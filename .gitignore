@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+.env
+transcripts_processed/
+transcripts_master/
+cache/
+temp/
+*.pdf
+credentials.json
+token.json
