@@ -1,27 +1,72 @@
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
-from reportlab.lib import colors
-import os
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+import re
 
 def create_cover_page(output_path, company, quarter, year):
     """
-    Creates a PDF cover page.
+    Creates a cover page for the transcript PDF.
     """
-    c = canvas.Canvas(output_path, pagesize=letter)
-    width, height = letter
+    doc = SimpleDocTemplate(output_path, pagesize=letter)
+    styles = getSampleStyleSheet()
     
-    c.setFont("Helvetica-Bold", 36)
-    c.drawCentredString(width / 2, height / 2 + 50, f"{company}")
+    story = []
     
-    c.setFont("Helvetica", 24)
-    c.drawCentredString(width / 2, height / 2, f"{quarter} {year} Earnings Transcript")
+    # Add some vertical space to center the text roughly
+    story.append(Spacer(1, 200))
     
-    c.save()
+    # Title Style
+    title_style = styles["Title"]
+    title_style.alignment = TA_CENTER
+    title_style.fontSize = 30
+    title_style.leading = 36
+    
+    # Subtitle Style
+    subtitle_style = styles["Heading2"]
+    subtitle_style.alignment = TA_CENTER
+    subtitle_style.fontSize = 20
+    subtitle_style.leading = 24
+    
+    story.append(Paragraph(company, title_style))
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(f"{quarter} {year} Earnings Call", subtitle_style))
+    
+    doc.build(story)
 
-import re
+def create_master_toc(output_path, company, entries):
+    """
+    Creates a Table of Contents PDF.
+    entries: list of dicts {'quarter': 'Q1', 'year': '2024', 'page': 123}
+    """
+    doc = SimpleDocTemplate(output_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    
+    story = []
+    
+    # Title
+    title_style = styles["Title"]
+    title_style.alignment = TA_CENTER
+    story.append(Paragraph(f"{company} Earnings Transcripts", title_style))
+    story.append(Spacer(1, 36))
+    
+    # TOC Header
+    h2_style = styles["Heading2"]
+    h2_style.alignment = TA_LEFT
+    story.append(Paragraph("Table of Contents", h2_style))
+    story.append(Spacer(1, 12))
+    
+    # Entries
+    normal_style = styles["Normal"]
+    normal_style.fontSize = 14
+    normal_style.leading = 18
+    
+    for entry in entries:
+        text = f"{entry['quarter']} {entry['year']} - Page {entry['page']}"
+        story.append(Paragraph(text, normal_style))
+        story.append(Spacer(1, 12))
+        
+    doc.build(story)
 
 def create_summary_pdf(output_path, summary_text):
     """
@@ -35,8 +80,10 @@ def create_summary_pdf(output_path, summary_text):
     styles.add(ParagraphStyle(name='Justify', alignment=TA_JUSTIFY))
     
     # Use regex to replace **text** with <b>text</b>
-    # This handles the pairs correctly.
     formatted_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', summary_text)
+    
+    # Sanitize <br> tags for ReportLab (must be self-closing)
+    formatted_text = re.sub(r'<br\s*/?>', '<br/>', formatted_text, flags=re.IGNORECASE)
     
     # Split into paragraphs
     paragraphs = formatted_text.split('\n')
@@ -53,11 +100,9 @@ def create_summary_pdf(output_path, summary_text):
     for para in paragraphs:
         if para.strip():
             # Check if it looks like a header (e.g., "1. Executive Summary:")
-            # We strip HTML tags for the check
             clean_text = re.sub(r'<[^>]+>', '', para).strip()
             
             if clean_text.startswith("#") or (clean_text and clean_text[0].isdigit() and ":" in clean_text):
-                 # Remove markdown headers #
                  display_text = para.replace("#", "").strip()
                  story.append(Paragraph(display_text, styles["Heading2"]))
             else:
