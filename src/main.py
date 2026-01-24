@@ -2,19 +2,10 @@ import os
 import shutil
 import time
 import sys
-from parser import parse_filename, extract_text_from_pdf
-from llm_client import generate_summary
-from pdf_builder import create_cover_page, create_summary_pdf
-from pdf_manager import build_final_master, merge_pdfs
-
-import os
-import shutil
-import time
-import sys
 import re
-from parser import parse_filename, extract_text_from_pdf
-from llm_client import generate_summary
-from pdf_builder import create_cover_page, create_summary_pdf, create_master_toc
+from parser import parse_filename, extract_text_from_pdf, smart_rename_files
+from llm_client import generate_summary, generate_strategic_analysis, generate_pairwise_analysis
+from pdf_builder import create_cover_page, create_summary_pdf, create_master_toc, create_analysis_pdf
 from pdf_manager import build_final_master, merge_pdfs
 from pypdf import PdfReader
 
@@ -31,6 +22,10 @@ def main():
     for d in [INPUT_DIR, PROCESSED_DIR, MASTER_DIR, TEMP_DIR, CACHE_DIR]:
         if not os.path.exists(d):
             os.makedirs(d)
+
+    # 0. Intelligent Auto-Renaming
+    print("Pre-scanning for file renaming...")
+    smart_rename_files(INPUT_DIR)
 
     # 1. Ingest New Files
     new_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith('.pdf')]
@@ -82,6 +77,9 @@ def main():
         current_page_count = 0
         company_content_parts = []
         
+        # Collection for Strategic Analysis
+        company_summaries = [] 
+
         for item in items:
             filename = item['filename']
             meta = item['meta']
@@ -109,6 +107,13 @@ def main():
                         f.write(summary_text)
                     time.sleep(30)
 
+                # Store for analysis
+                company_summaries.append({
+                    'quarter': quarter,
+                    'year': year,
+                    'text': summary_text
+                })
+
                 # Create Assets
                 cover_path = os.path.join(TEMP_DIR, f"{company}_{quarter}_{year}_cover.pdf")
                 summary_path = os.path.join(TEMP_DIR, f"{company}_{quarter}_{year}_summary.pdf")
@@ -117,23 +122,18 @@ def main():
                 create_summary_pdf(summary_path, summary_text)
                 
                 # Calculate Pages
-                # We need to know how many pages this section adds
-                # Section = Cover + Summary + Transcript
-                
-                # Get page counts
                 p_cover = len(PdfReader(cover_path).pages)
                 p_summary = len(PdfReader(summary_path).pages)
                 p_trans = len(PdfReader(filepath).pages)
                 
                 total_section_pages = p_cover + p_summary + p_trans
                 
-                # Record TOC Entry
-                # Start page is current_page_count + 1 (1-based for humans)
+                # Record TOC Entry (Transcript Sections)
                 toc_entries.append({
                     'quarter': quarter,
                     'year': year,
-                    'start_page': current_page_count, # 0-based index for bookmarking
-                    'page': current_page_count + 1 # 1-based for display
+                    'start_page': current_page_count, 
+                    'page': current_page_count + 1 
                 })
                 
                 current_page_count += total_section_pages
@@ -144,6 +144,73 @@ def main():
             except Exception as e:
                 print(f"CRITICAL ERROR on {filename}: {e}")
                 sys.exit(1)
+
+        # --- STRATEGIC ANALYSIS PHASE ---
+                # --- STRATEGIC ANALYSIS PHASE (PAIRWISE) ---
+        if len(company_summaries) > 1:
+            print(f"  Generating Strategic Analysis (Pairwise) for {len(company_summaries)} quarters...")
+            analysis_text = f"# Strategic Performance Analysis: {company}\n\n"
+            
+            # Sort chronologically just in case (though file sorting typically handles this)
+            # company_summaries is populated in loop order, which was sorted by filename keys.
+            
+            try:
+                pairwise_results = []
+                for i in range(1, len(company_summaries)):
+                    prev = company_summaries[i-1]
+                    curr = company_summaries[i]
+                    
+                    # Construct Pairwise Cache Key
+                    # e.g. "SayDo_NVDA_Q1_2026_Q2_2026.txt"
+                    pair_key = f"SayDo_{company}_{prev['quarter']}_{prev['year']}_{curr['quarter']}_{curr['year']}"
+                    pair_cache_path = os.path.join(CACHE_DIR, f"{pair_key}.txt")
+                    
+                    pair_text = ""
+                    
+                    # 1. Check Cache for Pair
+                    if os.path.exists(pair_cache_path):
+                        print(f"    [Cache Hit] Loading analysis: {prev['quarter']} -> {curr['quarter']}")
+                        with open(pair_cache_path, 'r', encoding='utf-8') as f:
+                            pair_text = f.read()
+                    else:
+                        print(f"    [Gen AI] Analyzing: {prev['quarter']} -> {curr['quarter']}...")
+                        pair_text = generate_pairwise_analysis(prev, curr)
+                        with open(pair_cache_path, 'w', encoding='utf-8') as f:
+                            f.write(pair_text)
+                            
+                    pairwise_results.append(pair_text)
+             
+                # Reverse for final output (Latest -> Oldest)
+                for text in reversed(pairwise_results):
+                    analysis_text += text + "\n\n" + ("-" * 40) + "\n\n"
+             
+                # 2. Create PDF with aggregated text
+                analysis_pdf_path = os.path.join(TEMP_DIR, f"{company}_strategic_analysis.pdf")
+                create_analysis_pdf(analysis_pdf_path, analysis_text)
+                
+                # 3. Insert into Content List (AT THE START)
+                company_content_parts.insert(0, analysis_pdf_path)
+                
+                # 4. Adjust Page Counts & TOC
+                # The analysis section shifts everything else down.
+                p_analysis = len(PdfReader(analysis_pdf_path).pages)
+                
+                # Add Analysis to TOC as the first item
+                analysis_toc_entry = {
+                    'quarter': "Strategic",
+                    'year': "Analysis",
+                    'start_page': 0,
+                    'page': 1
+                }
+                toc_entries.insert(0, analysis_toc_entry)
+                
+                # Shift all other TOC entries
+                for entry in toc_entries[1:]:
+                    entry['start_page'] += p_analysis
+                    entry['page'] += p_analysis
+                    
+            except Exception as e:
+                print(f"  WARNING: Strategic Analysis failed (skipping): {e}")
 
         # Build Final Master for this Company
         print(f"  Assembling final PDF for {company}...")

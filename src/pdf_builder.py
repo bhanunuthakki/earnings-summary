@@ -110,3 +110,52 @@ def create_summary_pdf(output_path, summary_text):
             story.append(Spacer(1, 12))
             
     doc.build(story)
+
+def create_analysis_pdf(output_path, analysis_text):
+    """
+    Creates a PDF from the strategic analysis text.
+    Similar to summary pdf but with different styling/title.
+    """
+    doc = SimpleDocTemplate(output_path, pagesize=letter,
+                            rightMargin=72, leftMargin=72,
+                            topMargin=72, bottomMargin=18)
+    
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name='Justify', alignment=TA_JUSTIFY))
+    
+    # Text formatting
+    formatted_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', analysis_text)
+    formatted_text = re.sub(r'<br\s*/?>', '<br/>', formatted_text, flags=re.IGNORECASE)
+    
+    story = []
+    
+    # Title
+    title_style = styles["Heading1"]
+    title_style.alignment = TA_CENTER
+    title_style.textColor = "darkblue" # Distinction
+    story.append(Paragraph("Strategic Performance Analysis", title_style))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph("Expectations vs. Reality", styles["Normal"]))
+    story.append(Spacer(1, 24))
+    
+    normal_style = styles["Normal"]
+    
+    paragraphs = formatted_text.split('\n')
+    for para in paragraphs:
+        if para.strip():
+            clean_text = re.sub(r'<[^>]+>', '', para).strip()
+            
+            # Formatting heuristics
+            if clean_text.startswith("#") or (clean_text and clean_text[0].isdigit() and "." in clean_text[:3]):
+                 # Headings
+                 display_text = para.replace("#", "").strip()
+                 story.append(Paragraph(display_text, styles["Heading2"]))
+            elif clean_text.startswith("*") or clean_text.startswith("-"):
+                 # Bullets
+                 bullet_text = para.strip()[1:].strip()
+                 story.append(Paragraph(f"• {bullet_text}", normal_style))
+            else:
+                 story.append(Paragraph(para, normal_style))
+            story.append(Spacer(1, 10))
+            
+    doc.build(story)
