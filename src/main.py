@@ -3,6 +3,7 @@ import shutil
 import time
 import sys
 import re
+import json
 from parser import parse_filename, extract_text_from_pdf, smart_rename_files
 from llm_client import generate_summary, generate_strategic_analysis, generate_pairwise_analysis
 from pdf_builder import create_cover_page, create_summary_pdf, create_master_toc, create_analysis_pdf
@@ -38,10 +39,10 @@ def main():
                 os.remove(dst)
             shutil.move(src, dst)
 
-    # 2. Clear Output
-    for f in os.listdir(MASTER_DIR):
-        if f.lower().endswith('.pdf'):
-            os.remove(os.path.join(MASTER_DIR, f))
+    # 2. Clear Output - DISABLED for incremental build
+    # for f in os.listdir(MASTER_DIR):
+    #     if f.lower().endswith('.pdf'):
+    #         os.remove(os.path.join(MASTER_DIR, f))
 
     # 3. Scan Archive
     all_files = [f for f in os.listdir(PROCESSED_DIR) if f.lower().endswith('.pdf')]
@@ -71,6 +72,51 @@ def main():
 
     # 5. Process per Company
     for company, items in companies.items():
+        master_path = os.path.join(MASTER_DIR, f"{company}_Master_Transcripts.pdf")
+        manifest_path = os.path.join(CACHE_DIR, f"{company}_manifest.json")
+        
+        # Gather current file state
+        current_files = {}
+        for item in items:
+            fp = os.path.join(PROCESSED_DIR, item['filename'])
+            if os.path.exists(fp):
+                current_files[item['filename']] = os.path.getmtime(fp)
+
+        # Check if rebuild is needed
+        rebuild_needed = False
+        
+        if not os.path.exists(master_path):
+            rebuild_needed = True
+        elif not os.path.exists(manifest_path):
+            rebuild_needed = True
+            print(f"  [Manifest] Missing manifest for {company}, triggering rebuild.")
+        else:
+            try:
+                with open(manifest_path, 'r') as f:
+                    manifest = json.load(f)
+                cached_files = manifest.get('files', {})
+                
+                # Check 1: Set difference (Files added/removed/renamed)
+                if set(cached_files.keys()) != set(current_files.keys()):
+                    rebuild_needed = True
+                    print(f"  [Manifest] File list changed for {company}.")
+                else:
+                    # Check 2: Timestamp comparison (Content modification)
+                    for fname, mtime in current_files.items():
+                        cached_mtime = cached_files.get(fname, 0)
+                        # Use a small epsilon for float comparison if needed, or simple >
+                        if mtime > cached_mtime: 
+                            rebuild_needed = True
+                            print(f"  [Manifest] File modified: {fname}")
+                            break
+            except Exception as e:
+                print(f"  [Manifest] Error reading manifest: {e}. Rebuilding.")
+                rebuild_needed = True
+            
+        if not rebuild_needed:
+            print(f"\nSkipping {company} (Up to date).")
+            continue
+                
         print(f"\nBuilding Master PDF for {company}...")
         
         toc_entries = []
@@ -228,6 +274,14 @@ def main():
         build_final_master(master_path, toc_path, content_path, toc_entries)
         
         print(f"  SUCCESS: Created {master_path}")
+        
+        # Update Manifest
+        try:
+            with open(manifest_path, 'w') as f:
+                json.dump({'company': company, 'files': current_files}, f, indent=2)
+            print(f"  [Manifest] Updated {manifest_path}")
+        except Exception as e:
+            print(f"  [Manifest] Warning: Could not save manifest: {e}")
 
 if __name__ == '__main__':
     main()
