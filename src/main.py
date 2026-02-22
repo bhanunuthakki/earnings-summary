@@ -13,7 +13,7 @@ from pypdf import PdfReader
 INPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'transcripts_in')
 PROCESSED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'transcripts_processed')
 MASTER_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'transcripts_master')
-TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'temp')
+TEMP_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.tmp')
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache')
 
 def main():

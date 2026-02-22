@@ -38,11 +38,11 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
 5. **Per-Quarter Processing** (for each quarter):
    - Extract text from PDF (`src/parser.py`)
    - Generate or load cached 1–2 page summary (`cache/<Co>_<Q>_<Y>_summary.txt`)
-   - Create cover page and summary PDF in `temp/`
+   - Create cover page and summary PDF in `.tmp/`
    - Wait 30 s between fresh Gemini calls (rate-limit guard)
 6. **Pairwise Strategic Analysis** (if ≥ 2 quarters):
    - For each consecutive pair, generate or load `cache/SayDo_<Co>_<Qprev>_<Yprev>_<Qcurr>_<Ycurr>.txt`
-   - Compile into `temp/<Company>_strategic_analysis.pdf`
+   - Compile into `.tmp/<Company>_strategic_analysis.pdf`
 7. **Assemble Master PDF**:
    - Merge: strategic analysis → cover + summary + transcript (per quarter)
    - Prepend a clickable ToC PDF
@@ -57,7 +57,7 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
 | Summary cache | `cache/<Company>_<Q>_<Y>_summary.txt` |
 | Analysis cache | `cache/SayDo_<Company>_…_….txt` |
 | Manifest | `cache/<Company>_manifest.json` |
-| Intermediates | `temp/` (can be deleted and regenerated) |
+| Intermediates | `.tmp/` (can be deleted and regenerated) |
 
 ## Edge Cases & Known Constraints
 

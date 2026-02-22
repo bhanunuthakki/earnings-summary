@@ -4,7 +4,7 @@ __pycache__/
 transcripts_processed/
 transcripts_master/
 cache/
-temp/
+.tmp/
 *.pdf
 credentials.json
 token.json
