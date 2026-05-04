@@ -22,17 +22,38 @@ A simple script to systematically run earnings transcripts through LLMs (Google 
 2.  **Verify Models** (Optional):
     *   Run `python check_models.py` to verify your API key and see available Gemini models.
 
+3.  **Configure FMP API Key** (Optional but Recommended):
+    *   To use the automated transcript fetcher, sign up at [Financial Modeling Prep](https://site.financialmodelingprep.com/developer/docs) for a free account.
+    *   Add your FMP API key to the `.env` file:
+        ```env
+        FMP_API_KEY=your_fmp_api_key_here
+        ```
+
+### Dual-Mode Ingestion (Manual vs. Auto-Fetch)
+
+You can both manually upload transcripts AND auto-fetch them via the FMP API. The system tracks a central index to ensure no duplicate processing or wasted API calls.
+
+**A. Manual Upload:**
+1.  Place your PDF earnings transcripts in the `transcripts/raw` directory.
+    *   Filename format: `Company_Qx_YYYY.pdf` (e.g., `Google_Q1_2024.pdf`).
+
+**B. Auto-Fetch (FMP API):**
+1.  Run the fetch script to download the transcript and convert it to a PDF in `transcripts/raw`:
+    ```bash
+    python execution/fetch_audio_transcripts.py --ticker AAPL --year 2024 --quarter 1
+    ```
+
 ### Running the Processor
-1.  Place your PDF earnings transcripts in the `transcripts_in` directory.
+1.  Place your PDF earnings transcripts in the `transcripts/raw` directory.
     *   Filename format: `Company_Qx_YYYY.pdf` (e.g., `Google_Q1_2024.pdf`).
 2.  Run the script:
     ```bash
     python src/main.py
     ```
 3.  The script will:
-    *   Move processed files to `transcripts_processed`.
-    *   Generate summaries, strategic analysis, and cover pages in `temp`.
-    *   Output the final master PDFs in `transcripts_master`.
+    *   Move processed files to `transcripts/processed`.
+    *   Generate summaries, strategic analysis, and cover pages in `.tmp`.
+    *   Output the final master PDFs in `transcripts/master`.
 
 ## Requirements
 

@@ -1,10 +1,35 @@
+# Environment & secrets
 venv/
-__pycache__/
 .env
-transcripts_processed/
-transcripts_master/
-cache/
-.tmp/
-*.pdf
 credentials.json
 token.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Ephemeral state (caches, temp audio, intermediates)
+.tmp/
+cache/
+
+# Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
+# from execution/save_fmp_data.py and alembic migrations)
+data/
+*.db.bak.*
+
+# IDE / agent state
+.claude/
+
+# Transcript data (user-specific, not checked in)
+transcripts/
+
+# Downloaded IR documents (PDFs — large binaries, user-specific)
+ir_documents/
+
+# Large binary examples (keep xlsx tracked via LFS or exclude)
+# examples/dcf/  # Uncomment if you don't want to track example workbooks
+
+# OS junk
+Thumbs.db
+.DS_Store

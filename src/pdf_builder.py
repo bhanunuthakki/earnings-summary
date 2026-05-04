@@ -159,3 +159,32 @@ def create_analysis_pdf(output_path, analysis_text):
             story.append(Spacer(1, 10))
             
     doc.build(story)
+
+def create_transcript_pdf(output_path, transcript_text):
+    """
+    Creates a PDF from raw transcript text.
+    """
+    doc = SimpleDocTemplate(output_path, pagesize=letter,
+                            rightMargin=72, leftMargin=72,
+                            topMargin=72, bottomMargin=18)
+    styles = getSampleStyleSheet()
+    story = []
+    
+    title_style = styles["Heading1"]
+    title_style.alignment = TA_CENTER
+    story.append(Paragraph("Raw Audio Transcript", title_style))
+    story.append(Spacer(1, 12))
+    
+    normal_style = styles["Normal"]
+    
+    # Just output the text lines
+    paragraphs = transcript_text.split('\n')
+    for para in paragraphs:
+        if para.strip():
+            # escape basic xml chars
+            clean_text = para.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            story.append(Paragraph(clean_text, normal_style))
+            story.append(Spacer(1, 6))
+            
+    doc.build(story)
+
