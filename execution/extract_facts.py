@@ -28,6 +28,7 @@ from compute.as_reported import extract_as_reported_facts  # noqa: E402
 from compute.balance_sheet import extract_balance_sheet_facts  # noqa: E402
 from compute.cashflow import extract_cashflow_facts  # noqa: E402
 from compute.income_statement import extract_income_statement_facts  # noqa: E402
+from compute.segment_oi_10k import extract_segment_oi_facts  # noqa: E402
 from compute.segments import extract_segment_facts  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
@@ -45,6 +46,7 @@ _DISPATCH: dict[str, _Extractor] = {
     "fmp_as_reported_balance": extract_as_reported_facts,
     "fmp_as_reported_cashflow": extract_as_reported_facts,
     "fmp_as_reported_financial": extract_as_reported_facts,
+    "fmp_10k_json": extract_segment_oi_facts,
 }
 
 
