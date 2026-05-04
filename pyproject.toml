@@ -49,9 +49,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B", "N802"]
 "alembic/**" = ["N999"]
-# fmp_payloads mirrors FMP's exact JSON keys (camelCase); aliasing every
-# field would add boilerplate without semantic value.
+# fmp_payloads + the Protocol in compute/_common.py mirror FMP's exact JSON
+# keys (camelCase); aliasing every field would add boilerplate.
 "src/models/fmp_payloads.py" = ["N815"]
+"src/compute/_common.py" = ["N815"]
 
 [tool.pyright]
 include = ["src", "execution", "tests"]
