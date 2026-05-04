@@ -1,0 +1,25 @@
+{
+  "ticker": "FLKR",
+  "thesis": "Korea equity factor ETF tilted toward memory semis (Samsung, SK Hynix) — cyclical play on DRAM/NAND/HBM pricing; not a bottom-up thesis but a macro/cycle instrument.",
+  "last_updated": "2026-04-12",
+  "tier_1_kpis": [
+    {"name": "DRAM contract price (monthly)", "source": "TrendForce monthly report (user may need to provide) or DRAMeXchange", "break": "2 consecutive months of declining contract prices"},
+    {"name": "NAND contract price (monthly)", "source": "TrendForce", "break": "2 consecutive months of declining contract prices"},
+    {"name": "HBM allocation & pricing commentary", "source": "Samsung + SK Hynix earnings transcripts", "break": "HBM3e/HBM4 allocation loss OR pricing resets lower"},
+    {"name": "Memory inventory levels (weeks of supply)", "source": "TrendForce / earnings transcripts", "break": "inventory building >10 weeks"},
+    {"name": "Samsung Electronics DS division operating margin", "source": "Samsung earnings release", "break": "margin compression without volume offset"},
+    {"name": "SK Hynix HBM revenue mix", "source": "SK Hynix earnings", "break": "HBM revenue share declining QoQ"}
+  ],
+  "tier_2_kpis": [
+    {"name": "Hyperscaler AI capex guidance (MSFT, META, GOOGL, AMZN)", "source": "US hyperscaler earnings — demand proxy"},
+    {"name": "Nvidia data center revenue growth (downstream pull)", "source": "NVDA earnings"},
+    {"name": "China semi self-sufficiency progress (CXMT, YMTC)", "source": "industry press"},
+    {"name": "KRW/USD trajectory", "source": "FX data"}
+  ],
+  "tier_3_kpis": [
+    {"name": "Korea Composite index correlation", "source": "price data"},
+    {"name": "Fund AUM & tracking difference", "source": "Franklin IR"}
+  ],
+  "competitive_watchlist": ["Micron (US proxy)", "Kioxia (NAND)", "Western Digital", "CXMT (China DRAM)"],
+  "thesis_breakers_qualitative": ["HBM supply glut", "China DRAM parity reached", "AI capex cycle turns"]
+}

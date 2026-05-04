@@ -1,0 +1,26 @@
+{
+  "ticker": "BN",
+  "thesis": "Alternative asset manager + insurance float + real assets compounder; DE per share growth driven by fee-related earnings, insurance solutions scaling, and monetization cadence.",
+  "last_updated": "2026-04-12",
+  "tier_1_kpis": [
+    {"name": "Distributable Earnings (DE) per share growth YoY", "source": "quarterly supplemental / earnings release", "break": "<15% YoY for 2 consecutive Qs"},
+    {"name": "Fee-Related Earnings (FRE) growth", "source": "BAM segment / BN supplemental", "break": "<15% YoY"},
+    {"name": "Fee-bearing capital growth", "source": "earnings supplemental", "break": "flat or declining"},
+    {"name": "Fundraising pace (flagship vintages, private credit, insurance)", "source": "transcript", "break": "flagship fund undersubscribed vs. target"},
+    {"name": "Insurance (BNRE) annualized earnings + assets", "source": "earnings supplemental", "break": "earnings yield on float <9%"},
+    {"name": "Realizations / monetizations ($ and count)", "source": "transcript + supplemental", "break": "2 Qs of <$1B carried interest realized without pipeline explanation"}
+  ],
+  "tier_2_kpis": [
+    {"name": "Carried interest generated (unrealized)", "source": "supplemental"},
+    {"name": "Real estate NOI growth", "source": "BPY supplemental"},
+    {"name": "Renewable power FFO", "source": "BEP supplemental"},
+    {"name": "Infrastructure FFO", "source": "BIP supplemental"},
+    {"name": "Private credit AUM growth (Oaktree)", "source": "transcript"}
+  ],
+  "tier_3_kpis": [
+    {"name": "BN share buybacks + NAV discount", "source": "earnings release"},
+    {"name": "Plan value vs. intrinsic value disclosure", "source": "investor day"}
+  ],
+  "competitive_watchlist": ["Blackstone", "KKR", "Apollo (insurance parallel via Athene)", "Ares"],
+  "thesis_breakers_qualitative": ["insurance reserve/credit loss surprise at BNRE", "CRE writedown cycle deeper than provisioned", "flagship fundraising cycle stalls >2 years"]
+}

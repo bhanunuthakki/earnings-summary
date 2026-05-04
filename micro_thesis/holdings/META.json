@@ -1,0 +1,26 @@
+{
+  "ticker": "META",
+  "thesis": "Ad targeting efficiency flywheel (Advantage+, Reels, WhatsApp click-to-message) + Llama as distribution lever; Reality Labs is an option, not a thesis pillar.",
+  "last_updated": "2026-04-12",
+  "tier_1_kpis": [
+    {"name": "Family of Apps revenue growth cc", "source": "earnings release", "break": "<10% cc"},
+    {"name": "Ad impressions growth vs price per ad growth", "source": "earnings release", "break": "price declining while impressions flat (demand weakness)"},
+    {"name": "Family DAP (daily active people) growth", "source": "earnings release", "break": "flat or declining in developed markets"},
+    {"name": "Capex guidance & AI ROI commentary", "source": "earnings release + transcript", "break": "capex up + ad efficiency metrics not improving"},
+    {"name": "Reality Labs operating loss", "source": "earnings release", "break": "loss expanding faster than FoA operating income growth"},
+    {"name": "Operating margin (consolidated)", "source": "earnings release", "break": "<35%"}
+  ],
+  "tier_2_kpis": [
+    {"name": "Reels monetization efficiency vs Feed", "source": "transcript"},
+    {"name": "WhatsApp business messaging revenue", "source": "transcript"},
+    {"name": "Threads MAU + monetization start", "source": "transcript"},
+    {"name": "Llama adoption metrics (if disclosed)", "source": "transcript"}
+  ],
+  "tier_3_kpis": [
+    {"name": "Share buyback pace", "source": "earnings release"},
+    {"name": "Headcount trajectory", "source": "10-Q"}
+  ],
+  "competitive_watchlist": ["TikTok (US ban status + share)", "YouTube Shorts", "X", "Snap", "Apple ATT impact evolution"],
+  "thesis_breakers_qualitative": ["EU DMA remedies force data silo between apps (targeting degradation)", "TikTok US operations continue + gain share", "capex cycle without revenue response (2022 redux)"],
+  "flags": ["HUMAN_CAPITAL_OVERLAP — thesis held to stricter standard per Correlation Filter"]
+}

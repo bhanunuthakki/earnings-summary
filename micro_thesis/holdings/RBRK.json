@@ -1,0 +1,17 @@
+{
+  "ticker": "RBRK",
+  "thesis": "Cyber-resilience/data security platform displacing legacy backup vendors; subscription ARR compounds 30%+ as enterprises prioritize ransomware recovery and cloud data protection.",
+  "tier_1_kpis": [
+    {"name": "Subscription ARR Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Total ARR Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Subscription Revenue Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Net Revenue Retention Rate", "unit": "%", "frequency": "quarterly"}
+  ],
+  "break_conditions": [
+    "Subscription ARR growth < 25% YoY",
+    "Total ARR growth < 15% YoY",
+    "NRR < 115%",
+    "Subscription revenue growth < 25% YoY for 2 consecutive quarters"
+  ],
+  "last_updated": "2026-04-12"
+}

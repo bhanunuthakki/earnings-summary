@@ -1,0 +1,28 @@
+{
+  "ticker": "GOOG",
+  "thesis": "Dominant Search cash engine funds transition to AI-native distribution (Gemini) + structurally profitable GCP; bear case is AI query cannibalization + capex ROI.",
+  "last_updated": "2026-04-12",
+  "tier_1_kpis": [
+    {"name": "Search query volume growth", "source": "transcript commentary (not always disclosed — press for it)", "break": "flat or negative YoY"},
+    {"name": "Paid click growth", "source": "earnings release / 10-Q", "break": "decoupling from Search revenue growth (clicks flat, revenue via price = saturation signal)"},
+    {"name": "Search & Other revenue growth cc", "source": "earnings release", "break": "<5% cc for 2 consecutive Qs"},
+    {"name": "GCP revenue growth", "source": "earnings release", "break": "<25%"},
+    {"name": "GCP operating margin", "source": "earnings release segment", "break": "margin expansion stalls (vs. AWS ~35%+, Azure implied 40%+)"},
+    {"name": "Capex as % of revenue + AI ROI commentary", "source": "earnings release + transcript", "break": "capex rising while cloud margin not expanding"},
+    {"name": "YouTube ads revenue growth", "source": "earnings release", "break": "<10% for 2 consecutive Qs"}
+  ],
+  "tier_2_kpis": [
+    {"name": "Gemini API traffic / token volume (if disclosed)", "source": "transcript"},
+    {"name": "Subscriptions, platforms & devices revenue (YT Premium, One)", "source": "earnings release"},
+    {"name": "Operating margin (consolidated)", "source": "earnings release"},
+    {"name": "TAC rate", "source": "10-Q"},
+    {"name": "Network revenue growth", "source": "earnings release"}
+  ],
+  "tier_3_kpis": [
+    {"name": "Other Bets revenue + loss (Waymo progress)", "source": "earnings release"},
+    {"name": "Headcount trajectory", "source": "10-Q"},
+    {"name": "Share buyback pace", "source": "earnings release"}
+  ],
+  "competitive_watchlist": ["OpenAI/ChatGPT (search substitution)", "Perplexity", "Meta (YouTube vs Reels ad share)", "Microsoft (Azure, Copilot)", "AWS", "Amazon ads (product search substitution)"],
+  "thesis_breakers_qualitative": ["DOJ remedy forces Chrome or Android divestiture", "ChatGPT sustained >1B WAU with ad model", "Apple defaults away from Google Search on iOS"]
+}

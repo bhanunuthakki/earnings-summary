@@ -1,0 +1,18 @@
+{
+  "ticker": "NVO",
+  "thesis": "GLP-1 franchise (Ozempic/Wegovy/oral sema) drives durable 20%+ revenue growth as obesity TAM expands globally; manufacturing scale-up is the binding constraint, not demand.",
+  "tier_1_kpis": [
+    {"name": "Revenue Growth (CER)", "unit": "%", "frequency": "quarterly"},
+    {"name": "GLP-1 Sales Growth (CER)", "unit": "%", "frequency": "quarterly"},
+    {"name": "Wegovy Sales Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Operating Margin", "unit": "%", "frequency": "quarterly"}
+  ],
+  "break_conditions": [
+    "CER Revenue growth < 15% YoY for 2 consecutive quarters",
+    "GLP-1 franchise growth (CER) < 20% YoY",
+    "Wegovy growth decelerating below 15% YoY (demand signal, not supply-constrained)",
+    "Operating margin contracts >300bps YoY without manufacturing investment explanation",
+    "Clinical trial failure on oral semaglutide (obesity) or CagriSema"
+  ],
+  "last_updated": "2026-04-12"
+}

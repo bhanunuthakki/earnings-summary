@@ -1,0 +1,47 @@
+{
+    "ticker": "NOW",
+    "name": "ServiceNow",
+    "last_updated": "2026-05-02",
+    "thesis": "ServiceNow is the primary workflow automation platform for the enterprise, leveraging GenAI to drive a significant step-function in ARPU via the Pro+ SKU.",
+    "verdict": "Intact",
+    "verdict_color": "green",
+    "key_driver": "Pro+ SKU Adoption Rates",
+    "tier_1_kpis": [
+        {
+            "name": "Subscription Revenue Growth (CC)",
+            "current": "24.5%",
+            "prior": "25.0%",
+            "yoy": "-50bps",
+            "status": "Green",
+            "break_condition": "< 20%"
+        },
+        {
+            "name": "cRPO Growth",
+            "current": "21.0%",
+            "prior": "21.0%",
+            "yoy": "Flat",
+            "status": "Green",
+            "break_condition": "< 18%"
+        },
+        {
+            "name": "Pro+ SKU Upsell Rate",
+            "current": "12%",
+            "prior": "8%",
+            "yoy": "+400bps",
+            "status": "Green",
+            "break_condition": "Deceleration in adoption"
+        }
+    ],
+    "tier_2_kpis": [
+        {
+            "name": "Renewal Rate",
+            "current": "98%",
+            "status": "Green"
+        }
+    ],
+    "nuance": {
+        "bear_case": "Bears argue that IT budget fatigue will cap seat expansion even if GenAI features are well-received.",
+        "adversarial_take": "The core risk is that Pro+ adoption is front-loaded with 'early adopters' and the mass market takes significantly longer to convert, leading to a growth cliff in 2027.",
+        "stress_test": "Renewal rate dip of >200bps would signal platform fatigue and break the core thesis."
+    }
+}

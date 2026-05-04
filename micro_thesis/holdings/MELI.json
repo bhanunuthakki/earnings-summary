@@ -1,0 +1,17 @@
+{
+  "ticker": "MELI",
+  "thesis": "LatAm e-commerce + fintech secular compounder; GMV and Mercado Pago TPV compound as digital adoption deepens across Brazil, Mexico, Argentina.",
+  "tier_1_kpis": [
+    {"name": "Revenue Growth (FXN)", "unit": "%", "frequency": "quarterly"},
+    {"name": "GMV Growth (FXN)", "unit": "%", "frequency": "quarterly"},
+    {"name": "TPV Growth (FXN)", "unit": "%", "frequency": "quarterly"},
+    {"name": "Operating Margin", "unit": "%", "frequency": "quarterly"}
+  ],
+  "break_conditions": [
+    "FXN Revenue growth < 20% YoY for 2 consecutive quarters",
+    "FXN GMV growth < 15% YoY",
+    "Operating margin contracts >400bps YoY without clear reinvestment rationale",
+    "Credit NPL 90d+ > 8% of portfolio"
+  ],
+  "last_updated": "2026-04-12"
+}

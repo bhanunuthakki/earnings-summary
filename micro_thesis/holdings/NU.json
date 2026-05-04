@@ -1,0 +1,19 @@
+{
+  "ticker": "NU",
+  "thesis": "Digital-native bank scaling across LatAm with structurally lower cost-to-serve, expanding ARPAC as product cross-sell deepens into lending, insurance, and investing.",
+  "tier_1_kpis": [
+    {"name": "Revenue Growth (FXN)", "unit": "%", "frequency": "quarterly"},
+    {"name": "Customer Count", "unit": "M", "frequency": "quarterly"},
+    {"name": "Monthly ARPAC", "unit": "USD", "frequency": "quarterly"},
+    {"name": "NPL 90+ Day Ratio", "unit": "%", "frequency": "quarterly"},
+    {"name": "Cost-to-Serve per Active Customer", "unit": "USD", "frequency": "quarterly"}
+  ],
+  "break_conditions": [
+    "NPL 90d+ > 7%",
+    "ARPAC declining QoQ for 2 consecutive quarters",
+    "FXN Revenue growth < 25% YoY",
+    "Customer net adds < 2M per quarter for 2 consecutive quarters",
+    "Cost-to-serve rising QoQ without commensurate ARPAC expansion"
+  ],
+  "last_updated": "2026-04-12"
+}

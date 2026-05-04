@@ -1,0 +1,17 @@
+{
+  "ticker": "WIX",
+  "thesis": "SMB web presence platform transitioning to durable mid-teens+ revenue growth with expanding margins as AI (Wix AI Site Builder) accelerates creation velocity and Partners/Studio drive upmarket.",
+  "tier_1_kpis": [
+    {"name": "Revenue Growth (CC)", "unit": "%", "frequency": "quarterly"},
+    {"name": "Creative Subscriptions Revenue Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Free Cash Flow Margin", "unit": "%", "frequency": "quarterly"},
+    {"name": "Bookings Growth (CC)", "unit": "%", "frequency": "quarterly"}
+  ],
+  "break_conditions": [
+    "CC Revenue growth < 12% YoY for 2 consecutive quarters",
+    "Creative subscriptions revenue growth decelerating below 10% YoY",
+    "FCF margin contracting >300bps YoY without clear investment rationale",
+    "Bookings growth (CC) < 10% YoY"
+  ],
+  "last_updated": "2026-04-12"
+}
