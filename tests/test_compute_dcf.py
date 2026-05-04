@@ -83,6 +83,64 @@ def test_compute_dcf_rejects_unreasonable_fcf_margin() -> None:
         compute_dcf(inputs)
 
 
+def test_compute_dcf_quarterly_matches_annual_at_constant_growth() -> None:
+    """At the same effective annual growth, quarterly and annual DCFs should agree."""
+    annual_growth = 0.10
+    quarterly_growth = (1 + annual_growth) ** 0.25 - 1
+    annual_inputs = DcfInputs(
+        base_revenue=100.0,
+        revenue_growths=[annual_growth] * 5,
+        fcf_margin=0.20,
+        wacc=0.10,
+        terminal_growth=0.02,
+        periods_per_year=1,
+    )
+    quarterly_inputs = DcfInputs(
+        base_revenue=25.0,  # per-period quarterly base = 100 / 4
+        revenue_growths=[quarterly_growth] * 20,
+        fcf_margin=0.20,
+        wacc=0.10,
+        terminal_growth=0.02,
+        periods_per_year=4,
+    )
+    annual_result = compute_dcf(annual_inputs)
+    quarterly_result = compute_dcf(quarterly_inputs)
+    # Both should converge — terminal value dominates so absolute NPVs differ slightly,
+    # but they should be within a few percent of each other for the same effective rates.
+    ratio = quarterly_result.npv / annual_result.npv
+    assert 0.95 < ratio < 1.05, (
+        f"quarterly NPV {quarterly_result.npv} vs annual {annual_result.npv}"
+    )
+
+
+def test_compute_dcf_quarterly_40_period_horizon() -> None:
+    """A 10-year horizon with periods_per_year=4 produces 40 projected FCFs."""
+    inputs = DcfInputs(
+        base_revenue=1_000_000.0,
+        revenue_growths=[0.02] * 40,
+        fcf_margin=0.20,
+        wacc=0.10,
+        terminal_growth=0.025,
+        periods_per_year=4,
+    )
+    result = compute_dcf(inputs)
+    assert len(result.projected_fcfs) == 40
+
+
+def test_compute_dcf_rejects_zero_periods_per_year() -> None:
+    """periods_per_year must be >= 1."""
+    inputs = DcfInputs(
+        base_revenue=100.0,
+        revenue_growths=[0.05],
+        fcf_margin=0.10,
+        wacc=0.10,
+        terminal_growth=0.02,
+        periods_per_year=0,
+    )
+    with pytest.raises(ValueError, match="periods_per_year"):
+        compute_dcf(inputs)
+
+
 def test_compute_dcf_per_share_is_none_when_no_shares() -> None:
     """If shares_outstanding is None or zero, npv_per_share is None."""
     inputs = DcfInputs(
