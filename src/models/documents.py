@@ -62,6 +62,7 @@ class DocType(StrEnum):
     FMP_HISTORICAL_EMPLOYEES = "fmp_historical_employees"
     FMP_FINANCIAL_REPORTS_DATES = "fmp_financial_reports_dates"
     FMP_10K_JSON = "fmp_10k_json"
+    FMP_10Q_JSON = "fmp_10q_json"
     FMP_OTHER = "fmp_other"
     ETF_INFORMATION = "etf_information"
     ETF_HOLDINGS = "etf_holdings"

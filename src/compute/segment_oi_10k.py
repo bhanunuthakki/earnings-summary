@@ -32,10 +32,9 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-from compute._common import load_document_row
 from models.facts import FiscalPeriodType, SegmentFact, Unit
 
-_DOC_TYPE = "fmp_10k_json"
+_DOC_TYPES: frozenset[str] = frozenset({"fmp_10k_json", "fmp_10q_json"})
 _NBSP = "\xa0"
 
 _MONTH_NUM: dict[str, int] = {
@@ -68,6 +67,90 @@ def _parse_date(s: str) -> datetime | None:
     if mon is None:
         return None
     return datetime(int(m.group(3)), mon, int(m.group(2)))
+
+
+def _quarter_from_month(month: int) -> FiscalPeriodType | None:
+    """Calendar-quarter mapping; off-calendar fiscal years use this as a default."""
+    if month in (1, 2, 3, 4):
+        return FiscalPeriodType.Q1
+    if month in (5, 6, 7):
+        return FiscalPeriodType.Q2
+    if month in (8, 9, 10):
+        return FiscalPeriodType.Q3
+    if month in (11, 12):
+        return FiscalPeriodType.Q4
+    return None
+
+
+def _period_type_from_descriptor(
+    descriptor: str | None, period_end: datetime
+) -> FiscalPeriodType | None:
+    """'12 Months Ended' -> FY; '3 Months Ended' -> Qx (calendar); cumulative -> None."""
+    if descriptor is None:
+        return None
+    desc = descriptor.lower()
+    if "12 months" in desc:
+        return FiscalPeriodType.FY
+    if "3 months" in desc:
+        return _quarter_from_month(period_end.month)
+    # 6 / 9 / other cumulative periods — skip for now
+    return None
+
+
+def _resolve_periods(
+    section: list[object],
+) -> list[tuple[FiscalPeriodType | None, datetime | None]]:
+    """For each items-column, return (period_type, period_end) or (None, None) to skip.
+
+    The first row's value list contains period descriptors (e.g.
+    ['3 Months Ended', None, '9 Months Ended']); the 'items' row has the
+    column dates. The descriptor list and items list rarely match in length —
+    in mixed-period sections, descriptors are split by None separators and
+    each non-None descriptor applies to a contiguous group of items columns.
+    """
+    if not section or not isinstance(section[0], dict):
+        return []
+    title_vals = next(iter(section[0].values()))
+    if not isinstance(title_vals, list):
+        return []
+    items_row: list[object] | None = None
+    for row in section[:5]:
+        if isinstance(row, dict) and "items" in row:
+            v = row["items"]
+            if isinstance(v, list):
+                items_row = v
+            break
+    if items_row is None:
+        return []
+
+    descriptors = [d for d in title_vals if d is not None]
+    n_cols = len(items_row)
+    if not descriptors:
+        per_col_descriptor: list[str | None] = [None] * n_cols
+    elif len(descriptors) == 1:
+        per_col_descriptor = [descriptors[0]] * n_cols
+    else:
+        cols_per_group = n_cols // len(descriptors)
+        if cols_per_group * len(descriptors) != n_cols:
+            per_col_descriptor = [descriptors[0]] * n_cols
+        else:
+            per_col_descriptor = [descriptors[i // cols_per_group] for i in range(n_cols)]
+
+    out: list[tuple[FiscalPeriodType | None, datetime | None]] = []
+    for i, item in enumerate(items_row):
+        if not isinstance(item, str):
+            out.append((None, None))
+            continue
+        period_end = _parse_date(item)
+        if period_end is None:
+            out.append((None, None))
+            continue
+        if i >= len(per_col_descriptor):
+            out.append((None, None))
+            continue
+        period_type = _period_type_from_descriptor(per_col_descriptor[i], period_end)
+        out.append((period_type, period_end))
+    return out
 
 
 def _detect_scale(title: str) -> int:
@@ -196,15 +279,19 @@ def _normalize_segment_name(label: str) -> str:
 def _emit_oi(
     segment: str,
     oi_per_period: list[float | int],
-    period_ends: list[datetime],
+    periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
     scale: int,
 ) -> list[SegmentFact]:
-    """Emit OI rows directly from a 'Total income from operations' row's values."""
+    """Emit OI rows directly from a 'Total income from operations'-style row.
+
+    Skips columns whose period_type is None (cumulative 6/9-month YTD columns
+    in 10-Qs, or columns whose descriptor we don't recognize).
+    """
     out: list[SegmentFact] = []
-    for i, pe in enumerate(period_ends):
-        if i >= len(oi_per_period):
+    for i, (period_type, period_end) in enumerate(periods):
+        if period_type is None or period_end is None or i >= len(oi_per_period):
             continue
         v = oi_per_period[i]
         if not isinstance(v, (int, float)):
@@ -212,8 +299,8 @@ def _emit_oi(
         out.append(
             SegmentFact(
                 ticker=ticker,
-                period_end=pe,
-                fiscal_period_type=FiscalPeriodType.FY,
+                period_end=period_end,
+                fiscal_period_type=period_type,
                 segment_name=segment,
                 metric="operating_income",
                 value=Decimal(str(v * scale)),
@@ -229,14 +316,16 @@ def _emit_oi_from_rev_costs(
     segment: str,
     revenue_per_period: list[float | int],
     costs_per_period: list[float | int],
-    period_ends: list[datetime],
+    periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
     scale: int,
 ) -> list[SegmentFact]:
-    """Compute OI = revenue - costs and emit one SegmentFact per period."""
+    """Compute OI = revenue - costs and emit one SegmentFact per recognized period column."""
     out: list[SegmentFact] = []
-    for i, pe in enumerate(period_ends):
+    for i, (period_type, period_end) in enumerate(periods):
+        if period_type is None or period_end is None:
+            continue
         if i >= len(revenue_per_period) or i >= len(costs_per_period):
             continue
         rev_raw = revenue_per_period[i]
@@ -247,8 +336,8 @@ def _emit_oi_from_rev_costs(
         out.append(
             SegmentFact(
                 ticker=ticker,
-                period_end=pe,
-                fiscal_period_type=FiscalPeriodType.FY,
+                period_end=period_end,
+                fiscal_period_type=period_type,
                 segment_name=segment,
                 metric="operating_income",
                 value=Decimal(str(oi)),
@@ -262,16 +351,17 @@ def _emit_oi_from_rev_costs(
 
 def _walk_section(
     section: list[object],
-    period_ends: list[datetime],
+    periods: list[tuple[FiscalPeriodType | None, datetime | None]],
     ticker: str,
     source_doc_id: int,
     scale: int,
 ) -> list[SegmentFact]:
-    """Walk a segment-OI section and emit one row per (segment, period).
+    """Walk a segment-OI section and emit one row per (segment, period column).
 
-    Two emit paths: prefer a 'Total income from operations' row (direct OI)
-    when present; otherwise compute OI from 'Total revenues' minus 'Total
-    costs and expenses'.
+    `periods[i]` is (period_type, period_end) for items-column i, or
+    (None, None) to skip. Two emit paths: prefer direct OI ('Total income
+    from operations' / 'Operating Income (Loss)') when present; otherwise
+    compute OI = revenue - costs.
     """
     facts: list[SegmentFact] = []
     current_segment: str | None = None
@@ -284,16 +374,14 @@ def _walk_section(
         if current_segment is not None:
             segment = _normalize_segment_name(current_segment)
             if pending_oi is not None:
-                facts.extend(
-                    _emit_oi(segment, pending_oi, period_ends, ticker, source_doc_id, scale)
-                )
+                facts.extend(_emit_oi(segment, pending_oi, periods, ticker, source_doc_id, scale))
             elif pending_revenue is not None and pending_costs is not None:
                 facts.extend(
                     _emit_oi_from_rev_costs(
                         segment,
                         pending_revenue,
                         pending_costs,
-                        period_ends,
+                        periods,
                         ticker,
                         source_doc_id,
                         scale,
@@ -328,19 +416,19 @@ def _walk_section(
 def extract_segment_oi_from_record(
     record: dict[str, object], source_doc_id: int, ticker: str
 ) -> list[SegmentFact]:
-    """Scan a 10-K JSON top-level dict; return all segment_facts derived from segment-OI sections."""
+    """Scan a 10-K or 10-Q JSON top-level dict; return all segment_facts derived from segment-OI sections."""
     section_keys = _find_segment_oi_sections(record)
     out: list[SegmentFact] = []
     for key in section_keys:
         section = record[key]
         if not isinstance(section, list):
             continue
-        period_ends = _parse_period_ends(section)
-        if period_ends is None:
+        periods = _resolve_periods(section)
+        if not periods:
             continue
         title = next(iter(section[0].keys()), "") if isinstance(section[0], dict) else ""
         scale = _detect_scale(title)
-        out.extend(_walk_section(section, period_ends, ticker, source_doc_id, scale))
+        out.extend(_walk_section(section, periods, ticker, source_doc_id, scale))
     return out
 
 
@@ -373,9 +461,23 @@ def _insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) ->
 
 
 def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
-    """Read 10-K JSON, walk segment-OI sections, write segment_facts. Idempotent."""
-    ticker, file_path_str = load_document_row(conn, document_id, _DOC_TYPE)
-    abs_path = project_root / file_path_str
+    """Read 10-K or 10-Q JSON, walk segment-OI sections, write segment_facts. Idempotent.
+
+    Auto-detects 10-K vs 10-Q via doc_type; the per-column period resolver
+    handles both annual and quarterly section shapes.
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT ticker, file_path, doc_type FROM documents WHERE id = ?", (document_id,))
+    row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"No document with id={document_id}")
+    if row["doc_type"] not in _DOC_TYPES:
+        raise ValueError(
+            f"Document {document_id} is doc_type={row['doc_type']!r}, "
+            f"not one of {sorted(_DOC_TYPES)}"
+        )
+    ticker = row["ticker"]
+    abs_path = project_root / row["file_path"]
     with open(abs_path, encoding="utf-8") as f:
         record = json.load(f)
     if not isinstance(record, dict):
