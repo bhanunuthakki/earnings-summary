@@ -164,13 +164,14 @@ _OI_PREFIXES: tuple[str, ...] = (
     "operating income",
     "segment operating income",
     "income from operations",
+    "income (loss) from operations",
 )
 
 
 def _matches_any(label: str, prefixes: tuple[str, ...]) -> bool:
     """Case-insensitive prefix match against any of the given strings."""
     lower = label.lower().strip()
-    return any(lower == p or lower.startswith(p + " ") or lower == p for p in prefixes)
+    return any(lower == p or lower.startswith(p + " ") for p in prefixes)
 
 
 def _is_revenue_label(label: str) -> bool:

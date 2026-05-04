@@ -118,14 +118,19 @@ def persist_dcf_run(
     result: DcfResult,
     notes: str | None = None,
     run_id: str | None = None,
+    segment_name: str | None = None,
 ) -> int:
-    """Insert one dcf_runs row; return the new row id."""
+    """Insert one dcf_runs row; return the new row id.
+
+    `segment_name=None` means a consolidated DCF run. A segment-level run
+    passes the segment label so consumers can filter or roll up.
+    """
     cur = conn.execute(
         "INSERT INTO dcf_runs ("
         "ticker, valuation_date, horizon_years, base_revenue, "
         "revenue_growths_json, fcf_margin, wacc, terminal_growth, "
-        "npv, npv_per_share, shares_outstanding, currency, notes, run_id"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "npv, npv_per_share, shares_outstanding, currency, notes, run_id, segment_name"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             ticker.upper(),
             datetime.now().date().isoformat(),
@@ -141,6 +146,7 @@ def persist_dcf_run(
             None,
             notes,
             run_id,
+            segment_name,
         ),
     )
     conn.commit()
@@ -157,7 +163,7 @@ def run_dcf_for_ticker(
     notes: str | None = None,
     run_id: str | None = None,
 ) -> tuple[DcfInputs, DcfResult, int]:
-    """End-to-end: fetch base inputs, compute DCF, persist. Returns (inputs, result, row_id)."""
+    """End-to-end: fetch base inputs, compute consolidated DCF, persist."""
     base_revenue, shares = fetch_dcf_base_inputs(conn, ticker)
     if base_revenue is None:
         raise ValueError(f"No FY revenue facts found for {ticker!r}")
@@ -173,3 +179,90 @@ def run_dcf_for_ticker(
     result = compute_dcf(inputs)
     row_id = persist_dcf_run(conn, ticker, inputs, result, notes=notes, run_id=run_id)
     return (inputs, result, row_id)
+
+
+def fetch_segment_base_revenues(
+    conn: sqlite3.Connection,
+    ticker: str,
+    metric: str = "revenue_by_product",
+) -> dict[str, float]:
+    """Latest annual segment revenue per segment_name from segment_facts.
+
+    Picks the most recent FY period_end and returns one entry per segment.
+    Default metric is the FMP product-segmentation endpoint output.
+    """
+    cur = conn.execute(
+        "SELECT MAX(period_end) FROM segment_facts "
+        "WHERE ticker = ? AND metric = ? AND fiscal_period_type = 'FY'",
+        (ticker.upper(), metric),
+    )
+    row = cur.fetchone()
+    latest = row[0] if row else None
+    if latest is None:
+        return {}
+    cur = conn.execute(
+        "SELECT segment_name, value FROM segment_facts "
+        "WHERE ticker = ? AND metric = ? AND fiscal_period_type = 'FY' AND period_end = ?",
+        (ticker.upper(), metric, latest),
+    )
+    return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
+@dataclass(frozen=True)
+class SegmentDcfRow:
+    """One segment's DCF in a multi-segment run."""
+
+    segment_name: str
+    inputs: DcfInputs
+    result: DcfResult
+    row_id: int
+
+
+def run_segment_dcf_for_ticker(
+    conn: sqlite3.Connection,
+    ticker: str,
+    segment_growths: dict[str, list[float]],
+    segment_fcf_margins: dict[str, float],
+    wacc: float,
+    terminal_growth: float,
+    notes: str | None = None,
+    run_id: str | None = None,
+    metric: str = "revenue_by_product",
+) -> list[SegmentDcfRow]:
+    """For each segment with both growths and an FCF margin specified, compute and persist a DCF.
+
+    Segments not present in segment_growths or segment_fcf_margins are skipped.
+    Each per-segment DCF gets its own dcf_runs row with segment_name set;
+    consumers can sum NPVs across rows for the ticker to get total enterprise value.
+    """
+    base_revenues = fetch_segment_base_revenues(conn, ticker, metric=metric)
+    if not base_revenues:
+        raise ValueError(
+            f"No segment revenue facts (metric={metric!r}, FY) for {ticker!r}; "
+            f"run extract_facts on fmp_segment_product first"
+        )
+
+    out: list[SegmentDcfRow] = []
+    for segment_name, base_revenue in base_revenues.items():
+        if segment_name not in segment_growths or segment_name not in segment_fcf_margins:
+            continue
+        inputs = DcfInputs(
+            base_revenue=base_revenue,
+            revenue_growths=segment_growths[segment_name],
+            fcf_margin=segment_fcf_margins[segment_name],
+            wacc=wacc,
+            terminal_growth=terminal_growth,
+            shares_outstanding=None,
+        )
+        result = compute_dcf(inputs)
+        row_id = persist_dcf_run(
+            conn,
+            ticker,
+            inputs,
+            result,
+            notes=notes,
+            run_id=run_id,
+            segment_name=segment_name,
+        )
+        out.append(SegmentDcfRow(segment_name, inputs, result, row_id))
+    return out
