@@ -130,6 +130,26 @@ class FmpCashFlowRecord(BaseModel):
     interestPaid: int | float | None = None
 
 
+class FmpAsReportedRecord(BaseModel):
+    """One period record from FMP /api/v3/as-reported-* endpoints.
+
+    The `data` field is a dict of XBRL tag names (lowercase concatenated) to
+    values. Values are int/float for monetary fields, str for metadata fields
+    (document type, filer info, etc.). The extractor picks a curated subset of
+    numeric tags relevant to the analytical aims (RPO, contract liabilities,
+    lease detail, etc.) and ignores the rest.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    date: str
+    symbol: str
+    reportedCurrency: str | None = None
+    period: str
+    fiscalYear: int | str | None = None
+    data: dict[str, str | int | float | None]
+
+
 class FmpSegmentRecord(BaseModel):
     """One period record from FMP product or geographic segment endpoints.
 

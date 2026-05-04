@@ -24,6 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from compute.as_reported import extract_as_reported_facts  # noqa: E402
 from compute.balance_sheet import extract_balance_sheet_facts  # noqa: E402
 from compute.cashflow import extract_cashflow_facts  # noqa: E402
 from compute.income_statement import extract_income_statement_facts  # noqa: E402
@@ -40,6 +41,10 @@ _DISPATCH: dict[str, _Extractor] = {
     "fmp_cashflow": extract_cashflow_facts,
     "fmp_segment_product": extract_segment_facts,
     "fmp_segment_geographic": extract_segment_facts,
+    "fmp_as_reported_income": extract_as_reported_facts,
+    "fmp_as_reported_balance": extract_as_reported_facts,
+    "fmp_as_reported_cashflow": extract_as_reported_facts,
+    "fmp_as_reported_financial": extract_as_reported_facts,
 }
 
 
