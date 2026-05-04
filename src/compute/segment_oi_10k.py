@@ -248,6 +248,17 @@ _OI_PREFIXES: tuple[str, ...] = (
     "segment operating income",
     "income from operations",
     "income (loss) from operations",
+    # Bank-style: segments don't separate non-operating items, so segment net
+    # income is the closest OI proxy (used by JPM, SOFI).
+    "net income/(loss)",
+    "net income (loss)",
+    # Homebuilder/industrial-style (used by WY, TOL).
+    "net contribution (charge) to earnings",
+    "net contribution to earnings",
+    "earnings before income taxes",
+    # Pre-tax (banks have minimal non-operating items at segment level).
+    "income/(loss) before income tax",
+    "income (loss) before income taxes",
 )
 
 
