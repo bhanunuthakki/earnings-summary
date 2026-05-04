@@ -54,7 +54,7 @@ _MONTH_NUM: dict[str, int] = {
 
 _DATE_RX = re.compile(
     r"^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
-    r"[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})$"
+    r"[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b"
 )
 
 
