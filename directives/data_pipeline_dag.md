@@ -62,7 +62,9 @@ Per `directives/data_provenance.md`, routing is decided at INGEST based on `(ins
 - Else if any `kpi_definitions` row for this ticker has `primary_source != 'fmp'`: sources = `{fmp, ir_doc, sec_xbrl}` (the union of what's needed).
 - Else: sources = `{fmp}`.
 
-Routing is data-driven — no hardcoded ticker logic. Adding a name to the IR-override registry (a `kpi_definitions` row) automatically opts that name into IR ingestion on the next run.
+Routing is data-driven — no hardcoded ticker logic. Adding a name to the IR-override registry (a `kpi_definitions` row) automatically opts that name into IR-fetch on the next run.
+
+**Manual IR uploads are an additional, orthogonal source.** The user typically uploads IR PDFs/XLSX only for portfolio names + a subset of watchlist names, not for every tracked ticker. `categorize_ir_uploads.py` picks them up from the root of `ir_documents/`, classifies them, and registers `documents` rows with `source_type='ir_doc'` independent of the routing rules above. Tickers with manual uploads but no `kpi_definitions` IR override still get IR rows in `documents` — downstream consumers should query `documents` directly rather than gating on the routing decision. Tickers with neither auto-fetch routing nor manual uploads simply have no `ir_doc` rows; downstream queries `LEFT JOIN`, and synthesis proceeds with whatever facts are present.
 
 ## Refresh cadence
 
