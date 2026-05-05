@@ -195,6 +195,35 @@ def register_ir_document(
     )
 
 
+def register_manual_document(
+    ticker: str,
+    year,
+    quarter: str,
+    doc_type: str,
+    local_path: str,
+    fiscal_label: str | None = None,
+    note: str | None = None,
+    processed: bool = False,
+) -> bool:
+    """
+    Register a document the user manually dropped into micro_thesis/sources/<TICKER>/.
+    Distinct from register_ir_document because the source is MANUAL_DROP, not an IR URL.
+    Idempotent.
+    """
+    return _register_document(
+        ticker=ticker,
+        year=year,
+        quarter=quarter,
+        doc_type=doc_type,
+        source="MANUAL_DROP",
+        local_path=local_path,
+        ir_url=None,
+        processed=processed,
+        fiscal_label=fiscal_label,
+        note=note,
+    )
+
+
 def mark_document_processed(ticker: str, year, quarter: str, doc_type: str) -> bool:
     """Mark a registered document as LLM-processed."""
     index = _load(DOCUMENT_INDEX_PATH)

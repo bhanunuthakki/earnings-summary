@@ -1,17 +1,18 @@
 {
   "ticker": "RBRK",
-  "thesis": "Cyber-resilience/data security platform displacing legacy backup vendors; subscription ARR compounds 30%+ as enterprises prioritize ransomware recovery and cloud data protection.",
+  "thesis": "Cyber-resilience/data security platform displacing legacy backup vendors; subscription ARR compounds 30%+ as enterprises prioritize ransomware recovery and cloud data protection. Cloud ARR is the higher-signal sub-metric for the cloud-transition thesis.",
   "tier_1_kpis": [
     {"name": "Subscription ARR Growth", "unit": "%", "frequency": "quarterly"},
-    {"name": "Total ARR Growth", "unit": "%", "frequency": "quarterly"},
-    {"name": "Subscription Revenue Growth", "unit": "%", "frequency": "quarterly"},
-    {"name": "Net Revenue Retention Rate", "unit": "%", "frequency": "quarterly"}
+    {"name": "Cloud ARR Growth", "unit": "%", "frequency": "quarterly"},
+    {"name": "Subscription Revenue Growth (normalized)", "unit": "%", "frequency": "quarterly", "note": "Use normalized (ex-material-rights) to neutralize FY26 ~$70M tailwind"},
+    {"name": "Average Subscription Dollar-Based NRR", "unit": "%", "frequency": "quarterly", "note": "Issuer discloses as floor only ('>120%')"}
   ],
   "break_conditions": [
     "Subscription ARR growth < 25% YoY",
-    "Total ARR growth < 15% YoY",
-    "NRR < 115%",
-    "Subscription revenue growth < 25% YoY for 2 consecutive quarters"
+    "Cloud ARR growth < 30% YoY",
+    "NRR floor disclosure drops below '>120%' bucket",
+    "Normalized subscription revenue growth < 25% YoY for 2 consecutive quarters"
   ],
-  "last_updated": "2026-04-12"
+  "last_updated": "2026-05-04",
+  "schema_revision_notes": "2026-05-04: Replaced 'Total ARR Growth' (not disclosed by issuer) with 'Cloud ARR Growth'. Specified 'normalized' on subscription revenue to neutralize material-rights tailwind. Renamed NRR to issuer terminology and acknowledged floor-only disclosure."
 }

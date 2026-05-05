@@ -5,15 +5,19 @@
     {"name": "Revenue Growth (FXN)", "unit": "%", "frequency": "quarterly"},
     {"name": "Customer Count", "unit": "M", "frequency": "quarterly"},
     {"name": "Monthly ARPAC", "unit": "USD", "frequency": "quarterly"},
-    {"name": "NPL 90+ Day Ratio", "unit": "%", "frequency": "quarterly"},
-    {"name": "Cost-to-Serve per Active Customer", "unit": "USD", "frequency": "quarterly"}
+    {"name": "NPL 90+ Brazil consumer", "unit": "%", "frequency": "quarterly", "note": "Q1-Q3'25 disclosure basis; track for continuity"},
+    {"name": "NPL 90+ Group", "unit": "%", "frequency": "quarterly", "note": "Q4'25 onwards consolidated all-geographies basis"},
+    {"name": "Cost-to-Serve per Active Customer", "unit": "USD", "frequency": "quarterly"},
+    {"name": "ARPAC/CTS ratio", "unit": "ratio", "frequency": "quarterly", "note": "Replaces simple cost-to-serve QoQ trigger; captures unit-economics direction"},
+    {"name": "Mexico active customer growth (YoY)", "unit": "%", "frequency": "quarterly", "note": "Brazil-saturation-aware leading indicator"}
   ],
   "break_conditions": [
-    "NPL 90d+ > 7%",
+    "FXN Revenue growth < 20% YoY",
     "ARPAC declining QoQ for 2 consecutive quarters",
-    "FXN Revenue growth < 25% YoY",
-    "Customer net adds < 2M per quarter for 2 consecutive quarters",
-    "Cost-to-serve rising QoQ without commensurate ARPAC expansion"
+    "NPL 90+ Brazil consumer > 8% (Q1-Q3'25 basis) OR NPL 90+ Group > 6% (Q4'25 onward basis)",
+    "Mexico active customer growth < 30% YoY",
+    "ARPAC/CTS ratio falling for 2 consecutive quarters"
   ],
-  "last_updated": "2026-04-12"
+  "last_updated": "2026-05-04",
+  "schema_revision_notes": "2026-05-04: Bifurcated NPL 90+ into Brazil-consumer and Group buckets to handle the Q4'25 methodology consolidation (geography mix). Re-baselined Revenue threshold from <25% to <20% (the $5B/Q base makes 25% mechanically unreachable in 2026). Replaced mechanically-safe customer net-adds 2M floor with Mexico growth (the leading indicator now that Brazil is saturated at 62% adult-pop). Replaced cost-to-serve QoQ trigger with ARPAC/CTS ratio direction."
 }

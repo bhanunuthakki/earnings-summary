@@ -79,6 +79,29 @@ def gather_quarter_context(ticker: str) -> list[dict]:
     return [q for q in sorted_quarters if q["summaries"]]  # Only quarters with at least one summary
 
 
+def quarter_to_period_end(year: int | str, quarter: str) -> str:
+    """
+    Map (year, quarter) → ISO period-end date using calendar-quarter heuristic.
+    Q1→Mar 31, Q2→Jun 30, Q3→Sep 30, Q4→Dec 31. Issuers with off-calendar fiscal
+    years (VEEV, RBRK ending Jan; etc.) will be approximated; this is acceptable
+    for staleness detection where ±60 days of slop does not materially change
+    the >120-day stale threshold.
+    """
+    q = quarter.upper().lstrip("Q")
+    quarter_int = int(q)
+    if quarter_int not in (1, 2, 3, 4):
+        raise ValueError(f"Invalid quarter: {quarter}")
+    end_map = {1: "03-31", 2: "06-30", 3: "09-30", 4: "12-31"}
+    return f"{int(year)}-{end_map[quarter_int]}"
+
+
+def latest_corpus_date(quarters: list[dict]) -> str | None:
+    """Return ISO date of the most recent period_end across quarters in scope, or None if empty."""
+    if not quarters:
+        return None
+    return max(quarter_to_period_end(q["year"], q["quarter"]) for q in quarters)
+
+
 def _cache_name(ticker: str, quarter: str, year, doc_type: str) -> str:
     suffix_map = {
         "transcript": "summary.txt",
@@ -89,33 +112,50 @@ def _cache_name(ticker: str, quarter: str, year, doc_type: str) -> str:
     return f"{ticker}_{quarter}_{year}_{suffix}"
 
 
-def update_tracker(ticker: str) -> None:
+def update_tracker(ticker: str) -> str:
+    """
+    Generate and write a tracker for one ticker.
+
+    Returns one of: "done", "skipped_no_schema", "skipped_no_docs", "failed".
+    Never raises — failures are logged and returned as status so batch runs
+    in --all mode can continue past a single-ticker failure.
+    """
     ticker = resolve_ticker(ticker).upper()
     schema = load_holdings_schema(ticker)
     if schema is None:
         print(f"[{ticker}] No holdings schema found. Skipping.", file=sys.stderr)
-        return
+        return "skipped_no_schema"
 
     quarters = gather_quarter_context(ticker)
     if not quarters:
         print(f"[{ticker}] No processed documents found. Run process_ir_documents.py first.", file=sys.stderr)
-        return
+        return "skipped_no_docs"
 
-    log.info({"event": "generating_tracker", "ticker": ticker, "quarters_available": len(quarters)})
+    report_date = datetime.date.today().isoformat()
+    corpus_latest = latest_corpus_date(quarters)
+
+    log.info({
+        "event": "generating_tracker",
+        "ticker": ticker,
+        "quarters_available": len(quarters),
+        "report_date": report_date,
+        "corpus_latest_date": corpus_latest,
+    })
 
     try:
-        tracker_text = generate_thesis_update(ticker, schema, quarters)
+        tracker_text = generate_thesis_update(ticker, schema, quarters, report_date, corpus_latest)
     except Exception as e:
         log.error({"event": "llm_failed", "ticker": ticker, "error": str(e)})
-        sys.exit(1)
+        print(json.dumps({"ticker": ticker, "status": "failed", "error": str(e)}))
+        return "failed"
 
-    date_str = datetime.date.today().isoformat()
-    out_path = THESIS_DIR / f"thesis-tracker-{ticker}-{date_str}.md"
+    out_path = THESIS_DIR / f"thesis-tracker-{ticker}-{report_date}.md"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(tracker_text)
 
     print(json.dumps({"ticker": ticker, "status": "done", "output": str(out_path)}))
     log.info({"event": "tracker_written", "path": str(out_path)})
+    return "done"
 
 
 def main() -> None:
@@ -130,11 +170,20 @@ def main() -> None:
         if not schemas:
             print("No holdings schemas found.", file=sys.stderr)
             sys.exit(1)
+        results: dict[str, list[str]] = {"done": [], "skipped_no_docs": [], "skipped_no_schema": [], "failed": []}
         for schema_path in schemas:
             ticker = schema_path.stem
-            update_tracker(ticker)
+            status = update_tracker(ticker)
+            results[status].append(ticker)
+        # Final batch summary on stderr — visible in the run log without polluting JSON-line stdout.
+        print(json.dumps({"event": "batch_summary", **{k: v for k, v in results.items() if v}}), file=sys.stderr)
+        # Non-zero exit if any ticker failed; skips are not failures.
+        if results["failed"]:
+            sys.exit(1)
     else:
-        update_tracker(args.ticker)
+        status = update_tracker(args.ticker)
+        if status == "failed":
+            sys.exit(1)
 
 
 if __name__ == "__main__":

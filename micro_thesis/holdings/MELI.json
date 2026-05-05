@@ -10,8 +10,10 @@
   "break_conditions": [
     "FXN Revenue growth < 20% YoY for 2 consecutive quarters",
     "FXN GMV growth < 15% YoY",
-    "Operating margin contracts >400bps YoY without clear reinvestment rationale",
-    "Credit NPL 90d+ > 8% of portfolio"
+    "Operating margin contracts >400bps YoY without clear reinvestment rationale AND no FXN revenue re-acceleration",
+    "15-90d early-bucket NPL rises >150bps QoQ for 2 consecutive quarters",
+    "NIMAL compression >300bps YoY (credit-quality proxy)"
   ],
-  "last_updated": "2026-04-12"
+  "last_updated": "2026-05-04",
+  "schema_revision_notes": "2026-05-04: Replaced permanently-triggered 'Credit NPL 90d+ > 8%' (issuer's stock 90d+ NPL is structurally 17-18%) with two flow-based credit-quality triggers: 15-90d early-bucket QoQ delta, and NIMAL compression. Tightened OpMgn break with 'AND no FXN revenue re-acceleration' to allow defensible reinvestment-driven compression while still firing on lasting deterioration."
 }
