@@ -22,7 +22,14 @@ TRANSCRIPT_INDEX_PATH = os.path.join(CACHE_DIR, "transcript_index.json")
 # New multi-doc-type index
 DOCUMENT_INDEX_PATH = os.path.join(CACHE_DIR, "document_index.json")
 
-VALID_DOC_TYPES = {"transcript", "press_release", "presentation"}
+VALID_DOC_TYPES = {
+    "transcript",
+    "press_release",
+    "presentation",
+    "investor_update",
+    "supplement",
+    "event",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +203,88 @@ def register_ir_document(
 
 
 def register_manual_document(
+def _event_key(ticker: str, event_date: str, sha256: str) -> str:
+    """Index key for non-quarterly events.
+
+    Quarterly docs key on `(ticker, year, quarter, doc_type)` since each tuple has at most
+    one artifact per kind. Events can have multiple distinct PDFs on the same date (deck
+    + transcript + supplement etc.), so the sha256 prefix differentiates them.
+    """
+    return f"{resolve_ticker(ticker).upper()}_event_{event_date}_{sha256[:8]}"
+
+
+def has_event(ticker: str, event_date: str, sha256: str) -> dict | None:
+    index = _load(DOCUMENT_INDEX_PATH)
+    return index.get(_event_key(ticker, event_date, sha256))
+
+
+def register_event_document(
+    ticker: str,
+    event_date: str,
+    local_path: str,
+    sha256: str,
+    confidence: float,
+    note: str | None = None,
+) -> bool:
+    """Register a non-quarterly IR event artifact (investor day, AGM, capital markets day).
+
+    Lives in document_index.json under a separate key namespace from quarterly docs;
+    `doc_type` is fixed to "event". `event_date` is the ISO date the event occurred.
+    """
+    index = _load(DOCUMENT_INDEX_PATH)
+    key = _event_key(ticker, event_date, sha256)
+    existing = index.get(key)
+
+    intake_note = f"intake sha={sha256[:8]} confidence={confidence:.2f}"
+    full_note = f"{intake_note}; {note}" if note else intake_note
+
+    index[key] = {
+        "ticker": resolve_ticker(ticker).upper(),
+        "event_date": event_date,
+        "doc_type": "event",
+        "source": "USER_INTAKE",
+        "ir_url": None,
+        "local_path": local_path,
+        "fiscal_label": None,
+        "note": full_note,
+        "processed": False,
+        "indexed_at": existing["indexed_at"] if existing else datetime.datetime.now().isoformat(),
+        "updated_at": datetime.datetime.now().isoformat(),
+    }
+    _save(DOCUMENT_INDEX_PATH, index)
+    return True
+
+
+def mark_event_processed(ticker: str, event_date: str, sha8: str) -> bool:
+    """Mark an event artifact as processed. `sha8` is the 8-character sha256 prefix
+    that appears in the event's index key and on-disk filename."""
+    index = _load(DOCUMENT_INDEX_PATH)
+    key = f"{resolve_ticker(ticker).upper()}_event_{event_date}_{sha8}"
+    if key not in index:
+        return False
+    index[key]["processed"] = True
+    index[key]["updated_at"] = datetime.datetime.now().isoformat()
+    _save(DOCUMENT_INDEX_PATH, index)
+    return True
+
+
+def get_unprocessed_events(ticker: str | None = None) -> list[dict]:
+    """Return all registered but unprocessed event artifacts, optionally filtered by ticker."""
+    index = _load(DOCUMENT_INDEX_PATH)
+    result = [
+        v for v in index.values()
+        if v.get("doc_type") == "event"
+        and not v.get("processed")
+        and v.get("local_path")
+    ]
+    if ticker:
+        ticker = resolve_ticker(ticker).upper()
+        result = [v for v in result if v.get("ticker") == ticker]
+    result.sort(key=lambda d: (d.get("ticker", ""), d.get("event_date", "")))
+    return result
+
+
+def register_user_intake_document(
     ticker: str,
     year,
     quarter: str,
@@ -210,6 +299,18 @@ def register_manual_document(
     Distinct from register_ir_document because the source is MANUAL_DROP, not an IR URL.
     Idempotent.
     """
+    sha256: str,
+    confidence: float,
+    note: str | None = None,
+) -> bool:
+    """
+    Register a document filed by the user-intake handler (`src/intake.py`).
+
+    Source is fixed to `USER_INTAKE` so downstream consumers can distinguish manually
+    dropped artifacts from IR-website downloads (`IR_WEBSITE`) and from FMP/SEC ingests.
+    """
+    intake_note = f"intake sha={sha256[:8]} confidence={confidence:.2f}"
+    full_note = f"{intake_note}; {note}" if note else intake_note
     return _register_document(
         ticker=ticker,
         year=year,
@@ -221,6 +322,12 @@ def register_manual_document(
         processed=processed,
         fiscal_label=fiscal_label,
         note=note,
+        source="USER_INTAKE",
+        local_path=local_path,
+        ir_url=None,
+        processed=False,
+        fiscal_label=None,
+        note=full_note,
     )
 
 
@@ -246,9 +353,18 @@ def get_documents_for_ticker(ticker: str) -> list[dict]:
 
 
 def get_unprocessed_documents(ticker: str | None = None) -> list[dict]:
-    """Return all registered but unprocessed documents, optionally filtered by ticker."""
+    """Return all registered but unprocessed quarterly documents, optionally filtered by ticker.
+
+    Events live in a separate keyspace (no year/quarter fields) — fetch via
+    `get_unprocessed_events`.
+    """
     index = _load(DOCUMENT_INDEX_PATH)
-    result = [v for v in index.values() if not v.get("processed") and v.get("local_path")]
+    result = [
+        v for v in index.values()
+        if v.get("doc_type") != "event"
+        and not v.get("processed")
+        and v.get("local_path")
+    ]
     if ticker:
         ticker = resolve_ticker(ticker).upper()
         result = [v for v in result if v.get("ticker") == ticker]

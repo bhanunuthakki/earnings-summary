@@ -33,7 +33,7 @@ sys.path.insert(0, str(SRC_DIR))
 
 import index_manager
 from parser import extract_text_from_pdf, read_text_file
-from llm_client import generate_summary, generate_press_release_summary, generate_presentation_brief
+from llm_client import generate_summary, generate_press_release_summary, generate_presentation_brief, generate_event_brief
 from alias_manager import resolve_ticker
 
 CACHE_DIR = PROJECT_ROOT / ".tmp"
@@ -61,15 +61,53 @@ DOC_TYPE_CONFIG: dict[str, dict] = {
         "llm_fn": generate_summary,
         "label": "Transcript Summary",
     },
+    # Letters to shareholders / investor updates summarize quarter highlights, so they
+    # share the press-release LLM path. The cache suffix differs to keep artifacts distinct.
+    "investor_update": {
+        "cache_suffix": "investor_update_summary.txt",
+        "llm_fn": generate_press_release_summary,
+        "label": "Investor Update Summary",
+    },
+    # Non-quarterly IR events: investor days, AGMs, capital markets days, conference decks.
+    # Uses the dedicated event-brief prompt focused on multi-year strategy + capital allocation.
+    "event": {
+        "cache_suffix": "event_brief.txt",
+        "llm_fn": generate_event_brief,
+        "label": "Event Brief",
+    },
 }
+
+
+def _is_event(doc: dict) -> bool:
+    return doc.get("doc_type") == "event"
 
 
 def cache_path_for(doc: dict) -> Path:
     ticker = doc["ticker"]
+    suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
+    if _is_event(doc):
+        # Event index entries have `event_date` instead of (year, quarter); the registered
+        # local_path's filename ends in `__<sha8>.pdf` which we surface in the cache name.
+        event_date = doc["event_date"]
+        sha8 = Path(doc["local_path"]).stem.split("__")[-1]
+        return CACHE_DIR / f"{ticker}_event_{event_date}_{sha8}_{suffix}"
     quarter = doc["quarter"]
     year = doc["year"]
-    suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
     return CACHE_DIR / f"{ticker}_{quarter}_{year}_{suffix}"
+
+
+def _mark_processed(doc: dict) -> None:
+    if _is_event(doc):
+        sha8 = Path(doc["local_path"]).stem.split("__")[-1]
+        index_manager.mark_event_processed(doc["ticker"], doc["event_date"], sha8)
+        return
+    index_manager.mark_document_processed(doc["ticker"], doc["year"], doc["quarter"], doc["doc_type"])
+
+
+def _doc_log_fields(doc: dict) -> dict:
+    if _is_event(doc):
+        return {"ticker": doc["ticker"], "event_date": doc["event_date"], "doc_type": "event"}
+    return {"ticker": doc["ticker"], "quarter": doc["quarter"], "year": doc["year"], "doc_type": doc["doc_type"]}
 
 
 def extract_text(local_path: str) -> str:
@@ -84,34 +122,30 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
     Process a single document entry. Returns True if processed successfully.
     Idempotent: skips if cache already exists.
     """
-    ticker = doc["ticker"]
-    quarter = doc["quarter"]
-    year = doc["year"]
     doc_type = doc["doc_type"]
     local_path = doc.get("local_path")
+    log_fields = _doc_log_fields(doc)
 
     config = DOC_TYPE_CONFIG.get(doc_type)
     if config is None:
-        log.warning({"event": "unknown_doc_type", "doc_type": doc_type, "ticker": ticker})
+        log.warning({"event": "unknown_doc_type", **log_fields})
         return False
 
     if not local_path or not Path(local_path).exists():
-        log.warning({"event": "local_path_missing", "ticker": ticker, "quarter": quarter, "year": year, "doc_type": doc_type})
+        log.warning({"event": "local_path_missing", **log_fields})
         return False
 
     cache = cache_path_for(doc)
 
     if cache.exists():
         log.info({"event": "cache_hit", "cache": str(cache)})
-        # Still mark as processed in the index if not already
-        index_manager.mark_document_processed(ticker, year, quarter, doc_type)
+        _mark_processed(doc)
         return True
 
-    label = config["label"]
-    log.info({"event": "processing", "ticker": ticker, "quarter": quarter, "year": year, "doc_type": doc_type, "label": label})
+    log.info({"event": "processing", "label": config["label"], **log_fields})
 
     if dry_run:
-        print(f"[DRY RUN] Would process: {ticker} {quarter} {year} {doc_type} -> {cache.name}")
+        print(f"[DRY RUN] Would process: {log_fields} -> {cache.name}")
         return True
 
     try:
@@ -120,19 +154,18 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
             log.error({"event": "empty_text", "local_path": local_path})
             return False
 
-        llm_fn = config["llm_fn"]
-        result_text = llm_fn(text)
+        result_text = config["llm_fn"](text)
 
         with open(cache, "w", encoding="utf-8") as f:
             f.write(result_text)
 
         log.info({"event": "cached", "cache": str(cache)})
-        index_manager.mark_document_processed(ticker, year, quarter, doc_type)
+        _mark_processed(doc)
         time.sleep(RATE_LIMIT_SLEEP)
         return True
 
     except Exception as e:
-        log.error({"event": "processing_failed", "ticker": ticker, "quarter": quarter, "year": year, "doc_type": doc_type, "error": str(e)})
+        log.error({"event": "processing_failed", "error": str(e), **log_fields})
         return False
 
 
@@ -149,6 +182,14 @@ def run_for_ticker(
         docs = [d for d in docs if d["quarter"].upper() == quarter.upper()]
     if year:
         docs = [d for d in docs if str(d["year"]) == str(year)]
+
+    # Events: include unless the caller filtered by quarter (events have no quarter).
+    # `--year` filters events by event_date year so users can scope to a specific period.
+    if not quarter:
+        events = index_manager.get_unprocessed_events(ticker)
+        if year:
+            events = [e for e in events if e.get("event_date", "").startswith(str(year))]
+        docs = docs + events
 
     if not docs:
         print(f"[{ticker}] No unprocessed documents found.")
@@ -175,7 +216,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.all:
-        unprocessed = index_manager.get_unprocessed_documents()
+        unprocessed = (
+            index_manager.get_unprocessed_documents()
+            + index_manager.get_unprocessed_events()
+        )
         tickers = sorted({d["ticker"] for d in unprocessed})
         if not tickers:
             print("No unprocessed documents found.")

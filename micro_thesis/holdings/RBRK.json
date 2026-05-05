@@ -15,4 +15,84 @@
   ],
   "last_updated": "2026-05-04",
   "schema_revision_notes": "2026-05-04: Replaced 'Total ARR Growth' (not disclosed by issuer) with 'Cloud ARR Growth'. Specified 'normalized' on subscription revenue to neutralize material-rights tailwind. Renamed NRR to issuer terminology and acknowledged floor-only disclosure."
+  "name": "Rubrik",
+  "last_updated": "2026-05-04",
+  "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors (Cohesity, Veeam, legacy Dell PowerProtect) as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform. The bet: (1) net new subscription ARR continues at $100M+ quarterly cadence, (2) NRR holds >120% as land-and-expand deepens within existing accounts, (3) operating leverage continues to inflect as the IPO-era customer-acquisition cost cycle normalizes (Q4 sub ARR contribution margin jumped from 2.1% to 11.6% YoY).",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Net new subscription ARR cadence + sub ARR contribution margin inflection",
+  "tier_1_kpis": [
+    {
+      "name": "Net new subscription ARR ($)",
+      "current": "$115M Q4 FY26 (record)",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<$80M for 2 consecutive Qs (deceleration to pre-FY26 levels)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Subscription ARR YoY growth",
+      "current": "+34% Q4 FY26 ($1.46B)",
+      "prior": null,
+      "yoy": "+34%",
+      "status": "Green",
+      "break_condition": "<25% YoY",
+      "source": "earnings release"
+    },
+    {
+      "name": "Subscription Revenue Growth",
+      "current": "+50% Q4 FY26 ($365M)",
+      "prior": null,
+      "yoy": "+50%",
+      "status": "Green",
+      "break_condition": "<25% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net Revenue Retention Rate (NRR)",
+      "current": ">120% Q4 FY26",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<115%",
+      "source": "earnings release"
+    },
+    {
+      "name": "Sub ARR contribution margin",
+      "current": "11.6% Q4 FY26 (vs 2.1% prior year)",
+      "prior": "2.1%",
+      "yoy": "+950bps",
+      "status": "Green",
+      "break_condition": "Inflection reverses — margin contracts QoQ for 2 Qs without explicit go-to-market reinvestment rationale",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customers >$100K ARR",
+      "current": "2,805 Q4 FY26 (+25% YoY)",
+      "prior": null,
+      "yoy": "+25%",
+      "status": "Green",
+      "break_condition": "<15% YoY (large-customer attach is the moat signal)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "Total Revenue Growth", "current": "+46% Q4 FY26 ($377.7M)", "source": "earnings release"},
+    {"name": "Free Cash Flow", "current": "$238M FY26 vs $22M prior year", "source": "earnings release"},
+    {"name": "Non-GAAP Gross Margin", "current": "79.7%", "source": "earnings release"}
+  ],
+  "nuance": {
+    "bear_case": "A Cohesity/Veeam consolidation play (PE-backed merger creates a credible scaled competitor) could compress RBRK's pricing power before scale economics fully kick in. Backup/recovery is historically a price-competitive category once the differentiation cycle ends.",
+    "adversarial_take": "34% sub ARR growth at $1.5B base is excellent, but the law of large numbers will bend the trajectory by FY27. The thesis must accommodate growth deceleration to ~25% as the new normal without panicking — break threshold below 25% is calibrated for that.",
+    "stress_test": "If $100K+ customer growth slows below 15% AND a competitor M&A creates a >$3B scaled rival, the moat thesis weakens even before any single break trips."
+  },
+  "competitive_watchlist": ["Cohesity", "Veeam", "Dell PowerProtect / Data Domain", "Commvault", "Druva"],
+  "thesis_breakers_qualitative": [
+    "Net new sub ARR <$80M for 2 consecutive Qs",
+    "NRR drops below 115%",
+    "Sub ARR contribution margin reverses inflection",
+    "Major competitor M&A creating scaled rival (Cohesity-Veeam-Druva combination, etc.)",
+    ">$100K customer growth <15% YoY"
+  ]
 }

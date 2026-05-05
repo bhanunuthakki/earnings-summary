@@ -10,3 +10,9 @@ mcp
 # dependency. Install separately: see https://code.claude.com/docs/en/setup, then `claude
 # auth login`. ANTHROPIC_API_KEY MUST be unset in the runtime env (silently overrides to
 # API billing). src/llm_client.py enforces this with a fail-loud lazy check.
+openpyxl
+pydantic
+yt-dlp
+faster-whisper
+pydantic
+beautifulsoup4

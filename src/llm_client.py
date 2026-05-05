@@ -27,6 +27,12 @@ import os
 import shutil
 import subprocess
 from datetime import date
+import json
+import os
+import re
+
+import google.generativeai as genai
+from dotenv import load_dotenv
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS
@@ -110,12 +116,33 @@ def _call_claude(
 # ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
+# Empty-string ANTHROPIC_API_KEY would still trigger claude_cli's billing-guard.
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    os.environ.pop("ANTHROPIC_API_KEY", None)
 
+# Models
+# `gemini-flash-latest` aliases to `gemini-3-flash`, capped at 20 RPD on the free tier.
+# The intake classifier runs ~50 calls per migration batch, so it pins to 2.5-flash
+# (1500 RPD free) for headroom. Summary/Say-Do functions stay on `gemini-flash-latest`.
+INTAKE_CLASSIFIER_MODEL = "gemini-2.5-flash"
+
+# Inbox classifier: keep the prompt below the 8 KB Gemini context budget for cheap calls
+INTAKE_TEXT_BUDGET = 6000
+JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+
+def _complete(prompt: str) -> str:
+    """Single LLM call — every public helper routes through this."""
+    return call_claude(prompt)
 
 def generate_pairwise_analysis(prev_summary, curr_summary):
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
     """
+
+def generate_pairwise_analysis(prev_summary, curr_summary):
+    """Strict Say-Do analysis comparing prior-quarter guidance to current results."""
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
 
@@ -170,6 +197,35 @@ def generate_summary(text):
     """
     Generates a 1-2 page summary of the earnings transcript.
     """
+    **Analysis Requirements:**
+    1.  **Context:** What did they promise? (Guidance, Targets, Strategic Goals).
+    2.  **Execution:** What did they actually deliver? (Results, Misses, Beats).
+    3.  **Analyst Verdict:**
+        *   **Attribution:** Was any miss/beat due to **Execution** (Management Performance) or **Exogenous Factors** (Macro, Supply Chain, One-offs)?
+        *   **Thesis Impact:** Is this a structural issue or a temporary blip?
+
+    **Output Format (Strict Markdown):**
+    ## Analysis: {prev_q_str} vs {curr_q_str}
+
+    ### 1. Analyst Verdict
+    *   **Performance Rating:** **MET** / **MISSED** / **EXCEEDED** (Choose one)
+    *   **Attribution:** [Execution vs. Exogenous explanation]
+    *   **Thesis View:** [Bull/Bear implication]
+
+    ### 2. Say (The Promise)
+    *   **Guidance:** [Specific numbers/targets from {prev_q_str}]
+    *   **Strategy:** [Key initiatives promised]
+
+    ### 3. Do (The Reality)
+    *   **Performance:** [Actuals in {curr_q_str}]
+    *   **Gap Analysis:** [Specific variances]
+    """
+
+    return _complete(prompt)
+
+
+def generate_summary(text):
+    """Generate a 1-2 page summary of an earnings transcript."""
     prompt = """
     You are an expert financial analyst. Please provide a detailed 1-2 page summary of the provided earnings call transcript.
 
@@ -215,12 +271,16 @@ def generate_summary(text):
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
 
+    return _complete(prompt + text)
 
 def generate_press_release_summary(text: str) -> str:
     """
     Generates a structured summary from an earnings press release.
     Press releases are financial-forward — emphasize the numbers table and guidance.
     """
+
+def generate_press_release_summary(text: str) -> str:
+    """Structured summary from an earnings press release."""
     prompt = """
 You are an expert financial analyst. Summarize the following earnings press release.
 This is sourced from the company's IR website, so it is the official financial release — be precise.
@@ -267,6 +327,12 @@ def generate_presentation_brief(text: str) -> str:
     Generates a strategic brief from an earnings presentation slide deck.
     Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
     """
+
+    return _complete(prompt + text)
+
+
+def generate_presentation_brief(text: str) -> str:
+    """Strategic brief from an earnings presentation slide deck."""
     prompt = """
 You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
 Extract the key strategic narrative — what story is management telling investors?
@@ -328,6 +394,68 @@ _ADVERSARIAL_LOOP_FORMAT_BLOCK = """**Adversarial Loop format (use these exact f
 - **Sensitivity:** quantified impact if the primary read is wrong by ±X% on the key variable.
 """
 
+def generate_event_brief(text: str) -> str:
+    """
+    Generate a structured brief for a non-quarterly IR event: investor day, AGM,
+    capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
+    """
+    model = genai.GenerativeModel("gemini-flash-latest")
+
+    prompt = """You are a senior equity analyst summarizing an IR event document.
+
+Events differ from quarterly artifacts: they are usually long-horizon strategy
+discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
+M&A rationale) rather than near-term financial results. Skip period numbers unless
+they materially shape the multi-year framework.
+
+**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
+
+**Output Format (Strict Markdown):**
+
+# Event Brief: [Ticker] [Event Name] [Date]
+
+## 1. Event Type & Context
+*   **Type:** [Investor Day / AGM / Capital Markets Day / Conference / M&A announcement / Other]
+*   **Setting:** [Date, location if relevant, audience]
+*   **Why it matters:** [1-2 sentences — what was the management goal for the event]
+
+## 2. Headline Strategic Messages
+[3-5 bullets on the core narratives management was trying to land. Lead with what's NEW
+or DIFFERENT vs. prior management framing.]
+
+## 3. Multi-Year Targets & Frameworks
+*   **Quantitative targets:** [5-year revenue/FCF/margin targets, capital deployment ranges]
+*   **Time horizon:** [Stated horizon — 3yr, 5yr, "through the cycle"]
+*   **Comparison to prior:** [If the company previously gave a framework, note shifts]
+
+## 4. Capital Allocation
+[Explicit framing on buybacks, dividends, M&A appetite, balance-sheet priorities, payout ratios]
+
+## 5. Segment / Product Deep-Dives
+[Material new disclosures by segment — TAM, growth drivers, unit economics, competitive positioning]
+
+## 6. Risks & Watchpoints
+*   **Acknowledged:** [What management explicitly flagged as risks]
+*   **Unaddressed:** [What investors will want to ask but didn't get clear answers on]
+
+## 7. Thesis Read-Through
+[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis]
+
+Event Document Text:
+"""
+
+    try:
+        response = model.generate_content(prompt + text)
+        return response.text
+    except Exception as e:
+        print(f"CRITICAL ERROR: Event brief generation failed:\n{e}")
+        raise e
+
+
+def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
+    """
+    Generate an updated micro-thesis tracker document for a holding.
+
 
 def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tuple[int, bool, str, str]:
     """
@@ -363,6 +491,12 @@ def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tupl
 def _format_quarter_context(quarters: list[dict]) -> str:
     """Render the chronological quarter blocks consumed by both passes."""
     blocks = []
+
+def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
+    """Updated micro-thesis tracker document for a holding."""
+    thesis_text = json.dumps(schema, indent=2)
+
+    quarter_blocks = []
     for q in quarters:
         block = f"\n### {q['quarter']} {q['year']}\n"
         for doc_type, text in q["summaries"].items():
@@ -396,6 +530,10 @@ def _build_pass_a_prompt(
         if is_stale
         else "distance to break condition (state as % or absolute gap)"
     )
+            block += f"\n**{label}:**\n{text[:3000]}\n"
+        quarter_blocks.append(block)
+
+    quarters_context = "\n".join(quarter_blocks)
 
     return f"""You are a senior fundamental equity analyst tracking a concentrated long position.
 
@@ -615,6 +753,7 @@ def generate_thesis_update(
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
     log.info({"event": "thesis_pass_done", "ticker": ticker, "pass": "B", "output_chars": len(pass_b_output)})
+    return _complete(prompt)
 
     return _assemble_tracker(
         ticker, report_date, is_stale, staleness_days, corpus_latest_date,
@@ -627,6 +766,8 @@ def generate_strategic_analysis(summaries_list):
     Generates a strategic analysis comparing performance vs expectations across quarters.
     summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
     """
+def generate_strategic_analysis(summaries_list):
+    """Strategic analysis comparing performance vs expectations across quarters."""
     context_str = ""
     for item in summaries_list:
         context_str += f"\n--- {item['quarter']} {item['year']} SUMMARY ---\n{item['text']}\n"
@@ -653,6 +794,9 @@ def generate_strategic_analysis(summaries_list):
     **Output Structure:**
 
     # Strategic Performance Analysis
+
+    ## Executive Outlook Assessment
+    Provide a high-level verdict: Is management credible? Do they consistently beat, meet, or miss their own expectations?
 
     ## Quarter-by-Quarter Track Record
 
@@ -688,10 +832,77 @@ def generate_strategic_analysis(summaries_list):
         raise
 
 
+    return _complete(prompt + context_str)
+
+
+def generate_bear_case(
+    ticker: str,
+    thesis: str,
+    break_conditions: list[str],
+    last_quarter_summaries: list[str],
+    financials_table_md: str,
+    segments_table_md: str,
+    kpi_status_md: str,
+) -> str:
+    """Generate a structured bear case as a JSON string the caller parses.
+
+    Schema: {failure_modes: list[FailureMode], most_underweighted: str,
+    out_of_scope_flags: list[str]}.
+    """
+    transcripts_block = "\n\n".join(
+        f"### Quarter {i + 1} (oldest first)\n{s[:6000]}" for i, s in enumerate(last_quarter_summaries)
+    )
+
+    prompt = f"""You are a senior fundamental equity analyst writing the bear case for {ticker}.
+Be specific, quantified, and grounded ONLY in the data below. Do not fabricate
+metrics or external events. If a real risk exists but the data here doesn't
+support it, list it under `out_of_scope_flags` for manual review — do not invent
+detail.
+
+THESIS:
+{thesis}
+
+BREAK CONDITIONS:
+{json.dumps(break_conditions, indent=2)}
+
+LAST {len(last_quarter_summaries)}Q SUMMARIES:
+{transcripts_block}
+
+QUARTERLY FINANCIALS (12Q):
+{financials_table_md}
+
+SEGMENT TRENDS (12Q):
+{segments_table_md}
+
+KPI STATUS:
+{kpi_status_md}
+
+---
+
+Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
+
+{{
+  "failure_modes": [
+    {{
+      "hypothesis": "one-sentence concrete failure mode",
+      "evidence_in_data": "which data point above supports it (cite a number or trend)",
+      "leading_indicator": "what would confirm it next quarter",
+      "quantitative_impact": "magnitude of revenue/margin/segment compression with reasoning chain",
+      "refutation_criteria": "what mgmt would have to demonstrate over next 2-4Q to neutralize"
+    }}
+  ],
+  "most_underweighted": "one paragraph: which failure mode is most underweighted by consensus and why",
+  "out_of_scope_flags": ["risks real but not derivable from the inputs above (regulatory, macro)"]
+}}
+
+Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
+"""
+
+    return _complete(prompt)
+
+
 def identify_transcript_metadata(text_snippet):
-    """
-    Identifies the Company Ticker, Quarter, and Year from the transcript text.
-    """
+    """Identify Company Ticker, Quarter, and Year from the transcript text."""
     prompt = """
     Analyze the following text from an earnings call transcript cover page or header.
     Identify the:
@@ -717,3 +928,58 @@ def identify_transcript_metadata(text_snippet):
     except Exception as e:
         log.error(f"Error identifying metadata: {e}")
         return "UNKNOWN"
+
+    return _complete(prompt + text_snippet[:2000]).strip()
+def classify_intake_document(filename: str, text: str, hint: dict) -> dict | None:
+    """Classify a user-dropped IR document.
+
+    Returns a dict with keys (ticker, period_end, doc_type, confidence, reasoning)
+    matching `src.intake.IntakeClassification`, or None on any LLM/parse failure.
+    """
+    model = genai.GenerativeModel(INTAKE_CLASSIFIER_MODEL)
+
+    prompt = (
+        "You are classifying an investor-relations document for a portfolio analyst.\n\n"
+        "Given the filename and an excerpt of the document text, return a JSON object with EXACTLY these fields:\n\n"
+        "{\n"
+        '  "ticker": "<US-listed primary ticker, e.g. NVDA, GOOG, BN, MELI>",\n'
+        '  "period_end": "<YYYY-MM-DD, the last calendar day of the fiscal quarter>",\n'
+        '  "doc_type": "<one of: ir_press_release, ir_presentation, ir_supplement, ir_investor_update, earnings_call_transcript, ir_event>",\n'
+        '  "confidence": <float 0.0 to 1.0>,\n'
+        '  "reasoning": "<one sentence explaining your choice>"\n'
+        "}\n\n"
+        "Doc-type guidance (pick the dominant form, not the topic):\n"
+        "- ir_press_release: short text-heavy quarterly earnings announcement / financial results\n"
+        "- ir_presentation: slide deck dominated by charts / visuals / bullet slides for a quarter\n"
+        "- ir_supplement: detailed financial supplement / data book / spreadsheet-style tables\n"
+        "- ir_investor_update: longer letter to shareholders / quarterly update narrative\n"
+        "- earnings_call_transcript: speaker-attributed dialogue from the earnings call\n"
+        "- ir_event: NON-QUARTERLY IR materials — investor day, AGM, capital markets day,\n"
+        "    conference deck, ad-hoc strategic announcement, M&A or stock-split deck.\n"
+        "    These are NOT tied to a fiscal quarter. For these, period_end = the EVENT DATE\n"
+        "    (the day the event occurred), not a quarter-end. If you can't find an exact day\n"
+        "    in the document, use the first day of the relevant month or the cover-page year.\n\n"
+        "Period-end mapping (for quarterly doc types only):\n"
+        "- Calendar fiscal year (BN, MELI, GOOG, META, NVO, NU, NOW, WIX, AMZN): Q1=03-31, Q2=06-30, Q3=09-30, Q4=12-31.\n"
+        "- VEEV / RBRK have January fiscal year-end. FY26 Q1 ends ~04-30, Q2 ~07-31, Q3 ~10-31, Q4 ~01-31 of the next calendar year.\n"
+        "- NVO publishes H1 (map to Q2, period_end 06-30) and 9M (map to Q3, 09-30).\n\n"
+        "Set confidence < 0.6 if the document is empty, ambiguous, or clearly not an IR document for a tracked holding.\n\n"
+        f"Filename hint (pre-extracted, may be wrong): {hint}\n"
+        f"Filename: {filename}\n\n"
+        "Document text excerpt:\n"
+        '"""\n'
+        f"{text[:INTAKE_TEXT_BUDGET]}\n"
+        '"""\n\n'
+        "Return ONLY the JSON object — no prose, no markdown fence."
+    )
+
+    try:
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"classify_intake_document failed: {e}")
+        return None
+
