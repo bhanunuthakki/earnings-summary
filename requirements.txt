@@ -9,3 +9,7 @@ reportlab
 mcp
 openpyxl
 pydantic
+yt-dlp
+faster-whisper
+pydantic
+beautifulsoup4

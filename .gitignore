@@ -11,6 +11,7 @@ __pycache__/
 
 # Ephemeral state (caches, temp audio, intermediates)
 .tmp/
+.cache/
 cache/
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
@@ -26,6 +27,9 @@ transcripts/
 
 # Downloaded IR documents (PDFs — large binaries, user-specific)
 ir_documents/
+
+# User intake drop folder (any user-supplied artifact lands here for sorting)
+_inbox/
 
 # Large binary examples (keep xlsx tracked via LFS or exclude)
 # examples/dcf/  # Uncomment if you don't want to track example workbooks

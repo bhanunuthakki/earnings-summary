@@ -1,20 +1,8 @@
-"""LLM helpers — every call routes to Claude via the user's subscription CLI.
-
-Implementation note
--------------------
-The CLI wrapper in `claude_cli.py` raises if `ANTHROPIC_API_KEY` is set in the
-environment, because a populated value would silently route the call to API
-billing instead of the subscription. On this machine the variable is set to an
-empty string (Claude Code does this internally), so we defensively pop it
-before importing the wrapper. `ANTHROPIC_BASE_URL` is left untouched — it's
-used by Claude Code for OAuth-managed routing.
-"""
-
-from __future__ import annotations
-
 import json
 import os
+import re
 
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,7 +11,16 @@ load_dotenv()
 if not os.environ.get("ANTHROPIC_API_KEY"):
     os.environ.pop("ANTHROPIC_API_KEY", None)
 
-from claude_cli import call_claude  # noqa: E402  (must follow env-var pop)
+# Models
+# `gemini-flash-latest` aliases to `gemini-3-flash`, capped at 20 RPD on the free tier.
+# The intake classifier runs ~50 calls per migration batch, so it pins to 2.5-flash
+# (1500 RPD free) for headroom. Summary/Say-Do functions stay on `gemini-flash-latest`.
+INTAKE_CLASSIFIER_MODEL = "gemini-2.5-flash"
+
+# Inbox classifier: keep the prompt below the 8 KB Gemini context budget for cheap calls
+INTAKE_TEXT_BUDGET = 6000
+JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
 
 
 def _complete(prompt: str) -> str:
@@ -189,7 +186,80 @@ Extract the key strategic narrative — what story is management telling investo
 Presentation Text:
 """
 
-    return _complete(prompt + text)
+    try:
+        response = model.generate_content(prompt + text)
+        return response.text
+    except Exception as e:
+        print(f"CRITICAL ERROR: Presentation brief generation failed:\n{e}")
+        raise e
+
+
+def generate_event_brief(text: str) -> str:
+    """
+    Generate a structured brief for a non-quarterly IR event: investor day, AGM,
+    capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
+    """
+    model = genai.GenerativeModel("gemini-flash-latest")
+
+    prompt = """You are a senior equity analyst summarizing an IR event document.
+
+Events differ from quarterly artifacts: they are usually long-horizon strategy
+discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
+M&A rationale) rather than near-term financial results. Skip period numbers unless
+they materially shape the multi-year framework.
+
+**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
+
+**Output Format (Strict Markdown):**
+
+# Event Brief: [Ticker] [Event Name] [Date]
+
+## 1. Event Type & Context
+*   **Type:** [Investor Day / AGM / Capital Markets Day / Conference / M&A announcement / Other]
+*   **Setting:** [Date, location if relevant, audience]
+*   **Why it matters:** [1-2 sentences — what was the management goal for the event]
+
+## 2. Headline Strategic Messages
+[3-5 bullets on the core narratives management was trying to land. Lead with what's NEW
+or DIFFERENT vs. prior management framing.]
+
+## 3. Multi-Year Targets & Frameworks
+*   **Quantitative targets:** [5-year revenue/FCF/margin targets, capital deployment ranges]
+*   **Time horizon:** [Stated horizon — 3yr, 5yr, "through the cycle"]
+*   **Comparison to prior:** [If the company previously gave a framework, note shifts]
+
+## 4. Capital Allocation
+[Explicit framing on buybacks, dividends, M&A appetite, balance-sheet priorities, payout ratios]
+
+## 5. Segment / Product Deep-Dives
+[Material new disclosures by segment — TAM, growth drivers, unit economics, competitive positioning]
+
+## 6. Risks & Watchpoints
+*   **Acknowledged:** [What management explicitly flagged as risks]
+*   **Unaddressed:** [What investors will want to ask but didn't get clear answers on]
+
+## 7. Thesis Read-Through
+[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis]
+
+Event Document Text:
+"""
+
+    try:
+        response = model.generate_content(prompt + text)
+        return response.text
+    except Exception as e:
+        print(f"CRITICAL ERROR: Event brief generation failed:\n{e}")
+        raise e
+
+
+def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
+    """
+    Generate an updated micro-thesis tracker document for a holding.
+
+    Args:
+        ticker: Company ticker (e.g. "GOOG")
+        schema: Holdings JSON schema from micro_thesis/holdings/<TICKER>.json
+        quarters: List of {year, quarter, summaries: {doc_type: text}} dicts, chronological order
 
 
 def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
@@ -387,3 +457,56 @@ def identify_transcript_metadata(text_snippet):
     """
 
     return _complete(prompt + text_snippet[:2000]).strip()
+def classify_intake_document(filename: str, text: str, hint: dict) -> dict | None:
+    """Classify a user-dropped IR document.
+
+    Returns a dict with keys (ticker, period_end, doc_type, confidence, reasoning)
+    matching `src.intake.IntakeClassification`, or None on any LLM/parse failure.
+    """
+    model = genai.GenerativeModel(INTAKE_CLASSIFIER_MODEL)
+
+    prompt = (
+        "You are classifying an investor-relations document for a portfolio analyst.\n\n"
+        "Given the filename and an excerpt of the document text, return a JSON object with EXACTLY these fields:\n\n"
+        "{\n"
+        '  "ticker": "<US-listed primary ticker, e.g. NVDA, GOOG, BN, MELI>",\n'
+        '  "period_end": "<YYYY-MM-DD, the last calendar day of the fiscal quarter>",\n'
+        '  "doc_type": "<one of: ir_press_release, ir_presentation, ir_supplement, ir_investor_update, earnings_call_transcript, ir_event>",\n'
+        '  "confidence": <float 0.0 to 1.0>,\n'
+        '  "reasoning": "<one sentence explaining your choice>"\n'
+        "}\n\n"
+        "Doc-type guidance (pick the dominant form, not the topic):\n"
+        "- ir_press_release: short text-heavy quarterly earnings announcement / financial results\n"
+        "- ir_presentation: slide deck dominated by charts / visuals / bullet slides for a quarter\n"
+        "- ir_supplement: detailed financial supplement / data book / spreadsheet-style tables\n"
+        "- ir_investor_update: longer letter to shareholders / quarterly update narrative\n"
+        "- earnings_call_transcript: speaker-attributed dialogue from the earnings call\n"
+        "- ir_event: NON-QUARTERLY IR materials — investor day, AGM, capital markets day,\n"
+        "    conference deck, ad-hoc strategic announcement, M&A or stock-split deck.\n"
+        "    These are NOT tied to a fiscal quarter. For these, period_end = the EVENT DATE\n"
+        "    (the day the event occurred), not a quarter-end. If you can't find an exact day\n"
+        "    in the document, use the first day of the relevant month or the cover-page year.\n\n"
+        "Period-end mapping (for quarterly doc types only):\n"
+        "- Calendar fiscal year (BN, MELI, GOOG, META, NVO, NU, NOW, WIX, AMZN): Q1=03-31, Q2=06-30, Q3=09-30, Q4=12-31.\n"
+        "- VEEV / RBRK have January fiscal year-end. FY26 Q1 ends ~04-30, Q2 ~07-31, Q3 ~10-31, Q4 ~01-31 of the next calendar year.\n"
+        "- NVO publishes H1 (map to Q2, period_end 06-30) and 9M (map to Q3, 09-30).\n\n"
+        "Set confidence < 0.6 if the document is empty, ambiguous, or clearly not an IR document for a tracked holding.\n\n"
+        f"Filename hint (pre-extracted, may be wrong): {hint}\n"
+        f"Filename: {filename}\n\n"
+        "Document text excerpt:\n"
+        '"""\n'
+        f"{text[:INTAKE_TEXT_BUDGET]}\n"
+        '"""\n\n'
+        "Return ONLY the JSON object — no prose, no markdown fence."
+    )
+
+    try:
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return json.loads(raw)
+    except Exception as e:
+        print(f"classify_intake_document failed: {e}")
+        return None
+

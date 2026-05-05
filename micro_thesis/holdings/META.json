@@ -1,14 +1,66 @@
 {
   "ticker": "META",
-  "thesis": "Ad targeting efficiency flywheel (Advantage+, Reels, WhatsApp click-to-message) + Llama as distribution lever; Reality Labs is an option, not a thesis pillar.",
-  "last_updated": "2026-04-12",
+  "name": "Meta Platforms",
+  "last_updated": "2026-05-04",
+  "thesis": "Ad-targeting efficiency flywheel (Advantage+, Reels monetization, WhatsApp click-to-message, Threads emerging) compounds as Llama becomes a distribution lever for both ads and platform stickiness. The thesis explicitly excludes Reality Labs as a return driver — RL is a long-dated option, not a thesis pillar; the model should work even if RL stays at zero. The bet: (1) FoA revenue growth holds 10%+ CC, (2) consolidated op margin holds 35%+ even as capex compounds, (3) RL operating loss stays bounded relative to FoA op income growth.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Family of Apps revenue growth + capital allocation discipline (RL bounded vs FoA op income)",
   "tier_1_kpis": [
-    {"name": "Family of Apps revenue growth cc", "source": "earnings release", "break": "<10% cc"},
-    {"name": "Ad impressions growth vs price per ad growth", "source": "earnings release", "break": "price declining while impressions flat (demand weakness)"},
-    {"name": "Family DAP (daily active people) growth", "source": "earnings release", "break": "flat or declining in developed markets"},
-    {"name": "Capex guidance & AI ROI commentary", "source": "earnings release + transcript", "break": "capex up + ad efficiency metrics not improving"},
-    {"name": "Reality Labs operating loss", "source": "earnings release", "break": "loss expanding faster than FoA operating income growth"},
-    {"name": "Operating margin (consolidated)", "source": "earnings release", "break": "<35%"}
+    {
+      "name": "Family of Apps revenue growth (CC)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% CC",
+      "source": "earnings release"
+    },
+    {
+      "name": "Ad price/impression ratio",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Price declining while impressions flat (demand-side weakness)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Family DAP (daily active people) growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Flat or declining in developed markets",
+      "source": "earnings release"
+    },
+    {
+      "name": "Consolidated operating margin",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<35%",
+      "source": "earnings release"
+    },
+    {
+      "name": "Reality Labs operating loss",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "RL loss expanding faster than FoA op income growth (capital allocation discipline test)",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Capex guidance + AI ROI commentary",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Capex up + ad-efficiency metrics not improving (2022 redux signal)",
+      "source": "earnings release + transcript"
+    }
   ],
   "tier_2_kpis": [
     {"name": "Reels monetization efficiency vs Feed", "source": "transcript"},
@@ -20,7 +72,17 @@
     {"name": "Share buyback pace", "source": "earnings release"},
     {"name": "Headcount trajectory", "source": "10-Q"}
   ],
+  "nuance": {
+    "bear_case": "EU DMA remedies could force a data silo between apps, degrading Advantage+ targeting performance. TikTok US continuing operations + share gains compounds the Reels vs TikTok competition. A 2022-redux capex cycle without revenue response is the singular tail risk.",
+    "adversarial_take": "RL is the discipline test — if losses keep expanding faster than FoA op income growth, the 'option value' framing collapses into 'undisciplined capital allocation' and the thesis is held under stricter HUMAN_CAPITAL_OVERLAP standard anyway.",
+    "stress_test": "FoA revenue <10% CC + RL loss expansion outpacing FoA op income for 2 consecutive Qs would force a multiple re-rate."
+  },
   "competitive_watchlist": ["TikTok (US ban status + share)", "YouTube Shorts", "X", "Snap", "Apple ATT impact evolution"],
-  "thesis_breakers_qualitative": ["EU DMA remedies force data silo between apps (targeting degradation)", "TikTok US operations continue + gain share", "capex cycle without revenue response (2022 redux)"],
+  "thesis_breakers_qualitative": [
+    "EU DMA remedies force data silo between apps (targeting degradation)",
+    "TikTok US operations continue + gain share",
+    "Capex cycle without revenue response (2022 redux)",
+    "Reality Labs operating loss expanding faster than FoA op income growth"
+  ],
   "flags": ["HUMAN_CAPITAL_OVERLAP — thesis held to stricter standard per Correlation Filter"]
 }
