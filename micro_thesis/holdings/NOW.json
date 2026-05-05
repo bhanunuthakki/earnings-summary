@@ -1,0 +1,66 @@
+{
+  "ticker": "NOW",
+  "name": "ServiceNow",
+  "last_updated": "2026-05-04",
+  "thesis": "ServiceNow is the AI control tower for the enterprise; durable subscription growth at $15B+ scale, with Now Assist / agentic AI driving the next leg of ARPU expansion via the rapidly-growing $1M+ AI ACV customer cohort.",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Now Assist AI ACV adoption (cohort >$1M ACV)",
+  "tier_1_kpis": [
+    {
+      "name": "Subscription Revenue Growth (CC)",
+      "current": "19% (Q1 FY26)",
+      "prior": "~21% (Q4 FY25)",
+      "yoy": "Q1 FY26: 22% reported, 19% CC",
+      "status": "Green",
+      "break_condition": "Misses sell-side consensus by >100bps on next print, OR misses consensus on 2 consecutive Qs (consensus-relative — no hard absolute floor)",
+      "source": "earnings release",
+      "notes": "Q1 FY26 had ~75bps headwind from delayed Middle East on-prem deals. FY26 guide 20.5-21% CC includes ~125bps from Armis acquisition."
+    },
+    {
+      "name": "cRPO Growth (CC)",
+      "current": "21% (Q1 FY26, $12.64B)",
+      "prior": "~21% (Q4 FY25)",
+      "yoy": "22.5% reported, 21% CC",
+      "status": "Green",
+      "break_condition": "Misses consensus by >100bps, OR prints below subscription revenue growth (cRPO is the leading indicator and should run ahead of in-period sub rev)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Now Assist / AI ACV cohort growth ($1M+ ACV customers)",
+      "current": "+130% YoY (Q1 FY26)",
+      "prior": "tripling QoQ commentary in Q4 FY25",
+      "yoy": "+130%",
+      "status": "Green",
+      "break_condition": "Cohort growth decelerates below 75% YoY, OR sub-50% YoY for 2 consecutive Qs (AI is the re-acceleration story; this is the cleanest disclosed AI ARR proxy)",
+      "source": "earnings release commentary + investor deck"
+    },
+    {
+      "name": "Renewal Rate",
+      "current": "TBV from Q1 FY26 deck p.16 (chart not OCR-extractable; latest known reading 98% adjusted)",
+      "prior": "98% (Q4 FY25)",
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<97%",
+      "source": "investor presentation"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "Net new ACV transactions >$5M", "current": "16 in Q1 FY26 (+~80% YoY)", "source": "earnings release"},
+    {"name": "Customers >$5M ACV", "current": "630 in Q1 FY26 (+~22% YoY)", "source": "earnings release"},
+    {"name": "Operating margin (non-GAAP)", "current": "32% Q1 FY26", "source": "earnings release"},
+    {"name": "Free cash flow margin", "current": "44% Q1 FY26", "source": "earnings release"}
+  ],
+  "nuance": {
+    "bear_case": "Strip Armis (~125bps of FY26 sub-rev contribution) and core organic growth is high-teens at $15B+ scale. The 'durable 20%+' framing the multiple is built on becomes 'mid-teens-to-low-twenties,' which is a different (less convex) thesis. Federal/gov vertical exposure to budget austerity adds tail risk.",
+    "adversarial_take": "Now Assist $1M+ cohort up 130% YoY is impressive but the cohort is still small in absolute ACV terms. If AI deals are pulling forward 2027-28 budget rather than expanding it, the apparent acceleration could create a tougher comp problem in FY27-28. IT budget fatigue + AI spend rationalization could compress the seat-expansion thesis.",
+    "stress_test": "Renewal rate dip below 97% would signal platform fatigue and break the moat thesis; consensus-misses on 2 consecutive Qs would force a multiple re-rate even if numbers stay healthy in absolute terms."
+  },
+  "competitive_watchlist": ["Salesforce (Agentforce)", "Microsoft (Copilot/Power Platform)", "Workday", "Atlassian (Jira Service Management)"],
+  "thesis_breakers_qualitative": [
+    "Two consecutive Qs of consensus misses on sub-rev or cRPO",
+    "Now Assist AI ACV cohort growth decelerating below 50% YoY",
+    "Renewal rate dip below 97%",
+    "Federal vertical churn or significant gov shutdown impact"
+  ]
+}

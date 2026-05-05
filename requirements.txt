@@ -1,4 +1,9 @@
+flask
+pandas
+lxml
+requests
+python-dotenv
 google-generativeai
 pypdf
 reportlab
-python-dotenv
+mcp

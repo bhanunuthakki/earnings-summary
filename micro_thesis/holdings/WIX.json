@@ -1,0 +1,55 @@
+{
+  "ticker": "WIX",
+  "name": "Wix",
+  "last_updated": "2026-05-04",
+  "thesis": "Two-engine model — (1) Base44 ARR scales rapidly post-acquisition as the AI-first builder, while (2) the core Creative Subs business holds single-digit-but-positive growth. FCF margin compression in 2026 is acceptable as long as Base44 ARR keeps stair-stepping at milestone disclosures and core stays positive.",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Base44 ARR growth (milestone-disclosed) + Creative Subs holding positive",
+  "tier_1_kpis": [
+    {
+      "name": "Base44 ARR (milestone disclosure)",
+      "current": "~$100M ARR (post-acquisition disclosure)",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": ">9 months without a milestone update (silence = stalling), OR any disclosed ARR number that implies <100% YoY growth from prior milestone",
+      "source": "press releases / earnings call commentary",
+      "frequency": "milestone-driven (not quarterly)"
+    },
+    {
+      "name": "Creative Subscriptions Revenue Growth (CC)",
+      "current": "+12% (Q4'25)",
+      "prior": null,
+      "yoy": "+12%",
+      "status": "Green",
+      "break_condition": "Turns negative, OR <5% for 2 consecutive Qs (single-digit positive is acceptable)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Bookings Growth (CC)",
+      "current": "+15% (Q4'25, $535M)",
+      "prior": null,
+      "yoy": "+15%",
+      "status": "Green",
+      "break_condition": "<8% (leading indicator for Creative Subs revenue)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "FCF Margin (monitoring only — compression accepted)", "current": "~28.7% FY25, guided low-to-mid 20s for 2026", "source": "earnings release"},
+    {"name": "Total Revenue Growth (CC)", "current": "+14% Q4'25", "source": "earnings release"},
+    {"name": "Business Solutions Revenue Growth", "current": "+18% Q4'25 ($153.8M)", "source": "earnings release"}
+  ],
+  "nuance": {
+    "bear_case": "AI builders (Bolt, Lovable, and Base44 competitors) commoditize SMB site creation. Wix downgraded by analysts in Mar 2026 on this risk.",
+    "adversarial_take": "Wix owns Base44, so the AI-first builder is additive to their funnel rather than cannibalistic — but if Base44 ARR ever stalls between milestones, the bull case collapses because core Creative Subs alone doesn't justify the multiple at single-digit growth.",
+    "stress_test": "Two consecutive Qs of Creative Subs <5% growth + a Base44 milestone gap >9 months would force a thesis re-evaluation."
+  },
+  "competitive_watchlist": ["Squarespace", "Shopify (overlapping SMB e-comm)", "Bolt.new", "Lovable", "Webflow", "Framer"],
+  "thesis_breakers_qualitative": [
+    "Base44 ARR growth decelerates below 100% YoY (vs. milestone trajectory)",
+    "Creative Subs growth turns negative",
+    "FCF margin compression extends into 2027 without Base44 monetization story progressing"
+  ]
+}

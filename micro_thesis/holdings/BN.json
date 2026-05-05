@@ -1,0 +1,88 @@
+{
+  "ticker": "BN",
+  "name": "Brookfield Corp",
+  "last_updated": "2026-05-04",
+  "thesis": "Three reinforcing compounders inside one wrapper — (1) BAM fee-related earnings (capital-light, scaling with fundraising), (2) BNRE insurance float earning >9% on assets across the cycle, (3) realizations cadence monetizing a $200B+ deployed-capital book on a multi-year cycle. The bet: DE/share grows 15%+ over a cycle, with the share buyback closing the persistent NAV discount.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "DE/share growth driven by FRE + BNRE float earnings + realizations cadence",
+  "tier_1_kpis": [
+    {
+      "name": "DE/share YoY growth",
+      "current": "TBV from latest supplemental",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs",
+      "source": "quarterly supplemental / earnings release"
+    },
+    {
+      "name": "Fee-Related Earnings (FRE) growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY",
+      "source": "BAM segment / BN supplemental"
+    },
+    {
+      "name": "Fee-bearing capital growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Flat or declining",
+      "source": "earnings supplemental"
+    },
+    {
+      "name": "Fundraising pace (flagship vintages, private credit, insurance)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Flagship fund undersubscribed vs target",
+      "source": "transcript"
+    },
+    {
+      "name": "Insurance (BNRE) earnings yield on float",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<9%",
+      "source": "earnings supplemental"
+    },
+    {
+      "name": "Realizations / monetizations ($ and count)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "2 Qs of <$1B carried interest realized without pipeline explanation",
+      "source": "transcript + supplemental"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "Carried interest generated (unrealized)", "source": "supplemental"},
+    {"name": "Real estate NOI growth", "source": "BPY supplemental"},
+    {"name": "Renewable power FFO", "source": "BEP supplemental"},
+    {"name": "Infrastructure FFO", "source": "BIP supplemental"},
+    {"name": "Private credit AUM growth (Oaktree)", "source": "transcript"}
+  ],
+  "tier_3_kpis": [
+    {"name": "BN share buybacks + NAV discount", "source": "earnings release"},
+    {"name": "Plan value vs intrinsic value disclosure", "source": "investor day"}
+  ],
+  "nuance": {
+    "bear_case": "Insurance reserve/credit-loss surprise at BNRE could blindside the model — float math depends on consistent earnings yield, and a single bad year of credit losses can compound. CRE writedown cycle deeper than provisioned is a separate but related tail risk.",
+    "adversarial_take": "Three compounders only work if all three keep working — a flagship fundraising stall (>2 years), CRE shock, OR BNRE credit miss can each independently break the math. Diversification is the bull case but also creates more failure modes.",
+    "stress_test": "BNRE earnings yield <9% + flagship undersubscribed in any single cycle would force a re-evaluation; 2 Qs of <$1B carried-interest realizations without pipeline color is the early canary."
+  },
+  "competitive_watchlist": ["Blackstone", "KKR", "Apollo (insurance parallel via Athene)", "Ares"],
+  "thesis_breakers_qualitative": [
+    "Insurance reserve/credit loss surprise at BNRE",
+    "CRE writedown cycle deeper than provisioned",
+    "Flagship fundraising cycle stalls >2 years",
+    "BNRE earnings yield on float <9% for 2 consecutive Qs"
+  ]
+}
