@@ -1,4 +1,57 @@
 {
+    "ticker": "NOW",
+    "name": "ServiceNow",
+    "last_updated": "2026-05-04",
+    "thesis": "ServiceNow is the primary workflow automation platform for the enterprise, leveraging GenAI (Now Assist) to drive a step-function in ARPU. Now Assist >$1M ACV and >$5M ACV cohort growth are the highest-signal proxies for AI monetization (Pro+ SKU-level adoption is not separately disclosed).",
+    "verdict": "Intact",
+    "verdict_color": "green",
+    "key_driver": "Now Assist >$1M ACV cohort growth",
+    "tier_1_kpis": [
+        {
+            "name": "Subscription Revenue Growth (CC)",
+            "current": "19%",
+            "prior": "19.5%",
+            "yoy": "-50bps",
+            "status": "Yellow",
+            "break_condition": "< 17% CC",
+            "note": "Re-baselined from <20% (which was already mechanically triggered by FY26 guide of 19.5-20% CC)"
+        },
+        {
+            "name": "cRPO Growth (CC)",
+            "current": "21%",
+            "prior": "21%",
+            "yoy": "Flat",
+            "status": "Green",
+            "break_condition": "< 18% CC"
+        },
+        {
+            "name": "Now Assist >$1M ACV customer growth (YoY)",
+            "current": ">130%",
+            "prior": "n/a",
+            "yoy": ">130%",
+            "status": "Green",
+            "break_condition": "< 50% YoY",
+            "note": "Replaces 'Pro+ SKU Upsell Rate' which NOW does not disclose. >$5M ACV cohort count (630, +22% YoY) is a confirming Tier-2 signal."
+        }
+    ],
+    "tier_2_kpis": [
+        {
+            "name": "Renewal Rate",
+            "current": "98%",
+            "status": "Green"
+        },
+        {
+            "name": "Now Assist >$5M ACV customer count",
+            "current": "630 (+22% YoY)",
+            "status": "Green"
+        }
+    ],
+    "nuance": {
+        "bear_case": "Bears argue that IT budget fatigue will cap seat expansion even if GenAI features are well-received.",
+        "adversarial_take": "Now Assist large-customer ACV growth is impressive on a small base; the test is whether the >$1M cohort continues compounding as it broadens beyond early adopters into the long tail of enterprise customers.",
+        "stress_test": "Renewal rate dip of >200bps would signal platform fatigue and break the core thesis. cRPO cc growth dropping below 18% for 2 consecutive Qs would corroborate."
+    },
+    "schema_revision_notes": "2026-05-04: Replaced 'Pro+ SKU Upsell Rate' (not disclosed) with 'Now Assist >$1M ACV customer growth' (NOW's actual proxy). Re-baselined Sub Rev (CC) break from <20% to <17% — the prior threshold was already mechanically triggered by Q4'25 (19.5%), Q1'26 (19%), and FY26 guide (19.5-20%) yet schema marked it Green. Updated thesis text to drop Pro+ SKU framing."
   "ticker": "NOW",
   "name": "ServiceNow",
   "last_updated": "2026-05-04",

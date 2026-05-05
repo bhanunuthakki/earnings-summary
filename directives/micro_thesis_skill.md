@@ -93,27 +93,69 @@ Holding-level verdict:
 - **Watch**: any T1 Yellow, no Red
 - **Broken**: any T1 Red → triggers Hold/Sell matrix review
 
-### Step 4 — Adversarial stress test
-Before finalizing, run the internal dialectic per user's standing instruction:
-- What's the bear case reading of these same numbers?
-- Is there a composition/mix effect masking deterioration?
-- Does management commentary contradict the quantitative print?
+### Step 4 — Adversarial stress test (REQUIRED, always surfaced)
 
-Only surface dialectic in output if the verdict is Watch or Broken, OR if user requests the debate ledger.
+The adversarial loop is not optional and is not gated on verdict color. It runs every time, on three specific surfaces, and the structured output appears in the final report.
+
+**Surfaces requiring the loop:**
+1. **Overall thesis verdict** — even Intact/Green verdicts must articulate the bear read. A "Green with no counter" is under-examined.
+2. **Say-Do attribution** — for any miss, mixed, or beat: explicitly contest whether the driver was Execution (management performance) vs. Exogenous (macro, FX, supply, one-offs). Both readings must be argued before the verdict is named.
+3. **Valuation triggers / break-conditions** — for any T1 KPI within ~15% of its `break_condition` threshold, run the loop on whether the trigger is genuinely about to fire vs. a noisy single-print artifact. Also stress-test any trigger that *did* fire — false-positive risk matters.
+
+**Loop structure (use these exact field names):**
+
+```
+Primary Thesis     : The asserted reading + the strongest supporting evidence,
+                     with inline source citations [Source: doc, period, page/section].
+Strongest Counter  : The most credible challenge — alternative reading of the same
+                     data, contradicting datapoint, mix/composition effect, base-rate
+                     argument, or management-credibility caveat. Cite sources.
+Resolution         : How the two sides reconcile + Net Conviction (High / Medium / Low),
+                     AND the specific observable that would flip the verdict (e.g.
+                     "two consecutive quarters of GMV growth <12%" or "RPO bookings
+                     coverage drops below 1.0x").
+Sensitivity        : Quantified impact — if the primary read is wrong by ±X%, what
+                     happens to the verdict / valuation / trigger distance?
+```
+
+**Discipline:** A counter you cannot articulate is a gap in the analysis, not a sign of conviction. Push harder. If the only counter is "macro could deteriorate," reject it as too generic and find a name-specific one.
+
+Stress-test inputs as well as conclusions: if the source documents are sparse or stale, treat the conviction as Low even when the surface read looks Green.
 
 ### Step 5 — Output format
 
 ```
 ## [TICKER] — [Verdict: Intact / Watch / Broken]
 **Thesis:** [one-line]
-**As of:** [date] | **Source:** [10-Q / transcript / press release + links]
+**As of:** [date] | **Sources:** [10-Q / transcript / press release + links]
 
-| T1 KPI | Current | Prior Q | YoY | Status |
-|---|---|---|---|---|
+| T1 KPI | Current | Prior Q | YoY | Break Threshold | Status | Source |
+|---|---|---|---|---|---|---|
 ...
+(every row carries an inline source tag: doc type, period, page/section)
 
-**Diff vs last review:** [what changed]
-**Action:** [None / Monitor X next Q / Review Hold-Sell matrix]
+**Diff vs last review:** [what changed materially, with sources]
+
+**Adversarial Loop — Thesis Verdict**
+- Primary Thesis: ...
+- Strongest Counter: ...
+- Resolution (Net Conviction: H/M/L): ...  ← include the specific observable that would flip the verdict
+- Sensitivity: ...
+
+**Adversarial Loop — Say-Do Attribution**
+- Primary Thesis: [Execution vs. Exogenous read with quoted guidance vs. actual]
+- Strongest Counter: ...
+- Resolution (Net Conviction: H/M/L): ...
+- Sensitivity: ...
+
+**Adversarial Loop — Valuation / Break-Condition Trigger Distance**
+(Required for any T1 within ~15% of break_condition, and any trigger that fired)
+- Primary Thesis: ...
+- Strongest Counter: ...
+- Resolution (Net Conviction: H/M/L): ...
+- Sensitivity: ...
+
+**Action:** [None / Monitor X next Q / Review Hold-Sell matrix / Deploy trigger check]
 ```
 
 For full monthly, prepend a summary table:

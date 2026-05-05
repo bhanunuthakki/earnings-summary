@@ -1,5 +1,14 @@
 {
   "ticker": "BN",
+  "thesis": "Alternative asset manager + insurance float + real assets compounder; DE per share growth driven by fee-related earnings, insurance solutions (BWS) scaling, and monetization cadence.",
+  "last_updated": "2026-05-04",
+  "tier_1_kpis": [
+    {"name": "Distributable Earnings (DE) per share growth YoY (TTM)", "source": "quarterly supplemental / earnings release", "break": "<15% YoY on TTM basis for 2 consecutive Qs"},
+    {"name": "Fee-Related Earnings (FRE) growth", "source": "BAM segment / BN supplemental", "break": "<15% YoY"},
+    {"name": "Fee-bearing capital growth", "source": "earnings supplemental", "break": "flat or declining"},
+    {"name": "Annual capital raised vs. $200B/yr inflow target", "source": "transcript + supplemental", "break": "annual inflows materially below $200B run-rate", "note": "Replaces 'flagship vintage subscription' (BN no longer publishes per-flagship subscription levels; that lives at BAM)"},
+    {"name": "Insurance (BWS) annualized earnings + ROE", "source": "earnings supplemental", "break": "BWS ROE <12% for 2 Qs", "note": "BNRE rebranded to BWS. Issuer discloses ROE not yield-on-float."},
+    {"name": "Realizations / monetizations ($ TTM and pipeline)", "source": "transcript + supplemental", "break": "<$2B realized carry on TTM basis AND no advancement in carry-eligible capital toward recognition", "note": "European waterfall back-end-loads carry; per-Q $1B floor is a false-positive generator. Avg run-rate is ~$0.5B/Q against a $6B/3yr forward commitment."}
   "name": "Brookfield Corp",
   "last_updated": "2026-05-04",
   "thesis": "Three reinforcing compounders inside one wrapper — (1) BAM fee-related earnings (capital-light, scaling with fundraising), (2) BNRE insurance float earning >9% on assets across the cycle, (3) realizations cadence monetizing a $200B+ deployed-capital book on a multi-year cycle. The bet: DE/share grows 15%+ over a cycle, with the share buyback closing the persistent NAV discount.",
@@ -79,6 +88,8 @@
     "stress_test": "BNRE earnings yield <9% + flagship undersubscribed in any single cycle would force a re-evaluation; 2 Qs of <$1B carried-interest realizations without pipeline color is the early canary."
   },
   "competitive_watchlist": ["Blackstone", "KKR", "Apollo (insurance parallel via Athene)", "Ares"],
+  "thesis_breakers_qualitative": ["insurance reserve/credit loss surprise at BWS", "CRE writedown cycle deeper than provisioned", "fundraising cycle stalls (annual inflows persistently <$150B)"],
+  "schema_revision_notes": "2026-05-04: Renamed BNRE → BWS (entity rebrand). Replaced 'flagship vintage subscription' (now disclosed at BAM, not BN) with 'annual capital raised vs $200B/yr target'. Replaced 'insurance earnings yield on float <9%' (not the disclosed metric) with 'BWS ROE <12%'. Replaced per-Q '<$1B realized carry' (European waterfall makes it a false-positive generator) with TTM-based test paired with carry-eligible capital direction. Specified DE per share break as TTM to handle quarterly carry lumpiness."
   "thesis_breakers_qualitative": [
     "Insurance reserve/credit loss surprise at BNRE",
     "CRE writedown cycle deeper than provisioned",

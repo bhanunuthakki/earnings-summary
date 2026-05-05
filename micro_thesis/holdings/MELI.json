@@ -72,6 +72,15 @@
       "source": "Q4'25 deck"
     }
   ],
+  "break_conditions": [
+    "FXN Revenue growth < 20% YoY for 2 consecutive quarters",
+    "FXN GMV growth < 15% YoY",
+    "Operating margin contracts >400bps YoY without clear reinvestment rationale AND no FXN revenue re-acceleration",
+    "15-90d early-bucket NPL rises >150bps QoQ for 2 consecutive quarters",
+    "NIMAL compression >300bps YoY (credit-quality proxy)"
+  ],
+  "last_updated": "2026-05-04",
+  "schema_revision_notes": "2026-05-04: Replaced permanently-triggered 'Credit NPL 90d+ > 8%' (issuer's stock 90d+ NPL is structurally 17-18%) with two flow-based credit-quality triggers: 15-90d early-bucket QoQ delta, and NIMAL compression. Tightened OpMgn break with 'AND no FXN revenue re-acceleration' to allow defensible reinvestment-driven compression while still firing on lasting deterioration."
   "tier_2_kpis": [
     {"name": "Unique Active Buyers", "current": "83.2MM Q4'25 (+24% YoY)", "source": "Q4'25 deck"},
     {"name": "Fintech Monthly Active Users", "current": "77.9MM Q4'25 (+27% YoY)", "source": "Q4'25 deck"},

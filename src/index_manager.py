@@ -202,6 +202,7 @@ def register_ir_document(
     )
 
 
+def register_manual_document(
 def _event_key(ticker: str, event_date: str, sha256: str) -> str:
     """Index key for non-quarterly events.
 
@@ -289,6 +290,15 @@ def register_user_intake_document(
     quarter: str,
     doc_type: str,
     local_path: str,
+    fiscal_label: str | None = None,
+    note: str | None = None,
+    processed: bool = False,
+) -> bool:
+    """
+    Register a document the user manually dropped into micro_thesis/sources/<TICKER>/.
+    Distinct from register_ir_document because the source is MANUAL_DROP, not an IR URL.
+    Idempotent.
+    """
     sha256: str,
     confidence: float,
     note: str | None = None,
@@ -306,6 +316,12 @@ def register_user_intake_document(
         year=year,
         quarter=quarter,
         doc_type=doc_type,
+        source="MANUAL_DROP",
+        local_path=local_path,
+        ir_url=None,
+        processed=processed,
+        fiscal_label=fiscal_label,
+        note=note,
         source="USER_INTAKE",
         local_path=local_path,
         ir_url=None,
