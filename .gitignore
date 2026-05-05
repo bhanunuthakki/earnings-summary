@@ -11,6 +11,7 @@ __pycache__/
 
 # Ephemeral state (caches, temp audio, intermediates)
 .tmp/
+.cache/
 cache/
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
