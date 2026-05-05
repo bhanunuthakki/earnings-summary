@@ -7,6 +7,8 @@ google-generativeai
 pypdf
 reportlab
 mcp
+openpyxl
+pydantic
 yt-dlp
 faster-whisper
 pydantic
