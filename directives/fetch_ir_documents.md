@@ -32,6 +32,7 @@ without IR data — IR rows simply don't appear in `documents` for that ticker.
 | RBRK | https://ir.rubrik.com/financial-information/quarterly-results | Jan FY-end; IPO May 2024; best-effort for pre-IPO quarters |
 | VEEV | https://ir.veeva.com/ | Jan FY-end; map FY quarters to calendar year |
 | BN | https://bam.brookfield.com/investors | Brookfield Corp; supplemental packages |
+| LLY | https://investor.lilly.com/financial-information | **Watchlist (not held)** — tracked as competitive cross-check for NVO thesis (tirzepatide/retatrutide vs semaglutide). Calendar year. See `directives/nvo_external_sources.md`. |
 
 ## Fiscal Calendar Notes
 

@@ -78,6 +78,51 @@ def test_extract_walks_segments_and_emits_oi() -> None:
     assert other_bets_2023.value == Decimal("-4095000000")
 
 
+def test_extract_handles_10q_quarterly_periods() -> None:
+    """Mixed-period 10-Q section: extract Q3 columns, skip 9-month YTD columns."""
+    record: dict[str, object] = {
+        "Operating Income by Segment - $ in Millions": [
+            {
+                "Operating Income by Segment - $ in Millions": [
+                    "3 Months Ended", None, "9 Months Ended"
+                ]
+            },
+            {"items": ["Sep. 30, 2024", "Sep. 30, 2023", "Sep. 30, 2024", "Sep. 30, 2023"]},
+            {"Segment Reporting Information [Line Items]": [_NBSP, _NBSP, _NBSP, _NBSP]},
+            {"Segment operating income (loss)": [28521, 21343, 81418, 60596]},
+            {"Operating Segments | Google Services": [_NBSP, _NBSP, _NBSP, _NBSP]},
+            {"Segment Reporting Information [Line Items]": [_NBSP, _NBSP, _NBSP, _NBSP]},
+            {"Segment operating income (loss)": [30856, 23937, 88427, 69128]},
+            {"Operating Segments | Google Cloud": [_NBSP, _NBSP, _NBSP, _NBSP]},
+            {"Segment Reporting Information [Line Items]": [_NBSP, _NBSP, _NBSP, _NBSP]},
+            {"Segment operating income (loss)": [1947, 266, 4019, 852]},
+        ]
+    }
+
+    facts = extract_segment_oi_from_record(record, source_doc_id=42, ticker="GOOG")
+
+    by_key = {(f.segment_name, f.fiscal_period_type, f.period_end): f for f in facts}
+
+    # Q3 2024 columns extracted (Sep month -> Q3); 9-month columns skipped
+    cloud_q3_2024 = by_key[("Google Cloud", FiscalPeriodType.Q3, datetime(2024, 9, 30))]
+    assert cloud_q3_2024.value == Decimal("1947000000")
+    services_q3_2024 = by_key[("Google Services", FiscalPeriodType.Q3, datetime(2024, 9, 30))]
+    assert services_q3_2024.value == Decimal("30856000000")
+
+    # Prior-year Q3 also extracted
+    cloud_q3_2023 = by_key[("Google Cloud", FiscalPeriodType.Q3, datetime(2023, 9, 30))]
+    assert cloud_q3_2023.value == Decimal("266000000")
+
+    # No 9-month YTD facts emitted (period_type = None for those columns)
+    for f in facts:
+        # The 9M columns held 81418 / 60596 / 88427 / 69128 / 4019 / 852 — none should appear
+        assert f.value not in {
+            Decimal("81418000000"), Decimal("60596000000"),
+            Decimal("88427000000"), Decimal("69128000000"),
+            Decimal("4019000000"), Decimal("852000000"),
+        }
+
+
 def test_consolidated_rows_before_segments_are_not_emitted() -> None:
     """Rows before the first real segment header don't accidentally emit facts."""
     record: dict[str, object] = {

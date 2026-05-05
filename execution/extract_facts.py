@@ -47,6 +47,7 @@ _DISPATCH: dict[str, _Extractor] = {
     "fmp_as_reported_cashflow": extract_as_reported_facts,
     "fmp_as_reported_financial": extract_as_reported_facts,
     "fmp_10k_json": extract_segment_oi_facts,
+    "fmp_10q_json": extract_segment_oi_facts,
 }
 
 

@@ -62,6 +62,7 @@ class DocType(StrEnum):
     FMP_HISTORICAL_EMPLOYEES = "fmp_historical_employees"
     FMP_FINANCIAL_REPORTS_DATES = "fmp_financial_reports_dates"
     FMP_10K_JSON = "fmp_10k_json"
+    FMP_10Q_JSON = "fmp_10q_json"
     FMP_OTHER = "fmp_other"
     ETF_INFORMATION = "etf_information"
     ETF_HOLDINGS = "etf_holdings"
@@ -78,6 +79,10 @@ class DocType(StrEnum):
     IR_SUPPLEMENT = "ir_supplement"
     IR_INVESTOR_UPDATE = "ir_investor_update"
     IR_TRANSCRIPT = "ir_transcript"
+    # Non-quarterly IR materials: investor days, AGMs, capital markets days, conference
+    # decks, ad-hoc strategic announcements. Period_end on these rows is the event date,
+    # not a fiscal-quarter end.
+    IR_EVENT = "ir_event"
     EARNINGS_CALL_AUDIO = "earnings_call_audio"
     EARNINGS_CALL_TRANSCRIPT = "earnings_call_transcript"
 

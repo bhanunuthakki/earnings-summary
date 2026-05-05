@@ -18,17 +18,32 @@ Use this exact structure when producing output. One block per holding.
 ⚠️ **Gaps:** [T1 KPIs not found in dropped docs — supplemented via web / still missing]
 
 ### Tier 1 Scorecard
-| KPI | Current | Prior Q | YoY | Break Condition | Status |
-|---|---|---|---|---|---|
-| ... | ... | ... | ... | [from JSON] | 🟢/🟡/🔴 |
+| KPI | Current | Prior Q | YoY | Break Condition | Status | Source |
+|---|---|---|---|---|---|---|
+| ... | ... | ... | ... | [from JSON] | 🟢/🟡/🔴 | [doc type, period, page/section] |
+
+Every row must carry an inline source tag. Use `[not disclosed]` for any cell where the value is not in the available source documents — never guess.
 
 ### Diff vs prior review
-- [what changed materially, including any management commentary shifts]
+- [what changed materially, including any management commentary shifts] — cite sources
 
-### Adversarial read (only if Watch/Broken)
-- Bull: ...
-- Bear: ...
-- Synthesis: ...
+### Adversarial Loop — Thesis Verdict (REQUIRED, all verdicts)
+- **Primary Thesis:** ... [Source: ...]
+- **Strongest Counter:** ... [Source: ...]
+- **Resolution:** ... — Net Conviction: High / Medium / Low. Specific observable that would flip the verdict: ...
+- **Sensitivity:** if primary read is wrong by ±X%, ...
+
+### Adversarial Loop — Say-Do Attribution (REQUIRED when prior-period guidance exists)
+- **Primary Thesis:** Execution vs. Exogenous read, with quoted prior guidance vs. current actual [Source: ...]
+- **Strongest Counter:** ...
+- **Resolution:** ... — Net Conviction: High / Medium / Low.
+- **Sensitivity:** ...
+
+### Adversarial Loop — Valuation / Trigger Distance (REQUIRED for any T1 within ~15% of break_condition, or any trigger that fired)
+- **Primary Thesis:** ...
+- **Strongest Counter:** false-positive risk / single-print artifact / mix effect / etc.
+- **Resolution:** ... — Net Conviction: High / Medium / Low.
+- **Sensitivity:** distance to threshold under ±X% scenarios.
 
 ### Action
 - [None / Monitor X into Q_/ Review Hold-Sell matrix / Deploy trigger check]

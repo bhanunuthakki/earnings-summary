@@ -1,19 +1,106 @@
 {
   "ticker": "NU",
-  "thesis": "Digital-native bank scaling across LatAm with structurally lower cost-to-serve, expanding ARPAC as product cross-sell deepens into lending, insurance, and investing.",
+  "name": "Nubank",
+  "last_updated": "2026-05-04",
+  "thesis": "Digital-native bank scaling across LatAm with structurally lower cost-to-serve. Brazil is maturing into a deepening cross-sell story; Mexico (banking license underway) and Colombia are the next-leg compounders. The compounder is per-customer monetization (ARPAC + cross-sell) × ex-Brazil customer expansion.",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Mexico + Colombia customer scale-up combined with cross-sell monetization deepening",
   "tier_1_kpis": [
     {"name": "Revenue Growth (FXN)", "unit": "%", "frequency": "quarterly"},
     {"name": "Customer Count", "unit": "M", "frequency": "quarterly"},
     {"name": "Monthly ARPAC", "unit": "USD", "frequency": "quarterly"},
-    {"name": "NPL 90+ Day Ratio", "unit": "%", "frequency": "quarterly"},
-    {"name": "Cost-to-Serve per Active Customer", "unit": "USD", "frequency": "quarterly"}
+    {"name": "NPL 90+ Brazil consumer", "unit": "%", "frequency": "quarterly", "note": "Q1-Q3'25 disclosure basis; track for continuity"},
+    {"name": "NPL 90+ Group", "unit": "%", "frequency": "quarterly", "note": "Q4'25 onwards consolidated all-geographies basis"},
+    {"name": "Cost-to-Serve per Active Customer", "unit": "USD", "frequency": "quarterly"},
+    {"name": "ARPAC/CTS ratio", "unit": "ratio", "frequency": "quarterly", "note": "Replaces simple cost-to-serve QoQ trigger; captures unit-economics direction"},
+    {"name": "Mexico active customer growth (YoY)", "unit": "%", "frequency": "quarterly", "note": "Brazil-saturation-aware leading indicator"}
   ],
   "break_conditions": [
-    "NPL 90d+ > 7%",
+    "FXN Revenue growth < 20% YoY",
     "ARPAC declining QoQ for 2 consecutive quarters",
-    "FXN Revenue growth < 25% YoY",
-    "Customer net adds < 2M per quarter for 2 consecutive quarters",
-    "Cost-to-serve rising QoQ without commensurate ARPAC expansion"
+    "NPL 90+ Brazil consumer > 8% (Q1-Q3'25 basis) OR NPL 90+ Group > 6% (Q4'25 onward basis)",
+    "Mexico active customer growth < 30% YoY",
+    "ARPAC/CTS ratio falling for 2 consecutive quarters"
   ],
-  "last_updated": "2026-04-12"
+  "last_updated": "2026-05-04",
+  "schema_revision_notes": "2026-05-04: Bifurcated NPL 90+ into Brazil-consumer and Group buckets to handle the Q4'25 methodology consolidation (geography mix). Re-baselined Revenue threshold from <25% to <20% (the $5B/Q base makes 25% mechanically unreachable in 2026). Replaced mechanically-safe customer net-adds 2M floor with Mexico growth (the leading indicator now that Brazil is saturated at 62% adult-pop). Replaced cost-to-serve QoQ trigger with ARPAC/CTS ratio direction."
+    {
+      "name": "Mexico customer count + activity rate",
+      "current": "14M customers (15% adult pop) Q4'25; banking license underway",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Net adds <500K/Q for 2 consecutive Qs, OR activity rate falls below 80%",
+      "source": "earnings release / IR deck"
+    },
+    {
+      "name": "Colombia customer growth",
+      "current": "4.2M customers (+70% YoY) Q4'25",
+      "prior": null,
+      "yoy": "+70%",
+      "status": "Green",
+      "break_condition": "<40% YoY customer growth for 2 consecutive Qs",
+      "source": "earnings release / IR deck"
+    },
+    {
+      "name": "Consolidated Monthly ARPAC (FXN)",
+      "current": "$15.00 (+25% YoY FXN) Q4'25",
+      "prior": "$11.10 (Q4'24, est.)",
+      "yoy": "+25% FXN",
+      "status": "Green",
+      "break_condition": "Declines QoQ for 2 consecutive Qs, OR FXN YoY growth slows below 15%",
+      "source": "earnings release / IR deck",
+      "notes": "Regional ARPAC (BR/MX/CO) is NOT disclosed quarterly — only consolidated. Flagging regional ARPAC breakout as a Q&A wishlist item for management."
+    },
+    {
+      "name": "Ecosystem cross-sell penetration",
+      "current": "12M unique active customers in ecosystem (+58% YoY); ~9% of base",
+      "prior": null,
+      "yoy": "+58%",
+      "status": "Green",
+      "break_condition": "% of base flat or declining QoQ, OR YoY growth in ecosystem actives <30%",
+      "source": "earnings release / IR deck"
+    },
+    {
+      "name": "NPL 90+ Day Ratio",
+      "current": "6.6% Q4'25 (-10bps QoQ)",
+      "prior": "6.7%",
+      "yoy": null,
+      "status": "Green",
+      "break_condition": ">7%",
+      "source": "earnings release"
+    },
+    {
+      "name": "Cost-to-Serve per Active Customer",
+      "current": "$0.80/mo Q4'25",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Rises QoQ without commensurate ARPAC expansion",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "Brazil customer count (saturation marker, not growth driver)", "current": "113M, 86% activity rate", "source": "IR deck"},
+    {"name": "Total credit portfolio (FXN growth)", "current": "$32.7B (+40% YoY FXN) Q4'25", "source": "IR deck"},
+    {"name": "Primary Banking Account (PBA) ratio for >12mo cohorts", "current": "disclosed in glossary, regional cuts inconsistent", "source": "IR deck / 20-F"},
+    {"name": "Mexico + Colombia deposits (FXN)", "current": "scaling per p.12 of Q4'25 deck", "source": "IR deck"}
+  ],
+  "nuance": {
+    "bear_case": "Brazil customer count saturating at 113M (62% adult pop) means future BR growth depends entirely on monetization — and BR macro (Selic elevated, credit cycle turning) could compress NPL buffer. Regional ARPAC opacity makes it hard to verify whether MX/CO cohorts are tracking toward BR-level monetization.",
+    "adversarial_take": "Mexico banking license has been 'underway' for multiple quarters — execution risk if regulatory approval drags into 2027. Cost-to-serve at $0.80 is at a scale floor; further leverage requires automation gains, not just volume.",
+    "stress_test": "NPL 90d+ at 6.6% is only 40bps from the 7% break threshold. A Brazil credit cycle turn flips this metric first; combined with any deceleration in MX/CO net adds, the thesis re-rates quickly."
+  },
+  "competitive_watchlist": ["Mercado Pago (MELI)", "Itaú", "Bradesco", "Banco Inter", "Inter&Co", "BBVA Mexico", "Bancolombia"],
+  "thesis_breakers_qualitative": [
+    "Mexico banking license rejected or delayed beyond mid-2027",
+    "BR macro deterioration spiking NPL above 7%",
+    "Ecosystem cross-sell stalling (% of base flat for 2+ Qs)",
+    "Regional ARPAC (when disclosed annually in 20-F) showing MX/CO at <30% of BR ARPAC for 2+ years"
+  ],
+  "open_disclosure_asks": [
+    "Quarterly ARPAC by region (BR / MX / CO) — currently only annual / inconsistent",
+    "Cross-product attach rate (avg products per active customer) by region — derivable from 20-F but not quarterly"
+  ]
 }
