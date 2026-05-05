@@ -57,9 +57,13 @@ Manual override always wins over automated sources, but it must include a reason
 - Filing regime branches by `companies.filing_regime`: 10-K/10-Q for US issuers, 20-F/6-K for foreign private issuers, 40-F for Canadian issuers.
 
 ### `ir_doc`
-- `doc_type` ∈ `{IR_PRESS_RELEASE, IR_PRESENTATION, IR_SUPPLEMENT, IR_INVESTOR_UPDATE}`. Files land in `ir_documents/{TICKER}/{period_end_iso}/`.
-- `source_url` **required** in `documents.source_url`.
-- Idempotence key: `(ticker, doc_type, period_end, sha256)`.
+- `doc_type` ∈ `{IR_PRESS_RELEASE, IR_PRESENTATION, IR_TRANSCRIPT, IR_SUPPLEMENT, IR_INVESTOR_UPDATE}`. Files land in `ir_documents/{TICKER}/{period_end_iso}/`.
+- `source_url` **required** in `documents.source_url`. Two flavors:
+  - Auto-fetch (URL manifest → download): the original IR-page PDF URL.
+  - Manual upload (`categorize_ir_uploads.py`): `manual_upload:{original-filename}`, where the original filename is the basename the user dropped in `ir_documents/` before triage. Preserves the user-visible identity for audit.
+- Idempotence key: `sha256` (UNIQUE in `documents`). Re-uploading identical bytes is a no-op; modified bytes for the same `(ticker, doc_type, period_end)` write a new row and supersede the previous one — never mutate.
+- Manual uploads where ticker, doc_type, **and** period_end cannot all be determined from filename + first-page fingerprint are quarantined to `ir_documents/_unsorted/` with a `.error.json` sidecar. They are **not** registered in `documents` and **not** silently merged with any existing row — the user must repair (rename the file, extend the issuer registry, or delete the upload) and re-run.
+- The IR step is **optional**: tickers with no `ir_doc` rows in `documents` proceed through the rest of the pipeline (FMP, SEC, transcripts) without any IR-derived facts. Downstream consumers must `LEFT JOIN` against `ir_doc` rows, never `INNER JOIN`.
 
 ### `transcript_audio`
 - Audio land in `transcripts/raw/audio/`, transcripts in `transcripts/raw/text/`.
@@ -88,4 +92,6 @@ Manual override always wins over automated sources, but it must include a reason
 
 The Phase 2 migration `0003_backfill_documents_from_fmp_files` walks `data/historical/fmp/` after the live FMP backfill completes, computes sha256 per file, and inserts one `documents` row per file with `source_type=fmp`, `fetched_at=mtime`, `fetch_status=ok`. Idempotent — re-runnable.
 
-Subsequent migrations backfill from `data/historical/sec/`, `ir_documents/`, and `transcripts/processed/` similarly.
+For `ir_doc`, backfill is performed by `execution/categorize_ir_uploads.py` rather than an Alembic migration: walking the user's loose uploads requires per-file content fingerprinting (issuer detection, doc-type classification, period extraction) which is more naturally expressed as an idempotent CLI than as a one-shot SQL migration. The CLI uses the same sha256-INSERT-OR-IGNORE semantics as the FMP backfill — running it twice is a no-op for unchanged files.
+
+Subsequent migrations backfill from `data/historical/sec/` and `transcripts/processed/` similarly.

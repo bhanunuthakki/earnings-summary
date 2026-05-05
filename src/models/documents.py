@@ -77,6 +77,7 @@ class DocType(StrEnum):
     IR_PRESENTATION = "ir_presentation"
     IR_SUPPLEMENT = "ir_supplement"
     IR_INVESTOR_UPDATE = "ir_investor_update"
+    IR_TRANSCRIPT = "ir_transcript"
     EARNINGS_CALL_AUDIO = "earnings_call_audio"
     EARNINGS_CALL_TRANSCRIPT = "earnings_call_transcript"
 
