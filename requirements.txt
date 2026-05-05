@@ -7,3 +7,7 @@ google-generativeai
 pypdf
 reportlab
 mcp
+yt-dlp
+faster-whisper
+pydantic
+beautifulsoup4
