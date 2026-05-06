@@ -24,15 +24,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import date
-import json
-import os
-import re
-
-import google.generativeai as genai
-from dotenv import load_dotenv
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS
@@ -44,9 +39,37 @@ STALE_CORPUS_THRESHOLD_DAYS = 120
 # the `model` argument on _call_claude.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
+# Fast classifier model — used for short, structured calls (intake doc-type
+# classification, transcript metadata extraction) where Sonnet would be
+# overkill. Haiku 4.5 returns ~5x faster at materially the same quality on
+# narrowly-scoped JSON-output tasks.
+FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
+
 # Default per-call timeout (seconds). Long-context thesis prompts can take
-# a few minutes on Sonnet; the cap protects against runaway hangs.
-DEFAULT_TIMEOUT_SECONDS = 600
+# a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
+# leaves headroom for the heaviest cases (4-quarter ticker × dense schema)
+# while still catching CLI hangs in a reasonable wall time.
+DEFAULT_TIMEOUT_SECONDS = 1200
+
+# Schema fields stripped from the LLM prompt — they are audit-trail metadata
+# meant for the human reviewer (why a schema was edited, when it was last
+# revised) and bloat the prompt without aiding the analysis. Centralized so
+# both passes apply the same redaction.
+SCHEMA_LLM_REDACT_FIELDS: frozenset[str] = frozenset({
+    "thesis_status_note",
+    "schema_revision_notes",
+    "last_updated",
+})
+
+# Markdown JSON-fence stripper — `claude -p` occasionally wraps structured
+# JSON responses in ```json ... ``` fences even when asked not to. Used by
+# functions that demand strict JSON output (classify_intake_document, etc.).
+JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# Intake classifier prompt budget — keep document excerpts bounded so a
+# single oversized PDF doesn't blow the prompt. 6 KB matches main's prior
+# Gemini-Flash budget; well under any Claude model's context.
+INTAKE_TEXT_BUDGET = 6000
 
 log = logging.getLogger(__name__)
 
@@ -116,33 +139,12 @@ def _call_claude(
 # ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
-# Empty-string ANTHROPIC_API_KEY would still trigger claude_cli's billing-guard.
-if not os.environ.get("ANTHROPIC_API_KEY"):
-    os.environ.pop("ANTHROPIC_API_KEY", None)
 
-# Models
-# `gemini-flash-latest` aliases to `gemini-3-flash`, capped at 20 RPD on the free tier.
-# The intake classifier runs ~50 calls per migration batch, so it pins to 2.5-flash
-# (1500 RPD free) for headroom. Summary/Say-Do functions stay on `gemini-flash-latest`.
-INTAKE_CLASSIFIER_MODEL = "gemini-2.5-flash"
-
-# Inbox classifier: keep the prompt below the 8 KB Gemini context budget for cheap calls
-INTAKE_TEXT_BUDGET = 6000
-JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
-
-
-
-def _complete(prompt: str) -> str:
-    """Single LLM call — every public helper routes through this."""
-    return call_claude(prompt)
 
 def generate_pairwise_analysis(prev_summary, curr_summary):
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
     """
-
-def generate_pairwise_analysis(prev_summary, curr_summary):
-    """Strict Say-Do analysis comparing prior-quarter guidance to current results."""
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
 
@@ -197,35 +199,6 @@ def generate_summary(text):
     """
     Generates a 1-2 page summary of the earnings transcript.
     """
-    **Analysis Requirements:**
-    1.  **Context:** What did they promise? (Guidance, Targets, Strategic Goals).
-    2.  **Execution:** What did they actually deliver? (Results, Misses, Beats).
-    3.  **Analyst Verdict:**
-        *   **Attribution:** Was any miss/beat due to **Execution** (Management Performance) or **Exogenous Factors** (Macro, Supply Chain, One-offs)?
-        *   **Thesis Impact:** Is this a structural issue or a temporary blip?
-
-    **Output Format (Strict Markdown):**
-    ## Analysis: {prev_q_str} vs {curr_q_str}
-
-    ### 1. Analyst Verdict
-    *   **Performance Rating:** **MET** / **MISSED** / **EXCEEDED** (Choose one)
-    *   **Attribution:** [Execution vs. Exogenous explanation]
-    *   **Thesis View:** [Bull/Bear implication]
-
-    ### 2. Say (The Promise)
-    *   **Guidance:** [Specific numbers/targets from {prev_q_str}]
-    *   **Strategy:** [Key initiatives promised]
-
-    ### 3. Do (The Reality)
-    *   **Performance:** [Actuals in {curr_q_str}]
-    *   **Gap Analysis:** [Specific variances]
-    """
-
-    return _complete(prompt)
-
-
-def generate_summary(text):
-    """Generate a 1-2 page summary of an earnings transcript."""
     prompt = """
     You are an expert financial analyst. Please provide a detailed 1-2 page summary of the provided earnings call transcript.
 
@@ -271,16 +244,12 @@ def generate_summary(text):
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
 
-    return _complete(prompt + text)
 
 def generate_press_release_summary(text: str) -> str:
     """
     Generates a structured summary from an earnings press release.
     Press releases are financial-forward — emphasize the numbers table and guidance.
     """
-
-def generate_press_release_summary(text: str) -> str:
-    """Structured summary from an earnings press release."""
     prompt = """
 You are an expert financial analyst. Summarize the following earnings press release.
 This is sourced from the company's IR website, so it is the official financial release — be precise.
@@ -327,12 +296,6 @@ def generate_presentation_brief(text: str) -> str:
     Generates a strategic brief from an earnings presentation slide deck.
     Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
     """
-
-    return _complete(prompt + text)
-
-
-def generate_presentation_brief(text: str) -> str:
-    """Strategic brief from an earnings presentation slide deck."""
     prompt = """
 You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
 Extract the key strategic narrative — what story is management telling investors?
@@ -394,68 +357,6 @@ _ADVERSARIAL_LOOP_FORMAT_BLOCK = """**Adversarial Loop format (use these exact f
 - **Sensitivity:** quantified impact if the primary read is wrong by ±X% on the key variable.
 """
 
-def generate_event_brief(text: str) -> str:
-    """
-    Generate a structured brief for a non-quarterly IR event: investor day, AGM,
-    capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
-    """
-    model = genai.GenerativeModel("gemini-flash-latest")
-
-    prompt = """You are a senior equity analyst summarizing an IR event document.
-
-Events differ from quarterly artifacts: they are usually long-horizon strategy
-discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
-M&A rationale) rather than near-term financial results. Skip period numbers unless
-they materially shape the multi-year framework.
-
-**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
-
-**Output Format (Strict Markdown):**
-
-# Event Brief: [Ticker] [Event Name] [Date]
-
-## 1. Event Type & Context
-*   **Type:** [Investor Day / AGM / Capital Markets Day / Conference / M&A announcement / Other]
-*   **Setting:** [Date, location if relevant, audience]
-*   **Why it matters:** [1-2 sentences — what was the management goal for the event]
-
-## 2. Headline Strategic Messages
-[3-5 bullets on the core narratives management was trying to land. Lead with what's NEW
-or DIFFERENT vs. prior management framing.]
-
-## 3. Multi-Year Targets & Frameworks
-*   **Quantitative targets:** [5-year revenue/FCF/margin targets, capital deployment ranges]
-*   **Time horizon:** [Stated horizon — 3yr, 5yr, "through the cycle"]
-*   **Comparison to prior:** [If the company previously gave a framework, note shifts]
-
-## 4. Capital Allocation
-[Explicit framing on buybacks, dividends, M&A appetite, balance-sheet priorities, payout ratios]
-
-## 5. Segment / Product Deep-Dives
-[Material new disclosures by segment — TAM, growth drivers, unit economics, competitive positioning]
-
-## 6. Risks & Watchpoints
-*   **Acknowledged:** [What management explicitly flagged as risks]
-*   **Unaddressed:** [What investors will want to ask but didn't get clear answers on]
-
-## 7. Thesis Read-Through
-[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis]
-
-Event Document Text:
-"""
-
-    try:
-        response = model.generate_content(prompt + text)
-        return response.text
-    except Exception as e:
-        print(f"CRITICAL ERROR: Event brief generation failed:\n{e}")
-        raise e
-
-
-def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
-    """
-    Generate an updated micro-thesis tracker document for a holding.
-
 
 def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tuple[int, bool, str, str]:
     """
@@ -488,15 +389,21 @@ def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tupl
     return staleness_days, is_stale, line, directive
 
 
+def _serialize_schema_for_llm(schema: dict) -> str:
+    """
+    Render the holdings schema as JSON for inclusion in an LLM prompt, with
+    audit-trail fields (per SCHEMA_LLM_REDACT_FIELDS) removed. Those fields
+    document why/when the schema was edited — useful for the human reviewer,
+    noise for the model. Stripping them keeps prompt budget on the KPI
+    definitions and break conditions that drive the analysis.
+    """
+    redacted = {k: v for k, v in schema.items() if k not in SCHEMA_LLM_REDACT_FIELDS}
+    return json.dumps(redacted, indent=2)
+
+
 def _format_quarter_context(quarters: list[dict]) -> str:
     """Render the chronological quarter blocks consumed by both passes."""
     blocks = []
-
-def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
-    """Updated micro-thesis tracker document for a holding."""
-    thesis_text = json.dumps(schema, indent=2)
-
-    quarter_blocks = []
     for q in quarters:
         block = f"\n### {q['quarter']} {q['year']}\n"
         for doc_type, text in q["summaries"].items():
@@ -521,7 +428,7 @@ def _build_pass_a_prompt(
     quarters_context: str,
 ) -> str:
     """Pass A — evidence tables. Schema Hygiene, Tier-1 Scorecard, Key Developments, Breakers, Competitive."""
-    thesis_text = json.dumps(schema, indent=2)
+    thesis_text = _serialize_schema_for_llm(schema)
     scorecard_target_col = "vs. Latest Disclosed Forward Target" if is_stale else "vs. Break Threshold"
     scorecard_staleness_col = "Staleness Adjustment | " if is_stale else ""
     scorecard_staleness_sep = "--- | " if is_stale else ""
@@ -530,10 +437,6 @@ def _build_pass_a_prompt(
         if is_stale
         else "distance to break condition (state as % or absolute gap)"
     )
-            block += f"\n**{label}:**\n{text[:3000]}\n"
-        quarter_blocks.append(block)
-
-    quarters_context = "\n".join(quarter_blocks)
 
     return f"""You are a senior fundamental equity analyst tracking a concentrated long position.
 
@@ -594,7 +497,7 @@ def _build_pass_b_prompt(
     pass_a_output: str,
 ) -> str:
     """Pass B — verdicts & adversarial loops. Anchored on Pass A's KPI table."""
-    thesis_text = json.dumps(schema, indent=2)
+    thesis_text = _serialize_schema_for_llm(schema)
 
     return f"""You are a senior fundamental equity analyst tracking a concentrated long position.
 
@@ -753,7 +656,6 @@ def generate_thesis_update(
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
     log.info({"event": "thesis_pass_done", "ticker": ticker, "pass": "B", "output_chars": len(pass_b_output)})
-    return _complete(prompt)
 
     return _assemble_tracker(
         ticker, report_date, is_stale, staleness_days, corpus_latest_date,
@@ -766,8 +668,6 @@ def generate_strategic_analysis(summaries_list):
     Generates a strategic analysis comparing performance vs expectations across quarters.
     summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
     """
-def generate_strategic_analysis(summaries_list):
-    """Strategic analysis comparing performance vs expectations across quarters."""
     context_str = ""
     for item in summaries_list:
         context_str += f"\n--- {item['quarter']} {item['year']} SUMMARY ---\n{item['text']}\n"
@@ -794,9 +694,6 @@ def generate_strategic_analysis(summaries_list):
     **Output Structure:**
 
     # Strategic Performance Analysis
-
-    ## Executive Outlook Assessment
-    Provide a high-level verdict: Is management credible? Do they consistently beat, meet, or miss their own expectations?
 
     ## Quarter-by-Quarter Track Record
 
@@ -832,7 +729,93 @@ def generate_strategic_analysis(summaries_list):
         raise
 
 
-    return _complete(prompt + context_str)
+def identify_transcript_metadata(text_snippet):
+    """
+    Identifies the Company Ticker, Quarter, and Year from the transcript text.
+    """
+    prompt = """
+    Analyze the following text from an earnings call transcript cover page or header.
+    Identify the:
+    1. Company Ticker (e.g., NVDA, GOOGL, MSFT).
+       **IMPORTANT**: Always use the **Primary US Listing Ticker** (NYSE/NASDAQ) if available.
+       - Example: For "Taiwan Semiconductor" or "2330.TW", return "TSM".
+       - Example: For "Tencent" or "700.HK", return "TCEHY".
+    2. Fiscal Quarter (Q1, Q2, Q3, or Q4).
+    3. Fiscal Year (e.g., 2025).
+
+    Return the result in this STRICT format:
+    TICKER_QX_YYYY
+
+    Example: NVDA_Q1_2026
+
+    If you cannot identify the information with confidence, return "UNKNOWN".
+
+    Text:
+    """
+    try:
+        return _call_claude(prompt + text_snippet[:2000], model=FAST_CLASSIFIER_MODEL).strip()
+    except Exception as e:
+        log.error(f"Error identifying metadata: {e}")
+        return "UNKNOWN"
+
+
+def generate_event_brief(text: str) -> str:
+    """
+    Generate a structured brief for a non-quarterly IR event: investor day, AGM,
+    capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
+
+    Events differ from quarterly artifacts: they are usually long-horizon strategy
+    discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
+    M&A rationale) rather than near-term financial results. Skip period numbers unless
+    they materially shape the multi-year framework.
+    """
+    prompt = """You are a senior equity analyst summarizing an IR event document.
+
+Events differ from quarterly artifacts: they are usually long-horizon strategy
+discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
+M&A rationale) rather than near-term financial results. Skip period numbers unless
+they materially shape the multi-year framework.
+
+**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
+
+**Output Format (Strict Markdown):**
+
+# Event Brief: [Ticker] [Event Name] [Date]
+
+## 1. Event Type & Context
+*   **Type:** [Investor Day / AGM / Capital Markets Day / Conference / M&A announcement / Other]
+*   **Setting:** [Date, location if relevant, audience]
+*   **Why it matters:** [1-2 sentences — what was the management goal for the event]
+
+## 2. Headline Strategic Messages
+[3-5 bullets on the core narratives management was trying to land. Lead with what's NEW
+or DIFFERENT vs. prior management framing.]
+
+## 3. Multi-Year Targets & Frameworks
+*   **Quantitative targets:** [5-year revenue/FCF/margin targets, capital deployment ranges]
+*   **Time horizon:** [Stated horizon — 3yr, 5yr, "through the cycle"]
+*   **Comparison to prior:** [If the company previously gave a framework, note shifts]
+
+## 4. Capital Allocation
+[Explicit framing on buybacks, dividends, M&A appetite, balance-sheet priorities, payout ratios]
+
+## 5. Segment / Product Deep-Dives
+[Material new disclosures by segment — TAM, growth drivers, unit economics, competitive positioning]
+
+## 6. Risks & Watchpoints
+*   **Acknowledged:** [What management explicitly flagged as risks]
+*   **Unaddressed:** [What investors will want to ask but didn't get clear answers on]
+
+## 7. Thesis Read-Through
+[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis]
+
+Event Document Text:
+"""
+    try:
+        return _call_claude(prompt + text)
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Event brief generation failed: {e}")
+        raise
 
 
 def generate_bear_case(
@@ -844,7 +827,8 @@ def generate_bear_case(
     segments_table_md: str,
     kpi_status_md: str,
 ) -> str:
-    """Generate a structured bear case as a JSON string the caller parses.
+    """
+    Generate a structured bear case as a JSON string the caller parses.
 
     Schema: {failure_modes: list[FailureMode], most_underweighted: str,
     out_of_scope_flags: list[str]}.
@@ -897,47 +881,26 @@ Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
 
 Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
 """
-
-    return _complete(prompt)
-
-
-def identify_transcript_metadata(text_snippet):
-    """Identify Company Ticker, Quarter, and Year from the transcript text."""
-    prompt = """
-    Analyze the following text from an earnings call transcript cover page or header.
-    Identify the:
-    1. Company Ticker (e.g., NVDA, GOOGL, MSFT).
-       **IMPORTANT**: Always use the **Primary US Listing Ticker** (NYSE/NASDAQ) if available.
-       - Example: For "Taiwan Semiconductor" or "2330.TW", return "TSM".
-       - Example: For "Tencent" or "700.HK", return "TCEHY".
-    2. Fiscal Quarter (Q1, Q2, Q3, or Q4).
-    3. Fiscal Year (e.g., 2025).
-
-    Return the result in this STRICT format:
-    TICKER_QX_YYYY
-
-    Example: NVDA_Q1_2026
-
-    If you cannot identify the information with confidence, return "UNKNOWN".
-
-    Text:
-    """
     try:
-        # Metadata extraction is short and simple — Haiku is plenty for this and faster.
-        return _call_claude(prompt + text_snippet[:2000], model="claude-haiku-4-5-20251001").strip()
+        raw = _call_claude(prompt).strip()
+        # Strip ``` fences if Claude wraps the JSON despite the instruction.
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
     except Exception as e:
-        log.error(f"Error identifying metadata: {e}")
-        return "UNKNOWN"
+        log.error(f"CRITICAL ERROR: Bear case generation failed for {ticker}: {e}")
+        raise
 
-    return _complete(prompt + text_snippet[:2000]).strip()
+
 def classify_intake_document(filename: str, text: str, hint: dict) -> dict | None:
-    """Classify a user-dropped IR document.
+    """
+    Classify a user-dropped IR document.
 
     Returns a dict with keys (ticker, period_end, doc_type, confidence, reasoning)
     matching `src.intake.IntakeClassification`, or None on any LLM/parse failure.
+    Routes through the fast classifier model — this is a short structured call
+    that runs ~50x per intake batch, so latency matters more than raw quality.
     """
-    model = genai.GenerativeModel(INTAKE_CLASSIFIER_MODEL)
-
     prompt = (
         "You are classifying an investor-relations document for a portfolio analyst.\n\n"
         "Given the filename and an excerpt of the document text, return a JSON object with EXACTLY these fields:\n\n"
@@ -974,12 +937,10 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
     )
 
     try:
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
+        raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return json.loads(raw)
     except Exception as e:
-        print(f"classify_intake_document failed: {e}")
+        log.error(f"classify_intake_document failed: {e}")
         return None
-
