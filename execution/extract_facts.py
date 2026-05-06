@@ -30,8 +30,13 @@ from compute.cashflow import extract_cashflow_facts  # noqa: E402
 from compute.income_statement import extract_income_statement_facts  # noqa: E402
 from compute.segment_oi_10k import extract_segment_oi_facts  # noqa: E402
 from compute.segments import extract_segment_facts  # noqa: E402
+from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
+from pipeline.queries import (  # noqa: E402
+    ANALYZED_LIST_TYPES,
+    open_db,
+    tracked_companies_for_user,
+)
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
 _Extractor = Callable[[sqlite3.Connection, int, Path], int]
@@ -55,7 +60,12 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     """Return the list of tickers to extract for, per CLI args."""
     if args.ticker:
         return [args.ticker.upper()]
-    companies = tracked_companies_for_user(conn, only_classified=True)
+    list_types = (
+        frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
+    )
+    companies = tracked_companies_for_user(
+        conn, only_classified=True, list_types=list_types
+    )
     return [c.ticker for c in companies]
 
 
@@ -124,6 +134,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
+    )
+    parser.add_argument(
+        "--include-index-members",
+        action="store_true",
+        help="With --all: also extract for index_member/etf/none tickers (default: "
+        "portfolio+watchlist only). Required to fan extraction over the full universe.",
     )
     args = parser.parse_args()
 

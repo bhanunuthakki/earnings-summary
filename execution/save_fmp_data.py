@@ -69,11 +69,95 @@ TIME_SENSITIVE_ENDPOINTS: set[str] = {
     "historical-market-capitalization",
 }
 
+# Snapshot cadence by list_type. Anything not present here defaults to monthly.
+# Portfolio/watchlist names get a daily history; index members are sampled
+# monthly to keep snapshot drift bounded across thousands of tickers.
+_SNAPSHOT_CADENCE_DAYS: dict[str, int] = {
+    "portfolio": 1,
+    "watchlist": 1,
+    "none": 1,
+    "index_member": 30,
+    "etf": 30,
+}
+
+
+def _load_snapshot_index() -> dict[str, str]:
+    """Walk SNAP_DIR once; return {<TICKER>_<suffix>: latest_YYYY-MM-DD}."""
+    index: dict[str, str] = {}
+    if not SNAP_DIR.exists():
+        return index
+    for date_dir in SNAP_DIR.iterdir():
+        if not date_dir.is_dir():
+            continue
+        date_str = date_dir.name
+        if len(date_str) != 10 or date_str[4] != "-":
+            continue
+        for f in date_dir.iterdir():
+            if not f.name.endswith(".json"):
+                continue
+            key = f.name[:-5]
+            prev = index.get(key)
+            if prev is None or date_str > prev:
+                index[key] = date_str
+    return index
+
+
+def _should_snapshot(
+    ticker: str,
+    suffix: str,
+    list_type: str,
+    today: date,
+    snapshot_index: dict[str, str],
+    *,
+    force: bool,
+) -> bool:
+    """True if (ticker, suffix) is overdue for a snapshot under list_type's cadence."""
+    if force:
+        return True
+    cadence_days = _SNAPSHOT_CADENCE_DAYS.get(list_type, 30)
+    last_str = snapshot_index.get(f"{ticker}_{suffix}")
+    if last_str is None:
+        return True
+    try:
+        last_date = date.fromisoformat(last_str)
+    except ValueError:
+        return True
+    return (today - last_date).days >= cadence_days
+
 SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "earnings-summary/1.0"
 
-REQUEST_DELAY = 0.10
+# FMP starter-tier limit is 750 requests/minute. We size the token bucket at
+# 12 tokens/sec (=720/min steady state) with a 12-token burst. That leaves
+# headroom for retry bursts after a 429 backoff without ever brushing the cap.
+# Override at runtime via FMP_RATE_LIMIT_PER_SEC env var.
+RATE_LIMIT_PER_SEC = float(os.environ.get("FMP_RATE_LIMIT_PER_SEC", "12"))
+RATE_LIMIT_BURST = max(1, int(RATE_LIMIT_PER_SEC))
 TIMEOUT = (10, 60)
+
+
+class TokenBucket:
+    """Process-local token bucket; thread-safe enough for our single-thread fetcher."""
+
+    def __init__(self, rate_per_sec: float, burst: int) -> None:
+        self.rate = rate_per_sec
+        self.capacity = float(burst)
+        self.tokens = float(burst)
+        self.last = time.monotonic()
+
+    def acquire(self) -> None:
+        """Block until one token is available, then consume it."""
+        while True:
+            now = time.monotonic()
+            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
+            self.last = now
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                return
+            time.sleep(max(0.005, (1.0 - self.tokens) / self.rate))
+
+
+_BUCKET = TokenBucket(RATE_LIMIT_PER_SEC, RATE_LIMIT_BURST)
 
 TODAY = date.today()
 TEN_YEARS_AGO = (TODAY - timedelta(days=365 * 10 + 3)).isoformat()
@@ -88,6 +172,7 @@ def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
     full = {**params, "apikey": API_KEY}
     # 429 backoff: up to 3 retries, exponential
     for attempt in range(3):
+        _BUCKET.acquire()
         try:
             r = SESSION.get(url, params=full, timeout=TIMEOUT)
         except requests.RequestException as e:
@@ -184,7 +269,6 @@ def fmp_call(
     last_err = "no-attempt"
     saw_403 = False
     for kind, url, params in _candidates(endpoint_path, symbol, extra):
-        time.sleep(REQUEST_DELAY)
         code, body, err = _http_get(url, params)
         last_code, last_err = code, err
         if code == 200 and body is not None:
@@ -333,24 +417,44 @@ def _record_status(ticker: str, endpoint: str, period: str, *, status: str,
                    earliest: str | None = None, latest: str | None = None,
                    file_path: str | None = None, file_bytes: int | None = None,
                    error_msg: str | None = None) -> None:
-    conn = portfolio_db.get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO fmp_endpoint_status
-            (ticker, endpoint, period, status, http_code, record_count,
-             earliest_date, latest_date, file_path, file_bytes, error_msg, last_pulled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ticker, endpoint, period) DO UPDATE SET
-            status=excluded.status, http_code=excluded.http_code,
-            record_count=excluded.record_count,
-            earliest_date=excluded.earliest_date, latest_date=excluded.latest_date,
-            file_path=excluded.file_path, file_bytes=excluded.file_bytes,
-            error_msg=excluded.error_msg, last_pulled=excluded.last_pulled
-    """, (ticker, endpoint, period or "", status, http_code, record_count,
-          earliest, latest, file_path, file_bytes, error_msg,
-          datetime.now().isoformat(timespec="seconds")))
-    conn.commit()
-    conn.close()
+    """Upsert one fmp_endpoint_status row with retry-on-lock backoff.
+
+    The DB is shared with sibling-branch pipelines; busy_timeout (set in
+    portfolio_db.get_connection) handles short waits, but we additionally
+    retry up to 5 times on persistent lock errors so a multi-hour pull
+    doesn't die on a one-off contention spike.
+    """
+    payload = (ticker, endpoint, period or "", status, http_code, record_count,
+               earliest, latest, file_path, file_bytes, error_msg,
+               datetime.now().isoformat(timespec="seconds"))
+    last_err: sqlite3.OperationalError | None = None
+    for attempt in range(5):
+        conn = portfolio_db.get_connection()
+        try:
+            conn.execute("""
+                INSERT INTO fmp_endpoint_status
+                    (ticker, endpoint, period, status, http_code, record_count,
+                     earliest_date, latest_date, file_path, file_bytes, error_msg,
+                     last_pulled)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticker, endpoint, period) DO UPDATE SET
+                    status=excluded.status, http_code=excluded.http_code,
+                    record_count=excluded.record_count,
+                    earliest_date=excluded.earliest_date, latest_date=excluded.latest_date,
+                    file_path=excluded.file_path, file_bytes=excluded.file_bytes,
+                    error_msg=excluded.error_msg, last_pulled=excluded.last_pulled
+            """, payload)
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            last_err = e
+            wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+            print(f"  [db-locked, retry {attempt + 1}/5 after {wait}s: {e}]", flush=True)
+            time.sleep(wait)
+        finally:
+            conn.close()
+    assert last_err is not None
+    raise last_err
 
 
 def _date_bounds(records) -> tuple[str | None, str | None]:
@@ -381,10 +485,17 @@ def _list_type_for(ticker: str) -> str:
     return row["list_type"] if row else "none"
 
 
-def run_ticker(ticker: str, *, skip_existing: bool = False) -> dict:
+def run_ticker(
+    ticker: str,
+    *,
+    skip_existing: bool = False,
+    snapshot_index: dict[str, str] | None = None,
+    force_snapshot: bool = False,
+) -> dict:
     lt = _list_type_for(ticker)
     print(f"\n=== {ticker} ({lt}) ===", flush=True)
     jobs = per_ticker_jobs(ticker, list_type=lt)
+    snapshot_index = snapshot_index if snapshot_index is not None else {}
 
     summary = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0,
                "total": len(jobs)}
@@ -416,12 +527,16 @@ def run_ticker(ticker: str, *, skip_existing: bool = False) -> dict:
 
             # For time-sensitive endpoints (forward consensus, ratings, DCF, TTM,
             # market-data-driven), also write a dated snapshot so historical
-            # values aren't overwritten on next pull.
-            if endpoint in TIME_SENSITIVE_ENDPOINTS:
+            # values aren't overwritten on next pull. Cadence is per list_type:
+            # daily for portfolio/watchlist, monthly for index_member/etf.
+            if endpoint in TIME_SENSITIVE_ENDPOINTS and _should_snapshot(
+                ticker, suffix, lt, TODAY, snapshot_index, force=force_snapshot
+            ):
                 snap_dir = SNAP_DIR / TODAY_STR
                 snap_dir.mkdir(parents=True, exist_ok=True)
                 (snap_dir / f"{ticker}_{suffix}.json").write_text(
                     json.dumps(body, indent=2), encoding="utf-8")
+                snapshot_index[f"{ticker}_{suffix}"] = TODAY_STR
 
             count = len(body) if isinstance(body, list) else 1
             earliest, latest = _date_bounds(body if isinstance(body, list) else [body])
@@ -591,6 +706,8 @@ def main():
                     help="Portfolio + watchlist + sector/industry")
     ap.add_argument("--skip-existing", action="store_true",
                     help="Skip endpoints already 'ok' in DB")
+    ap.add_argument("--force-snapshot", action="store_true",
+                    help="Snapshot every time-sensitive endpoint regardless of cadence")
     args = ap.parse_args()
 
     targets: list[str] = []
@@ -622,9 +739,17 @@ def main():
         ap.print_help()
         sys.exit(2)
 
+    snapshot_index = _load_snapshot_index()
+    print(f"snapshot index: {len(snapshot_index)} entries", flush=True)
+
     grand = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0, "total": 0}
     for t in targets:
-        s = run_ticker(t, skip_existing=args.skip_existing)
+        s = run_ticker(
+            t,
+            skip_existing=args.skip_existing,
+            snapshot_index=snapshot_index,
+            force_snapshot=args.force_snapshot,
+        )
         for k in grand:
             grand[k] += s[k]
 
