@@ -23,8 +23,17 @@ API surface — frontend contract:
 
 API surface — research artifacts (produced by execution/build_artifacts.py):
     GET    /api/research/<ticker>          latest sections.json
-    GET    /api/research/<ticker>/html     long-form HTML report (transcripts embedded in §10)
-    GET    /api/research/<ticker>/sheet    latest DCF workbook (.xlsx)
+    GET    /api/research/<ticker>/dates    list of available report dates (YYYY-MM-DD)
+    GET    /api/research/<ticker>/html     long-form HTML report (?date=YYYY-MM-DD optional)
+    GET    /api/research/<ticker>/sheet    DCF workbook .xlsx (?date=YYYY-MM-DD optional)
+
+API surface — jobs / actions:
+    POST   /api/jobs/build                 body {ticker, enable_llm?} → JobState
+    POST   /api/jobs/pipeline              body {ticker} → JobState
+    POST   /api/jobs/categorize            body {ticker?} → JobState
+    POST   /api/upload                     multipart 'file' → list of saved names
+    GET    /api/jobs                       list of recent jobs
+    GET    /api/jobs/<job_id>              JobState
 
 Repo-root resolution: PORTFOLIO_REPO_ROOT env var > project root inferred from
 this file. We override db / calendar_manager module paths after import so a
@@ -35,15 +44,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
+from werkzeug.utils import secure_filename
 
 import calendar_manager
 import db
 from alias_manager import resolve_ticker
+from jobs import JobManager
 
 _DEFAULT_REPO_ROOT = Path(__file__).resolve().parent.parent
+CODE_ROOT = _DEFAULT_REPO_ROOT
 REPO_ROOT = Path(os.environ.get("PORTFOLIO_REPO_ROOT", _DEFAULT_REPO_ROOT)).resolve()
 
 # Override module-level paths so db / calendar_manager read from the chosen repo.
@@ -56,9 +69,17 @@ calendar_manager.FMP_DIR = str(REPO_ROOT / "data" / "historical" / "fmp")
 
 HOLDINGS_DIR = REPO_ROOT / "micro_thesis" / "holdings"
 RESEARCH_DIR = REPO_ROOT / "output" / "research"
+IR_DROPBOX = REPO_ROOT / "ir_documents"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
+_TICKER_RX = re.compile(r"^[A-Z][A-Z0-9.\-]{0,9}$")
+_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ALLOWED_UPLOAD_EXTS = frozenset({".pdf", ".xlsx", ".xls", ".html", ".htm", ".txt", ".csv"})
+_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 app = Flask(__name__, static_folder=None)
+app.config["MAX_CONTENT_LENGTH"] = _MAX_UPLOAD_BYTES
+job_manager = JobManager(REPO_ROOT, code_root=CODE_ROOT)
 
 
 # ---------------------------------------------------------------------------
@@ -235,18 +256,27 @@ def research_feed() -> object:
 # ---------------------------------------------------------------------------
 
 
-def _latest_artifact(ticker: str, suffix: str) -> Path | None:
-    """Latest file matching {RESEARCH_DIR}/{TICKER}/*_{suffix} sorted by name (ISO date)."""
+def _resolve_artifact(ticker: str, suffix: str, date_str: str | None) -> Path | None:
+    """Return {RESEARCH_DIR}/{TICKER}/{date}_{suffix} or the latest by name.
+
+    `date_str` must match YYYY-MM-DD or be None. If None, we return the
+    last file by sorted name (ISO date prefix gives chronological order).
+    """
     ticker_dir = RESEARCH_DIR / resolve_ticker(ticker).upper()
     if not ticker_dir.exists():
         return None
+    if date_str is not None:
+        if not _DATE_RX.match(date_str):
+            return None
+        candidate = ticker_dir / f"{date_str}{suffix}"
+        return candidate if candidate.exists() else None
     matches = sorted(ticker_dir.glob(f"*{suffix}"))
     return matches[-1] if matches else None
 
 
 @app.route("/api/research/<ticker>")
 def research_sections(ticker: str) -> object:
-    path = _latest_artifact(ticker, "_sections.json")
+    path = _resolve_artifact(ticker, "_sections.json", request.args.get("date"))
     if path is None:
         return (
             jsonify(
@@ -261,9 +291,23 @@ def research_sections(ticker: str) -> object:
         return jsonify(json.load(f))
 
 
+@app.route("/api/research/<ticker>/dates")
+def research_dates(ticker: str) -> object:
+    """List available report dates (YYYY-MM-DD) for ticker, newest first."""
+    ticker_dir = RESEARCH_DIR / resolve_ticker(ticker).upper()
+    if not ticker_dir.exists():
+        return jsonify([])
+    dates: set[str] = set()
+    for p in ticker_dir.glob("*_report.html"):
+        prefix = p.name.split("_report.html", 1)[0]
+        if _DATE_RX.match(prefix):
+            dates.add(prefix)
+    return jsonify(sorted(dates, reverse=True))
+
+
 @app.route("/api/research/<ticker>/html")
 def research_html(ticker: str) -> object:
-    path = _latest_artifact(ticker, "_report.html")
+    path = _resolve_artifact(ticker, "_report.html", request.args.get("date"))
     if path is None:
         abort(404)
     return send_file(path, mimetype="text/html")
@@ -271,7 +315,7 @@ def research_html(ticker: str) -> object:
 
 @app.route("/api/research/<ticker>/sheet")
 def research_sheet(ticker: str) -> object:
-    path = _latest_artifact(ticker, "_dcf.xlsx")
+    path = _resolve_artifact(ticker, "_dcf.xlsx", request.args.get("date"))
     if path is None:
         abort(404)
     return send_file(
@@ -280,6 +324,112 @@ def research_sheet(ticker: str) -> object:
         as_attachment=True,
         download_name=path.name,
     )
+
+
+# ---------------------------------------------------------------------------
+# Jobs (build / pipeline / categorize)
+# ---------------------------------------------------------------------------
+
+
+def _ticker_or_400(body: dict[str, object]) -> str:
+    raw = body.get("ticker")
+    if not isinstance(raw, str):
+        abort(400, description="ticker required")
+    ticker = resolve_ticker(raw).upper()
+    if not _TICKER_RX.match(ticker):
+        abort(400, description=f"invalid ticker {raw!r}")
+    return ticker
+
+
+@app.route("/api/jobs/build", methods=["POST"])
+def jobs_build() -> object:
+    body = request.get_json(force=True) or {}
+    ticker = _ticker_or_400(body)
+    enable_llm = bool(body.get("enable_llm", False))
+    state = job_manager.start_build(ticker, enable_llm=enable_llm)
+    return jsonify(state.to_dict())
+
+
+@app.route("/api/jobs/pipeline", methods=["POST"])
+def jobs_pipeline() -> object:
+    body = request.get_json(force=True) or {}
+    ticker = _ticker_or_400(body)
+    state = job_manager.start_pipeline(ticker)
+    return jsonify(state.to_dict())
+
+
+@app.route("/api/jobs/categorize", methods=["POST"])
+def jobs_categorize() -> object:
+    body = request.get_json(silent=True) or {}
+    raw = body.get("ticker")
+    ticker: str | None = None
+    if isinstance(raw, str) and raw.strip():
+        ticker = resolve_ticker(raw).upper()
+        if not _TICKER_RX.match(ticker):
+            abort(400, description=f"invalid ticker {raw!r}")
+    state = job_manager.start_categorize(ticker)
+    return jsonify(state.to_dict())
+
+
+@app.route("/api/jobs")
+def jobs_list() -> object:
+    return jsonify([j.to_dict() for j in job_manager.list_recent()])
+
+
+@app.route("/api/jobs/<job_id>")
+def jobs_get(job_id: str) -> object:
+    state = job_manager.get(job_id)
+    if state is None:
+        abort(404)
+    return jsonify(state.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# IR document upload
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_ir_documents() -> object:
+    """Accept one or more files and drop them at ir_documents/<filename>.
+
+    Filename is sanitized via werkzeug.secure_filename so path traversal can't
+    escape the dropbox. Extension allowlist mirrors the IR classifier's
+    supported types. The actual classification is a separate step — call
+    POST /api/jobs/categorize after upload to register them.
+    """
+    files = request.files.getlist("file")
+    if not files:
+        abort(400, description="no files in request")
+
+    IR_DROPBOX.mkdir(parents=True, exist_ok=True)
+    saved: list[str] = []
+    rejected: list[dict[str, str]] = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        safe = secure_filename(f.filename)
+        if not safe:
+            rejected.append({"name": f.filename, "reason": "unsafe filename"})
+            continue
+        ext = Path(safe).suffix.lower()
+        if ext not in _ALLOWED_UPLOAD_EXTS:
+            rejected.append({"name": safe, "reason": f"extension {ext} not allowed"})
+            continue
+        target = IR_DROPBOX / safe
+        if target.exists():
+            stem = target.stem
+            i = 1
+            while True:
+                cand = IR_DROPBOX / f"{stem}__{i}{ext}"
+                if not cand.exists():
+                    target = cand
+                    break
+                i += 1
+        f.save(str(target))
+        saved.append(target.name)
+
+    return jsonify({"saved": saved, "rejected": rejected, "dropbox": str(IR_DROPBOX)})
 
 
 if __name__ == "__main__":
