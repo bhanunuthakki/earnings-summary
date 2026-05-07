@@ -37,14 +37,21 @@ _FMP_ALIASES: dict[str, list[str]] = {
 }
 
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_LIST_TYPES: frozenset[str] = frozenset({"portfolio", "watchlist", "none"})
+_LIST_TYPES: frozenset[str] = frozenset(
+    {"portfolio", "watchlist", "none", "etf", "index_member"}
+)
 
 
 def get_connection() -> sqlite3.Connection:
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
-    conn = sqlite3.connect(DB_PATH)
+    # 30s busy_timeout: this DB is shared with sibling-branch pipelines whose
+    # write transactions can briefly hold the lock. Without it, any concurrent
+    # writer immediately raises OperationalError("database is locked") and
+    # kills long-running pulls. 30s is well above any normal transaction.
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -71,7 +78,9 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
             user_id INTEGER DEFAULT 1,
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
-            list_type TEXT NOT NULL CHECK(list_type IN ('portfolio', 'watchlist', 'none')),
+            list_type TEXT NOT NULL CHECK(list_type IN (
+                'portfolio', 'watchlist', 'none', 'etf', 'index_member'
+            )),
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, ticker)
         )

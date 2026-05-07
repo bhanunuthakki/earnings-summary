@@ -63,23 +63,43 @@ def documents_for(
     return [dict(r) for r in cur.fetchall()]
 
 
+# Default scope for `tracked_companies_for_user`: only the lists the user actively
+# analyzes. Index members and ETFs (added by the FMP universe backfill) are
+# excluded so that bulk consumers like `extract_facts.py --all` don't fan out
+# parsing/analysis over thousands of names. Callers needing the wider universe
+# pass an explicit `list_types=` set.
+ANALYZED_LIST_TYPES: frozenset[ListType] = frozenset(
+    {ListType.PORTFOLIO, ListType.WATCHLIST}
+)
+
+
 def tracked_companies_for_user(
     conn: sqlite3.Connection,
     user_id: int = 1,
     only_classified: bool = True,
+    list_types: frozenset[ListType] = ANALYZED_LIST_TYPES,
 ) -> list[Company]:
-    """Return Company rows for user. only_classified filters out NULL instrument_type."""
+    """Return Company rows for user, scoped to `list_types`.
+
+    `only_classified` filters out NULL instrument_type. Default `list_types` is
+    portfolio + watchlist so bulk callers don't iterate the index-member universe;
+    pass `frozenset(ListType)` (or any superset) to opt in to the broader scope.
+    """
+    if not list_types:
+        raise ValueError("list_types must be non-empty")
     cur = conn.cursor()
+    placeholders = ",".join("?" for _ in list_types)
     sql = (
         "SELECT id, user_id, ticker, name, list_type, added_at, sec_validated, "
         "       ir_url, instrument_type, filing_regime, fiscal_year_end, "
         "       fmp_data_saved, fmp_data_upto "
-        "FROM tracked_companies WHERE user_id = ?"
+        "FROM tracked_companies WHERE user_id = ? "
+        f"AND list_type IN ({placeholders})"
     )
     if only_classified:
         sql += " AND instrument_type IS NOT NULL"
     sql += " ORDER BY list_type, ticker"
-    cur.execute(sql, (user_id,))
+    cur.execute(sql, (user_id, *(lt.value for lt in list_types)))
     out: list[Company] = []
     for row in cur.fetchall():
         out.append(

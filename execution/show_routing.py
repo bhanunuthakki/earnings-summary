@@ -16,8 +16,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from models.companies import Company  # noqa: E402
-from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
+from models.companies import Company, ListType  # noqa: E402
+from pipeline.queries import (  # noqa: E402
+    ANALYZED_LIST_TYPES,
+    open_db,
+    tracked_companies_for_user,
+)
 from pipeline.source_routing import SourcePlan, plan_for_ticker  # noqa: E402
 
 
@@ -37,8 +41,11 @@ def _print_plan_for(conn, ticker: str) -> None:
     print(json.dumps(_format_plan(plan), indent=2))
 
 
-def _print_plans_for_all(conn) -> None:
-    companies: list[Company] = tracked_companies_for_user(conn, only_classified=True)
+def _print_plans_for_all(conn, *, include_index_members: bool) -> None:
+    list_types = frozenset(ListType) if include_index_members else ANALYZED_LIST_TYPES
+    companies: list[Company] = tracked_companies_for_user(
+        conn, only_classified=True, list_types=list_types
+    )
     out: list[dict[str, object]] = []
     for c in companies:
         plan = plan_for_ticker(conn, c.ticker)
@@ -56,6 +63,12 @@ def main() -> int:
         default=str(PROJECT_ROOT / "data" / "portfolio.db"),
         help="Path to portfolio.db",
     )
+    parser.add_argument(
+        "--include-index-members",
+        action="store_true",
+        help="With --all: also show plans for index_member/etf/none (default: "
+        "portfolio+watchlist only).",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.db):
@@ -67,7 +80,9 @@ def main() -> int:
         if args.ticker:
             _print_plan_for(conn, args.ticker)
         else:
-            _print_plans_for_all(conn)
+            _print_plans_for_all(
+                conn, include_index_members=args.include_index_members
+            )
     finally:
         conn.close()
     return 0
