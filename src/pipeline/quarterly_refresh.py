@@ -41,6 +41,7 @@ from compute.income_statement import extract_income_statement_facts
 from compute.say_do import match_pending as match_commitments_pending
 from compute.segment_oi_10k import extract_segment_oi_facts
 from compute.segments import extract_segment_facts
+from compute.segments_nu import extract_nu_segment_facts
 from compute.thesis_evaluator import (
     evaluate_ticker_thesis,
     persist_verdict,
@@ -64,6 +65,16 @@ _FACT_EXTRACTOR_DISPATCH: dict[str, Callable[[sqlite3.Connection, int, Path], in
     "fmp_as_reported_financial": extract_as_reported_facts,
     "fmp_10k_json": extract_segment_oi_facts,
     "fmp_10q_json": extract_segment_oi_facts,
+}
+
+# Per-ticker extractor overrides (ticker, doc_type) -> Extractor.
+# NU's 20-F uses IFRS segment-note conventions that the generic
+# segment_oi_10k walker can't decode — see compute/segments_nu.py.
+_TICKER_EXTRACTOR_OVERRIDE: dict[
+    tuple[str, str], Callable[[sqlite3.Connection, int, Path], int]
+] = {
+    ("NU", "fmp_10k_json"): extract_nu_segment_facts,
+    ("NU", "fmp_10q_json"): extract_nu_segment_facts,
 }
 
 
@@ -197,7 +208,11 @@ def _stage_extract_fmp_facts(
     failed = 0
     for row in docs:
         doc_id = int(row["id"])
-        extractor = _FACT_EXTRACTOR_DISPATCH[row["doc_type"]]
+        doc_type = row["doc_type"]
+        extractor = (
+            _TICKER_EXTRACTOR_OVERRIDE.get((ticker.upper(), doc_type))
+            or _FACT_EXTRACTOR_DISPATCH[doc_type]
+        )
         n = _safe_extract(extractor, conn, doc_id, project_root)
         if n < 0:
             failed += 1

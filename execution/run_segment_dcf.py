@@ -93,7 +93,7 @@ def main() -> int:
 
     conn = open_db(args.db)
     try:
-        rows = run_segment_dcf_for_ticker(
+        agg = run_segment_dcf_for_ticker(
             conn,
             ticker=args.ticker,
             segment_growths=growths,
@@ -103,37 +103,32 @@ def main() -> int:
             notes=str(notes) if notes is not None else None,
             metric=metric,
         )
+    except ValueError as e:
+        print(json.dumps({"ticker": args.ticker.upper(), "error": str(e)}, indent=2))
+        return 1
     finally:
         conn.close()
 
-    if not rows:
-        print(
-            json.dumps(
-                {"ticker": args.ticker.upper(), "warning": "no segments matched assumptions"},
-                indent=2,
-            )
-        )
-        return 1
-
-    total_npv = sum(r.result.npv for r in rows)
     output = {
-        "ticker": args.ticker.upper(),
+        "ticker": agg.ticker,
+        "dcf_run_id": agg.row_id,
         "wacc": wacc,
         "terminal_growth": terminal_growth,
         "metric": metric,
         "horizon_years": len(next(iter(growths.values()))),
-        "segments": [
+        "components": [
             {
-                "segment_name": r.segment_name,
-                "dcf_run_id": r.row_id,
-                "base_revenue_billions": r.inputs.base_revenue / 1e9,
-                "fcf_margin": r.inputs.fcf_margin,
-                "growths": r.inputs.revenue_growths,
-                "npv_billions": r.result.npv / 1e9,
+                "component_name": c.component_name,
+                "component_type": c.component_type,
+                "base_revenue_billions": c.inputs.base_revenue / 1e9,
+                "fcf_margin": c.inputs.fcf_margin,
+                "growths": c.inputs.revenue_growths,
+                "npv_billions": c.result.npv / 1e9,
             }
-            for r in rows
+            for c in agg.components
         ],
-        "total_npv_billions": total_npv / 1e9,
+        "aggregate_npv_billions": agg.aggregate_npv / 1e9,
+        "aggregate_npv_per_share": agg.aggregate_npv_per_share,
     }
     print(json.dumps(output, indent=2))
     return 0
