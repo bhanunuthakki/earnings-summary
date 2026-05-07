@@ -15,7 +15,7 @@ from compute._common import (
     load_document_row,
     read_records_json,
 )
-from models.facts import FinancialFact, Unit
+from models.facts import FinancialFact, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpBalanceSheetRecord
 
 _DOC_TYPE = "fmp_balance_sheet"
@@ -58,23 +58,34 @@ _LINE_ITEM_SPEC: list[tuple[str, str, Unit]] = [
 
 
 def extract_facts_from_record(
-    record: FmpBalanceSheetRecord, source_doc_id: int
+    record: FmpBalanceSheetRecord,
+    source_doc_id: int,
+    period_type_override: FiscalPeriodType | None = None,
 ) -> list[FinancialFact]:
     """Convert one validated record to FinancialFact rows."""
-    return extract_facts_with_spec(record, source_doc_id, _LINE_ITEM_SPEC)
+    return extract_facts_with_spec(
+        record, source_doc_id, _LINE_ITEM_SPEC, period_type_override=period_type_override
+    )
 
 
 def extract_balance_sheet_facts(
     conn: sqlite3.Connection, document_id: int, project_root: Path
 ) -> int:
-    """Read documents[document_id]'s file, write FinancialFact rows. Idempotent."""
+    """Read documents[document_id]'s file, write FinancialFact rows. Idempotent.
+
+    `*_ttm.json` files report a TTM-aligned snapshot; we override fiscal_period_type
+    to TTM so it doesn't conflate with standalone-quarter point-in-time values.
+    """
     _ticker, file_path_str = load_document_row(conn, document_id, _DOC_TYPE)
     records = read_records_json(project_root / file_path_str)
+    period_override = FiscalPeriodType.TTM if file_path_str.endswith("_ttm.json") else None
 
     inserted = 0
     for rec_data in records:
         rec = FmpBalanceSheetRecord.model_validate(rec_data)
-        facts = extract_facts_from_record(rec, source_doc_id=document_id)
+        facts = extract_facts_from_record(
+            rec, source_doc_id=document_id, period_type_override=period_override
+        )
         inserted += insert_financial_facts(conn, facts)
     conn.commit()
     return inserted

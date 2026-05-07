@@ -1,4 +1,4 @@
--- Seed canonical IR URLs into tracked_companies.ir_url for the 28-name book.
+-- Seed canonical IR URLs into tracked_companies.ir_url for the 33-name book.
 -- Verify each URL before running — corporate IR sites do change paths.
 -- Apply with:  sqlite3 data/portfolio.db < data/seed_ir_urls.sql
 
@@ -16,7 +16,7 @@ UPDATE tracked_companies SET ir_url = 'https://investors.nu'                    
 UPDATE tracked_companies SET ir_url = 'https://bn.brookfield.com'                           WHERE ticker = 'BN';
 UPDATE tracked_companies SET ir_url = 'https://www.franklintempleton.com/investments/options/exchange-traded-funds' WHERE ticker = 'FLKR';
 
--- Watchlist (16)
+-- Watchlist (21)
 UPDATE tracked_companies SET ir_url = 'https://investor.lilly.com'                          WHERE ticker = 'LLY';
 UPDATE tracked_companies SET ir_url = 'https://ir.appliedmaterials.com'                     WHERE ticker = 'AMAT';
 UPDATE tracked_companies SET ir_url = 'https://investors.fcx.com'                           WHERE ticker = 'FCX';
@@ -33,7 +33,12 @@ UPDATE tracked_companies SET ir_url = 'https://investor.lemonade.com'           
 UPDATE tracked_companies SET ir_url = 'https://www.hdfcbank.com/personal/about-us/investor-relations' WHERE ticker = 'HDB';
 UPDATE tracked_companies SET ir_url = 'https://www.franco-nevada.com/investors'             WHERE ticker = 'FNV';
 UPDATE tracked_companies SET ir_url = 'https://www.cnrl.com/investors'                      WHERE ticker = 'CNQ';
+UPDATE tracked_companies SET ir_url = 'https://www.bookingholdings.com/financial-information' WHERE ticker = 'BKNG';
+UPDATE tracked_companies SET ir_url = 'https://www.wheatonpm.com/Investors'                  WHERE ticker = 'WPM';
+UPDATE tracked_companies SET ir_url = 'https://www.texaspacific.com/investors'               WHERE ticker = 'TPL';
+UPDATE tracked_companies SET ir_url = 'https://investor.tsmc.com'                            WHERE ticker = 'TSM';
+UPDATE tracked_companies SET ir_url = 'https://investors.micron.com'                         WHERE ticker = 'MU';
 
--- Quick check: verify all 28 are populated
+-- Quick check: verify all 33 are populated
 SELECT ticker, ir_url FROM tracked_companies WHERE instrument_type IS NOT NULL AND ir_url IS NULL;
 -- (should return zero rows)

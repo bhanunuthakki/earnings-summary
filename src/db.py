@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from urllib.parse import unquote
 
@@ -454,8 +455,71 @@ def scan_and_sync_artifacts(ticker: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+_TRACKED_LIST_TYPES_FOR_ONBOARD: frozenset[str] = frozenset({"portfolio", "watchlist"})
+
+
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def _spawn_onboard_async(ticker: str) -> None:
+    """Fire-and-forget `execution/onboard_ticker.py --ticker X` for a newly-added ticker.
+
+    Detached so the child outlives the parent (Flask request handler / CLI).
+    Logs go to `logs/onboard_{TICKER}_{TIMESTAMP}.log`. Spawn failures are
+    swallowed to JSON stderr so a watchlist add never fails on a missing pipeline.
+    """
+    script = os.path.join(PROJECT_ROOT, "execution", "onboard_ticker.py")
+    if not os.path.exists(script):
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawn_skipped", "ticker": ticker, "reason": "script missing"}) + "\n"
+        )
+        return
+
+    log_dir = os.path.join(PROJECT_ROOT, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    log_path = os.path.join(log_dir, f"onboard_{ticker}_{stamp}.log")
+    cmd = [sys.executable, script, "--ticker", ticker]
+
+    try:
+        log_handle = open(log_path, "w", encoding="utf-8")
+        if os.name == "nt":
+            subprocess.Popen(
+                cmd,
+                cwd=PROJECT_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            subprocess.Popen(
+                cmd,
+                cwd=PROJECT_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=True,
+            )
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawned", "ticker": ticker, "log": log_path}) + "\n"
+        )
+    except OSError as e:
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawn_failed", "ticker": ticker, "error": str(e)}) + "\n"
+        )
+
+
 def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> None:
-    """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts."""
+    """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
+
+    For first-time adds to portfolio/watchlist, also spawns a detached
+    `execution/onboard_ticker.py` subprocess to fetch FMP data and run the
+    parse DAG. Re-upserts (ticker already exists for user) do NOT re-spawn.
+    """
     if list_type not in _LIST_TYPES:
         raise ValueError(f"Invalid list_type {list_type!r}; expected one of {sorted(_LIST_TYPES)}")
 
@@ -466,6 +530,11 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
 
     conn = get_connection()
     cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+        (user_id, ticker),
+    )
+    is_new_addition = cursor.fetchone() is None
     cursor.execute(
         """
         INSERT INTO tracked_companies (user_id, ticker, name, list_type, added_at, sec_validated, ir_url)
@@ -483,6 +552,9 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
     conn.close()
 
     scan_and_sync_artifacts(ticker)
+
+    if is_new_addition and list_type in _TRACKED_LIST_TYPES_FOR_ONBOARD:
+        _spawn_onboard_async(ticker)
 
 
 def remove_company(ticker: str, user_id: int = 1) -> None:
