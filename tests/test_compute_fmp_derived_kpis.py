@@ -1,0 +1,265 @@
+"""Tests for src/compute/fmp_derived_kpis.py — KPI derivation from financial_facts."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime
+from decimal import Decimal
+
+import pytest
+
+from compute.fmp_derived_kpis import (
+    KPI_GROSS_MARGIN_GAAP,
+    KPI_NET_MARGIN_GAAP,
+    KPI_OPERATING_MARGIN_GAAP,
+    KPI_REVENUE_YOY_USD,
+    QuarterlyFacts,
+    derive_for_facts,
+    derive_for_ticker,
+)
+from models.facts import FiscalPeriodType, Unit
+
+
+def _create_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            fetched_at TIMESTAMP NOT NULL,
+            fetch_status TEXT NOT NULL,
+            raw_bytes_size INTEGER NOT NULL
+        );
+        CREATE TABLE financial_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            line_item TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            confidence REAL DEFAULT 1.0
+        );
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            primary_source TEXT NOT NULL,
+            fallback_source TEXT,
+            ir_url TEXT,
+            threshold_tier TEXT,
+            threshold_low REAL,
+            threshold_high REAL,
+            notes TEXT,
+            UNIQUE(ticker, name)
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            kpi_definition_id INTEGER NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX uq_kpi_facts_provenance
+        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
+        """
+    )
+    conn.commit()
+
+
+@pytest.fixture
+def conn() -> sqlite3.Connection:
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    _create_schema(c)
+    return c
+
+
+def _insert_doc(
+    conn: sqlite3.Connection, ticker: str, file_path: str
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1)",
+        (ticker, file_path, "a" * 64, datetime.now()),
+    )
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def _insert_fact(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str, period_end: datetime, fpt: str, line_item: str,
+    value: float, source_doc_id: int,
+) -> None:
+    conn.execute(
+        "INSERT INTO financial_facts "
+        "(ticker, period_end, fiscal_period_type, line_item, value, currency, unit, source_doc_id) "
+        "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
+        (ticker, period_end, fpt, line_item, str(value), source_doc_id),
+    )
+
+
+def test_derive_for_facts_emits_three_margin_metrics_per_period() -> None:
+    """One QuarterlyFacts -> 3 margin rows (no YoY without prior year)."""
+    facts = [
+        QuarterlyFacts(
+            ticker="MELI", period_end=datetime(2024, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("6059000000"),
+            operating_income=Decimal("820000000"),
+            net_income=Decimal("639000000"),
+            gross_profit=Decimal("2749000000"),
+            source_doc_id=42,
+        )
+    ]
+    rows = derive_for_facts(facts)
+    by_name = {r.name: r for r in rows}
+    assert KPI_OPERATING_MARGIN_GAAP in by_name
+    assert KPI_NET_MARGIN_GAAP in by_name
+    assert KPI_GROSS_MARGIN_GAAP in by_name
+    # YoY needs a prior year — not present yet
+    assert KPI_REVENUE_YOY_USD not in by_name
+
+
+def test_derive_operating_margin_value_is_correct() -> None:
+    """820M / 6059M = 13.535...% — matches the MELI Q4'24 published number 13.5%."""
+    facts = [
+        QuarterlyFacts(
+            ticker="MELI", period_end=datetime(2024, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("6059000000"),
+            operating_income=Decimal("820000000"),
+            net_income=Decimal("639000000"),
+            gross_profit=Decimal("2749000000"),
+            source_doc_id=42,
+        )
+    ]
+    rows = derive_for_facts(facts)
+    op_margin = next(r for r in rows if r.name == KPI_OPERATING_MARGIN_GAAP)
+    assert Decimal("13.5") < op_margin.value < Decimal("13.6")
+    assert op_margin.unit == Unit.PERCENT
+    assert op_margin.fiscal_period_type == FiscalPeriodType.Q4
+
+
+def test_derive_revenue_yoy_compares_same_quarter_one_year_apart() -> None:
+    """Q4'24 vs Q4'23: 96% if revenue went 100 -> 196."""
+    facts = [
+        QuarterlyFacts(
+            ticker="X", period_end=datetime(2023, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("100"), operating_income=Decimal("10"),
+            net_income=Decimal("8"), gross_profit=Decimal("40"), source_doc_id=1,
+        ),
+        QuarterlyFacts(
+            ticker="X", period_end=datetime(2024, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("196"), operating_income=Decimal("20"),
+            net_income=Decimal("15"), gross_profit=Decimal("80"), source_doc_id=2,
+        ),
+    ]
+    rows = derive_for_facts(facts)
+    yoy = [r for r in rows if r.name == KPI_REVENUE_YOY_USD]
+    assert len(yoy) == 1
+    assert yoy[0].value == Decimal("96")
+    assert yoy[0].period_end == datetime(2024, 12, 31)
+
+
+def test_derive_skips_yoy_when_year_gap_is_not_exactly_one() -> None:
+    """If only Q4'23 and Q4'25 exist (gap year), no YoY emitted."""
+    facts = [
+        QuarterlyFacts(
+            ticker="X", period_end=datetime(2023, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("100"), operating_income=Decimal("10"),
+            net_income=Decimal("8"), gross_profit=Decimal("40"), source_doc_id=1,
+        ),
+        QuarterlyFacts(
+            ticker="X", period_end=datetime(2025, 12, 31),
+            fiscal_period_type=FiscalPeriodType.Q4,
+            revenue=Decimal("200"), operating_income=Decimal("20"),
+            net_income=Decimal("15"), gross_profit=Decimal("80"), source_doc_id=2,
+        ),
+    ]
+    rows = derive_for_facts(facts)
+    yoy = [r for r in rows if r.name == KPI_REVENUE_YOY_USD]
+    assert yoy == []
+
+
+def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) -> None:
+    """Only documents whose file_path ends in _quarterly.json contribute to derivation."""
+    quarterly_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_quarterly.json")
+    annual_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement.json")
+    ttm_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_ttm.json")
+
+    pe = datetime(2024, 12, 31)
+    for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
+        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=quarterly_doc)
+        # Annual + TTM rows would pollute if not filtered
+        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val * 10, source_doc_id=annual_doc)
+        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val * 4, source_doc_id=ttm_doc)
+    conn.commit()
+
+    emitted, inserted = derive_for_ticker(conn, "X")
+    assert emitted == 3  # OpMargin + NetMargin + GrossMargin (no YoY without prior year)
+    assert inserted == 3
+    rows = conn.execute(
+        "SELECT kd.name, kf.value FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        "WHERE kf.ticker='X' ORDER BY kd.name"
+    ).fetchall()
+    by_name = {dict(r)["name"]: Decimal(str(dict(r)["value"])) for r in rows}
+    assert by_name[KPI_OPERATING_MARGIN_GAAP] == Decimal("20")  # 20/100*100
+    assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")        # 15/100*100
+    assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")      # 40/100*100
+
+
+def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
+    """Re-running derivation inserts no duplicates (UNIQUE index dedupes)."""
+    doc_id = _insert_doc(conn, "Y", "data/historical/fmp/Y_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
+        _insert_fact(conn, ticker="Y", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    conn.commit()
+
+    _, inserted_first = derive_for_ticker(conn, "Y")
+    _, inserted_second = derive_for_ticker(conn, "Y")
+    assert inserted_first == 3
+    assert inserted_second == 0
+
+
+def test_derive_for_ticker_skips_period_missing_required_line_items(
+    conn: sqlite3.Connection,
+) -> None:
+    """If a period is missing one of revenue/op_income/net_income/gross_profit, it's skipped (no partial derivation)."""
+    doc_id = _insert_doc(conn, "Z", "data/historical/fmp/Z_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    # Missing gross_profit
+    for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15)]:
+        _insert_fact(conn, ticker="Z", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    conn.commit()
+
+    emitted, inserted = derive_for_ticker(conn, "Z")
+    assert emitted == 0
+    assert inserted == 0
+
+
+def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> None:
+    """Zero revenue would divide by zero — period is skipped, no validation error."""
+    doc_id = _insert_doc(conn, "Z", "data/historical/fmp/Z_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    for line, val in [("revenue", 0), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
+        _insert_fact(conn, ticker="Z", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    conn.commit()
+    emitted, _inserted = derive_for_ticker(conn, "Z")
+    assert emitted == 0
