@@ -1,0 +1,92 @@
+{
+  "ticker": "MU",
+  "name": "Micron Technology",
+  "last_updated": "2026-05-07",
+  "thesis": "Memory cycle leverage + HBM revenue ramp; thesis is multi-year revenue growth from HBM allocation to AI accelerators + DRAM ASP recovery. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "HBM bit shipments × ASP × DRAM/NAND mix",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "HBM revenue (USD bn quarterly)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below management's stated trajectory by >15% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Total revenue YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<20% YoY for 2 consecutive Qs in growth phase of cycle",
+      "source": "earnings release"
+    },
+    {
+      "name": "Non-GAAP gross margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses for 2 consecutive Qs in stable-price environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "DRAM ASP commentary (QoQ change)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Two consecutive Qs of QoQ ASP decline outside seasonal expectation",
+      "source": "transcript"
+    },
+    {
+      "name": "Inventory days",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Rises >20% YoY for 2 consecutive Qs (channel build signal)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "NAND segment commentary",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capex / revenue ratio",
+      "source": "earnings release"
+    },
+    {
+      "name": "Bit-shipment growth",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Government subsidies (CHIPS Act) status",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Capital return pace",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Samsung Semiconductor",
+    "SK Hynix",
+    "Kioxia (NAND)",
+    "Western Digital (NAND)"
+  ],
+  "thesis_breakers_qualitative": [
+    "HBM allocation share lost to SK Hynix/Samsung",
+    "DRAM downcycle starts",
+    "China memory subsidies displace Western pricing"
+  ]
+}

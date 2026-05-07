@@ -1,0 +1,106 @@
+{
+  "ticker": "AMZN",
+  "name": "Amazon.com",
+  "last_updated": "2026-05-07",
+  "thesis": "Three engines: (1) AWS revenue + margin compounding back into the high-30s% operating margin range with AI-workload mix; (2) North-America retail operating margin expanding from regionalization + advertising attach; (3) advertising as a third leg now scaling above $60B run-rate at high incremental margin. Long-cycle capex must produce visible ROI through AWS revenue acceleration, not just AI optionality.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "AWS revenue growth re-acceleration + advertising scale + retail margin",
+  "_status": "draft_for_review",
+  "tier_1_kpis": [
+    {
+      "name": "AWS revenue growth (YoY)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<18% YoY for 2 consecutive Qs (vs Azure ~30s%, GCP ~30s%) — implies share loss or workload migration delay",
+      "source": "earnings release"
+    },
+    {
+      "name": "AWS operating margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 32% for 2 consecutive Qs (depreciation lap from accelerated server lives)",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "North America retail operating margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Operating margin contracts QoQ for 2 consecutive Qs OR drops below 5% on TTM basis",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Advertising services revenue growth (YoY)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<18% YoY for 2 consecutive Qs (slowing from current 20s% would imply category saturation)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capex intensity vs AWS growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Capex/AWS-revenue rising while AWS growth not re-accelerating (the 'spending without payoff' signal)",
+      "source": "earnings release + transcript"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "International retail operating margin trajectory",
+      "source": "earnings release"
+    },
+    {
+      "name": "Prime member growth + ARPU disclosed metrics",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free cash flow ex-capex ('reverse capex' from finance leases)",
+      "source": "earnings release"
+    },
+    {
+      "name": "AI/Bedrock revenue commentary",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Healthcare (One Medical, Amazon Pharmacy) revenue scale-up",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Project Kuiper deployment cadence",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Headcount trajectory",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "nuance": {
+    "bear_case": "AWS growth stuck in the 18-22% band while capex compounds at 25%+ creates a 2027 margin shock similar to 2018-2019. Retail margin gains stall as regionalization saturates.",
+    "adversarial_take": "If AI workloads concentrate at Azure (OpenAI partnership) and GCP (Anthropic, Vertex AI), AWS share losses compound. Bedrock has not produced a clear winner model the way GPT-4/Claude have.",
+    "stress_test": "If AWS prints <18% for 2 Qs AND advertising decelerates below 18%, NA retail margin would have to carry the entire incremental story — historically a bumpy line."
+  },
+  "competitive_watchlist": [
+    "Microsoft Azure",
+    "Google Cloud",
+    "Walmart (e-comm + ads)",
+    "Shopify (merchant tooling)"
+  ],
+  "thesis_breakers_qualitative": [
+    "AWS YoY <18% for 2 consecutive Qs",
+    "AWS operating margin below 32% for 2 consecutive Qs",
+    "Advertising growth below 18%",
+    "FTC structural separation remedy"
+  ]
+}

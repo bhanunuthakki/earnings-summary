@@ -1,0 +1,92 @@
+{
+  "ticker": "HDB",
+  "name": "HDFC Bank",
+  "last_updated": "2026-05-07",
+  "thesis": "India's largest private sector bank, post-merger digestion of HDFC Ltd; thesis is ROA recovery + advance growth as merger integration normalizes. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Advances growth × NIM × credit cost",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Advances YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% YoY for 2 consecutive Qs (sub-system growth)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net interest margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 3.5% for 2 consecutive Qs (post-merger normalized)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross NPA ratio",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 1.6% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Return on assets (ROA)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 1.6% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Cost-to-income ratio",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 42% for 2 consecutive Qs",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "CASA ratio",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net interest income growth",
+      "source": "earnings release"
+    },
+    {
+      "name": "Credit cost (annualized)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Branch additions",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Capital adequacy ratio",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "ICICI Bank",
+    "Kotak Mahindra Bank",
+    "Axis Bank",
+    "SBI"
+  ],
+  "thesis_breakers_qualitative": [
+    "Asset quality deterioration in unsecured retail",
+    "NIM compresses on funding pressure",
+    "Merger integration overruns"
+  ]
+}

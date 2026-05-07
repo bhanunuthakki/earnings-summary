@@ -1,0 +1,92 @@
+{
+  "ticker": "LMND",
+  "name": "Lemonade",
+  "last_updated": "2026-05-07",
+  "thesis": "AI-native insurer aiming for sub-75% gross loss ratio at scale; thesis is unit economics inflection + premium-per-customer growth. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Gross loss ratio trajectory + IFP growth",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Gross loss ratio (TTM)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 80% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "In-force premium (IFP) YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Premium per customer YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<8% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted gross profit margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 25% on TTM basis",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA loss (TTM)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Widens YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Customer count growth",
+      "source": "earnings release"
+    },
+    {
+      "name": "Catastrophe loss commentary",
+      "source": "earnings release"
+    },
+    {
+      "name": "Investment income",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Reinsurance structure",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Cash runway",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Progressive",
+    "Allstate",
+    "Geico",
+    "Root"
+  ],
+  "thesis_breakers_qualitative": [
+    "Loss ratio above 80% structurally",
+    "Customer growth stalls",
+    "Cash runway under 18 months"
+  ]
+}

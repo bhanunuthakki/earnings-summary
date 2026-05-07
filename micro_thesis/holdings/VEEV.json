@@ -1,95 +1,73 @@
 {
   "ticker": "VEEV",
-  "thesis": "Vertical life-sciences SaaS with regulatory moat; R&D and Quality Solutions is the compounder, Vault CRM migration off Salesforce is the 2025-27 re-rating catalyst.",
-  "last_updated": "2026-05-04",
-  "tier_1_kpis": [
-    {"name": "R&D and Quality Solutions subscription revenue growth", "source": "earnings release segment", "break": "<15% for 2 consecutive Qs"},
-    {"name": "Commercial Solutions subscription revenue growth", "source": "earnings release segment", "break": "turns negative cc"},
-    {"name": "Vault CRM named migration wins (top-20 pharma)", "source": "transcript Q&A / press releases", "break": "no net new top-20 wins in 2 consecutive Qs"},
-    {"name": "Subscription revenue growth (total)", "source": "earnings release", "break": "<12% for 2 consecutive Qs (re-baselined from <15% which would trigger on FY27 guide of ~13%)"},
-    {"name": "Operating margin (non-GAAP)", "source": "earnings release", "break": "<40%"},
-    {"name": "Top-20 biopharma per-product adoption counts", "source": "transcript / investor day", "break": "no top-20 product-area additions across Vault CRM/QMS/Submissions/Link in 2 consecutive Qs"}
-  ],
-  "tier_2_kpis": [
-    {"name": "Gross retention (subscription services revenue retention)", "source": "investor day", "frequency": "annual", "note": "Demoted from Tier-1; not disclosed quarterly. Annual review only."},
   "name": "Veeva Systems",
-  "last_updated": "2026-05-04",
-  "thesis": "Vertical life-sciences SaaS with a regulatory-data moat compounding through three reinforcing motions: (1) gross retention >95% anchors the base, (2) Vault CRM cross-sell captures Salesforce-Veeva-CRM customers migrating ahead of the 2025 contract sunset, (3) product attach rate in top-20 pharma deepens (every additional Vault module per customer is structural ARPU expansion at near-100% retention). The compounder is moat × attach, not new-logo land-grab.",
+  "last_updated": "2026-05-07",
+  "thesis": "Vertical life-sciences SaaS with a regulatory moat. Two engines: (1) R&D + Quality Solutions (Vault) is the durable compounder — sticky workflow software for clinical trials and quality management, (2) Vault CRM migration off Salesforce (2025-27) is the medium-term catalyst for revenue acceleration as customers transition. Bet: 15%+ revenue growth with operating margin >40% non-GAAP. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "Top-20 pharma product attach rate × Vault CRM migration win cadence",
+  "key_driver": "R&D Solutions revenue growth + Vault CRM migration progress",
+  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {
-      "name": "Gross retention (subscription services revenue retention)",
-      "current": "TBV from latest 10-Q",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<95% (the moat metric — everything else is downstream)",
-      "source": "10-Q / annual investor day"
-    },
-    {
-      "name": "Top-20 pharma product attach rate (avg # of Vault products per top-20 customer)",
-      "current": "TBV — disclosed in absolute counts at investor day; commentary in transcript Q&A",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "QoQ growth in attach decelerates by >50% relative to the trailing 4-Q average, OR reported attach prints below any company-disclosed forward guidance/target by >5%",
-      "source": "transcript Q&A / investor day"
-    },
-    {
-      "name": "Vault CRM named migrations from legacy Veeva CRM (top-20 pharma cumulative)",
-      "current": "TBV from FY26 prepared remarks",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "No net new top-20 wins for 2 consecutive Qs in the 2026-27 migration window",
-      "source": "transcript Q&A / press releases"
-    },
-    {
-      "name": "R&D Cloud subscription revenue growth",
+      "name": "Total revenue YoY growth",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<15% for 2 consecutive Qs",
-      "source": "earnings release segment"
+      "break_condition": "<14% YoY for 2 consecutive Qs",
+      "source": "earnings release"
     },
     {
-      "name": "Commercial Cloud subscription revenue growth",
-      "current": "TBV from latest earnings release",
+      "name": "Subscription revenue YoY growth",
+      "current": "TBV",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Turns negative cc",
+      "break_condition": "<15% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Non-GAAP operating margin",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 40% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "R&D Solutions revenue YoY growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs (the durable compounder slowing)",
       "source": "earnings release segment"
+    },
+    {
+      "name": "Vault CRM migration / customer count commentary",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Customer migration cadence stalls or major customer abandons migration",
+      "source": "transcript"
     }
   ],
   "tier_2_kpis": [
-    {"name": "Total subscription revenue growth", "source": "earnings release"},
-    {"name": "Billings growth", "source": "computed from 10-Q"},
-    {"name": "Operating margin (non-GAAP)", "source": "earnings release"},
-    {"name": "FCF margin", "source": "earnings release"},
-    {"name": "Services revenue growth", "source": "earnings release"}
+    {"name": "Top 20 customer concentration", "source": "10-K"},
+    {"name": "Free cash flow margin", "source": "earnings release"},
+    {"name": "Commercial Solutions vs R&D mix", "source": "earnings release segment"}
   ],
   "tier_3_kpis": [
-    {"name": "International revenue mix", "source": "10-Q"},
-    {"name": "SBC as % of revenue", "source": "10-Q"}
+    {"name": "Capital return pace", "source": "earnings release"},
+    {"name": "Customer count growth", "source": "earnings release"}
   ],
-  "competitive_watchlist": ["Salesforce (retains legacy Veeva CRM users post-2025 breakup)", "IQVIA", "Certara", "Medidata (Dassault)"],
-  "thesis_breakers_qualitative": ["Salesforce Life Sciences Cloud gains traction post-contract termination", "pharma R&D budget cuts", "GenAI disrupting clinical trial software stack"],
-  "schema_revision_notes": "2026-05-04: Renamed 'R&D Cloud' / 'Commercial Cloud' to issuer terminology ('R&D and Quality Solutions' / 'Commercial Solutions'). Re-baselined total-subscription break from <15% to <12% (FY27 guide of ~13% would otherwise mechanically trigger). Demoted gross retention to Tier-2 annual-only (not in quarterly disclosure). Rephrased 'Top-20 attach count' to per-product (no aggregate metric is reported)."
-  "nuance": {
-    "bear_case": "Gross retention holds at 96-97% but product attach plateaus and Vault CRM fails to take more than ~10 of the top-20 by end-2027. Revenue growth decelerates to high-single-digits, multiple compresses, no single break trips — but the compounder thesis is hollowed out.",
-    "adversarial_take": "Salesforce Life Sciences Cloud could win residual customers post-Veeva contract sunset, capping the migration TAM at less than the bull case assumes. GenAI disrupting clinical trial software stack adds tail risk to R&D Cloud's structural moat.",
-    "stress_test": "Track attach trajectory in absolute terms, not just YoY change — the deceleration break condition is designed to catch this. A QoQ deceleration of >50% relative to trailing 4-Q baseline triggers re-evaluation even if YoY growth is still positive."
-  },
-  "competitive_watchlist": ["Salesforce (Life Sciences Cloud, post-2025 breakup)", "IQVIA", "Certara", "Medidata (Dassault)"],
+  "competitive_watchlist": ["Salesforce (CRM legacy)", "IQVIA", "Medidata (Dassault)", "Oracle Health Sciences"],
   "thesis_breakers_qualitative": [
-    "Gross retention <95%",
-    "Product attach decelerates >50% from trailing 4-Q baseline",
-    "Vault CRM net-new top-20 wins flat for 2 Qs in migration window",
-    "Salesforce Life Sciences Cloud gains traction post-termination",
-    "GenAI disrupts clinical-trial software stack"
+    "Subscription growth below 15% for 2 Qs",
+    "Operating margin below 40%",
+    "Major Vault CRM customer churn or migration delay",
+    "Commercial Solutions revenue decline accelerates"
   ]
 }

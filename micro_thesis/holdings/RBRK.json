@@ -1,20 +1,5 @@
 {
   "ticker": "RBRK",
-  "thesis": "Cyber-resilience/data security platform displacing legacy backup vendors; subscription ARR compounds 30%+ as enterprises prioritize ransomware recovery and cloud data protection. Cloud ARR is the higher-signal sub-metric for the cloud-transition thesis.",
-  "tier_1_kpis": [
-    {"name": "Subscription ARR Growth", "unit": "%", "frequency": "quarterly"},
-    {"name": "Cloud ARR Growth", "unit": "%", "frequency": "quarterly"},
-    {"name": "Subscription Revenue Growth (normalized)", "unit": "%", "frequency": "quarterly", "note": "Use normalized (ex-material-rights) to neutralize FY26 ~$70M tailwind"},
-    {"name": "Average Subscription Dollar-Based NRR", "unit": "%", "frequency": "quarterly", "note": "Issuer discloses as floor only ('>120%')"}
-  ],
-  "break_conditions": [
-    "Subscription ARR growth < 25% YoY",
-    "Cloud ARR growth < 30% YoY",
-    "NRR floor disclosure drops below '>120%' bucket",
-    "Normalized subscription revenue growth < 25% YoY for 2 consecutive quarters"
-  ],
-  "last_updated": "2026-05-04",
-  "schema_revision_notes": "2026-05-04: Replaced 'Total ARR Growth' (not disclosed by issuer) with 'Cloud ARR Growth'. Specified 'normalized' on subscription revenue to neutralize material-rights tailwind. Renamed NRR to issuer terminology and acknowledged floor-only disclosure."
   "name": "Rubrik",
   "last_updated": "2026-05-04",
   "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors (Cohesity, Veeam, legacy Dell PowerProtect) as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform. The bet: (1) net new subscription ARR continues at $100M+ quarterly cadence, (2) NRR holds >120% as land-and-expand deepens within existing accounts, (3) operating leverage continues to inflect as the IPO-era customer-acquisition cost cycle normalizes (Q4 sub ARR contribution margin jumped from 2.1% to 11.6% YoY).",
@@ -78,16 +63,34 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "Total Revenue Growth", "current": "+46% Q4 FY26 ($377.7M)", "source": "earnings release"},
-    {"name": "Free Cash Flow", "current": "$238M FY26 vs $22M prior year", "source": "earnings release"},
-    {"name": "Non-GAAP Gross Margin", "current": "79.7%", "source": "earnings release"}
+    {
+      "name": "Total Revenue Growth",
+      "current": "+46% Q4 FY26 ($377.7M)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free Cash Flow",
+      "current": "$238M FY26 vs $22M prior year",
+      "source": "earnings release"
+    },
+    {
+      "name": "Non-GAAP Gross Margin",
+      "current": "79.7%",
+      "source": "earnings release"
+    }
   ],
   "nuance": {
     "bear_case": "A Cohesity/Veeam consolidation play (PE-backed merger creates a credible scaled competitor) could compress RBRK's pricing power before scale economics fully kick in. Backup/recovery is historically a price-competitive category once the differentiation cycle ends.",
     "adversarial_take": "34% sub ARR growth at $1.5B base is excellent, but the law of large numbers will bend the trajectory by FY27. The thesis must accommodate growth deceleration to ~25% as the new normal without panicking — break threshold below 25% is calibrated for that.",
     "stress_test": "If $100K+ customer growth slows below 15% AND a competitor M&A creates a >$3B scaled rival, the moat thesis weakens even before any single break trips."
   },
-  "competitive_watchlist": ["Cohesity", "Veeam", "Dell PowerProtect / Data Domain", "Commvault", "Druva"],
+  "competitive_watchlist": [
+    "Cohesity",
+    "Veeam",
+    "Dell PowerProtect / Data Domain",
+    "Commvault",
+    "Druva"
+  ],
   "thesis_breakers_qualitative": [
     "Net new sub ARR <$80M for 2 consecutive Qs",
     "NRR drops below 115%",

@@ -1,0 +1,91 @@
+{
+  "ticker": "TSM",
+  "name": "Taiwan Semiconductor",
+  "last_updated": "2026-05-07",
+  "thesis": "Leading-edge logic foundry monopoly (3nm/2nm) with AI accelerator capex tailwind; thesis is multi-year revenue + margin expansion as 3nm/2nm volumes ramp. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "3nm + 5nm wafer volumes × ASP × utilization",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Revenue YoY growth (USD)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs in non-trough environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 53% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "3nm + 5nm revenue mix",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Mix flattens or contracts QoQ for 2 consecutive Qs",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Capex (USD bn annualized)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Cuts disclosed mid-year by >15% (demand-signal weakening)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customer concentration commentary (top customer)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Apple or NVIDIA materially reduces 3nm/2nm allocation share",
+      "source": "transcript"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "HPC revenue mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Smartphone segment trajectory",
+      "source": "earnings release"
+    },
+    {
+      "name": "Arizona / Japan fab progress",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Capital return pace (dividend + buyback)",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Mature node (28nm+) revenue",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Samsung Foundry",
+    "Intel Foundry Services",
+    "GlobalFoundries"
+  ],
+  "thesis_breakers_qualitative": [
+    "Geopolitical event in Taiwan Strait",
+    "Apple/NVIDIA customer loss to Samsung at leading edge",
+    "AI capex pause"
+  ]
+}

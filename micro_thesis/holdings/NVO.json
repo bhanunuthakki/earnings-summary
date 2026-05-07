@@ -1,32 +1,5 @@
 {
   "ticker": "NVO",
-  "thesis": "GLP-1 incumbent ceding US obesity share to Lilly tirzepatide; investment case re-underwritten as a share-defender + pipeline option. Defense levers: Wegovy pill (oral sema, US approved Jan 2026), self-pay channel + price ($349 from Nov'25), IO Obesity expansion (45+ countries). Optionality: CagriSema (REIMAGINE 2/3 hit primary endpoints; REDEFINE-1 readout pending), amycretin (next-gen GLP-1+amylin), MASH (Akero acquisition), Decenimig (Mim8 hemophilia A). Binary 2026 catalyst: CMS Medicare Part D obesity coverage decision (CMMI pilot, mid-year).",
-  "thesis_status_note": "Original 'durable 20%+ supply-constrained-growth' thesis is broken (FY25 +10% CER vs 16-24% initial guide; FY26 guide -5% to -13% adj CER). Schema rewritten 2026-05-04 to monitor share-defense execution + pipeline delivery rather than top-line growth.",
-  "tier_1_kpis": [
-    {"name": "NVO US AOM TRx market share vs tirzepatide", "unit": "ratio + absolute weekly TRx", "frequency": "monthly (IQVIA) / quarterly (NVO disclosure)", "note": "Year-end '25: tirzepatide ~469k weekly vs Wegovy sc ~233k; Wegovy pill ~50k week-3 launch ramp"},
-    {"name": "Obesity care Sales Growth (CER)", "unit": "%", "frequency": "quarterly", "note": "FY25: +31% CER (82.3 bDKK incl Saxenda)"},
-    {"name": "Wegovy US self-pay channel mix and price", "unit": "% of TRx + $/script", "frequency": "quarterly", "note": "Self-pay ~30% of TRx at $349 (post-Nov'25 cut)"},
-    {"name": "Operating Margin", "unit": "%", "frequency": "quarterly", "note": "FY25: 41.3% (-290bps YoY); FY26 guide implies further compression"},
-    {"name": "Pipeline milestone delivery (rolling 12-month)", "unit": "milestone count vs commitment", "frequency": "quarterly", "note": "Track CagriSema REDEFINE-1, amycretin Phase 2/3, oral GLP-1 obesity, MASH/Akero progression, Decenimig submissions"}
-  ],
-  "break_conditions": [
-    "NVO US AOM TRx share loses >500bps to tirzepatide over 2 consecutive monthly IQVIA prints",
-    "Obesity care CER growth <0% YoY (would signal franchise repricing rather than slowdown)",
-    "Operating Margin <38% OR >500bps contraction ex-restructuring",
-    "Wegovy US weekly TRx declines QoQ for 2 consecutive months on NRx (demand-side decay)",
-    "CagriSema REDEFINE-1 readout misses primary endpoint OR amycretin discontinued for safety/efficacy",
-    "CMS Medicare Part D obesity coverage decision negative or delayed beyond 2026 (binary catalyst miss)"
-  ],
-  "competitive_watchlist": ["Eli Lilly (tirzepatide / Mounjaro / Zepbound — primary share-take threat)", "Compounding pharmacies (defense via NovoCare Pharmacy + self-pay price cut)", "Generic GLP-1 timeline (post-2030)", "Roche / Pfizer / AstraZeneca (incretin pipeline entrants)"],
-  "thesis_breakers_qualitative": ["CMS Part D negative decision OR delay beyond 2026", "Wegovy pill commercial gating (manufacturing, reimbursement, prescriber adoption)", "Lilly retatrutide Phase 3 superiority vs Wegovy", "GLP-1 class-effect safety signal (e.g., NAION, suicidal ideation) reaching FDA black-box level", "FX (DKK/USD) durably adverse"],
-  "key_observables_for_2026": [
-    "Wegovy pill US TRx trajectory at week 12-26 — flip observable: pill TRx ≥ Zepbound TRx in any single weekly print by Q3'26",
-    "CMS Medicare Part D obesity coverage decision (mid-2026 anticipated)",
-    "Q1-Q2'26 sales-growth print vs the -5%/-13% adj CER guide — confirms trough vs further deterioration",
-    "CagriSema REDEFINE-1 (obesity monotherapy Phase 3) readout"
-  ],
-  "last_updated": "2026-05-04",
-  "schema_revision_notes": "2026-05-04: FULL THESIS REWRITE. Original supply-constrained-growth thesis is structurally broken (FY25 +10% CER vs initial 16-24% guide; FY26 guide -5% to -13% adj). Pivoted KPI set from growth metrics to share-defense + pipeline-execution metrics. New T1 KPIs reflect what management can actually be measured against in the new regime: US TRx share vs tirzepatide, Obesity care CER (the franchise still growing), Wegovy self-pay economics (the active defense lever), Operating Margin (deleverage check), and pipeline milestone delivery (the optionality value). New break conditions are name-specific (Wegovy pill ramp, CagriSema readout, CMS decision) rather than generic growth thresholds. Previous schema's 4 of 5 break conditions had already triggered on the new regime."
   "name": "Novo Nordisk",
   "last_updated": "2026-05-04",
   "thesis": "Long-term holder of the GLP-1 secular growth story at $37-40 cost basis. The bet is (a) global GLP-1 script volume continues compounding faster than price decline, (b) Novo defends share against Lilly through patent extensions in key emerging markets and next-gen pipeline (CagriSema, oral sema for obesity), and (c) the 2026 reset is the price-driven trough, not the structural top.",
@@ -81,17 +54,38 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "CER Revenue growth (consolidated)", "current": "+10% FY25; 2026 guided -5% to -13%", "source": "annual report"},
-    {"name": "Operating margin", "current": "Op profit +6% on sales +10% (margin contracted)", "source": "annual report"},
-    {"name": "Oral semaglutide for obesity status", "current": "TAM expansion option", "source": "press releases"},
-    {"name": "Manufacturing capacity (binding constraint indicator)", "current": "TBD", "source": "annual report"}
+    {
+      "name": "CER Revenue growth (consolidated)",
+      "current": "+10% FY25; 2026 guided -5% to -13%",
+      "source": "annual report"
+    },
+    {
+      "name": "Operating margin",
+      "current": "Op profit +6% on sales +10% (margin contracted)",
+      "source": "annual report"
+    },
+    {
+      "name": "Oral semaglutide for obesity status",
+      "current": "TAM expansion option",
+      "source": "press releases"
+    },
+    {
+      "name": "Manufacturing capacity (binding constraint indicator)",
+      "current": "TBD",
+      "source": "annual report"
+    }
   ],
   "nuance": {
     "bear_case": "Three forces compounding: (1) MFN pricing on Wegovy/Ozempic US (~48% cuts in select markets), (2) Semaglutide LOE in CN/IN/BR/CA in 2026, (3) Lilly tirzepatide taking share. Original 20%+ CER growth thesis is broken. The bull case is now a 'wait for the next catalyst' (CagriSema), not 'original thesis holds'.",
     "adversarial_take": "CagriSema is 12-18 months from meaningful revenue under optimistic timelines, AND Lilly retatrutide could pre-empt any clean CagriSema launch window. Holding requires conviction that the 2026 trough is single-cycle pricing, not the start of a multi-year volume-share-price compression spiral.",
     "stress_test": "If 2026 actuals come in worse than -13% CER guide AND Wegovy Q-over-Q volumes decelerate AND Lilly retatrutide approval comes through, the position may need to be cut even before CagriSema readouts."
   },
-  "competitive_watchlist": ["Eli Lilly (tirzepatide / retatrutide / orforglipron)", "Pfizer (oral GLP-1 candidates)", "Amgen (MariTide)", "Roche (CT-388)"],
+  "competitive_watchlist": [
+    "Eli Lilly (tirzepatide / retatrutide / orforglipron)",
+    "Pfizer (oral GLP-1 candidates)",
+    "Amgen (MariTide)",
+    "Roche (CT-388)"
+  ],
   "thesis_breakers_qualitative": [
     "Two consecutive Qs of CER revenue worse than -13% guide",
     "Patent LOE proceeds in >=2 of CN/IN/BR/CA without extension",
