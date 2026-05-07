@@ -1,0 +1,92 @@
+{
+  "ticker": "JPM",
+  "name": "JPMorgan Chase",
+  "last_updated": "2026-05-07",
+  "thesis": "Diversified global bank with structural advantages in IB + payments + asset management; thesis is durable ROTCE through cycles + capital return. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Net interest income trajectory + non-interest revenue × efficiency",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Net interest income (NII) YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Falls >10% YoY in non-Fed-cutting environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Return on tangible common equity (ROTCE)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 17% on TTM basis",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net charge-off ratio (firm-wide)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 1.0% for 2 consecutive Qs (excl. Card)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Common equity tier 1 (CET1) ratio",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 12.5% (above SCB minimum is required)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Non-interest expense growth (YoY)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 6% YoY for 2 consecutive Qs absent revenue offset",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Investment banking fees",
+      "source": "earnings release"
+    },
+    {
+      "name": "Trading revenue (markets)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Wealth management AUM growth",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Buyback pace",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Dividend payout ratio",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Bank of America",
+    "Citi",
+    "Goldman Sachs",
+    "Wells Fargo"
+  ],
+  "thesis_breakers_qualitative": [
+    "Credit normalization beyond Card",
+    "NII cliff from Fed cuts",
+    "Regulatory capital surcharge increase"
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "ticker": "RIO",
+  "name": "Rio Tinto",
+  "last_updated": "2026-05-07",
+  "thesis": "Diversified miner with iron ore (Pilbara) + copper ramp (Oyu Tolgoi underground + Resolution); thesis is FCF + copper transition. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Iron ore + copper realized prices × volumes − unit costs",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Iron ore production (Mt, Pilbara)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Drops >5% YoY without disclosed remediation plan",
+      "source": "operational review"
+    },
+    {
+      "name": "Copper production (kt, mined)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Misses annual guidance by >10%",
+      "source": "operational review"
+    },
+    {
+      "name": "C1 unit cash cost ($/t Pilbara iron ore)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Rises above $22/t for 2 consecutive halves",
+      "source": "operational review"
+    },
+    {
+      "name": "Operating cash flow (USD bn TTM)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Falls below $14bn TTM in stable-price environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net debt / EBITDA",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Above 1.5x for 2 consecutive halves",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Aluminium segment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capex pace on Oyu Tolgoi underground",
+      "source": "earnings release"
+    },
+    {
+      "name": "Lithium ramp (Rincon)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Dividend payout policy",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Pension / asset retirement obligations",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "BHP",
+    "Vale",
+    "Fortescue",
+    "Anglo American"
+  ],
+  "thesis_breakers_qualitative": [
+    "China iron ore demand structurally lower",
+    "Oyu Tolgoi delays compound",
+    "Capex blowouts"
+  ]
+}

@@ -1,108 +1,73 @@
 {
   "ticker": "MELI",
   "name": "MercadoLibre",
-  "last_updated": "2026-05-04",
-  "thesis": "LatAm e-commerce + fintech compounder currently in a deliberate investment cycle — deepening logistics moat (same/next-day shipments, 1P, free shipping) to widen distance from Shopee and Amazon, while the Mercado Pago credit / acquiring flywheel scales. Margin compression in 2026 is acceptable while engagement metrics (items per buyer, same/next-day volume) prove the investment is producing returns.",
-  "verdict": "Watch",
-  "verdict_color": "yellow",
-  "key_driver": "Logistics-moat investment ROI: must show as engagement metrics accelerating while margin compresses",
+  "last_updated": "2026-05-07",
+  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
+  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {
-      "name": "GMV Growth (FXN)",
-      "current": "+37% Q4'25 ($19.9B); BR ~+35%, MX ~+37%",
+      "name": "GMV growth FX-neutral (consolidated)",
+      "current": "TBV from latest earnings release",
       "prior": null,
-      "yoy": "+37%",
-      "status": "Green",
-      "break_condition": "Brazil GMV FXN growth <20% for 2 consecutive Qs (the moat market)",
-      "source": "Q4'25 deck"
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "source": "earnings release"
     },
     {
-      "name": "Items Sold YoY",
-      "current": "+43% Q4'25 (751.8MM units)",
+      "name": "Revenue YoY growth (USD)",
+      "current": "TBV",
       "prior": null,
-      "yoy": "+43%",
-      "status": "Green",
-      "break_condition": "<25% YoY (direct engagement signal)",
-      "source": "Q4'25 deck"
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "source": "earnings release"
     },
     {
-      "name": "Items Sold per Unique Active Buyer",
-      "current": "9.0 Q4'25 (+15% YoY)",
-      "prior": "7.8",
-      "yoy": "+15%",
-      "status": "Green",
-      "break_condition": "Declines YoY for 2 consecutive Qs (engagement breaking)",
-      "source": "Q4'25 deck"
-    },
-    {
-      "name": "Same/Next-Day Shipments YoY",
-      "current": "+29% Q4'25 (191MM)",
+      "name": "Operating margin (consolidated)",
+      "current": "TBV",
       "prior": null,
-      "yoy": "+29%",
-      "status": "Green",
-      "break_condition": "<15% YoY (logistics-moat investment failing to drive throughput)",
-      "source": "Q4'25 deck"
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "source": "earnings release"
     },
     {
-      "name": "Acquiring TPV Growth (FXN)",
-      "current": "+40% Q4'25 (FXN)",
+      "name": "MercadoPago TPV growth + take rate",
+      "current": "TBV",
       "prior": null,
-      "yoy": "+40% FXN",
-      "status": "Green",
-      "break_condition": "<25%, OR instore TPV decelerating faster than online",
-      "source": "Q4'25 deck"
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
+      "source": "earnings release fintech segment"
     },
     {
-      "name": "Operating Margin",
-      "current": "10.1% Q4'25 (9.0% ex-$99M Brazilian tax credit); FY ~11.1%",
-      "prior": "13.5% Q4'24",
-      "yoy": "~-540bps",
-      "status": "Yellow",
-      "break_condition": "<8% for 2 consecutive Qs WITHOUT engagement metrics improving (this is the investment-justification gate — sub-8% is acceptable if engagement KPIs above keep accelerating; if they stall, it becomes a break)",
-      "source": "Q4'25 deck",
-      "notes": "Margin compression is explicit in MELI's own deck p.20: 'The margin compression reflects our decision to invest in key long-term growth opportunities.'"
-    },
-    {
-      "name": "Credit NPL 90d+",
-      "current": "7.6% Q4'25 (vs 7.4% Q4'24)",
-      "prior": "7.4%",
-      "yoy": "+20bps",
-      "status": "Yellow",
-      "break_condition": ">9% (credit risk import from credit-card portfolio expansion)",
-      "source": "Q4'25 deck"
+      "name": "Credit portfolio NPL ratio",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
+      "source": "earnings release fintech segment"
     }
   ],
-  "break_conditions": [
-    "FXN Revenue growth < 20% YoY for 2 consecutive quarters",
-    "FXN GMV growth < 15% YoY",
-    "Operating margin contracts >400bps YoY without clear reinvestment rationale AND no FXN revenue re-acceleration",
-    "15-90d early-bucket NPL rises >150bps QoQ for 2 consecutive quarters",
-    "NIMAL compression >300bps YoY (credit-quality proxy)"
-  ],
-  "last_updated": "2026-05-04",
-  "schema_revision_notes": "2026-05-04: Replaced permanently-triggered 'Credit NPL 90d+ > 8%' (issuer's stock 90d+ NPL is structurally 17-18%) with two flow-based credit-quality triggers: 15-90d early-bucket QoQ delta, and NIMAL compression. Tightened OpMgn break with 'AND no FXN revenue re-acceleration' to allow defensible reinvestment-driven compression while still firing on lasting deterioration."
   "tier_2_kpis": [
-    {"name": "Unique Active Buyers", "current": "83.2MM Q4'25 (+24% YoY)", "source": "Q4'25 deck"},
-    {"name": "Fintech Monthly Active Users", "current": "77.9MM Q4'25 (+27% YoY)", "source": "Q4'25 deck"},
-    {"name": "Credit portfolio", "current": "$12.5B (+90% YoY)", "source": "Q4'25 deck"},
-    {"name": "NIMAL", "current": "23.3% Q4'25", "source": "Q4'25 deck"},
-    {"name": "Monthly Active Sellers with Credit", "current": "33.8% of total Q4'25 (vs 24.6% Q4'24)", "source": "Q4'25 deck"}
+    {"name": "Unique active users + buyer growth", "source": "earnings release"},
+    {"name": "Shipping cost as % of revenue", "source": "earnings release"},
+    {"name": "Brazil/Mexico/Argentina segment commentary", "source": "earnings release commentary"}
   ],
-  "nuance": {
-    "bear_case": "The 'deliberate investment' framing may mask structurally lower-margin categories. 1P commerce, subsidized shipping, and credit cards are inherently lower-return businesses than the marketplace flywheel. If MELI is buying GMV growth with margin, the compounding thesis weakens — revenue without earnings power expansion. Credit-card expansion also imports NPL risk at scale.",
-    "adversarial_take": "Investment thesis (Shopee/Amazon defense) is YOUR working hypothesis — MELI's deck only says 'long-term growth opportunities' generically; competitive framing is not validated by management commentary. Watch for explicit Shopee/Amazon mentions in subsequent earnings calls to either confirm or refute the framing.",
-    "stress_test": "If Brazil GMV FXN decelerates while Shopee continues taking share AND items/buyer flatlines, the 'investment is working' framing collapses → margin compression becomes structural, not strategic, and verdict moves to Broken."
-  },
-  "competitive_watchlist": ["Shopee (Sea Limited)", "Amazon Brazil/Mexico", "Magazine Luiza", "Falabella", "Mercado Pago competitors (NU Pagamentos, PicPay, etc.)"],
+  "tier_3_kpis": [
+    {"name": "Mercado Ads revenue mix", "source": "earnings release"},
+    {"name": "Capex pace", "source": "earnings release"}
+  ],
+  "competitive_watchlist": ["Amazon LatAm", "Sea (Shopee)", "Magazine Luiza", "Casas Bahia", "Nubank (fintech overlap)"],
   "thesis_breakers_qualitative": [
-    "Brazil GMV FXN growth <20% for 2 consecutive Qs",
-    "Items per buyer flatlining or declining",
-    "Op margin sub-8% for 2 Qs WITHOUT engagement metrics accelerating",
-    "Credit NPL 90d+ above 9%",
-    "Explicit competitive concession in management commentary about Shopee/Amazon share losses"
-  ],
-  "working_hypotheses": [
-    "Investment cycle is specifically Shopee/Amazon defensive (NOT validated by deck commentary; awaiting transcript confirmation)",
-    "Credit-card expansion is the primary near-term margin drag rather than free shipping"
+    "FXN GMV growth below 25% for 2 consecutive Qs",
+    "Operating margin compresses below 12%",
+    "Credit NPL spikes structurally",
+    "Latin America macro shock that breaks consumer spending"
   ]
 }

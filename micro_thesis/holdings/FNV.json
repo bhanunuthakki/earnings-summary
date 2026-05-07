@@ -1,0 +1,87 @@
+{
+  "ticker": "FNV",
+  "name": "Franco-Nevada",
+  "last_updated": "2026-05-07",
+  "thesis": "Streaming/royalty company with optionality across gold + diversified commodities; thesis is sustained free cash flow + counter-cyclical M&A. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "GEOs (gold-equivalent ounces) × realized prices",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "GEO production (oz)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below guidance midpoint for 2 consecutive years",
+      "source": "operational review"
+    },
+    {
+      "name": "Adjusted net income margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 50% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Operating cash flow (TTM)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below $850M TTM in stable price environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net cash position",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Drops below zero (taking on net debt)",
+      "source": "earnings release"
+    },
+    {
+      "name": "New stream/royalty deals (annual count + size)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Zero new material deals in any 12-month period",
+      "source": "press releases"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Cobre Panama settlement progress",
+      "source": "earnings release"
+    },
+    {
+      "name": "Energy royalty revenue mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capital return pace",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Pension / asset retirement obligations",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Wheaton Precious Metals",
+    "Royal Gold",
+    "Osisko Gold Royalties"
+  ],
+  "thesis_breakers_qualitative": [
+    "Cobre Panama remains shut indefinitely",
+    "Gold price multi-year drawdown",
+    "Counter-cyclical M&A absent"
+  ]
+}

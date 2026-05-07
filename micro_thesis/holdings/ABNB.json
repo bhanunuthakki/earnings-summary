@@ -1,0 +1,91 @@
+{
+  "ticker": "ABNB",
+  "name": "Airbnb",
+  "last_updated": "2026-05-07",
+  "thesis": "Booking platform with structural take-rate + nights-booked compounding; thesis is durability of ADR + nights growth as travel normalizes off COVID base. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Nights & experiences booked × ADR × take-rate",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Nights & experiences booked YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<5% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "ADR (average daily rate)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Declines >5% YoY for 2 consecutive Qs (mix shift signal)",
+      "source": "earnings release"
+    },
+    {
+      "name": "GBV (gross bookings value) growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<8% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 30% on TTM basis",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free cash flow margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 25% on TTM basis",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Take rate trajectory",
+      "source": "earnings release"
+    },
+    {
+      "name": "Active hosts growth",
+      "source": "earnings release"
+    },
+    {
+      "name": "Marketing spend / revenue ratio",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Experiences + co-hosting product traction",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Long-term stays mix",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Booking Holdings",
+    "Vrbo (Expedia)",
+    "Direct hotel booking"
+  ],
+  "thesis_breakers_qualitative": [
+    "Nights growth turns negative",
+    "Regulatory crackdown in major metros",
+    "Take-rate compression"
+  ]
+}

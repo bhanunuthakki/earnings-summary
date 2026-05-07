@@ -1,0 +1,90 @@
+{
+  "ticker": "ASML",
+  "name": "ASML Holding",
+  "last_updated": "2026-05-07",
+  "thesis": "EUV monopoly + High-NA EUV ramp; thesis is multi-year capacity ramp at $40B+ revenue tied to leading-edge logic + HBM. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "EUV system shipments + High-NA adoption + service revenue",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Net system bookings (EUR)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Two consecutive Qs of declining bookings",
+      "source": "earnings release"
+    },
+    {
+      "name": "EUV system revenue YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% YoY for 2 consecutive Qs",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Gross margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 50% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Service revenue growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<5% YoY for 2 consecutive Qs (installed base utilization signal)",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "China systems revenue mix",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Disclosed cliff to <15% of system revenue from prior 30%+",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "High-NA EUV cumulative shipments",
+      "source": "earnings release"
+    },
+    {
+      "name": "DUV system revenue",
+      "source": "earnings release"
+    },
+    {
+      "name": "Backlog (in EUR billions)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Capital return policy",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "R&D spend trajectory",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Canon (DUV legacy)",
+    "Nikon (DUV legacy)"
+  ],
+  "thesis_breakers_qualitative": [
+    "Leading-edge logic customer pushes out capex",
+    "China export controls intensify",
+    "High-NA adoption stalls"
+  ]
+}
