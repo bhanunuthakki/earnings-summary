@@ -134,12 +134,7 @@ JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 def _complete(prompt: str) -> str:
     """Single LLM call — every public helper routes through this."""
-    return call_claude(prompt)
-
-def generate_pairwise_analysis(prev_summary, curr_summary):
-    """
-    Generates a specific "Say-Do" analysis comparing two sequential quarters.
-    """
+    return _call_claude(prompt)
 
 def generate_pairwise_analysis(prev_summary, curr_summary):
     """Strict Say-Do analysis comparing prior-quarter guidance to current results."""
@@ -194,37 +189,6 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
 
 
 def generate_summary(text):
-    """
-    Generates a 1-2 page summary of the earnings transcript.
-    """
-    **Analysis Requirements:**
-    1.  **Context:** What did they promise? (Guidance, Targets, Strategic Goals).
-    2.  **Execution:** What did they actually deliver? (Results, Misses, Beats).
-    3.  **Analyst Verdict:**
-        *   **Attribution:** Was any miss/beat due to **Execution** (Management Performance) or **Exogenous Factors** (Macro, Supply Chain, One-offs)?
-        *   **Thesis Impact:** Is this a structural issue or a temporary blip?
-
-    **Output Format (Strict Markdown):**
-    ## Analysis: {prev_q_str} vs {curr_q_str}
-
-    ### 1. Analyst Verdict
-    *   **Performance Rating:** **MET** / **MISSED** / **EXCEEDED** (Choose one)
-    *   **Attribution:** [Execution vs. Exogenous explanation]
-    *   **Thesis View:** [Bull/Bear implication]
-
-    ### 2. Say (The Promise)
-    *   **Guidance:** [Specific numbers/targets from {prev_q_str}]
-    *   **Strategy:** [Key initiatives promised]
-
-    ### 3. Do (The Reality)
-    *   **Performance:** [Actuals in {curr_q_str}]
-    *   **Gap Analysis:** [Specific variances]
-    """
-
-    return _complete(prompt)
-
-
-def generate_summary(text):
     """Generate a 1-2 page summary of an earnings transcript."""
     prompt = """
     You are an expert financial analyst. Please provide a detailed 1-2 page summary of the provided earnings call transcript.
@@ -271,13 +235,6 @@ def generate_summary(text):
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
 
-    return _complete(prompt + text)
-
-def generate_press_release_summary(text: str) -> str:
-    """
-    Generates a structured summary from an earnings press release.
-    Press releases are financial-forward — emphasize the numbers table and guidance.
-    """
 
 def generate_press_release_summary(text: str) -> str:
     """Structured summary from an earnings press release."""
@@ -320,15 +277,6 @@ Press Release:
     except Exception as e:
         log.error(f"CRITICAL ERROR: Press release summary generation failed: {e}")
         raise
-
-
-def generate_presentation_brief(text: str) -> str:
-    """
-    Generates a strategic brief from an earnings presentation slide deck.
-    Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
-    """
-
-    return _complete(prompt + text)
 
 
 def generate_presentation_brief(text: str) -> str:
@@ -452,11 +400,6 @@ Event Document Text:
         raise e
 
 
-def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
-    """
-    Generate an updated micro-thesis tracker document for a holding.
-
-
 def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tuple[int, bool, str, str]:
     """
     Returns (staleness_days, is_stale, staleness_line, staleness_directive).
@@ -491,12 +434,6 @@ def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tupl
 def _format_quarter_context(quarters: list[dict]) -> str:
     """Render the chronological quarter blocks consumed by both passes."""
     blocks = []
-
-def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
-    """Updated micro-thesis tracker document for a holding."""
-    thesis_text = json.dumps(schema, indent=2)
-
-    quarter_blocks = []
     for q in quarters:
         block = f"\n### {q['quarter']} {q['year']}\n"
         for doc_type, text in q["summaries"].items():
@@ -530,10 +467,6 @@ def _build_pass_a_prompt(
         if is_stale
         else "distance to break condition (state as % or absolute gap)"
     )
-            block += f"\n**{label}:**\n{text[:3000]}\n"
-        quarter_blocks.append(block)
-
-    quarters_context = "\n".join(quarter_blocks)
 
     return f"""You are a senior fundamental equity analyst tracking a concentrated long position.
 
@@ -753,7 +686,6 @@ def generate_thesis_update(
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
     log.info({"event": "thesis_pass_done", "ticker": ticker, "pass": "B", "output_chars": len(pass_b_output)})
-    return _complete(prompt)
 
     return _assemble_tracker(
         ticker, report_date, is_stale, staleness_days, corpus_latest_date,
@@ -761,11 +693,6 @@ def generate_thesis_update(
     )
 
 
-def generate_strategic_analysis(summaries_list):
-    """
-    Generates a strategic analysis comparing performance vs expectations across quarters.
-    summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
-    """
 def generate_strategic_analysis(summaries_list):
     """Strategic analysis comparing performance vs expectations across quarters."""
     context_str = ""
@@ -830,9 +757,6 @@ def generate_strategic_analysis(summaries_list):
     except Exception as e:
         log.error(f"CRITICAL ERROR: Analysis generation failed: {e}")
         raise
-
-
-    return _complete(prompt + context_str)
 
 
 def generate_bear_case(
@@ -929,7 +853,7 @@ def identify_transcript_metadata(text_snippet):
         log.error(f"Error identifying metadata: {e}")
         return "UNKNOWN"
 
-    return _complete(prompt + text_snippet[:2000]).strip()
+
 def classify_intake_document(filename: str, text: str, hint: dict) -> dict | None:
     """Classify a user-dropped IR document.
 
