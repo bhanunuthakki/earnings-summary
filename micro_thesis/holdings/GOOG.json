@@ -54,31 +54,111 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "YouTube ads revenue growth (demoted from T1)", "source": "earnings release"},
-    {"name": "Gemini API token volume / API revenue (when disclosed)", "source": "transcript"},
-    {"name": "Paid click growth vs price-per-click decoupling", "source": "earnings release / 10-Q"},
-    {"name": "TAC rate", "source": "10-Q"},
-    {"name": "Consolidated operating margin", "source": "earnings release"},
-    {"name": "Subscriptions, platforms & devices revenue (YT Premium, One)", "source": "earnings release"}
+    {
+      "name": "YouTube ads revenue growth (demoted from T1)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gemini API token volume / API revenue (when disclosed)",
+      "source": "transcript"
+    },
+    {
+      "name": "Paid click growth vs price-per-click decoupling",
+      "source": "earnings release / 10-Q"
+    },
+    {
+      "name": "TAC rate",
+      "source": "10-Q"
+    },
+    {
+      "name": "Consolidated operating margin",
+      "source": "earnings release"
+    },
+    {
+      "name": "Subscriptions, platforms & devices revenue (YT Premium, One)",
+      "source": "earnings release"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "SpaceX equity stake mark", "source": "10-K investments line / press disclosures", "notes": "Bottom of the list; monitor only"},
-    {"name": "Anthropic equity stake mark", "source": "10-K investments line / press disclosures", "notes": "Bottom of the list; monitor only"},
-    {"name": "Other strategic investment marks", "source": "10-Q investments-and-other line"},
-    {"name": "Headcount trajectory", "source": "10-Q"},
-    {"name": "Share buyback pace", "source": "earnings release"}
+    {
+      "name": "SpaceX equity stake mark",
+      "source": "10-K investments line / press disclosures",
+      "notes": "Bottom of the list; monitor only"
+    },
+    {
+      "name": "Anthropic equity stake mark",
+      "source": "10-K investments line / press disclosures",
+      "notes": "Bottom of the list; monitor only"
+    },
+    {
+      "name": "Other strategic investment marks",
+      "source": "10-Q investments-and-other line"
+    },
+    {
+      "name": "Headcount trajectory",
+      "source": "10-Q"
+    },
+    {
+      "name": "Share buyback pace",
+      "source": "earnings release"
+    }
   ],
   "nuance": {
     "bear_case": "GCP at 50%+ for 2 years is an aggressive bar — current ~30s% growth means the company needs material acceleration, not just maintenance. If hyperscalers normalize cloud growth into the 30s% (as is common at $50B+ scale), this thesis trips even though GCP is doing well by industry standards. ChatGPT/Perplexity sustained search-share takings would compound the cannibalization risk.",
     "adversarial_take": "Capex compounding without GCP margin expansion creates a 2027 margin shock — the AI infrastructure build is 2-3 years ahead of monetization. DOJ remedy uncertainty (Chrome/Android divestiture) is a long-tail tail risk that's hard to size but binary in outcome.",
     "stress_test": "If GCP prints below 50% for 2 Qs while capex/cloud-rev ratio rises, the 'AI ROI is coming' argument loses credibility and forces a multiple re-rate."
   },
-  "competitive_watchlist": ["OpenAI/ChatGPT (search substitution + ad model)", "Perplexity", "Microsoft (Azure, Copilot)", "AWS", "Amazon ads (product search substitution)", "Meta (YouTube vs Reels ad share)"],
+  "competitive_watchlist": [
+    "OpenAI/ChatGPT (search substitution + ad model)",
+    "Perplexity",
+    "Microsoft (Azure, Copilot)",
+    "AWS",
+    "Amazon ads (product search substitution)",
+    "Meta (YouTube vs Reels ad share)"
+  ],
   "thesis_breakers_qualitative": [
     "DOJ remedy forces Chrome or Android divestiture",
     "ChatGPT sustained >1B WAU with monetized ad model",
     "Apple defaults away from Google Search on iOS",
     "GCP <50% YoY for 2 consecutive Qs",
     "Other Bets loss expanding faster than Waymo revenue 2x trajectory"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }

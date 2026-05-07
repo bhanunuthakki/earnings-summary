@@ -55,19 +55,77 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "Top 20 customer concentration", "source": "10-K"},
-    {"name": "Free cash flow margin", "source": "earnings release"},
-    {"name": "Commercial Solutions vs R&D mix", "source": "earnings release segment"}
+    {
+      "name": "Top 20 customer concentration",
+      "source": "10-K"
+    },
+    {
+      "name": "Free cash flow margin",
+      "source": "earnings release"
+    },
+    {
+      "name": "Commercial Solutions vs R&D mix",
+      "source": "earnings release segment"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "Capital return pace", "source": "earnings release"},
-    {"name": "Customer count growth", "source": "earnings release"}
+    {
+      "name": "Capital return pace",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customer count growth",
+      "source": "earnings release"
+    }
   ],
-  "competitive_watchlist": ["Salesforce (CRM legacy)", "IQVIA", "Medidata (Dassault)", "Oracle Health Sciences"],
+  "competitive_watchlist": [
+    "Salesforce (CRM legacy)",
+    "IQVIA",
+    "Medidata (Dassault)",
+    "Oracle Health Sciences"
+  ],
   "thesis_breakers_qualitative": [
     "Subscription growth below 15% for 2 Qs",
     "Operating margin below 40%",
     "Major Vault CRM customer churn or migration delay",
     "Commercial Solutions revenue decline accelerates"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }

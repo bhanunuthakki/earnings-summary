@@ -55,19 +55,78 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "Mexico customer + revenue growth", "source": "earnings release segment"},
-    {"name": "Cost-to-serve trajectory", "source": "earnings release"},
-    {"name": "Cost of risk (NPL formation)", "source": "earnings release"}
+    {
+      "name": "Mexico customer + revenue growth",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Cost-to-serve trajectory",
+      "source": "earnings release"
+    },
+    {
+      "name": "Cost of risk (NPL formation)",
+      "source": "earnings release"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "Investment AUC (assets under custody)", "source": "earnings release"},
-    {"name": "Capital adequacy ratio", "source": "earnings release"}
+    {
+      "name": "Investment AUC (assets under custody)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capital adequacy ratio",
+      "source": "earnings release"
+    }
   ],
-  "competitive_watchlist": ["Itau Unibanco", "Bradesco", "Banco do Brasil", "MercadoPago", "PicPay"],
+  "competitive_watchlist": [
+    "Itau Unibanco",
+    "Bradesco",
+    "Banco do Brasil",
+    "MercadoPago",
+    "PicPay"
+  ],
   "thesis_breakers_qualitative": [
     "Customer net adds <5M/Q",
     "ARPAC stalls (cross-sell saturating)",
     "NPL >7% (credit cycle break)",
     "Mexico expansion stalls without offset"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }
