@@ -97,6 +97,18 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
 | Manifest | `.tmp/<Company>_manifest.json` |
 | Intermediates | `.tmp/` (can be deleted and regenerated) |
 
+## Q&A Section Awareness
+
+Some transcripts (notably IR-published prepared-remarks PDFs) cut off at the hand-off to Q&A and contain no analyst questions. These produce silently degraded Say-Do, commitments-tracker, and analyst-question-mining output.
+
+`compute.transcript_ingest.detect_qa_section` runs on every ingest and stores the verdict on `transcripts.has_qa_section` (`1=present`, `0=absent`, `NULL=unknown`). Detection uses three structural regex signals (CallStreet header, `<Q – ...>` tags, ≥2 operator analyst introductions) — see `directives/fetch_transcripts.md` for the full rubric.
+
+`execution/ingest_transcripts.py` prints `WARN missing_qa: <ticker> <period_end>` to stderr and lists `missing_qa: [...]` in its JSON summary for any prepared-only file. When you see this:
+
+1. Check whether a fuller transcript exists (CallStreet PDF, full YouTube recording, etc.).
+2. Replace the file in `transcripts/raw/` and re-run `execution/ingest_transcripts.py` — the new sha256 will create a fresh `documents` row with the updated verdict.
+3. If no fuller source is available, ask the user to drop one in. Do not run downstream Say-Do / commitments extraction against `has_qa_section = 0` rows; their guidance content will be misleading.
+
 ## Edge Cases & Known Constraints
 
 - **Local Transcriber Resources**: Transcribing audio takes significant CPU processing time on the `large-v3-turbo` model.

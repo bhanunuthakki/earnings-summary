@@ -9,10 +9,13 @@ import pytest
 
 from compute.transcript_ingest import (
     ParsedFilename,
+    QASectionStatus,
     SpeakerTurn,
     _infer_fiscal_period_type,
+    detect_qa_section,
     map_to_period,
     parse_transcript_filename,
+    qa_status_to_db_value,
     segment_by_speaker,
 )
 from models.facts import FiscalPeriodType
@@ -201,3 +204,99 @@ def test_known_speakers_for_returns_none_for_unknown_ticker() -> None:
     assert known_speakers_for("MELI") is None
     assert known_speakers_for("WIX") is not None
     assert "Avishai Abrahami" in known_speakers_for("WIX")
+
+
+# ---------------------------------------------------------------------------
+# Q&A section detection
+# ---------------------------------------------------------------------------
+
+
+def _padded(body: str) -> str:
+    """Pad text past the min-length-for-detection threshold so the detector
+    actually runs (UNKNOWN is reserved for genuinely too-short stubs)."""
+    return body + ("\nfiller line " * 400)
+
+
+def test_detect_qa_section_callstreet_header() -> None:
+    """CallStreet `QUESTION AND ANSWER SECTION` header is sufficient by itself."""
+    text = _padded(
+        "Bom Kim, CEO\nThanks operator, Q1 was strong.\n"
+        "Operator, we are now ready to begin the Q&A.\n\n"
+        "QUESTION AND ANSWER SECTION\n"
+        "Operator: First question is from Eric Cha with Goldman Sachs.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "qa_header" in result.signals
+
+
+def test_detect_qa_section_analyst_tag() -> None:
+    """CallStreet `<Q - Name - Firm>` analyst speaker tag is sufficient.
+
+    The fixture uses real CallStreet en-dashes (U+2013) deliberately —
+    that is the format the detector must handle in production PDFs.
+    """
+    text = _padded(
+        "Bom Kim, CEO\nPrepared remarks here.\n"
+        "<Q – Eric Cha – Goldman Sachs (Asia) LLC>: Thanks for taking my question.\n"  # noqa: RUF001
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert "analyst_tag" in result.signals
+
+
+def test_detect_qa_section_operator_introductions() -> None:
+    """≥2 operator analyst-introductions trigger PRESENT (no header/tag needed)."""
+    text = _padded(
+        "Sundar Pichai\nThanks Jim, hi everyone.\n\n"
+        "Operator: Our first question is from Eric Sheridan from Goldman Sachs.\n"
+        "Eric Sheridan (Goldman Sachs): Thanks for taking my question.\n\n"
+        "Operator: Our next question comes from Doug Anmuth from JPMorgan.\n"
+        "Doug Anmuth (JPMorgan): Thank you for taking my questions.\n"
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.PRESENT
+    assert any(s.startswith("operator_intros=") for s in result.signals)
+
+
+def test_detect_qa_section_single_operator_intro_below_threshold() -> None:
+    """A single operator hand-off line is the boilerplate preamble, not Q&A
+    content. Must NOT trigger PRESENT on its own."""
+    text = _padded(
+        "Welcome to the call. After the speaker presentations, there will be a "
+        "question-and-answer session.\n"
+        "Avishai Abrahami\nQ1 results were strong.\n"
+        "Operator – we are now ready for questions.\n"  # noqa: RUF001
+    )
+    result = detect_qa_section(text)
+    # No operator intro pattern, no tag, no header => should be ABSENT.
+    assert result.status is QASectionStatus.ABSENT
+    assert result.signals == ()
+
+
+def test_detect_qa_section_prepared_remarks_only_wix_style() -> None:
+    """The WIX-style IR PDF that ends at the hand-off must classify as ABSENT."""
+    text = _padded(
+        "Avishai Abrahami\nThanks Operator. Q1 bookings grew 14%.\n"
+        "Lior Shemesh\nThanks Avishai. Margin expanded 200bps.\n"
+        "Nir Zohar\nWe remain committed to increasing shareholder value.\n"
+        "Operator – we are now ready for questions.\n"  # noqa: RUF001
+    )
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.ABSENT
+    assert result.signals == ()
+
+
+def test_detect_qa_section_short_text_is_unknown() -> None:
+    """Below the min-length threshold we cannot tell — return UNKNOWN, not ABSENT."""
+    text = "Welcome to the call. Q1 was strong. Thanks."
+    result = detect_qa_section(text)
+    assert result.status is QASectionStatus.UNKNOWN
+    assert result.signals == ()
+
+
+def test_qa_status_to_db_value_round_trip() -> None:
+    """Tri-state -> bool|None mapping for the `transcripts.has_qa_section` column."""
+    assert qa_status_to_db_value(QASectionStatus.PRESENT) is True
+    assert qa_status_to_db_value(QASectionStatus.ABSENT) is False
+    assert qa_status_to_db_value(QASectionStatus.UNKNOWN) is None

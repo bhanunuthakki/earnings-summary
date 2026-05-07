@@ -40,8 +40,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.append(str(SRC_DIR))
 
-from alias_manager import resolve_ticker  # noqa: E402
 import index_manager  # noqa: E402
+from alias_manager import resolve_ticker  # noqa: E402
+from compute.transcript_ingest import (  # noqa: E402
+    QASectionStatus,
+    detect_qa_section,
+    qa_status_to_db_value,
+)
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_audio_transcript,
@@ -137,6 +142,8 @@ class TranscriptionResult:
     output_path: Path
     source: TranscriptSource
     video_url: str
+    qa_section_status: QASectionStatus
+    qa_section_signals: tuple[str, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +297,7 @@ def _ensure_qa_recorded(
 ) -> str:
     """For an existing transcript file, ensure index + QA are recorded.
     Returns the qa_status string ('ok' or 'failed'). Idempotent — if the
-    index already shows ok/failed, it's a no-op."""
+    index already shows ok/failed AND has_qa is set, it's a no-op."""
     entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
     if entry is None:
         # File on disk but not in index — register with a stub source so
@@ -305,6 +312,27 @@ def _ensure_qa_recorded(
         entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
         if entry is None:
             raise RuntimeError(f"failed to register existing transcript {output_path}")
+
+    # Backfill has_qa if missing — legacy entries from before Q&A detection landed.
+    if entry.get("has_qa") is None:
+        try:
+            section = detect_qa_section(output_path.read_text(encoding="utf-8"))
+        except OSError:
+            section = None
+        if section is not None:
+            index_manager.register_transcript(
+                canonical_ticker, year, qlabel,
+                source=entry.get("source") or "unknown_legacy",
+                filepath=output_path.name,
+                has_qa=qa_status_to_db_value(section.status),
+            )
+            if section.status is QASectionStatus.ABSENT:
+                sys.stderr.write(
+                    f"WARN missing_qa: {canonical_ticker} {qlabel} {year} — "
+                    f"existing transcript has no analyst Q&A signals "
+                    f"(signals={list(section.signals)}); replace with a full-call "
+                    f"source before running downstream extraction.\n"
+                )
 
     qa_status = entry.get("qa_status")
     if qa_status in ("ok", "failed"):
@@ -377,29 +405,49 @@ def fetch_and_transcribe(
     )
     _transcribe(audio_path, output_path, whisper_model, beam_size)
 
-    # QA gate: validate the just-produced transcript. Cached audio is only
-    # deleted on QA pass — failed transcripts keep the audio so the user can
-    # rerun with a different model / beam_size without re-downloading.
+    # Two independent QA checks against the just-produced transcript:
+    #   (a) structural validity — file size, timestamps, words/sec, hallucination
+    #       repeat ratio. Gates the audio-cache cleanup (failed transcripts keep
+    #       the cached audio so the user can rerun with different decode params
+    #       without re-downloading).
+    #   (b) Q&A-section presence — was analyst Q&A in the recording at all,
+    #       or did the source cut off at the hand-off? A structurally-OK file
+    #       can still be prepared-remarks only; downstream Say-Do / commitments
+    #       extraction needs to know.
     qa_result = validate_audio_transcript(output_path)
     qa_details_payload = qa_result.model_dump(mode="json")
+    qa_section = detect_qa_section(output_path.read_text(encoding="utf-8"))
+    if qa_section.status is QASectionStatus.ABSENT:
+        sys.stderr.write(
+            f"WARN missing_qa: {canonical_ticker} {qlabel} {spec.year} — "
+            f"transcribed audio has no analyst Q&A signals "
+            f"(signals={list(qa_section.signals)}). Likely the source cut off "
+            f"at hand-off; provide a full-call replacement or pull a longer "
+            f"recording before running Say-Do/commitments mining.\n"
+        )
+
     index_manager.register_transcript(
         canonical_ticker,
         spec.year,
         qlabel,
         source=source.value,
         filepath=output_path.name,
-        has_qa=None,
+        has_qa=qa_status_to_db_value(qa_section.status),
         qa_status=qa_result.status.value,
         qa_details=qa_details_payload,
     )
 
     if qa_result.status == QaStatus.OK:
         audio_path.unlink(missing_ok=True)
-        print(f"[done] {output_path}  qa=ok  audio_cleaned")
+        print(
+            f"[done] {output_path}  qa=ok  has_qa={qa_section.status.value}  "
+            f"audio_cleaned"
+        )
     else:
         print(
             f"[done-qa-failed] {output_path}  qa=failed  "
-            f"audio_kept={audio_path.name}  issues={len(qa_result.issues)}"
+            f"has_qa={qa_section.status.value}  audio_kept={audio_path.name}  "
+            f"issues={len(qa_result.issues)}"
         )
         for issue in qa_result.issues:
             print(f"      - {issue}")
@@ -411,6 +459,8 @@ def fetch_and_transcribe(
         output_path=output_path,
         source=source,
         video_url=url,
+        qa_section_status=qa_section.status,
+        qa_section_signals=qa_section.signals,
     )
 
 
@@ -458,11 +508,24 @@ def run_from_manifest(
         if result is not None:
             results.append(result)
 
+    missing_qa = [
+        f"{r.ticker} Q{r.quarter} {r.year}"
+        for r in results
+        if r.qa_section_status is QASectionStatus.ABSENT
+    ]
     print(
         f"[summary] processed={len(results)} "
         f"gaps_skipped={len(skipped_gaps)} "
+        f"missing_qa={len(missing_qa)} "
         f"manifest={manifest_path.name}"
     )
+    if missing_qa:
+        print(
+            "[action_required] These transcripts have no Q&A section and need a full-call "
+            "replacement before downstream extraction can use them:"
+        )
+        for label in missing_qa:
+            print(f"  - {label}")
     return results
 
 
