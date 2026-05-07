@@ -1,15 +1,23 @@
 """
 src/llm_client.py
 -----------------
-LLM client for the earnings-summary pipeline. All calls route through the
-Claude Code CLI (`claude -p`) via subprocess so they bill against the user's
-Claude Pro/Max subscription rather than the separately-metered Anthropic API.
+LLM client for the earnings-summary pipeline. Two-tier execution:
+
+  PRIMARY: Claude Code CLI (`claude -p`) via subprocess. Bills against the user's
+  Claude Pro/Max subscription. Zero per-call cost.
+
+  FALLBACK: Gemini via google-generativeai. Fires automatically when the Claude
+  CLI call fails (timeout, non-zero exit, empty output, binary missing).
+  Per-call cost on Gemini Flash is sub-penny; the fallback prevents single-ticker
+  failures from blocking batch runs.
 
 CRITICAL: The Claude Agent SDK does NOT support subscription billing — it
 requires ANTHROPIC_API_KEY (separate API billing). The CLI is the ONLY path
 to subscription billing. Even the CLI silently falls back to API billing if
 ANTHROPIC_API_KEY is set in the environment, so the module's lazy setup check
-fails loud when that key is present.
+fails loud when that key is present. The Gemini fallback is intentionally a
+separate, opt-in path that requires its own GEMINI_API_KEY in .env — it cannot
+be triggered by accidentally setting ANTHROPIC_API_KEY.
 
 Setup (one-time, user action required):
 1. Install Claude Code CLI: see https://code.claude.com/docs/en/setup
@@ -17,6 +25,8 @@ Setup (one-time, user action required):
 3. Ensure ANTHROPIC_API_KEY is unset in the shell that runs this pipeline:
      PowerShell: Remove-Item env:ANTHROPIC_API_KEY
      Bash:       unset ANTHROPIC_API_KEY
+4. (Optional but recommended) Add GEMINI_API_KEY to .env to enable the fallback
+   path. Without it, Claude CLI failures surface as hard errors. See .env.example.
 """
 
 from __future__ import annotations
@@ -28,6 +38,22 @@ import re
 import shutil
 import subprocess
 from datetime import date
+
+# NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
+# is `google-genai` with a different API (genai.Client / client.models.generate_content).
+# Migrate when convenient — the deprecated package still works and avoids forcing
+# users to re-install for the fallback path. See:
+# https://github.com/google-gemini/deprecated-generative-ai-python
+import warnings
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
+    import google.generativeai as genai
+
+from dotenv import load_dotenv
+
+# Load .env at module init so GEMINI_API_KEY is available without callers having to
+# import dotenv themselves. Silent no-op if .env doesn't exist.
+load_dotenv()
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS
@@ -71,6 +97,12 @@ JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 # Gemini-Flash budget; well under any Claude model's context.
 INTAKE_TEXT_BUDGET = 6000
 
+# Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
+# and light (intake classifier) workloads — quality is good enough for backup
+# duty and per-call cost is sub-penny. Override per-call by passing a custom
+# model to _try_gemini_fallback if needed.
+GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
+
 log = logging.getLogger(__name__)
 
 _setup_verified: bool = False
@@ -104,36 +136,89 @@ def _verify_setup_once() -> None:
     _setup_verified = True
 
 
+def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
+    """
+    Last-resort Gemini call invoked when the Claude CLI fails operationally
+    (timeout, non-zero exit, empty stdout, binary missing). Reads GEMINI_API_KEY
+    (or GOOGLE_API_KEY) from the environment — populated by load_dotenv() at
+    module init.
+
+    If no Gemini key is available, re-raises a RuntimeError that wraps the
+    original Claude error and points the user at .env.example. This makes the
+    failure mode explicit: setup an LLM, see the prompt, fix the cause.
+
+    Setup-class Claude errors (ANTHROPIC_API_KEY set, claude binary missing)
+    are NOT routed here — they propagate from _verify_setup_once() before the
+    subprocess call ever runs.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "Claude CLI failed AND no Gemini fallback configured. "
+            f"Original Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}\n"
+            "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path. "
+            "See .env.example."
+        ) from claude_error
+
+    log.warning({
+        "event": "claude_cli_failed_falling_back_to_gemini",
+        "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
+        "gemini_model": GEMINI_FALLBACK_MODEL,
+    })
+    genai.configure(api_key=api_key)
+    model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
+    response = model_obj.generate_content(prompt)
+    text = (response.text or "").strip() if hasattr(response, "text") else ""
+    if not text:
+        raise RuntimeError(
+            "Both LLMs failed: Claude CLI errored AND Gemini fallback returned empty response.\n"
+            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:200]}"
+        ) from claude_error
+    log.info({"event": "gemini_fallback_done", "response_chars": len(text)})
+    return text
+
+
 def _call_claude(
     prompt: str,
     model: str = DEFAULT_MODEL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     """
-    Single-shot LLM call via the Claude Code CLI. Returns the model's text response.
+    Single-shot LLM call. Tries the Claude Code CLI first (subscription billing).
+    On any operational failure — timeout, non-zero exit, empty output, or the
+    binary becoming unavailable mid-run — falls back to Gemini Flash if a
+    GEMINI_API_KEY is available in the environment.
 
-    Prompts are passed via stdin to avoid Windows CreateProcess command-line length
-    limits (32K). subprocess.CalledProcessError on non-zero exit; the pipeline's
-    Bounded Self-Annealing wrapper handles retries upstream.
+    Setup errors (ANTHROPIC_API_KEY set, claude binary missing on first call)
+    raise RuntimeError directly without invoking the fallback — those need to
+    be fixed by the operator, not papered over.
+
+    Prompts are passed via stdin to avoid Windows CreateProcess command-line
+    length limits (32K).
     """
-    _verify_setup_once()
+    _verify_setup_once()  # setup errors propagate; do NOT route to fallback
     assert _claude_cli_path is not None  # set by _verify_setup_once when it returns successfully
     log.info({"event": "llm_call_start", "model": model, "prompt_chars": len(prompt)})
-    result = subprocess.run(
-        [_claude_cli_path, "-p", "--model", model],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
-        errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
-        check=True,
-        timeout=timeout_seconds,
-    )
-    text = result.stdout.strip()
-    if not text:
-        raise RuntimeError(f"claude -p returned empty stdout. stderr: {result.stderr.strip()}")
-    log.info({"event": "llm_call_done", "response_chars": len(text)})
-    return text
+    try:
+        result = subprocess.run(
+            [_claude_cli_path, "-p", "--model", model],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
+            errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
+            check=True,
+            timeout=timeout_seconds,
+        )
+        text = result.stdout.strip()
+        if not text:
+            raise RuntimeError(f"claude -p returned empty stdout. stderr: {result.stderr.strip()[:200]}")
+        log.info({"event": "llm_call_done", "response_chars": len(text)})
+        return text
+    except (subprocess.SubprocessError, OSError, RuntimeError) as claude_error:
+        # Operational failure — try Gemini fallback. _try_gemini_fallback raises
+        # if no Gemini key is configured, surfacing both errors together.
+        return _try_gemini_fallback(prompt, claude_error)
 
 
 # ---------------------------------------------------------------------------
