@@ -55,12 +55,47 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("RBRK", _CAL_RUBRIK, ("Rubrik",)),
     ("NOW", _CAL_CALENDAR, ("ServiceNow",)),
     ("WIX", _CAL_CALENDAR, ("Wix.com", "Wix Ltd", "Wix's", "Wix ", "WIX ")),
-    ("NVO", _CAL_NVO, ("Novo Nordisk", "Amounts in DKK million", "Amounts  in  DKK")),
+    ("NVO", _CAL_NVO, (
+        "Novo Nordisk",
+        "Amounts in DKK million",
+        "Amounts are in DKK",
+        "Amounts  in  DKK",
+    )),
     ("GOOG", _CAL_CALENDAR, ("Alphabet Inc", "Alphabet's")),
-    ("META", _CAL_CALENDAR, ("Meta Platforms", "Meta Reports")),
+    ("META", _CAL_CALENDAR, (
+        "Meta Platforms",
+        "Meta Reports",
+        "Meta Earnings",
+        "investor.atmeta.com",
+        "atmeta.com",
+    )),
     ("AMZN", _CAL_CALENDAR, ("Amazon.com", "AMAZON.COM")),
     ("VEEV", _CAL_VEEV, ("Veeva Systems", "Veeva ")),
     ("BN", _CAL_CALENDAR, ("Brookfield Corporation", "Brookfield Asset Management")),
+    ("ABNB", _CAL_CALENDAR, (
+        "Airbnb, Inc.",
+        "Airbnb Inc.",
+        "Airbnb (ABNB)",
+        "Airbnb's",
+    )),
+    ("BKNG", _CAL_CALENDAR, (
+        "Booking Holdings, Inc.",
+        "Booking Holdings Inc.",
+        "Booking Holdings",
+        "Booking.com Holdings",
+    )),
+    ("SOFI", _CAL_CALENDAR, (
+        "SoFi Technologies",
+        "Social Finance, Inc.",
+        "SoFi Reports",
+        "SoFi's",
+    )),
+    ("DLO", _CAL_CALENDAR, (
+        "DLocal Limited",
+        "(NASDAQ:DLO)",
+        "dLocal",
+        "DLocal",
+    )),
 ]
 
 
@@ -77,6 +112,16 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     # "Annual Report") sit at the end so they only fire when nothing more
     # decisive matched.
 
+    # ---- SEC filing covers: anchored to the first ~500 chars so disclaimer
+    # mentions ("filing on Form 10-K for the period end…") in IR presentations
+    # don't false-positive as 10-K/10-Q filings. Real SEC filings put the form
+    # designator on the cover page within the first few hundred chars. ----
+    (DocType.SEC_10Q, re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?Q\b", re.IGNORECASE), "sec_form_10q"),
+    (DocType.SEC_10K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?K\b", re.IGNORECASE), "sec_form_10k"),
+    (DocType.SEC_20F, re.compile(r"\A[\s\S]{0,500}\bFORM\s+20-?F\b", re.IGNORECASE), "sec_form_20f"),
+    (DocType.SEC_8K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+8-?K\b", re.IGNORECASE), "sec_form_8k"),
+    (DocType.SEC_6K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+6-?K\b", re.IGNORECASE), "sec_form_6k"),
+
     # ---- Transcripts: only the strongest cover-page signals up-front. ----
     (
         DocType.IR_TRANSCRIPT,
@@ -87,6 +132,13 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         DocType.IR_TRANSCRIPT,
         re.compile(r"\b(Earnings\s+Call\s+Script|Prepared\s+Remarks)\b", re.IGNORECASE),
         "transcript_title",
+    ),
+    (
+        DocType.IR_TRANSCRIPT,
+        # FactSet CallStreet-published transcripts open with "Corrected Transcript"
+        # in the cover-page header. Specific enough to be unambiguous.
+        re.compile(r"\bCorrected\s+Transcript\b|FactSet\s+CallStreet", re.IGNORECASE),
+        "transcript_factset",
     ),
 
     # ---- Shareholder letters first: their bodies contain press-release-
@@ -99,6 +151,23 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
             re.IGNORECASE,
         ),
         "shareholder_letter_label",
+    ),
+
+    # ---- Non-quarterly events: investor days, AGMs, capital markets days,
+    # broker conferences. Period_end on these rows is the event date, not a
+    # fiscal-quarter end (handled in `classify_ir_file`). ----
+    (
+        DocType.IR_EVENT,
+        re.compile(r"\bInvestor\s+Day\b", re.IGNORECASE),
+        "investor_day_label",
+    ),
+    (
+        DocType.IR_EVENT,
+        re.compile(
+            r"\b(?:Capital\s+Markets\s+Day|JPMorgan\s+Healthcare\s+Conference|J\.?P\.?\s*Morgan\s+Healthcare\s+Conference|Healthcare\s+Conference|Investor\s+Conference)\b",
+            re.IGNORECASE,
+        ),
+        "conference_label",
     ),
 
     # ---- Presentations: cover-page titles. ----
@@ -137,12 +206,21 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     ),
     (
         DocType.IR_PRESS_RELEASE,
+        # dLocal / NU title pattern: "Q1'25 Earnings Release" as the document
+        # title. Anchored to the first ~100 chars so transcripts that
+        # casually reference "If you have not seen the Earnings Release..."
+        # don't false-positive as a press release.
+        re.compile(r"\A[\s\S]{0,100}\bEarnings\s+Release\b", re.IGNORECASE),
+        "earnings_release_title",
+    ),
+    (
+        DocType.IR_PRESS_RELEASE,
         # Press-release dateline: "CITY[, STATE-OR-COUNTRY][;,] Month DD, YYYY".
-        # Allow optional ", State" / "; Country" between city and date so
-        # MELI's "MONTEVIDEO, Uruguay; October 29, 2025" matches alongside
-        # the simpler "SEATTLE, WA -- January 30, 2026" form.
+        # Accept all-caps ("MONTEVIDEO, Uruguay; October 29, 2025") *and* mixed
+        # case ("Montevideo, Uruguay, May 14, 2025") since dLocal/NU IR releases
+        # use the latter.
         re.compile(
-            r"^[A-Z][A-Z\s]{2,40}(?:,\s*[A-Za-z\.]+)?[;,\s\-]+"
+            r"^[A-Z][A-Za-z\s]{2,40}(?:,\s*[A-Za-z\.]+)?[;,\s\-]+"
             r"(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}",
             re.MULTILINE,
         ),
@@ -178,8 +256,17 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
 _DOC_TYPE_SQUASHED_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     # Same priority ordering as `_DOC_TYPE_RULES`. Patterns assume
     # `re.sub(r"\s+", "", text).lower()` — i.e. pypdf's no-space output.
+    # SEC FORM is intentionally NOT squashed: the boundary-anchored content
+    # rule above is enough; relying on flat-text matching invites
+    # collisions like "filingonform10-k" in disclaimers.
     (DocType.IR_TRANSCRIPT, re.compile(r"earningscallscript"), "transcript_title"),
     (DocType.IR_TRANSCRIPT, re.compile(r"preparedremarks"), "transcript_title"),
+    (DocType.IR_TRANSCRIPT, re.compile(r"correctedtranscript"), "transcript_factset"),
+    (DocType.IR_TRANSCRIPT, re.compile(r"factsetcallstreet"), "transcript_factset"),
+    (DocType.IR_EVENT, re.compile(r"investorday"), "investor_day_label"),
+    (DocType.IR_EVENT, re.compile(r"capitalmarketsday"), "conference_label"),
+    (DocType.IR_EVENT, re.compile(r"healthcareconference"), "conference_label"),
+    (DocType.IR_EVENT, re.compile(r"investorconference"), "conference_label"),
     (DocType.IR_INVESTOR_UPDATE, re.compile(r"lettertoshareholders"), "shareholder_letter_label"),
     (DocType.IR_INVESTOR_UPDATE, re.compile(r"toourshareholders"), "shareholder_letter_label"),
     (DocType.IR_INVESTOR_UPDATE, re.compile(r"shareholderletter"), "shareholder_letter_label"),
@@ -242,6 +329,28 @@ _RX_DATE_QUARTER_ENDED = re.compile(
 # "Fourth Quarter & Full Year 2025" / "Fourth Quarter and Full Year 2025"
 _RX_QUARTER_FULL_YEAR = re.compile(
     r"\b(?P<word>First|Second|Third|Fourth)\s+Quarter\s+(?:&|and)\s+Full\s+Year\s+(?P<y>20\d{2})\b",
+    re.IGNORECASE,
+)
+# 10-Q cover page: "For the quarterly period ended June 30, 2025"
+_RX_SEC_QUARTERLY_PERIOD_ENDED = re.compile(
+    r"\bFor\s+the\s+quarterly\s+period\s+ended[:\s]+"
+    r"(?P<m>January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+    r"(?P<d>\d{1,2}),?\s+(?P<y>20\d{2})\b",
+    re.IGNORECASE,
+)
+# 10-K cover page: "For the fiscal year ended: December 31, 2025"
+_RX_SEC_FISCAL_YEAR_ENDED = re.compile(
+    r"\bFor\s+the\s+fiscal\s+year\s+ended[:\s]+"
+    r"(?P<m>January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+    r"(?P<d>\d{1,2}),?\s+(?P<y>20\d{2})\b",
+    re.IGNORECASE,
+)
+# Generic dateline used as event-date for IR_EVENT docs (Investor Day, JPM,
+# Capital Markets Day decks). Match the FIRST month/day/year date in the
+# fingerprint — these decks always lead with the event date on slide 1.
+_RX_EVENT_DATE = re.compile(
+    r"\b(?P<m>January|February|March|April|May|June|July|August|September|October|November|December)\s+"
+    r"(?P<d>\d{1,2}),?\s+(?P<y>20\d{2})\b",
     re.IGNORECASE,
 )
 
@@ -369,28 +478,126 @@ _RX_WIX_CDN_PREFIX = re.compile(r"^(?:2e8ef1|4f4a31)_[0-9a-f]{32}\.pdf$", re.IGN
 _RX_NU_RESULTS_DECK = re.compile(r"^[1-4]Q\d{2} Results Presentation\.pdf$", re.IGNORECASE)
 _RX_NU_TRANSCRIPT_FILE = re.compile(r"^Transcript [1-4]Q\d{2}\.pdf$", re.IGNORECASE)
 
+# Filename-based ticker rules. First match wins. Patterns are anchored where
+# possible (^ ... ) so a stray substring elsewhere in the name doesn't decide.
+# Each rule is (regex, ticker, evidence-label). Compiled once at import.
+_FILENAME_TICKER_RULES: list[tuple[re.Pattern[str], str, str]] = [
+    (re.compile(r"^RBRK[-_]", re.IGNORECASE), "RBRK", "filename_prefix:RBRK"),
+    (re.compile(r"^(?:ServiceNow|ER-Q)", re.IGNORECASE), "NOW", "filename_prefix:ServiceNow"),
+    (re.compile(r"^Novo[-_]Nordisk", re.IGNORECASE), "NVO", "filename_prefix:novo-nordisk"),
+    (_RX_WIX_CDN_PREFIX, "WIX", "filename_wix_cdn"),
+    (_RX_NU_RESULTS_DECK, "NU", "filename_pattern:nu_default_naming"),
+    (_RX_NU_TRANSCRIPT_FILE, "NU", "filename_pattern:nu_default_naming"),
+    # Airbnb: own filenames + FactSet "CORRECTED-TRANSCRIPT_-Airbnb-Inc-ABNB-US-..."
+    (
+        re.compile(r"^(?:Airbnb[-_]|CORRECTED-TRANSCRIPT_-Airbnb-Inc-ABNB)", re.IGNORECASE),
+        "ABNB",
+        "filename_prefix:Airbnb",
+    ),
+    # Booking Holdings: BKNG-*, Q1-2026-BKNG-*, Q3-25-BKNG-*, Booking-Holdings-Inc-BKNG-*,
+    # CORRECTED-TRANSCRIPT_-Booking-Holdings-Inc-BKNG-*
+    (
+        re.compile(
+            r"^(?:BKNG[-_]|Q[1-4]-(?:\d{2}|20\d{2})-BKNG[-_]|Booking-Holdings-Inc-BKNG|CORRECTED-TRANSCRIPT_-Booking-Holdings-Inc-BKNG)",
+            re.IGNORECASE,
+        ),
+        "BKNG",
+        "filename_prefix:BKNG",
+    ),
+    # SoFi: SOFI-*, SoFi-*, SoFi_*
+    (re.compile(r"^SoFi[-_]|^SOFI[-_]", re.IGNORECASE), "SOFI", "filename_prefix:SoFi"),
+    # dLocal: dlocal_*, dLocal_*, https___investor.dlocal.com_*, plus the user's
+    # specific bare-quarter naming (4q24_earnings_results_vf.pdf,
+    # transcript_webcast_presentation_q4_2024.pdf — both verified dLocal-issued).
+    (
+        re.compile(
+            r"^(?:dlocal[-_]|https___investor\.dlocal\.com_|[1-4]q\d{2}_earnings_|transcript_webcast_presentation_q[1-4]_20\d{2}\.pdf$)",
+            re.IGNORECASE,
+        ),
+        "DLO",
+        "filename_prefix:dlocal",
+    ),
+    # Veeva: VEEV-*, Veeva-*, 2025-Veeva-Investor-Day, Veeva-JPM-*, etc.
+    (
+        re.compile(r"^(?:VEEV[-_]|Veeva[-_]|\d{4}[-_]Veeva[-_])", re.IGNORECASE),
+        "VEEV",
+        "filename_prefix:Veeva",
+    ),
+    # Alphabet: Alphabet-*, 2025q1-alphabet-*
+    (
+        re.compile(r"^(?:Alphabet[-_]|\d{4}q[1-4]-alphabet[-_])", re.IGNORECASE),
+        "GOOG",
+        "filename_prefix:Alphabet",
+    ),
+]
+
 
 def _detect_ticker_from_filename(name: str) -> tuple[str | None, list[str]]:
-    """Filename prefix → ticker, for the small set of upload-naming conventions
-    we actually see (RBRK-*, ServiceNow-*, novo-nordisk-*, Wix CDN hex names,
-    NU's `NQYY Results Presentation` / `Transcript NQYY` convention). Hex/UUID
-    names without a known prefix fall through to content detection.
-    """
-    upper = name.upper()
-    if upper.startswith("RBRK-") or upper.startswith("RBRK_"):
-        return "RBRK", ["filename_prefix:RBRK"]
-    if upper.startswith("SERVICENOW") or upper.startswith("ER-Q"):
-        return "NOW", ["filename_prefix:ServiceNow"]
-    if upper.startswith("NOVO-NORDISK") or upper.startswith("NOVO_NORDISK"):
-        return "NVO", ["filename_prefix:novo-nordisk"]
-    if _RX_WIX_CDN_PREFIX.match(name):
-        return "WIX", [f"filename_wix_cdn:{name[:7]}"]
-    if _RX_NU_RESULTS_DECK.match(name) or _RX_NU_TRANSCRIPT_FILE.match(name):
-        return "NU", ["filename_pattern:nu_default_naming"]
+    """Filename prefix/pattern → ticker. Hex/UUID names without a known prefix
+    fall through to content detection."""
+    for rx, ticker, label in _FILENAME_TICKER_RULES:
+        if rx.search(name):
+            return ticker, [f"{label}:{name[:32]!r}"]
     return None, []
 
 
 _RX_FILENAME_ANNUAL_REPORT = re.compile(r"annual[-_\s]?report", re.IGNORECASE)
+
+# Filename-based doc-type fallbacks. Used when content rules return None
+# (e.g. image-only PDFs, decks where pypdf extracts no useful text). First
+# match wins. Order: most specific first, broad keywords last.
+_FILENAME_DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
+    (
+        DocType.IR_TRANSCRIPT,
+        re.compile(
+            r"earnings[-_](?:call|conference[-_]call)[-_]transcript|earnings[-_]transcript|^transcript[-_]|transcript[-_]webcast",
+            re.IGNORECASE,
+        ),
+        "filename_transcript",
+    ),
+    (
+        DocType.IR_INVESTOR_UPDATE,
+        re.compile(r"shareholder[-_]letter", re.IGNORECASE),
+        "filename_shareholder_letter",
+    ),
+    (
+        DocType.IR_EVENT,
+        re.compile(r"investor[-_]day", re.IGNORECASE),
+        "filename_investor_day",
+    ),
+    (
+        DocType.IR_EVENT,
+        re.compile(
+            r"(?:healthcare[-_]conference|jpm[-_].*?conference|capital[-_]markets[-_]day|investor[-_]conference)",
+            re.IGNORECASE,
+        ),
+        "filename_conference",
+    ),
+    (
+        DocType.IR_PRESENTATION,
+        re.compile(
+            r"(?:quarterly[-_]earnings[-_]presentation|earnings[-_]presentation|investor[-_]presentation|earnings[-_]slides?)",
+            re.IGNORECASE,
+        ),
+        "filename_presentation",
+    ),
+    (
+        DocType.IR_PRESS_RELEASE,
+        re.compile(
+            r"(?:earnings[-_]press[-_]release|earnings[-_]release|earnings[-_]results)",
+            re.IGNORECASE,
+        ),
+        "filename_press_release",
+    ),
+    (
+        DocType.IR_SUPPLEMENT,
+        re.compile(
+            r"(?:financial[-_]workbook|financial[-_]supplement|fact[-_]sheet)",
+            re.IGNORECASE,
+        ),
+        "filename_supplement",
+    ),
+]
 
 
 def _detect_doc_type(
@@ -445,6 +652,14 @@ def _detect_doc_type(
             return doc_type, [f"{label}_squashed:{m.group(0)!r}"]
     if filename and _RX_FILENAME_ANNUAL_REPORT.search(filename):
         return DocType.IR_INVESTOR_UPDATE, ["filename_annual_report"]
+    # Filename-pattern fallbacks fire only when no content rule matched.
+    # Critical for image-only PDFs (e.g. Wix CDN cover decks) and decks where
+    # pypdf returns near-empty text.
+    if filename:
+        for doc_type, rx, label in _FILENAME_DOC_TYPE_RULES:
+            m = rx.search(filename)
+            if m:
+                return doc_type, [f"{label}:{m.group(0)!r}"]
     return None, []
 
 
@@ -457,6 +672,20 @@ def _detect_period(
     Returns the *fiscal-year-and-quarter* pair the issuer would label this
     period with — `_period_end_for()` then converts to a calendar period_end.
     """
+    # SEC 10-Q / 10-K cover pages always carry an explicit period-ended line.
+    # Pre-empt the looser quarter regexes since 10-Qs frequently mention "first
+    # quarter" prose later in the body; the cover phrase is the source of truth.
+    m = _RX_SEC_QUARTERLY_PERIOD_ENDED.search(text)
+    if m:
+        q = _MONTH_TO_Q[m.group("m").lower()]
+        y = int(m.group("y"))
+        return (y, q), [f"sec_quarterly_period_ended:{m.group(0)!r}"]
+    m = _RX_SEC_FISCAL_YEAR_ENDED.search(text)
+    if m:
+        q = _MONTH_TO_Q[m.group("m").lower()]
+        y = int(m.group("y"))
+        return (y, q), [f"sec_fiscal_year_ended:{m.group(0)!r}"]
+
     if ticker_calendar == _CAL_NVO:
         m = _RX_NVO_PERIOD.search(text)
         if m:
@@ -531,10 +760,49 @@ def _detect_period(
     return None, []
 
 
+_MONTH_TO_NUM: dict[str, int] = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
+
+
+def _detect_event_period_end(text: str, filename: str) -> tuple[date | None, list[str]]:
+    """For IR_EVENT decks, period_end is the event date (per DocType.IR_EVENT).
+
+    Strategy: take the first explicit "Month DD, YYYY" date in the cover-page
+    text. Investor day / conference decks lead with this on slide 1. If no
+    date is found, fall back to a filename year hint and use Dec 31 as a
+    placeholder so the file still gets categorized — the user can rename for
+    a more specific date.
+    """
+    m = _RX_EVENT_DATE.search(text)
+    if m:
+        month_num = _MONTH_TO_NUM[m.group("m").lower()]
+        d = int(m.group("d"))
+        y = int(m.group("y"))
+        try:
+            return date(y, month_num, d), [f"event_date:{m.group(0)!r}"]
+        except ValueError:
+            pass
+    # Filename year-only fallback: "2025-Veeva-Investor-Day.pdf" → 2025-12-31.
+    rx_year = re.compile(r"\b(?P<y>20\d{2})\b")
+    m2 = rx_year.search(filename)
+    if m2:
+        return date(int(m2.group("y")), 12, 31), [f"event_year_filename:{m2.group(0)!r}"]
+    return None, []
+
+
 def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]:
     """Best-effort period hint from filename — used to disambiguate when
     content gives a less-specific match (e.g. cover slide doesn't say which Q).
     """
+    # SoFi-style "Q4-FY-2025" naming: must be tried before the looser rx2/rx3
+    # since they'd otherwise capture only the trailing "20\d{2}" segment.
+    rx_fy = re.compile(r"\bq(?P<q>[1-4])[-_]fy[-_](?P<y>20\d{2})\b", re.IGNORECASE)
+    m_fy = rx_fy.search(name)
+    if m_fy:
+        return (int(m_fy.group("y")), int(m_fy.group("q"))), [f"filename_period:{m_fy.group(0)!r}"]
+
     rx = re.compile(r"(?P<a>[1-4])Q(?P<b>\d{2})", re.IGNORECASE)
     m = rx.search(name)
     if m:
@@ -550,6 +818,12 @@ def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]
     if m3:
         y = _yy_to_yyyy(int(m3.group("yy")))
         return (y, int(m3.group("q"))), [f"filename_period:{m3.group(0)!r}"]
+    # YYYY-Q[1-4] / YYYYqN style (e.g. "2025-Q1", "2025q1"). Order: after rx
+    # (which catches "1Q25") so the year-first form doesn't shadow it.
+    rx_year_q = re.compile(r"\b(?P<y>20\d{2})[-_]?q(?P<q>[1-4])\b", re.IGNORECASE)
+    m_year_q = rx_year_q.search(name)
+    if m_year_q:
+        return (int(m_year_q.group("y")), int(m_year_q.group("q"))), [f"filename_period:{m_year_q.group(0)!r}"]
     rx4 = re.compile(r"annual[-_\s]report[-_\s](?P<y>20\d{2})", re.IGNORECASE)
     m4 = rx4.search(name)
     if m4:
@@ -615,6 +889,31 @@ def classify_ir_file(path: Path) -> CategorizationResult | CategorizationFailure
         )
 
     cal = _calendar_for(ticker)
+
+    # IR_EVENT (investor day, broker conference, capital markets day) is keyed
+    # by event date, not fiscal quarter. Pull the first explicit date out of
+    # the cover-page text; fall back to a year-only filename hint.
+    if doc_type == DocType.IR_EVENT:
+        event_period_end, event_evidence = _detect_event_period_end(text, path.name)
+        if event_period_end is None:
+            return CategorizationFailure(
+                reason="event_date_unidentified",
+                text_sample=text[:600],
+                ticker_guess=ticker,
+                doc_type_guess=doc_type,
+            )
+        confidence = Confidence.HIGH if file_ev else Confidence.MEDIUM
+        return CategorizationResult(
+            ticker=ticker,
+            doc_type=doc_type,
+            period_end=event_period_end,
+            period_label=event_period_end.isoformat(),
+            confidence=confidence,
+            ticker_evidence=ticker_evidence,
+            doc_type_evidence=doc_ev,
+            period_evidence=event_evidence,
+        )
+
     fname_yq, fname_period_ev = _filename_period_hint(path.name)
     content_yq, content_period_ev = _detect_period(text, cal)
 

@@ -70,12 +70,16 @@ logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger("categorize_ir_uploads")
 
 # Subset of DocType values that the legacy `process_ir_documents.py` step
-# knows how to LLM-process. Other doc_types are still registered in `documents`
-# (canonical) but not mirrored to the legacy JSON index.
+# knows how to LLM-process via the (ticker, year, quarter, doc_type) keying.
+# `IR_EVENT` uses a separate event-keyed path — handled below in `_process_one`.
+# Other doc_types (SEC_10K/10Q, IR_SUPPLEMENT) are still registered in `documents`
+# (canonical) but not mirrored to the legacy JSON index because the LLM step
+# has no handler for them.
 _LEGACY_INDEX_MAP: dict[DocType, str] = {
     DocType.IR_PRESS_RELEASE: "press_release",
     DocType.IR_PRESENTATION: "presentation",
     DocType.IR_TRANSCRIPT: "transcript",
+    DocType.IR_INVESTOR_UPDATE: "investor_update",
 }
 
 
@@ -271,6 +275,17 @@ def _process_one(
                 fiscal_label=outcome.period_label,
                 note="categorized_by:categorize_ir_uploads",
                 processed=False,
+            )
+        elif outcome.doc_type == DocType.IR_EVENT:
+            # Events are keyed by (ticker, event_date, sha256[:8]) — see
+            # `index_manager.register_event_document`. period_end is the event date.
+            index_manager.register_event_document(
+                ticker=outcome.ticker,
+                event_date=outcome.period_end.isoformat(),
+                local_path=str(new_path),
+                sha256=sha,
+                confidence=1.0 if outcome.confidence.value == "high" else 0.6,
+                note="categorized_by:categorize_ir_uploads",
             )
 
     return {
