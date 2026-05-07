@@ -81,6 +81,8 @@ def register_transcript(
     source: str,
     filepath: str | None = None,
     has_qa: bool | None = None,
+    qa_status: str | None = None,
+    qa_details: dict | None = None,
 ) -> bool:
     index = _load(TRANSCRIPT_INDEX_PATH)
     key = _transcript_key(ticker, year, quarter)
@@ -95,6 +97,11 @@ def register_transcript(
     if updated_has_qa is None and existing:
         updated_has_qa = existing.get("has_qa")
 
+    # Preserve existing QA fields if caller didn't pass them — re-registering
+    # for an unrelated reason (e.g. metadata fix) shouldn't blow away QA state.
+    updated_qa_status = qa_status if qa_status is not None else (existing.get("qa_status") if existing else None)
+    updated_qa_details = qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
+
     index[key] = {
         "ticker": resolve_ticker(ticker).upper(),
         "year": str(year),
@@ -103,6 +110,13 @@ def register_transcript(
         "filepath": filepath,
         "indexed_at": existing["indexed_at"] if existing else datetime.datetime.now().isoformat(),
         "has_qa": updated_has_qa,
+        "qa_status": updated_qa_status,
+        "qa_details": updated_qa_details,
+        "qa_checked_at": (
+            datetime.datetime.now().isoformat()
+            if qa_status is not None
+            else (existing.get("qa_checked_at") if existing else None)
+        ),
     }
     _save(TRANSCRIPT_INDEX_PATH, index)
 
@@ -116,6 +130,26 @@ def register_transcript(
         local_path=filepath,
         processed=True,  # Legacy flow already processed
     )
+    return True
+
+
+def update_transcript_qa(
+    ticker: str,
+    year,
+    quarter: str,
+    qa_status: str,
+    qa_details: dict | None = None,
+) -> bool:
+    """Update only the QA fields of an existing transcript entry. Returns False
+    if the entry does not exist (caller should register_transcript first)."""
+    index = _load(TRANSCRIPT_INDEX_PATH)
+    key = _transcript_key(ticker, year, quarter)
+    if key not in index:
+        return False
+    index[key]["qa_status"] = qa_status
+    index[key]["qa_details"] = qa_details
+    index[key]["qa_checked_at"] = datetime.datetime.now().isoformat()
+    _save(TRANSCRIPT_INDEX_PATH, index)
     return True
 
 

@@ -57,6 +57,7 @@ sys.path.append(str(SRC_DIR))
 
 from alias_manager import resolve_ticker  # noqa: E402
 import index_manager  # noqa: E402
+from transcript_qa import QaStatus, validate_synthesized_transcript  # noqa: E402
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 TMP_DIR = PROJECT_ROOT / ".tmp"
@@ -435,6 +436,7 @@ def synthesize(spec: SynthInput, force: bool = False) -> SynthResult:
 
     output_path.write_text(_build_header(spec, sections) + _render(sections), encoding="utf-8")
 
+    qa_result = validate_synthesized_transcript(output_path)
     index_manager.register_transcript(
         canonical,
         spec.year,
@@ -442,8 +444,18 @@ def synthesize(spec: SynthInput, force: bool = False) -> SynthResult:
         source="synthesized_text",
         filepath=output_path.name,
         has_qa=False,  # press releases / recaps don't carry a Q&A segment
+        qa_status=qa_result.status.value,
+        qa_details=qa_result.model_dump(mode="json"),
     )
-    print(f"[done] {output_path} ({len(sections)} sections)")
+    if qa_result.status == QaStatus.OK:
+        print(f"[done] {output_path} ({len(sections)} sections) qa=ok")
+    else:
+        print(
+            f"[done-qa-failed] {output_path} ({len(sections)} sections) "
+            f"qa=failed issues={len(qa_result.issues)}"
+        )
+        for issue in qa_result.issues:
+            print(f"      - {issue}")
     return SynthResult(
         ticker=canonical,
         year=spec.year,

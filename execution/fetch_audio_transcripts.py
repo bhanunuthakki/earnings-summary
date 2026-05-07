@@ -42,6 +42,11 @@ sys.path.append(str(SRC_DIR))
 
 from alias_manager import resolve_ticker  # noqa: E402
 import index_manager  # noqa: E402
+from transcript_qa import (  # noqa: E402
+    QaStatus,
+    validate_audio_transcript,
+    validate_transcript,
+)
 
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 TMP_DIR = PROJECT_ROOT / ".tmp"
@@ -277,6 +282,49 @@ def _transcribe(
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _ensure_qa_recorded(
+    canonical_ticker: str,
+    year: int,
+    qlabel: str,
+    output_path: Path,
+) -> str:
+    """For an existing transcript file, ensure index + QA are recorded.
+    Returns the qa_status string ('ok' or 'failed'). Idempotent — if the
+    index already shows ok/failed, it's a no-op."""
+    entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
+    if entry is None:
+        # File on disk but not in index — register with a stub source so
+        # validate_transcript can route. Caller will overwrite with real source
+        # if it just produced the file; backfill leaves "unknown_legacy".
+        index_manager.register_transcript(
+            canonical_ticker, year, qlabel,
+            source="unknown_legacy",
+            filepath=output_path.name,
+            has_qa=None,
+        )
+        entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
+        if entry is None:
+            raise RuntimeError(f"failed to register existing transcript {output_path}")
+
+    qa_status = entry.get("qa_status")
+    if qa_status in ("ok", "failed"):
+        return qa_status
+
+    result = validate_transcript(output_path, entry.get("source") or "unknown_legacy")
+    index_manager.update_transcript_qa(
+        canonical_ticker, year, qlabel,
+        qa_status=result.status.value,
+        qa_details=result.model_dump(mode="json"),
+    )
+    print(
+        f"[qa] {canonical_ticker} {qlabel} {year}: {result.status.value} "
+        f"(issues={len(result.issues)})"
+    )
+    for issue in result.issues:
+        print(f"      - {issue}")
+    return result.status.value
+
+
 def fetch_and_transcribe(
     spec: FetchSpec,
     ffmpeg_location: Path | None,
@@ -287,8 +335,23 @@ def fetch_and_transcribe(
     qlabel = _quarter_label(spec.quarter)
     output_path = RAW_DIR / f"{canonical_ticker}_{qlabel}_{spec.year}.txt"
 
-    if index_manager.has_transcript(canonical_ticker, spec.year, qlabel) or output_path.exists():
-        print(f"[skip] transcript already exists for {canonical_ticker} {qlabel} {spec.year}")
+    # Skip-existing logic, gated on QA: if the file is on disk we don't redo
+    # work; we only run QA (once) so the index reflects reality.
+    if output_path.exists() or index_manager.has_transcript(canonical_ticker, spec.year, qlabel):
+        if output_path.exists():
+            qa_status = _ensure_qa_recorded(canonical_ticker, spec.year, qlabel, output_path)
+            if qa_status == "ok":
+                print(f"[skip] {canonical_ticker} {qlabel} {spec.year}: transcript present, qa=ok")
+            else:
+                print(
+                    f"[skip-failed-qa] {canonical_ticker} {qlabel} {spec.year}: "
+                    f"transcript present but qa=failed; delete the file to retry"
+                )
+        else:
+            print(
+                f"[skip] {canonical_ticker} {qlabel} {spec.year}: indexed but file missing — "
+                f"clear the index entry to retry"
+            )
         return None
 
     RAW_DIR.mkdir(parents=True, exist_ok=True)
@@ -314,8 +377,11 @@ def fetch_and_transcribe(
     )
     _transcribe(audio_path, output_path, whisper_model, beam_size)
 
-    audio_path.unlink(missing_ok=True)
-
+    # QA gate: validate the just-produced transcript. Cached audio is only
+    # deleted on QA pass — failed transcripts keep the audio so the user can
+    # rerun with a different model / beam_size without re-downloading.
+    qa_result = validate_audio_transcript(output_path)
+    qa_details_payload = qa_result.model_dump(mode="json")
     index_manager.register_transcript(
         canonical_ticker,
         spec.year,
@@ -323,8 +389,21 @@ def fetch_and_transcribe(
         source=source.value,
         filepath=output_path.name,
         has_qa=None,
+        qa_status=qa_result.status.value,
+        qa_details=qa_details_payload,
     )
-    print(f"[done] {output_path}")
+
+    if qa_result.status == QaStatus.OK:
+        audio_path.unlink(missing_ok=True)
+        print(f"[done] {output_path}  qa=ok  audio_cleaned")
+    else:
+        print(
+            f"[done-qa-failed] {output_path}  qa=failed  "
+            f"audio_kept={audio_path.name}  issues={len(qa_result.issues)}"
+        )
+        for issue in qa_result.issues:
+            print(f"      - {issue}")
+
     return TranscriptionResult(
         ticker=canonical_ticker,
         year=spec.year,

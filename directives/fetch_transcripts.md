@@ -26,14 +26,22 @@ The smart search replaces the previous naive `ytsearch1`. It enumerates 5 candid
 ### fetch_audio_transcripts.py Responsibilities
 
 1. Validates its inputs via Pydantic (`FetchSpec`, `LinksManifest`).
-2. Checks `.tmp/transcript_index.json` and `transcripts/raw/` to skip if already done.
+2. **Skip-existing (automatic, QA-gated)** — if `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt` already exists:
+   - Ensure it has an index entry (register a stub with `source=unknown_legacy` if missing).
+   - If `qa_status` is unset, run `validate_transcript` now and persist the result.
+   - If `qa_status=ok` → print `[skip]` and return without re-downloading.
+   - If `qa_status=failed` → print `[skip-failed-qa]` with issue list; user must delete the file to retry.
 3. Resolves the YouTube URL (curated → manifest → smart search).
 4. Downloads audio via `yt-dlp` to `.tmp/temp_audio_<TICKER>_<Q>_<YEAR>.<ext>`.
-5. Transcribes via `faster-whisper` `large-v3-turbo` (CPU, int8) → `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt`.
-6. Registers in `.tmp/transcript_index.json` with one of:
+5. Transcribes via `faster-whisper` (defaults `distil-large-v3` + `beam_size=1`) → `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt`.
+6. **QA gate (automatic)** — runs `validate_audio_transcript` on the produced file and records `qa_status` + `qa_details` in the index:
+   - `qa=ok` → cached audio at `.tmp/temp_audio_*.<ext>` is **deleted**; print `[done] ... qa=ok audio_cleaned`.
+   - `qa=failed` → cached audio is **kept** so the user can rerun with a different `--whisper-model` / `--beam-size` without re-downloading; print `[done-qa-failed]` with issue list.
+7. Index entry source label is one of:
    - `source=yt_dlp_whisper_url` (explicit URL)
    - `source=yt_dlp_whisper_links` (manifest)
    - `source=yt_dlp_whisper_search` (smart search)
+   - `source=unknown_legacy` (file existed before any source was recorded; backfilled by skip-existing)
 
 ### Links manifest schema
 
@@ -78,9 +86,25 @@ Entries with `url: null` are skipped with the `gap_reason` printed — they are 
 - **First-run model download**: `large-v3-turbo` (~1.6 GB) is fetched on first invocation and cached in the user's HF cache.
 - **Dual-Mode Sync**: `src/main.py` ingestion pipeline also handles direct manual `.mp3` / `.m4a` uploads from the web interface.
 
+## QA validation
+
+QA logic lives in `src/transcript_qa.py`. Defaults are tuned against the May 2026 backfill of 24 known-good transcripts. Tighten via the constants at the top of that module; rerun `python execution/qa_transcripts.py --rerun-all` after any change.
+
+| Check (audio transcripts) | Threshold |
+|---|---|
+| File size | ≥ 10 KB |
+| Line count | ≥ 100 |
+| Timestamped fraction | ≥ 95 % |
+| Duration covered (max-end − min-start) | ≥ 10 min |
+| Words / second | 0.5 – 5.0 |
+| Adjacent-repeat ratio (Whisper hallucination signal) | ≤ 30 % |
+
+Synthesized transcripts (from `synthesize_quarterly_update.py`) get a separate validator that just checks size + presence of the writer's banner + at least one section. See `directives/qa_transcripts.md`.
+
 ## Verification
 
 After running, confirm:
 - [ ] `.txt` transcript file appears in `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt`.
-- [ ] Re-running the fetcher with the same args prints `[skip] transcript already exists` and exits clean.
-- [ ] `.tmp/transcript_index.json` contains an entry with the correct `source` label.
+- [ ] Re-running the fetcher with the same args prints `[skip] ... qa=ok` and does not re-download.
+- [ ] `.tmp/transcript_index.json` entry has correct `source` label, `qa_status=ok`, and `qa_details` populated.
+- [ ] No `.tmp/temp_audio_<TICKER>_Q<N>_<YEAR>.*` file remains after a successful run.
