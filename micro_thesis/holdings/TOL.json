@@ -1,95 +1,93 @@
 {
-  "ticker": "MELI",
-  "name": "MercadoLibre",
+  "ticker": "TOL",
+  "name": "Toll Brothers",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "Luxury-end homebuilder with structural advantages in land bank + customer demographics; thesis is durable order book + pricing power. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "Net signed contracts × ASP × adjusted gross margin",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "GMV growth FX-neutral (consolidated)",
+      "name": "Net signed contracts (units) YoY growth",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "break_condition": "Down >10% YoY for 2 consecutive Qs in non-recession",
       "source": "earnings release"
     },
     {
-      "name": "Revenue YoY growth (USD)",
-      "current": "TBV",
+      "name": "Average sales price (ASP)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "break_condition": "Declines >5% YoY for 2 consecutive Qs (mix-adjusted)",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (consolidated)",
-      "current": "TBV",
+      "name": "Adjusted home sales gross margin",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "break_condition": "Compresses below 26% for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "MercadoPago TPV growth + take rate",
-      "current": "TBV",
+      "name": "Backlog (units + value)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Backlog units down >20% YoY for 2 consecutive Qs",
+      "source": "earnings release"
     },
     {
-      "name": "Credit portfolio NPL ratio",
-      "current": "TBV",
+      "name": "SG&A % of revenue",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Above 11% for 2 consecutive Qs",
+      "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Unique active users + buyer growth",
+      "name": "Land bank years of supply",
       "source": "earnings release"
     },
     {
-      "name": "Shipping cost as % of revenue",
+      "name": "Cancellation rate",
       "source": "earnings release"
     },
     {
-      "name": "Brazil/Mexico/Argentina segment commentary",
-      "source": "earnings release commentary"
+      "name": "Capital return pace",
+      "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Mercado Ads revenue mix",
-      "source": "earnings release"
+      "name": "Build-to-rent JV revenue",
+      "source": "10-K / 10-Q"
     },
     {
-      "name": "Capex pace",
-      "source": "earnings release"
+      "name": "City living vs traditional luxury mix",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Amazon LatAm",
-    "Sea (Shopee)",
-    "Magazine Luiza",
-    "Casas Bahia",
-    "Nubank (fintech overlap)"
+    "D.R. Horton",
+    "Lennar",
+    "PulteGroup",
+    "NVR"
   ],
   "thesis_breakers_qualitative": [
-    "FXN GMV growth below 25% for 2 consecutive Qs",
-    "Operating margin compresses below 12%",
-    "Credit NPL spikes structurally",
-    "Latin America macro shock that breaks consumer spending"
+    "Order book down >20% YoY for 2 Qs",
+    "Adjusted gross margin below 26%",
+    "Mortgage rate shock kills demand"
   ],
   "break_rules": [
     {

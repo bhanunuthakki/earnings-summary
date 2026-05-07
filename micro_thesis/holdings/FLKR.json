@@ -54,26 +54,87 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "Hyperscaler AI capex aggregate (MSFT/META/GOOG/AMZN)", "source": "US hyperscaler earnings — demand proxy"},
-    {"name": "Nvidia data center revenue growth (downstream pull)", "source": "NVDA earnings"},
-    {"name": "China semi self-sufficiency progress (CXMT, YMTC)", "source": "industry press"},
-    {"name": "KRW/USD trajectory", "source": "FX data"}
+    {
+      "name": "Hyperscaler AI capex aggregate (MSFT/META/GOOG/AMZN)",
+      "source": "US hyperscaler earnings — demand proxy"
+    },
+    {
+      "name": "Nvidia data center revenue growth (downstream pull)",
+      "source": "NVDA earnings"
+    },
+    {
+      "name": "China semi self-sufficiency progress (CXMT, YMTC)",
+      "source": "industry press"
+    },
+    {
+      "name": "KRW/USD trajectory",
+      "source": "FX data"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "Korea Composite (KOSPI) correlation", "source": "price data"},
-    {"name": "Fund AUM & tracking difference", "source": "Franklin IR"}
+    {
+      "name": "Korea Composite (KOSPI) correlation",
+      "source": "price data"
+    },
+    {
+      "name": "Fund AUM & tracking difference",
+      "source": "Franklin IR"
+    }
   ],
   "nuance": {
     "bear_case": "HBM supply glut from competing Korean + Chinese capacity additions could compress pricing faster than current guidance models. China DRAM (CXMT) reaching parity in commodity DRAM would commoditize legacy nodes and pressure ASPs.",
     "adversarial_take": "AI capex cycle is what pulls memory pricing — if hyperscaler aggregate capex guides flat or down, the entire thesis pillar collapses regardless of HBM allocation.",
     "stress_test": "Single-signal design means the position should be exited promptly on first trip — no 'two consecutive months' deliberation. Bias is to leave fast and re-enter on confirmed re-acceleration rather than hold through a draw-down."
   },
-  "competitive_watchlist": ["Micron (US proxy and signal source)", "Kioxia (NAND)", "Western Digital", "CXMT (China DRAM)"],
+  "competitive_watchlist": [
+    "Micron (US proxy and signal source)",
+    "Kioxia (NAND)",
+    "Western Digital",
+    "CXMT (China DRAM)"
+  ],
   "thesis_breakers_qualitative": [
     "HBM supply glut",
     "China DRAM parity reached",
     "AI capex cycle turns (any hyperscaler guides capex flat/down)",
     "Single monthly decline in DRAM or NAND contract price",
     "MU inventory rises QoQ"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }

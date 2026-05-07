@@ -1,32 +1,24 @@
 {
   "ticker": "BN",
-  "thesis": "Alternative asset manager + insurance float + real assets compounder; DE per share growth driven by fee-related earnings, insurance solutions (BWS) scaling, and monetization cadence.",
-  "last_updated": "2026-05-04",
-  "tier_1_kpis": [
-    {"name": "Distributable Earnings (DE) per share growth YoY (TTM)", "source": "quarterly supplemental / earnings release", "break": "<15% YoY on TTM basis for 2 consecutive Qs"},
-    {"name": "Fee-Related Earnings (FRE) growth", "source": "BAM segment / BN supplemental", "break": "<15% YoY"},
-    {"name": "Fee-bearing capital growth", "source": "earnings supplemental", "break": "flat or declining"},
-    {"name": "Annual capital raised vs. $200B/yr inflow target", "source": "transcript + supplemental", "break": "annual inflows materially below $200B run-rate", "note": "Replaces 'flagship vintage subscription' (BN no longer publishes per-flagship subscription levels; that lives at BAM)"},
-    {"name": "Insurance (BWS) annualized earnings + ROE", "source": "earnings supplemental", "break": "BWS ROE <12% for 2 Qs", "note": "BNRE rebranded to BWS. Issuer discloses ROE not yield-on-float."},
-    {"name": "Realizations / monetizations ($ TTM and pipeline)", "source": "transcript + supplemental", "break": "<$2B realized carry on TTM basis AND no advancement in carry-eligible capital toward recognition", "note": "European waterfall back-end-loads carry; per-Q $1B floor is a false-positive generator. Avg run-rate is ~$0.5B/Q against a $6B/3yr forward commitment."}
-  "name": "Brookfield Corp",
-  "last_updated": "2026-05-04",
-  "thesis": "Three reinforcing compounders inside one wrapper — (1) BAM fee-related earnings (capital-light, scaling with fundraising), (2) BNRE insurance float earning >9% on assets across the cycle, (3) realizations cadence monetizing a $200B+ deployed-capital book on a multi-year cycle. The bet: DE/share grows 15%+ over a cycle, with the share buyback closing the persistent NAV discount.",
+  "name": "Brookfield Corporation",
+  "last_updated": "2026-05-07",
+  "thesis": "Three reinforcing compounders: (1) BAM fee-related earnings (capital-light, scaling with fundraising), (2) Brookfield Wealth Solutions insurance float earning a spread above cost of float across the cycle, (3) realizations cadence monetizing a $200B+ deployed-capital book on a multi-year cycle. Bet: DE/share grows 15%+ over a cycle with the share buyback closing the persistent NAV discount. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "DE/share growth driven by FRE + BNRE float earnings + realizations cadence",
+  "key_driver": "DE/share growth driven by FRE + BWS float earnings + realizations cadence",
+  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {
-      "name": "DE/share YoY growth",
-      "current": "TBV from latest supplemental",
+      "name": "Distributable Earnings (DE) per share growth YoY (TTM)",
+      "current": "TBV from latest earnings supplemental",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<15% YoY for 2 consecutive Qs",
-      "source": "quarterly supplemental / earnings release"
+      "break_condition": "<15% YoY on TTM basis for 2 consecutive Qs",
+      "source": "quarterly supplemental"
     },
     {
-      "name": "Fee-Related Earnings (FRE) growth",
+      "name": "Fee-Related Earnings (FRE) growth (BAM segment)",
       "current": "TBV",
       "prior": null,
       "yoy": null,
@@ -40,60 +32,111 @@
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Flat or declining",
+      "break_condition": "Flat or declining FBC",
       "source": "earnings supplemental"
     },
     {
-      "name": "Fundraising pace (flagship vintages, private credit, insurance)",
+      "name": "Annual capital raised vs $200B/yr inflow target",
       "current": "TBV",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Flagship fund undersubscribed vs target",
-      "source": "transcript"
-    },
-    {
-      "name": "Insurance (BNRE) earnings yield on float",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<9%",
-      "source": "earnings supplemental"
-    },
-    {
-      "name": "Realizations / monetizations ($ and count)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "2 Qs of <$1B carried interest realized without pipeline explanation",
+      "break_condition": "Annual inflows materially below $200B run-rate",
       "source": "transcript + supplemental"
+    },
+    {
+      "name": "Brookfield Wealth Solutions ROE",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "BWS ROE <12% for 2 consecutive Qs",
+      "source": "earnings supplemental",
+      "note": "BNRE rebranded to BWS. Issuer discloses ROE not yield-on-float."
+    },
+    {
+      "name": "Realizations / monetizations ($ TTM and pipeline)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<$2B realized carry on TTM basis AND no advancement in carry-eligible capital toward recognition",
+      "source": "transcript + supplemental",
+      "note": "European waterfall back-end-loads carry; per-Q $1B floor is a false-positive generator."
     }
   ],
   "tier_2_kpis": [
-    {"name": "Carried interest generated (unrealized)", "source": "supplemental"},
-    {"name": "Real estate NOI growth", "source": "BPY supplemental"},
-    {"name": "Renewable power FFO", "source": "BEP supplemental"},
-    {"name": "Infrastructure FFO", "source": "BIP supplemental"},
-    {"name": "Private credit AUM growth (Oaktree)", "source": "transcript"}
+    {
+      "name": "BAM AUM growth",
+      "source": "earnings supplemental"
+    },
+    {
+      "name": "Real estate segment NOI",
+      "source": "earnings supplemental"
+    },
+    {
+      "name": "BEP / BIP / BBU distributions to BN",
+      "source": "earnings supplemental"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "BN share buybacks + NAV discount", "source": "earnings release"},
-    {"name": "Plan value vs intrinsic value disclosure", "source": "investor day"}
+    {
+      "name": "Capital deployment pace",
+      "source": "transcript"
+    },
+    {
+      "name": "Buyback pace (% of float)",
+      "source": "earnings release"
+    }
   ],
-  "nuance": {
-    "bear_case": "Insurance reserve/credit-loss surprise at BNRE could blindside the model — float math depends on consistent earnings yield, and a single bad year of credit losses can compound. CRE writedown cycle deeper than provisioned is a separate but related tail risk.",
-    "adversarial_take": "Three compounders only work if all three keep working — a flagship fundraising stall (>2 years), CRE shock, OR BNRE credit miss can each independently break the math. Diversification is the bull case but also creates more failure modes.",
-    "stress_test": "BNRE earnings yield <9% + flagship undersubscribed in any single cycle would force a re-evaluation; 2 Qs of <$1B carried-interest realizations without pipeline color is the early canary."
-  },
-  "competitive_watchlist": ["Blackstone", "KKR", "Apollo (insurance parallel via Athene)", "Ares"],
-  "thesis_breakers_qualitative": ["insurance reserve/credit loss surprise at BWS", "CRE writedown cycle deeper than provisioned", "fundraising cycle stalls (annual inflows persistently <$150B)"],
-  "schema_revision_notes": "2026-05-04: Renamed BNRE → BWS (entity rebrand). Replaced 'flagship vintage subscription' (now disclosed at BAM, not BN) with 'annual capital raised vs $200B/yr target'. Replaced 'insurance earnings yield on float <9%' (not the disclosed metric) with 'BWS ROE <12%'. Replaced per-Q '<$1B realized carry' (European waterfall makes it a false-positive generator) with TTM-based test paired with carry-eligible capital direction. Specified DE per share break as TTM to handle quarterly carry lumpiness."
+  "competitive_watchlist": [
+    "Blackstone",
+    "KKR",
+    "Apollo Global Management",
+    "Ares Management"
+  ],
   "thesis_breakers_qualitative": [
-    "Insurance reserve/credit loss surprise at BNRE",
-    "CRE writedown cycle deeper than provisioned",
-    "Flagship fundraising cycle stalls >2 years",
-    "BNRE earnings yield on float <9% for 2 consecutive Qs"
+    "DE/share <15% YoY for 2 consecutive Qs",
+    "BWS ROE materially below 12%",
+    "Material slowdown in fundraising vs $200B run-rate",
+    "NAV discount widens despite buyback"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }

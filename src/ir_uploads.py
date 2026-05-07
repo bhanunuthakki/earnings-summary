@@ -72,6 +72,7 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("AMZN", _CAL_CALENDAR, ("Amazon.com", "AMAZON.COM")),
     ("VEEV", _CAL_VEEV, ("Veeva Systems", "Veeva ")),
     ("BN", _CAL_CALENDAR, ("Brookfield Corporation", "Brookfield Asset Management")),
+    ("LLY", _CAL_CALENDAR, ("Eli Lilly and Company", "Eli Lilly", "Lilly ")),
     ("ABNB", _CAL_CALENDAR, (
         "Airbnb, Inc.",
         "Airbnb Inc.",
@@ -809,11 +810,11 @@ def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]
         q = int(m.group("a"))
         y = _yy_to_yyyy(int(m.group("b")))
         return (y, q), [f"filename_period:{m.group(0)!r}"]
-    rx2 = re.compile(r"\bq(?P<q>[1-4])[-_](?P<y>20\d{2})\b", re.IGNORECASE)
+    rx2 = re.compile(r"\bq(?P<q>[1-4])[-_+\s]+(?P<y>20\d{2})\b", re.IGNORECASE)
     m2 = rx2.search(name)
     if m2:
         return (int(m2.group("y")), int(m2.group("q"))), [f"filename_period:{m2.group(0)!r}"]
-    rx3 = re.compile(r"\bq(?P<q>[1-4])[-_](?P<yy>\d{2})\b", re.IGNORECASE)
+    rx3 = re.compile(r"\bq(?P<q>[1-4])[-_+\s]+(?P<yy>\d{2})\b", re.IGNORECASE)
     m3 = rx3.search(name)
     if m3:
         y = _yy_to_yyyy(int(m3.group("yy")))
@@ -836,12 +837,21 @@ def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]
 # ---------------------------------------------------------------------------
 
 
-def classify_ir_file(path: Path) -> CategorizationResult | CategorizationFailure:
+def classify_ir_file(
+    path: Path,
+    *,
+    ticker_hint: str | None = None,
+) -> CategorizationResult | CategorizationFailure:
     """Classify a single IR-uploads file. Pure function — only reads the file.
 
     Returns a `CategorizationResult` when ticker, doc_type, and period are all
     determined. Otherwise a `CategorizationFailure` carrying the partial
     evidence so the user can repair (rename, delete, or extend the registry).
+
+    `ticker_hint` is consulted only when the filename and content fingerprint
+    fail to identify a ticker. Callers pass the parent-folder ticker when a
+    file is dropped under `ir_documents/<TICKER>/...` — the path is then strong
+    evidence for the issuer.
     """
     ext = path.suffix.lower()
     if ext not in {".pdf", ".xlsx"}:
@@ -874,6 +884,10 @@ def classify_ir_file(path: Path) -> CategorizationResult | CategorizationFailure
             ticker_guess=file_ticker,
         )
     ticker = file_ticker or content_ticker
+    if ticker is None and ticker_hint is not None:
+        if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
+            ticker = ticker_hint
+            ticker_evidence = ticker_evidence + ["path_hint"]
     if ticker is None:
         return CategorizationFailure(
             reason="ticker_unidentified",
@@ -981,22 +995,105 @@ def canonical_path(
     )
 
 
-def iter_uncategorized_files(root: Path) -> list[Path]:
-    """Files at the root of `ir_documents/` that need categorization.
+_CANONICAL_PATH_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)/"
+    r"(?P<period>\d{4}-\d{2}-\d{2})/"
+    r"(?P<doc_type>ir_[a-z_]+)__(?P<sha8>[0-9a-f]{8})"
+    r"\.(?P<ext>pdf|xlsx)$"
+)
 
-    Already-categorized files live under `ir_documents/{TICKER}/{period}/`.
-    The `_unsorted/` quarantine and any other subdirs are skipped.
+
+def parse_canonical_path(path: Path, root: Path) -> CategorizationResult | None:
+    """Extract (ticker, doc_type, period_end) from a path already at canonical position.
+
+    Returns None if the path doesn't match the `<TICKER>/<period_end>/<doc_type>__<sha8>.<ext>`
+    layout produced by `canonical_path()`. Used by the reindexer fast-path so we
+    can register pre-placed files without re-classifying them.
+    """
+    try:
+        rel = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return None
+    m = _CANONICAL_PATH_RX.match(rel)
+    if m is None:
+        return None
+    try:
+        doc_type = DocType(m["doc_type"])
+    except ValueError:
+        return None
+    period_end = date.fromisoformat(m["period"])
+    try:
+        cal = _calendar_for(m["ticker"])
+    except ValueError:
+        cal = _CAL_CALENDAR
+    quarter = _quarter_for_period_end(cal, period_end)
+    period_label = _period_label(cal, period_end.year, quarter) if quarter else period_end.isoformat()
+    return CategorizationResult(
+        ticker=m["ticker"],
+        doc_type=doc_type,
+        period_end=period_end,
+        period_label=period_label,
+        confidence=Confidence.HIGH,
+        ticker_evidence=["canonical_path"],
+        doc_type_evidence=["canonical_path"],
+        period_evidence=["canonical_path"],
+    )
+
+
+def _quarter_for_period_end(cal: str, period_end: date) -> int | None:
+    """Reverse of `_period_end_for`: derive Q-number from period_end given calendar."""
+    if cal == _CAL_VEEV:
+        return {4: 1, 7: 2, 10: 3, 1: 4}.get(period_end.month)
+    if cal == _CAL_RUBRIK:
+        return {7: 1, 10: 2, 1: 3, 4: 4}.get(period_end.month)
+    return {3: 1, 6: 2, 9: 3, 12: 4}.get(period_end.month)
+
+
+def iter_uncategorized_files(root: Path) -> list[Path]:
+    """Files anywhere under `ir_documents/` that may need processing.
+
+    - Root-level files: arrived via manual drop, need full classification.
+    - Files under `<TICKER>/...`: already in a ticker folder, may be at the
+      canonical `<TICKER>/<period_end>/<doc_type>__<sha8>.<ext>` position
+      (fast-path: parse-and-register), or somewhere else under the ticker dir
+      (use the path-based ticker as a hint to the classifier).
+
+    System folders prefixed with `_` (e.g. `_unsorted/`, `_events/`) and any
+    hidden dotfiles are skipped.
     """
     out: list[Path] = []
-    for p in sorted(root.iterdir()):
-        if p.is_dir():
-            continue
-        if p.name.startswith("."):
+    for p in sorted(root.rglob("*")):
+        if not p.is_file() or p.name.startswith("."):
             continue
         if p.suffix.lower() not in {".pdf", ".xlsx"}:
             continue
+        try:
+            rel_parts = p.resolve().relative_to(root.resolve()).parts
+        except ValueError:
+            continue
+        if rel_parts and (rel_parts[0].startswith("_") or rel_parts[0].startswith(".")):
+            continue
         out.append(p)
     return out
+
+
+def ticker_hint_from_path(path: Path, root: Path) -> str | None:
+    """If `path` is under `<root>/<TICKER>/...`, return TICKER. Else None.
+
+    Used by the categorizer when filename heuristics fail: if the user dropped
+    a file inside a ticker subfolder, the path itself is strong evidence of
+    which issuer it belongs to.
+    """
+    try:
+        rel_parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        return None
+    if len(rel_parts) < 2:
+        return None
+    head = rel_parts[0]
+    if not re.match(r"^[A-Z][A-Z0-9.]*$", head):
+        return None
+    return head
 
 
 __all__: Sequence[str] = (
@@ -1006,6 +1103,8 @@ __all__: Sequence[str] = (
     "Confidence",
     "canonical_path",
     "classify_ir_file",
+    "parse_canonical_path",
+    "ticker_hint_from_path",
     "fingerprint",
     "fingerprint_pdf",
     "fingerprint_xlsx",

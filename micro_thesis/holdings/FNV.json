@@ -1,95 +1,88 @@
 {
-  "ticker": "NU",
-  "name": "Nu Holdings",
+  "ticker": "FNV",
+  "name": "Franco-Nevada",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). Three engines: (1) customer count compounding on network effects + low-CAC acquisition, (2) ARPAC (revenue per active customer) ramping as customers add credit + investment products, (3) operating leverage as cost-to-serve stays near-zero. Bet: 25%+ revenue growth with ROE crossing 30% and durable Brazil profitability funding Mexico/Colombia expansion. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "Streaming/royalty company with optionality across gold + diversified commodities; thesis is sustained free cash flow + counter-cyclical M&A. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "Customer count × ARPAC × NIM with NPL controlled",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "GEOs (gold-equivalent ounces) × realized prices",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "Total customers (millions)",
+      "name": "GEO production (oz)",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Net adds <5M per quarter for 2 consecutive Qs",
-      "source": "earnings release"
+      "break_condition": "Below guidance midpoint for 2 consecutive years",
+      "source": "operational review"
     },
     {
-      "name": "Monthly ARPAC (USD)",
-      "current": "TBV",
+      "name": "Adjusted net income margin",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "ARPAC growth <15% YoY for 2 consecutive Qs",
+      "break_condition": "Below 50% for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "Net interest margin (NIM)",
-      "current": "TBV",
+      "name": "Operating cash flow (TTM)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NIM compresses >100bps YoY for 2 consecutive Qs",
+      "break_condition": "Below $850M TTM in stable price environment",
       "source": "earnings release"
     },
     {
-      "name": "NPL 90d+ ratio (consolidated)",
-      "current": "TBV",
+      "name": "Net cash position",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs",
+      "break_condition": "Drops below zero (taking on net debt)",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (GAAP) consolidated",
-      "current": "TBV",
+      "name": "New stream/royalty deals (annual count + size)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs",
-      "source": "earnings release"
+      "break_condition": "Zero new material deals in any 12-month period",
+      "source": "press releases"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Mexico customer + revenue growth",
-      "source": "earnings release segment"
-    },
-    {
-      "name": "Cost-to-serve trajectory",
+      "name": "Cobre Panama settlement progress",
       "source": "earnings release"
     },
     {
-      "name": "Cost of risk (NPL formation)",
+      "name": "Energy royalty revenue mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capital return pace",
       "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Investment AUC (assets under custody)",
-      "source": "earnings release"
-    },
-    {
-      "name": "Capital adequacy ratio",
-      "source": "earnings release"
+      "name": "Pension / asset retirement obligations",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Itau Unibanco",
-    "Bradesco",
-    "Banco do Brasil",
-    "MercadoPago",
-    "PicPay"
+    "Wheaton Precious Metals",
+    "Royal Gold",
+    "Osisko Gold Royalties"
   ],
   "thesis_breakers_qualitative": [
-    "Customer net adds <5M/Q",
-    "ARPAC stalls (cross-sell saturating)",
-    "NPL >7% (credit cycle break)",
-    "Mexico expansion stalls without offset"
+    "Cobre Panama remains shut indefinitely",
+    "Gold price multi-year drawdown",
+    "Counter-cyclical M&A absent"
   ],
   "break_rules": [
     {

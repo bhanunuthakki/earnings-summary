@@ -1,95 +1,93 @@
 {
-  "ticker": "MELI",
-  "name": "MercadoLibre",
+  "ticker": "JPM",
+  "name": "JPMorgan Chase",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "Diversified global bank with structural advantages in IB + payments + asset management; thesis is durable ROTCE through cycles + capital return. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "Net interest income trajectory + non-interest revenue × efficiency",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "GMV growth FX-neutral (consolidated)",
+      "name": "Net interest income (NII) YoY growth",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "break_condition": "Falls >10% YoY in non-Fed-cutting environment",
       "source": "earnings release"
     },
     {
-      "name": "Revenue YoY growth (USD)",
-      "current": "TBV",
+      "name": "Return on tangible common equity (ROTCE)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "break_condition": "Below 17% on TTM basis",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (consolidated)",
-      "current": "TBV",
+      "name": "Net charge-off ratio (firm-wide)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "break_condition": "Above 1.0% for 2 consecutive Qs (excl. Card)",
       "source": "earnings release"
     },
     {
-      "name": "MercadoPago TPV growth + take rate",
-      "current": "TBV",
+      "name": "Common equity tier 1 (CET1) ratio",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Below 12.5% (above SCB minimum is required)",
+      "source": "earnings release"
     },
     {
-      "name": "Credit portfolio NPL ratio",
-      "current": "TBV",
+      "name": "Non-interest expense growth (YoY)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Above 6% YoY for 2 consecutive Qs absent revenue offset",
+      "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Unique active users + buyer growth",
+      "name": "Investment banking fees",
       "source": "earnings release"
     },
     {
-      "name": "Shipping cost as % of revenue",
+      "name": "Trading revenue (markets)",
       "source": "earnings release"
     },
     {
-      "name": "Brazil/Mexico/Argentina segment commentary",
-      "source": "earnings release commentary"
+      "name": "Wealth management AUM growth",
+      "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Mercado Ads revenue mix",
-      "source": "earnings release"
+      "name": "Buyback pace",
+      "source": "10-K / 10-Q"
     },
     {
-      "name": "Capex pace",
-      "source": "earnings release"
+      "name": "Dividend payout ratio",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Amazon LatAm",
-    "Sea (Shopee)",
-    "Magazine Luiza",
-    "Casas Bahia",
-    "Nubank (fintech overlap)"
+    "Bank of America",
+    "Citi",
+    "Goldman Sachs",
+    "Wells Fargo"
   ],
   "thesis_breakers_qualitative": [
-    "FXN GMV growth below 25% for 2 consecutive Qs",
-    "Operating margin compresses below 12%",
-    "Credit NPL spikes structurally",
-    "Latin America macro shock that breaks consumer spending"
+    "Credit normalization beyond Card",
+    "NII cliff from Fed cuts",
+    "Regulatory capital surcharge increase"
   ],
   "break_rules": [
     {

@@ -38,6 +38,7 @@ UPDATE tracked_companies SET ir_url = 'https://www.wheatonpm.com/Investors'     
 UPDATE tracked_companies SET ir_url = 'https://www.texaspacific.com/investors'               WHERE ticker = 'TPL';
 UPDATE tracked_companies SET ir_url = 'https://investor.tsmc.com'                            WHERE ticker = 'TSM';
 UPDATE tracked_companies SET ir_url = 'https://investors.micron.com'                         WHERE ticker = 'MU';
+UPDATE tracked_companies SET ir_url = 'https://investors.dlocal.com'                         WHERE ticker = 'DLO';
 
 -- Quick check: verify all 33 are populated
 SELECT ticker, ir_url FROM tracked_companies WHERE instrument_type IS NOT NULL AND ir_url IS NULL;

@@ -1,95 +1,93 @@
 {
-  "ticker": "NU",
-  "name": "Nu Holdings",
+  "ticker": "FCX",
+  "name": "Freeport-McMoRan",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). Three engines: (1) customer count compounding on network effects + low-CAC acquisition, (2) ARPAC (revenue per active customer) ramping as customers add credit + investment products, (3) operating leverage as cost-to-serve stays near-zero. Bet: 25%+ revenue growth with ROE crossing 30% and durable Brazil profitability funding Mexico/Colombia expansion. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "Levered copper play with Indonesia smelter transition + brownfield expansion; thesis is sustained copper price tailwind from electrification + supply tightness. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "Customer count × ARPAC × NIM with NPL controlled",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "Copper realized price × volumes − unit costs",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "Total customers (millions)",
+      "name": "Copper sales (Mlbs)",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Net adds <5M per quarter for 2 consecutive Qs",
-      "source": "earnings release"
+      "break_condition": "Misses annual guidance by >5%",
+      "source": "operational review"
     },
     {
-      "name": "Monthly ARPAC (USD)",
-      "current": "TBV",
+      "name": "Net unit cash cost ($/lb copper)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "ARPAC growth <15% YoY for 2 consecutive Qs",
-      "source": "earnings release"
+      "break_condition": "Rises above $1.80/lb for 2 consecutive Qs (excl. FX/cost-of-input swings)",
+      "source": "operational review"
     },
     {
-      "name": "Net interest margin (NIM)",
-      "current": "TBV",
+      "name": "Operating cash flow (TTM)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NIM compresses >100bps YoY for 2 consecutive Qs",
+      "break_condition": "Below $7bn TTM in stable-price environment",
       "source": "earnings release"
     },
     {
-      "name": "NPL 90d+ ratio (consolidated)",
-      "current": "TBV",
+      "name": "Net debt / EBITDA",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs",
+      "break_condition": "Above 1.5x for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (GAAP) consolidated",
-      "current": "TBV",
+      "name": "Indonesia smelter throughput / export rights status",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs",
-      "source": "earnings release"
+      "break_condition": "Smelter export licence not renewed OR throughput materially below capacity",
+      "source": "transcript / regulatory disclosures"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Mexico customer + revenue growth",
-      "source": "earnings release segment"
-    },
-    {
-      "name": "Cost-to-serve trajectory",
+      "name": "Gold byproduct revenue",
       "source": "earnings release"
     },
     {
-      "name": "Cost of risk (NPL formation)",
+      "name": "Molybdenum segment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capex pace on Bagdad / Lone Star",
       "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Investment AUC (assets under custody)",
-      "source": "earnings release"
+      "name": "Capital return pace",
+      "source": "10-K / 10-Q"
     },
     {
-      "name": "Capital adequacy ratio",
-      "source": "earnings release"
+      "name": "Pension / asset retirement obligations",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Itau Unibanco",
-    "Bradesco",
-    "Banco do Brasil",
-    "MercadoPago",
-    "PicPay"
+    "BHP",
+    "Rio Tinto",
+    "Antofagasta",
+    "Southern Copper"
   ],
   "thesis_breakers_qualitative": [
-    "Customer net adds <5M/Q",
-    "ARPAC stalls (cross-sell saturating)",
-    "NPL >7% (credit cycle break)",
-    "Mexico expansion stalls without offset"
+    "Copper demand recession",
+    "Indonesia regulatory cliff",
+    "Cost inflation runs ahead of price"
   ],
   "break_rules": [
     {

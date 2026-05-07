@@ -1,57 +1,4 @@
 {
-    "ticker": "NOW",
-    "name": "ServiceNow",
-    "last_updated": "2026-05-04",
-    "thesis": "ServiceNow is the primary workflow automation platform for the enterprise, leveraging GenAI (Now Assist) to drive a step-function in ARPU. Now Assist >$1M ACV and >$5M ACV cohort growth are the highest-signal proxies for AI monetization (Pro+ SKU-level adoption is not separately disclosed).",
-    "verdict": "Intact",
-    "verdict_color": "green",
-    "key_driver": "Now Assist >$1M ACV cohort growth",
-    "tier_1_kpis": [
-        {
-            "name": "Subscription Revenue Growth (CC)",
-            "current": "19%",
-            "prior": "19.5%",
-            "yoy": "-50bps",
-            "status": "Yellow",
-            "break_condition": "< 17% CC",
-            "note": "Re-baselined from <20% (which was already mechanically triggered by FY26 guide of 19.5-20% CC)"
-        },
-        {
-            "name": "cRPO Growth (CC)",
-            "current": "21%",
-            "prior": "21%",
-            "yoy": "Flat",
-            "status": "Green",
-            "break_condition": "< 18% CC"
-        },
-        {
-            "name": "Now Assist >$1M ACV customer growth (YoY)",
-            "current": ">130%",
-            "prior": "n/a",
-            "yoy": ">130%",
-            "status": "Green",
-            "break_condition": "< 50% YoY",
-            "note": "Replaces 'Pro+ SKU Upsell Rate' which NOW does not disclose. >$5M ACV cohort count (630, +22% YoY) is a confirming Tier-2 signal."
-        }
-    ],
-    "tier_2_kpis": [
-        {
-            "name": "Renewal Rate",
-            "current": "98%",
-            "status": "Green"
-        },
-        {
-            "name": "Now Assist >$5M ACV customer count",
-            "current": "630 (+22% YoY)",
-            "status": "Green"
-        }
-    ],
-    "nuance": {
-        "bear_case": "Bears argue that IT budget fatigue will cap seat expansion even if GenAI features are well-received.",
-        "adversarial_take": "Now Assist large-customer ACV growth is impressive on a small base; the test is whether the >$1M cohort continues compounding as it broadens beyond early adopters into the long tail of enterprise customers.",
-        "stress_test": "Renewal rate dip of >200bps would signal platform fatigue and break the core thesis. cRPO cc growth dropping below 18% for 2 consecutive Qs would corroborate."
-    },
-    "schema_revision_notes": "2026-05-04: Replaced 'Pro+ SKU Upsell Rate' (not disclosed) with 'Now Assist >$1M ACV customer growth' (NOW's actual proxy). Re-baselined Sub Rev (CC) break from <20% to <17% — the prior threshold was already mechanically triggered by Q4'25 (19.5%), Q1'26 (19%), and FY26 guide (19.5-20%) yet schema marked it Green. Updated thesis text to drop Pro+ SKU framing."
   "ticker": "NOW",
   "name": "ServiceNow",
   "last_updated": "2026-05-04",
@@ -99,21 +46,80 @@
     }
   ],
   "tier_2_kpis": [
-    {"name": "Net new ACV transactions >$5M", "current": "16 in Q1 FY26 (+~80% YoY)", "source": "earnings release"},
-    {"name": "Customers >$5M ACV", "current": "630 in Q1 FY26 (+~22% YoY)", "source": "earnings release"},
-    {"name": "Operating margin (non-GAAP)", "current": "32% Q1 FY26", "source": "earnings release"},
-    {"name": "Free cash flow margin", "current": "44% Q1 FY26", "source": "earnings release"}
+    {
+      "name": "Net new ACV transactions >$5M",
+      "current": "16 in Q1 FY26 (+~80% YoY)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customers >$5M ACV",
+      "current": "630 in Q1 FY26 (+~22% YoY)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Operating margin (non-GAAP)",
+      "current": "32% Q1 FY26",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free cash flow margin",
+      "current": "44% Q1 FY26",
+      "source": "earnings release"
+    }
   ],
   "nuance": {
     "bear_case": "Strip Armis (~125bps of FY26 sub-rev contribution) and core organic growth is high-teens at $15B+ scale. The 'durable 20%+' framing the multiple is built on becomes 'mid-teens-to-low-twenties,' which is a different (less convex) thesis. Federal/gov vertical exposure to budget austerity adds tail risk.",
     "adversarial_take": "Now Assist $1M+ cohort up 130% YoY is impressive but the cohort is still small in absolute ACV terms. If AI deals are pulling forward 2027-28 budget rather than expanding it, the apparent acceleration could create a tougher comp problem in FY27-28. IT budget fatigue + AI spend rationalization could compress the seat-expansion thesis.",
     "stress_test": "Renewal rate dip below 97% would signal platform fatigue and break the moat thesis; consensus-misses on 2 consecutive Qs would force a multiple re-rate even if numbers stay healthy in absolute terms."
   },
-  "competitive_watchlist": ["Salesforce (Agentforce)", "Microsoft (Copilot/Power Platform)", "Workday", "Atlassian (Jira Service Management)"],
+  "competitive_watchlist": [
+    "Salesforce (Agentforce)",
+    "Microsoft (Copilot/Power Platform)",
+    "Workday",
+    "Atlassian (Jira Service Management)"
+  ],
   "thesis_breakers_qualitative": [
     "Two consecutive Qs of consensus misses on sub-rev or cRPO",
     "Now Assist AI ACV cohort growth decelerating below 50% YoY",
     "Renewal rate dip below 97%",
     "Federal vertical churn or significant gov shutdown impact"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
   ]
 }

@@ -1,95 +1,93 @@
 {
-  "ticker": "MELI",
-  "name": "MercadoLibre",
+  "ticker": "HDB",
+  "name": "HDFC Bank",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "India's largest private sector bank, post-merger digestion of HDFC Ltd; thesis is ROA recovery + advance growth as merger integration normalizes. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "Advances growth × NIM × credit cost",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "GMV growth FX-neutral (consolidated)",
+      "name": "Advances YoY growth",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "break_condition": "<10% YoY for 2 consecutive Qs (sub-system growth)",
       "source": "earnings release"
     },
     {
-      "name": "Revenue YoY growth (USD)",
-      "current": "TBV",
+      "name": "Net interest margin",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "break_condition": "Below 3.5% for 2 consecutive Qs (post-merger normalized)",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (consolidated)",
-      "current": "TBV",
+      "name": "Gross NPA ratio",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "break_condition": "Above 1.6% for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "MercadoPago TPV growth + take rate",
-      "current": "TBV",
+      "name": "Return on assets (ROA)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Below 1.6% for 2 consecutive Qs",
+      "source": "earnings release"
     },
     {
-      "name": "Credit portfolio NPL ratio",
-      "current": "TBV",
+      "name": "Cost-to-income ratio",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Above 42% for 2 consecutive Qs",
+      "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Unique active users + buyer growth",
+      "name": "CASA ratio",
       "source": "earnings release"
     },
     {
-      "name": "Shipping cost as % of revenue",
+      "name": "Net interest income growth",
       "source": "earnings release"
     },
     {
-      "name": "Brazil/Mexico/Argentina segment commentary",
-      "source": "earnings release commentary"
+      "name": "Credit cost (annualized)",
+      "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Mercado Ads revenue mix",
-      "source": "earnings release"
+      "name": "Branch additions",
+      "source": "10-K / 10-Q"
     },
     {
-      "name": "Capex pace",
-      "source": "earnings release"
+      "name": "Capital adequacy ratio",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Amazon LatAm",
-    "Sea (Shopee)",
-    "Magazine Luiza",
-    "Casas Bahia",
-    "Nubank (fintech overlap)"
+    "ICICI Bank",
+    "Kotak Mahindra Bank",
+    "Axis Bank",
+    "SBI"
   ],
   "thesis_breakers_qualitative": [
-    "FXN GMV growth below 25% for 2 consecutive Qs",
-    "Operating margin compresses below 12%",
-    "Credit NPL spikes structurally",
-    "Latin America macro shock that breaks consumer spending"
+    "Asset quality deterioration in unsecured retail",
+    "NIM compresses on funding pressure",
+    "Merger integration overruns"
   ],
   "break_rules": [
     {

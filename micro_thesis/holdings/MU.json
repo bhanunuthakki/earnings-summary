@@ -1,95 +1,93 @@
 {
-  "ticker": "MELI",
-  "name": "MercadoLibre",
+  "ticker": "MU",
+  "name": "Micron Technology",
   "last_updated": "2026-05-07",
-  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "thesis": "Memory cycle leverage + HBM revenue ramp; thesis is multi-year revenue growth from HBM allocation to AI accelerators + DRAM ASP recovery. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
-  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
-  "_status": "stub_regenerated_from_corruption",
+  "key_driver": "HBM bit shipments × ASP × DRAM/NAND mix",
+  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "GMV growth FX-neutral (consolidated)",
+      "name": "HBM revenue (USD bn quarterly)",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "break_condition": "Below management's stated trajectory by >15% for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "Revenue YoY growth (USD)",
-      "current": "TBV",
+      "name": "Total revenue YoY growth",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "break_condition": "<20% YoY for 2 consecutive Qs in growth phase of cycle",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (consolidated)",
-      "current": "TBV",
+      "name": "Non-GAAP gross margin",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "break_condition": "Compresses for 2 consecutive Qs in stable-price environment",
       "source": "earnings release"
     },
     {
-      "name": "MercadoPago TPV growth + take rate",
-      "current": "TBV",
+      "name": "DRAM ASP commentary (QoQ change)",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Two consecutive Qs of QoQ ASP decline outside seasonal expectation",
+      "source": "transcript"
     },
     {
-      "name": "Credit portfolio NPL ratio",
-      "current": "TBV",
+      "name": "Inventory days",
+      "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
-      "source": "earnings release fintech segment"
+      "break_condition": "Rises >20% YoY for 2 consecutive Qs (channel build signal)",
+      "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Unique active users + buyer growth",
+      "name": "NAND segment commentary",
       "source": "earnings release"
     },
     {
-      "name": "Shipping cost as % of revenue",
+      "name": "Capex / revenue ratio",
       "source": "earnings release"
     },
     {
-      "name": "Brazil/Mexico/Argentina segment commentary",
-      "source": "earnings release commentary"
+      "name": "Bit-shipment growth",
+      "source": "earnings release"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Mercado Ads revenue mix",
-      "source": "earnings release"
+      "name": "Government subsidies (CHIPS Act) status",
+      "source": "10-K / 10-Q"
     },
     {
-      "name": "Capex pace",
-      "source": "earnings release"
+      "name": "Capital return pace",
+      "source": "10-K / 10-Q"
     }
   ],
   "competitive_watchlist": [
-    "Amazon LatAm",
-    "Sea (Shopee)",
-    "Magazine Luiza",
-    "Casas Bahia",
-    "Nubank (fintech overlap)"
+    "Samsung Semiconductor",
+    "SK Hynix",
+    "Kioxia (NAND)",
+    "Western Digital (NAND)"
   ],
   "thesis_breakers_qualitative": [
-    "FXN GMV growth below 25% for 2 consecutive Qs",
-    "Operating margin compresses below 12%",
-    "Credit NPL spikes structurally",
-    "Latin America macro shock that breaks consumer spending"
+    "HBM allocation share lost to SK Hynix/Samsung",
+    "DRAM downcycle starts",
+    "China memory subsidies displace Western pricing"
   ],
   "break_rules": [
     {

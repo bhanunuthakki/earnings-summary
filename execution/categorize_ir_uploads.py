@@ -55,7 +55,9 @@ from ir_uploads import (
     canonical_path,
     classify_ir_file,
     iter_uncategorized_files,
+    parse_canonical_path,
     sha256_of,
+    ticker_hint_from_path,
 )
 from models.documents import DocType, FetchStatus, SourceType
 
@@ -203,12 +205,85 @@ def _process_one(
     ir_dir: Path,
     rel_root: Path,
 ) -> dict[str, object]:
-    """Classify, move, register one file. Returns a record for the run manifest."""
-    outcome = classify_ir_file(path)
+    """Classify, move, register one file. Returns a record for the run manifest.
+
+    Files already at canonical position (`<TICKER>/<period_end>/<doc_type>__<sha8>.<ext>`)
+    short-circuit the classifier and the move step — only the DB row is written.
+    Files inside a ticker subdir but not at a canonical filename get the parent
+    folder's ticker passed to `classify_ir_file` as a hint.
+    """
+    canonical = parse_canonical_path(path, ir_dir)
+    if canonical is not None:
+        if ticker_filter and canonical.ticker != ticker_filter:
+            log.info({"event": "skipped_filter", "file": path.name, "ticker": canonical.ticker})
+            return {"status": "skipped", "original": path.name, "ticker": canonical.ticker}
+        sha = sha256_of(path)
+        raw_bytes_size = path.stat().st_size
+        log.info({
+            "event": "reindexed",
+            "ticker": canonical.ticker,
+            "doc_type": canonical.doc_type.value,
+            "period_end": canonical.period_end.isoformat(),
+            "path": _safe_rel(path, rel_root),
+        })
+        db_inserted = False
+        if not dry_run and conn is not None:
+            fetched_at = dt.datetime.fromtimestamp(path.stat().st_mtime)
+            db_inserted = _insert_document_row(
+                conn,
+                ticker=canonical.ticker,
+                doc_type=canonical.doc_type,
+                period_end=canonical.period_end,
+                file_path=path,
+                sha256=sha,
+                fetched_at=fetched_at,
+                raw_bytes_size=raw_bytes_size,
+                source_url=f"reindex_subdir:{path.name}",
+                rel_root=rel_root,
+            )
+            legacy = _LEGACY_INDEX_MAP.get(canonical.doc_type)
+            if legacy is not None:
+                year, qlabel = _quarter_label_from_period_end(canonical.period_end)
+                existing_idx = index_manager.has_document(canonical.ticker, year, qlabel, legacy)
+                already_processed = bool(existing_idx and existing_idx.get("processed"))
+                if not already_processed:
+                    index_manager.register_ir_document(
+                        ticker=canonical.ticker,
+                        year=year,
+                        quarter=qlabel,
+                        doc_type=legacy,
+                        ir_url=f"reindex_subdir:{path.name}",
+                        local_path=str(path),
+                        fiscal_label=canonical.period_label,
+                        note="reindexed_by:categorize_ir_uploads",
+                        processed=False,
+                    )
+        return {
+            "status": "reindexed",
+            "original": path.name,
+            "ticker": canonical.ticker,
+            "doc_type": canonical.doc_type.value,
+            "period_end": canonical.period_end.isoformat(),
+            "sha256": sha,
+            "raw_bytes_size": raw_bytes_size,
+            "documents_inserted": db_inserted,
+        }
+
+    hint = ticker_hint_from_path(path, ir_dir)
+    outcome = classify_ir_file(path, ticker_hint=hint)
     if isinstance(outcome, CategorizationFailure):
         log.warning(
             {"event": "rejected", "file": path.name, "reason": outcome.reason}
         )
+        if hint is not None:
+            return {
+                "status": "rejected",
+                "original": path.name,
+                "moved_to": _safe_rel(path, rel_root),
+                "reason": outcome.reason,
+                "ticker_guess": outcome.ticker_guess,
+                "left_in_place": True,
+            }
         moved = _quarantine(path, outcome, dry_run, ir_dir)
         return {
             "status": "rejected",
