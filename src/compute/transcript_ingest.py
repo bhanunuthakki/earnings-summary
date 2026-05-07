@@ -18,6 +18,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -234,6 +235,100 @@ def segment_by_speaker(
     return turns
 
 
+# --------------------------------------------------------------------------
+# Q&A section detection
+# --------------------------------------------------------------------------
+#
+# Earnings transcripts come in two flavors:
+#   (a) full call: prepared remarks + analyst Q&A
+#   (b) prepared-remarks only: IR-published PDF that ends at the hand-off
+#       ("Operator -- we are now ready for questions.") with no Q&A content.
+#
+# Downstream consumers (Say-Do extraction, analyst-question KPI mining,
+# commitments tracker) silently produce worse output on (b). We detect which
+# kind we have via three structural signals against established transcript
+# conventions, then persist the verdict on `transcripts.has_qa_section`.
+#
+# All signals are regex against well-defined boundary markers. No fuzzy
+# substring scoring, no LLM.
+
+# CallStreet/FactSet PDFs print this exact uppercase header at the Q&A boundary.
+_QA_HEADER_RE = re.compile(r"(?:^|\n)\s*QUESTION\s+AND\s+ANSWER\s+SECTION\b")
+
+# CallStreet analyst-question tag, e.g. "<Q - Eric Cha - Goldman Sachs (Asia) LLC>".
+# Real PDFs use em-dash (U+2014), en-dash (U+2013), or ASCII hyphen as the
+# separator after `Q`. The Unicode dashes inside the character class below
+# are deliberate; they are part of what we match against.
+_QA_ANALYST_TAG_RE = re.compile("<Q[\\s–—\\-]")  # noqa: RUF001
+
+# Operator analyst-introduction patterns. Multiple occurrences = multi-question
+# Q&A section. Single occurrence may be the boilerplate "after speaker
+# presentations there will be a question-and-answer session" preamble, so the
+# threshold is >=2 distinct introductions of analyst questions.
+_OPERATOR_ANALYST_INTRO_RE = re.compile(
+    r"(?:next|first)\s+question\s+(?:is\s+from|comes\s+from|will\s+come\s+from)",
+    re.IGNORECASE,
+)
+_MIN_OPERATOR_INTROS_FOR_QA = 2
+
+
+class QASectionStatus(StrEnum):
+    """Tri-state verdict on whether a transcript contains analyst Q&A.
+
+    PRESENT  : structural signals confirm analyst Q&A content is in the doc.
+    ABSENT   : no Q&A signals found; treat as prepared-remarks only.
+    UNKNOWN  : text too short to make a determination (rare; e.g. stub files).
+    """
+
+    PRESENT = "present"
+    ABSENT = "absent"
+    UNKNOWN = "unknown"
+
+
+# Below this length we cannot tell whether the file is a stub or genuinely
+# prepared-only — both look the same. Real prepared-remarks transcripts are
+# typically 15-25k chars, full calls 50-80k chars. 2000 chars is well below
+# any genuine call but enough to flag obviously broken/empty inputs.
+_MIN_TEXT_LEN_FOR_DETECTION = 2000
+
+
+@dataclass(frozen=True)
+class QADetectionResult:
+    """Detailed verdict from `detect_qa_section`. `signals` enumerates which
+    structural patterns fired — useful for diagnostics and for surfacing
+    confidence to the orchestrator.
+    """
+
+    status: QASectionStatus
+    signals: tuple[str, ...]
+
+
+def detect_qa_section(text: str) -> QADetectionResult:
+    """Inspect transcript text for analyst Q&A content.
+
+    Looks for any of three structural signals:
+      1. The CallStreet `QUESTION AND ANSWER SECTION` header.
+      2. CallStreet `<Q – ...>` analyst speaker tags.
+      3. >=2 operator analyst-introduction phrases ("next question is from X").
+
+    Any single signal at the required threshold is sufficient for PRESENT.
+    """
+    if len(text) < _MIN_TEXT_LEN_FOR_DETECTION:
+        return QADetectionResult(status=QASectionStatus.UNKNOWN, signals=())
+
+    signals: list[str] = []
+    if _QA_HEADER_RE.search(text):
+        signals.append("qa_header")
+    if _QA_ANALYST_TAG_RE.search(text):
+        signals.append("analyst_tag")
+    operator_intros = len(_OPERATOR_ANALYST_INTRO_RE.findall(text))
+    if operator_intros >= _MIN_OPERATOR_INTROS_FOR_QA:
+        signals.append(f"operator_intros={operator_intros}")
+
+    status = QASectionStatus.PRESENT if signals else QASectionStatus.ABSENT
+    return QADetectionResult(status=status, signals=tuple(signals))
+
+
 def find_existing_document_id(conn: sqlite3.Connection, sha256: str) -> int | None:
     """Idempotency: return documents.id if a row already exists with this sha256."""
     cur = conn.execute("SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,))
@@ -304,15 +399,30 @@ def insert_transcript(
     ticker: str,
     fiscal_period_type: FiscalPeriodType,
     period_end: datetime,
+    has_qa_section: bool | None = None,
 ) -> int:
-    """Insert one transcripts row; returns transcripts.id."""
+    """Insert one transcripts row; returns transcripts.id.
+
+    `has_qa_section` is the tri-state Q&A verdict from `detect_qa_section`
+    flattened to bool|None: PRESENT->True, ABSENT->False, UNKNOWN->None.
+    """
     cur = conn.execute(
         "INSERT INTO transcripts "
-        "(document_id, ticker, call_date, fiscal_period_type, period_end, source_url) "
-        "VALUES (?, ?, NULL, ?, ?, NULL)",
-        (document_id, ticker, fiscal_period_type.value, period_end),
+        "(document_id, ticker, call_date, fiscal_period_type, period_end, "
+        " source_url, has_qa_section) "
+        "VALUES (?, ?, NULL, ?, ?, NULL, ?)",
+        (document_id, ticker, fiscal_period_type.value, period_end, has_qa_section),
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def qa_status_to_db_value(status: QASectionStatus) -> bool | None:
+    """Flatten the tri-state enum to the bool|None storage representation."""
+    if status is QASectionStatus.PRESENT:
+        return True
+    if status is QASectionStatus.ABSENT:
+        return False
+    return None
 
 
 def insert_segments(
@@ -341,6 +451,8 @@ class IngestResult:
     transcript_id: int | None
     segment_count: int
     skipped_existing: bool
+    qa_status: QASectionStatus = QASectionStatus.UNKNOWN
+    qa_signals: tuple[str, ...] = ()
 
 
 def ingest_one(
@@ -375,12 +487,14 @@ def ingest_one(
             )
         text = read_transcript_text(file_path)
         turns = segment_by_speaker(text, known_speakers=known_speakers_for(parsed.ticker))
+        qa = detect_qa_section(text)
         transcript_id = insert_transcript(
             conn,
             document_id=existing,
             ticker=parsed.ticker,
             fiscal_period_type=period.fiscal_period_type,
             period_end=period.period_end,
+            has_qa_section=qa_status_to_db_value(qa.status),
         )
         segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
         conn.commit()
@@ -392,10 +506,13 @@ def ingest_one(
             transcript_id=transcript_id,
             segment_count=segment_count,
             skipped_existing=False,
+            qa_status=qa.status,
+            qa_signals=qa.signals,
         )
 
     text = read_transcript_text(file_path)
     turns = segment_by_speaker(text, known_speakers=known_speakers_for(parsed.ticker))
+    qa = detect_qa_section(text)
 
     document_id = insert_document(
         conn,
@@ -411,6 +528,7 @@ def ingest_one(
         ticker=parsed.ticker,
         fiscal_period_type=period.fiscal_period_type,
         period_end=period.period_end,
+        has_qa_section=qa_status_to_db_value(qa.status),
     )
     segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
     conn.commit()
@@ -422,6 +540,8 @@ def ingest_one(
         transcript_id=transcript_id,
         segment_count=segment_count,
         skipped_existing=False,
+        qa_status=qa.status,
+        qa_signals=qa.signals,
     )
 
 
@@ -455,6 +575,7 @@ def ingest_existing_ir_transcript(
         )
     text = read_transcript_text(file_path)
     turns = segment_by_speaker(text, known_speakers=known_speakers_for(ticker))
+    qa = detect_qa_section(text)
     fiscal_period_type = _infer_fiscal_period_type(period_end)
     transcript_id = insert_transcript(
         conn,
@@ -462,6 +583,7 @@ def ingest_existing_ir_transcript(
         ticker=ticker,
         fiscal_period_type=fiscal_period_type,
         period_end=period_end,
+        has_qa_section=qa_status_to_db_value(qa.status),
     )
     segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
     conn.commit()
@@ -473,6 +595,8 @@ def ingest_existing_ir_transcript(
         transcript_id=transcript_id,
         segment_count=segment_count,
         skipped_existing=False,
+        qa_status=qa.status,
+        qa_signals=qa.signals,
     )
 
 

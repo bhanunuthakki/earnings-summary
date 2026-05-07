@@ -143,6 +143,8 @@ def _backfill_existing_ir_transcripts(
                     "transcript_id": result.transcript_id,
                     "segments": result.segment_count,
                     "file": rel_path,
+                    "qa_status": result.qa_status.value,
+                    "qa_signals": list(result.qa_signals),
                 }
             )
     return (ingested, skipped_existing, failed)
@@ -245,6 +247,8 @@ def main() -> int:
                         "transcript_id": result.transcript_id,
                         "segments": result.segment_count,
                         "file": str(path.relative_to(PROJECT_ROOT)),
+                        "qa_status": result.qa_status.value,
+                        "qa_signals": list(result.qa_signals),
                     }
                 )
 
@@ -267,6 +271,17 @@ def main() -> int:
             ),
         )
 
+        missing_qa = [
+            f"{d['ticker']} {d['period_end']}"
+            for d in (*ingested, *ir_ingested)
+            if d.get("qa_status") == "absent"
+        ]
+        for label in missing_qa:
+            sys.stderr.write(
+                f"WARN missing_qa: {label} — prepared remarks only; "
+                f"re-fetch a full-call source to enable Say-Do/commitments mining.\n"
+            )
+
         print(
             json.dumps(
                 {
@@ -276,6 +291,7 @@ def main() -> int:
                     "ingested": len(ingested),
                     "skipped_existing": skipped_existing,
                     "failed": failed,
+                    "missing_qa": missing_qa,
                     "out_of_scope_tickers": plan["out_of_scope"],
                     "details": ingested,
                     "ir_transcript_backfill": {

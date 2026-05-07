@@ -76,7 +76,25 @@ Entries with `url: null` are skipped with the `gap_reason` printed — they are 
 | Artifact | Location |
 |---|---|
 | Raw Transcript Text | `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt` |
-| Index Update | `.tmp/transcript_index.json` |
+| Index Update | `.tmp/transcript_index.json` (includes `has_qa: true\|false\|null`) |
+
+## Q&A Section Detection
+
+Every transcribed file is inspected for analyst Q&A content immediately after Whisper finishes. Detection is structural — three regex signals against established transcript conventions:
+
+1. CallStreet/FactSet `QUESTION AND ANSWER SECTION` header.
+2. CallStreet `<Q – ...>` analyst-question speaker tag.
+3. ≥2 operator analyst-introduction phrases (`next question is from X`, `first question comes from Y`).
+
+Outcomes:
+
+| `has_qa` | Meaning | What to do |
+|---|---|---|
+| `true` | Q&A present | Proceed normally. |
+| `false` | Prepared remarks only | Fetcher prints `WARN missing_qa: ...` to stderr and the batch summary lists the affected (ticker, quarter). Either re-pull from a longer YouTube source, fall back to `synthesize_quarterly_update.py`, or ask the user to drop a full-call PDF into `transcripts/raw/`. |
+| `null` | Text too short to determine (<2 KB) | Treat as broken file; investigate. |
+
+The same verdict is also persisted on `transcripts.has_qa_section` during ingest (see `directives/process_earnings_transcripts.md` and migration `0019_transcripts_has_qa_section`), so downstream extractors (Say-Do, commitments) can filter to `has_qa_section = 1` rows when analyst-question content is required.
 
 ## Edge Cases & Known Constraints
 
