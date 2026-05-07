@@ -128,42 +128,73 @@ def _valuation_snapshot(
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT valuation_date, wacc, terminal_growth, npv_per_share, segment_name
+        SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
+               shares_outstanding, breakdown_json
         FROM dcf_runs
         WHERE ticker = ?
-        ORDER BY valuation_date DESC, id DESC
+        LIMIT 1
         """,
         (ticker.upper(),),
     )
-    rows = cursor.fetchall()
+    row = cursor.fetchone()
     conn.close()
-    if not rows:
+    if row is None:
         return ValuationSnapshot(current_price=current_price, model_link=model_link)
 
-    latest_date = rows[0]["valuation_date"]
-    same_date = [r for r in rows if r["valuation_date"] == latest_date]
-    consolidated = next((r for r in same_date if r["segment_name"] is None), None)
-    segment_rows = [r for r in same_date if r["segment_name"] is not None]
-    sum_of_segments = (
-        sum(r["npv_per_share"] for r in segment_rows if r["npv_per_share"] is not None)
-        if segment_rows
-        else None
+    cons_npv_per_share = (
+        float(row["npv_per_share"]) if row["npv_per_share"] is not None else None
     )
-    cons_npv = consolidated["npv_per_share"] if consolidated else None
+    sum_of_segments = _sum_of_segments_npv_per_share(
+        row["breakdown_json"], row["shares_outstanding"]
+    )
     upside = None
-    if cons_npv is not None and current_price not in (None, 0):
+    if cons_npv_per_share is not None and current_price not in (None, 0):
         assert current_price is not None
-        upside = cons_npv / current_price - 1.0
+        upside = cons_npv_per_share / current_price - 1.0
     return ValuationSnapshot(
-        consolidated_npv_per_share=cons_npv,
+        consolidated_npv_per_share=cons_npv_per_share,
         sum_of_segments_npv_per_share=sum_of_segments,
         current_price=current_price,
         implied_upside_pct=upside,
-        wacc=(consolidated or rows[0])["wacc"],
-        terminal_growth=(consolidated or rows[0])["terminal_growth"],
-        valuation_date=latest_date,
+        wacc=row["wacc"],
+        terminal_growth=row["terminal_growth"],
+        valuation_date=row["valuation_date"],
         model_link=model_link,
     )
+
+
+def _sum_of_segments_npv_per_share(
+    breakdown_json: str | None, shares_outstanding: object
+) -> float | None:
+    """Sum the NPVs of components flagged `segment` (excludes overhead) and per-share scale."""
+    if breakdown_json is None:
+        return None
+    try:
+        components = json.loads(breakdown_json)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(components, list):
+        return None
+    seg_npv_total = 0.0
+    found_segment = False
+    for c in components:
+        if not isinstance(c, dict):
+            continue
+        if c.get("component_type") != "segment":
+            continue
+        npv = c.get("npv")
+        if isinstance(npv, (int, float)):
+            seg_npv_total += float(npv)
+            found_segment = True
+    if not found_segment:
+        return None
+    try:
+        shares = float(shares_outstanding) if shares_outstanding is not None else None
+    except (TypeError, ValueError):
+        shares = None
+    if not shares or shares <= 0:
+        return None
+    return seg_npv_total / shares
 
 
 def _verdict(ticker: str, repo_root: Path) -> Literal["intact", "watch", "broken", "pending"]:
