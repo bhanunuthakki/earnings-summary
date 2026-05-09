@@ -272,6 +272,10 @@ def main() -> None:
         "--ticker", help="Restrict the run to one ticker (debug / manual reruns).",
     )
     parser.add_argument(
+        "--include-watchlist", action="store_true",
+        help="Include watchlist tickers in addition to portfolio (default: portfolio only).",
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Print what would be done without calling any fetcher.",
     )
@@ -290,7 +294,11 @@ def main() -> None:
             parser.error(f"--ticker {args.ticker} not in portfolio")
         portfolio = [entry]
     else:
-        portfolio = get_portfolio()
+        portfolio = get_portfolio(include_watchlist=args.include_watchlist)
+    print(
+        f"[scope] {len(portfolio)} ticker(s): "
+        f"{', '.join(e.ticker for e in portfolio)}"
+    )
 
     ffmpeg_location = _resolve_ffmpeg_location(None)
 

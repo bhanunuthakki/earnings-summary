@@ -36,10 +36,21 @@ HTTP_TIMEOUT = (10, 30)
 # protocol cue.
 QA_BOUNDARY_RE = re.compile(
     r"(?:"
-    r"first\s+question\s+comes\s+from|"
-    r"first\s+question\s+is\s+from|"
-    r"we['’]?ll\s+(?:now\s+)?(?:open|begin)\s+(?:the\s+)?(?:line|floor)?\s*(?:up\s+)?for\s+question|"
-    r"(?:begin|start)\s+the\s+(?:question[-\s]and[-\s]answer|q&a)\s+session|"
+    # "first question {today,now,...0-4 filler words} {comes|coming|come|is|will come} from ..."
+    # Catches:
+    #   first question comes from              (most US large-caps)
+    #   first question is from                 (variant)
+    #   first question today comes from        (LLY, SOFI, LMND)
+    #   first question today is coming from    (LLY)
+    #   first question will come from          (JPM)
+    #   first question coming from the line of (WIX)
+    r"first\s+question(?:\s+\w+){0,4}\s+(?:comes?|come|coming|is|will\s+come)\s+from|"
+    # Operator-cue: open up the call/line/floor for/to questions.
+    r"(?:we['’]?ll|let['’]?s|i['’]?ll)\s+(?:now\s+)?(?:open|begin)\s+(?:the\s+|up\s+)*(?:line|floor|call)?\s*(?:up\s+)?(?:for|to)\s+question|"
+    r"open\s+(?:up\s+)?(?:the\s+)?(?:line|floor|call)?\s*(?:up\s+)?(?:to|for)\s+questions|"
+    # "begin the Q&A" / "start the question-and-answer session"
+    r"(?:begin|start|let['’]?s\s+(?:now\s+)?begin)\s+(?:our\s+|the\s+)?(?:question[-\s]and[-\s]answer|q\s*&\s*a)(?:\s+session)?|"
+    # Hand-off cue: "I'll turn it over to the operator"
     r"i['’]?ll\s+(?:now\s+)?turn\s+(?:it|the\s+call)\s+over\s+to\s+the\s+operator"
     r")",
     re.IGNORECASE,

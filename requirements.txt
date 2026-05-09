@@ -21,3 +21,4 @@ yt-dlp
 faster-whisper
 pydantic
 beautifulsoup4
+markdown

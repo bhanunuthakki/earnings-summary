@@ -17,9 +17,11 @@ On a monthly schedule, walk the portfolio, detect any new quarterly earnings rel
 
 | Input | Where |
 |---|---|
-| Portfolio | `src/portfolio.get_portfolio()` — DB rows from `tracked_companies`, falling back to a hardcoded baseline of 11 names |
+| Portfolio | `src/portfolio.get_portfolio()` — DB rows from `tracked_companies`, falling back to a hardcoded baseline of 11 portfolio + 16 watchlist names |
+| Watchlist toggle | `--include-watchlist` (off by default — cron only watches portfolio; backfills usually pass it) |
 | FMP API key | `.env` → `FMP_API_KEY` |
-| Date window | `--days <N>` (default 45 — covers a monthly cron with 2-week safety overlap) |
+| Date window | `--days <N>` (default 45 — covers a monthly cron with 2-week safety overlap; pass a wider value like `--days 800` for historical backfills) |
+| History per ticker | `--limit-quarters <N>` (default 4 — bump to 8-12 for backfill) |
 | Audio fallback | `--with-audio-fallback` flag (off by default) |
 
 ## Pipeline (per cron run)
@@ -68,7 +70,22 @@ If a fire is missed (machine off): `StartWhenAvailable=true` + `RestartOnFailure
 
 - **NVO foreign-filer lag**: Novo Nordisk announces under Danish stock-exchange rules and files a 6-K to the SEC. FMP's `filingDate` may lag the announcement by 1-3 days. The augmentation pull from `/stable/earnings` catches the announcement date so the `--days` window doesn't miss the report.
 - **Most-recent-quarter-not-yet-indexed**: If the cron fires within 12-24 hours of a call, aggregators may not have indexed it yet. Outcome: `action="miss"` in the run report. Next monthly fire will catch it.
-- **FMP free-tier rate**: ~22 calls per run (2 endpoints × 11 tickers). Comfortably within the daily limit.
+- **FMP free-tier rate**: ~22 calls per portfolio-only run, ~54 calls per portfolio+watchlist run. Comfortably within the daily limit either way.
+
+## One-off backfill recipe
+
+Pull the historical corpus for everything we track in a single shot:
+
+```cmd
+python execution\check_quarterly_releases.py ^
+  --include-watchlist --days 800 --limit-quarters 8
+```
+
+This walks 8 quarters per ticker across the 27-name combined list, skips
+any already-`qa=ok` entries, and lands the rest via the aggregator chain.
+Misses are written to the run report under `action=miss` for human review;
+typical reasons are foreign-filer non-coverage on roic.ai (e.g. ASML's most
+recent quarters can lag) and small caps without third-party transcripts.
 - **Idempotency**: each step is idempotent. Re-running with the same window is safe — already-`qa=ok` entries are skipped; failed-QA transcripts keep their cached audio for human re-attempt.
 - **Portfolio drift**: when you add/remove a ticker via the front-end, the DB-backed `tracked_companies` updates and the next cron picks it up automatically. The hardcoded `_DEFAULT_PORTFOLIO` in `src/portfolio.py` only fires on a fresh clone with empty DB.
 

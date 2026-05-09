@@ -221,6 +221,64 @@ def _call_claude(
         return _try_gemini_fallback(prompt, claude_error)
 
 
+# Web-search-enabled call: same subprocess as _call_claude but with the
+# Claude CLI's --allowedTools flag turned on so the model can run WebSearch
+# / WebFetch as part of producing its answer. Used by the memo generator
+# for the "Recent Developments" section so memos cite real news URLs
+# instead of leaning on a stale FMP news pre-pull.
+CLAUDE_WEB_TOOLS = "WebSearch WebFetch"
+CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
+
+
+def call_llm_with_web(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
+) -> str:
+    """LLM call with Claude WebSearch + WebFetch tools enabled.
+
+    Setup invariants are the same as `_call_claude` (subscription billing
+    via the CLI, UTF-8, stdin prompt). On Claude failure, falls through to
+    plain `_call_claude` (which has its own Gemini fallback) so a memo is
+    always produced even when web tools are unavailable.
+
+    Use for memo generation, fact-finding on recent news, anything where
+    the upstream context is stale and Claude needs to look something up.
+    """
+    _verify_setup_once()
+    assert _claude_cli_path is not None
+    log.info({"event": "llm_web_call_start", "model": model, "prompt_chars": len(prompt)})
+    cmd = [
+        _claude_cli_path, "-p", "--model", model,
+        "--allowedTools", *CLAUDE_WEB_TOOLS.split(),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+            timeout=timeout_seconds,
+        )
+        text = result.stdout.strip()
+        if not text:
+            raise RuntimeError(
+                f"claude -p with web tools returned empty stdout. stderr: {result.stderr.strip()[:200]}"
+            )
+        log.info({"event": "llm_web_call_done", "response_chars": len(text)})
+        return text
+    except (subprocess.SubprocessError, OSError, RuntimeError) as web_err:
+        log.warning({
+            "event": "llm_web_call_fallback_to_plain",
+            "error": f"{type(web_err).__name__}: {web_err}",
+        })
+        # Fall through to non-web path so the caller still gets output.
+        return _call_claude(prompt, model=model, timeout_seconds=timeout_seconds)
+
+
 # ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
@@ -435,6 +493,32 @@ _HARD_RULES_BLOCK = """**Hard rules — non-negotiable:**
 7. **Prior-period guidance reference for Say-Do:** when the corpus contains the immediately-prior quarter, treat its Outlook/Guidance section as the source of "guided X" values; treat the latest-quarter's printed actuals as "actual Y." When the corpus contains only the latest quarter, Say-Do can only be evaluated if THIS quarter's docs reference prior guidance ranges. If neither condition holds, Say-Do is un-evaluable — state this explicitly and cap Say-Do conviction at Low. Do NOT fall back to trusting management's own self-attestation phrases like "we exceeded guidance across the board."
 """
 
+_PRINCIPLES_BLOCK = """**Investment principles — frame all verdicts and recommendations through these:**
+
+1. **One-page thesis test.** A position only earns capital if there's a coherent paragraph
+   answering: (a) what the company does, (b) why the market is mispricing it, (c) what
+   specifically catalyzes the re-rating, (d) when. If the report can't generate that
+   paragraph from the evidence, the verdict skews toward CUT, not HOLD.
+2. **Killer variables.** Identify the 2-3 fundamental drivers that actually move the
+   outcome for THIS business (not generic "macro / rates / sentiment"). Frame KPI
+   verdicts and Open Questions around those, not the long tail.
+3. **Invalidation triggers — fundamental, not price.** Break conditions are about
+   business reality (revenue growth thresholds, competitor launches, regulatory rulings),
+   never about stock price drawdowns. A 20% price decline is not, by itself, a sell signal.
+4. **Sizing by conviction.** Recommendations should be tiered:
+     - High conviction (clean thesis + low ambiguity + observable catalysts): up to ~8-10%
+     - Standard (thesis intact, some ambiguity): ~3-5%
+     - Speculative (asymmetric option, broken thesis with optionality, early stage): ~1-2%
+   The Sizing call must reference Net Conviction from the Adversarial Loops, not feel.
+5. **Time horizon.** A fundamental thesis is years, not months. Pre-commit to N quarters
+   of holding unless an invalidation trigger fires. State the horizon explicitly.
+6. **Sell discipline.** Sells are justified by exactly one of: (a) thesis fully realized
+   (target valuation hit / re-rating happened), (b) a specific named invalidation trigger
+   fired, (c) explicit IRR comparison shows a better opportunity. NOT: bad week, boredom,
+   tax-loss harvesting at the cost of the thesis. Reflect this in the verdict framing.
+"""
+
+
 _ADVERSARIAL_LOOP_FORMAT_BLOCK = """**Adversarial Loop format (use these exact field names):**
 - **Primary Thesis:** the asserted reading + strongest supporting evidence (with source tags)
 - **Strongest Counter:** the most credible name-specific challenge — alternative read, contradicting datapoint, mix/composition effect, management-credibility caveat. Reject generic macro hand-waving.
@@ -543,6 +627,7 @@ def _build_pass_a_prompt(
 {staleness_directive}
 
 {_HARD_RULES_BLOCK}
+{_PRINCIPLES_BLOCK}
 **Output Format (Strict Markdown — start directly at `## Schema Hygiene`, no preamble, no title):**
 
 ## Schema Hygiene (REQUIRED)
@@ -610,6 +695,7 @@ def _build_pass_b_prompt(
 {staleness_directive}
 
 {_HARD_RULES_BLOCK}
+{_PRINCIPLES_BLOCK}
 {_ADVERSARIAL_LOOP_FORMAT_BLOCK}
 **Output Format (Strict Markdown — start directly at `## Thesis Status:`, no preamble, no title):**
 
@@ -647,6 +733,36 @@ For each tier_1_kpi within ~15% of its break_condition (read distances from the 
 
 ## Open Questions for Next Quarter
 [2–3 specific things to listen for / look for in next earnings — each tied to a Resolution flip-observable named above.]
+
+## Portfolio & Thesis Fit
+This section operationalizes the investment principles above into a position-management view. Be specific; refuse to write generic content.
+
+**One-paragraph thesis** *(the discipline test — if you can't articulate this in one paragraph drawing only on this report's evidence, the position is mis-defined and the recommendation defaults to CUT/PASS):*
+[≤120 words covering: what the company does, why the market is mispricing it (or has correctly priced it — say so), what specifically catalyzes a re-rating (or what would close the gap), expected horizon. No filler.]
+
+**Killer variables (2–3, business-specific):**
+- [variable 1 — the actual driver, not "macro"; e.g. "GLP-1 supply ramp + insurance coverage trajectory" not "drug demand"]
+- [variable 2 — ditto]
+- [variable 3 if needed]
+
+**Invalidation triggers (fundamental, not price):**
+- [trigger 1 — specific quarter-level observable, e.g. "FoA revenue growth <10% CC for 2 consecutive quarters"]
+- [trigger 2]
+- [trigger 3 if relevant — competitive event, regulator action, etc.]
+
+**Sizing recommendation:**
+- **Tier:** High conviction (≤8–10%) / Standard (3–5%) / Speculative (1–2%) / Avoid
+- **Rationale:** [Tie this to Net Conviction from the three Adversarial Loops above. High conviction requires Net Conviction = High on Thesis Status AND no fired triggers. Speculative is the right call when Net Conviction = Low but the asymmetry is favorable; specify the asymmetry.]
+
+**Time horizon & holding commitment:**
+- **Pre-commit horizon:** [N quarters minimum, e.g. 8 quarters / 2 years]
+- **Re-evaluation cadence:** every earnings + on any invalidation-trigger fire
+- **What would shorten this:** [only the named invalidation triggers; explicitly NOT price-action]
+
+**Sell trigger preview (for use later):**
+- **Thesis-realized exit:** [specific scenario — target valuation, named re-rating event]
+- **Thesis-broken exit:** [pointer to invalidation triggers above]
+- **Better-opportunity exit:** [requires explicit IRR comparison vs an alternative; not "this looks cheaper"]
 
 ## Analyst Notes
 [Any asymmetries, positioning thoughts, or thesis evolution observations. Mark any that rest on inference (vs. cited evidence) explicitly. Also note here any Pass A figure you believe is wrong, per the anchoring rule above.]
