@@ -34,7 +34,9 @@ import db
 from portfolio import PortfolioEntry, get_portfolio
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+# Aligns with the pre-existing `output/research/<TICKER>/<DATE>_report.html`
+# convention already used by other research artefacts in this project.
+OUTPUTS_DIR = PROJECT_ROOT / "output" / "research"
 MEMOS_SRC = PROJECT_ROOT / "transcripts" / "memos"
 MASTER_SRC = PROJECT_ROOT / "transcripts" / "master"
 THESIS_DIR = PROJECT_ROOT / "micro_thesis"
@@ -101,6 +103,15 @@ def _copy_if_changed(src: Path, dest: Path) -> Path:
     return dest
 
 
+def _date_from_name(p: Path) -> str:
+    """Extract YYYY-MM-DD from a source filename (memo or tracker), falling
+    back to the file's mtime so the dated copy in output/ always has a date."""
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", p.name)
+    if m:
+        return m.group(1)
+    return _dt.date.fromtimestamp(p.stat().st_mtime).isoformat()
+
+
 def consolidate_ticker(entry: PortfolioEntry) -> TickerArtifacts:
     ticker = entry.ticker
     folder = OUTPUTS_DIR / ticker
@@ -114,12 +125,18 @@ def consolidate_ticker(entry: PortfolioEntry) -> TickerArtifacts:
     tracker_dest: Path | None = None
     master_dest: Path | None = None
 
+    # Output filenames follow the existing `<DATE>_<kind>.<ext>` convention
+    # (matches the pre-existing `<DATE>_report.html` files already in
+    # output/research/<TICKER>/). Master PDF gets a stable name since
+    # we only ever keep one canonical version.
     if memo_src is not None:
-        memo_dest = _copy_if_changed(memo_src, folder / memo_src.name)
+        dest_name = f"{_date_from_name(memo_src)}_memo.html"
+        memo_dest = _copy_if_changed(memo_src, folder / dest_name)
         db.register_output_artifact(ticker, KIND_MEMO, str(memo_dest.relative_to(PROJECT_ROOT)))
 
     if tracker_src is not None:
-        tracker_dest = _copy_if_changed(tracker_src, folder / tracker_src.name)
+        dest_name = f"{_date_from_name(tracker_src)}_tracker.md"
+        tracker_dest = _copy_if_changed(tracker_src, folder / dest_name)
         db.register_output_artifact(ticker, KIND_TRACKER, str(tracker_dest.relative_to(PROJECT_ROOT)))
 
     if master_src is not None:
@@ -161,7 +178,7 @@ _TICKER_INDEX_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <p><a href="../index.html">&larr; portfolio dashboard</a></p>
+  <p><a href="../index.html">&larr; research dashboard</a></p>
   <h1>{ticker} <span class="pill">{list_type}</span></h1>
   <p class="meta">{name} &mdash; outputs refreshed {refreshed_at}</p>
   <table>
@@ -230,8 +247,8 @@ _PORTFOLIO_INDEX_HTML = """<!doctype html>
   </style>
 </head>
 <body>
-  <h1>Earnings-summary outputs dashboard</h1>
-  <p class="meta">Refreshed {refreshed_at} &middot; {n_portfolio} portfolio names &middot; {n_watchlist} watchlist names</p>
+  <h1>Earnings-summary research dashboard</h1>
+  <p class="meta">Refreshed {refreshed_at} &middot; {n_portfolio} portfolio names &middot; {n_watchlist} watchlist names &middot; <code>output/research/</code></p>
 
   <h2>Portfolio</h2>
   {portfolio_table}

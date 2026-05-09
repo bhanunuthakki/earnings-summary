@@ -46,7 +46,7 @@ def main() -> None:
     print(f"  memos:    {have_memo}/{len(arts)} present")
     print(f"  trackers: {have_tracker}/{len(arts)} present")
     print(f"  master pdfs: {have_master}/{len(arts)} present")
-    print(f"  dashboard: outputs/index.html")
+    print(f"  dashboard: {(OUTPUTS_DIR / 'index.html').relative_to(OUTPUTS_DIR.parent.parent).as_posix()}")
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ Single-command, end-to-end refresh of the portfolio's analytical state on a mont
 
 ```
 PULL    → PROCESS    → TRACK    → MEMO    → CONSOLIDATE
-(aggregators) (LLM summaries  (LLM thesis  (LLM memos    (outputs/<TICKER>/
+(aggregators) (LLM summaries  (LLM thesis  (LLM memos    (output/research/<TICKER>/
               + SayDo + PDFs)  trackers)    + Claude       + index.html
                                             web research)  + DB register)
 ```
@@ -68,14 +68,14 @@ Graceful degradation: a memo is produced even when only the transcript summaries
 
 `python execution/consolidate_outputs.py`
 
-Copy the latest of each per-ticker artifact (memo HTML, thesis tracker MD, master PDF) into a unified `outputs/<TICKER>/` folder, write a per-ticker `outputs/<TICKER>/index.html` landing page, and a top-level `outputs/index.html` portfolio dashboard. Each artifact path is registered in the SQLite `output_artifacts` table with `is_latest=1` so any downstream consumer can find them via:
+Copy the latest of each per-ticker artifact (memo HTML, thesis tracker MD, master PDF) into a unified `output/research/<TICKER>/` folder, write a per-ticker `output/research/<TICKER>/index.html` landing page, and a top-level `output/research/index.html` portfolio dashboard. Each artifact path is registered in the SQLite `output_artifacts` table with `is_latest=1` so any downstream consumer can find them via:
 
 ```sql
 SELECT path FROM output_artifacts
 WHERE ticker = ? AND kind = 'memo' AND is_latest = 1;
 ```
 
-Idempotent — re-running just refreshes copies and re-registers latest paths. Older versions in `outputs/<TICKER>/` are NOT pruned (manual housekeeping if disk pressure becomes an issue).
+Idempotent — re-running just refreshes copies and re-registers latest paths. Older versions in `output/research/<TICKER>/` are NOT pruned (manual housekeeping if disk pressure becomes an issue).
 
 ## CLI
 
@@ -100,8 +100,8 @@ python execution/autopilot.py --memo-news-days 30          # widen news window
 | Master PDFs | `transcripts/master/<TICKER>_Master_Transcripts.pdf` | One per ticker |
 | Thesis trackers | `micro_thesis/thesis-tracker-<TICKER>-<DATE>.md` | One per holding with JSON |
 | Memos | `transcripts/memos/<TICKER>_memo_<DATE>.html` | One per portfolio name (Claude WebSearch-sourced) |
-| Consolidated outputs | `outputs/<TICKER>/{memo,tracker,master_transcripts.pdf,index.html}` | Per-ticker landing folder; copies of latest of each kind |
-| Portfolio dashboard | `outputs/index.html` | Top-level table linking every ticker's folder |
+| Consolidated outputs | `output/research/<TICKER>/{<DATE>_memo.html, <DATE>_tracker.md, master_transcripts.pdf, index.html}` | Per-ticker landing folder. Naming follows the pre-existing `<DATE>_report.html` convention so memos sit alongside any other dated research artefacts. |
+| Research dashboard | `output/research/index.html` | Top-level table linking every ticker's folder |
 | Output index (DB) | SQLite `output_artifacts` table | `(ticker, kind, path, is_latest)` rows for downstream queries |
 
 ## Schedule
