@@ -86,15 +86,24 @@ _SOURCE_GROUPS: dict[str, tuple[_SourceSpec, ...]] = {
     "ir": (_IR_PRESS_RELEASE_SOURCE, _IR_PRESENTATION_SOURCE),
 }
 
-# How filename Q + calendar year map to a period_end. Most tickers use calendar
-# fiscal-year mapping; tickers with off-calendar fiscal years (RBRK, VEEV, NVO)
-# would need an override map — out of scope for this MVP, those will produce
-# slightly off period_ends until refined.
-_QUARTER_PERIOD_END = {
+# How filename Q + calendar year map to a period_end. Most tickers use the
+# calendar fiscal-year mapping; the per-ticker override map handles companies
+# whose fiscal year ends on a non-December month (RBRK and VEEV both use
+# January FYE). NVO publishes H1 / 9M instead of Q2 / Q3, but its period
+# end-of-month dates still align to calendar quarters, so no override needed.
+_QUARTER_PERIOD_END: dict[int, tuple[int, int]] = {
     1: (3, 31),
     2: (6, 30),
     3: (9, 30),
     4: (12, 31),
+}
+
+# (month, day) per fiscal quarter for tickers with non-calendar fiscal years.
+# When the month is in Jan/Feb, period_end falls into calendar `year + 1`
+# (e.g. RBRK_Q4_2026 = FY26 Q4 ending 2027-01-31).
+_TICKER_QUARTER_PERIOD_END: dict[str, dict[int, tuple[int, int]]] = {
+    "RBRK": {1: (4, 30), 2: (7, 31), 3: (10, 31), 4: (1, 31)},
+    "VEEV": {1: (4, 30), 2: (7, 31), 3: (10, 31), 4: (1, 31)},
 }
 
 
@@ -147,7 +156,7 @@ def extract_for_ticker(
         return _close_log(log, t0)
 
     for quarter, year, source_path, spec in sources:
-        period_end = _period_end(quarter, year)
+        period_end = _period_end(ticker, quarter, year)
         period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
 
@@ -228,7 +237,19 @@ def _tier_1_names(holdings: dict[str, object]) -> list[str]:
     return out
 
 
-def _period_end(quarter: int, year: int) -> datetime:
+def _period_end(ticker: str, quarter: int, year: int) -> datetime:
+    """Map a (filename year, fiscal quarter) pair to the actual period_end date.
+
+    Most tickers report on the calendar fiscal year (Q4 FY{year} ends
+    {year}-12-31). Tickers in `_TICKER_QUARTER_PERIOD_END` use a non-calendar
+    fiscal year — for those, the override determines (month, day) and Q4 of a
+    January-FYE company rolls into calendar `year + 1`.
+    """
+    overrides = _TICKER_QUARTER_PERIOD_END.get(ticker.upper())
+    if overrides and quarter in overrides:
+        month, day = overrides[quarter]
+        period_year = year + 1 if month <= 2 else year
+        return datetime(period_year, month, day)
     month, day = _QUARTER_PERIOD_END[quarter]
     return datetime(year, month, day)
 
