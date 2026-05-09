@@ -32,9 +32,10 @@ class PortfolioEntry:
     list_type: str               # "portfolio" | "watchlist"
 
 
-# Hardcoded fallback. Mirrored from directives/fetch_ir_documents.md and the
-# data_pipeline_dag.md fiscal-calendar table.
+# Hardcoded fallback. Mirrored from directives/fetch_ir_documents.md +
+# fetch_fmp_statements.DEFAULT_TICKERS + the data_pipeline_dag fiscal table.
 _DEFAULT_PORTFOLIO: tuple[PortfolioEntry, ...] = (
+    # --- portfolio (11 names) -------------------------------------------------
     PortfolioEntry("AMZN", "Amazon",            12, "portfolio"),
     PortfolioEntry("GOOG", "Alphabet",          12, "portfolio"),
     PortfolioEntry("META", "Meta Platforms",    12, "portfolio"),
@@ -46,6 +47,24 @@ _DEFAULT_PORTFOLIO: tuple[PortfolioEntry, ...] = (
     PortfolioEntry("RBRK", "Rubrik",             1, "portfolio"),  # FY ends Jan 31
     PortfolioEntry("VEEV", "Veeva Systems",      1, "portfolio"),  # FY ends Jan 31
     PortfolioEntry("BN",   "Brookfield Corp",   12, "portfolio"),
+
+    # --- watchlist (16 names, mirrored from fetch_fmp_statements.DEFAULT_TICKERS) ---
+    PortfolioEntry("CNQ",  "Canadian Natural Resources", 12, "watchlist"),
+    PortfolioEntry("WY",   "Weyerhaeuser",                12, "watchlist"),
+    PortfolioEntry("FNV",  "Franco-Nevada",               12, "watchlist"),
+    PortfolioEntry("RIO",  "Rio Tinto",                   12, "watchlist"),
+    PortfolioEntry("VALE", "Vale",                        12, "watchlist"),
+    PortfolioEntry("FCX",  "Freeport-McMoRan",            12, "watchlist"),
+    PortfolioEntry("ASML", "ASML Holding",                12, "watchlist"),
+    PortfolioEntry("AMAT", "Applied Materials",           10, "watchlist"),  # FY ends ~last Sun in Oct
+    PortfolioEntry("TOL",  "Toll Brothers",               10, "watchlist"),  # FY ends Oct 31
+    PortfolioEntry("SOFI", "SoFi Technologies",           12, "watchlist"),
+    PortfolioEntry("HDB",  "HDFC Bank",                    3, "watchlist"),  # FY ends Mar 31 (Indian FY)
+    PortfolioEntry("ABNB", "Airbnb",                      12, "watchlist"),
+    PortfolioEntry("BHP",  "BHP Group",                    6, "watchlist"),  # FY ends Jun 30 (Australian)
+    PortfolioEntry("LLY",  "Eli Lilly",                   12, "watchlist"),
+    PortfolioEntry("LMND", "Lemonade",                    12, "watchlist"),
+    PortfolioEntry("JPM",  "JPMorgan Chase",              12, "watchlist"),
 )
 
 # Per-ticker fiscal-year-end overrides for entries pulled from the DB (the

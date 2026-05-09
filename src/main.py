@@ -260,7 +260,9 @@ def main(target_company=None):
                     summary_text = generate_summary(text)
                     with open(cache_path, 'w', encoding='utf-8') as f:
                         f.write(summary_text)
-                    time.sleep(30) # Rate limit
+                    # Throttling not needed: llm_client._call_claude uses Claude
+                    # CLI subscription primary (no per-call rate limit) and the
+                    # Gemini fallback only fires on Claude failure.
 
                 curr_summary = {'quarter': quarter, 'year': year, 'text': summary_text}
 

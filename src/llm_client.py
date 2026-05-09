@@ -221,6 +221,64 @@ def _call_claude(
         return _try_gemini_fallback(prompt, claude_error)
 
 
+# Web-search-enabled call: same subprocess as _call_claude but with the
+# Claude CLI's --allowedTools flag turned on so the model can run WebSearch
+# / WebFetch as part of producing its answer. Used by the memo generator
+# for the "Recent Developments" section so memos cite real news URLs
+# instead of leaning on a stale FMP news pre-pull.
+CLAUDE_WEB_TOOLS = "WebSearch WebFetch"
+CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
+
+
+def call_llm_with_web(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
+) -> str:
+    """LLM call with Claude WebSearch + WebFetch tools enabled.
+
+    Setup invariants are the same as `_call_claude` (subscription billing
+    via the CLI, UTF-8, stdin prompt). On Claude failure, falls through to
+    plain `_call_claude` (which has its own Gemini fallback) so a memo is
+    always produced even when web tools are unavailable.
+
+    Use for memo generation, fact-finding on recent news, anything where
+    the upstream context is stale and Claude needs to look something up.
+    """
+    _verify_setup_once()
+    assert _claude_cli_path is not None
+    log.info({"event": "llm_web_call_start", "model": model, "prompt_chars": len(prompt)})
+    cmd = [
+        _claude_cli_path, "-p", "--model", model,
+        "--allowedTools", *CLAUDE_WEB_TOOLS.split(),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=True,
+            timeout=timeout_seconds,
+        )
+        text = result.stdout.strip()
+        if not text:
+            raise RuntimeError(
+                f"claude -p with web tools returned empty stdout. stderr: {result.stderr.strip()[:200]}"
+            )
+        log.info({"event": "llm_web_call_done", "response_chars": len(text)})
+        return text
+    except (subprocess.SubprocessError, OSError, RuntimeError) as web_err:
+        log.warning({
+            "event": "llm_web_call_fallback_to_plain",
+            "error": f"{type(web_err).__name__}: {web_err}",
+        })
+        # Fall through to non-web path so the caller still gets output.
+        return _call_claude(prompt, model=model, timeout_seconds=timeout_seconds)
+
+
 # ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
