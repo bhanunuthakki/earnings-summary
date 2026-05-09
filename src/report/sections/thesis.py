@@ -9,11 +9,13 @@ status='unknown' — the holdings JSON remains the contract.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 
 from report.models import (
+    BreakRuleEvaluation,
+    BreakRuleObservation,
     KpiLedgerRow,
     SectionStatus,
     ThesisSection,
@@ -35,6 +37,7 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         holdings = json.load(f)
 
     ledger = _build_ledger(ticker, repo_root, holdings)
+    overall, evaluations, evaluated_at = _load_break_rule_state(ticker, repo_root)
 
     return ThesisSection(
         status=SectionStatus.OK if ledger else SectionStatus.PARTIAL,
@@ -44,6 +47,9 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         competitive_watchlist=list(holdings.get("competitive_watchlist") or []),
         qualitative_breakers=list(holdings.get("thesis_breakers_qualitative") or []),
         kpi_ledger=ledger,
+        overall_breach_status=overall,
+        break_rule_evaluations=evaluations,
+        last_evaluated_at=evaluated_at,
     )
 
 
@@ -90,6 +96,87 @@ def _build_ledger(ticker: str, repo_root: Path, holdings: dict[str, object]) -> 
 def _status_for(k: dict[str, object]) -> Literal["green", "yellow", "red", "unknown"]:
     """Without runtime KPI facts wired up yet, every KPI starts at 'unknown'."""
     return "unknown"
+
+
+_BreachStatusLiteral = Literal["ok", "warn", "breach", "unknown"]
+
+
+def _load_break_rule_state(
+    ticker: str, repo_root: Path
+) -> tuple[_BreachStatusLiteral, list[BreakRuleEvaluation], datetime | None]:
+    """Pull the most recent thesis_evaluations row for `ticker` and parse it.
+
+    Returns ('unknown', [], None) when the evaluator has never run for this
+    ticker — the report still renders, the section just shows the missing-data
+    callout for break-rules.
+    """
+    conn = open_repo_db(repo_root)
+    if conn is None or not has_table(conn, "thesis_evaluations"):
+        if conn is not None:
+            conn.close()
+        return ("unknown", [], None)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT evaluated_at, overall_status, rule_evaluations_json
+        FROM thesis_evaluations
+        WHERE ticker = ?
+        ORDER BY evaluated_at DESC
+        LIMIT 1
+        """,
+        (ticker.upper(),),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if row is None:
+        return ("unknown", [], None)
+    overall = _coerce_status(str(row["overall_status"]))
+    evaluated_at = _parse_datetime(row["evaluated_at"])
+    payload = json.loads(row["rule_evaluations_json"])
+    evaluations = [_parse_evaluation(item) for item in payload]
+    return (overall, evaluations, evaluated_at)
+
+
+def _coerce_status(s: str) -> _BreachStatusLiteral:
+    s = s.lower()
+    if s in ("ok", "warn", "breach"):
+        return s  # type: ignore[return-value]
+    return "unknown"
+
+
+def _parse_datetime(v: object) -> datetime | None:
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, str):
+        try:
+            return datetime.fromisoformat(v)
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_evaluation(raw: dict[str, object]) -> BreakRuleEvaluation:
+    obs_raw = raw.get("observations") or []
+    observations = [
+        BreakRuleObservation(
+            period_end=str(o.get("period_end", ""))[:10],
+            value=float(str(o.get("value", "0"))),
+            unit=str(o.get("unit", "")),
+        )
+        for o in obs_raw
+        if isinstance(o, dict)
+    ]
+    return BreakRuleEvaluation(
+        rule_id=str(raw.get("rule_id", "")),
+        kpi_name=str(raw.get("kpi_name", "")),
+        comparator=str(raw.get("comparator", "")),
+        threshold=float(str(raw.get("threshold", "0"))),
+        consecutive_periods=int(raw.get("consecutive_periods", 1) or 1),
+        status=_coerce_status(str(raw.get("status", "unknown"))),  # type: ignore[arg-type]
+        detail=str(raw.get("detail", "")),
+        narrative=str(raw.get("narrative", "")),
+        observations=observations,
+    )
 
 
 def _kpi_history(ticker: str, repo_root: Path, kpi_name: str) -> list[tuple[str, float | None]]:

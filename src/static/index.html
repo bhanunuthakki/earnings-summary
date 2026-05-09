@@ -894,5 +894,144 @@
         // Initialize on load
         window.onload = initDashboard;
     </script>
+
+    <!-- Chat widget -->
+    <style>
+        #chat-fab {
+            position: fixed; right: 20px; bottom: 20px; z-index: 9999;
+            width: 56px; height: 56px; border-radius: 28px;
+            background: #2563eb; color: #fff; border: none;
+            font-size: 22px; cursor: pointer;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+            display: flex; align-items: center; justify-content: center;
+        }
+        #chat-fab:hover { background: #1d4ed8; }
+        #chat-panel {
+            position: fixed; right: 20px; bottom: 88px; z-index: 9999;
+            width: 420px; max-width: calc(100vw - 40px); height: 560px; max-height: calc(100vh - 120px);
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+            display: none; flex-direction: column; overflow: hidden;
+            font-family: 'Inter', system-ui, sans-serif; color: #111827;
+        }
+        #chat-panel.open { display: flex; }
+        #chat-header { padding: 12px 16px; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; align-items: center; }
+        #chat-header h4 { margin: 0; font-size: 14px; font-weight: 600; }
+        #chat-header .meta { font-size: 11px; color: #6b7280; }
+        #chat-close { background: none; border: none; font-size: 18px; cursor: pointer; color: #6b7280; padding: 0 4px; }
+        #chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; }
+        .chat-msg { font-size: 13px; line-height: 1.5; }
+        .chat-msg.user { align-self: flex-end; max-width: 85%; background: #2563eb; color: #fff; padding: 8px 12px; border-radius: 12px 12px 0 12px; white-space: pre-wrap; }
+        .chat-msg.bot { align-self: flex-start; max-width: 95%; }
+        .chat-msg.bot .body { background: #f3f4f6; padding: 10px 14px; border-radius: 12px 12px 12px 0; white-space: pre-wrap; }
+        .chat-msg.bot .sources { font-size: 10.5px; color: #6b7280; margin-top: 6px; padding-left: 4px; }
+        .chat-msg.bot .meta-line { font-size: 10.5px; color: #9ca3af; margin-top: 4px; padding-left: 4px; }
+        .chat-msg.error .body { background: #fef2f2; color: #b91c1c; }
+        #chat-input-row { border-top: 1px solid #e5e7eb; padding: 10px 12px; display: flex; gap: 8px; align-items: flex-end; }
+        #chat-input { flex: 1; min-height: 36px; max-height: 120px; resize: none; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-family: inherit; font-size: 13px; }
+        #chat-send { background: #2563eb; color: #fff; border: none; padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 500; font-size: 13px; }
+        #chat-send:disabled { background: #93c5fd; cursor: wait; }
+    </style>
+    <button id="chat-fab" type="button" aria-label="Open assistant">💬</button>
+    <div id="chat-panel" role="dialog" aria-label="Research assistant">
+        <div id="chat-header">
+            <div>
+                <h4>Research assistant</h4>
+                <div class="meta">Claude Sonnet 4.6 · context-aware over your DB</div>
+            </div>
+            <button id="chat-close" type="button" aria-label="Close">×</button>
+        </div>
+        <div id="chat-log"></div>
+        <div id="chat-input-row">
+            <textarea id="chat-input" placeholder="Ask about a holding (mention the ticker, e.g. GOOG, NU)…" rows="1"></textarea>
+            <button id="chat-send" type="button">Ask</button>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const fab = document.getElementById('chat-fab');
+            const panel = document.getElementById('chat-panel');
+            const closeBtn = document.getElementById('chat-close');
+            const log = document.getElementById('chat-log');
+            const input = document.getElementById('chat-input');
+            const sendBtn = document.getElementById('chat-send');
+
+            function open() { panel.classList.add('open'); input.focus(); }
+            function close() { panel.classList.remove('open'); }
+
+            fab.addEventListener('click', () => panel.classList.contains('open') ? close() : open());
+            closeBtn.addEventListener('click', close);
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    send();
+                }
+            });
+            sendBtn.addEventListener('click', send);
+
+            function appendUser(text) {
+                const el = document.createElement('div');
+                el.className = 'chat-msg user';
+                el.textContent = text;
+                log.appendChild(el);
+                log.scrollTop = log.scrollHeight;
+            }
+
+            function appendBot(answer, sources, elapsedMs, tickers, isError) {
+                const wrap = document.createElement('div');
+                wrap.className = 'chat-msg bot' + (isError ? ' error' : '');
+                const body = document.createElement('div');
+                body.className = 'body';
+                body.textContent = answer;
+                wrap.appendChild(body);
+                if (tickers && tickers.length) {
+                    const meta = document.createElement('div');
+                    meta.className = 'meta-line';
+                    meta.textContent = `Ticker: ${tickers.join(', ')} · ${elapsedMs}ms`;
+                    wrap.appendChild(meta);
+                }
+                if (sources && sources.length) {
+                    const src = document.createElement('div');
+                    src.className = 'sources';
+                    src.textContent = 'Sources: ' + sources.join(' · ');
+                    wrap.appendChild(src);
+                }
+                log.appendChild(wrap);
+                log.scrollTop = log.scrollHeight;
+            }
+
+            async function send() {
+                const text = input.value.trim();
+                if (!text) return;
+                input.value = '';
+                input.style.height = 'auto';
+                appendUser(text);
+                sendBtn.disabled = true;
+                sendBtn.textContent = '…';
+                try {
+                    // Try to pick up the currently-selected ticker from the dashboard if it exists.
+                    const ticker = (window.currentCompanyTicker || null);
+                    const res = await fetch('/api/ask', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({query: text, ticker: ticker})
+                    });
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        appendBot('Error: ' + errText.slice(0, 300), [], 0, [], true);
+                    } else {
+                        const data = await res.json();
+                        appendBot(data.answer, data.sources, data.elapsed_ms, data.tickers, false);
+                    }
+                } catch (e) {
+                    appendBot('Network error: ' + e.message, [], 0, [], true);
+                } finally {
+                    sendBtn.disabled = false;
+                    sendBtn.textContent = 'Ask';
+                }
+            }
+        })();
+    </script>
 </body>
 </html>

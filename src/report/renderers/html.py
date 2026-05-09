@@ -19,10 +19,12 @@ import html
 import re
 from io import StringIO
 
+from report.renderers.charts import CHART_CSS, line_chart, sparkline
 from report.models import (
     AnnualLineItem,
     AppendixSection,
     BearCaseSection,
+    BreakRuleEvaluation,
     EarningsSection,
     FinancialsSection,
     IrDocsSection,
@@ -49,7 +51,7 @@ def render(spec: ReportSpec) -> str:
     _nav(body)
     _header(body, spec)
     _snapshot(body, spec.snapshot)
-    _thesis(body, spec.thesis)
+    _thesis(body, spec.thesis, spec.ticker)
     _financials(body, spec.financials)
     _segments(body, spec.segments)
     _earnings(body, spec.earnings)
@@ -229,6 +231,20 @@ details summary {
 details summary::-webkit-details-marker { display: none; }
 details summary::before { content: '▸ '; color: var(--muted); }
 details[open] summary::before { content: '▾ '; }
+details.earnings-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; margin: 10px 0; }
+details.earnings-card[open] { background: #fcfcfd; }
+.earnings-title { font-size: 16px; }
+.earnings-digest { font-weight: 400; margin-top: 6px; color: var(--fg); }
+.earnings-digest p { margin: 4px 0; }
+.earnings-full { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.seg-snapshot { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 8px 0 14px; }
+.seg-card { border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; background: #fcfcfd; }
+.seg-card-name { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.seg-card-spark { color: var(--accent); margin: 4px 0 8px; }
+.seg-card-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; color: var(--muted); }
+.seg-card-row strong { color: var(--fg); font-variant-numeric: tabular-nums; }
+details.segment-details { margin-top: 6px; }
+""" + CHART_CSS + """
 .summary-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -448,7 +464,7 @@ def _verdict_class(v: str) -> str:
     return {"intact": "ok", "watch": "partial", "broken": "missing_data"}.get(v, "not_applicable")
 
 
-def _thesis(out: StringIO, s: ThesisSection) -> None:
+def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:
     _section_h2(out, "thesis", 2, "Thesis & tier-1 KPIs", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
@@ -470,8 +486,78 @@ def _thesis(out: StringIO, s: ThesisSection) -> None:
         out.write(
             f'<h3>Competitive watchlist</h3><p>{html.escape(", ".join(s.competitive_watchlist))}</p>\n'
         )
+    _break_rules_block(out, s, ticker)
     if s.kpi_ledger:
         _kpi_ledger(out, s.kpi_ledger)
+
+
+_BREACH_STATUS_CLASS: dict[str, str] = {
+    "ok": "ok",
+    "warn": "partial",
+    "breach": "missing_data",
+    "unknown": "not_applicable",
+}
+
+_COMPARATOR_SYMBOL: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge": "≥", "eq": "="}
+
+
+def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
+    """Render the deterministic universal break-rules from thesis_evaluations."""
+    if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
+        out.write(
+            '<h3>Universal break rules</h3>\n'
+            f'<div class="callout"><strong>Not yet evaluated.</strong> '
+            f'Run <code>python execution/run_thesis_evaluator.py --ticker {html.escape(ticker)}</code> '
+            f'to populate <code>thesis_evaluations</code>.</div>\n'
+        )
+        return
+    overall = s.overall_breach_status
+    overall_class = _BREACH_STATUS_CLASS.get(overall, "not_applicable")
+    out.write("<h3>Universal break rules</h3>\n")
+    eval_when = (
+        f' <span class="meta">— evaluated {html.escape(s.last_evaluated_at.isoformat(timespec="seconds"))}</span>'
+        if s.last_evaluated_at
+        else ""
+    )
+    out.write(
+        f'<p><strong>Overall:</strong> '
+        f'<span class="status-badge status-{overall_class}">{overall}</span>{eval_when}</p>\n'
+    )
+    if not s.break_rule_evaluations:
+        return
+    out.write('<div class="table-wrap"><table>\n<thead><tr>')
+    for h_label in ("Status", "Rule", "Threshold", "Latest", "Detail"):
+        out.write(f"<th>{h_label}</th>")
+    out.write("</tr></thead>\n<tbody>")
+    for ev in s.break_rule_evaluations:
+        out.write("<tr>")
+        rule_class = _BREACH_STATUS_CLASS.get(ev.status, "not_applicable")
+        out.write(f'<td><span class="status-badge status-{rule_class}">{ev.status}</span></td>')
+        out.write(
+            f"<td><strong>{html.escape(ev.kpi_name)}</strong>"
+            f'<br><span class="meta">{html.escape(ev.narrative)}</span></td>'
+        )
+        comp = _COMPARATOR_SYMBOL.get(ev.comparator, ev.comparator)
+        threshold_label = (
+            f"{comp} {ev.threshold:g} for {ev.consecutive_periods} consecutive periods"
+        )
+        out.write(f"<td>{html.escape(threshold_label)}</td>")
+        out.write(f"<td>{_format_observations(ev)}</td>")
+        out.write(f"<td>{html.escape(ev.detail)}</td>")
+        out.write("</tr>\n")
+    out.write("</tbody></table></div>\n")
+
+
+def _format_observations(ev: BreakRuleEvaluation) -> str:
+    if not ev.observations:
+        return "—"
+    cells = []
+    for o in ev.observations[: max(2, ev.consecutive_periods)]:
+        unit = "%" if o.unit == "percent" else f" {html.escape(o.unit)}" if o.unit else ""
+        cells.append(f"{html.escape(o.period_end)}: <strong>{o.value:.2f}{unit}</strong>")
+    return "<br>".join(cells)
+
+
 
 
 def _kpi_ledger(out: StringIO, rows: list[KpiLedgerRow]) -> None:
@@ -479,9 +565,10 @@ def _kpi_ledger(out: StringIO, rows: list[KpiLedgerRow]) -> None:
     lower = [r for r in rows if r.tier != "tier_1"]
     out.write("<h3>Tier-1 KPIs (thesis breakers)</h3>\n")
     out.write(
-        '<p class="meta">Status reflects current KPI fact in DB; '
-        '<code>unknown</code> = no kpi_facts row joined to this name yet '
-        '(wire by adding a <code>kpi_definitions</code> row + extracting facts).</p>\n'
+        '<p class="meta">Custom per-thesis KPIs from the holdings JSON. Status fires once '
+        '<code>kpi_facts</code> rows are populated for each name '
+        '(<code>extract_kpis_from_ir.py</code> / <code>derive_kpis_from_fmp.py</code>). '
+        'Universal financial break rules — those that always apply — are evaluated above.</p>\n'
     )
     _kpi_table(out, tier_1)
     if lower:
@@ -512,14 +599,45 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
     _section_h2(out, "financials", 3, "Financials — last 12 quarters", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
+    if s.line_items and s.chart_priorities:
+        _financial_charts(out, s.quarter_labels, s.line_items, s.chart_priorities)
     if s.line_items:
+        out.write(
+            f'<details class="financials-table"><summary>Full quarterly table — '
+            f'{len(s.line_items)} line items × {len(s.quarter_labels)} quarters</summary>\n'
+        )
         _quarterly_table(out, s.quarter_labels, s.line_items)
+        out.write("</details>\n")
     if s.annual_line_items:
         out.write(
             f'<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n'
         )
         _annual_table(out, s.annual_years, s.annual_line_items)
         out.write("</details>\n")
+
+
+def _financial_charts(
+    out: StringIO,
+    quarters: list[str],
+    line_items: list[QuarterlyLineItem],
+    priorities: list[str],
+) -> None:
+    """Render N line charts — one per priority — in a fluid grid.
+
+    Number of charts is whatever the holdings JSON `chart_priorities` requests;
+    layout adapts (1 col on narrow, 2-3 col on wide) so 2 charts read clean and
+    8 charts still fit.
+    """
+    by_name = {li.line_item: li for li in line_items}
+    grid_class = "chart-grid-1col" if len(priorities) == 1 else "chart-grid-2col"
+    out.write(f'<div class="{grid_class}">\n')
+    for name in priorities:
+        item = by_name.get(name)
+        if item is None:
+            continue
+        title = f"{item.line_item} ({item.unit})"
+        out.write(f'<div class="chart-cell">{line_chart(item.values, quarters, title=title)}</div>\n')
+    out.write("</div>\n")
 
 
 def _quarterly_table(out: StringIO, quarters: list[str], rows: list[QuarterlyLineItem]) -> None:
@@ -556,25 +674,86 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     _section_h2(out, "segments", 4, "Segments — last 12 quarters", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
-    for label, group in (
-        ("Revenue by product", s.revenue_by_product),
-        ("Revenue by geography", s.revenue_by_geography),
-        ("Operating income", s.operating_income),
+    out.write(
+        '<p class="meta">Sorted by latest-quarter magnitude, descending. '
+        'Segments contributing &lt;1% of the bucket roll up into "Other". '
+        'Click each bucket to expand the table; the snapshot panel is always visible.</p>\n'
+    )
+    for label, group, anchor in (
+        ("Revenue by product", s.revenue_by_product, "rev-product"),
+        ("Revenue by geography", s.revenue_by_geography, "rev-geo"),
+        ("Operating income", s.operating_income, "op-income"),
     ):
         if not group:
             continue
-        out.write(f"<h3>{html.escape(label)}</h3>\n")
-        _segments_table(out, s.quarter_labels, group)
+        _segment_bucket(out, label, anchor, s.quarter_labels, group)
+
+
+def _segment_bucket(
+    out: StringIO, label: str, anchor: str, quarters: list[str], rows: list[SegmentSeries]
+) -> None:
+    """One bucket: snapshot panel (visible) + full table (in <details>)."""
+    out.write(f'<h3 id="seg-{anchor}">{html.escape(label)}</h3>\n')
+    _segment_snapshot_panel(out, quarters, rows)
+    out.write(f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n')
+    _segments_table(out, quarters, rows)
+    out.write("</details>\n")
+
+
+def _segment_snapshot_panel(
+    out: StringIO, quarters: list[str], rows: list[SegmentSeries]
+) -> None:
+    """Top-3 (by latest magnitude) cards + sparkline-per-segment summary list."""
+    latest_label = quarters[-1] if quarters else ""
+    out.write('<div class="seg-snapshot">')
+    for r in rows[:3]:
+        latest = _last_non_null(r.values)
+        share_pct = _segment_share(r, rows)
+        latest_str = _fmt_num(latest, 0)
+        share_str = f"{share_pct * 100:.1f}%" if share_pct is not None else "—"
+        yoy_str = _fmt_pct(r.growth.yoy)
+        spark = sparkline(r.values, width=140, height=32)
+        out.write(
+            f'<div class="seg-card">'
+            f'<div class="seg-card-name">{html.escape(r.segment_name)}</div>'
+            f'<div class="seg-card-spark">{spark}</div>'
+            f'<div class="seg-card-row"><span>{html.escape(latest_label)}</span>'
+            f'<strong>{latest_str}</strong></div>'
+            f'<div class="seg-card-row"><span>Share</span><strong>{share_str}</strong></div>'
+            f'<div class="seg-card-row"><span>YoY</span><strong>{yoy_str}</strong></div>'
+            f"</div>"
+        )
+    out.write("</div>\n")
+
+
+def _segment_share(r: SegmentSeries, rows: list[SegmentSeries]) -> float | None:
+    latest = _last_non_null(r.values)
+    if latest is None:
+        return None
+    total = sum(abs(_last_non_null(s.values) or 0.0) for s in rows)
+    if total == 0:
+        return None
+    return abs(latest) / total
+
+
+def _last_non_null(values: list[float | None]) -> float | None:
+    for v in reversed(values):
+        if v is not None:
+            return v
+    return None
 
 
 def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries]) -> None:
-    headers = ["Segment", "Unit", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
+    headers = ["Segment", "Trend", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
     out.write('<div class="table-wrap"><table>\n<thead><tr>')
     for h in headers:
         out.write(f"<th>{html.escape(h)}</th>")
     out.write("</tr></thead>\n<tbody>")
     for r in rows:
-        out.write(f"<tr><td>{html.escape(r.segment_name)}</td><td>{html.escape(r.unit)}</td>")
+        out.write(
+            f'<tr><td>{html.escape(r.segment_name)}</td>'
+            f'<td>{sparkline(r.values, width=100, height=24)}</td>'
+        )
         for v in r.values:
             out.write(f'<td class="num">{_fmt_num(v, 0)}</td>')
         for v in (r.growth.qoq, r.growth.yoy, r.growth.cagr_1y_ttm, r.growth.cagr_3y_ttm):
@@ -588,40 +767,34 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
-        '<p class="meta">The most recent 3 quarters render in full; older ones are '
-        'collapsed to a 1-paragraph digest. Full transcripts in §10.</p>\n'
+        '<p class="meta">Each quarter shows its executive-summary digest as the visible '
+        'header; click to expand the full LLM analysis. Newest first. Full transcripts in §10.</p>\n'
     )
     cards = list(s.full_quarters) + list(s.digest_quarters)
     cards.sort(key=lambda c: (c.year, c.quarter), reverse=True)
     for q in cards:
-        if q.is_recent:
-            _full_card(out, q)
-        else:
-            _digest_card(out, q)
+        _earnings_card(out, q)
 
 
-def _digest_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
-    out.write(
-        f'<details><summary>{html.escape(q.quarter)} {q.year} '
-        f'<span class="meta">— digest</span></summary>\n'
-    )
-    if q.digest_md:
-        out.write(_md_block(q.digest_md))
-    out.write("</details>\n")
-
-
-def _full_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
+def _earnings_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
+    """Uniform card: digest is always visible inside <summary>, full body expands."""
+    digest_html = _md_block(q.digest_md) if q.digest_md else ""
     summary_html = _md_block(q.summary_md) if q.summary_md else "<p><em>No LLM summary cached.</em></p>"
     transcript_link = (
         f'<p class="meta">Transcript source: <code>{html.escape(q.transcript_path)}</code></p>'
         if q.transcript_path
         else ""
     )
+    open_attr = " open" if q.is_recent else ""
+    out.write(f'<details class="earnings-card"{open_attr}>\n')
     out.write(
-        f'<details><summary>{html.escape(q.quarter)} {q.year} '
-        f'<span class="meta">— full</span></summary>\n'
-        f"{summary_html}{transcript_link}</details>\n"
+        f'<summary><span class="earnings-title">{html.escape(q.quarter)} {q.year}</span>'
     )
+    if digest_html:
+        out.write(f'<div class="earnings-digest">{digest_html}</div>')
+    out.write("</summary>\n")
+    out.write(f'<div class="earnings-full">{summary_html}{transcript_link}</div>\n')
+    out.write("</details>\n")
 
 
 def _saydo(out: StringIO, s: SayDoSection) -> None:

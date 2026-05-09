@@ -130,8 +130,42 @@ def _thesis(out: StringIO, s: ThesisSection) -> None:
     if s.competitive_watchlist:
         out.write("### Competitive watchlist\n\n")
         out.write(", ".join(s.competitive_watchlist) + "\n\n")
+    _break_rules_block(out, s)
     if s.kpi_ledger:
         _kpi_ledger(out, s.kpi_ledger)
+
+
+_COMPARATOR_SYMBOL_MD: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge": "≥", "eq": "="}
+
+
+def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
+    if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
+        out.write("### Universal break rules\n\n")
+        out.write("_Not yet evaluated. Run `python execution/run_thesis_evaluator.py --ticker <T>` to populate `thesis_evaluations`._\n\n")
+        return
+    out.write("### Universal break rules\n\n")
+    eval_when = (
+        f" — evaluated {s.last_evaluated_at.isoformat(timespec='seconds')}"
+        if s.last_evaluated_at
+        else ""
+    )
+    out.write(f"**Overall:** `{s.overall_breach_status}`{eval_when}\n\n")
+    if not s.break_rule_evaluations:
+        return
+    out.write("| Status | Rule | Threshold | Latest | Detail |\n|---|---|---|---|---|\n")
+    for ev in s.break_rule_evaluations:
+        comp = _COMPARATOR_SYMBOL_MD.get(ev.comparator, ev.comparator)
+        threshold = f"{comp} {ev.threshold:g} for {ev.consecutive_periods} consecutive periods"
+        if ev.observations:
+            latest_cells = []
+            for o in ev.observations[: max(2, ev.consecutive_periods)]:
+                unit = "%" if o.unit == "percent" else (f" {o.unit}" if o.unit else "")
+                latest_cells.append(f"{o.period_end}: **{o.value:.2f}{unit}**")
+            latest = "<br>".join(latest_cells)
+        else:
+            latest = "—"
+        out.write(f"| `{ev.status}` | **{ev.kpi_name}** — {ev.narrative} | {threshold} | {latest} | {ev.detail} |\n")
+    out.write("\n")
 
 
 def _kpi_ledger(out: StringIO, rows: list[KpiLedgerRow]) -> None:
