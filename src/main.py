@@ -21,14 +21,16 @@ def _spawn_background_cache_refresh() -> None:
     """Detach a non-blocking FMP cache refresh; return immediately.
 
     The cacher (execution/refresh_cache.py) fast-exits if no ticker is stale
-    under its tier cadence, so this is cheap on every invocation. Manual
-    refresh: `python execution/refresh_cache.py --force`.
+    under its tier cadence, so this is cheap on every invocation. The lockfile
+    inside the cacher prevents duplicate concurrent runs. Manual refresh:
+    `python execution/refresh_cache.py run --force`. Tier from FMP_TIER env.
     """
     if os.environ.get("EARNINGS_SUMMARY_SKIP_CACHE_REFRESH") == "1":
         return
     cmd = [
         sys.executable,
         os.path.join(PROJECT_ROOT_DIR, "execution", "refresh_cache.py"),
+        "run",
         "--background",
     ]
     try:
