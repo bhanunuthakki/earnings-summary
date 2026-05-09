@@ -33,9 +33,9 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-import google.generativeai as genai  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 
+from llm_client import call_llm  # noqa: E402
 from models.patents import (  # noqa: E402
     Confidence,
     MarketSignal,
@@ -45,9 +45,6 @@ from models.patents import (  # noqa: E402
 from parser import read_text_file  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
 OUT_DIR = PROJECT_ROOT / ".tmp" / "glp1_market_signals"
@@ -86,10 +83,7 @@ Return JSON: {"signals": [...]}. Empty list is valid if no qualifying signals fo
 Transcript:
 """
 
-GENERATION_CONFIG: dict[str, Any] = {
-    "response_mime_type": "application/json",
-    "temperature": 0.1,
-}
+JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _log(event: str, **kwargs: Any) -> None:
@@ -135,18 +129,16 @@ def extract_signals(
     period: str,
     transcript_path: Path,
 ) -> MarketSignalBundle:
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not set; cannot run LLM extraction.")
     text = read_text_file(str(transcript_path))
     if not text.strip():
         raise RuntimeError(f"Transcript empty: {transcript_path}")
 
-    model = genai.GenerativeModel("gemini-flash-latest")
-    response = model.generate_content(
-        EXTRACTION_PROMPT + text[:120_000],
-        generation_config=GENERATION_CONFIG,
-    )
-    raw = response.text.strip()
+    # Routes through llm_client.call_llm: Claude CLI first (subscription
+    # billing), Gemini Flash fallback if Claude fails. Model selection via
+    # the "market_signals" purpose in LLM_MODELS (Haiku — short, batch).
+    raw = call_llm(EXTRACTION_PROMPT + text[:120_000], purpose="market_signals").strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RX.sub("", raw).strip()
     payload = json.loads(raw)
     if not isinstance(payload, dict) or "signals" not in payload:
         raise ValueError(f"LLM returned unexpected schema: {payload!r}")

@@ -62,14 +62,59 @@ STALE_CORPUS_THRESHOLD_DAYS = 120
 
 # Default Claude model for prompt calls. Sonnet 4.6 chosen as a balance of
 # quality and speed across the pipeline's tasks. Per-function overrides via
-# the `model` argument on _call_claude.
+# the `model` argument on _call_claude or by adding the purpose to LLM_MODELS.
 DEFAULT_MODEL = "claude-sonnet-4-6"
 
 # Fast classifier model — used for short, structured calls (intake doc-type
-# classification, transcript metadata extraction) where Sonnet would be
-# overkill. Haiku 4.5 returns ~5x faster at materially the same quality on
-# narrowly-scoped JSON-output tasks.
+# classification, transcript metadata extraction, batch extractors) where
+# Sonnet would be overkill. Haiku 4.5 returns ~5x faster at materially the
+# same quality on narrowly-scoped JSON-output tasks.
 FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
+
+# Per-purpose model selection. Every public generator below should resolve its
+# model via _model_for(purpose) so retuning one section doesn't require touching
+# the call site. Keys are stable strings; values are model identifiers Claude
+# CLI accepts. Adding a new entry here is the only change needed to retune a
+# section's quality/latency tradeoff.
+#
+# Rationale per entry:
+#   sonnet (default): long-context analysis where reasoning matters
+#       (transcript summary, thesis tracker, bear case, strategic compare).
+#   haiku (FAST_CLASSIFIER_MODEL): short, structured, often-batched calls
+#       where latency dominates and the task is narrowly scoped
+#       (intake classification, per-line entity extraction).
+LLM_MODELS: dict[str, str] = {
+    # Long-context analytical writing
+    "transcript_summary":      DEFAULT_MODEL,
+    "press_release_summary":   DEFAULT_MODEL,
+    "presentation_brief":      DEFAULT_MODEL,
+    "pairwise_analysis":       DEFAULT_MODEL,
+    "strategic_analysis":      DEFAULT_MODEL,
+    "thesis_pass_a":           DEFAULT_MODEL,
+    "thesis_pass_b":           DEFAULT_MODEL,
+    "bear_case":               DEFAULT_MODEL,
+    "event_brief":             DEFAULT_MODEL,
+    # Short, structured, batch — Haiku for latency
+    "intake_classifier":       FAST_CLASSIFIER_MODEL,
+    "transcript_metadata":     FAST_CLASSIFIER_MODEL,
+    "market_signals":          FAST_CLASSIFIER_MODEL,
+    "patent_timeline":         FAST_CLASSIFIER_MODEL,
+}
+
+
+def _model_for(purpose: str) -> str:
+    """Resolve a purpose key to a model id. Unknown purposes fall back to
+    DEFAULT_MODEL so a missing entry doesn't crash the pipeline — but the
+    fallback is logged so the gap surfaces in observability."""
+    model = LLM_MODELS.get(purpose)
+    if model is None:
+        log.warning({
+            "event": "llm_model_purpose_unknown",
+            "purpose": purpose,
+            "fallback": DEFAULT_MODEL,
+        })
+        return DEFAULT_MODEL
+    return model
 
 # Default per-call timeout (seconds). Long-context thesis prompts can take
 # a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
@@ -221,6 +266,46 @@ def _call_claude(
         return _try_gemini_fallback(prompt, claude_error)
 
 
+def call_llm(
+    prompt: str,
+    *,
+    purpose: str | None = None,
+    model: str | None = None,
+    timeout_seconds: int | None = None,
+) -> str:
+    """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
+    this repo — including from `execution/` scripts, `src/report/sections/`, and
+    anywhere else that needs a Claude-then-Gemini-fallback round-trip.
+
+    Direct use of `google.generativeai`, the `anthropic` SDK, or any other
+    provider client is forbidden outside this module's fallback wiring; route
+    through call_llm so retunes (model swap, timeout change, billing change,
+    fallback policy) happen in one place.
+
+    Args:
+        prompt: The fully-rendered prompt text.
+        purpose: Logical key for model selection (see LLM_MODELS). Required
+            for new code; the explicit `model` arg overrides it when both
+            are passed (escape hatch for one-off retunes during debugging).
+        model: Explicit Claude model id. If neither purpose nor model is set,
+            falls back to DEFAULT_MODEL with a warning log.
+        timeout_seconds: Per-call timeout. None = DEFAULT_TIMEOUT_SECONDS.
+    """
+    if model is None:
+        if purpose is None:
+            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
+            resolved_model = DEFAULT_MODEL
+        else:
+            resolved_model = _model_for(purpose)
+    else:
+        resolved_model = model
+    return _call_claude(
+        prompt,
+        model=resolved_model,
+        timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+    )
+
+
 # Web-search-enabled call: same subprocess as _call_claude but with the
 # Claude CLI's --allowedTools flag turned on so the model can run WebSearch
 # / WebFetch as part of producing its answer. Used by the memo generator
@@ -332,7 +417,7 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     """
 
     try:
-        return _call_claude(prompt)
+        return call_llm(prompt, purpose="pairwise_analysis")
     except Exception as e:
         log.error(f"Error generating pairwise analysis: {e}")
         return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
@@ -382,7 +467,7 @@ def generate_summary(text):
     Transcript:
     """
     try:
-        return _call_claude(prompt + text)
+        return call_llm(prompt + text, purpose="transcript_summary")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
@@ -428,7 +513,7 @@ This is sourced from the company's IR website, so it is the official financial r
 Press Release:
 """
     try:
-        return _call_claude(prompt + text)
+        return call_llm(prompt + text, purpose="press_release_summary")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Press release summary generation failed: {e}")
         raise
@@ -467,7 +552,7 @@ Extract the key strategic narrative — what story is management telling investo
 Presentation Text:
 """
     try:
-        return _call_claude(prompt + text)
+        return call_llm(prompt + text, purpose="presentation_brief")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Presentation brief generation failed: {e}")
         raise
@@ -840,7 +925,7 @@ def generate_thesis_update(
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "A"})
     try:
-        pass_a_output = _call_claude(pass_a_prompt)
+        pass_a_output = call_llm(pass_a_prompt, purpose="thesis_pass_a")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass A failed for {ticker}: {e}")
         raise
@@ -852,7 +937,7 @@ def generate_thesis_update(
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "B"})
     try:
-        pass_b_output = _call_claude(pass_b_prompt)
+        pass_b_output = call_llm(pass_b_prompt, purpose="thesis_pass_b")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
@@ -924,7 +1009,7 @@ def generate_strategic_analysis(summaries_list):
     """
 
     try:
-        return _call_claude(prompt + context_str)
+        return call_llm(prompt + context_str, purpose="strategic_analysis")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Analysis generation failed: {e}")
         raise
@@ -954,7 +1039,7 @@ def identify_transcript_metadata(text_snippet):
     Text:
     """
     try:
-        return _call_claude(prompt + text_snippet[:2000], model=FAST_CLASSIFIER_MODEL).strip()
+        return call_llm(prompt + text_snippet[:2000], purpose="transcript_metadata").strip()
     except Exception as e:
         log.error(f"Error identifying metadata: {e}")
         return "UNKNOWN"
@@ -1013,7 +1098,7 @@ or DIFFERENT vs. prior management framing.]
 Event Document Text:
 """
     try:
-        return _call_claude(prompt + text)
+        return call_llm(prompt + text, purpose="event_brief")
     except Exception as e:
         log.error(f"CRITICAL ERROR: Event brief generation failed: {e}")
         raise
@@ -1083,7 +1168,7 @@ Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
 Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
 """
     try:
-        raw = _call_claude(prompt).strip()
+        raw = call_llm(prompt, purpose="bear_case").strip()
         # Strip ``` fences if Claude wraps the JSON despite the instruction.
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
@@ -1138,7 +1223,7 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
     )
 
     try:
-        raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
+        raw = call_llm(prompt, purpose="intake_classifier").strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return json.loads(raw)
