@@ -1,0 +1,88 @@
+{
+  "ticker": "WPM",
+  "name": "Wheaton Precious Metals",
+  "last_updated": "2026-05-09",
+  "thesis": "Wheaton Precious Metals — precious metal streaming. STUB: needs user-authored thesis. Default key driver: GEOs × realized prices × deal pipeline. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "GEOs × realized prices × deal pipeline",
+  "_status": "stub_for_recurring_onboard",
+  "tier_1_kpis": [
+    {
+      "name": "Revenue YoY Growth (USD)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<0% YoY for 2 consecutive Qs (placeholder; user to set per-ticker threshold)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Operating Margin (GAAP)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross Margin (GAAP)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 20% for 2 consecutive Qs (placeholder)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Net Income Margin (GAAP)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [],
+  "tier_3_kpis": [],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
+  ]
+}
