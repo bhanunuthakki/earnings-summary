@@ -1,23 +1,31 @@
-"""Stage 2 of the KPI cascade — extract custom tier_1_kpis from `.tmp/*_summary.txt`.
+"""Stages 2-3 of the KPI cascade — extract custom tier_1_kpis from LLM summaries.
 
 Stage 1 (`fmp_derived_kpis`) handled universal financial KPIs deterministically
-from FMP raw data. Stage 2 reaches into the LLM-generated quarterly summaries
-already on disk to fill in custom per-ticker metrics (GMV, ARPAC, NIM, etc.)
-that aren't derivable from raw line items.
+from FMP raw data. Stages 2/3 reach into the LLM-generated summaries already
+on disk to fill in custom per-ticker metrics (GMV, ARPAC, NIM, etc.) that
+aren't derivable from raw line items.
 
-Pipeline per (ticker, quarter):
-  1. Locate `.tmp/{TICKER}_Q{N}_{YEAR}_summary.txt`.
-  2. Auto-register as a `documents` row (`source_type=synthesized`,
-     `doc_type=llm_summary`) so kpi_facts can FK to it.
+Two SourceType variants share the same pipeline shape, just different filename
+suffixes and slightly different doc_type labels for provenance:
+
+  - "earnings"  (Stage 2): `_summary.txt` + `_investor_update_summary.txt`
+                           — per-quarter LLM summary of the call/investor letter
+  - "ir"        (Stage 3): `_press_release_summary.txt` + `_presentation_brief.txt`
+                           — IR-pipeline structured briefs
+
+Pipeline per (ticker, quarter, source-doc):
+  1. Locate matching files in `.tmp/`.
+  2. Auto-register each as a `documents` row (`source_type=llm_extracted`,
+     doc_type per source) so kpi_facts can FK to it.
   3. From the holdings JSON tier_1_kpis, list KPI names NOT yet present in
      kpi_facts for this (ticker, period). Skip if all are already extracted.
   4. Single Haiku call returning {kpi_name: {value, unit, confidence}}.
   5. Persist via the existing KpiExtractionManifest pipeline.
 
-Idempotent: re-runs skip (ticker, quarter) combinations whose missing-KPI
-list is empty. Force re-extraction with `--refresh`.
+Idempotent on (ticker, period_end, kpi_definition_id): re-runs skip rows whose
+missing-KPI list is empty. Force re-extraction with `--refresh`.
 
-Per-run state lands in `data/kpi_extraction_log.json` keyed by ticker → quarter.
+Per-run state lands in `data/kpi_extraction_log.json` keyed by ticker → stage.
 """
 
 from __future__ import annotations
@@ -42,11 +50,41 @@ from pipeline.kpi_persistence import (
 )
 from pipeline.run_accounting import start_run
 
-# Matches both the canonical `_summary.txt` and the MELI/NU `_investor_update_summary.txt`
-# variant — same per-quarter LLM-summary shape, just produced from a different source PDF.
-_SUMMARY_RX = re.compile(
+# Per-source filename matchers + the documents.doc_type label written for each.
+# Earnings: per-quarter call summary (canonical) + the MELI/NU investor-update variant.
+# IR: press-release LLM summary + presentation-deck brief from the IR pipeline.
+_EARNINGS_SUMMARY_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
 )
+_IR_PRESS_RELEASE_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_press_release_summary\.txt$"
+)
+_IR_PRESENTATION_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_presentation_brief\.txt$"
+)
+
+
+@dataclass(frozen=True)
+class _SourceSpec:
+    """One LLM-summary kind: filename pattern + the doc_type used for provenance."""
+
+    name: str  # short label for telemetry / log keys
+    doc_type: str  # what we write into documents.doc_type
+    pattern: re.Pattern[str]
+
+
+_EARNINGS_SOURCE = _SourceSpec("earnings_summary", "llm_summary", _EARNINGS_SUMMARY_RX)
+_IR_PRESS_RELEASE_SOURCE = _SourceSpec(
+    "ir_press_release_summary", "ir_press_release_synthesized", _IR_PRESS_RELEASE_RX
+)
+_IR_PRESENTATION_SOURCE = _SourceSpec(
+    "ir_presentation_brief", "ir_presentation_synthesized", _IR_PRESENTATION_RX
+)
+
+_SOURCE_GROUPS: dict[str, tuple[_SourceSpec, ...]] = {
+    "earnings": (_EARNINGS_SOURCE,),
+    "ir": (_IR_PRESS_RELEASE_SOURCE, _IR_PRESENTATION_SOURCE),
+}
 
 # How filename Q + calendar year map to a period_end. Most tickers use calendar
 # fiscal-year mapping; tickers with off-calendar fiscal years (RBRK, VEEV, NVO)
@@ -76,18 +114,29 @@ class TickerExtractionLog:
     error: str | None = None
 
 
+_GROUP_TO_STAGE: dict[str, str] = {
+    "earnings": "stage_2_summaries",
+    "ir": "stage_3_ir_briefs",
+}
+
+
 def extract_for_ticker(
     ticker: str,
     repo_root: Path,
     conn: sqlite3.Connection,
     refresh: bool = False,
+    source_group: str = "earnings",
 ) -> TickerExtractionLog:
     ticker = ticker.upper()
-    log = TickerExtractionLog(ticker=ticker)
+    if source_group not in _SOURCE_GROUPS:
+        raise ValueError(
+            f"unknown source_group {source_group!r}; expected one of {list(_SOURCE_GROUPS)}"
+        )
+    log = TickerExtractionLog(ticker=ticker, stage=_GROUP_TO_STAGE[source_group])
     log.started_at = _now_iso_z()
     t0 = time.perf_counter()
 
-    summaries = _list_summaries(repo_root, ticker)
+    sources = _list_sources(repo_root, ticker, _SOURCE_GROUPS[source_group])
     holdings = _read_holdings(repo_root, ticker)
     if holdings is None:
         log.error = f"no holdings JSON for {ticker}"
@@ -97,9 +146,9 @@ def extract_for_ticker(
         log.error = "holdings JSON has no tier_1_kpis"
         return _close_log(log, t0)
 
-    for quarter, year, summary_path in summaries:
+    for quarter, year, source_path, spec in sources:
         period_end = _period_end(quarter, year)
-        period_label = f"Q{quarter} {year}"
+        period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
 
         already_extracted = _already_extracted_kpis(
@@ -111,9 +160,13 @@ def extract_for_ticker(
             continue
 
         try:
-            doc_id = _ensure_summary_document_row(conn, ticker, period_end, summary_path)
-            text = summary_path.read_text(encoding="utf-8")
-            extracted = _llm_extract(ticker, period_label, missing if not refresh else tier_1_names, text)
+            doc_id = _ensure_summary_document_row(
+                conn, ticker, period_end, source_path, spec.doc_type
+            )
+            text = source_path.read_text(encoding="utf-8")
+            extracted = _llm_extract(
+                ticker, period_label, missing if not refresh else tier_1_names, text
+            )
             if not extracted:
                 continue
             manifest = _build_manifest(
@@ -121,7 +174,7 @@ def extract_for_ticker(
             )
             run_id = start_run(
                 conn,
-                directive="extract_kpis_from_summaries",
+                directive=f"extract_kpis_from_{source_group}",
                 ticker_scope=[ticker],
             )
             result = persist_manifest(conn, run_id=run_id, manifest=manifest)
@@ -134,19 +187,24 @@ def extract_for_ticker(
     return _close_log(log, t0)
 
 
-def _list_summaries(repo_root: Path, ticker: str) -> list[tuple[int, int, Path]]:
+def _list_sources(
+    repo_root: Path, ticker: str, specs: tuple[_SourceSpec, ...]
+) -> list[tuple[int, int, Path, _SourceSpec]]:
+    """Walk `.tmp/`, return (quarter, year, path, spec) for every match. Oldest first."""
     tmp = repo_root / ".tmp"
     if not tmp.exists():
         return []
-    out: list[tuple[int, int, Path]] = []
+    out: list[tuple[int, int, Path, _SourceSpec]] = []
     for p in tmp.iterdir():
         if not p.is_file():
             continue
-        m = _SUMMARY_RX.match(p.name)
-        if not m or m.group("ticker") != ticker:
-            continue
-        out.append((int(m.group("q")), int(m.group("y")), p))
-    out.sort()
+        for spec in specs:
+            m = spec.pattern.match(p.name)
+            if not m or m.group("ticker") != ticker:
+                continue
+            out.append((int(m.group("q")), int(m.group("y")), p, spec))
+            break
+    out.sort(key=lambda x: (x[1], x[0], x[3].name))
     return out
 
 
@@ -194,7 +252,11 @@ def _already_extracted_kpis(
 
 
 def _ensure_summary_document_row(
-    conn: sqlite3.Connection, ticker: str, period_end: datetime, path: Path
+    conn: sqlite3.Connection,
+    ticker: str,
+    period_end: datetime,
+    path: Path,
+    doc_type: str,
 ) -> int:
     """Insert documents row for the summary file if not already present, return id."""
     raw = path.read_bytes()
@@ -214,7 +276,7 @@ def _ensure_summary_document_row(
         (
             ticker,
             SourceType.LLM_EXTRACTED.value,
-            "llm_summary",
+            doc_type,
             period_end,
             str(path).replace("\\", "/"),
             sha,
@@ -230,25 +292,31 @@ def _ensure_summary_document_row(
 def _llm_extract(
     ticker: str, period_label: str, kpi_names: list[str], summary_text: str
 ) -> dict[str, dict[str, object]]:
-    """Single Haiku call. Returns {kpi_name: {value, unit, confidence}}."""
+    """Single Haiku call. Returns {kpi_name: {value, unit, confidence}}.
+
+    Prompt is generic across all three source shapes (earnings call summary /
+    press release / presentation brief). Each has its own structure, but the
+    extraction contract — pull the as-reported current-quarter value of each
+    named KPI — is the same.
+    """
     if not kpi_names:
         return {}
     names_block = "\n".join(f"- {n}" for n in kpi_names)
-    prompt = f"""You are extracting structured KPI values from an LLM-generated quarterly summary for {ticker} ({period_label}).
+    prompt = f"""You are extracting structured KPI values from a quarterly research document for {ticker} ({period_label}).
 
-The summary follows a stable shape: it contains a "Financial Highlights" markdown table with columns Metric / Value / QoQ / YoY / Miss/Beat, plus prose sections covering Operational Highlights, Management Outlook, and Q&A. Numerical KPIs typically live in the table or in section #4 (guidance) and #5 (Q&A); operational KPIs (subscriber counts, segment growth %, etc.) live in section #3.
+The document is one of: an LLM-summarised earnings call (sections: Financial Highlights table, Operational Highlights, Management Outlook, Q&A), an LLM-summarised IR press release (Headline Results table, Key Business Metrics, Guidance, Capital Allocation), or an LLM-distilled presentation brief (Management Narrative, Highlighted Metrics, Strategic Initiatives, Forward-Looking Slides). Whichever it is, current-quarter actuals live in the headline table / metrics section; *guidance* for the NEXT quarter or full year is reported separately and is NOT what we want here.
 
 For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not guidance for next quarter). Return a JSON object keyed by the EXACT name I gave you. Values:
   - "value": numeric (no units; e.g. 12.5 not "12.5%"). Convert as needed (e.g. "$1.2 billion" → 1200000000, "+15%" → 15.0).
   - "unit": one of "percent" / "usd" / "ratio" / "count" / "ratio_per_unit" / "actual"
   - "confidence": float 0.0–1.0; lower if you had to estimate from context
 
-If a KPI is not disclosed in the summary, OMIT IT from the response. Do not guess.
+If a KPI is not disclosed in the document, OMIT IT from the response. Do not guess.
 
 KPI names to extract:
 {names_block}
 
-Summary text:
+Document text:
 \"\"\"
 {summary_text}
 \"\"\"

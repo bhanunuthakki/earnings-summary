@@ -10,9 +10,10 @@
     "Revenue",
     "Operating income",
     "Free cash flow",
-    "GMV Growth (FXN)",
-    "TPV Growth (FXN)",
-    "Items Sold"
+    "GMV growth FX-neutral (consolidated)",
+    "MercadoPago TPV growth + take rate",
+    "Operating margin (consolidated)",
+    "Credit portfolio NPL ratio"
   ],
   "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [

@@ -1,16 +1,23 @@
-"""Stage 2 of the KPI cascade: extract tier_1 KPIs from `.tmp/*_summary.txt`.
+"""Stages 2-3 of the KPI cascade: extract tier_1 KPIs from `.tmp/` LLM summaries.
 
 Reads the holdings JSON's tier_1_kpis for each ticker, asks Claude Haiku to
-pull values from the existing per-quarter LLM summary files (already generated
-by `python src/main.py --company <T>`), and persists into kpi_facts via the
-existing manifest pipeline. Idempotent on (ticker, period, KPI name).
+pull values from the existing on-disk LLM summary files, and persists into
+kpi_facts via the existing manifest pipeline. Idempotent on (ticker, period,
+KPI name); a value present from any earlier source is not re-extracted.
+
+`--source` selects the document family:
+  earnings  Stage 2: per-quarter call summary + investor-update variant
+            (`{T}_Q{N}_{Y}_summary.txt`, `{T}_Q{N}_{Y}_investor_update_summary.txt`)
+  ir        Stage 3: IR-pipeline press-release + presentation briefs
+            (`{T}_Q{N}_{Y}_press_release_summary.txt`, `..._presentation_brief.txt`)
 
 Usage:
     python execution/extract_kpis_from_summaries.py --ticker NU
     python execution/extract_kpis_from_summaries.py --all
+    python execution/extract_kpis_from_summaries.py --all --source ir
     python execution/extract_kpis_from_summaries.py --all --refresh
 
-Per-run telemetry lands in `data/kpi_extraction_log.json` keyed by ticker.
+Per-run telemetry lands in `data/kpi_extraction_log.json` keyed by ticker → stage.
 """
 
 from __future__ import annotations
@@ -49,7 +56,13 @@ def main() -> int:
     summary_lines: list[dict[str, object]] = []
     try:
         for ticker in tickers:
-            log = extract_for_ticker(ticker, repo_root, conn, refresh=args.refresh)
+            log = extract_for_ticker(
+                ticker,
+                repo_root,
+                conn,
+                refresh=args.refresh,
+                source_group=args.source,
+            )
             results.append(log)
             summary_lines.append(
                 {
@@ -83,6 +96,12 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--ticker", help="Single ticker")
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
     p.add_argument("--refresh", action="store_true", help="Re-extract even if all KPIs already present")
+    p.add_argument(
+        "--source",
+        choices=("earnings", "ir"),
+        default="earnings",
+        help="Which document family to extract from (default: earnings)",
+    )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     return p.parse_args()
 
