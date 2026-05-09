@@ -58,12 +58,19 @@ def _load_transcript(card: QuarterlyEarningsCard) -> TranscriptEntry | None:
 
 
 def _extract(path: Path) -> str | None:
+    """Best-effort extract; one bad transcript should not crash the whole batch.
+
+    pypdf raises its own exception hierarchy (PdfStreamError, PdfReadError) on
+    truncated / malformed files; .txt reads can hit OSError / UnicodeDecodeError.
+    Catching `Exception` here is intentional — appendix content is a nice-to-have,
+    every other section has its own data source.
+    """
     suffix = path.suffix.lower()
     try:
         if suffix == ".pdf":
             return extract_text_from_pdf(str(path))
         return read_text_file(str(path))
-    except (OSError, ValueError):
+    except Exception:
         return None
 
 

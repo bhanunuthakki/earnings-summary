@@ -20,7 +20,12 @@ from report.models import (
 )
 from report.sections._common import missing
 
-_SUMMARY_RX = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_summary\.txt$")
+# `_summary.txt` is the canonical per-quarter LLM summary; `_investor_update_summary.txt`
+# is the MELI/NU variant (companies that publish investor-update letters in lieu of
+# traditional press-release-plus-call). Both feed §5 the same way.
+_SUMMARY_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
+)
 _TRANSCRIPT_RX = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.(?:txt|pdf)$")
 
 MAX_CARDS = 8
