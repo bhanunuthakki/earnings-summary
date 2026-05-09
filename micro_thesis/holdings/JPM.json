@@ -6,6 +6,11 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Net interest income trajectory + non-interest revenue × efficiency",
+  "chart_priorities": [
+    "Revenue",
+    "Net income",
+    "Operating income"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

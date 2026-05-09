@@ -6,6 +6,13 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "AWS revenue growth re-acceleration + advertising scale + retail margin",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "Free cash flow",
+    "Capex / Revenue (GAAP)"
+  ],
   "_status": "draft_for_review",
   "tier_1_kpis": [
     {

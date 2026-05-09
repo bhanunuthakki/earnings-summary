@@ -6,6 +6,12 @@
   "verdict": "Intact",
   "verdict_color": "green",
   "key_driver": "Base44 ARR growth (milestone-disclosed) + Creative Subs holding positive",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "FCF Margin (GAAP)"
+  ],
   "tier_1_kpis": [
     {
       "name": "Base44 ARR (milestone disclosure)",

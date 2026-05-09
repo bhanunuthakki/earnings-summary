@@ -6,6 +6,11 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "DE/share growth driven by FRE + BWS float earnings + realizations cadence",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Net income"
+  ],
   "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {

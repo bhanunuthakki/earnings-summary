@@ -6,6 +6,13 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Copper realized price × volumes − unit costs",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "Capex",
+    "Capex / Revenue (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

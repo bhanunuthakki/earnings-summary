@@ -9,8 +9,10 @@
   "chart_priorities": [
     "Revenue",
     "Operating income",
-    "Operating cash flow",
-    "Free cash flow"
+    "Free cash flow",
+    "Capex / Revenue (GAAP)",
+    "GCP revenue growth (YoY)",
+    "GCP operating margin trajectory"
   ],
   "tier_1_kpis": [
     {

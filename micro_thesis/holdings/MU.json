@@ -6,6 +6,13 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "HBM bit shipments × ASP × DRAM/NAND mix",
+  "chart_priorities": [
+    "Revenue",
+    "Gross profit",
+    "Operating income",
+    "Capex",
+    "Capex / Revenue (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

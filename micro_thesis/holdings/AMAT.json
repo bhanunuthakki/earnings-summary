@@ -6,6 +6,12 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Leading-edge logic + DRAM/HBM capex intensity",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "Capex / Revenue (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

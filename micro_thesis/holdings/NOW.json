@@ -6,6 +6,14 @@
   "verdict": "Intact",
   "verdict_color": "green",
   "key_driver": "Now Assist AI ACV adoption (cohort >$1M ACV)",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "FCF Margin (GAAP)",
+    "Subscription Revenue Growth (CC)",
+    "cRPO Growth",
+    "RPO Growth"
+  ],
   "tier_1_kpis": [
     {
       "name": "Subscription Revenue Growth (CC)",

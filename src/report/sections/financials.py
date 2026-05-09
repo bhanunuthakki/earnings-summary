@@ -21,6 +21,7 @@ from pathlib import Path
 from report.models import (
     AnnualLineItem,
     FinancialsSection,
+    KpiSeries,
     QuarterlyLineItem,
     SectionStatus,
 )
@@ -109,36 +110,137 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         SectionStatus.PARTIAL if (quarterly_ok or annual_ok) else SectionStatus.MISSING_DATA
     )
 
+    requested_priorities = _read_chart_priorities_request(ticker, repo_root)
+    resolved_priorities, kpi_series = _resolve_priorities(
+        requested_priorities, line_items, ticker, repo_root, display_labels
+    )
+
     return FinancialsSection(
         status=status,
         quarter_labels=display_labels,
         line_items=line_items,
         annual_years=annual_years,
         annual_line_items=annual_items,
-        chart_priorities=_load_chart_priorities(ticker, repo_root, line_items),
+        chart_priorities=resolved_priorities,
+        kpi_chart_series=kpi_series,
     )
 
 
-def _load_chart_priorities(
-    ticker: str, repo_root: Path, line_items: list[QuarterlyLineItem]
-) -> list[str]:
-    """Read holdings.chart_priorities; fall back to the universal default 4.
-
-    Filters to names that actually exist as line_items in this report so a typo
-    in the JSON doesn't render an empty chart.
-    """
-    available = {li.line_item.lower(): li.line_item for li in line_items}
+def _read_chart_priorities_request(ticker: str, repo_root: Path) -> list[str]:
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    requested: list[str] = []
-    if holdings_path.exists():
-        with open(holdings_path, encoding="utf-8") as f:
-            holdings = json.load(f)
-        raw = holdings.get("chart_priorities") or []
-        if isinstance(raw, list):
-            requested = [str(x) for x in raw if isinstance(x, str)]
-    if not requested:
-        requested = list(_DEFAULT_CHART_PRIORITIES)
-    return [available[name.lower()] for name in requested if name.lower() in available]
+    if not holdings_path.exists():
+        return list(_DEFAULT_CHART_PRIORITIES)
+    with open(holdings_path, encoding="utf-8") as f:
+        holdings = json.load(f)
+    raw = holdings.get("chart_priorities") or []
+    if isinstance(raw, list):
+        cleaned = [str(x) for x in raw if isinstance(x, str)]
+        if cleaned:
+            return cleaned
+    return list(_DEFAULT_CHART_PRIORITIES)
+
+
+def _resolve_priorities(
+    requested: list[str],
+    line_items: list[QuarterlyLineItem],
+    ticker: str,
+    repo_root: Path,
+    quarter_labels: list[str],
+) -> tuple[list[str], list[KpiSeries]]:
+    """Resolve each requested name against line_items → kpi_facts → drop.
+
+    Each name is tried first against the financials line_items (case-insensitive).
+    If not found, queried against kpi_facts. If neither has data, dropped silently.
+    Preserves the holdings-JSON ordering.
+    """
+    li_map = {li.line_item.lower(): li.line_item for li in line_items}
+    resolved: list[str] = []
+    kpi_series: list[KpiSeries] = []
+
+    db_path = repo_root / "data" / "portfolio.db"
+    conn: sqlite3.Connection | None = None
+    if db_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+
+    try:
+        for name in requested:
+            lower = name.lower()
+            if lower in li_map:
+                resolved.append(li_map[lower])
+                continue
+            if conn is None:
+                continue
+            series = _kpi_series_for(conn, ticker, name, quarter_labels)
+            if series is not None:
+                kpi_series.append(series)
+                resolved.append(series.name)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return resolved, kpi_series
+
+
+def _kpi_series_for(
+    conn: sqlite3.Connection,
+    ticker: str,
+    kpi_name: str,
+    quarter_labels: list[str],
+) -> KpiSeries | None:
+    """Pull a 12-quarter series for a kpi_facts metric, aligned to quarter_labels."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT kf.period_end, kf.value, kf.unit, kd.name
+        FROM kpi_facts kf
+        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+        WHERE kf.ticker = ?
+          AND kd.name = ?
+          AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
+        ORDER BY kf.period_end ASC
+        """,
+        (ticker.upper(), kpi_name),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return None
+    by_label: dict[str, float] = {}
+    canonical_name = kpi_name
+    canonical_unit = ""
+    for r in rows:
+        canonical_name = str(r["name"])
+        canonical_unit = str(r["unit"] or "")
+        period_end = str(r["period_end"])[:10]
+        # Period_end YYYY-MM-DD → "YYYY Qn" matching report quarter labels.
+        try:
+            year = int(period_end[:4])
+            month = int(period_end[5:7])
+        except ValueError:
+            continue
+        quarter = (month - 1) // 3 + 1
+        label = f"{year} Q{quarter}"
+        try:
+            by_label[label] = float(str(r["value"]))
+        except ValueError:
+            continue
+    values = [by_label.get(lbl) for lbl in quarter_labels]
+    if all(v is None for v in values):
+        return None
+    return KpiSeries(
+        name=canonical_name,
+        unit=_pretty_unit(canonical_unit),
+        quarters=quarter_labels,
+        values=values,
+    )
+
+
+def _pretty_unit(raw_unit: str) -> str:
+    if raw_unit == "percent":
+        return "%"
+    if raw_unit == "actual":
+        return ""
+    return raw_unit
 
 
 # ---------------------------------------------------------------------------

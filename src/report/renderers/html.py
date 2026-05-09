@@ -244,6 +244,10 @@ details.earnings-card[open] { background: #fcfcfd; }
 .seg-card-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; color: var(--muted); }
 .seg-card-row strong { color: var(--fg); font-variant-numeric: tabular-nums; }
 details.segment-details { margin-top: 6px; }
+details.seg-card-def { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--border); }
+details.seg-card-def summary { font-size: 11px; color: var(--muted); }
+details.seg-card-def p { font-size: 11.5px; line-height: 1.4; margin: 6px 0 0; color: var(--fg); }
+.seg-def-mark { font-size: 11px; vertical-align: super; opacity: 0.6; cursor: help; }
 """ + CHART_CSS + """
 .summary-grid {
   display: grid;
@@ -600,7 +604,9 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
     if _missing_callout(out, s.status, s.missing):
         return
     if s.line_items and s.chart_priorities:
-        _financial_charts(out, s.quarter_labels, s.line_items, s.chart_priorities)
+        _financial_charts(
+            out, s.quarter_labels, s.line_items, s.chart_priorities, list(s.kpi_chart_series)
+        )
     if s.line_items:
         out.write(
             f'<details class="financials-table"><summary>Full quarterly table — '
@@ -621,22 +627,31 @@ def _financial_charts(
     quarters: list[str],
     line_items: list[QuarterlyLineItem],
     priorities: list[str],
+    kpi_series: list[object],
 ) -> None:
     """Render N line charts — one per priority — in a fluid grid.
 
-    Number of charts is whatever the holdings JSON `chart_priorities` requests;
-    layout adapts (1 col on narrow, 2-3 col on wide) so 2 charts read clean and
-    8 charts still fit.
+    Each priority resolves first to a financials line_item, then falls back to
+    a kpi_facts series (e.g. ARPAC, GMV growth, NIM). Number of charts is
+    whatever the holdings JSON requests; the grid layout adapts.
     """
-    by_name = {li.line_item: li for li in line_items}
+    by_line_item = {li.line_item: li for li in line_items}
+    by_kpi_name = {getattr(s, "name"): s for s in kpi_series}
     grid_class = "chart-grid-1col" if len(priorities) == 1 else "chart-grid-2col"
     out.write(f'<div class="{grid_class}">\n')
     for name in priorities:
-        item = by_name.get(name)
-        if item is None:
+        if name in by_line_item:
+            item = by_line_item[name]
+            title = f"{item.line_item} ({item.unit})"
+            values = item.values
+        elif name in by_kpi_name:
+            ks = by_kpi_name[name]
+            unit = getattr(ks, "unit", "")
+            title = f"{name} ({unit})" if unit else name
+            values = list(getattr(ks, "values", []))
+        else:
             continue
-        title = f"{item.line_item} ({item.unit})"
-        out.write(f'<div class="chart-cell">{line_chart(item.values, quarters, title=title)}</div>\n')
+        out.write(f'<div class="chart-cell">{line_chart(values, quarters, title=title)}</div>\n')
     out.write("</div>\n")
 
 
@@ -677,8 +692,14 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     out.write(
         '<p class="meta">Sorted by latest-quarter magnitude, descending. '
         'Segments contributing &lt;1% of the bucket roll up into "Other". '
-        'Click each bucket to expand the table; the snapshot panel is always visible.</p>\n'
+        'Click each bucket to expand the table; the snapshot panel is always visible.'
     )
+    if s.segment_definitions and s.segment_definitions_fiscal_year:
+        out.write(
+            f' Hover a segment name with the <code>📖</code> mark for the 10-K '
+            f'definition (FY{s.segment_definitions_fiscal_year}).'
+        )
+    out.write("</p>\n")
     for label, group, anchor in (
         ("Revenue by product", s.revenue_by_product, "rev-product"),
         ("Revenue by geography", s.revenue_by_geography, "rev-geo"),
@@ -686,22 +707,30 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     ):
         if not group:
             continue
-        _segment_bucket(out, label, anchor, s.quarter_labels, group)
+        _segment_bucket(out, label, anchor, s.quarter_labels, group, s.segment_definitions)
 
 
 def _segment_bucket(
-    out: StringIO, label: str, anchor: str, quarters: list[str], rows: list[SegmentSeries]
+    out: StringIO,
+    label: str,
+    anchor: str,
+    quarters: list[str],
+    rows: list[SegmentSeries],
+    definitions: dict[str, str],
 ) -> None:
     """One bucket: snapshot panel (visible) + full table (in <details>)."""
     out.write(f'<h3 id="seg-{anchor}">{html.escape(label)}</h3>\n')
-    _segment_snapshot_panel(out, quarters, rows)
+    _segment_snapshot_panel(out, quarters, rows, definitions)
     out.write(f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n')
-    _segments_table(out, quarters, rows)
+    _segments_table(out, quarters, rows, definitions)
     out.write("</details>\n")
 
 
 def _segment_snapshot_panel(
-    out: StringIO, quarters: list[str], rows: list[SegmentSeries]
+    out: StringIO,
+    quarters: list[str],
+    rows: list[SegmentSeries],
+    definitions: dict[str, str],
 ) -> None:
     """Top-3 (by latest magnitude) cards + sparkline-per-segment summary list."""
     latest_label = quarters[-1] if quarters else ""
@@ -715,15 +744,31 @@ def _segment_snapshot_panel(
         spark = sparkline(r.values, width=140, height=32)
         out.write(
             f'<div class="seg-card">'
-            f'<div class="seg-card-name">{html.escape(r.segment_name)}</div>'
+            f'<div class="seg-card-name">{_segment_name_with_def(r.segment_name, definitions)}</div>'
             f'<div class="seg-card-spark">{spark}</div>'
             f'<div class="seg-card-row"><span>{html.escape(latest_label)}</span>'
             f'<strong>{latest_str}</strong></div>'
             f'<div class="seg-card-row"><span>Share</span><strong>{share_str}</strong></div>'
             f'<div class="seg-card-row"><span>YoY</span><strong>{yoy_str}</strong></div>'
-            f"</div>"
         )
+        definition = definitions.get(r.segment_name)
+        if definition:
+            out.write(
+                f'<details class="seg-card-def"><summary>10-K definition</summary>'
+                f'<p>{html.escape(definition)}</p></details>'
+            )
+        out.write("</div>")
     out.write("</div>\n")
+
+
+def _segment_name_with_def(name: str, definitions: dict[str, str]) -> str:
+    """Append a 📖 hover-mark when a definition exists. Tooltip via title attr."""
+    if name in definitions:
+        return (
+            f'<span title="{html.escape(definitions[name])}">{html.escape(name)} '
+            f'<span class="seg-def-mark">📖</span></span>'
+        )
+    return html.escape(name)
 
 
 def _segment_share(r: SegmentSeries, rows: list[SegmentSeries]) -> float | None:
@@ -743,7 +788,12 @@ def _last_non_null(values: list[float | None]) -> float | None:
     return None
 
 
-def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries]) -> None:
+def _segments_table(
+    out: StringIO,
+    quarters: list[str],
+    rows: list[SegmentSeries],
+    definitions: dict[str, str],
+) -> None:
     headers = ["Segment", "Trend", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
     out.write('<div class="table-wrap"><table>\n<thead><tr>')
     for h in headers:
@@ -751,7 +801,7 @@ def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries
     out.write("</tr></thead>\n<tbody>")
     for r in rows:
         out.write(
-            f'<tr><td>{html.escape(r.segment_name)}</td>'
+            f'<tr><td>{_segment_name_with_def(r.segment_name, definitions)}</td>'
             f'<td>{sparkline(r.values, width=100, height=24)}</td>'
         )
         for v in r.values:

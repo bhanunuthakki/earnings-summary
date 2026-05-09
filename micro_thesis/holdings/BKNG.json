@@ -6,6 +6,12 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Room nights × ADR × take-rate × connected-trip attach",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "FCF Margin (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {
