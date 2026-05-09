@@ -58,6 +58,7 @@ def init_db() -> None:
     cursor = conn.cursor()
     _create_tracked_companies(cursor)
     _create_quarterly_artifacts(cursor)
+    _create_output_artifacts(cursor)
     _create_fmp_endpoint_status(cursor)
     conn.commit()
     conn.close()
@@ -122,6 +123,30 @@ def _create_quarterly_artifacts(cursor: sqlite3.Cursor) -> None:
             ("step_llm_summarized", "BOOLEAN DEFAULT 0"),
             ("step_pdf_generated", "BOOLEAN DEFAULT 0"),
         ],
+    )
+
+
+def _create_output_artifacts(cursor: sqlite3.Cursor) -> None:
+    """Per-ticker (not per-quarter) outputs the autopilot/MEMO + TRACK +
+    consolidate stages produce: HTML memos, markdown thesis trackers, and
+    master-transcript PDFs. The consolidator writes into outputs/<TICKER>/
+    and registers the latest of each kind here."""
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS output_artifacts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker       TEXT NOT NULL,
+            kind         TEXT NOT NULL CHECK(kind IN ('memo','thesis_tracker','master_pdf','ticker_index','portfolio_index')),
+            path         TEXT NOT NULL,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            is_latest    INTEGER DEFAULT 1,
+            UNIQUE(ticker, kind, path)
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_output_artifacts_latest "
+        "ON output_artifacts(ticker, kind, is_latest)"
     )
 
 
@@ -506,6 +531,49 @@ def get_company_artifacts(ticker: str) -> list[dict[str, object]]:
         "SELECT * FROM quarterly_artifacts WHERE ticker = ? ORDER BY year DESC, quarter DESC",
         (ticker.upper(),),
     )
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def register_output_artifact(ticker: str, kind: str, path: str) -> None:
+    """Insert (or upsert) an output_artifacts row, marking previous (ticker, kind)
+    rows as is_latest=0 so the latest one wins. Used by the consolidator."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE output_artifacts SET is_latest = 0 WHERE ticker = ? AND kind = ?",
+        (ticker.upper(), kind),
+    )
+    cursor.execute(
+        """
+        INSERT INTO output_artifacts (ticker, kind, path, is_latest)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT(ticker, kind, path) DO UPDATE SET
+            generated_at = CURRENT_TIMESTAMP,
+            is_latest = 1
+        """,
+        (ticker.upper(), kind, path),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_latest_output_artifacts(ticker: str | None = None) -> list[dict[str, object]]:
+    """Return latest of each kind across (optionally filtered by) ticker."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    if ticker:
+        cursor.execute(
+            "SELECT * FROM output_artifacts WHERE ticker = ? AND is_latest = 1 "
+            "ORDER BY kind, generated_at DESC",
+            (ticker.upper(),),
+        )
+    else:
+        cursor.execute(
+            "SELECT * FROM output_artifacts WHERE is_latest = 1 "
+            "ORDER BY ticker, kind"
+        )
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]

@@ -24,6 +24,15 @@ data/
 # Transcript data (user-specific, not checked in)
 transcripts/
 
+# Consolidated per-ticker outputs (memo HTML, tracker copies, master PDFs,
+# index.html). Source-of-truth lives in transcripts/ and micro_thesis/;
+# outputs/ is a derived view rebuilt by execution/consolidate_outputs.py.
+outputs/
+
+# Auto-generated per-run thesis tracker markdowns (micro_thesis/holdings/
+# JSON schemas ARE checked in; the dated tracker outputs are not).
+micro_thesis/thesis-tracker-*-*.md
+
 # Downloaded IR documents (PDFs — large binaries, user-specific)
 ir_documents/
 
