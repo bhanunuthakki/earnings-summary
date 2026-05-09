@@ -6,6 +6,12 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Member growth × cross-buy × take rate",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Net income",
+    "FCF Margin (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

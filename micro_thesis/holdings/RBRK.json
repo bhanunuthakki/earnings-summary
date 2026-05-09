@@ -6,6 +6,12 @@
   "verdict": "Intact",
   "verdict_color": "green",
   "key_driver": "Net new subscription ARR cadence + sub ARR contribution margin inflection",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "Operating Cash Flow YoY Growth (USD)"
+  ],
   "tier_1_kpis": [
     {
       "name": "Net new subscription ARR ($)",

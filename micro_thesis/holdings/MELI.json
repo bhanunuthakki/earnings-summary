@@ -6,6 +6,14 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "GMV Growth (FXN)",
+    "TPV Growth (FXN)",
+    "Items Sold"
+  ],
   "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {

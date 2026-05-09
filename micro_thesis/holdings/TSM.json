@@ -6,6 +6,13 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "3nm + 5nm wafer volumes × ASP × utilization",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "Capex",
+    "Capex / Revenue (GAAP)"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

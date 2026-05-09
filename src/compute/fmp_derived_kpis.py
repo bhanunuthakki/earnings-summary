@@ -33,14 +33,21 @@ KPI_OPERATING_MARGIN_GAAP = "Operating Margin (GAAP)"
 KPI_NET_MARGIN_GAAP = "Net Income Margin (GAAP)"
 KPI_GROSS_MARGIN_GAAP = "Gross Margin (GAAP)"
 KPI_REVENUE_YOY_USD = "Revenue YoY Growth (USD)"
+KPI_CAPEX_REVENUE_RATIO = "Capex / Revenue (GAAP)"
+KPI_FCF_MARGIN_GAAP = "FCF Margin (GAAP)"
+KPI_OCF_YOY_USD = "Operating Cash Flow YoY Growth (USD)"
 
 _DERIVED_KPI_NAMES: tuple[str, ...] = (
     KPI_OPERATING_MARGIN_GAAP,
     KPI_NET_MARGIN_GAAP,
     KPI_GROSS_MARGIN_GAAP,
     KPI_REVENUE_YOY_USD,
+    KPI_CAPEX_REVENUE_RATIO,
+    KPI_FCF_MARGIN_GAAP,
+    KPI_OCF_YOY_USD,
 )
 
+# Income-statement line items needed for margin + revenue YoY derivations.
 _REQUIRED_LINE_ITEMS: tuple[str, ...] = (
     "revenue",
     "operating_income",
@@ -48,10 +55,23 @@ _REQUIRED_LINE_ITEMS: tuple[str, ...] = (
     "gross_profit",
 )
 
+# Cash-flow / capex line items needed for the new derivers. Optional — if any
+# are missing for a quarter we just skip that derivation rather than the row.
+_OPTIONAL_LINE_ITEMS: tuple[str, ...] = (
+    "capital_expenditure",
+    "free_cash_flow",
+    "operating_cash_flow",
+)
+
 
 @dataclass(frozen=True)
 class QuarterlyFacts:
-    """All four required line_items for one (ticker, period_end, fiscal_period_type)."""
+    """All four required line_items for one (ticker, period_end, fiscal_period_type).
+
+    Optional cash-flow fields (capital_expenditure / free_cash_flow / operating_cash_flow)
+    are None when not disclosed for that quarter — derivers that need them skip
+    silently rather than failing the whole row.
+    """
 
     ticker: str
     period_end: datetime
@@ -61,6 +81,9 @@ class QuarterlyFacts:
     net_income: Decimal
     gross_profit: Decimal
     source_doc_id: int
+    capital_expenditure: Decimal | None = None
+    free_cash_flow: Decimal | None = None
+    operating_cash_flow: Decimal | None = None
 
 
 def _fetch_quarterly_facts(
@@ -73,19 +96,21 @@ def _fetch_quarterly_facts(
     (period_end, fiscal_period_type) where ALL four required line items exist.
     Ordered period_end ASC (oldest first) so YoY lookback is straightforward.
     """
+    all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS
+    placeholders = ",".join("?" * len(all_line_items))
     cur = conn.execute(
-        """
+        f"""
         SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.source_doc_id
         FROM financial_facts ff
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
-          AND d.doc_type = 'fmp_income_statement'
+          AND d.doc_type IN ('fmp_income_statement', 'fmp_cashflow')
           AND d.file_path LIKE '%_quarterly.json'
-          AND ff.line_item IN (?, ?, ?, ?)
+          AND ff.line_item IN ({placeholders})
           AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
         ORDER BY ff.period_end ASC
         """,
-        (ticker.upper(), *_REQUIRED_LINE_ITEMS),
+        (ticker.upper(), *all_line_items),
     )
     grouped: dict[tuple[datetime, str], dict[str, object]] = {}
     for row in cur.fetchall():
@@ -113,6 +138,9 @@ def _fetch_quarterly_facts(
                 net_income=bucket["net_income"],
                 gross_profit=bucket["gross_profit"],
                 source_doc_id=int(bucket["_source_doc_id"]),
+                capital_expenditure=bucket.get("capital_expenditure"),  # type: ignore[arg-type]
+                free_cash_flow=bucket.get("free_cash_flow"),  # type: ignore[arg-type]
+                operating_cash_flow=bucket.get("operating_cash_flow"),  # type: ignore[arg-type]
             )
         )
     return results
@@ -180,6 +208,30 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 source_doc_id=f.source_doc_id,
             )
         )
+        # Capex / Revenue — capex stored as a negative cash-flow figure;
+        # take abs() so the ratio reads as a positive intensity %.
+        if f.capital_expenditure is not None:
+            out.append(
+                DerivedKpiRow(
+                    period_end=f.period_end,
+                    fiscal_period_type=f.fiscal_period_type,
+                    name=KPI_CAPEX_REVENUE_RATIO,
+                    value=_pct(abs(f.capital_expenditure), f.revenue),
+                    unit=Unit.PERCENT,
+                    source_doc_id=f.source_doc_id,
+                )
+            )
+        if f.free_cash_flow is not None:
+            out.append(
+                DerivedKpiRow(
+                    period_end=f.period_end,
+                    fiscal_period_type=f.fiscal_period_type,
+                    name=KPI_FCF_MARGIN_GAAP,
+                    value=_pct(f.free_cash_flow, f.revenue),
+                    unit=Unit.PERCENT,
+                    source_doc_id=f.source_doc_id,
+                )
+            )
 
     for series in by_quarter_label.values():
         for i, f in enumerate(series):
@@ -202,6 +254,26 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     source_doc_id=f.source_doc_id,
                 )
             )
+            if (
+                f.operating_cash_flow is not None
+                and prior.operating_cash_flow is not None
+                and prior.operating_cash_flow != 0
+            ):
+                ocf_yoy = (
+                    (f.operating_cash_flow - prior.operating_cash_flow)
+                    / prior.operating_cash_flow
+                    * Decimal(100)
+                )
+                out.append(
+                    DerivedKpiRow(
+                        period_end=f.period_end,
+                        fiscal_period_type=f.fiscal_period_type,
+                        name=KPI_OCF_YOY_USD,
+                        value=ocf_yoy,
+                        unit=Unit.PERCENT,
+                        source_doc_id=f.source_doc_id,
+                    )
+                )
     return out
 
 

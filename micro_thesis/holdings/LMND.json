@@ -6,6 +6,12 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Gross loss ratio trajectory + IFP growth",
+  "chart_priorities": [
+    "Revenue",
+    "Gross profit",
+    "Operating income",
+    "Operating cash flow"
+  ],
   "_status": "needs_user_review",
   "tier_1_kpis": [
     {

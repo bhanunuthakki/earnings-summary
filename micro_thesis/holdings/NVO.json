@@ -6,6 +6,13 @@
   "verdict": "Broken (original thesis); Held under revised volume/share/patent thesis",
   "verdict_color": "red",
   "key_driver": "Global GLP-1 script volume vs price decline + patent extensions in EM + share defense vs Lilly",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "Capex",
+    "Capex / Revenue (GAAP)"
+  ],
   "tier_1_kpis": [
     {
       "name": "Global GLP-1 script (TRx) volume growth — diabetes + obesity combined",

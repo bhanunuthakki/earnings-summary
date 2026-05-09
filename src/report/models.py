@@ -150,6 +150,19 @@ class AnnualLineItem(BaseModel):
     values: list[float | None] = Field(default_factory=list)
 
 
+class KpiSeries(BaseModel):
+    """A kpi_facts time series aligned to the financials quarter axis.
+
+    Used when chart_priorities references a KPI name that lives in kpi_facts
+    rather than in the metrics view (e.g. ARPAC, GMV growth, NIM).
+    """
+
+    name: str
+    unit: str  # "%", "USD bn", etc.
+    quarters: list[str] = Field(default_factory=list)
+    values: list[float | None] = Field(default_factory=list)
+
+
 class FinancialsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -158,6 +171,7 @@ class FinancialsSection(BaseModel):
     annual_years: list[int] = Field(default_factory=list)  # 10 fiscal years
     annual_line_items: list[AnnualLineItem] = Field(default_factory=list)
     chart_priorities: list[str] = Field(default_factory=list)  # display names, dynamic count
+    kpi_chart_series: list[KpiSeries] = Field(default_factory=list)
 
 
 class SegmentSeries(BaseModel):
@@ -176,6 +190,8 @@ class SegmentsSection(BaseModel):
     revenue_by_product: list[SegmentSeries] = Field(default_factory=list)
     revenue_by_geography: list[SegmentSeries] = Field(default_factory=list)
     operating_income: list[SegmentSeries] = Field(default_factory=list)
+    segment_definitions: dict[str, str] = Field(default_factory=dict)
+    segment_definitions_fiscal_year: int | None = None
 
 
 # ---------------------------------------------------------------------------

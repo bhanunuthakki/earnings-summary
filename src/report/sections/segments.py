@@ -11,6 +11,7 @@ under `data_rules` and are applied via report.rules.TickerRules.canonicalize.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
@@ -70,13 +71,27 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
     quarters_full, display_labels = _quarter_axes(deduped)
 
     grids = _build_grids(deduped, quarters_full, display_labels)
+    definitions, definitions_year = _load_segment_definitions(ticker, repo_root)
     return SegmentsSection(
         status=SectionStatus.OK if any(grids.values()) else SectionStatus.PARTIAL,
         quarter_labels=display_labels,
         revenue_by_product=grids["revenue_by_product"],
         revenue_by_geography=grids["revenue_by_geography"],
         operating_income=grids["operating_income"],
+        segment_definitions=definitions,
+        segment_definitions_fiscal_year=definitions_year,
     )
+
+
+def _load_segment_definitions(ticker: str, repo_root: Path) -> tuple[dict[str, str], int | None]:
+    """Read the cached segment definitions file produced by extract_segment_definitions.py."""
+    cache_path = repo_root / "data" / "segment_definitions" / f"{ticker.upper()}.json"
+    if not cache_path.exists():
+        return ({}, None)
+    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    raw = cached.get("definitions") or {}
+    out = {str(k): str(v) for k, v in raw.items() if isinstance(v, str) and v.strip()}
+    return (out, cached.get("fiscal_year"))
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,327 @@
+"""Stage 2 of the KPI cascade — extract custom tier_1_kpis from `.tmp/*_summary.txt`.
+
+Stage 1 (`fmp_derived_kpis`) handled universal financial KPIs deterministically
+from FMP raw data. Stage 2 reaches into the LLM-generated quarterly summaries
+already on disk to fill in custom per-ticker metrics (GMV, ARPAC, NIM, etc.)
+that aren't derivable from raw line items.
+
+Pipeline per (ticker, quarter):
+  1. Locate `.tmp/{TICKER}_Q{N}_{YEAR}_summary.txt`.
+  2. Auto-register as a `documents` row (`source_type=synthesized`,
+     `doc_type=llm_summary`) so kpi_facts can FK to it.
+  3. From the holdings JSON tier_1_kpis, list KPI names NOT yet present in
+     kpi_facts for this (ticker, period). Skip if all are already extracted.
+  4. Single Haiku call returning {kpi_name: {value, unit, confidence}}.
+  5. Persist via the existing KpiExtractionManifest pipeline.
+
+Idempotent: re-runs skip (ticker, quarter) combinations whose missing-KPI
+list is empty. Force re-extraction with `--refresh`.
+
+Per-run state lands in `data/kpi_extraction_log.json` keyed by ticker → quarter.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sqlite3
+import time
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from decimal import Decimal
+from pathlib import Path
+
+from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from models.documents import SourceType
+from models.facts import FiscalPeriodType, Unit
+from pipeline.kpi_persistence import (
+    KpiExtractionManifest,
+    KpiValue,
+    persist_manifest,
+)
+from pipeline.run_accounting import start_run
+
+_SUMMARY_RX = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_summary\.txt$")
+
+# How filename Q + calendar year map to a period_end. Most tickers use calendar
+# fiscal-year mapping; tickers with off-calendar fiscal years (RBRK, VEEV, NVO)
+# would need an override map — out of scope for this MVP, those will produce
+# slightly off period_ends until refined.
+_QUARTER_PERIOD_END = {
+    1: (3, 31),
+    2: (6, 30),
+    3: (9, 30),
+    4: (12, 31),
+}
+
+
+@dataclass
+class TickerExtractionLog:
+    """Per-ticker run record persisted to data/kpi_extraction_log.json."""
+
+    ticker: str
+    stage: str = "stage_2_summaries"
+    started_at: str = ""
+    ended_at: str = ""
+    elapsed_ms: int = 0
+    quarters_attempted: list[str] = field(default_factory=list)
+    quarters_extracted: list[str] = field(default_factory=list)
+    quarters_skipped_no_missing: list[str] = field(default_factory=list)
+    kpis_inserted_total: int = 0
+    error: str | None = None
+
+
+def extract_for_ticker(
+    ticker: str,
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    refresh: bool = False,
+) -> TickerExtractionLog:
+    ticker = ticker.upper()
+    log = TickerExtractionLog(ticker=ticker)
+    log.started_at = _now_iso_z()
+    t0 = time.perf_counter()
+
+    summaries = _list_summaries(repo_root, ticker)
+    holdings = _read_holdings(repo_root, ticker)
+    if holdings is None:
+        log.error = f"no holdings JSON for {ticker}"
+        return _close_log(log, t0)
+    tier_1_names = _tier_1_names(holdings)
+    if not tier_1_names:
+        log.error = "holdings JSON has no tier_1_kpis"
+        return _close_log(log, t0)
+
+    for quarter, year, summary_path in summaries:
+        period_end = _period_end(quarter, year)
+        period_label = f"Q{quarter} {year}"
+        log.quarters_attempted.append(period_label)
+
+        already_extracted = _already_extracted_kpis(
+            conn, ticker, period_end, tier_1_names
+        )
+        missing = [n for n in tier_1_names if n not in already_extracted]
+        if not missing and not refresh:
+            log.quarters_skipped_no_missing.append(period_label)
+            continue
+
+        try:
+            doc_id = _ensure_summary_document_row(conn, ticker, period_end, summary_path)
+            text = summary_path.read_text(encoding="utf-8")
+            extracted = _llm_extract(ticker, period_label, missing if not refresh else tier_1_names, text)
+            if not extracted:
+                continue
+            manifest = _build_manifest(
+                ticker, period_end, FiscalPeriodType(f"Q{quarter}"), doc_id, extracted
+            )
+            run_id = start_run(
+                conn,
+                directive="extract_kpis_from_summaries",
+                ticker_scope=[ticker],
+            )
+            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            log.kpis_inserted_total += result.inserted
+            log.quarters_extracted.append(period_label)
+        except Exception as e:
+            log.error = f"{period_label}: {type(e).__name__}: {e}"
+            break
+
+    return _close_log(log, t0)
+
+
+def _list_summaries(repo_root: Path, ticker: str) -> list[tuple[int, int, Path]]:
+    tmp = repo_root / ".tmp"
+    if not tmp.exists():
+        return []
+    out: list[tuple[int, int, Path]] = []
+    for p in tmp.iterdir():
+        if not p.is_file():
+            continue
+        m = _SUMMARY_RX.match(p.name)
+        if not m or m.group("ticker") != ticker:
+            continue
+        out.append((int(m.group("q")), int(m.group("y")), p))
+    out.sort()
+    return out
+
+
+def _read_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _tier_1_names(holdings: dict[str, object]) -> list[str]:
+    raw = holdings.get("tier_1_kpis") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for k in raw:
+        if isinstance(k, dict):
+            name = str(k.get("name", "")).strip()
+            if name:
+                out.append(name)
+    return out
+
+
+def _period_end(quarter: int, year: int) -> datetime:
+    month, day = _QUARTER_PERIOD_END[quarter]
+    return datetime(year, month, day)
+
+
+def _already_extracted_kpis(
+    conn: sqlite3.Connection, ticker: str, period_end: datetime, names: list[str]
+) -> set[str]:
+    if not names:
+        return set()
+    placeholders = ",".join("?" * len(names))
+    cur = conn.execute(
+        f"""
+        SELECT DISTINCT kd.name
+        FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+        WHERE kf.ticker = ? AND kf.period_end = ?
+          AND kd.name IN ({placeholders})
+        """,
+        (ticker, period_end, *names),
+    )
+    return {str(r["name"]) for r in cur.fetchall()}
+
+
+def _ensure_summary_document_row(
+    conn: sqlite3.Connection, ticker: str, period_end: datetime, path: Path
+) -> int:
+    """Insert documents row for the summary file if not already present, return id."""
+    raw = path.read_bytes()
+    sha = hashlib.sha256(raw).hexdigest()
+    existing = conn.execute(
+        "SELECT id FROM documents WHERE sha256 = ?", (sha,)
+    ).fetchone()
+    if existing is not None:
+        return int(existing["id"])
+    cur = conn.execute(
+        """
+        INSERT INTO documents
+          (ticker, source_type, doc_type, period_end, file_path, sha256,
+           fetched_at, fetch_status, raw_bytes_size)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticker,
+            SourceType.LLM_EXTRACTED.value,
+            "llm_summary",
+            period_end,
+            str(path).replace("\\", "/"),
+            sha,
+            datetime.now(timezone.utc),
+            "ok",
+            len(raw),
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def _llm_extract(
+    ticker: str, period_label: str, kpi_names: list[str], summary_text: str
+) -> dict[str, dict[str, object]]:
+    """Single Haiku call. Returns {kpi_name: {value, unit, confidence}}."""
+    if not kpi_names:
+        return {}
+    names_block = "\n".join(f"- {n}" for n in kpi_names)
+    prompt = f"""You are extracting structured KPI values from an LLM-generated quarterly summary for {ticker} ({period_label}).
+
+The summary follows a stable shape: it contains a "Financial Highlights" markdown table with columns Metric / Value / QoQ / YoY / Miss/Beat, plus prose sections covering Operational Highlights, Management Outlook, and Q&A. Numerical KPIs typically live in the table or in section #4 (guidance) and #5 (Q&A); operational KPIs (subscriber counts, segment growth %, etc.) live in section #3.
+
+For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not guidance for next quarter). Return a JSON object keyed by the EXACT name I gave you. Values:
+  - "value": numeric (no units; e.g. 12.5 not "12.5%"). Convert as needed (e.g. "$1.2 billion" → 1200000000, "+15%" → 15.0).
+  - "unit": one of "percent" / "usd" / "ratio" / "count" / "ratio_per_unit" / "actual"
+  - "confidence": float 0.0–1.0; lower if you had to estimate from context
+
+If a KPI is not disclosed in the summary, OMIT IT from the response. Do not guess.
+
+KPI names to extract:
+{names_block}
+
+Summary text:
+\"\"\"
+{summary_text}
+\"\"\"
+
+Return ONLY the JSON object — no markdown fence, no commentary."""
+
+    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RE.sub("", raw).strip()
+    # Haiku occasionally appends commentary after the JSON; raw_decode peels
+    # off the first top-level value and ignores the rest.
+    start = raw.find("{")
+    if start < 0:
+        return {}
+    decoder = json.JSONDecoder()
+    parsed, _ = decoder.raw_decode(raw[start:])
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): v for k, v in parsed.items() if isinstance(v, dict) and "value" in v}
+
+
+def _build_manifest(
+    ticker: str,
+    period_end: datetime,
+    fpt: FiscalPeriodType,
+    doc_id: int,
+    extracted: dict[str, dict[str, object]],
+) -> KpiExtractionManifest:
+    values: list[KpiValue] = []
+    for name, payload in extracted.items():
+        try:
+            v = Decimal(str(payload.get("value")))
+        except (TypeError, ValueError):
+            continue
+        unit_raw = str(payload.get("unit") or "actual")
+        try:
+            unit = Unit(unit_raw)
+        except ValueError:
+            unit = Unit.ACTUAL
+        conf_raw = payload.get("confidence", 0.85)
+        try:
+            confidence = max(0.0, min(1.0, float(conf_raw)))
+        except (TypeError, ValueError):
+            confidence = 0.85
+        values.append(KpiValue(name=name, value=v, unit=unit, confidence=confidence))
+
+    return KpiExtractionManifest(
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fpt,
+        source_doc_id=doc_id,
+        primary_source=SourceType.LLM_EXTRACTED,
+        values=values,
+    )
+
+
+def _now_iso_z() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _close_log(log: TickerExtractionLog, t0: float) -> TickerExtractionLog:
+    log.ended_at = _now_iso_z()
+    log.elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    return log
+
+
+def write_log(repo_root: Path, results: list[TickerExtractionLog]) -> Path:
+    """Append/overwrite ticker entries in `data/kpi_extraction_log.json`."""
+    log_path = repo_root / "data" / "kpi_extraction_log.json"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    if log_path.exists():
+        existing = json.loads(log_path.read_text(encoding="utf-8"))
+    else:
+        existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    for r in results:
+        existing.setdefault(r.ticker, {})[r.stage] = asdict(r)
+    log_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    return log_path
