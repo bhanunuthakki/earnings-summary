@@ -1,18 +1,30 @@
-import os
-import google.generativeai as genai
-from dotenv import load_dotenv
+"""
+src/llm_client.py
+-----------------
+Prompt library for the project. Each function builds a domain-specific prompt
+(summary, press release, presentation, SayDo, thesis tracker, metadata) and
+delegates the actual LLM call to `llm_router.call_llm()`.
 
-load_dotenv()
+Provider routing — Claude CLI (subscription) primary, Gemini API fallback —
+is handled in `src/llm_router.py`. This module does NOT import any LLM SDK
+directly; everything goes through the router so future provider swaps are
+single-file changes.
+"""
 
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+from __future__ import annotations
+
+import json
+
+from llm_router import call_llm
 
 
-def generate_pairwise_analysis(prev_summary, curr_summary):
-    """
-    Generates a specific "Say-Do" analysis comparing two sequential quarters.
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
+# ---------------------------------------------------------------------------
+# Pairwise SayDo: previous-quarter outlook vs current-quarter actuals
+# ---------------------------------------------------------------------------
 
+
+def generate_pairwise_analysis(prev_summary: dict, curr_summary: dict) -> str:
+    """Strict Say-Do analysis between two consecutive quarter summaries."""
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
 
@@ -30,10 +42,10 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     **Analysis Requirements:**
     1.  **Context:** What did they promise? (Guidance, Targets, Strategic Goals).
     2.  **Execution:** What did they actually deliver? (Results, Misses, Beats).
-    3.  **Analyst Verdict:** 
+    3.  **Analyst Verdict:**
         *   **Attribution:** Was any miss/beat due to **Execution** (Management Performance) or **Exogenous Factors** (Macro, Supply Chain, One-offs)?
         *   **Thesis Impact:** Is this a structural issue or a temporary blip?
-    
+
     **Output Format (Strict Markdown):**
     ## Analysis: {prev_q_str} vs {curr_q_str}
 
@@ -41,7 +53,7 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     *   **Performance Rating:** **MET** / **MISSED** / **EXCEEDED** (Choose one)
     *   **Attribution:** [Execution vs. Exogenous explanation]
     *   **Thesis View:** [Bull/Bear implication]
-    
+
     ### 2. Say (The Promise)
     *   **Guidance:** [Specific numbers/targets from {prev_q_str}]
     *   **Strategy:** [Key initiatives promised]
@@ -50,29 +62,27 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     *   **Performance:** [Actuals in {curr_q_str}]
     *   **Gap Analysis:** [Specific variances]
     """
-    
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        return call_llm(prompt)
     except Exception as e:
         print(f"Error generating pairwise analysis: {e}")
         return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
 
-def generate_summary(text):
-    # ... existing code ...
 
-    """
-    Generates a 1-2 page summary of the earnings transcript.
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
-    
+# ---------------------------------------------------------------------------
+# Per-quarter transcript summary
+# ---------------------------------------------------------------------------
+
+
+def generate_summary(text: str) -> str:
+    """1-2 page structured summary of an earnings call transcript."""
     prompt = """
     You are an expert financial analyst. Please provide a detailed 1-2 page summary of the provided earnings call transcript.
 
     **STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
 
     **Output Format (Strict Markdown):**
-    
+
     # Earnings Call Summary: [Company Ticker] [Quarter] [Year]
 
     ## 1. Executive Summary
@@ -102,25 +112,23 @@ def generate_summary(text):
     ## 5. Q&A Key Points
     *   **Analyst Concerns:** [Top 2-3 contentious questions]
     *   **Management Response:** [How they answered usually defense or explanation]
-    
+
     Transcript:
     """
-    
     try:
-        response = model.generate_content(prompt + text)
-        return response.text
+        return call_llm(prompt + text)
     except Exception as e:
         print(f"CRITICAL ERROR: Summary generation failed for the following reason:\n{e}")
-        raise e # Re-raise to stop execution in main
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Press release summary
+# ---------------------------------------------------------------------------
 
 
 def generate_press_release_summary(text: str) -> str:
-    """
-    Generates a structured summary from an earnings press release.
-    Press releases are financial-forward — emphasize the numbers table and guidance.
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
-
+    """Structured summary from an earnings press release (numbers + guidance)."""
     prompt = """
 You are an expert financial analyst. Summarize the following earnings press release.
 This is sourced from the company's IR website, so it is the official financial release — be precise.
@@ -141,7 +149,7 @@ This is sourced from the company's IR website, so it is the official financial r
 | **Free Cash Flow** | [Value if disclosed] | N/A | N/A |
 
 ## 2. Key Business Metrics
-[List 3–6 company-specific KPIs disclosed in the release (e.g. DAUs, GMV, RPO, cloud revenue, etc.)]
+[List 3-6 company-specific KPIs disclosed in the release (e.g. DAUs, GMV, RPO, cloud revenue, etc.)]
 
 ## 3. Guidance (Next Quarter & Full Year)
 | Metric | Next Quarter | Full Year |
@@ -155,22 +163,20 @@ This is sourced from the company's IR website, so it is the official financial r
 
 Press Release:
 """
-
     try:
-        response = model.generate_content(prompt + text)
-        return response.text
+        return call_llm(prompt + text)
     except Exception as e:
         print(f"CRITICAL ERROR: Press release summary generation failed:\n{e}")
-        raise e
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Presentation deck brief
+# ---------------------------------------------------------------------------
 
 
 def generate_presentation_brief(text: str) -> str:
-    """
-    Generates a strategic brief from an earnings presentation slide deck.
-    Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
-
+    """Strategic brief from an earnings presentation slide deck."""
     prompt = """
 You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
 Extract the key strategic narrative — what story is management telling investors?
@@ -182,7 +188,7 @@ Extract the key strategic narrative — what story is management telling investo
 # Presentation Brief: [Company Ticker] [Quarter] [Year]
 
 ## 1. Management Narrative
-[2–3 sentences on the central investor story management is presenting this quarter]
+[2-3 sentences on the central investor story management is presenting this quarter]
 
 ## 2. Highlighted Metrics & Charts
 [List key data points, KPIs, or charts that management chose to prominently feature — these signal what they want investors to focus on]
@@ -198,40 +204,43 @@ Extract the key strategic narrative — what story is management telling investo
 
 Presentation Text:
 """
-
     try:
-        response = model.generate_content(prompt + text)
-        return response.text
+        return call_llm(prompt + text)
     except Exception as e:
         print(f"CRITICAL ERROR: Presentation brief generation failed:\n{e}")
-        raise e
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Micro-thesis tracker update
+# ---------------------------------------------------------------------------
+
 
 def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> str:
     """
     Generate an updated micro-thesis tracker document for a holding.
 
     Args:
-        ticker: Company ticker (e.g. "GOOG")
-        schema: Holdings JSON schema from micro_thesis/holdings/<TICKER>.json
-        quarters: List of {year, quarter, summaries: {doc_type: text}} dicts, chronological order
-
+        ticker:   Company ticker (e.g. "GOOG")
+        schema:   Holdings JSON schema from micro_thesis/holdings/<TICKER>.json
+        quarters: List of {year, quarter, summaries: {doc_type: text}} dicts,
+                  chronological order
     Returns:
         Markdown thesis tracker document.
     """
-    model = genai.GenerativeModel("gemini-flash-latest")
-
-    # Serialize thesis schema
     thesis_text = json.dumps(schema, indent=2)
 
-    # Build quarter context
     quarter_blocks = []
     for q in quarters:
         block = f"\n### {q['quarter']} {q['year']}\n"
         for doc_type, text in q["summaries"].items():
-            label = {"transcript": "Transcript Summary", "press_release": "Press Release Summary", "presentation": "Presentation Brief"}.get(doc_type, doc_type)
+            label = {
+                "transcript": "Transcript Summary",
+                "press_release": "Press Release Summary",
+                "presentation": "Presentation Brief",
+            }.get(doc_type, doc_type)
             block += f"\n**{label}:**\n{text[:3000]}\n"  # Cap per-doc to 3k chars
         quarter_blocks.append(block)
-
     quarters_context = "\n".join(quarter_blocks)
 
     prompt = f"""You are a senior fundamental equity analyst tracking a concentrated long position.
@@ -257,10 +266,10 @@ def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> s
 ## Tier 1 KPI Scorecard
 | KPI | Latest Value | Trend | vs. Break Threshold | Status |
 | :--- | :--- | :--- | :--- | :--- |
-[For each tier_1_kpi in the schema: fill in latest known value, direction (↑↓→), compare to the break condition, flag 🟢/🟡/🔴]
+[For each tier_1_kpi in the schema: fill in latest known value, direction (up/down/flat), compare to the break condition, flag status]
 
 ## Key Developments This Period
-[3–5 bullet points on material changes — new products, macro shifts, competitive moves, management credibility events]
+[3-5 bullet points on material changes — new products, macro shifts, competitive moves, management credibility events]
 
 ## Say-Do Assessment
 [Did management deliver on prior-quarter commitments? Rate: MET / MIXED / MISSED. Cite specific promises vs. actuals.]
@@ -274,52 +283,48 @@ def generate_thesis_update(ticker: str, schema: dict, quarters: list[dict]) -> s
 [Any material developments from the competitive_watchlist since last tracker]
 
 ## Open Questions for Next Quarter
-[2–3 specific things to listen for / look for in next earnings]
+[2-3 specific things to listen for / look for in next earnings]
 
 ## Analyst Notes
 [Any asymmetries, positioning thoughts, or thesis evolution observations]
 """
-
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        return call_llm(prompt)
     except Exception as e:
-        print(f"CRITICAL ERROR: Thesis update generation failed for {ticker}:\\n{e}")
-        raise e
+        print(f"CRITICAL ERROR: Thesis update generation failed for {ticker}:\n{e}")
+        raise
 
 
-def generate_strategic_analysis(summaries_list):
+# ---------------------------------------------------------------------------
+# Strategic analysis — multi-quarter Say-Do over a window
+# ---------------------------------------------------------------------------
 
-    """
-    Generates a strategic analysis comparing performance vs expectations across quarters.
-    summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
-    
-    # Construct the input context
+
+def generate_strategic_analysis(summaries_list: list[dict]) -> str:
+    """Multi-quarter Say-Do narrative across a chronological window."""
     context_str = ""
     for item in summaries_list:
         context_str += f"\n--- {item['quarter']} {item['year']} SUMMARY ---\n{item['text']}\n"
-    
+
     prompt = """
-    You are a Strategic Management Consultant for this company. 
-    
-    **Goal:** Analyze the provided chronological earnings summaries to track the "Say-Do" ratio of management. 
+    You are a Strategic Management Consultant for this company.
+
+    **Goal:** Analyze the provided chronological earnings summaries to track the "Say-Do" ratio of management.
     Specifically, does the company achieve the goals and guidance it sets in one quarter when reported in the next?
 
     **Input:** A sequence of earnings call summaries.
 
     **Output Structure:**
-    
+
     # Strategic Performance Analysis
-    
+
     ## Executive Outlook Assessment
     Provide a high-level verdict: Is management credible? Do they consistently beat, meet, or miss their own expectations?
 
     ## Quarter-by-Quarter Track Record
-    
+
     (Iterate through the timeline, comparing Q(N) Outlook to Q(N+1) Results)
-    
+
     ### [Quarter N] Guidance vs [Quarter N+1] Reality
     *   **Expectation:** What did they promise in [Quarter N] (Outlook/Guidance)?
     *   **Reality:** What actually happened in [Quarter N+1]?
@@ -330,20 +335,21 @@ def generate_strategic_analysis(summaries_list):
 
     **Tone:** Analytical, objective, and critical where necessary.
     """
-    
     try:
-        response = model.generate_content(prompt + context_str)
-        return response.text
+        return call_llm(prompt + context_str)
     except Exception as e:
         print(f"CRITICAL ERROR: Analysis generation failed:\n{e}")
-        raise e
+        raise
 
-def identify_transcript_metadata(text_snippet):
-    """
-    Identifies the Company Ticker, Quarter, and Year from the transcript text.
-    """
-    model = genai.GenerativeModel('gemini-flash-latest')
-    
+
+# ---------------------------------------------------------------------------
+# Filename / metadata extraction (used by smart_rename in src/parser.py)
+# ---------------------------------------------------------------------------
+
+
+def identify_transcript_metadata(text_snippet: str) -> str:
+    """Identify (TICKER, Quarter, Year) from a transcript header. Returns
+    `TICKER_QX_YYYY` or `UNKNOWN`."""
     prompt = """
     Analyze the following text from an earnings call transcript cover page or header.
     Identify the:
@@ -358,17 +364,13 @@ def identify_transcript_metadata(text_snippet):
     TICKER_QX_YYYY
 
     Example: NVDA_Q1_2026
-    
+
     If you cannot identify the information with confidence, return "UNKNOWN".
-    
+
     Text:
     """
-    
     try:
-        response = model.generate_content(prompt + text_snippet[:2000]) # First 2000 chars should be enough
-        return response.text.strip()
+        return call_llm(prompt + text_snippet[:2000]).strip()
     except Exception as e:
         print(f"Error identifying metadata: {e}")
         return "UNKNOWN"
-
-

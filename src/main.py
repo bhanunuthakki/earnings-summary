@@ -232,7 +232,8 @@ def main(target_company=None):
                     summary_text = generate_summary(text)
                     with open(cache_path, 'w', encoding='utf-8') as f:
                         f.write(summary_text)
-                    time.sleep(30) # Rate limit
+                    # Throttling lives in src/llm_router (Gemini fallback path
+                    # only; Claude CLI primary needs no per-call sleep).
 
                 curr_summary = {'quarter': quarter, 'year': year, 'text': summary_text}
 
