@@ -42,7 +42,11 @@ from pipeline.kpi_persistence import (
 )
 from pipeline.run_accounting import start_run
 
-_SUMMARY_RX = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_summary\.txt$")
+# Matches both the canonical `_summary.txt` and the MELI/NU `_investor_update_summary.txt`
+# variant — same per-quarter LLM-summary shape, just produced from a different source PDF.
+_SUMMARY_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
+)
 
 # How filename Q + calendar year map to a period_end. Most tickers use calendar
 # fiscal-year mapping; tickers with off-calendar fiscal years (RBRK, VEEV, NVO)
