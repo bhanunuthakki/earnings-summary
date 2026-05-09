@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Windows Task Scheduler definition: hourly catch-up onboarder for tickers
+  that bypassed db.track_company's auto-onboard hook (raw SQL / external API
+  inserts). Wraps execution/onboard_pending_tickers.py.
+
+  Calendar trigger: every hour at :17 past, starting at midnight. Off-cycle
+  from the FMP API's busy hours and offset from the autopilot's monthly run
+  on the 15th @ 06:00.
+
+  Behavior: idempotent — when no tickers are pending, the script exits 0
+  with an empty results array. So running every hour is safe.
+
+  Import via:
+    schtasks /create /tn "earnings-summary\onboard_pending" /xml <path> /ru "%USERNAME%"
+  See cron\SETUP_WINDOWS_SCHEDULER.md.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Earnings-summary hourly onboarding catch-up for newly-tracked tickers.</Description>
+    <URI>\earnings-summary\onboard_pending</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-05-09T00:17:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+      <Repetition>
+        <Interval>PT1H</Interval>
+        <Duration>P1D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+      <Arguments>/c "%LOCALAPPDATA%\earnings-summary\run_onboard_pending.bat"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
