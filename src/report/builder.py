@@ -37,8 +37,9 @@ def build_report(
     should point at. Caller passes it because the workbook isn't written
     until after `build_report()` returns.
 
-    `enable_llm` opts the bear-case section into a real Gemini call. Default
-    off so dev runs don't spend tokens or require GEMINI_API_KEY.
+    `enable_llm` opts the bear-case section into a real LLM call (Claude Sonnet 4.6
+    via the Code CLI, with Gemini Flash as automatic fallback). Default off so dev
+    runs don't burn subscription quota or wall-time on the synthesis step.
     """
     ticker = ticker.upper()
     snapshot_section = snapshot.build(ticker, repo_root, model_link)

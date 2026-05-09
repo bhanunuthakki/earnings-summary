@@ -6,6 +6,12 @@
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "GCP revenue acceleration to 50%+ + Waymo commercialization trajectory",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "Free cash flow"
+  ],
   "tier_1_kpis": [
     {
       "name": "GCP revenue growth (YoY)",

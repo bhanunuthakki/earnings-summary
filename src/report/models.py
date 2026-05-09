@@ -8,7 +8,7 @@ section carries an explicit `status` so a downstream renderer can show a clear
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
@@ -85,6 +85,26 @@ class KpiLedgerRow(BaseModel):
     current_status: Literal["green", "yellow", "red", "unknown"] = "unknown"
 
 
+class BreakRuleObservation(BaseModel):
+    period_end: str  # ISO YYYY-MM-DD
+    value: float
+    unit: str
+
+
+class BreakRuleEvaluation(BaseModel):
+    """One evaluated break rule from `thesis_evaluations.rule_evaluations_json`."""
+
+    rule_id: str
+    kpi_name: str
+    comparator: str  # lt / le / gt / ge / eq
+    threshold: float
+    consecutive_periods: int
+    status: Literal["ok", "warn", "breach"]
+    detail: str
+    narrative: str
+    observations: list[BreakRuleObservation] = Field(default_factory=list)
+
+
 class ThesisSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -94,6 +114,9 @@ class ThesisSection(BaseModel):
     competitive_watchlist: list[str] = Field(default_factory=list)
     qualitative_breakers: list[str] = Field(default_factory=list)
     kpi_ledger: list[KpiLedgerRow] = Field(default_factory=list)
+    overall_breach_status: Literal["ok", "warn", "breach", "unknown"] = "unknown"
+    break_rule_evaluations: list[BreakRuleEvaluation] = Field(default_factory=list)
+    last_evaluated_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +157,7 @@ class FinancialsSection(BaseModel):
     line_items: list[QuarterlyLineItem] = Field(default_factory=list)
     annual_years: list[int] = Field(default_factory=list)  # 10 fiscal years
     annual_line_items: list[AnnualLineItem] = Field(default_factory=list)
+    chart_priorities: list[str] = Field(default_factory=list)  # display names, dynamic count
 
 
 class SegmentSeries(BaseModel):

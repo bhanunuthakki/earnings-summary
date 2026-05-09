@@ -13,6 +13,7 @@ no growth columns at the annual cadence.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
@@ -49,6 +50,14 @@ _LINE_ITEM_SPECS: list[tuple[str, str, str, int]] = [
 ]
 
 ANNUAL_HISTORY_YEARS = 10
+
+# Fallback when a holdings JSON omits chart_priorities.
+_DEFAULT_CHART_PRIORITIES: tuple[str, ...] = (
+    "Revenue",
+    "Operating income",
+    "Operating cash flow",
+    "Free cash flow",
+)
 
 
 def build(ticker: str, repo_root: Path) -> FinancialsSection:
@@ -106,7 +115,30 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         line_items=line_items,
         annual_years=annual_years,
         annual_line_items=annual_items,
+        chart_priorities=_load_chart_priorities(ticker, repo_root, line_items),
     )
+
+
+def _load_chart_priorities(
+    ticker: str, repo_root: Path, line_items: list[QuarterlyLineItem]
+) -> list[str]:
+    """Read holdings.chart_priorities; fall back to the universal default 4.
+
+    Filters to names that actually exist as line_items in this report so a typo
+    in the JSON doesn't render an empty chart.
+    """
+    available = {li.line_item.lower(): li.line_item for li in line_items}
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    requested: list[str] = []
+    if holdings_path.exists():
+        with open(holdings_path, encoding="utf-8") as f:
+            holdings = json.load(f)
+        raw = holdings.get("chart_priorities") or []
+        if isinstance(raw, list):
+            requested = [str(x) for x in raw if isinstance(x, str)]
+    if not requested:
+        requested = list(_DEFAULT_CHART_PRIORITIES)
+    return [available[name.lower()] for name in requested if name.lower() in available]
 
 
 # ---------------------------------------------------------------------------

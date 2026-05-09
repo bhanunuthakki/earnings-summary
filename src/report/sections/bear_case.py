@@ -45,7 +45,11 @@ def build(
                 fix_command=(
                     f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm"
                 ),
-                detail="Pass --enable-llm to populate this section (requires GEMINI_API_KEY).",
+                detail=(
+                    "Pass --enable-llm to populate this section. "
+                    "Calls go through the Claude Code CLI (Sonnet 4.6) and bill against your "
+                    "Pro/Max subscription; GEMINI_API_KEY is only the automatic fallback when the CLI fails."
+                ),
             ),
         )
 

@@ -190,6 +190,9 @@ def _trailing_median_magnitude(values: list[float | None], idx: int, window: int
     return sample[n // 2] if n % 2 else (sample[n // 2 - 1] + sample[n // 2]) / 2
 
 
+_MIN_SHARE_OF_BUCKET = 0.01  # segments below 1% of bucket latest-quarter total roll up to "Other"
+
+
 def _build_grids(
     rows: list[dict[str, object]],
     quarters_full: list[tuple[int, int]],
@@ -209,20 +212,77 @@ def _build_grids(
     grids: dict[MetricKey, list[SegmentSeries]] = {bucket: [] for bucket in _BUCKETS}
     display_quarter_count = len(display_labels)
     for bucket in _BUCKETS:
-        for segment_name, qmap in sorted(by_metric_segment[bucket].items()):
+        prepared: list[tuple[SegmentSeries, float | None]] = []
+        for segment_name, qmap in by_metric_segment[bucket].items():
             raw_series = [_optional_millions(qmap.get(q)) for q in quarters_full]
             cleaned_series = _drop_outliers(raw_series)
             display_values = cleaned_series[-display_quarter_count:]
-            grids[bucket].append(
-                SegmentSeries(
-                    segment_name=segment_name,
-                    metric=bucket,
-                    quarters=display_labels,
-                    values=display_values,
-                    growth=compute_growth(cleaned_series),
-                )
+            latest = _last_non_null(display_values)
+            series = SegmentSeries(
+                segment_name=segment_name,
+                metric=bucket,
+                quarters=display_labels,
+                values=display_values,
+                growth=compute_growth(cleaned_series),
             )
+            prepared.append((series, latest))
+        grids[bucket] = _sort_and_rollup(prepared, display_labels, bucket)
     return grids
+
+
+def _sort_and_rollup(
+    prepared: list[tuple["SegmentSeries", float | None]],
+    display_labels: list[str],
+    bucket: MetricKey,
+) -> list[SegmentSeries]:
+    """Sort by latest descending; aggregate sub-1%-of-total segments into 'Other'.
+
+    Magnitude-based for OI too — a -$5B losing segment is more material than a
+    $50M one regardless of sign, so both buckets use abs() to filter and sort.
+    """
+    total_magnitude = sum(abs(latest) for _, latest in prepared if latest is not None)
+    if total_magnitude == 0:
+        return [s for s, _ in sorted(prepared, key=lambda p: p[0].segment_name)]
+    kept: list[tuple[SegmentSeries, float | None]] = []
+    rolled: list[SegmentSeries] = []
+    for series, latest in prepared:
+        share = (abs(latest) / total_magnitude) if latest is not None else 0.0
+        if share < _MIN_SHARE_OF_BUCKET:
+            rolled.append(series)
+        else:
+            kept.append((series, latest))
+    kept.sort(key=lambda p: abs(p[1] or 0.0), reverse=True)
+    out = [s for s, _ in kept]
+    if rolled:
+        out.append(_aggregate_other(rolled, display_labels, bucket))
+    return out
+
+
+def _aggregate_other(
+    rolled: list[SegmentSeries],
+    display_labels: list[str],
+    bucket: MetricKey,
+) -> SegmentSeries:
+    n = len(display_labels)
+    summed: list[float | None] = []
+    for i in range(n):
+        col = [s.values[i] for s in rolled if i < len(s.values) and s.values[i] is not None]
+        summed.append(sum(col) if col else None)  # type: ignore[arg-type]
+    label = f"Other ({len(rolled)} segments < 1%)"
+    return SegmentSeries(
+        segment_name=label,
+        metric=bucket,
+        quarters=display_labels,
+        values=summed,
+        growth=compute_growth(summed),
+    )
+
+
+def _last_non_null(values: list[float | None]) -> float | None:
+    for v in reversed(values):
+        if v is not None:
+            return v
+    return None
 
 
 def _optional_millions(value: float | None) -> float | None:

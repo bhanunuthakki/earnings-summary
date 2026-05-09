@@ -35,6 +35,9 @@ API surface — jobs / actions:
     GET    /api/jobs                       list of recent jobs
     GET    /api/jobs/<job_id>              JobState
 
+API surface — chat:
+    POST   /api/ask                        body {query, ticker?} → context-aware Claude answer
+
 Repo-root resolution: PORTFOLIO_REPO_ROOT env var > project root inferred from
 this file. We override db / calendar_manager module paths after import so a
 single process can serve a different repo's data without touching those modules.
@@ -45,12 +48,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 from werkzeug.utils import secure_filename
 
 import calendar_manager
+import chat
 import db
 from alias_manager import resolve_ticker
 from jobs import JobManager
@@ -430,6 +435,42 @@ def upload_ir_documents() -> object:
         saved.append(target.name)
 
     return jsonify({"saved": saved, "rejected": rejected, "dropbox": str(IR_DROPBOX)})
+
+
+# ---------------------------------------------------------------------------
+# Chatbot — context-aware Claude (Sonnet 4.6) over the project DB
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/ask", methods=["POST"])
+def ask() -> object:
+    """POST {query, ticker?} → {answer, tickers, sources, elapsed_ms}.
+
+    If `ticker` is omitted, we try to detect from the query against
+    tracked_companies (word-boundary match on ticker + name).
+    """
+    body = request.get_json(force=True) or {}
+    query = str(body.get("query") or "").strip()
+    if not query:
+        abort(400, description="missing 'query'")
+    explicit_ticker = body.get("ticker")
+    conn = sqlite3.connect(db.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        contexts: list[chat.ChatContext] = []
+        if isinstance(explicit_ticker, str) and explicit_ticker.strip():
+            ticker = resolve_ticker(explicit_ticker).upper()
+            if not _TICKER_RX.match(ticker):
+                abort(400, description=f"invalid ticker {explicit_ticker!r}")
+            contexts.append(chat.build_context(ticker, conn, REPO_ROOT))
+        else:
+            detected = chat.detect_ticker(query, conn)
+            if detected:
+                contexts.append(chat.build_context(detected, conn, REPO_ROOT))
+        result = chat.answer(query, contexts)
+        return jsonify(result)
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
