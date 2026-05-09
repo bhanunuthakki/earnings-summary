@@ -78,12 +78,16 @@ def tracked_companies_for_user(
     user_id: int = 1,
     only_classified: bool = True,
     list_types: frozenset[ListType] = ANALYZED_LIST_TYPES,
+    include_archived: bool = False,
 ) -> list[Company]:
     """Return Company rows for user, scoped to `list_types`.
 
     `only_classified` filters out NULL instrument_type. Default `list_types` is
     portfolio + watchlist so bulk callers don't iterate the index-member universe;
     pass `frozenset(ListType)` (or any superset) to opt in to the broader scope.
+
+    `include_archived` defaults False so archived names disappear from analysis,
+    DCF, thesis, refresh-queue scopes; pass True only for admin/diagnostic flows.
     """
     if not list_types:
         raise ValueError("list_types must be non-empty")
@@ -98,6 +102,8 @@ def tracked_companies_for_user(
     )
     if only_classified:
         sql += " AND instrument_type IS NOT NULL"
+    if not include_archived:
+        sql += " AND archived_at IS NULL"
     sql += " ORDER BY list_type, ticker"
     cur.execute(sql, (user_id, *(lt.value for lt in list_types)))
     out: list[Company] = []

@@ -49,6 +49,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             fiscal_year_end TEXT,
             fmp_data_saved INTEGER DEFAULT 0,
             fmp_data_upto TEXT,
+            archived_at TIMESTAMP,
             UNIQUE(user_id, ticker)
         );
 

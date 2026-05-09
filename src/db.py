@@ -544,7 +544,8 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
             name          = excluded.name,
             sec_validated = excluded.sec_validated,
             ir_url        = excluded.ir_url,
-            added_at      = excluded.added_at
+            added_at      = excluded.added_at,
+            archived_at   = NULL
         """,
         (user_id, ticker, final_name, list_type, datetime.datetime.now(), is_valid, ir_url),
     )
@@ -558,6 +559,12 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
 
 
 def remove_company(ticker: str, user_id: int = 1) -> None:
+    """Hard-delete a tracked company row (and any captured FMP/transcripts stay
+    on disk; only the tracking row goes). Prefer `archive_company` for ordinary
+    'I'm not watching this anymore' flows — archive preserves the row + all
+    captured history, lets `track_company` reactivate later, and keeps the
+    cacher from re-pulling stale rows by mistake.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -568,13 +575,57 @@ def remove_company(ticker: str, user_id: int = 1) -> None:
     conn.close()
 
 
-def get_tracked_companies(user_id: int = 1) -> list[dict[str, object]]:
+def archive_company(ticker: str, user_id: int = 1) -> bool:
+    """Soft-delete: set archived_at = now. Returns True if a row was archived.
+
+    Idempotent on already-archived rows (re-archiving updates the timestamp).
+    The cacher's audit step filters archived rows out of the refresh queue;
+    captured FMP JSON, snapshots, and endpoint-status rows are retained on
+    disk and in DB, so reactivation is free.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM tracked_companies WHERE user_id = ? ORDER BY list_type, ticker",
-        (user_id,),
+        "UPDATE tracked_companies SET archived_at = ? "
+        "WHERE user_id = ? AND ticker = ?",
+        (datetime.datetime.now(), user_id, ticker.upper()),
     )
+    archived = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return archived
+
+
+def reactivate_company(ticker: str, user_id: int = 1) -> bool:
+    """Clear archived_at so the cacher resumes refreshing this ticker.
+
+    Returns True if a row was reactivated. No-op on rows that are already
+    active (archived_at IS NULL).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tracked_companies SET archived_at = NULL "
+        "WHERE user_id = ? AND ticker = ? AND archived_at IS NOT NULL",
+        (user_id, ticker.upper()),
+    )
+    reactivated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return reactivated
+
+
+def get_tracked_companies(
+    user_id: int = 1, *, include_archived: bool = False
+) -> list[dict[str, object]]:
+    """Return tracked companies for user. Excludes archived rows by default."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql = "SELECT * FROM tracked_companies WHERE user_id = ?"
+    if not include_archived:
+        sql += " AND archived_at IS NULL"
+    sql += " ORDER BY list_type, ticker"
+    cursor.execute(sql, (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]
