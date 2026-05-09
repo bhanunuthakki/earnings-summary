@@ -81,7 +81,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-llm",
         action="store_true",
-        help="Run the §7 bear-case LLM call (Gemini). Requires GEMINI_API_KEY.",
+        help="Run the §7 bear-case LLM call. Routes through llm_client.call_llm: "
+        "Claude CLI first (subscription billing), Gemini Flash fallback if Claude "
+        "fails. Model selected via LLM_MODELS['bear_case']. Without --enable-llm, "
+        "§7 is stubbed to keep the build offline.",
     )
     return parser.parse_args()
 

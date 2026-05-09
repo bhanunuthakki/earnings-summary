@@ -33,17 +33,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-import google.generativeai as genai  # noqa: E402
 from dotenv import load_dotenv  # noqa: E402
 
+from llm_client import call_llm  # noqa: E402
 from models.patents import NvoSelfDisclosedPatent, NvoSelfDisclosedTimeline  # noqa: E402
 from parser import extract_text_from_pdf  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
-
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
 OUT_DIR = PROJECT_ROOT / ".tmp" / "nvo_patents"
 IR_DOCS_DIR = PROJECT_ROOT / "ir_documents" / "NVO"
@@ -66,10 +62,7 @@ Return a JSON object with a single key "patents" containing a list of these reco
 Document text:
 """
 
-GENERATION_CONFIG: dict[str, Any] = {
-    "response_mime_type": "application/json",
-    "temperature": 0.1,
-}
+JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _log(event: str, **kwargs: Any) -> None:
@@ -109,22 +102,19 @@ def infer_fiscal_year(pdf_path: Path) -> int:
 
 def extract_timeline(pdf_path: Path) -> NvoSelfDisclosedTimeline:
     """Run LLM extraction over the PDF and return a validated timeline."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY is not set; cannot run LLM extraction.")
     text = extract_text_from_pdf(str(pdf_path))
     if not text.strip():
         raise RuntimeError(f"No text extracted from {pdf_path}")
 
-    # Cap to ~80k chars — Gemini Flash handles 1M tokens but extraction quality
-    # falls off when the relevant section is buried; trim to first 80k.
+    # Cap to ~80k chars — extraction quality falls off when the relevant
+    # section is buried; trim to first 80k. Routes through llm_client.call_llm
+    # (Claude CLI subscription billing first, Gemini Flash fallback) — model
+    # selected via LLM_MODELS["patent_timeline"] (Haiku for batch latency).
     capped = text[:80_000]
 
-    model = genai.GenerativeModel("gemini-flash-latest")
-    response = model.generate_content(
-        EXTRACTION_PROMPT + capped,
-        generation_config=GENERATION_CONFIG,
-    )
-    raw = response.text.strip()
+    raw = call_llm(EXTRACTION_PROMPT + capped, purpose="patent_timeline").strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RX.sub("", raw).strip()
     payload = json.loads(raw)
     if not isinstance(payload, dict) or "patents" not in payload:
         raise ValueError(f"LLM returned unexpected schema: {payload!r}")
