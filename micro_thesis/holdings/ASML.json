@@ -1,0 +1,128 @@
+{
+  "ticker": "ASML",
+  "name": "ASML Holding",
+  "last_updated": "2026-05-07",
+  "thesis": "EUV monopoly + High-NA EUV ramp; thesis is multi-year capacity ramp at $40B+ revenue tied to leading-edge logic + HBM. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "EUV system shipments + High-NA adoption + service revenue",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Net system bookings (EUR)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Two consecutive Qs of declining bookings",
+      "source": "earnings release"
+    },
+    {
+      "name": "EUV system revenue YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% YoY for 2 consecutive Qs",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Gross margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 50% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Service revenue growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<5% YoY for 2 consecutive Qs (installed base utilization signal)",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "China systems revenue mix",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Disclosed cliff to <15% of system revenue from prior 30%+",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "High-NA EUV cumulative shipments",
+      "source": "earnings release"
+    },
+    {
+      "name": "DUV system revenue",
+      "source": "earnings release"
+    },
+    {
+      "name": "Backlog (in EUR billions)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Capital return policy",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "R&D spend trajectory",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Canon (DUV legacy)",
+    "Nikon (DUV legacy)"
+  ],
+  "thesis_breakers_qualitative": [
+    "Leading-edge logic customer pushes out capex",
+    "China export controls intensify",
+    "High-NA adoption stalls"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
+  ]
+}

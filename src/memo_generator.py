@@ -17,7 +17,7 @@ Inputs (all optional except summaries):
 Output:
   transcripts/memos/<TICKER>_memo_<YYYY-MM-DD>.html
 
-The LLM step (Claude CLI primary, Gemini fallback via llm_router) produces
+The LLM step (Claude CLI primary, Gemini fallback via llm_client) produces
 a markdown body that this module wraps in a minimal styled HTML shell.
 
 Public API:
@@ -38,7 +38,8 @@ import markdown as md
 import requests
 from dotenv import load_dotenv
 
-from llm_router import call_llm, call_llm_with_web
+from llm_client import _call_claude as call_llm  # use the merged llm_client's CLI+Gemini path
+from llm_client import call_llm_with_web
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TMP_DIR = PROJECT_ROOT / ".tmp"

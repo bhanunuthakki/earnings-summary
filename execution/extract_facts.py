@@ -30,8 +30,14 @@ from compute.cashflow import extract_cashflow_facts  # noqa: E402
 from compute.income_statement import extract_income_statement_facts  # noqa: E402
 from compute.segment_oi_10k import extract_segment_oi_facts  # noqa: E402
 from compute.segments import extract_segment_facts  # noqa: E402
+from compute.segments_nu import extract_nu_segment_facts  # noqa: E402
+from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
+from pipeline.queries import (  # noqa: E402
+    ANALYZED_LIST_TYPES,
+    open_db,
+    tracked_companies_for_user,
+)
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
 _Extractor = Callable[[sqlite3.Connection, int, Path], int]
@@ -50,12 +56,30 @@ _DISPATCH: dict[str, _Extractor] = {
     "fmp_10q_json": extract_segment_oi_facts,
 }
 
+# Per-ticker extractor overrides (ticker, doc_type) -> Extractor.
+# NU files 20-F under IFRS; its segment note has a different shape than the
+# US-GAAP segment_oi_10k walker expects, so route to a NU-specific labeler.
+_TICKER_OVERRIDE: dict[tuple[str, str], _Extractor] = {
+    ("NU", "fmp_10k_json"): extract_nu_segment_facts,
+    ("NU", "fmp_10q_json"): extract_nu_segment_facts,
+}
+
+
+def _resolve_extractor(ticker: str, doc_type: str) -> _Extractor:
+    """Per-ticker override first, then fall back to the doc_type-keyed dispatch."""
+    return _TICKER_OVERRIDE.get((ticker, doc_type)) or _DISPATCH[doc_type]
+
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     """Return the list of tickers to extract for, per CLI args."""
     if args.ticker:
         return [args.ticker.upper()]
-    companies = tracked_companies_for_user(conn, only_classified=True)
+    list_types = (
+        frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
+    )
+    companies = tracked_companies_for_user(
+        conn, only_classified=True, list_types=list_types
+    )
     return [c.ticker for c in companies]
 
 
@@ -91,7 +115,7 @@ def _run_extraction(
     ok_count = 0
     failed_count = 0
     for doc_id, ticker, doc_type in docs:
-        extractor = _DISPATCH[doc_type]
+        extractor = _resolve_extractor(ticker, doc_type)
         try:
             n = extractor(conn, doc_id, project_root)
         except (ValueError, OSError, KeyError, json.JSONDecodeError) as e:
@@ -124,6 +148,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
+    )
+    parser.add_argument(
+        "--include-index-members",
+        action="store_true",
+        help="With --all: also extract for index_member/etf/none tickers (default: "
+        "portfolio+watchlist only). Required to fan extraction over the full universe.",
     )
     args = parser.parse_args()
 

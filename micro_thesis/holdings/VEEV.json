@@ -1,26 +1,131 @@
 {
   "ticker": "VEEV",
-  "thesis": "Vertical life-sciences SaaS with regulatory moat; R&D Cloud is the compounder, Vault CRM migration off Salesforce is the 2025-27 re-rating catalyst.",
-  "last_updated": "2026-04-12",
+  "name": "Veeva Systems",
+  "last_updated": "2026-05-07",
+  "thesis": "Vertical life-sciences SaaS with a regulatory moat. Two engines: (1) R&D + Quality Solutions (Vault) is the durable compounder — sticky workflow software for clinical trials and quality management, (2) Vault CRM migration off Salesforce (2025-27) is the medium-term catalyst for revenue acceleration as customers transition. Bet: 15%+ revenue growth with operating margin >40% non-GAAP. STUB regenerated from corrupted source — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "R&D Solutions revenue growth + Vault CRM migration progress",
+  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
-    {"name": "R&D Cloud subscription revenue growth", "source": "earnings release segment", "break": "<15% for 2 consecutive Qs"},
-    {"name": "Commercial Cloud subscription revenue growth", "source": "earnings release segment", "break": "turns negative cc"},
-    {"name": "Vault CRM named migration wins (top-20 pharma)", "source": "transcript Q&A / press releases", "break": "no net new top-20 wins in 2 consecutive Qs"},
-    {"name": "Subscription revenue growth (total)", "source": "earnings release", "break": "<15% for 2 consecutive Qs"},
-    {"name": "Gross retention (subscription services revenue retention)", "source": "10-Q / investor day", "break": "<95%"},
-    {"name": "Operating margin (non-GAAP)", "source": "earnings release", "break": "<40%"},
-    {"name": "Top-20 pharma customer product attach count", "source": "transcript / investor day", "break": "flat YoY"}
+    {
+      "name": "Total revenue YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<14% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Subscription revenue YoY growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Non-GAAP operating margin",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 40% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "R&D Solutions revenue YoY growth",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<15% YoY for 2 consecutive Qs (the durable compounder slowing)",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "Vault CRM migration / customer count commentary",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Customer migration cadence stalls or major customer abandons migration",
+      "source": "transcript"
+    }
   ],
   "tier_2_kpis": [
-    {"name": "Billings growth", "source": "computed from 10-Q"},
-    {"name": "FCF margin", "source": "earnings release"},
-    {"name": "Services revenue growth", "source": "earnings release"},
-    {"name": "Customer count by tier", "source": "investor day"}
+    {
+      "name": "Top 20 customer concentration",
+      "source": "10-K"
+    },
+    {
+      "name": "Free cash flow margin",
+      "source": "earnings release"
+    },
+    {
+      "name": "Commercial Solutions vs R&D mix",
+      "source": "earnings release segment"
+    }
   ],
   "tier_3_kpis": [
-    {"name": "International revenue mix", "source": "10-Q"},
-    {"name": "SBC as % of revenue", "source": "10-Q"}
+    {
+      "name": "Capital return pace",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customer count growth",
+      "source": "earnings release"
+    }
   ],
-  "competitive_watchlist": ["Salesforce (retains legacy Veeva CRM users post-2025 breakup)", "IQVIA", "Certara", "Medidata (Dassault)"],
-  "thesis_breakers_qualitative": ["Salesforce Life Sciences Cloud gains traction post-contract termination", "pharma R&D budget cuts", "GenAI disrupting clinical trial software stack"]
+  "competitive_watchlist": [
+    "Salesforce (CRM legacy)",
+    "IQVIA",
+    "Medidata (Dassault)",
+    "Oracle Health Sciences"
+  ],
+  "thesis_breakers_qualitative": [
+    "Subscription growth below 15% for 2 Qs",
+    "Operating margin below 40%",
+    "Major Vault CRM customer churn or migration delay",
+    "Commercial Solutions revenue decline accelerates"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
+  ]
 }

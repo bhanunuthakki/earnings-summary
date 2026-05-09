@@ -1,17 +1,132 @@
 {
   "ticker": "MELI",
-  "thesis": "LatAm e-commerce + fintech secular compounder; GMV and Mercado Pago TPV compound as digital adoption deepens across Brazil, Mexico, Argentina.",
+  "name": "MercadoLibre",
+  "last_updated": "2026-05-07",
+  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
+  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
-    {"name": "Revenue Growth (FXN)", "unit": "%", "frequency": "quarterly"},
-    {"name": "GMV Growth (FXN)", "unit": "%", "frequency": "quarterly"},
-    {"name": "TPV Growth (FXN)", "unit": "%", "frequency": "quarterly"},
-    {"name": "Operating Margin", "unit": "%", "frequency": "quarterly"}
+    {
+      "name": "GMV growth FX-neutral (consolidated)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Revenue YoY growth (USD)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Operating margin (consolidated)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "MercadoPago TPV growth + take rate",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "Credit portfolio NPL ratio",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
+      "source": "earnings release fintech segment"
+    }
   ],
-  "break_conditions": [
-    "FXN Revenue growth < 20% YoY for 2 consecutive quarters",
-    "FXN GMV growth < 15% YoY",
-    "Operating margin contracts >400bps YoY without clear reinvestment rationale",
-    "Credit NPL 90d+ > 8% of portfolio"
+  "tier_2_kpis": [
+    {
+      "name": "Unique active users + buyer growth",
+      "source": "earnings release"
+    },
+    {
+      "name": "Shipping cost as % of revenue",
+      "source": "earnings release"
+    },
+    {
+      "name": "Brazil/Mexico/Argentina segment commentary",
+      "source": "earnings release commentary"
+    }
   ],
-  "last_updated": "2026-04-12"
+  "tier_3_kpis": [
+    {
+      "name": "Mercado Ads revenue mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Capex pace",
+      "source": "earnings release"
+    }
+  ],
+  "competitive_watchlist": [
+    "Amazon LatAm",
+    "Sea (Shopee)",
+    "Magazine Luiza",
+    "Casas Bahia",
+    "Nubank (fintech overlap)"
+  ],
+  "thesis_breakers_qualitative": [
+    "FXN GMV growth below 25% for 2 consecutive Qs",
+    "Operating margin compresses below 12%",
+    "Credit NPL spikes structurally",
+    "Latin America macro shock that breaks consumer spending"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
+  ]
 }

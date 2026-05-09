@@ -1,0 +1,404 @@
+"""Tests for src/pipeline/quarterly_refresh.py — DAG orchestration + per-stage idempotency."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from models.kpis import BreachStatus
+from pipeline.quarterly_refresh import (
+    StageName,
+    StageStatus,
+    refresh_ticker,
+)
+
+
+def _create_schema(conn: sqlite3.Connection) -> None:
+    """Mirror the production schema for the tables refresh_ticker touches."""
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            period_start TIMESTAMP,
+            period_end TIMESTAMP,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            fetched_at TIMESTAMP NOT NULL,
+            fetch_status TEXT NOT NULL,
+            raw_bytes_size INTEGER NOT NULL
+        );
+        CREATE TABLE financial_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            line_item TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            confidence REAL DEFAULT 1.0
+        );
+        CREATE TABLE segment_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            segment_name TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL
+        );
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            unit TEXT NOT NULL,
+            primary_source TEXT NOT NULL,
+            fallback_source TEXT,
+            ir_url TEXT,
+            threshold_tier TEXT,
+            threshold_low REAL,
+            threshold_high REAL,
+            notes TEXT,
+            UNIQUE(ticker, name)
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            kpi_definition_id INTEGER NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX uq_kpi_facts_provenance
+        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            document_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            call_date TIMESTAMP,
+            fiscal_period_type TEXT,
+            period_end TIMESTAMP,
+            source_url TEXT
+        );
+        CREATE TABLE transcript_segments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transcript_id INTEGER NOT NULL,
+            seq INTEGER NOT NULL,
+            speaker TEXT,
+            speaker_role TEXT,
+            time_code_start TEXT,
+            time_code_end TEXT,
+            text TEXT NOT NULL
+        );
+        CREATE TABLE management_commitments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_made TIMESTAMP NOT NULL,
+            transcript_segment_id INTEGER NOT NULL,
+            period_target TIMESTAMP NOT NULL,
+            kpi_name TEXT NOT NULL,
+            comparator TEXT NOT NULL,
+            target_value NUMERIC(24, 6) NOT NULL,
+            unit TEXT NOT NULL,
+            narrative TEXT NOT NULL,
+            realized_value NUMERIC(24, 6),
+            realized_doc_id INTEGER,
+            outcome TEXT,
+            evaluated_at TIMESTAMP
+        );
+        CREATE TABLE thesis_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL UNIQUE,
+            thesis TEXT,
+            last_updated TIMESTAMP,
+            breach_status TEXT,
+            raw_json TEXT NOT NULL,
+            ingested_at TIMESTAMP NOT NULL
+        );
+        CREATE TABLE thesis_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            evaluated_at TIMESTAMP NOT NULL,
+            overall_status TEXT NOT NULL,
+            rule_evaluations_json TEXT NOT NULL,
+            run_id TEXT
+        );
+        """
+    )
+    conn.commit()
+
+
+@pytest.fixture
+def conn() -> sqlite3.Connection:
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    _create_schema(c)
+    return c
+
+
+def _seed_thesis_state(
+    conn: sqlite3.Connection, ticker: str, status: BreachStatus | None = None
+) -> None:
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, raw_json, breach_status, ingested_at) "
+        "VALUES (?, '{}', ?, ?)",
+        (ticker, status.value if status else None, datetime.now()),
+    )
+    conn.commit()
+
+
+def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
+    """Insert one quarterly income statement document + its 4 line items."""
+    cur = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
+        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1, ?)",
+        (ticker, f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
+         "a" * 64, datetime.now(), datetime(2024, 12, 31)),
+    )
+    doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    pe = datetime(2024, 12, 31)
+    for line, val in [("revenue", 1000), ("operating_income", 200), ("net_income", 150), ("gross_profit", 500)]:
+        conn.execute(
+            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
+            "line_item, value, currency, unit, source_doc_id) "
+            "VALUES (?, ?, 'Q4', ?, ?, 'USD', 'actual', ?)",
+            (ticker, pe, line, str(val), doc_id),
+        )
+    conn.commit()
+
+
+def _seed_ir_pdf(conn: sqlite3.Connection, ticker: str, doc_type: str = "ir_presentation") -> int:
+    """Insert one IR doc with no kpi_facts yet (becomes pending LLM work)."""
+    cur = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
+        "VALUES (?, 'ir_doc', ?, ?, ?, ?, 'ok', 1, ?)",
+        (ticker, doc_type, f"ir_documents/{ticker}/2024-12-31/x.pdf",
+         "b" * 64, datetime.now(), datetime(2024, 12, 31)),
+    )
+    conn.commit()
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def _write_holdings(tmp_path: Path, ticker: str, threshold: float = 0) -> None:
+    payload = {
+        "ticker": ticker,
+        "thesis": "test",
+        "break_rules": [
+            {
+                "rule_id": "op_margin_below",
+                "kpi_name": "Operating Margin (GAAP)",
+                "comparator": "lt",
+                "threshold": threshold,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": f"OpMargin < {threshold}",
+            },
+        ],
+    }
+    (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_refresh_ticker_runs_six_stages_by_default(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Without --fetch-sec, only the 6 network-free stages execute, in order."""
+    _seed_thesis_state(conn, "X")
+    _seed_quarterly_income(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    stage_names = [s.name for s in report.stages]
+    assert stage_names == [
+        StageName.EXTRACT_FMP_FACTS,
+        StageName.INGEST_IR_TRANSCRIPTS,
+        StageName.DERIVE_FMP_KPIS,
+        StageName.MATCH_COMMITMENTS,
+        StageName.EVALUATE_THESIS,
+        StageName.SURFACE_PENDING_LLM,
+    ]
+
+
+def test_refresh_ticker_includes_sec_stage_when_opt_in(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch
+) -> None:
+    """fetch_sec=True prepends the SEC fetch stage. Stub the network call."""
+    _seed_thesis_state(conn, "MELI")
+    _seed_quarterly_income(conn, "MELI")
+    _write_holdings(tmp_path, "MELI", threshold=0)
+
+    from pipeline import quarterly_refresh as qr_mod
+    from pipeline.sec_xbrl import IngestStats
+
+    def fake_ingest(conn, *, ticker, project_root):
+        return IngestStats(accessions_inserted=2, facts_inserted=10)
+
+    monkeypatch.setattr(qr_mod, "ingest_sec_for_ticker", fake_ingest)
+    report = refresh_ticker(
+        conn, ticker="MELI", project_root=tmp_path, holdings_dir=tmp_path,
+        run_id="r1", fetch_sec=True,
+    )
+    stage_names = [s.name for s in report.stages]
+    assert stage_names[0] == StageName.FETCH_SEC_XBRL
+
+
+def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A ticker absent from CIK_MAP gets SKIPPED on the SEC stage (no error)."""
+    _seed_thesis_state(conn, "FLKR")
+    _write_holdings(tmp_path, "FLKR", threshold=0)
+    report = refresh_ticker(
+        conn, ticker="FLKR", project_root=tmp_path, holdings_dir=tmp_path,
+        run_id="r1", fetch_sec=True,
+    )
+    sec_stage = next(s for s in report.stages if s.name == StageName.FETCH_SEC_XBRL)
+    assert sec_stage.status == StageStatus.SKIPPED
+    assert "no CIK" in sec_stage.notes
+
+
+def test_refresh_ticker_derives_kpis_when_facts_present(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    _seed_thesis_state(conn, "X")
+    _seed_quarterly_income(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    derive_stage = next(s for s in report.stages if s.name == StageName.DERIVE_FMP_KPIS)
+    assert derive_stage.status == StageStatus.OK
+    assert derive_stage.rows_processed >= 3  # OpMargin, NetMargin, GrossMargin
+
+
+def test_refresh_ticker_skips_derive_when_no_facts(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Ticker with no FMP income statement -> DERIVE_FMP_KPIS skipped, not failed."""
+    _seed_thesis_state(conn, "Y")
+    _write_holdings(tmp_path, "Y", threshold=0)
+
+    report = refresh_ticker(
+        conn, ticker="Y", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    derive_stage = next(s for s in report.stages if s.name == StageName.DERIVE_FMP_KPIS)
+    assert derive_stage.status == StageStatus.SKIPPED
+
+
+def test_refresh_ticker_detects_status_change(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Prior status OK + new BREACH eval -> breach_status_changed = True."""
+    _seed_thesis_state(conn, "X", status=BreachStatus.OK)
+    _seed_quarterly_income(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=50)  # 200/1000=20%, < 50% -> BREACH
+
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    assert report.breach_status == BreachStatus.BREACH
+    assert report.breach_status_changed is True
+
+
+def test_refresh_ticker_surfaces_pending_ir_pdfs(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """IR PDFs without kpi_facts show up as pending LLM work."""
+    _seed_thesis_state(conn, "X")
+    _seed_ir_pdf(conn, "X", "ir_press_release")
+    _seed_ir_pdf(conn, "X", "ir_presentation")
+    _write_holdings(tmp_path, "X", threshold=0)
+
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    pdf_items = [p for p in report.pending_work if p.kind == "ir_pdf_kpi_extraction"]
+    assert len(pdf_items) == 2
+
+    pending_stage = next(s for s in report.stages if s.name == StageName.SURFACE_PENDING_LLM)
+    assert pending_stage.status == StageStatus.NEEDS_LLM
+    assert pending_stage.rows_processed == 2
+
+
+def test_refresh_ticker_surfaces_pending_transcripts(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Transcripts without commitments are surfaced for follow-up."""
+    _seed_thesis_state(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+    cur = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size, period_end) "
+        "VALUES ('X', 'transcript_audio', 'earnings_call_transcript', 'a.pdf', ?, ?, 'ok', 1, ?)",
+        ("c" * 64, datetime.now(), datetime(2024, 12, 31)),
+    )
+    doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    cur = conn.execute(
+        "INSERT INTO transcripts (document_id, ticker, period_end) VALUES (?, 'X', ?)",
+        (doc_id, datetime(2024, 12, 31)),
+    )
+    transcript_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    conn.execute(
+        "INSERT INTO transcript_segments (transcript_id, seq, text) VALUES (?, 0, 'hello')",
+        (transcript_id,),
+    )
+    conn.commit()
+
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    transcript_items = [
+        p for p in report.pending_work if p.kind == "transcript_commitment_extraction"
+    ]
+    assert len(transcript_items) == 1
+
+
+def test_refresh_ticker_idempotent_on_rerun(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Running the DAG twice in a row produces zero new rows on the second run."""
+    _seed_thesis_state(conn, "X")
+    _seed_quarterly_income(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+
+    refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    second = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r2",
+    )
+    derive_stage = next(s for s in second.stages if s.name == StageName.DERIVE_FMP_KPIS)
+    # Re-derivation produces the same kpi_facts; UNIQUE index dedupes
+    assert derive_stage.rows_processed == 0
+    assert derive_stage.status == StageStatus.OK
+
+
+def test_refresh_ticker_handles_missing_holdings_gracefully(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Watchlist ticker (no holdings JSON) -> evaluate stage SKIPPED, doesn't raise."""
+    _seed_thesis_state(conn, "Z")
+    # No holdings JSON written
+    report = refresh_ticker(
+        conn, ticker="Z", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+    )
+    eval_stage = next(s for s in report.stages if s.name == StageName.EVALUATE_THESIS)
+    assert eval_stage.status == StageStatus.SKIPPED
+    assert report.breach_status is None

@@ -78,6 +78,11 @@ class DocType(StrEnum):
     IR_PRESENTATION = "ir_presentation"
     IR_SUPPLEMENT = "ir_supplement"
     IR_INVESTOR_UPDATE = "ir_investor_update"
+    IR_TRANSCRIPT = "ir_transcript"
+    # Non-quarterly IR materials: investor days, AGMs, capital markets days, conference
+    # decks, ad-hoc strategic announcements. Period_end on these rows is the event date,
+    # not a fiscal-quarter end.
+    IR_EVENT = "ir_event"
     EARNINGS_CALL_AUDIO = "earnings_call_audio"
     EARNINGS_CALL_TRANSCRIPT = "earnings_call_transcript"
 

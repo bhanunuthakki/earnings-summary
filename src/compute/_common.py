@@ -41,14 +41,20 @@ def extract_facts_with_spec(
     record: FmpStatementRecordLike,
     source_doc_id: int,
     line_item_spec: list[tuple[str, str, Unit]],
+    period_type_override: FiscalPeriodType | None = None,
 ) -> list[FinancialFact]:
     """Convert a record to FinancialFact rows using a (fmp_field, canonical, unit) spec.
 
     Skips None values (field not present in record). Currency comes from the
     record's reportedCurrency field; Unit.COUNT facts get currency=None.
+
+    `period_type_override`: when set, overrides the FMP `period` field. Used by
+    the TTM extractor path: FMP's `_ttm.json` files have period='Q1'/'Q3'/etc
+    (the latest quarter ending the trailing window) but the value is TTM —
+    callers detect that via file_path and pass FiscalPeriodType.TTM here.
     """
     period_end = datetime.fromisoformat(record.date)
-    period_type = FiscalPeriodType(record.period)
+    period_type = period_type_override if period_type_override is not None else FiscalPeriodType(record.period)
     currency = parse_currency(record.reportedCurrency)
 
     facts: list[FinancialFact] = []

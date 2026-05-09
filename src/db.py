@@ -12,6 +12,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from urllib.parse import unquote
 
@@ -37,14 +38,21 @@ _FMP_ALIASES: dict[str, list[str]] = {
 }
 
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_LIST_TYPES: frozenset[str] = frozenset({"portfolio", "watchlist", "none"})
+_LIST_TYPES: frozenset[str] = frozenset(
+    {"portfolio", "watchlist", "none", "etf", "index_member"}
+)
 
 
 def get_connection() -> sqlite3.Connection:
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
-    conn = sqlite3.connect(DB_PATH)
+    # 30s busy_timeout: this DB is shared with sibling-branch pipelines whose
+    # write transactions can briefly hold the lock. Without it, any concurrent
+    # writer immediately raises OperationalError("database is locked") and
+    # kills long-running pulls. 30s is well above any normal transaction.
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
@@ -72,7 +80,9 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
             user_id INTEGER DEFAULT 1,
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
-            list_type TEXT NOT NULL CHECK(list_type IN ('portfolio', 'watchlist', 'none')),
+            list_type TEXT NOT NULL CHECK(list_type IN (
+                'portfolio', 'watchlist', 'none', 'etf', 'index_member'
+            )),
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, ticker)
         )
@@ -470,8 +480,71 @@ def scan_and_sync_artifacts(ticker: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+_TRACKED_LIST_TYPES_FOR_ONBOARD: frozenset[str] = frozenset({"portfolio", "watchlist"})
+
+
+_DETACHED_PROCESS = 0x00000008
+_CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def _spawn_onboard_async(ticker: str) -> None:
+    """Fire-and-forget `execution/onboard_ticker.py --ticker X` for a newly-added ticker.
+
+    Detached so the child outlives the parent (Flask request handler / CLI).
+    Logs go to `logs/onboard_{TICKER}_{TIMESTAMP}.log`. Spawn failures are
+    swallowed to JSON stderr so a watchlist add never fails on a missing pipeline.
+    """
+    script = os.path.join(PROJECT_ROOT, "execution", "onboard_ticker.py")
+    if not os.path.exists(script):
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawn_skipped", "ticker": ticker, "reason": "script missing"}) + "\n"
+        )
+        return
+
+    log_dir = os.path.join(PROJECT_ROOT, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    log_path = os.path.join(log_dir, f"onboard_{ticker}_{stamp}.log")
+    cmd = [sys.executable, script, "--ticker", ticker]
+
+    try:
+        log_handle = open(log_path, "w", encoding="utf-8")
+        if os.name == "nt":
+            subprocess.Popen(
+                cmd,
+                cwd=PROJECT_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            subprocess.Popen(
+                cmd,
+                cwd=PROJECT_ROOT,
+                stdin=subprocess.DEVNULL,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                close_fds=True,
+                start_new_session=True,
+            )
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawned", "ticker": ticker, "log": log_path}) + "\n"
+        )
+    except OSError as e:
+        sys.stderr.write(
+            json.dumps({"event": "onboard_spawn_failed", "ticker": ticker, "error": str(e)}) + "\n"
+        )
+
+
 def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> None:
-    """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts."""
+    """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
+
+    For first-time adds to portfolio/watchlist, also spawns a detached
+    `execution/onboard_ticker.py` subprocess to fetch FMP data and run the
+    parse DAG. Re-upserts (ticker already exists for user) do NOT re-spawn.
+    """
     if list_type not in _LIST_TYPES:
         raise ValueError(f"Invalid list_type {list_type!r}; expected one of {sorted(_LIST_TYPES)}")
 
@@ -483,6 +556,11 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
+        "SELECT 1 FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+        (user_id, ticker),
+    )
+    is_new_addition = cursor.fetchone() is None
+    cursor.execute(
         """
         INSERT INTO tracked_companies (user_id, ticker, name, list_type, added_at, sec_validated, ir_url)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -491,7 +569,8 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
             name          = excluded.name,
             sec_validated = excluded.sec_validated,
             ir_url        = excluded.ir_url,
-            added_at      = excluded.added_at
+            added_at      = excluded.added_at,
+            archived_at   = NULL
         """,
         (user_id, ticker, final_name, list_type, datetime.datetime.now(), is_valid, ir_url),
     )
@@ -500,8 +579,17 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
 
     scan_and_sync_artifacts(ticker)
 
+    if is_new_addition and list_type in _TRACKED_LIST_TYPES_FOR_ONBOARD:
+        _spawn_onboard_async(ticker)
+
 
 def remove_company(ticker: str, user_id: int = 1) -> None:
+    """Hard-delete a tracked company row (and any captured FMP/transcripts stay
+    on disk; only the tracking row goes). Prefer `archive_company` for ordinary
+    'I'm not watching this anymore' flows — archive preserves the row + all
+    captured history, lets `track_company` reactivate later, and keeps the
+    cacher from re-pulling stale rows by mistake.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -512,13 +600,57 @@ def remove_company(ticker: str, user_id: int = 1) -> None:
     conn.close()
 
 
-def get_tracked_companies(user_id: int = 1) -> list[dict[str, object]]:
+def archive_company(ticker: str, user_id: int = 1) -> bool:
+    """Soft-delete: set archived_at = now. Returns True if a row was archived.
+
+    Idempotent on already-archived rows (re-archiving updates the timestamp).
+    The cacher's audit step filters archived rows out of the refresh queue;
+    captured FMP JSON, snapshots, and endpoint-status rows are retained on
+    disk and in DB, so reactivation is free.
+    """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT * FROM tracked_companies WHERE user_id = ? ORDER BY list_type, ticker",
-        (user_id,),
+        "UPDATE tracked_companies SET archived_at = ? "
+        "WHERE user_id = ? AND ticker = ?",
+        (datetime.datetime.now(), user_id, ticker.upper()),
     )
+    archived = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return archived
+
+
+def reactivate_company(ticker: str, user_id: int = 1) -> bool:
+    """Clear archived_at so the cacher resumes refreshing this ticker.
+
+    Returns True if a row was reactivated. No-op on rows that are already
+    active (archived_at IS NULL).
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE tracked_companies SET archived_at = NULL "
+        "WHERE user_id = ? AND ticker = ? AND archived_at IS NOT NULL",
+        (user_id, ticker.upper()),
+    )
+    reactivated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return reactivated
+
+
+def get_tracked_companies(
+    user_id: int = 1, *, include_archived: bool = False
+) -> list[dict[str, object]]:
+    """Return tracked companies for user. Excludes archived rows by default."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    sql = "SELECT * FROM tracked_companies WHERE user_id = ?"
+    if not include_archived:
+        sql += " AND archived_at IS NULL"
+    sql += " ORDER BY list_type, ticker"
+    cursor.execute(sql, (user_id,))
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]

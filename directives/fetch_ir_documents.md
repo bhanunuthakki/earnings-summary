@@ -2,9 +2,20 @@
 
 ## Goal
 
-Download investor relations documents (press releases, earnings presentations, and transcripts)
-from official company IR websites for the 11 tracked portfolio holdings, covering the last 8 quarters.
-All documents are saved to `ir_documents/` and registered in `.tmp/document_index.json`.
+Acquire investor relations documents (press releases, earnings presentations, supplements,
+shareholder letters, transcripts) for tracked names through two parallel paths:
+
+1. **Auto-fetch** — download PDFs from official IR websites for the 11 tracked portfolio
+   holdings, covering the last 8 quarters. Files land in `ir_documents/{TICKER}/{period}/`
+   and are registered in the canonical `documents` SQLite table (`source_type='ir_doc'`).
+2. **Manual upload** — the user drops PDFs/XLSX at the root of `ir_documents/` for a
+   subset of names (typically portfolio + selected watchlist). The
+   `categorize_ir_uploads.py` step classifies and routes them through the same
+   provenance contract as auto-fetch.
+
+The IR pipeline as a whole is **optional** on the broader project: when neither path
+yields any documents for a ticker, the rest of the analysis (FMP, SEC, transcripts) runs
+without IR data — IR rows simply don't appear in `documents` for that ticker.
 
 ## Target Holdings & IR Pages
 
@@ -21,6 +32,7 @@ All documents are saved to `ir_documents/` and registered in `.tmp/document_inde
 | RBRK | https://ir.rubrik.com/financial-information/quarterly-results | Jan FY-end; IPO May 2024; best-effort for pre-IPO quarters |
 | VEEV | https://ir.veeva.com/ | Jan FY-end; map FY quarters to calendar year |
 | BN | https://bam.brookfield.com/investors | Brookfield Corp; supplemental packages |
+| LLY | https://investor.lilly.com/financial-information | **Watchlist (not held)** — tracked as competitive cross-check for NVO thesis (tirzepatide/retatrutide vs semaglutide). Calendar year. See `directives/nvo_external_sources.md`. |
 
 ## Fiscal Calendar Notes
 
@@ -38,17 +50,57 @@ All documents are saved to `ir_documents/` and registered in `.tmp/document_inde
 
 ## Document Types
 
-| doc_type | Description | Priority |
-|---|---|---|
-| `press_release` | Quarterly earnings press release or financial results PDF | High |
-| `presentation` | Earnings slide deck / investor presentation PDF | High |
-| `transcript` | IR-published earnings call transcript PDF | High (YouTube/Whisper fallback) |
+`source_type` is always `ir_doc` for both paths. The DB-canonical `doc_type` enum
+(`src/models/documents.py::DocType`) covers:
 
-## URL Discovery → Download Flow
+| DocType (canonical) | Legacy index alias | Description | Priority |
+|---|---|---|---|
+| `IR_PRESS_RELEASE` | `press_release` | Quarterly earnings press release or financial results PDF | High |
+| `IR_PRESENTATION`  | `presentation`  | Earnings slide deck / investor presentation PDF | High |
+| `IR_TRANSCRIPT`    | `transcript`    | IR-published earnings call transcript PDF (text) | High (YouTube/Whisper fallback) |
+| `IR_SUPPLEMENT`    | (none)          | Financial supplement / data workbook (XLSX or PDF) | Medium |
+| `IR_INVESTOR_UPDATE`| (none)         | Shareholder letter, annual report, investor day deck | Medium |
+
+`IR_SUPPLEMENT` and `IR_INVESTOR_UPDATE` aren't yet wired into the legacy
+`process_ir_documents.py` LLM step, but they are first-class citizens of the
+`documents` table for downstream analytical queries.
+
+## Path A: Auto-fetch (URL Discovery → Download)
 
 1. **Browser discovery** (one session per company, run once): Navigate IR pages, extract direct PDF URLs, save to `.tmp/ir_url_manifest/<TICKER>_urls.json`.
 2. **Download** (`execution/fetch_ir_documents.py --ticker <X>`): Reads manifest, downloads PDFs to `ir_documents/<TICKER>/<YEAR>_<QUARTER>/<doc_type>.pdf`, registers in `document_index.json`.
 3. **Idempotency**: If file already exists locally, skip. Manifest can be re-run safely.
+
+## Path B: Manual upload (Categorize → Register)
+
+1. **Drop**: User places any combination of `.pdf` / `.xlsx` files at the root of `ir_documents/`. Filenames may be arbitrary — UUID exports, IR-CDN hex names, vendor-specific conventions — the categorizer doesn't need them to follow a schema.
+2. **Categorize** (`execution/categorize_ir_uploads.py`):
+   - Filename heuristics (RBRK-/ServiceNow-/novo-nordisk- prefixes, Wix CDN hex, NU's `NQYY Results Presentation` convention) decide ticker when possible.
+   - First-page content fingerprint (first ~2 PDF pages or first xlsx sheet) confirms ticker via the issuer-name registry, identifies doc_type via cover-page phrase rules, and locates period via quarter/date/fiscal regex.
+   - Files where ticker, doc_type, and period all resolve are moved to `ir_documents/{TICKER}/{period_end_iso}/{doc_type}__{sha8}.{ext}` and a `documents` row is inserted (`source_type='ir_doc'`, `source_url='manual_upload:{original-filename}'`).
+   - Files that fail to resolve are quarantined under `ir_documents/_unsorted/` next to a `.error.json` sidecar carrying the failure reason and partial evidence — never silently dropped, never guessed.
+3. **Idempotency**: sha256-keyed unique constraint on `documents`. Re-uploading identical bytes is a no-op; modified content writes a new row and supersedes (never mutates).
+4. **Optionality**: When the root has no uncategorized files, the step prints `{"status":"empty",...}` and exits 0 — orchestrator continues.
+
+## Issuer-name registry (manual-upload classifier)
+
+The classifier substring-matches first-page text against this closed registry
+(`src/ir_uploads.py::ISSUER_REGISTRY`). Adding a name = adding a tuple. No LLM,
+no fuzzy matching — a name either appears or doesn't.
+
+| Ticker | Cover-page substrings used as issuer signal | Calendar |
+|---|---|---|
+| MELI | `MercadoLibre`, `Mercado Libre` | calendar |
+| NU   | `Nu Holdings`, `Nu's Investor`, `Nubank` | calendar |
+| RBRK | `Rubrik` | rubrik (FY-end Apr 30) |
+| NOW  | `ServiceNow` | calendar |
+| WIX  | `Wix.com`, `Wix Ltd`, `Wix's`, `Wix ` | calendar |
+| NVO  | `Novo Nordisk`, `Amounts in DKK million` | nvo (Q1/H1/9M/FY) |
+| GOOG | `Alphabet Inc`, `Alphabet's` | calendar |
+| META | `Meta Platforms`, `Meta Reports` | calendar |
+| AMZN | `Amazon.com`, `AMAZON.COM` | calendar |
+| VEEV | `Veeva Systems`, `Veeva ` | veeva (FY-end Jan 31) |
+| BN   | `Brookfield Corporation`, `Brookfield Asset Management` | calendar |
 
 ## Output Schema (URL Manifest JSON)
 

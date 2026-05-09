@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import time
 import sys
 import re
@@ -12,6 +13,31 @@ from pdf_manager import build_final_master, merge_pdfs
 from pypdf import PdfReader
 import index_manager
 from alias_manager import resolve_ticker
+
+PROJECT_ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _spawn_background_cache_refresh() -> None:
+    """Detach a non-blocking FMP cache refresh; return immediately.
+
+    The cacher (execution/refresh_cache.py) fast-exits if no ticker is stale
+    under its tier cadence, so this is cheap on every invocation. The lockfile
+    inside the cacher prevents duplicate concurrent runs. Manual refresh:
+    `python execution/refresh_cache.py run --force`. Tier from FMP_TIER env.
+    """
+    if os.environ.get("EARNINGS_SUMMARY_SKIP_CACHE_REFRESH") == "1":
+        return
+    cmd = [
+        sys.executable,
+        os.path.join(PROJECT_ROOT_DIR, "execution", "refresh_cache.py"),
+        "run",
+        "--background",
+    ]
+    try:
+        subprocess.run(cmd, check=False, timeout=5)
+    except (subprocess.SubprocessError, OSError) as e:
+        # Non-fatal: cacher failure must never block the user's transcript run.
+        sys.stderr.write(f"[cache-refresh] could not spawn: {type(e).__name__}: {e}\n")
 
 INPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'transcripts', 'raw')
 PROCESSED_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'transcripts', 'processed')
@@ -57,7 +83,9 @@ def main(target_company=None):
         print(f"Starting Earnings Transcript Processor (Audio-First) for: {target_company}...")
     else:
         print("Starting Earnings Transcript Processor (Audio-First)...")
-    
+
+    _spawn_background_cache_refresh()
+
     for d in [INPUT_DIR, PROCESSED_DIR, MASTER_DIR, TEMP_DIR, CACHE_DIR]:
         if not os.path.exists(d):
             os.makedirs(d)
@@ -232,8 +260,9 @@ def main(target_company=None):
                     summary_text = generate_summary(text)
                     with open(cache_path, 'w', encoding='utf-8') as f:
                         f.write(summary_text)
-                    # Throttling lives in src/llm_router (Gemini fallback path
-                    # only; Claude CLI primary needs no per-call sleep).
+                    # Throttling not needed: llm_client._call_claude uses Claude
+                    # CLI subscription primary (no per-call rate limit) and the
+                    # Gemini fallback only fires on Claude failure.
 
                 curr_summary = {'quarter': quarter, 'year': year, 'text': summary_text}
 

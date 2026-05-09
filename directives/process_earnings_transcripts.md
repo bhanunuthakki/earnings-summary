@@ -4,13 +4,51 @@
 
 Run one or more earnings call transcripts (or raw audio) through the full pipeline to produce a **company-level Master PDF** for each ticker. The output contains a clickable Table of Contents, a pairwise Say-Do strategic analysis (when ≥ 2 quarters are present), per-quarter cover pages, 1–2 page LLM-generated summaries, and the beautifully formatted full original text transcript.
 
+## Analytical Principles (apply to every LLM-generated section)
+
+These principles govern any narrative produced by this pipeline — summaries, Say-Do, strategic analysis, thesis trackers. They are not stylistic suggestions; downstream prompts enforce them and outputs that violate them are defective.
+
+### 1. User-provided data is source of truth
+- Materials the user has dropped into the working set (transcripts, 10-Q/10-K excerpts, IR docs, analyst forecasts) take precedence over any web-sourced or model-recalled figure.
+- Web/third-party data is supplemental — only used to fill gaps the user's docs do not cover, and must be labeled as such.
+- If a web-sourced figure conflicts with the user's data, flag the discrepancy explicitly and default to the user's version. Do not silently merge or average.
+
+### 2. No hallucination — verifiable or absent
+- Every number, date, quote, and named event in output must be traceable to a specific source document.
+- If a figure is not disclosed in the available sources, write `[not disclosed]`. Do not invent, interpolate, or back-fill from prior knowledge.
+- Verbatim quotes must use quotation marks and a source tag. Paraphrases must still cite the source.
+
+### 3. Inline source citation
+- Format: `[Source: <doc type>, <period>, <page/section or speaker>]`
+  - Examples: `[Source: 10-Q, Q2 FY2026, Item 2 – MD&A]`, `[Source: Q4 2025 Transcript, CFO prepared remarks]`, `[Source: IR Press Release, 2026-02-14]`
+- Cite at the point of claim, not just in a footer block.
+- Tables: cite per row when sources differ, or once in a "Sources" column.
+
+### 4. Adversarial loop on every material claim
+Any judgment that drives a verdict, recommendation, or trigger evaluation must be stress-tested before it is asserted. The loop has four steps and every step is required:
+
+```
+Primary Thesis     : The claim and the strongest evidence for it (with sources).
+Strongest Counter  : The most credible challenge to the claim — alternative
+                     reading of the same data, contradicting datapoint, base-rate
+                     argument, or management-credibility caveat.
+Resolution         : How the two sides reconcile + Net Conviction (High / Medium / Low),
+                     and the specific observable that would flip the verdict.
+Sensitivity        : Quantified impact if the primary thesis is wrong (±X% on the KPI,
+                     valuation, or trigger threshold).
+```
+
+A claim with no articulable counter is under-examined, not strong — push harder before asserting it. Apply this loop most rigorously to: (a) thesis status verdicts, (b) Say-Do attribution (execution vs. exogenous), and (c) valuation-trigger / break-condition evaluations.
+
 ## Inputs
 
 | Input | Where |
 |---|---|
 | Transcript files (`.txt`, `.pdf`, `.mp3`, `.m4a`) | `transcripts/raw/` |
-| Gemini API key | `.env` → `GEMINI_API_KEY` |
+| Claude Code CLI (`claude`), authed via `claude auth login` | system PATH |
 | (Optional) existing cache | `.tmp/` |
+
+**Auth + billing precondition:** All LLM calls go through `claude -p` (subprocess) so they bill against the user's Claude Pro/Max subscription rather than the metered Anthropic API. `ANTHROPIC_API_KEY` MUST be unset in the runtime env or the CLI silently routes to API billing. `src/llm_client.py` fails loud at first call if either condition is wrong.
 
 **Filename format**: `Company_Qx_YYYY.ext` (e.g. `NVDA_Q2_2024.txt` or `AAPL_Q1_2026.m4a`).  
 The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rename files that don't match this pattern using heuristics or LLM parsing.
@@ -20,7 +58,7 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
 | Purpose | Script |
 |---|---|
 | **Primary pipeline** | `execution/run_pipeline.py` |
-| Verify API key & models | `python check_models.py` |
+| Verify Claude CLI is installed + authed (no separate `check_models.py`; the lazy check in `src/llm_client.py` does this) | `claude auth status` |
 
 ### run_pipeline.py responsibilities
 `execution/run_pipeline.py` triggers audio fetching and delegates analysis to `src/main.py`. It should:
@@ -39,7 +77,7 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
    - Extract text from `.txt` or `.pdf`
    - Generate or load cached 1–2 page summary (`.tmp/<Co>_<Q>_<Y>_summary.txt`)
    - Create cover page, summary PDF, and full transcript PDF (`pdf_builder.py`) in `.tmp/`
-   - Wait 30 s between fresh Gemini calls (rate-limit guard)
+   - Inter-call sleeps (currently 15-30s in scripts) were Gemini-free-tier rate-limit guards. The Claude Code subscription has different limits; these sleeps are now over-conservative — leaving as-is for safety until the user confirms an aggressive cadence is fine, then they can be reduced/removed.
 4. **Pairwise Strategic Analysis** (if ≥ 2 quarters):
    - For each consecutive pair, generate or load `.tmp/SayDo_<Co>_<Qprev>_<Yprev>_<Qcurr>_<Ycurr>.txt`
    - Compile into `.tmp/<Company>_strategic_analysis.pdf`
@@ -59,10 +97,22 @@ The `smart_rename_files()` pre-pass in `src/parser.py` will attempt to auto-rena
 | Manifest | `.tmp/<Company>_manifest.json` |
 | Intermediates | `.tmp/` (can be deleted and regenerated) |
 
+## Q&A Section Awareness
+
+Some transcripts (notably IR-published prepared-remarks PDFs) cut off at the hand-off to Q&A and contain no analyst questions. These produce silently degraded Say-Do, commitments-tracker, and analyst-question-mining output.
+
+`compute.transcript_ingest.detect_qa_section` runs on every ingest and stores the verdict on `transcripts.has_qa_section` (`1=present`, `0=absent`, `NULL=unknown`). Detection uses three structural regex signals (CallStreet header, `<Q – ...>` tags, ≥2 operator analyst introductions) — see `directives/fetch_transcripts.md` for the full rubric.
+
+`execution/ingest_transcripts.py` prints `WARN missing_qa: <ticker> <period_end>` to stderr and lists `missing_qa: [...]` in its JSON summary for any prepared-only file. When you see this:
+
+1. Check whether a fuller transcript exists (CallStreet PDF, full YouTube recording, etc.).
+2. Replace the file in `transcripts/raw/` and re-run `execution/ingest_transcripts.py` — the new sha256 will create a fresh `documents` row with the updated verdict.
+3. If no fuller source is available, ask the user to drop one in. Do not run downstream Say-Do / commitments extraction against `has_qa_section = 0` rows; their guidance content will be misleading.
+
 ## Edge Cases & Known Constraints
 
 - **Local Transcriber Resources**: Transcribing audio takes significant CPU processing time on the `large-v3-turbo` model.
-- **Rate limits**: Gemini free-tier is ~15 RPM. A `time.sleep(30)` is inserted between fresh summary generations. 
+- **Rate limits / billing**: All LLM calls route through `claude -p` (subprocess) and bill against the user's Claude Pro/Max subscription. Subscription-tier limits apply (much more permissive than the prior Gemini free-tier ~15 RPM). Existing inter-call sleeps in scripts are vestigial Gemini guards and can be dialed down once cadence is confirmed safe.
 - **Filename mismatch**: Unformatted text/PDFs will be auto-renamed. Audio files *must* be named intuitively prior to upload since text-extraction pre-parsing is not possible for audio.
 - **venv dependency**: Expects `venv/` at the project root with `faster-whisper` and `yt-dlp` installed.
 

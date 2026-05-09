@@ -69,11 +69,102 @@ TIME_SENSITIVE_ENDPOINTS: set[str] = {
     "historical-market-capitalization",
 }
 
+# Snapshot cadence by list_type. Anything not present here defaults to monthly.
+# Portfolio/watchlist names get a daily history; index members are sampled
+# monthly to keep snapshot drift bounded across thousands of tickers.
+_SNAPSHOT_CADENCE_DAYS: dict[str, int] = {
+    "portfolio": 1,
+    "watchlist": 1,
+    "none": 1,
+    "index_member": 30,
+    "etf": 30,
+}
+
+
+def _load_snapshot_index() -> dict[str, str]:
+    """Walk SNAP_DIR once; return {<TICKER>_<suffix>: latest_YYYY-MM-DD}."""
+    index: dict[str, str] = {}
+    if not SNAP_DIR.exists():
+        return index
+    for date_dir in SNAP_DIR.iterdir():
+        if not date_dir.is_dir():
+            continue
+        date_str = date_dir.name
+        if len(date_str) != 10 or date_str[4] != "-":
+            continue
+        for f in date_dir.iterdir():
+            if not f.name.endswith(".json"):
+                continue
+            key = f.name[:-5]
+            prev = index.get(key)
+            if prev is None or date_str > prev:
+                index[key] = date_str
+    return index
+
+
+def _should_snapshot(
+    ticker: str,
+    suffix: str,
+    list_type: str,
+    today: date,
+    snapshot_index: dict[str, str],
+    *,
+    force: bool,
+) -> bool:
+    """True if (ticker, suffix) is overdue for a snapshot under list_type's cadence."""
+    if force:
+        return True
+    cadence_days = _SNAPSHOT_CADENCE_DAYS.get(list_type, 30)
+    last_str = snapshot_index.get(f"{ticker}_{suffix}")
+    if last_str is None:
+        return True
+    try:
+        last_date = date.fromisoformat(last_str)
+    except ValueError:
+        return True
+    return (today - last_date).days >= cadence_days
+
 SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "earnings-summary/1.0"
 
-REQUEST_DELAY = 0.10
+# Live HTTP-attempt counter. The cacher reads this after a run via the budget
+# file (`.tmp/cacher/budget_<YYYY-MM-DD>.json`) so the next invocation knows
+# how much daily quota is left. Counts every attempt (including 4xx) — that
+# matches FMP's billing model.
+_CALL_COUNTER = 0
+_BUDGET_DIR = PROJECT_ROOT / ".tmp" / "cacher"
+
+# FMP starter-tier limit is 750 requests/minute. We size the token bucket at
+# 12 tokens/sec (=720/min steady state) with a 12-token burst. That leaves
+# headroom for retry bursts after a 429 backoff without ever brushing the cap.
+# Override at runtime via FMP_RATE_LIMIT_PER_SEC env var.
+RATE_LIMIT_PER_SEC = float(os.environ.get("FMP_RATE_LIMIT_PER_SEC", "12"))
+RATE_LIMIT_BURST = max(1, int(RATE_LIMIT_PER_SEC))
 TIMEOUT = (10, 60)
+
+
+class TokenBucket:
+    """Process-local token bucket; thread-safe enough for our single-thread fetcher."""
+
+    def __init__(self, rate_per_sec: float, burst: int) -> None:
+        self.rate = rate_per_sec
+        self.capacity = float(burst)
+        self.tokens = float(burst)
+        self.last = time.monotonic()
+
+    def acquire(self) -> None:
+        """Block until one token is available, then consume it."""
+        while True:
+            now = time.monotonic()
+            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
+            self.last = now
+            if self.tokens >= 1.0:
+                self.tokens -= 1.0
+                return
+            time.sleep(max(0.005, (1.0 - self.tokens) / self.rate))
+
+
+_BUCKET = TokenBucket(RATE_LIMIT_PER_SEC, RATE_LIMIT_BURST)
 
 TODAY = date.today()
 TEN_YEARS_AGO = (TODAY - timedelta(days=365 * 10 + 3)).isoformat()
@@ -87,7 +178,10 @@ TODAY_STR = TODAY.isoformat()
 def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
     full = {**params, "apikey": API_KEY}
     # 429 backoff: up to 3 retries, exponential
+    global _CALL_COUNTER
     for attempt in range(3):
+        _BUCKET.acquire()
+        _CALL_COUNTER += 1
         try:
             r = SESSION.get(url, params=full, timeout=TIMEOUT)
         except requests.RequestException as e:
@@ -184,7 +278,6 @@ def fmp_call(
     last_err = "no-attempt"
     saw_403 = False
     for kind, url, params in _candidates(endpoint_path, symbol, extra):
-        time.sleep(REQUEST_DELAY)
         code, body, err = _http_get(url, params)
         last_code, last_err = code, err
         if code == 200 and body is not None:
@@ -328,29 +421,74 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
 # Per-ticker runner
 # ---------------------------------------------------------------------------
 
+_STATUS_UPSERT_SQL = """
+    INSERT INTO fmp_endpoint_status
+        (ticker, endpoint, period, status, http_code, record_count,
+         earliest_date, latest_date, file_path, file_bytes, error_msg,
+         last_pulled)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(ticker, endpoint, period) DO UPDATE SET
+        status=excluded.status, http_code=excluded.http_code,
+        record_count=excluded.record_count,
+        earliest_date=excluded.earliest_date, latest_date=excluded.latest_date,
+        file_path=excluded.file_path, file_bytes=excluded.file_bytes,
+        error_msg=excluded.error_msg, last_pulled=excluded.last_pulled
+"""
+
+
+def _build_status_row(ticker: str, endpoint: str, period: str, *, status: str,
+                      http_code: int | None = None, record_count: int | None = None,
+                      earliest: str | None = None, latest: str | None = None,
+                      file_path: str | None = None, file_bytes: int | None = None,
+                      error_msg: str | None = None) -> tuple:
+    """Build the 12-tuple for the fmp_endpoint_status upsert."""
+    return (ticker, endpoint, period or "", status, http_code, record_count,
+            earliest, latest, file_path, file_bytes, error_msg,
+            datetime.now().isoformat(timespec="seconds"))
+
+
+def _flush_status_batch(rows: list[tuple]) -> None:
+    """Upsert many fmp_endpoint_status rows in one transaction with retry-on-lock.
+
+    Batched commits cut per-ticker DB time from ~1.1s (57 separate fsyncs) to
+    ~50ms (one fsync). The DB is shared with sibling-branch pipelines;
+    busy_timeout (set in portfolio_db.get_connection) handles short waits, but
+    we additionally retry up to 5 times on persistent lock errors so a
+    multi-hour pull doesn't die on a one-off contention spike.
+    """
+    if not rows:
+        return
+    last_err: sqlite3.OperationalError | None = None
+    for attempt in range(5):
+        conn = portfolio_db.get_connection()
+        try:
+            conn.executemany(_STATUS_UPSERT_SQL, rows)
+            conn.commit()
+            return
+        except sqlite3.OperationalError as e:
+            last_err = e
+            wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+            print(f"  [db-locked, retry {attempt + 1}/5 after {wait}s: {e}]", flush=True)
+            time.sleep(wait)
+        finally:
+            conn.close()
+    assert last_err is not None
+    raise last_err
+
+
 def _record_status(ticker: str, endpoint: str, period: str, *, status: str,
                    http_code: int | None = None, record_count: int | None = None,
                    earliest: str | None = None, latest: str | None = None,
                    file_path: str | None = None, file_bytes: int | None = None,
                    error_msg: str | None = None) -> None:
-    conn = portfolio_db.get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO fmp_endpoint_status
-            (ticker, endpoint, period, status, http_code, record_count,
-             earliest_date, latest_date, file_path, file_bytes, error_msg, last_pulled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ticker, endpoint, period) DO UPDATE SET
-            status=excluded.status, http_code=excluded.http_code,
-            record_count=excluded.record_count,
-            earliest_date=excluded.earliest_date, latest_date=excluded.latest_date,
-            file_path=excluded.file_path, file_bytes=excluded.file_bytes,
-            error_msg=excluded.error_msg, last_pulled=excluded.last_pulled
-    """, (ticker, endpoint, period or "", status, http_code, record_count,
-          earliest, latest, file_path, file_bytes, error_msg,
-          datetime.now().isoformat(timespec="seconds")))
-    conn.commit()
-    conn.close()
+    """Upsert one fmp_endpoint_status row immediately. Used by global/sector path
+    where there's no per-ticker batch to accumulate into.
+    """
+    _flush_status_batch([_build_status_row(
+        ticker, endpoint, period, status=status, http_code=http_code,
+        record_count=record_count, earliest=earliest, latest=latest,
+        file_path=file_path, file_bytes=file_bytes, error_msg=error_msg,
+    )])
 
 
 def _date_bounds(records) -> tuple[str | None, str | None]:
@@ -381,10 +519,21 @@ def _list_type_for(ticker: str) -> str:
     return row["list_type"] if row else "none"
 
 
-def run_ticker(ticker: str, *, skip_existing: bool = False) -> dict:
+def run_ticker(
+    ticker: str,
+    *,
+    skip_existing: bool = False,
+    snapshot_index: dict[str, str] | None = None,
+    force_snapshot: bool = False,
+    manifest_filter: set[tuple[str, str]] | None = None,
+    max_calls: int | None = None,
+) -> dict:
     lt = _list_type_for(ticker)
     print(f"\n=== {ticker} ({lt}) ===", flush=True)
     jobs = per_ticker_jobs(ticker, list_type=lt)
+    if manifest_filter is not None:
+        jobs = [j for j in jobs if (j["path"], j["period"]) in manifest_filter]
+    snapshot_index = snapshot_index if snapshot_index is not None else {}
 
     summary = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0,
                "total": len(jobs)}
@@ -399,12 +548,20 @@ def run_ticker(ticker: str, *, skip_existing: bool = False) -> dict:
     else:
         already_ok = set()
 
+    # Accumulate fmp_endpoint_status upserts and flush once at end-of-ticker.
+    # 57 individual commits cost ~1s/ticker on Windows; one batch commit is ~50ms.
+    pending: list[tuple] = []
+
     for job in jobs:
         endpoint = job["path"]
         period = job["period"]
         suffix = job["suffix"]
 
         if (endpoint, period) in already_ok:
+            summary["skipped"] += 1
+            continue
+
+        if max_calls is not None and _CALL_COUNTER >= max_calls:
             summary["skipped"] += 1
             continue
 
@@ -416,38 +573,52 @@ def run_ticker(ticker: str, *, skip_existing: bool = False) -> dict:
 
             # For time-sensitive endpoints (forward consensus, ratings, DCF, TTM,
             # market-data-driven), also write a dated snapshot so historical
-            # values aren't overwritten on next pull.
-            if endpoint in TIME_SENSITIVE_ENDPOINTS:
+            # values aren't overwritten on next pull. Cadence is per list_type:
+            # daily for portfolio/watchlist, monthly for index_member/etf.
+            if endpoint in TIME_SENSITIVE_ENDPOINTS and _should_snapshot(
+                ticker, suffix, lt, TODAY, snapshot_index, force=force_snapshot
+            ):
                 snap_dir = SNAP_DIR / TODAY_STR
                 snap_dir.mkdir(parents=True, exist_ok=True)
                 (snap_dir / f"{ticker}_{suffix}.json").write_text(
                     json.dumps(body, indent=2), encoding="utf-8")
+                snapshot_index[f"{ticker}_{suffix}"] = TODAY_STR
 
             count = len(body) if isinstance(body, list) else 1
             earliest, latest = _date_bounds(body if isinstance(body, list) else [body])
-            _record_status(ticker, endpoint, period, status="ok",
-                           http_code=code, record_count=count,
-                           earliest=earliest, latest=latest,
-                           file_path=str(file_path.relative_to(PROJECT_ROOT)),
-                           file_bytes=file_path.stat().st_size)
+            pending.append(_build_status_row(
+                ticker, endpoint, period, status="ok",
+                http_code=code, record_count=count,
+                earliest=earliest, latest=latest,
+                file_path=str(file_path.relative_to(PROJECT_ROOT)),
+                file_bytes=file_path.stat().st_size,
+            ))
             summary["ok"] += 1
             print(f"  ok   {endpoint:48s} {period:8s} n={count:<5} "
                   f"{earliest or '?':10s} -> {latest or '?':10s}  [{kind}]")
         elif code in (401, 402, 403):
-            _record_status(ticker, endpoint, period, status="forbidden",
-                           http_code=code, error_msg=err)
+            pending.append(_build_status_row(
+                ticker, endpoint, period, status="forbidden",
+                http_code=code, error_msg=err,
+            ))
             summary["forbidden"] += 1
             print(f"  403  {endpoint:48s} {period:8s} (tier-restricted)")
         elif err == "empty-list":
-            _record_status(ticker, endpoint, period, status="empty",
-                           http_code=200, record_count=0, error_msg="empty-list")
+            pending.append(_build_status_row(
+                ticker, endpoint, period, status="empty",
+                http_code=200, record_count=0, error_msg="empty-list",
+            ))
             summary["empty"] += 1
             print(f"  empty {endpoint:48s} {period:8s}")
         else:
-            _record_status(ticker, endpoint, period, status="error",
-                           http_code=code, error_msg=err)
+            pending.append(_build_status_row(
+                ticker, endpoint, period, status="error",
+                http_code=code, error_msg=err,
+            ))
             summary["error"] += 1
             print(f"  err  {endpoint:48s} {period:8s} code={code} {err}")
+
+    _flush_status_batch(pending)
 
     print(f"  --- {ticker}: ok={summary['ok']} empty={summary['empty']} "
           f"forbidden={summary['forbidden']} error={summary['error']} "
@@ -591,10 +762,34 @@ def main():
                     help="Portfolio + watchlist + sector/industry")
     ap.add_argument("--skip-existing", action="store_true",
                     help="Skip endpoints already 'ok' in DB")
+    ap.add_argument("--force-snapshot", action="store_true",
+                    help="Snapshot every time-sensitive endpoint regardless of cadence")
+    ap.add_argument("--manifest", type=str, default=None,
+                    help="Path to JSON manifest of [{ticker, endpoint, period}] tuples; "
+                    "filters per_ticker_jobs to only those entries (cacher-driven runs)")
+    ap.add_argument("--max-calls", type=int, default=None,
+                    help="Soft cap on total HTTP attempts. Run halts mid-ticker when "
+                    "the counter exceeds this; remaining work is left for next run")
     args = ap.parse_args()
 
     targets: list[str] = []
     do_sector = False
+
+    # Manifest mode: cacher-driven precise (ticker, endpoint, period) work.
+    # Accepts either a bare list of entries or a wrapped {"items": [...], ...}
+    # object (the cacher writes the wrapped form for diagnostics).
+    manifest_filter: dict[str, set[tuple[str, str]]] | None = None
+    if args.manifest:
+        with open(args.manifest, encoding="utf-8") as mf:
+            payload = json.load(mf)
+        entries = payload["items"] if isinstance(payload, dict) else payload
+        manifest_filter = {}
+        for e in entries:
+            t = e["ticker"].upper()
+            manifest_filter.setdefault(t, set()).add(
+                (e["endpoint"], e.get("period", ""))
+            )
+        targets = sorted(manifest_filter.keys())
 
     if args.probe:
         targets = ["GOOGL"]
@@ -622,9 +817,22 @@ def main():
         ap.print_help()
         sys.exit(2)
 
+    snapshot_index = _load_snapshot_index()
+    print(f"snapshot index: {len(snapshot_index)} entries", flush=True)
+
     grand = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0, "total": 0}
     for t in targets:
-        s = run_ticker(t, skip_existing=args.skip_existing)
+        if args.max_calls is not None and _CALL_COUNTER >= args.max_calls:
+            print(f"  [max-calls {args.max_calls} reached; halting before {t}]")
+            break
+        s = run_ticker(
+            t,
+            skip_existing=args.skip_existing,
+            snapshot_index=snapshot_index,
+            force_snapshot=args.force_snapshot,
+            manifest_filter=manifest_filter.get(t) if manifest_filter else None,
+            max_calls=args.max_calls,
+        )
         for k in grand:
             grand[k] += s[k]
 
@@ -635,6 +843,24 @@ def main():
     print(f"  ok={grand['ok']} empty={grand['empty']} forbidden={grand['forbidden']} "
           f"error={grand['error']} skipped={grand['skipped']} / total={grand['total']}")
     print(f"  tickers processed: {len(targets)}")
+    print(f"  http attempts:     {_CALL_COUNTER}")
+
+    # Append today's HTTP attempts to the daily budget ledger so the cacher
+    # can read it on the next invocation. Atomic append-or-create with read+
+    # rewrite — concurrent writers serialize through portfolio_db's busy_timeout
+    # at the consumer layer, but we don't double-write here.
+    try:
+        _BUDGET_DIR.mkdir(parents=True, exist_ok=True)
+        budget_path = _BUDGET_DIR / f"budget_{TODAY_STR}.json"
+        existing = {"calls_made": 0, "runs": 0}
+        if budget_path.exists():
+            existing = json.loads(budget_path.read_text(encoding="utf-8"))
+        existing["calls_made"] = existing.get("calls_made", 0) + _CALL_COUNTER
+        existing["runs"] = existing.get("runs", 0) + 1
+        existing["last_run_at"] = datetime.now().isoformat(timespec="seconds")
+        budget_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except OSError as e:
+        print(f"  [warn] could not write budget file: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

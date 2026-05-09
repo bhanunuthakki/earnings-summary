@@ -131,6 +131,36 @@ def fetch_dcf_base_inputs(
     return revenue, shares
 
 
+@dataclass(frozen=True)
+class DcfComponent:
+    """One sub-DCF inside an aggregate run: a segment, or the unallocated overhead.
+
+    `component_type` distinguishes segment-level cash flows from the residual
+    corporate/overhead portion that's not attributed to any operating segment.
+    The aggregate `npv` of a `dcf_runs` row equals the sum of its component NPVs.
+    """
+
+    component_name: str
+    component_type: str
+    inputs: DcfInputs
+    result: DcfResult
+
+
+def _component_to_dict(c: DcfComponent) -> dict[str, object]:
+    return {
+        "component_name": c.component_name,
+        "component_type": c.component_type,
+        "base_revenue": c.inputs.base_revenue,
+        "revenue_growths": c.inputs.revenue_growths,
+        "fcf_margin": c.inputs.fcf_margin,
+        "wacc": c.inputs.wacc,
+        "terminal_growth": c.inputs.terminal_growth,
+        "periods_per_year": c.inputs.periods_per_year,
+        "npv": c.result.npv,
+        "npv_per_share": c.result.npv_per_share,
+    }
+
+
 def persist_dcf_run(
     conn: sqlite3.Connection,
     ticker: str,
@@ -138,19 +168,39 @@ def persist_dcf_run(
     result: DcfResult,
     notes: str | None = None,
     run_id: str | None = None,
-    segment_name: str | None = None,
+    breakdown: list[DcfComponent] | None = None,
 ) -> int:
-    """Insert one dcf_runs row; return the new row id.
+    """Upsert the single dcf_runs row for `ticker`. Returns row id.
 
-    `segment_name=None` means a consolidated DCF run. A segment-level run
-    passes the segment label so consumers can filter or roll up.
+    Schema invariant (since migration 0018): one row per ticker. The aggregate
+    `npv` and `npv_per_share` equal the sum of `breakdown` component NPVs when
+    a breakdown is supplied; for a pure consolidated run, breakdown is None.
     """
+    breakdown_json = (
+        json.dumps([_component_to_dict(c) for c in breakdown]) if breakdown else None
+    )
     cur = conn.execute(
         "INSERT INTO dcf_runs ("
         "ticker, valuation_date, horizon_years, base_revenue, "
         "revenue_growths_json, fcf_margin, wacc, terminal_growth, "
-        "npv, npv_per_share, shares_outstanding, currency, notes, run_id, segment_name"
-        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "npv, npv_per_share, shares_outstanding, currency, notes, run_id, "
+        "segment_name, breakdown_json"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?) "
+        "ON CONFLICT(ticker) DO UPDATE SET "
+        "  valuation_date = excluded.valuation_date, "
+        "  horizon_years = excluded.horizon_years, "
+        "  base_revenue = excluded.base_revenue, "
+        "  revenue_growths_json = excluded.revenue_growths_json, "
+        "  fcf_margin = excluded.fcf_margin, "
+        "  wacc = excluded.wacc, "
+        "  terminal_growth = excluded.terminal_growth, "
+        "  npv = excluded.npv, "
+        "  npv_per_share = excluded.npv_per_share, "
+        "  shares_outstanding = excluded.shares_outstanding, "
+        "  notes = excluded.notes, "
+        "  run_id = excluded.run_id, "
+        "  segment_name = NULL, "
+        "  breakdown_json = excluded.breakdown_json",
         (
             ticker.upper(),
             datetime.now().date().isoformat(),
@@ -166,11 +216,15 @@ def persist_dcf_run(
             None,
             notes,
             run_id,
-            segment_name,
+            breakdown_json,
         ),
     )
     conn.commit()
-    return cur.lastrowid or 0
+    if cur.lastrowid:
+        return cur.lastrowid
+    cur = conn.execute("SELECT id FROM dcf_runs WHERE ticker = ?", (ticker.upper(),))
+    row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 def run_dcf_for_ticker(
@@ -230,12 +284,109 @@ def fetch_segment_base_revenues(
 
 @dataclass(frozen=True)
 class SegmentDcfRow:
-    """One segment's DCF in a multi-segment run."""
+    """One segment's DCF inside a multi-segment aggregate run.
+
+    `row_id` references the single aggregate `dcf_runs` row that holds this
+    segment within its `breakdown_json`. Multiple SegmentDcfRow values for the
+    same ticker share the same `row_id` — one row per ticker, post-0018.
+    """
 
     segment_name: str
     inputs: DcfInputs
     result: DcfResult
     row_id: int
+
+
+@dataclass(frozen=True)
+class AggregateDcfRow:
+    """The single dcf_runs row for a ticker, with its full per-component breakdown."""
+
+    ticker: str
+    row_id: int
+    aggregate_npv: float
+    aggregate_npv_per_share: float | None
+    components: list[DcfComponent]
+
+
+def _aggregate_inputs_for_persist(
+    components: list[DcfComponent], shares_outstanding: float | None
+) -> DcfInputs:
+    """Synthesize the top-level DcfInputs columns for a multi-component run.
+
+    The top-level columns on `dcf_runs` (base_revenue, revenue_growths_json,
+    fcf_margin, wacc, terminal_growth) carry no meaning when `breakdown_json`
+    is set — readers should consult the breakdown. We populate them with the
+    first component's inputs as a placeholder so downstream legacy reads
+    don't choke on NULLs.
+    """
+    if not components:
+        raise ValueError("Cannot synthesize aggregate inputs from empty component list")
+    first = components[0].inputs
+    return DcfInputs(
+        base_revenue=first.base_revenue,
+        revenue_growths=first.revenue_growths,
+        fcf_margin=first.fcf_margin,
+        wacc=first.wacc,
+        terminal_growth=first.terminal_growth,
+        shares_outstanding=shares_outstanding,
+        periods_per_year=first.periods_per_year,
+    )
+
+
+def _aggregate_result(
+    components: list[DcfComponent], shares_outstanding: float | None
+) -> DcfResult:
+    """Aggregate NPV = sum of component NPVs. Per-share scaled at the aggregate level."""
+    aggregate_npv = sum(c.result.npv for c in components)
+    npv_per_share = (
+        aggregate_npv / shares_outstanding
+        if shares_outstanding and shares_outstanding > 0
+        else None
+    )
+    return DcfResult(
+        projected_fcfs=[],
+        sum_of_discounted_fcfs=0.0,
+        terminal_value=0.0,
+        discounted_terminal=0.0,
+        npv=aggregate_npv,
+        npv_per_share=npv_per_share,
+    )
+
+
+def persist_aggregate_dcf(
+    conn: sqlite3.Connection,
+    ticker: str,
+    components: list[DcfComponent],
+    shares_outstanding: float | None,
+    notes: str | None = None,
+    run_id: str | None = None,
+) -> AggregateDcfRow:
+    """Persist one dcf_runs row whose breakdown_json holds `components`.
+
+    Aggregate NPV is the sum of component NPVs, by construction. Use this for
+    segment + overhead style runs; for a pure consolidated DCF, call
+    `persist_dcf_run` directly with `breakdown=None`.
+    """
+    if not components:
+        raise ValueError(f"Cannot persist aggregate dcf for {ticker!r}: no components")
+    inputs = _aggregate_inputs_for_persist(components, shares_outstanding)
+    result = _aggregate_result(components, shares_outstanding)
+    row_id = persist_dcf_run(
+        conn,
+        ticker,
+        inputs,
+        result,
+        notes=notes,
+        run_id=run_id,
+        breakdown=components,
+    )
+    return AggregateDcfRow(
+        ticker=ticker.upper(),
+        row_id=row_id,
+        aggregate_npv=result.npv,
+        aggregate_npv_per_share=result.npv_per_share,
+        components=components,
+    )
 
 
 def _filter_outliers(values: list[float], threshold_x: float = 5.0) -> list[float]:
@@ -291,6 +442,26 @@ def fetch_segment_quarterly_per_period_base(
     return {k: v / 4.0 for k, v in annual.items()}
 
 
+def _build_segment_components(
+    segment_inputs: dict[str, DcfInputs],
+) -> list[DcfComponent]:
+    """Compute compute_dcf for each segment-keyed inputs dict; return components."""
+    out: list[DcfComponent] = []
+    for segment_name, inputs in segment_inputs.items():
+        result = compute_dcf(inputs)
+        out.append(DcfComponent(segment_name, "segment", inputs, result))
+    return out
+
+
+def _build_overhead_component(
+    overhead_inputs: DcfInputs | None,
+) -> DcfComponent | None:
+    """If overhead inputs supplied, compute and wrap as a component."""
+    if overhead_inputs is None:
+        return None
+    return DcfComponent("overhead", "overhead", overhead_inputs, compute_dcf(overhead_inputs))
+
+
 def run_quarterly_segment_dcf_for_ticker(
     conn: sqlite3.Connection,
     ticker: str,
@@ -301,23 +472,26 @@ def run_quarterly_segment_dcf_for_ticker(
     notes: str | None = None,
     run_id: str | None = None,
     metric: str = "revenue_by_product",
-) -> list[SegmentDcfRow]:
-    """Per-segment DCF at quarterly granularity.
+    overhead_inputs: DcfInputs | None = None,
+) -> AggregateDcfRow:
+    """Per-segment quarterly DCFs persisted as one aggregate row per ticker.
 
-    Base revenue per segment = TTM (sum of last 4 quarters) from
-    segment_facts. Growth lists are per-quarter (typically 40 entries for
-    a 10-year horizon). WACC and terminal_growth remain annualized;
-    compute_dcf converts internally.
+    Base revenue per segment = TTM (sum of last 4 quarters) from segment_facts.
+    Growth lists are per-quarter (typically 40 entries for a 10-year horizon).
+    WACC and terminal_growth remain annualized; compute_dcf converts internally.
+    `overhead_inputs`, when supplied, is computed and appended as the trailing
+    'overhead' component so the aggregate row's NPV equals
+    `sum(segment NPVs) + overhead NPV`.
     """
     base_revenues = fetch_segment_quarterly_per_period_base(conn, ticker, metric=metric)
     if not base_revenues:
         raise ValueError(f"No quarterly segment revenue facts (metric={metric!r}) for {ticker!r}")
 
-    out: list[SegmentDcfRow] = []
+    segment_inputs: dict[str, DcfInputs] = {}
     for segment_name, base_revenue in base_revenues.items():
         if segment_name not in segment_quarterly_growths or segment_name not in segment_fcf_margins:
             continue
-        inputs = DcfInputs(
+        segment_inputs[segment_name] = DcfInputs(
             base_revenue=base_revenue,
             revenue_growths=segment_quarterly_growths[segment_name],
             fcf_margin=segment_fcf_margins[segment_name],
@@ -326,18 +500,23 @@ def run_quarterly_segment_dcf_for_ticker(
             shares_outstanding=None,
             periods_per_year=4,
         )
-        result = compute_dcf(inputs)
-        row_id = persist_dcf_run(
-            conn,
-            ticker,
-            inputs,
-            result,
-            notes=notes,
-            run_id=run_id,
-            segment_name=segment_name,
-        )
-        out.append(SegmentDcfRow(segment_name, inputs, result, row_id))
-    return out
+    if not segment_inputs:
+        raise ValueError(f"No segments matched assumptions for {ticker!r}")
+
+    components = _build_segment_components(segment_inputs)
+    overhead = _build_overhead_component(overhead_inputs)
+    if overhead is not None:
+        components.append(overhead)
+
+    _, shares = fetch_dcf_base_inputs(conn, ticker)
+    return persist_aggregate_dcf(
+        conn,
+        ticker,
+        components,
+        shares_outstanding=shares,
+        notes=notes,
+        run_id=run_id,
+    )
 
 
 def run_segment_dcf_for_ticker(
@@ -350,12 +529,14 @@ def run_segment_dcf_for_ticker(
     notes: str | None = None,
     run_id: str | None = None,
     metric: str = "revenue_by_product",
-) -> list[SegmentDcfRow]:
-    """For each segment with both growths and an FCF margin specified, compute and persist a DCF.
+    overhead_inputs: DcfInputs | None = None,
+) -> AggregateDcfRow:
+    """Annual per-segment DCFs persisted as one aggregate row per ticker.
 
-    Segments not present in segment_growths or segment_fcf_margins are skipped.
-    Each per-segment DCF gets its own dcf_runs row with segment_name set;
-    consumers can sum NPVs across rows for the ticker to get total enterprise value.
+    Segments not present in `segment_growths` or `segment_fcf_margins` are
+    skipped. The persisted row's `breakdown_json` lists every segment plus an
+    optional 'overhead' component supplied by the caller; the aggregate `npv`
+    equals their sum.
     """
     base_revenues = fetch_segment_base_revenues(conn, ticker, metric=metric)
     if not base_revenues:
@@ -364,11 +545,11 @@ def run_segment_dcf_for_ticker(
             f"run extract_facts on fmp_segment_product first"
         )
 
-    out: list[SegmentDcfRow] = []
+    segment_inputs: dict[str, DcfInputs] = {}
     for segment_name, base_revenue in base_revenues.items():
         if segment_name not in segment_growths or segment_name not in segment_fcf_margins:
             continue
-        inputs = DcfInputs(
+        segment_inputs[segment_name] = DcfInputs(
             base_revenue=base_revenue,
             revenue_growths=segment_growths[segment_name],
             fcf_margin=segment_fcf_margins[segment_name],
@@ -376,15 +557,20 @@ def run_segment_dcf_for_ticker(
             terminal_growth=terminal_growth,
             shares_outstanding=None,
         )
-        result = compute_dcf(inputs)
-        row_id = persist_dcf_run(
-            conn,
-            ticker,
-            inputs,
-            result,
-            notes=notes,
-            run_id=run_id,
-            segment_name=segment_name,
-        )
-        out.append(SegmentDcfRow(segment_name, inputs, result, row_id))
-    return out
+    if not segment_inputs:
+        raise ValueError(f"No segments matched assumptions for {ticker!r}")
+
+    components = _build_segment_components(segment_inputs)
+    overhead = _build_overhead_component(overhead_inputs)
+    if overhead is not None:
+        components.append(overhead)
+
+    _, shares = fetch_dcf_base_inputs(conn, ticker)
+    return persist_aggregate_dcf(
+        conn,
+        ticker,
+        components,
+        shares_outstanding=shares,
+        notes=notes,
+        run_id=run_id,
+    )

@@ -1,0 +1,129 @@
+{
+  "ticker": "BKNG",
+  "name": "Booking Holdings",
+  "last_updated": "2026-05-07",
+  "thesis": "Global accommodation booking leader with structural compounding from international markets + alternative accommodations + connected trip vision. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Room nights × ADR × take-rate × connected-trip attach",
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Room nights booked YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<5% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross bookings YoY growth (FX-neutral)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<8% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 33% on TTM basis",
+      "source": "earnings release"
+    },
+    {
+      "name": "Marketing efficiency (marketing/gross profit)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Rises >300 bps YoY for 2 consecutive Qs",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Free cash flow margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 28% on TTM basis",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Alternative accommodations mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Direct vs paid traffic mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Take rate trajectory",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Connected-trip / payments attach",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Capital return pace",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Airbnb",
+    "Expedia",
+    "Direct hotel booking"
+  ],
+  "thesis_breakers_qualitative": [
+    "Room nights turn negative",
+    "Marketing intensity creep without offset",
+    "Google search disintermediation"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    }
+  ]
+}
