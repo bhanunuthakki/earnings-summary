@@ -285,9 +285,23 @@ def persist_verdict(
     `thesis_state` is mutable (current-state row per ticker). `thesis_evaluations`
     is append-only — every evaluation produces a new row keyed by evaluated_at.
     """
+    # Upsert: a thesis_state row may not exist yet (e.g. ticker added via raw SQL
+    # bypassing the track_company → onboard_ticker → seed flow). New rows get an
+    # empty raw_json placeholder; the holdings JSON file remains the source of truth.
     conn.execute(
-        "UPDATE thesis_state SET breach_status = ?, last_updated = ? WHERE ticker = ?",
-        (verdict.overall_status.value, verdict.evaluated_at, verdict.ticker),
+        "INSERT INTO thesis_state "
+        "(ticker, thesis, breach_status, last_updated, raw_json, ingested_at) "
+        "VALUES (?, ?, ?, ?, '{}', ?) "
+        "ON CONFLICT(ticker) DO UPDATE SET "
+        "    breach_status = excluded.breach_status, "
+        "    last_updated  = excluded.last_updated",
+        (
+            verdict.ticker,
+            verdict.thesis,
+            verdict.overall_status.value,
+            verdict.evaluated_at,
+            verdict.evaluated_at,  # ingested_at = evaluated_at for newly-created rows
+        ),
     )
     conn.execute(
         "INSERT INTO thesis_evaluations "
