@@ -15,9 +15,10 @@ onboard pipeline against them.
 | Purpose | Path |
 |---|---|
 | Catch-up CLI | `execution/onboard_pending_tickers.py` |
-| Per-ticker onboarder (called per pending ticker) | `execution/onboard_ticker.py` |
-| Thesis evaluator (called per pending ticker) | `execution/run_thesis_evaluator.py` |
-| DCF runner (called per pending ticker) | `execution/batch_dcf.py` |
+| Per-ticker onboarder | `execution/onboard_ticker.py` |
+| Thesis evaluator | `execution/run_thesis_evaluator.py` |
+| DCF runner | `execution/batch_dcf.py` |
+| **Auto commitment extractor** | `execution/extract_commitments_from_transcript.py --auto` |
 | Cron wrapper | `cron/run_onboard_pending.bat` |
 | Scheduled-task definition | `cron/onboard_pending_tickers.task.xml` |
 
@@ -29,25 +30,49 @@ A row in `tracked_companies` is pending when ALL of:
 
 AND ANY of:
 
-| Signal | Meaning |
-|---|---|
-| `instrument_type IS NULL` | `track_company` would have set this; missing → bypassed the hook |
-| `0 financial_facts rows` | parse stage never ran |
-| `0 dcf_runs rows` | analysis stage never ran |
+| Reason code | Signal | Meaning |
+|---|---|---|
+| `no_instrument_type` | `instrument_type IS NULL` | `track_company` would have set this; missing → bypassed the hook |
+| `no_financial_facts` | 0 `financial_facts` rows | parse stage never ran |
+| `no_dcf_run` | 0 `dcf_runs` rows | analysis stage never ran |
+| `no_commitments` | has ≥1 `transcripts` row but 0 `management_commitments` | LLM extractor never ran for this ticker's transcripts |
 
-Index/ETF/'none' rows are deliberately excluded — they're not in the analytical
-universe.
+Reason precedence is the order above — first matching condition wins. Index /
+ETF / `'none'` rows are deliberately excluded.
+
+A fully-onboarded ticker with NO transcripts is intentionally NOT pending —
+nothing for the extractor to chew on. The `no_commitments` signal only fires
+when transcripts exist.
 
 ## Per-ticker pipeline
 
+Stage subset depends on `pending_reason`:
+
+| pending_reason | Stages run |
+|---|---|
+| `no_instrument_type`, `no_financial_facts`, `no_dcf_run` | `onboard_ticker` → `run_thesis_evaluator` → `batch_dcf` → `extract_commitments` |
+| `no_commitments` | `extract_commitments` only (heavy stages skipped because the ticker is already onboarded) |
+
 ```
-onboard_ticker.py (FMP fetch + parse) → run_thesis_evaluator.py → batch_dcf.py
+no_instrument_type / no_financial_facts / no_dcf_run:
+  onboard_ticker (FMP fetch + parse)
+    -> run_thesis_evaluator
+    -> batch_dcf
+    -> extract_commitments_from_transcript --auto
+
+no_commitments:
+  extract_commitments_from_transcript --auto
 ```
 
-Each stage is a subprocess. The eval + DCF stages are best-effort: they exit
-non-zero when a ticker has no holdings JSON or insufficient facts, but that
-does not abort the chain — those stages get marked `failed` in the structured
-result and the ticker advances to the next.
+Each stage is a subprocess. The eval / DCF / extraction stages are
+best-effort: they exit non-zero when a ticker has no holdings JSON,
+insufficient facts, no transcripts, or LLM auth is misconfigured — but
+that does not abort the chain. Each stage's outcome is recorded in the
+structured result and the ticker advances to the next.
+
+The `--skip-commitments` flag suppresses the extraction stage globally
+(useful for runs where LLM auth is unavailable or you want to keep
+runtime predictable).
 
 ## Idempotency
 
@@ -57,6 +82,9 @@ result and the ticker advances to the next.
   produce identical outputs given identical inputs.
 - `batch_dcf` returns `skipped` when a ticker already has a current-quarter
   DCF run.
+- `extract_commitments --auto` skips transcripts that already have ≥1
+  `management_commitments` row. New transcripts arriving between cron
+  ticks get extracted on the next run.
 
 Net: re-running the catch-up while no tickers are pending exits 0 with an
 empty `results` array. Safe at any cadence.
