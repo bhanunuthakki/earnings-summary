@@ -154,6 +154,60 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    },
+    {
+      "rule_id": "capex_intensity_too_high",
+      "kpi_name": "Capex / Revenue (GAAP)",
+      "comparator": "gt",
+      "threshold": 25,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
+    },
+    {
+      "rule_id": "fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+    },
+    {
+      "rule_id": "ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    },
+    {
+      "rule_id": "meta_foa_revenue_below_10",
+      "kpi_name": "Family of Apps revenue growth (CC)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Family of Apps revenue growth below 10% CC for 2 consecutive Qs."
+    },
+    {
+      "rule_id": "meta_dap_below_3",
+      "kpi_name": "Family DAP (daily active people) growth",
+      "comparator": "lt",
+      "threshold": 3,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Family DAP growth below 3% for 2 consecutive Qs — engagement saturation."
+    },
+    {
+      "rule_id": "meta_op_margin_below_35",
+      "kpi_name": "Consolidated operating margin",
+      "comparator": "lt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Consolidated operating margin below 35% for 2 consecutive Qs."
     }
   ]
 }
