@@ -101,6 +101,7 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
             ("fmp_data_upto", "TEXT DEFAULT NULL"),
             ("manual_data_quarters", "TEXT DEFAULT '[]'"),
             ("fmp_data_saved", "BOOLEAN DEFAULT 0"),
+            ("archived_at", "TIMESTAMP DEFAULT NULL"),
         ],
     )
 
@@ -541,9 +542,13 @@ def _spawn_onboard_async(ticker: str) -> None:
 def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> None:
     """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
 
-    For first-time adds to portfolio/watchlist, also spawns a detached
-    `execution/onboard_ticker.py` subprocess to fetch FMP data and run the
-    parse DAG. Re-upserts (ticker already exists for user) do NOT re-spawn.
+    Spawns the detached `execution/onboard_ticker.py` subprocess whenever
+    the ticker *transitions into* the analytical universe — that is, a new
+    add to portfolio/watchlist OR a promotion from a non-onboardable
+    list_type (index_member, etf, none) into one. Re-adds within the same
+    onboardable set (watchlist↔portfolio, or repeated watchlist→watchlist)
+    do NOT re-spawn — the data is already there and `onboard_pending_tickers`
+    handles any actual gaps.
     """
     if list_type not in _LIST_TYPES:
         raise ValueError(f"Invalid list_type {list_type!r}; expected one of {sorted(_LIST_TYPES)}")
@@ -556,10 +561,11 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT 1 FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+        "SELECT list_type FROM tracked_companies WHERE user_id = ? AND ticker = ?",
         (user_id, ticker),
     )
-    is_new_addition = cursor.fetchone() is None
+    prior_row = cursor.fetchone()
+    prior_list_type: str | None = prior_row[0] if prior_row is not None else None
     cursor.execute(
         """
         INSERT INTO tracked_companies (user_id, ticker, name, list_type, added_at, sec_validated, ir_url)
@@ -579,7 +585,10 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
 
     scan_and_sync_artifacts(ticker)
 
-    if is_new_addition and list_type in _TRACKED_LIST_TYPES_FOR_ONBOARD:
+    became_onboardable = list_type in _TRACKED_LIST_TYPES_FOR_ONBOARD and (
+        prior_list_type is None or prior_list_type not in _TRACKED_LIST_TYPES_FOR_ONBOARD
+    )
+    if became_onboardable:
         _spawn_onboard_async(ticker)
 
 
