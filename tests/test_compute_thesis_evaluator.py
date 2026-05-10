@@ -367,3 +367,75 @@ def test_break_rule_rejects_zero_consecutive_periods() -> None:
             threshold=Decimal("1"), unit=Unit.PERCENT, consecutive_periods=0,
             narrative="x",
         )
+
+
+def test_persist_verdict_upserts_when_thesis_state_row_missing(
+    conn: sqlite3.Connection,
+) -> None:
+    """A thesis_state row is created on first persist_verdict for an unseen ticker.
+
+    Regression: previously persist_verdict only UPDATEd, so tickers added via
+    raw SQL inserts (bypassing track_company's onboard hook) ended up with
+    thesis_evaluations rows but NO thesis_state row, breaking the dashboard's
+    breach_status read.
+    """
+    # No INSERT INTO thesis_state — row should be missing.
+    pre = conn.execute("SELECT COUNT(*) FROM thesis_state WHERE ticker='FRESH'").fetchone()[0]
+    assert pre == 0
+
+    verdict = ThesisVerdict(
+        ticker="FRESH",
+        thesis="some thesis",
+        overall_status=BreachStatus.WARN,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 5, 9, 12, 0, 0),
+    )
+    persist_verdict(conn, verdict, run_id="upsert-run")
+
+    row = conn.execute(
+        "SELECT ticker, thesis, breach_status, last_updated, raw_json, ingested_at "
+        "FROM thesis_state WHERE ticker='FRESH'"
+    ).fetchone()
+    assert row is not None
+    d = dict(row)
+    assert d["ticker"] == "FRESH"
+    assert d["thesis"] == "some thesis"
+    assert d["breach_status"] == "warn"
+    assert d["raw_json"] == "{}"
+
+    # And a thesis_evaluations row was also created (existing behavior preserved).
+    evals = conn.execute(
+        "SELECT overall_status, run_id FROM thesis_evaluations WHERE ticker='FRESH'"
+    ).fetchall()
+    assert len(evals) == 1
+    assert dict(evals[0])["overall_status"] == "warn"
+    assert dict(evals[0])["run_id"] == "upsert-run"
+
+
+def test_persist_verdict_preserves_existing_raw_json(
+    conn: sqlite3.Connection,
+) -> None:
+    """When thesis_state already has a row, raw_json is preserved across upsert."""
+    seeded_raw = '{"thesis": "original holdings JSON content here"}'
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES ('KEEP', 't', ?, ?)",
+        (seeded_raw, datetime(2026, 1, 1)),
+    )
+    conn.commit()
+
+    verdict = ThesisVerdict(
+        ticker="KEEP",
+        thesis="t",
+        overall_status=BreachStatus.BREACH,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 5, 9, 12, 0, 0),
+    )
+    persist_verdict(conn, verdict)
+
+    # raw_json is the seeded value, NOT '{}' — upsert must not clobber it.
+    raw = conn.execute(
+        "SELECT raw_json, breach_status FROM thesis_state WHERE ticker='KEEP'"
+    ).fetchone()
+    assert raw["raw_json"] == seeded_raw
+    assert raw["breach_status"] == "breach"
