@@ -167,6 +167,51 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    },
+    {
+      "rule_id": "capex_intensity_too_high",
+      "kpi_name": "Capex / Revenue (GAAP)",
+      "comparator": "gt",
+      "threshold": 25,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
+    },
+    {
+      "rule_id": "fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+    },
+    {
+      "rule_id": "ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    },
+    {
+      "rule_id": "goog_gcp_revenue_decel",
+      "kpi_name": "GCP revenue growth (YoY)",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GCP revenue growth below 30% YoY for 2 consecutive Qs — cloud thesis weakening."
+    },
+    {
+      "rule_id": "goog_gcp_margin_below_15",
+      "kpi_name": "GCP operating margin trajectory",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GCP operating margin below 15% for 2 consecutive Qs — margin expansion stalling."
     }
   ]
 }
