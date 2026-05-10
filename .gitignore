@@ -13,6 +13,7 @@ __pycache__/
 .tmp/
 .cache/
 cache/
+logs/
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
 # from execution/save_fmp_data.py and alembic migrations)

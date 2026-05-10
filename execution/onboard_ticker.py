@@ -32,7 +32,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
-from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
+from pipeline.fmp_doc_index import (  # noqa: E402
+    index_fmp_files_for_ticker,
+    set_fiscal_year_end_from_fmp,
+)
 from pipeline.quarterly_refresh import (  # noqa: E402
     StageStatus as RefreshStageStatus,
 )
@@ -81,6 +84,10 @@ def main() -> int:
         print(f"[onboard] {ticker} stage=index_fmp_documents", flush=True)
         n_indexed = index_fmp_files_for_ticker(conn, ticker, PROJECT_ROOT)
         print(f"[onboard] {ticker} indexed {n_indexed} new fmp documents rows", flush=True)
+
+        print(f"[onboard] {ticker} stage=set_fiscal_year_end", flush=True)
+        fye = set_fiscal_year_end_from_fmp(conn, ticker, PROJECT_ROOT)
+        print(f"[onboard] {ticker} fiscal_year_end={fye!s}", flush=True)
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
         run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])

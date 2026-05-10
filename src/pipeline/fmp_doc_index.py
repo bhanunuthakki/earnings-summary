@@ -135,6 +135,47 @@ def _sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+def set_fiscal_year_end_from_fmp(
+    conn: sqlite3.Connection,
+    ticker: str,
+    project_root: Path,
+) -> str | None:
+    """Read the FMP annual income statement for `ticker` and write its FYE
+    (MM-DD) to `tracked_companies.fiscal_year_end`. Returns the value written,
+    or None if the cache file is missing/empty (column left untouched).
+    """
+    upper = ticker.upper()
+    path = project_root / "data" / "historical" / "fmp" / f"{upper}_income_statement_annual.json"
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8") as f:
+        raw: object = json.load(f)
+    if not isinstance(raw, list):
+        return None
+    records = cast(list[object], raw)
+    latest_date: str | None = None
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        rec_obj = cast(dict[str, object], rec)
+        if rec_obj.get("period") != "FY":
+            continue
+        d = rec_obj.get("date")
+        if not isinstance(d, str) or len(d) < 10:
+            continue
+        if latest_date is None or d > latest_date:
+            latest_date = d
+    if latest_date is None:
+        return None
+    fye = latest_date[5:10]  # "YYYY-MM-DD" → "MM-DD"
+    conn.execute(
+        "UPDATE tracked_companies SET fiscal_year_end = ? WHERE ticker = ?",
+        (fye, upper),
+    )
+    conn.commit()
+    return fye
+
+
 def index_fmp_files_for_ticker(
     conn: sqlite3.Connection,
     ticker: str,
