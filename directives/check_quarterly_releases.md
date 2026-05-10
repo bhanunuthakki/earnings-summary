@@ -17,7 +17,7 @@ On a monthly schedule, walk the portfolio, detect any new quarterly earnings rel
 
 | Input | Where |
 |---|---|
-| Portfolio | `src/portfolio.get_portfolio()` — DB rows from `tracked_companies`, falling back to a hardcoded baseline of 11 portfolio + 16 watchlist names |
+| Portfolio | `src/portfolio.get_portfolio()` — reads `tracked_companies` directly. Each entry's `fiscal_year_end_month` is parsed from the DB `fiscal_year_end` column; rows with NULL raise loudly so misconfigured tickers surface instead of silently labeling as December |
 | Watchlist toggle | `--include-watchlist` (off by default — cron only watches portfolio; backfills usually pass it) |
 | FMP API key | `.env` → `FMP_API_KEY` |
 | Date window | `--days <N>` (default 45 — covers a monthly cron with 2-week safety overlap; pass a wider value like `--days 800` for historical backfills) |
@@ -87,7 +87,7 @@ Misses are written to the run report under `action=miss` for human review;
 typical reasons are foreign-filer non-coverage on roic.ai (e.g. ASML's most
 recent quarters can lag) and small caps without third-party transcripts.
 - **Idempotency**: each step is idempotent. Re-running with the same window is safe — already-`qa=ok` entries are skipped; failed-QA transcripts keep their cached audio for human re-attempt.
-- **Portfolio drift**: when you add/remove a ticker via the front-end, the DB-backed `tracked_companies` updates and the next cron picks it up automatically. The hardcoded `_DEFAULT_PORTFOLIO` in `src/portfolio.py` only fires on a fresh clone with empty DB.
+- **Portfolio drift**: when you add/remove a ticker via the front-end, the DB-backed `tracked_companies` updates and the next cron picks it up automatically. The onboarder (`execution/onboard_ticker.py`) populates `fiscal_year_end` from the FMP annual income statement after the FMP fetch; if FMP coverage is missing, the column stays NULL and `get_portfolio()` will raise on next read until it's set manually.
 
 ## Verification (after a real fire)
 
