@@ -1,23 +1,35 @@
-"""Find P+W tickers that bypassed `db.track_company`'s auto-onboard hook
-and run `onboard_ticker.py` for each. Closes the gap when tickers get
-added via raw SQL / direct DB writes / external API bypass.
+"""Find P+W tickers missing data, analysis, or commitment-extraction work
+and run the appropriate subset of the pipeline for each. Closes the gap
+when tickers get added via raw SQL / direct DB writes / external API
+bypass AND keeps the commitment ledger fresh as new transcripts arrive.
 
-A ticker is "pending onboard" if ALL of:
+A ticker is "pending" when ALL of:
   - list_type IN ('portfolio', 'watchlist')
 
 AND ANY of:
-  - instrument_type IS NULL                  (track_company would have set it)
-  - 0 rows in financial_facts for ticker     (parse stage never ran)
-  - 0 rows in dcf_runs for ticker            (analysis stage never ran)
+  - instrument_type IS NULL                  -> 'no_instrument_type'
+    (track_company would have set this; missing means the ticker bypassed
+    the auto-onboard hook)
+  - 0 rows in financial_facts                -> 'no_financial_facts'
+    (parse stage never ran)
+  - 0 rows in dcf_runs                       -> 'no_dcf_run'
+    (analysis stage never ran)
+  - has transcripts but 0 management_commitments -> 'no_commitments'
+    (commitments never extracted from existing transcripts)
 
-Per-ticker work:
-  1. `execution/onboard_ticker.py --ticker T`     (subprocess; FMP fetch + parse)
-  2. `execution/run_thesis_evaluator.py --ticker T` (subprocess; non-fatal if no holdings JSON)
-  3. `execution/batch_dcf.py --ticker T`          (subprocess; non-fatal if facts insufficient)
+Per-ticker work depends on pending_reason:
+  - no_instrument_type / no_financial_facts / no_dcf_run:
+      onboard_ticker -> run_thesis_evaluator -> batch_dcf
+      -> extract_commitments_from_transcript --auto
+  - no_commitments:
+      extract_commitments_from_transcript --auto only
 
-Idempotent: `save_fmp_data --skip-existing` on the FMP fetch and
-`run_thesis_evaluator` checks `breach_status` so re-runs are no-ops once a
-ticker is fully onboarded.
+Idempotent at every layer:
+  - save_fmp_data --skip-existing on the FMP fetch
+  - run_thesis_evaluator always recomputes from current facts
+  - batch_dcf returns 'skipped' when a current-quarter DCF already exists
+  - extract_commitments --auto skips transcripts that already have at least
+    one commitments row
 
 Designed to be invoked hourly by Windows Task Scheduler. See:
   - directives/onboard_pending_tickers.md
@@ -29,6 +41,7 @@ Usage:
     python execution/onboard_pending_tickers.py --dry-run
     python execution/onboard_pending_tickers.py --max 10
     python execution/onboard_pending_tickers.py --skip-fmp
+    python execution/onboard_pending_tickers.py --skip-commitments
 """
 from __future__ import annotations
 
@@ -49,6 +62,10 @@ from pipeline.queries import open_db  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _LOG_DIR = PROJECT_ROOT / ".tmp" / "cron_logs"
+
+# When pending_reason is 'no_commitments', only the commitment-extract stage
+# needs to run — the heavy onboard/eval/DCF stages are no-ops.
+_COMMITMENT_ONLY_REASON = "no_commitments"
 
 log = logging.getLogger("onboard_pending")
 
@@ -84,6 +101,11 @@ SELECT
       THEN 'no_financial_facts'
     WHEN (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
       THEN 'no_dcf_run'
+    WHEN EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
+         AND NOT EXISTS (
+           SELECT 1 FROM management_commitments mc WHERE UPPER(mc.ticker) = UPPER(tc.ticker)
+         )
+      THEN 'no_commitments'
     ELSE 'ok'
   END AS pending_reason
 FROM tracked_companies tc
@@ -92,6 +114,12 @@ WHERE tc.list_type IN ('portfolio', 'watchlist')
     tc.instrument_type IS NULL
     OR (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0
     OR (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
+    OR (
+      EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
+      AND NOT EXISTS (
+        SELECT 1 FROM management_commitments mc WHERE UPPER(mc.ticker) = UPPER(tc.ticker)
+      )
+    )
   )
 ORDER BY tc.added_at, tc.ticker
 """
@@ -128,23 +156,62 @@ def _run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
     )
 
 
-def onboard_one(ticker: str, pending_reason: str, *, skip_fmp: bool, log_path: Path) -> TickerResult:
-    """Run onboard + evaluator + DCF for a single ticker. Returns a structured result."""
+def _skipped(stage: str, detail: str) -> StageResult:
+    return StageResult(stage=stage, outcome=StageOutcome.SKIPPED, rc=0, detail=detail)
+
+
+def onboard_one(
+    ticker: str,
+    pending_reason: str,
+    *,
+    skip_fmp: bool,
+    skip_commitments: bool,
+    log_path: Path,
+) -> TickerResult:
+    """Run the appropriate stage chain for a single ticker. Returns a structured result.
+
+    Stage subset depends on pending_reason:
+      - no_commitments        -> commitment_extract only (heavy stages skipped)
+      - any other reason      -> full chain (onboard + eval + DCF + commitment_extract)
+
+    All stages best-effort: failures are surfaced in the result, not raised.
+    """
     started = datetime.now(timezone.utc)
     stages: list[StageResult] = []
+    is_commitment_only = pending_reason == _COMMITMENT_ONLY_REASON
 
-    onboard_cmd = [sys.executable, "execution/onboard_ticker.py", "--ticker", ticker]
-    if skip_fmp:
-        onboard_cmd.append("--skip-fmp")
-    stages.append(_run_subprocess(onboard_cmd, "onboard_ticker", log_path))
+    if is_commitment_only:
+        stages.append(_skipped("onboard_ticker", "ticker already onboarded"))
+        stages.append(_skipped("run_thesis_evaluator", "ticker already evaluated"))
+        stages.append(_skipped("batch_dcf", "ticker already has DCF"))
+    else:
+        onboard_cmd = [sys.executable, "execution/onboard_ticker.py", "--ticker", ticker]
+        if skip_fmp:
+            onboard_cmd.append("--skip-fmp")
+        stages.append(_run_subprocess(onboard_cmd, "onboard_ticker", log_path))
 
-    # run_thesis_evaluator is best-effort — missing holdings JSON returns non-zero
-    # but should not abort the rest of the chain.
-    eval_cmd = [sys.executable, "execution/run_thesis_evaluator.py", "--ticker", ticker]
-    stages.append(_run_subprocess(eval_cmd, "run_thesis_evaluator", log_path))
+        # run_thesis_evaluator is best-effort — missing holdings JSON returns non-zero
+        # but should not abort the rest of the chain.
+        eval_cmd = [sys.executable, "execution/run_thesis_evaluator.py", "--ticker", ticker]
+        stages.append(_run_subprocess(eval_cmd, "run_thesis_evaluator", log_path))
 
-    dcf_cmd = [sys.executable, "execution/batch_dcf.py", "--ticker", ticker]
-    stages.append(_run_subprocess(dcf_cmd, "batch_dcf", log_path))
+        dcf_cmd = [sys.executable, "execution/batch_dcf.py", "--ticker", ticker]
+        stages.append(_run_subprocess(dcf_cmd, "batch_dcf", log_path))
+
+    if skip_commitments:
+        stages.append(_skipped("extract_commitments", "--skip-commitments flag"))
+    else:
+        # Auto-extract any pending commitments from this ticker's transcripts.
+        # Idempotent: transcripts already with a commitment row are skipped.
+        # Best-effort: missing LLM auth / no transcripts is non-fatal.
+        commit_cmd = [
+            sys.executable,
+            "execution/extract_commitments_from_transcript.py",
+            "--auto",
+            "--ticker",
+            ticker,
+        ]
+        stages.append(_run_subprocess(commit_cmd, "extract_commitments", log_path))
 
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
     return TickerResult(
@@ -173,6 +240,11 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="List pending tickers and exit")
     ap.add_argument("--max", type=int, default=0, help="Limit to first N tickers (0 = no limit)")
     ap.add_argument("--skip-fmp", action="store_true", help="Skip FMP fetch (parse-only re-run)")
+    ap.add_argument(
+        "--skip-commitments",
+        action="store_true",
+        help="Skip the LLM commitment-extraction stage (faster runs; useful when LLM auth is unavailable)",
+    )
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="[onboard_pending] %(message)s")
@@ -203,17 +275,19 @@ def main() -> int:
     log.info("starting run %s — %d pending tickers — log: %s", stamp, len(pending), log_path)
     results: list[TickerResult] = []
     for ticker, reason in pending:
-        log.info("onboarding %s (%s)", ticker, reason)
-        result = onboard_one(ticker, reason, skip_fmp=args.skip_fmp, log_path=log_path)
-        results.append(result)
-        log.info(
-            "  %s done in %.1fs — onboard=%s eval=%s dcf=%s",
+        log.info("processing %s (%s)", ticker, reason)
+        result = onboard_one(
             ticker,
-            result.elapsed_seconds,
-            result.stages[0].outcome.value,
-            result.stages[1].outcome.value,
-            result.stages[2].outcome.value,
+            reason,
+            skip_fmp=args.skip_fmp,
+            skip_commitments=args.skip_commitments,
+            log_path=log_path,
         )
+        results.append(result)
+        outcomes = " ".join(
+            f"{s.stage.split('_')[0]}={s.outcome.value}" for s in result.stages
+        )
+        log.info("  %s done in %.1fs — %s", ticker, result.elapsed_seconds, outcomes)
 
     report = {
         "run_id": stamp,
@@ -223,9 +297,20 @@ def main() -> int:
     }
     print(json.dumps(report, indent=2))
 
-    # Exit code: non-zero if every onboard subprocess failed (signals real problem)
-    onboard_failures = sum(1 for r in results if r.stages[0].outcome is StageOutcome.FAILED)
-    return 1 if onboard_failures and onboard_failures == len(results) else 0
+    # Exit code: non-zero if every onboard subprocess failed (signals real problem).
+    # Pure no-commitments runs skip onboard, so they never count toward this signal.
+    full_chain_results = [
+        r for r in results if r.pending_reason != _COMMITMENT_ONLY_REASON
+    ]
+    onboard_failures = sum(
+        1 for r in full_chain_results if r.stages[0].outcome is StageOutcome.FAILED
+    )
+    return (
+        1
+        if full_chain_results
+        and onboard_failures == len(full_chain_results)
+        else 0
+    )
 
 
 if __name__ == "__main__":
