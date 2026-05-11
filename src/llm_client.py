@@ -1196,6 +1196,17 @@ under "Material news" and skip the other two sections. Do not pad with stale ite
         raise
 
 
+def _ticker_specific_block(md: str) -> str:
+    """Wrap optional per-ticker enhancement context (see Phase 5) for the prompt.
+
+    Empty input → empty output (no extra newlines), so the universal prompt
+    shape is unchanged when no per-ticker enhancements exist for this name.
+    """
+    if not md.strip():
+        return ""
+    return f"\nTICKER-SPECIFIC CONTEXT (per-ticker research enhancements):\n{md}\n"
+
+
 def generate_bear_case(
     ticker: str,
     thesis: str,
@@ -1204,6 +1215,7 @@ def generate_bear_case(
     financials_table_md: str,
     segments_table_md: str,
     kpi_status_md: str,
+    ticker_specific_md: str = "",
 ) -> str:
     """
     Generate a structured bear case as a JSON string the caller parses.
@@ -1239,7 +1251,7 @@ SEGMENT TRENDS (12Q):
 
 KPI STATUS:
 {kpi_status_md}
-
+{_ticker_specific_block(ticker_specific_md)}
 ---
 
 Produce a JSON object with EXACTLY these keys (no markdown, no commentary):

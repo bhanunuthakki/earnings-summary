@@ -86,7 +86,11 @@ def find_default_pdf() -> Path | None:
                 break  # Latest year only
     if SOURCES_DIR.exists():
         for pdf in SOURCES_DIR.glob("*.pdf"):
-            if "annual" in pdf.name.lower() or "10-k" in pdf.name.lower() or "fy" in pdf.name.lower():
+            if (
+                "annual" in pdf.name.lower()
+                or "10-k" in pdf.name.lower()
+                or "fy" in pdf.name.lower()
+            ):
                 candidates.append(pdf)
     return candidates[0] if candidates else None
 
@@ -147,26 +151,41 @@ def extract_timeline(pdf_path: Path) -> NvoSelfDisclosedTimeline:
 
 
 def write_output(timeline: NvoSelfDisclosedTimeline) -> Path:
+    """Write the timeline to both (a) the dated history archive under .tmp
+    and (b) the canonical ticker-specific path the bear_case prompt loads.
+
+    The canonical file `data/ticker_specific/NVO/patent_timeline.json` is the
+    one the brief generator reads (per the Phase 5 convention). The dated
+    .tmp file is the audit trail.
+    """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     run_date = datetime.utcnow().strftime("%Y-%m-%d")
-    out_path = OUT_DIR / f"nvo_self_disclosed_{run_date}.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(timeline.model_dump(mode="json"), f, indent=2)
-    return out_path
+    payload = timeline.model_dump(mode="json")
+
+    history_path = OUT_DIR / f"nvo_self_disclosed_{run_date}.json"
+    with open(history_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    canonical_path = PROJECT_ROOT / "data" / "ticker_specific" / "NVO" / "patent_timeline.json"
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(canonical_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+    return canonical_path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Extract NVO self-disclosed patent timeline.")
     parser.add_argument("--pdf", type=Path, default=None, help="Override path to annual report PDF")
-    parser.add_argument("--force", action="store_true", help="Re-extract even if today's file exists")
+    parser.add_argument(
+        "--force", action="store_true", help="Re-extract even if today's file exists"
+    )
     args = parser.parse_args()
 
     pdf_path = args.pdf or find_default_pdf()
     if pdf_path is None:
         _log("no_source_pdf", searched=[str(IR_DOCS_DIR), str(SOURCES_DIR)])
-        sys.stderr.write(
-            "ERROR: No NVO annual report PDF found. Use --pdf to specify a path.\n"
-        )
+        sys.stderr.write("ERROR: No NVO annual report PDF found. Use --pdf to specify a path.\n")
         sys.exit(1)
     if not pdf_path.exists():
         sys.stderr.write(f"ERROR: PDF not found: {pdf_path}\n")
@@ -185,11 +204,13 @@ def main() -> None:
     out_path = write_output(timeline)
     _log("done", path=str(out_path), patent_count=len(timeline.patents))
     sys.stdout.write(
-        json.dumps({
-            "output_file": str(out_path.relative_to(PROJECT_ROOT)),
-            "fiscal_year": timeline.fiscal_year,
-            "patent_count": len(timeline.patents),
-        })
+        json.dumps(
+            {
+                "output_file": str(out_path.relative_to(PROJECT_ROOT)),
+                "fiscal_year": timeline.fiscal_year,
+                "patent_count": len(timeline.patents),
+            }
+        )
         + "\n"
     )
 

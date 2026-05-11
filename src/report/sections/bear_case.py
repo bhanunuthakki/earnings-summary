@@ -71,8 +71,36 @@ def build(
         financials_table_md=_financials_md(financials),
         segments_table_md=_segments_md(segments),
         kpi_status_md=_kpi_status_md(thesis),
+        ticker_specific_md=_ticker_specific_md(ticker, repo_root),
     )
     return _parse_response(response_text)
+
+
+def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
+    """Concatenate any per-ticker enhancement JSONs into prompt-ready markdown.
+
+    Convention (Phase 5): per-ticker research scripts (e.g.
+    `extract_nvo_patent_timeline.py`) write JSON to
+    `data/ticker_specific/<TICKER>/<feature>.json`. The bear case section
+    loads every file in that directory and inlines them as markdown code
+    blocks so the LLM can ground its failure-mode analysis in concrete
+    ticker-specific evidence (patent expiry dates for NVO, drug pipeline
+    milestones, regulatory readouts, etc.).
+
+    Returns an empty string when the ticker has no enhancements — leaves
+    the prompt unchanged from the universal shape.
+    """
+    base = repo_root / "data" / "ticker_specific" / ticker.upper()
+    if not base.exists():
+        return ""
+    chunks: list[str] = []
+    for path in sorted(base.glob("*.json")):
+        try:
+            body = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        chunks.append(f"### {path.stem}\n\n```json\n{body}\n```")
+    return "\n\n".join(chunks)
 
 
 def _parse_response(text: str) -> BearCaseSection:
@@ -88,14 +116,22 @@ def _parse_response(text: str) -> BearCaseSection:
         status=SectionStatus.OK,
         failure_modes=failure_modes,
         most_underweighted=_str_or_none(payload.get("most_underweighted")),
-        out_of_scope_flags=[s for s in (payload.get("out_of_scope_flags") or []) if isinstance(s, str)],
+        out_of_scope_flags=[
+            s for s in (payload.get("out_of_scope_flags") or []) if isinstance(s, str)
+        ],
     )
 
 
 def _coerce_failure_mode(raw: object) -> dict[str, str]:
     if not isinstance(raw, dict):
         raise ValueError(f"failure_mode must be an object; got {type(raw).__name__}")
-    keys = ("hypothesis", "evidence_in_data", "leading_indicator", "quantitative_impact", "refutation_criteria")
+    keys = (
+        "hypothesis",
+        "evidence_in_data",
+        "leading_indicator",
+        "quantitative_impact",
+        "refutation_criteria",
+    )
     return {k: str(raw.get(k, "")) for k in keys}
 
 
@@ -118,11 +154,18 @@ def _financials_md(financials: FinancialsSection) -> str:
     if financials.status == SectionStatus.MISSING_DATA:
         return "(not yet extracted)"
     out = StringIO()
-    out.write("| Line item | " + " | ".join(financials.quarter_labels) + " | QoQ | YoY | 1Y CAGR | 3Y CAGR |\n")
+    out.write(
+        "| Line item | "
+        + " | ".join(financials.quarter_labels)
+        + " | QoQ | YoY | 1Y CAGR | 3Y CAGR |\n"
+    )
     out.write("|" + "|".join(["---"] * (len(financials.quarter_labels) + 5)) + "|\n")
     for li in financials.line_items:
         cells = [li.line_item] + [_fmt(v, li.digits) for v in li.values]
-        cells.extend(_pct(g) for g in (li.growth.qoq, li.growth.yoy, li.growth.cagr_1y_ttm, li.growth.cagr_3y_ttm))
+        cells.extend(
+            _pct(g)
+            for g in (li.growth.qoq, li.growth.yoy, li.growth.cagr_1y_ttm, li.growth.cagr_3y_ttm)
+        )
         out.write("| " + " | ".join(cells) + " |\n")
     return out.getvalue()
 
