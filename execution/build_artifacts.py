@@ -70,6 +70,7 @@ def main() -> int:
             news_cache_ttl_days=args.news_cache_ttl_days,
             refresh_news=args.refresh_news,
             flavor=flavor,
+            trigger=args.trigger,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -130,6 +131,15 @@ def _parse_args() -> argparse.Namespace:
             "data table) at §1 instead — for new-name screening."
         ),
     )
+    parser.add_argument(
+        "--trigger",
+        choices=("earnings", "news_refresh", "manual", "on_demand", "daily_worker"),
+        default="manual",
+        help=(
+            "What triggered this brief build. Logged to brief_provenance_log for audit. "
+            "Daily worker passes 'daily_worker'; refresh_news.py passes 'news_refresh'."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -179,6 +189,7 @@ def _build_one(
     news_cache_ttl_days: int = 7,
     refresh_news: bool = False,
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
+    trigger: str = "manual",
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -219,6 +230,9 @@ def _build_one(
     render_workbook(spec, xlsx_path)
     _emit("wrote_workbook", {"ticker": ticker, "path": str(xlsx_path)})
 
+    _write_provenance_log(repo_root, spec, str(html_path), trigger)
+    _emit("wrote_provenance_log", {"ticker": ticker, "trigger": trigger})
+
     return {
         "ticker": ticker,
         "report_html": str(html_path),
@@ -243,6 +257,83 @@ def _build_one(
 def _emit(event: str, payload: dict[str, object]) -> None:
     """One JSON line per event to stderr."""
     sys.stderr.write(json.dumps({"event": event, **payload}) + "\n")
+
+
+def _write_provenance_log(
+    repo_root: Path,
+    spec: object,
+    artifact_path: str,
+    trigger: str,
+) -> None:
+    """Insert one row into brief_provenance_log capturing the render's audit trail.
+
+    No-op if the table doesn't exist (pre-migration-0023 DB) — keeps the
+    builder backward-compatible during phased rollout.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return
+    sections_status = _section_status_map(spec)
+    # `sources_used` is a forward-looking column. Phase 4 captures section
+    # status as a proxy; later phases will track per-metric source_type as
+    # the §3 / §4 builders evolve to honor the provenance trust order.
+    sources_used = sections_status
+    with sqlite3.connect(str(db_path)) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='brief_provenance_log'"
+        )
+        if cursor.fetchone() is None:
+            return
+        cursor.execute(
+            """
+            INSERT INTO brief_provenance_log (
+                ticker, generation_date, sources_used, sections_status, trigger, artifact_path
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                getattr(spec, "ticker", "?"),
+                getattr(spec, "generation_date", "?").isoformat()
+                if hasattr(spec, "generation_date")
+                else "?",
+                json.dumps(sources_used, default=str),
+                json.dumps(sections_status, default=str),
+                trigger,
+                artifact_path,
+            ),
+        )
+        conn.commit()
+
+
+def _section_status_map(spec: object) -> dict[str, str]:
+    """Extract {section_name: status_value} from a ReportSpec, safely."""
+    sections = (
+        "snapshot",
+        "thesis",
+        "financials",
+        "segments",
+        "earnings",
+        "saydo",
+        "ir_docs",
+        "recent_developments",
+        "bear_case",
+        "provenance",
+    )
+    out: dict[str, str] = {}
+    for name in sections:
+        section = getattr(spec, name, None)
+        if section is None:
+            continue
+        status = getattr(section, "status", None)
+        if status is None:
+            continue
+        out[name] = getattr(status, "value", str(status))
+    eval_snapshot = getattr(spec, "evaluation_snapshot", None)
+    if eval_snapshot is not None:
+        status = getattr(eval_snapshot, "status", None)
+        if status is not None:
+            out["evaluation_snapshot"] = getattr(status, "value", str(status))
+    return out
 
 
 if __name__ == "__main__":
