@@ -5,8 +5,7 @@
   inserts). Wraps execution/onboard_pending_tickers.py.
 
   Calendar trigger: every hour at :17 past, starting at midnight. Off-cycle
-  from the FMP API's busy hours and offset from the autopilot's monthly run
-  on the 15th @ 06:00.
+  from the FMP API's busy hours and from the daily 06:00/06:30 crons.
 
   Behavior: idempotent — when no tickers are pending, the script exits 0
   with an empty results array. So running every hour is safe.

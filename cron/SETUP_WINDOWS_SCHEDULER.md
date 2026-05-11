@@ -1,96 +1,97 @@
-# Setting up the monthly earnings-release check on Windows Task Scheduler
+# Setting up the earnings-summary crons on Windows Task Scheduler
 
-This is the one-time wiring for the cron job defined in
-`directives/check_quarterly_releases.md`. After this, on the 15th of every
-month the scheduler will run the orchestrator, write transcripts for any new
-quarterly releases into `transcripts/raw/`, and drop a per-run report at
-`.tmp/cron_runs/<run_id>.json`.
+This is the one-time wiring for the scheduled tasks defined in this folder.
+All three crons run as `InteractiveToken` under `%USERNAME%`, log to
+`.tmp/cron_logs/<task>_<TS>.log`, and are registered under the
+`\earnings-summary\` namespace so they show up grouped in the Task Scheduler
+GUI.
 
-## Files in this folder
+## Active crons
 
-| File | Purpose |
-|---|---|
-| `run_check_quarterly_releases.bat` | Wrapper invoked by the scheduler |
-| `check_quarterly_releases.task.xml` | Declarative task definition (calendar trigger, retry policy) |
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\earnings_calendar_watcher` | Daily 06:00 | `earnings_calendar_watcher.task.xml` | `run_earnings_calendar_watcher.bat` | Scans the FMP earnings calendar cache and populates the `expected_earnings` table for the daily worker to drain. |
+| `earnings-summary\daily_fetch_and_brief` | Daily 06:30 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Drains `tracked_companies.brief_dirty`, runs the thesis evaluator + DCF refresh + brief regen per ticker. Runs with `--enable-llm` so §8/§9 populate via the Claude CLI (Gemini fallback). |
+| `earnings-summary\onboard_pending` | Hourly at :17 | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Catches up tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Idempotent — no-op when nothing is pending. |
+
+The 30-minute gap between the two daily crons is intentional: the watcher
+needs to land its rows in `expected_earnings` before `daily_fetch_and_brief`
+reads them.
 
 ## Prerequisites
 
 - `python` on PATH and resolves to a Python 3.11+ install with the project's
   `requirements.txt` packages installed.
-- `.env` next to `pyproject.toml` containing `FMP_API_KEY=...` (the key is
-  what the orchestrator uses to pull the earnings calendar + income statements).
-- `ffmpeg` at `C:\ffmpeg\bin` (only needed if you turn on `--with-audio-fallback`).
+- `.env` next to `pyproject.toml` containing `FMP_API_KEY=...`.
 - The repo cloned at `%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary`
-  — or any path you set in `PROJECT_ROOT` at the top of the `.bat`.
+  — or any path you set in `PROJECT_ROOT` at the top of each `.bat`.
+- Claude Code CLI on PATH and authed (only required by `daily_fetch_and_brief`
+  for §8/§9 generation; the worker falls back to Gemini if the CLI fails).
 
 ## Install
 
-From an **admin** PowerShell or `cmd` window:
+From an **admin** PowerShell or `cmd` window, run one `schtasks /create` per
+task:
 
 ```cmd
-schtasks /create /tn "earnings-summary\check_quarterly_releases" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\check_quarterly_releases.task.xml" ^
+schtasks /create /tn "earnings-summary\earnings_calendar_watcher" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\earnings_calendar_watcher.task.xml" ^
+  /ru "%USERNAME%"
+
+schtasks /create /tn "earnings-summary\daily_fetch_and_brief" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\daily_fetch_and_brief.task.xml" ^
+  /ru "%USERNAME%"
+
+schtasks /create /tn "earnings-summary\onboard_pending" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\onboard_pending_tickers.task.xml" ^
   /ru "%USERNAME%"
 ```
 
-The task is registered under the namespace `\earnings-summary\` so it shows
-up grouped in Task Scheduler GUI.
+The `/tn` value is the registered task name (used by all `schtasks` commands
+below); the `/xml` value is the file in this folder. Note that the
+`onboard_pending` task name doesn't match its XML filename — that's fine, the
+filename is just for humans.
 
 ## Verify
 
 ```cmd
-schtasks /query /tn "earnings-summary\check_quarterly_releases" /v /fo LIST
+schtasks /query /tn "earnings-summary\<task>" /v /fo LIST
 ```
 
-You should see `Status: Ready`, `Next Run Time: <15th of next month> 06:00:00`.
+You should see `Status: Ready` and a `Next Run Time` consistent with the
+cadence in the table above.
 
-## Test fire (without waiting for the 15th)
+## Test fire (without waiting for the schedule)
 
 ```cmd
-schtasks /run /tn "earnings-summary\check_quarterly_releases"
+schtasks /run /tn "earnings-summary\<task>"
 ```
 
 Then check:
-- `.tmp\cron_logs\check_quarterly_*.log` — full stdout/stderr of the run
-- `.tmp\cron_runs\check_quarterly_*.json` — structured run report
-- `transcripts\raw\` — any new `<TICKER>_Q<N>_<YEAR>.txt` files
 
-You can also run the wrapper directly to bypass the scheduler entirely:
+- `.tmp\cron_logs\<task>_<TS>.log` — full stdout/stderr of the run.
+- For `daily_fetch_and_brief`: `output/research/<TICKER>/<DATE>_report.html`
+  for any tickers that had `brief_dirty=1`.
+- For `earnings_calendar_watcher`: row count in
+  `tracked_companies.expected_earnings` (or the `expected_earnings` table,
+  depending on schema version).
+- For `onboard_pending`: the script exits 0 with an empty results array when
+  nothing is pending; otherwise it logs each onboarded ticker.
+
+You can also run any wrapper directly to bypass the scheduler entirely:
 
 ```cmd
-%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_check_quarterly_releases.bat
+%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_<task>.bat
 ```
 
 ## Uninstall
 
 ```cmd
-schtasks /delete /tn "earnings-summary\check_quarterly_releases" /f
+schtasks /delete /tn "earnings-summary\<task>" /f
 ```
 
 ## Edit the schedule
 
 Open Task Scheduler → Task Scheduler Library → `earnings-summary` →
-`check_quarterly_releases` → Properties → Triggers tab. Or edit the XML and
-re-import.
-
-## Tuning knobs (edit `run_check_quarterly_releases.bat`)
-
-- `--days 45` — how far back to look. Default catches anything reported in
-  the last ~6 weeks. Bump to 60-90 if you want a wider net.
-- `--with-audio-fallback` — adds a Whisper smart-search pass when the
-  aggregator chain misses. **Off by default** because ytsearch5 occasionally
-  picks the wrong upload; turn on once you're comfortable the QA validator
-  catches anything bad (it does — `qa_status=failed` keeps audio cached and
-  refuses to overwrite).
-- `--limit-quarters 4` — how many quarterly reports per ticker to pull from
-  FMP before applying the date filter. 4 is enough for a monthly cadence.
-
-## Manual one-offs
-
-```cmd
-REM Single ticker
-python execution\check_quarterly_releases.py --ticker NOW --days 90
-
-REM Dry-run (no fetch, just report what would happen)
-python execution\check_quarterly_releases.py --dry-run --days 90
-```
+`<task>` → Properties → Triggers tab. Or edit the XML and re-import with
+`/create /f` to overwrite.
