@@ -5,10 +5,6 @@ against `kpi_facts`, and writes the rolled-up Red/Yellow/Green verdict back to
 `thesis_state.breach_status`. Wraps the run in start_run / record_stage /
 end_run so every invocation produces an audit trail.
 
-Distinct from the legacy `execution/update_thesis_tracker.py`, which uses
-Gemini to render a narrative markdown report from cached transcript summaries.
-This evaluator is deterministic, schema-validated, and persists to the DB.
-
 Usage:
     python execution/run_thesis_evaluator.py --ticker MELI
     python execution/run_thesis_evaluator.py --all

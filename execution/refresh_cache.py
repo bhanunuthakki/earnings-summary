@@ -23,10 +23,11 @@ Manual overrides:
     --tickers A,B      restrict scope to specific tickers
     --only TIER        restrict to one list_type (portfolio/watchlist/...)
 
-Hooks:
-    src/main.py calls `refresh_cache.py --background` at startup. Cacher
-    fast-exits in <1s when nothing's stale or budget is exhausted, so this
-    is cheap on every invocation. The lockfile prevents concurrent runs.
+Operational notes:
+    `--background` detaches the run and exits immediately, so callers can
+    fire-and-forget. Cacher fast-exits in <1s when nothing's stale or budget
+    is exhausted, so manual or scheduled invocations stay cheap. A lockfile
+    prevents concurrent runs.
 
 Tier semantics:
     basic    250 calls/day, no rate limit (we throttle to 4/sec for steady drip)

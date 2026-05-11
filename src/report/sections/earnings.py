@@ -4,7 +4,7 @@ Most recent N quarters render in full; older ones collapse to a 1-paragraph
 digest. Pairwise Say-Do lives in §6; full transcripts in §9.
 
 Sources:
-  - .tmp/{TICKER}_{Q}_{YEAR}_summary.txt          legacy main.py per-quarter summary
+  - .tmp/{TICKER}_{Q}_{YEAR}_summary.txt          per-quarter LLM summary (written by execution/process_ir_documents.py)
   - transcripts/processed/{TICKER}_Q{N}_{YEAR}.txt path provenance
 """
 

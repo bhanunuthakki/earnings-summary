@@ -10,8 +10,9 @@ For each ticker, derive a default 10-year DCF profile from existing kpi_facts:
   - WACC = 0.09, terminal_growth = 0.025 — config-tunable.
 
 This produces a comparable baseline across names. Bespoke per-name profiles
-should still be authored via run_dcf.py / run_segment_dcf.py for serious
-valuation work; this just gives a starting point in dcf_runs for every name.
+are authored in `dcf/<TICKER>.xlsx` workbooks and ingested via
+`execution/refresh_dcf.py` for serious valuation work; this batch path just
+gives a starting point in dcf_runs for every name.
 """
 
 from __future__ import annotations

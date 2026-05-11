@@ -1,14 +1,12 @@
 """Build pairwise Say-Do analyses from existing `.tmp/*_summary.txt` files.
 
-`src/main.py` generates SayDo pairs only when it processes a transcript file —
-which means tickers that don't have `transcripts/processed/` data (MELI, NU,
-etc., which publish investor updates instead of traditional call transcripts)
-end up with empty §6 in the report even though their per-quarter summaries
-already exist on disk.
-
-This CLI fills that gap: walks `.tmp/{TICKER}_Q*_{YEAR}_(?:investor_update_)?summary.txt`
-in chronological order and writes a `.tmp/SayDo_{TICKER}_Q{prev}_{prev_yr}_Q{curr}_{curr_yr}.txt`
-for every consecutive pair via `llm_client.generate_pairwise_analysis`. Idempotent —
+Sole producer of the `.tmp/SayDo_*.txt` files that feed the brief's §6 Say-Do
+section. Walks `.tmp/{TICKER}_Q*_{YEAR}_(?:investor_update_)?summary.txt` (written
+by `execution/process_ir_documents.py`) in chronological order and writes a
+`.tmp/SayDo_{TICKER}_Q{prev}_{prev_yr}_Q{curr}_{curr_yr}.txt` for every
+consecutive pair via `llm_client.generate_pairwise_analysis`. The
+`_investor_update_summary` variant covers tickers like MELI/NU that publish
+investor letters in lieu of traditional call transcripts. Idempotent —
 re-runs skip pairs whose SayDo file already exists.
 
 Usage:

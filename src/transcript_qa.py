@@ -5,7 +5,7 @@ Structural validation for transcript files in `transcripts/raw/`.
 
 Two flavors:
   - validate_audio_transcript:    Whisper-produced files (timestamped segments)
-  - validate_synthesized_transcript: synthesize_quarterly_update.py output (banner sections)
+  - validate_synthesized_transcript: aggregator Q&A files from fetch_qa_transcript.py (banner sections)
 
 Both return a `QaResult` so the index_manager can persist a single shape and
 downstream consumers (skip-existing logic, audio-cache cleanup gate) can

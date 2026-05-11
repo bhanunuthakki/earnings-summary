@@ -2,7 +2,7 @@
 
 **Status**: Layer 1 baseline. Defines the 8 stages every per-task directive composes from. Immutable without explicit user authorization.
 
-**Why this exists**: The pipeline as it stood was ad-hoc script-calls-script with `.tmp/` JSON as the only inter-stage contract. That doesn't scale to the FMP × SEC × IR × audio × manual matrix. Every per-task directive (`fetch_transcripts`, `fetch_ir_documents`, `process_earnings_transcripts`, etc.) is now expressed as a slice of these 8 stages with explicit per-stage status, contracts, and resumption.
+**Why this exists**: The pipeline as it stood was ad-hoc script-calls-script with `.tmp/` JSON as the only inter-stage contract. That doesn't scale to the FMP × SEC × IR × audio × manual matrix. Every per-task directive (`fetch_transcripts`, `fetch_ir_documents`, `quarterly_refresh`, etc.) is now expressed as a slice of these 8 stages with explicit per-stage status, contracts, and resumption.
 
 ## Stages
 
