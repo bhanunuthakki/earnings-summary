@@ -1,7 +1,7 @@
 {
   "ticker": "VEEV",
   "name": "Veeva Systems",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Vertical life-sciences SaaS with a regulatory moat. Two engines: (1) R&D + Quality Solutions (Vault) is the durable compounder — sticky workflow software for clinical trials and quality management, (2) Vault CRM migration off Salesforce (2025-27) is the medium-term catalyst for revenue acceleration as customers transition. Bet: 15%+ revenue growth with operating margin >40% non-GAAP. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -178,5 +178,15 @@
       "consecutive_periods": 2,
       "narrative": "R&D Solutions revenue growth below 15% YoY for 2 consecutive Qs — durable compounder slowing."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.095,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 22.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

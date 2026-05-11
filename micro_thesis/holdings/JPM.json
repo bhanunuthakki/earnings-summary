@@ -1,7 +1,7 @@
 {
   "ticker": "JPM",
   "name": "JPMorgan Chase",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Diversified global bank with structural advantages in IB + payments + asset management; thesis is durable ROTCE through cycles + capital return. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -158,5 +158,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

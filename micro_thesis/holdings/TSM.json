@@ -1,7 +1,7 @@
 {
   "ticker": "TSM",
   "name": "Taiwan Semiconductor",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Leading-edge logic foundry monopoly (3nm/2nm) with AI accelerator capex tailwind; thesis is multi-year revenue + margin expansion as 3nm/2nm volumes ramp. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -159,5 +159,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

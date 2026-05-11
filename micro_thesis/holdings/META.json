@@ -1,7 +1,7 @@
 {
   "ticker": "META",
   "name": "Meta Platforms",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "Ad-targeting efficiency flywheel (Advantage+, Reels monetization, WhatsApp click-to-message, Threads emerging) compounds as Llama becomes a distribution lever for both ads and platform stickiness. The thesis explicitly excludes Reality Labs as a return driver — RL is a long-dated option, not a thesis pillar; the model should work even if RL stays at zero. The bet: (1) FoA revenue growth holds 10%+ CC, (2) consolidated op margin holds 35%+ even as capex compounds, (3) RL operating loss stays bounded relative to FoA op income growth.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -209,5 +209,15 @@
       "consecutive_periods": 2,
       "narrative": "Consolidated operating margin below 35% for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.09,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

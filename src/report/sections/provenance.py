@@ -36,7 +36,7 @@ def build(ticker: str, repo_root: Path) -> ProvenanceSection:
             status=SectionStatus.MISSING_DATA,
             missing=missing(
                 stage="INGEST",
-                fix_command=f"python execution/run_pipeline.py --company {ticker.upper()}",
+                fix_command=f"python execution/onboard_ticker.py --ticker {ticker.upper()}",
                 detail="No artifacts or documents recorded for this ticker.",
             ),
         )

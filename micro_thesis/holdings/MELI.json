@@ -1,7 +1,7 @@
 {
   "ticker": "MELI",
   "name": "MercadoLibre",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -182,5 +182,15 @@
       "consecutive_periods": 2,
       "narrative": "Consolidated operating margin below 8% for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.11,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

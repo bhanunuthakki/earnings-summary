@@ -1,7 +1,7 @@
 {
   "ticker": "RBRK",
   "name": "Rubrik",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors (Cohesity, Veeam, legacy Dell PowerProtect) as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform. The bet: (1) net new subscription ARR continues at $100M+ quarterly cadence, (2) NRR holds >120% as land-and-expand deepens within existing accounts, (3) operating leverage continues to inflect as the IPO-era customer-acquisition cost cycle normalizes (Q4 sub ARR contribution margin jumped from 2.1% to 11.6% YoY).",
   "verdict": "Intact",
   "verdict_color": "green",
@@ -168,5 +168,15 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.12,
+  "mos_bar": 0.3,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 22.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

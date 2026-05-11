@@ -1,7 +1,7 @@
 {
   "ticker": "WIX",
   "name": "Wix",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "Two-engine model — (1) Base44 ARR scales rapidly post-acquisition as the AI-first builder, while (2) the core Creative Subs business holds single-digit-but-positive growth. FCF margin compression in 2026 is acceptable as long as Base44 ARR keeps stair-stepping at milestone disclosures and core stays positive.",
   "verdict": "Intact",
   "verdict_color": "green",
@@ -141,5 +141,15 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.095,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 22.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

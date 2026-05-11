@@ -1,7 +1,7 @@
 {
   "ticker": "NOW",
   "name": "ServiceNow",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "ServiceNow is the AI control tower for the enterprise; durable subscription growth at $15B+ scale, with Now Assist / agentic AI driving the next leg of ARPU expansion via the rapidly-growing $1M+ AI ACV customer cohort.",
   "verdict": "Intact",
   "verdict_color": "green",
@@ -156,5 +156,15 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.095,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 22.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

@@ -339,7 +339,7 @@ I will NOT sell on:
 ## Final go / no-go
 
 - [ ] **GO** — thesis is coherent, killer variables identified, triggers defined, sizing tier selected, horizon committed.
-  → run `python execution/update_thesis_tracker.py --ticker {ticker}` after each earnings release.
+  → run `python execution/build_artifacts.py --ticker {ticker}` after each earnings release.
 - [ ] **PASS** — too much ambiguity to write a coherent thesis. Revisit in N quarters.
 """
 

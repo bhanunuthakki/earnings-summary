@@ -1,7 +1,7 @@
 {
   "ticker": "AMAT",
   "name": "Applied Materials",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "WFE leader with leading-edge logic + memory exposure; thesis is capex super-cycle from AI/HBM driving multi-year revenue growth. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -159,5 +159,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

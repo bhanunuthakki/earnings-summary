@@ -1,7 +1,7 @@
 {
   "ticker": "IVN",
   "name": "Ivanhoe Mines",
-  "last_updated": "2026-05-09",
+  "last_updated": "2026-05-10",
   "thesis": "Ivanhoe Mines — copper miner. STUB: needs user-authored thesis. Default key driver: Kamoa-Kakula ramp × Platreef development. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -84,5 +84,18 @@
       "consecutive_periods": 2,
       "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }
