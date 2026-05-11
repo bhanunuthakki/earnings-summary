@@ -18,6 +18,7 @@ from report.sections import (
     financials,
     ir_docs,
     provenance,
+    recent_developments,
     saydo,
     segments,
     snapshot,
@@ -30,6 +31,9 @@ def build_report(
     repo_root: Path,
     model_link: str | None = None,
     enable_llm: bool = False,
+    news_days: int = 7,
+    news_cache_ttl_days: int = 7,
+    refresh_news: bool = False,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -37,9 +41,15 @@ def build_report(
     should point at. Caller passes it because the workbook isn't written
     until after `build_report()` returns.
 
-    `enable_llm` opts the bear-case section into a real LLM call (Claude Sonnet 4.6
-    via the Code CLI, with Gemini Flash as automatic fallback). Default off so dev
-    runs don't burn subscription quota or wall-time on the synthesis step.
+    `enable_llm` opts the bear-case AND recent-developments sections into real
+    LLM calls (Claude Sonnet 4.6 via the Code CLI, Gemini Flash as automatic
+    fallback). Default off so dev runs don't burn subscription quota or
+    wall-time on the synthesis step.
+
+    `news_days` is the WebSearch lookback window for the §8 recent-developments
+    section. `news_cache_ttl_days` controls how long that section's on-disk
+    cache stays fresh between regenerations; `refresh_news=True` bypasses
+    the cache for this build.
     """
     ticker = ticker.upper()
     snapshot_section = snapshot.build(ticker, repo_root, model_link)
@@ -49,6 +59,14 @@ def build_report(
     earnings_section = earnings.build(ticker, repo_root)
     saydo_section = saydo.build(ticker, repo_root)
     ir_docs_section = ir_docs.build(ticker, repo_root)
+    recent_developments_section = recent_developments.build(
+        ticker=ticker,
+        repo_root=repo_root,
+        enable_llm=enable_llm,
+        news_days=news_days,
+        cache_ttl_days=news_cache_ttl_days,
+        force_refresh=refresh_news,
+    )
     bear_case_section = bear_case.build(
         ticker=ticker,
         repo_root=repo_root,
@@ -72,6 +90,7 @@ def build_report(
         earnings=earnings_section,
         saydo=saydo_section,
         ir_docs=ir_docs_section,
+        recent_developments=recent_developments_section,
         bear_case=bear_case_section,
         provenance=provenance_section,
         appendix=appendix_section,

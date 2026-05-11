@@ -237,7 +237,9 @@ class SayDoCard(BaseModel):
     prior_year: int
     saydo_md: str
     rating: Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"] = "unknown"
-    thesis_view: str | None = None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
+    thesis_view: str | None = (
+        None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
+    )
     attribution: str | None = None  # one-line excerpt after "Attribution:"
 
 
@@ -251,7 +253,7 @@ class SayDoSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §6 IR documents
+# §7 IR documents
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +273,7 @@ class IrDocsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §7 Bear case
+# §9 Bear case
 # ---------------------------------------------------------------------------
 
 
@@ -292,7 +294,28 @@ class BearCaseSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §8 Provenance & data quality
+# §8 Recent developments (WebSearch-driven news brief, 7d cache)
+# ---------------------------------------------------------------------------
+
+
+class RecentDevelopmentsSection(BaseModel):
+    """News + recent-developments brief sourced via Claude WebSearch.
+
+    Cached under `.tmp/news_cache/<TICKER>.json` with `cached_at` so that
+    successive brief regenerations within the TTL reuse the cached content.
+    `content_md` is rendered as-is in the HTML (sources inline as URLs in the
+    LLM output); no structural parsing keeps the section schema thin.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    cached_at: datetime | None = None
+    news_days_window: int = 7
+    content_md: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# §10 Provenance & data quality
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +347,7 @@ class ProvenanceSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §9 Appendix — full older quarter content (transcripts + analyses)
+# §11 Appendix — full older quarter content (transcripts + analyses)
 # ---------------------------------------------------------------------------
 
 
@@ -338,7 +361,7 @@ class TranscriptEntry(BaseModel):
 
 
 class AppendixSection(BaseModel):
-    """§9 — full earnings-call transcripts, collapsible per quarter, newest first.
+    """§11 — full earnings-call transcripts, collapsible per quarter, newest first.
 
     Embedded inline (not a separate file) so the deliverable is a single
     self-contained HTML doc.
@@ -368,6 +391,7 @@ class ReportSpec(BaseModel):
     earnings: EarningsSection
     saydo: SayDoSection
     ir_docs: IrDocsSection
+    recent_developments: RecentDevelopmentsSection
     bear_case: BearCaseSection
     provenance: ProvenanceSection
     appendix: AppendixSection

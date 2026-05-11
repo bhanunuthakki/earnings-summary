@@ -60,31 +60,62 @@ def main() -> int:
 
     summary: list[dict[str, object]] = []
     for ticker in tickers:
-        result = _build_one(ticker, repo_root, enable_llm=args.enable_llm)
+        result = _build_one(
+            ticker,
+            repo_root,
+            enable_llm=args.enable_llm,
+            news_days=args.news_days,
+            news_cache_ttl_days=args.news_cache_ttl_days,
+            refresh_news=args.refresh_news,
+        )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
     return 0
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker to build for")
-    g.add_argument("--all-tracked", action="store_true", help="Build for all rows in tracked_companies")
+    g.add_argument(
+        "--all-tracked", action="store_true", help="Build for all rows in tracked_companies"
+    )
     parser.add_argument(
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
         help="Repo root containing data/, transcripts/, micro_thesis/. Default: this repo.",
     )
-    parser.add_argument("--allow-untracked", action="store_true", help="Build even if ticker not in tracked_companies")
+    parser.add_argument(
+        "--allow-untracked",
+        action="store_true",
+        help="Build even if ticker not in tracked_companies",
+    )
     parser.add_argument(
         "--enable-llm",
         action="store_true",
-        help="Run the §7 bear-case LLM call. Routes through llm_client.call_llm: "
-        "Claude CLI first (subscription billing), Gemini Flash fallback if Claude "
-        "fails. Model selected via LLM_MODELS['bear_case']. Without --enable-llm, "
-        "§7 is stubbed to keep the build offline.",
+        help="Run the §8 recent-developments and §9 bear-case LLM calls. Routes "
+        "through llm_client: Claude CLI first (subscription billing), Gemini Flash "
+        "fallback if Claude fails. Without --enable-llm, both sections are stubbed.",
+    )
+    parser.add_argument(
+        "--news-days",
+        type=int,
+        default=7,
+        help="Lookback window (days) for the §8 recent-developments WebSearch. Default 7.",
+    )
+    parser.add_argument(
+        "--news-cache-ttl-days",
+        type=int,
+        default=7,
+        help="How long the §8 news cache stays fresh between regenerations. Default 7.",
+    )
+    parser.add_argument(
+        "--refresh-news",
+        action="store_true",
+        help="Force a fresh WebSearch for §8 (bypasses the cache for this build).",
     )
     return parser.parse_args()
 
@@ -93,7 +124,10 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         ticker = args.ticker.upper()
         if not args.allow_untracked and not _is_tracked(repo_root, ticker):
-            _emit("warn_untracked", {"ticker": ticker, "hint": "pass --allow-untracked to build anyway"})
+            _emit(
+                "warn_untracked",
+                {"ticker": ticker, "hint": "pass --allow-untracked to build anyway"},
+            )
         return [ticker]
     return _all_tracked(repo_root)
 
@@ -124,7 +158,14 @@ def _all_tracked(repo_root: Path) -> list[str]:
     return [r[0] for r in rows]
 
 
-def _build_one(ticker: str, repo_root: Path, enable_llm: bool) -> dict[str, object]:
+def _build_one(
+    ticker: str,
+    repo_root: Path,
+    enable_llm: bool,
+    news_days: int = 7,
+    news_cache_ttl_days: int = 7,
+    refresh_news: bool = False,
+) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
@@ -146,6 +187,9 @@ def _build_one(ticker: str, repo_root: Path, enable_llm: bool) -> dict[str, obje
         repo_root=repo_root,
         model_link=xlsx_path.name,
         enable_llm=enable_llm,
+        news_days=news_days,
+        news_cache_ttl_days=news_cache_ttl_days,
+        refresh_news=refresh_news,
     )
 
     html_path.write_text(render_html(spec), encoding="utf-8")
@@ -174,6 +218,7 @@ def _build_one(ticker: str, repo_root: Path, enable_llm: bool) -> dict[str, obje
             "earnings": spec.earnings.status.value,
             "saydo": spec.saydo.status.value,
             "ir_docs": spec.ir_docs.status.value,
+            "recent_developments": spec.recent_developments.status.value,
             "bear_case": spec.bear_case.status.value,
             "provenance": spec.provenance.status.value,
         },
