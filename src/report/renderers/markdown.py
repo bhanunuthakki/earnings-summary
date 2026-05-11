@@ -30,6 +30,7 @@ from report.models import (
     SnapshotSection,
     ThesisSection,
     TranscriptEntry,
+    ValuationSnapshot,
 )
 
 
@@ -108,11 +109,51 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
     out.write(f"**Verdict:** `{s.verdict}`  \n")
     if s.thesis_one_liner:
         out.write(f"**Thesis:** {s.thesis_one_liner}\n\n")
+    _valuation_card_md(out, s.valuation)
     if s.valuation.model_link:
+        out.write(f"_DCF workbook: `{s.valuation.model_link}`_\n\n")
+
+
+_TRIGGER_LABEL_MD: dict[str, str] = {
+    "sell": "**SELL** — DCF says >20% over fair value",
+    "trim": "**TRIM** — DCF says >10% over fair value",
+    "hold": "HOLD — within trim/sell band",
+    "initiate_candidate": "**INITIATE candidate** — beyond MoS bar",
+    "unknown": "_DCF not yet computed_",
+}
+
+
+def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
+    if v.consolidated_npv_per_share is None and v.current_price is None:
         out.write(
-            f"_Valuation snapshot, DCF inputs, and segment NPVs live in the workbook: "
-            f"`{s.valuation.model_link}`._\n\n"
+            "> **DCF not yet computed.** Run "
+            "`python execution/refresh_dcf.py --ticker <TICKER>` "
+            "after the canonical workbook (`dcf/<TICKER>.xlsx`) is in place.\n\n"
         )
+        return
+    out.write("| Metric | Value |\n|---|---|\n")
+    if v.consolidated_npv_per_share is not None:
+        out.write(f"| Fair value / share | ${v.consolidated_npv_per_share:,.2f} |\n")
+    if v.current_price is not None:
+        suffix = ""
+        if v.live_price_at is not None:
+            suffix = f" *(as of {v.live_price_at.date().isoformat()})*"
+        out.write(f"| Live price | ${v.current_price:,.2f}{suffix} |\n")
+    if v.over_under_pct is not None:
+        out.write(
+            f"| Over/under | {v.over_under_pct * 100:+.1f}% — "
+            f"{_TRIGGER_LABEL_MD.get(v.trigger_status, v.trigger_status)} |\n"
+        )
+    out.write("\n")
+    meta_parts: list[str] = []
+    if v.wacc is not None:
+        meta_parts.append(f"WACC {v.wacc * 100:.1f}%")
+    if v.mos_bar is not None:
+        meta_parts.append(f"MoS bar {v.mos_bar * 100:.0f}%")
+    if v.valuation_date is not None:
+        meta_parts.append(f"Valued {v.valuation_date}")
+    if meta_parts:
+        out.write(f"_{' · '.join(meta_parts)}_\n\n")
 
 
 def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
