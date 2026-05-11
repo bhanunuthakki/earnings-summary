@@ -14,11 +14,19 @@ Usage:
 """
 
 import os
+import re
 import sys
 import argparse
 import requests
 import json
 from dotenv import load_dotenv
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,10 +52,10 @@ def fetch_from_fmp(path: str, params: dict) -> list | dict | None:
         resp.raise_for_status()
         return resp.json()
     except requests.HTTPError as e:
-        print(f"  [HTTP {resp.status_code}] {path}: {e}", file=sys.stderr)
+        print(f"  [HTTP {resp.status_code}] {path}: {_redact(e)}", file=sys.stderr)
         return None
     except Exception as e:
-        print(f"  [Error] {path}: {e}", file=sys.stderr)
+        print(f"  [Error] {path}: {_redact(e)}", file=sys.stderr)
         return None
 
 

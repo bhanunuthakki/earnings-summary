@@ -29,10 +29,18 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 
 import requests
 from dotenv import load_dotenv
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -63,10 +71,10 @@ def fetch_earnings(symbol: str, limit: int) -> list[dict] | None:
         return data
     except requests.HTTPError as e:
         code = resp.status_code if "resp" in dir() else "?"
-        print(f"  [HTTP {code}] {symbol}: {e}", file=sys.stderr)
+        print(f"  [HTTP {code}] {symbol}: {_redact(e)}", file=sys.stderr)
         return None
     except Exception as e:
-        print(f"  [Error] {symbol}: {e}", file=sys.stderr)
+        print(f"  [Error] {symbol}: {_redact(e)}", file=sys.stderr)
         return None
 
 

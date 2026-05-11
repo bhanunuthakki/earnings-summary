@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -28,6 +29,13 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -65,7 +73,7 @@ def _fetch_once(symbol: str, year: int, quarter: str) -> tuple[int, dict | list 
                 timeout=TIMEOUT,
             )
         except requests.RequestException as e:
-            return (0, None, f"network: {e}")
+            return (0, None, f"network: {_redact(e)}")
         if r.status_code == 429:
             wait = 5 * (2**attempt)
             sys.stderr.write(f"  429 rate limit; sleeping {wait}s\n")
