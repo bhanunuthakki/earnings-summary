@@ -20,6 +20,7 @@ from report.models import (
 )
 from report.rules import load_rules
 from report.sections._common import has_table, missing, open_repo_db
+from report.sections.thesis import _split_stub_warning
 
 
 def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSection:
@@ -46,11 +47,12 @@ def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSecti
             valuation=valuation,
         )
 
+    thesis_clean, _ = _split_stub_warning(holdings or {})
     return SnapshotSection(
         status=SectionStatus.OK if valuation.consolidated_npv_per_share else SectionStatus.PARTIAL,
         ticker=ticker.upper(),
         company_name=company_name,
-        thesis_one_liner=(holdings or {}).get("thesis"),
+        thesis_one_liner=thesis_clean,
         verdict=verdict,
         valuation=valuation,
         tier_1_kpi_row=tier_1_strip,

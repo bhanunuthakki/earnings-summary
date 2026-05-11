@@ -91,10 +91,17 @@ def _fetch_quarterly_facts(
 ) -> list[QuarterlyFacts]:
     """Pull standalone-quarter fundamentals for a ticker.
 
-    Filters to `fmp_income_statement` documents whose file_path ends in
-    `_quarterly.json` to exclude TTM and FY rollups. Returns one record per
-    (period_end, fiscal_period_type) where ALL four required line items exist.
-    Ordered period_end ASC (oldest first) so YoY lookback is straightforward.
+    Accepts rows from any `fmp_income_statement` / `fmp_cashflow` document
+    EXCEPT the TTM / FY rollups (`%_ttm.json`, `%_annual.json`). The
+    `fiscal_period_type IN ('Q1'..'Q4')` filter is the real safety net — it
+    rejects any non-quarterly leakage regardless of file naming.
+
+    Why the file-path filter widened: the legacy v3 statements endpoint
+    wrote `{TICKER}_income_statement_quarterly.json` and we filtered to
+    that. After v3 started returning 403 in May 2026, refreshes moved to
+    /stable, which writes the unsuffixed `{TICKER}_income_statement.json`.
+    The `grouped` dict below dedupes by (period_end, fiscal_period_type)
+    so feeding rows from both sources is safe.
     """
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
@@ -105,7 +112,8 @@ def _fetch_quarterly_facts(
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
           AND d.doc_type IN ('fmp_income_statement', 'fmp_cashflow')
-          AND d.file_path LIKE '%_quarterly.json'
+          AND d.file_path NOT LIKE '%_ttm.json'
+          AND d.file_path NOT LIKE '%_annual.json'
           AND ff.line_item IN ({placeholders})
           AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
         ORDER BY ff.period_end ASC
