@@ -26,9 +26,9 @@ data/
 # Transcript data (user-specific, not checked in)
 transcripts/
 
-# Consolidated per-ticker research outputs (memo HTML, tracker copies, master
-# PDFs, index.html). Source-of-truth lives in transcripts/ and micro_thesis/;
-# output/research/ is a derived view rebuilt by execution/consolidate_outputs.py.
+# Generated brief artifacts written by execution/build_artifacts.py
+# (output/research/<TICKER>/<DATE>_report.html etc.). Reproducible from
+# data/ + transcripts/ + micro_thesis/.
 output/
 
 # Auto-generated per-run thesis tracker markdowns (micro_thesis/holdings/
