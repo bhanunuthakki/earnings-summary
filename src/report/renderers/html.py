@@ -42,6 +42,7 @@ from report.models import (
     SnapshotSection,
     ThesisSection,
     TranscriptEntry,
+    ValuationSnapshot,
 )
 from report.renderers.charts import CHART_CSS, line_chart, sparkline
 
@@ -465,11 +466,73 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
     )
     if s.thesis_one_liner:
         out.write(f"<p><strong>Thesis:</strong> {html.escape(s.thesis_one_liner)}</p>\n")
+    _valuation_card(out, s.valuation)
     if s.valuation.model_link:
         out.write(
-            f'<p class="meta">Valuation snapshot, DCF inputs, and segment NPVs live in the workbook: '
-            f"<code>{html.escape(s.valuation.model_link)}</code></p>\n"
+            f'<p class="meta">DCF workbook: <code>{html.escape(s.valuation.model_link)}</code></p>\n'
         )
+
+
+_TRIGGER_LABEL: dict[str, str] = {
+    "sell": "SELL — DCF says >20% over fair value",
+    "trim": "TRIM — DCF says >10% over fair value",
+    "hold": "HOLD — within trim/sell band",
+    "initiate_candidate": "INITIATE candidate — beyond MoS bar",
+    "unknown": "DCF not yet computed",
+}
+
+_TRIGGER_CLASS: dict[str, str] = {
+    "sell": "missing_data",
+    "trim": "partial",
+    "hold": "ok",
+    "initiate_candidate": "ok",
+    "unknown": "not_applicable",
+}
+
+
+def _valuation_card(out: StringIO, v: ValuationSnapshot) -> None:
+    """Render the §1 valuation card. Empty section if DCF hasn't been computed yet."""
+    if v.consolidated_npv_per_share is None and v.current_price is None:
+        out.write(
+            '<div class="callout"><strong>DCF not yet computed.</strong><br>'
+            "Run <code>python execution/refresh_dcf.py --ticker &lt;TICKER&gt;</code> "
+            "after the canonical workbook (<code>dcf/&lt;TICKER&gt;.xlsx</code>) is in place.</div>\n"
+        )
+        return
+    out.write('<div class="table-wrap"><table class="kpi-table">\n<tbody>')
+    if v.consolidated_npv_per_share is not None:
+        out.write(
+            f'<tr><th>Fair value / share</th><td class="num">'
+            f"${v.consolidated_npv_per_share:,.2f}</td></tr>"
+        )
+    if v.current_price is not None:
+        suffix = ""
+        if v.live_price_at is not None:
+            suffix = (
+                f' <span class="meta">(as of '
+                f"{html.escape(v.live_price_at.date().isoformat())})</span>"
+            )
+        out.write(
+            f'<tr><th>Live price</th><td class="num">${v.current_price:,.2f}{suffix}</td></tr>'
+        )
+    if v.over_under_pct is not None:
+        trigger_label = _TRIGGER_LABEL.get(v.trigger_status, v.trigger_status)
+        trigger_cls = _TRIGGER_CLASS.get(v.trigger_status, "not_applicable")
+        out.write(
+            f'<tr><th>Over/under</th><td class="num">{v.over_under_pct * 100:+.1f}% '
+            f'<span class="status-badge status-{trigger_cls}">{html.escape(trigger_label)}</span>'
+            f"</td></tr>"
+        )
+    out.write("</tbody></table></div>\n")
+    meta_parts: list[str] = []
+    if v.wacc is not None:
+        meta_parts.append(f"WACC {v.wacc * 100:.1f}%")
+    if v.mos_bar is not None:
+        meta_parts.append(f"MoS bar {v.mos_bar * 100:.0f}%")
+    if v.valuation_date is not None:
+        meta_parts.append(f"Valued {v.valuation_date}")
+    if meta_parts:
+        out.write(f'<p class="meta">{html.escape(" · ".join(meta_parts))}</p>\n')
 
 
 def _verdict_class(v: str) -> str:

@@ -9,6 +9,7 @@ Current price is read in priority order:
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -26,8 +27,9 @@ def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSecti
     holdings = _read_holdings(ticker, repo_root)
     rules = load_rules(ticker, repo_root)
     company_name = _company_name(ticker, repo_root)
+    mos_bar = _mos_bar(holdings)
     current_price = rules.current_price_override or _latest_price(ticker, repo_root)
-    valuation = _valuation_snapshot(ticker, repo_root, current_price, model_link)
+    valuation = _valuation_snapshot(ticker, repo_root, current_price, model_link, mos_bar)
     verdict = _verdict(ticker, repo_root)
     tier_1_strip = _tier_1_strip(holdings)
 
@@ -100,7 +102,13 @@ def _read_latest_close(path: Path) -> float | None:
             data = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    records = data if isinstance(data, list) else data.get("historical") if isinstance(data, dict) else None
+    records = (
+        data
+        if isinstance(data, list)
+        else data.get("historical")
+        if isinstance(data, dict)
+        else None
+    )
     if not isinstance(records, list) or not records:
         return None
     sorted_records = sorted(
@@ -117,19 +125,28 @@ def _read_latest_close(path: Path) -> float | None:
 
 
 def _valuation_snapshot(
-    ticker: str, repo_root: Path, current_price: float | None, model_link: str | None
+    ticker: str,
+    repo_root: Path,
+    current_price: float | None,
+    model_link: str | None,
+    mos_bar: float | None,
 ) -> ValuationSnapshot:
     conn = open_repo_db(repo_root)
     if conn is None or not has_table(conn, "dcf_runs"):
         if conn is not None:
             conn.close()
-        return ValuationSnapshot(current_price=current_price, model_link=model_link)
+        return ValuationSnapshot(
+            current_price=current_price,
+            model_link=model_link,
+            mos_bar=mos_bar,
+        )
 
     cursor = conn.cursor()
     cursor.execute(
         """
         SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
-               shares_outstanding, breakdown_json
+               shares_outstanding, breakdown_json,
+               live_price, live_price_at, over_under_pct, mos_bar_used
         FROM dcf_runs
         WHERE ticker = ?
         LIMIT 1
@@ -139,28 +156,77 @@ def _valuation_snapshot(
     row = cursor.fetchone()
     conn.close()
     if row is None:
-        return ValuationSnapshot(current_price=current_price, model_link=model_link)
+        return ValuationSnapshot(
+            current_price=current_price,
+            model_link=model_link,
+            mos_bar=mos_bar,
+        )
 
-    cons_npv_per_share = (
-        float(row["npv_per_share"]) if row["npv_per_share"] is not None else None
-    )
+    cons_npv_per_share = float(row["npv_per_share"]) if row["npv_per_share"] is not None else None
     sum_of_segments = _sum_of_segments_npv_per_share(
         row["breakdown_json"], row["shares_outstanding"]
     )
-    upside = None
-    if cons_npv_per_share is not None and current_price not in (None, 0):
-        assert current_price is not None
-        upside = cons_npv_per_share / current_price - 1.0
+
+    # Prefer live_price persisted by refresh_dcf (the system-authoritative
+    # snapshot at valuation time); fall back to the older _latest_price path
+    # so snapshots still render for tickers whose DCF predates the audit cols.
+    live_price = float(row["live_price"]) if row["live_price"] is not None else current_price
+    over_under = float(row["over_under_pct"]) if row["over_under_pct"] is not None else None
+    mos_bar_used = float(row["mos_bar_used"]) if row["mos_bar_used"] is not None else mos_bar
+    live_price_at = _parse_iso_datetime(row["live_price_at"])
+    upside = -over_under if over_under is not None else None
+    trigger = _trigger_status(over_under, mos_bar_used)
+
     return ValuationSnapshot(
         consolidated_npv_per_share=cons_npv_per_share,
         sum_of_segments_npv_per_share=sum_of_segments,
-        current_price=current_price,
+        current_price=live_price,
         implied_upside_pct=upside,
         wacc=row["wacc"],
         terminal_growth=row["terminal_growth"],
         valuation_date=row["valuation_date"],
         model_link=model_link,
+        over_under_pct=over_under,
+        mos_bar=mos_bar_used,
+        trigger_status=trigger,
+        live_price_at=live_price_at,
     )
+
+
+def _mos_bar(holdings: dict[str, object] | None) -> float | None:
+    """Read mos_bar from holdings JSON v2; return None for pre-v2 stubs."""
+    if holdings is None:
+        return None
+    raw = holdings.get("mos_bar")
+    return float(raw) if isinstance(raw, (int, float)) else None
+
+
+def _trigger_status(
+    over_under: float | None, mos_bar: float | None
+) -> Literal["sell", "trim", "hold", "initiate_candidate", "unknown"]:
+    """Map over_under_pct to the design's trim/sell ladder.
+
+    >20% over → sell; >10% over → trim; > -mos_bar → hold; else initiate.
+    Returns 'unknown' when we have no over/under reading yet.
+    """
+    if over_under is None:
+        return "unknown"
+    if over_under > 0.20:
+        return "sell"
+    if over_under > 0.10:
+        return "trim"
+    if mos_bar is not None and over_under < -mos_bar:
+        return "initiate_candidate"
+    return "hold"
+
+
+def _parse_iso_datetime(raw: object) -> datetime | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
 
 
 def _sum_of_segments_npv_per_share(
