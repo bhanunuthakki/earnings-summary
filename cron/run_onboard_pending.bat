@@ -6,8 +6,7 @@ REM Catches up tickers that bypassed db.track_company's auto-onboard hook
 REM (raw SQL inserts / external API writes / direct DB edits). Idempotent —
 REM safe to run on any cadence; a no-op when no tickers are pending.
 REM
-REM Setup: cron\SETUP_WINDOWS_SCHEDULER.md (same flow as autopilot, swap
-REM the wrapper file in the schtasks /create line).
+REM Setup: cron\SETUP_WINDOWS_SCHEDULER.md for the install pattern.
 REM
 REM PROJECT_ROOT auto-resolved from this .bat's own location.
 REM ---------------------------------------------------------------------------
