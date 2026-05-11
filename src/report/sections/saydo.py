@@ -45,8 +45,8 @@ def build(ticker: str, repo_root: Path) -> SayDoSection:
         return SayDoSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
-                stage="SYNTHESIZE(main.py)",
-                fix_command=f"python src/main.py --company {ticker.upper()}",
+                stage="SYNTHESIZE(build_saydo_pairs)",
+                fix_command=f"python execution/build_saydo_pairs.py --ticker {ticker.upper()}",
                 detail="No SayDo_*.txt files found under .tmp/.",
             ),
         )
