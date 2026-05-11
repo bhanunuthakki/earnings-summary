@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,6 +36,13 @@ from typing import NamedTuple
 
 import requests
 from dotenv import load_dotenv
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 # ---------------------------------------------------------------------------
 # Config
@@ -131,7 +139,7 @@ def _fetch_with_retry(task: FetchTask) -> FetchResult:
                 return FetchResult(task, False, 0, f"unexpected response type: {type(data)}")
             return FetchResult(task, True, len(data), None)
         except requests.RequestException as exc:
-            last_err = str(exc)
+            last_err = _redact(exc)
             if attempt < RETRY_LIMIT:
                 _log("network_retry", ticker=task.ticker, endpoint=task.endpoint,
                      attempt=attempt, error=last_err)
@@ -170,7 +178,7 @@ def _fetch_and_save(task: FetchTask) -> FetchResult:
             task.out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             return FetchResult(task, True, len(data), None)
         except requests.RequestException as exc:
-            last_err = str(exc)
+            last_err = _redact(exc)
             if attempt < RETRY_LIMIT:
                 _log("network_retry", ticker=task.ticker, endpoint=task.endpoint,
                      attempt=attempt, error=last_err)

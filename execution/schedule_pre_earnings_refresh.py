@@ -24,12 +24,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -71,8 +79,11 @@ def _fetch_earnings_calendar(start: date, end: date) -> list[dict[str, str]]:
         raise RuntimeError("FMP_API_KEY not set in .env")
     url = "https://financialmodelingprep.com/stable/earnings-calendar"
     params = {"from": start.isoformat(), "to": end.isoformat(), "apikey": API_KEY}
-    r = requests.get(url, params=params, timeout=30)
-    r.raise_for_status()
+    try:
+        r = requests.get(url, params=params, timeout=30)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise RuntimeError(f"FMP earnings-calendar fetch failed: {_redact(e)}") from None
     body = r.json()
     if not isinstance(body, list):
         raise RuntimeError(f"unexpected calendar shape: {type(body).__name__}")

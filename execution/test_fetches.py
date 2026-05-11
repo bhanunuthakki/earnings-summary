@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 
 # Make sure we can import from src
@@ -9,6 +10,13 @@ import requests
 import pandas as pd
 from io import StringIO
 from calendar_manager import get_earnings_date
+
+_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
+
+
+def _redact(text: object) -> str:
+    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
+    return _APIKEY_RE.sub(r"\1***", str(text))
 
 def test_sp500():
     print("\n--- Testing S&P 500 Fetch ---")
@@ -66,8 +74,8 @@ def test_fmp_api():
             print("❌ FMP_API_KEY not found in .env. Skipping test.")
             return
 
-        url = f"https://financialmodelingprep.com/api/v4/earning_call_transcript?symbol=AAPL&apikey={api_key}"
-        res = requests.get(url)
+        url = "https://financialmodelingprep.com/api/v4/earning_call_transcript"
+        res = requests.get(url, params={"symbol": "AAPL", "apikey": api_key})
         if res.status_code == 200:
             data = res.json()
             if isinstance(data, list) and len(data) > 0:
@@ -78,7 +86,7 @@ def test_fmp_api():
         else:
              print(f"❌ FMP API fetch failed: HTTP {res.status_code}")
     except Exception as e:
-        print(f"❌ FMP API fetch failed with exception: {e}")
+        print(f"❌ FMP API fetch failed with exception: {_redact(e)}")
 
 if __name__ == "__main__":
     print("Starting Data Fetch Validation Tests...\n")
