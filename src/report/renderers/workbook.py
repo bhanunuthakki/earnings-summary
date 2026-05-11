@@ -101,13 +101,18 @@ def _readme(wb: Workbook, spec: ReportSpec) -> None:
     ws["A7"].font = Font(bold=True)
     statuses = [
         ("§1 Snapshot", spec.snapshot.status, _detail(spec.snapshot.missing)),
-        ("§2 Thesis", spec.thesis.status, _detail(spec.thesis.missing)),
-        ("§3 Financials (12Q)", spec.financials.status, _detail(spec.financials.missing)),
-        ("§4 Segments (12Q)", spec.segments.status, _detail(spec.segments.missing)),
-        ("§5 Earnings analysis", spec.earnings.status, _detail(spec.earnings.missing)),
-        ("§6 IR documents", spec.ir_docs.status, _detail(spec.ir_docs.missing)),
-        ("§7 Bear case", spec.bear_case.status, _detail(spec.bear_case.missing)),
-        ("§8 Provenance", spec.provenance.status, _detail(spec.provenance.missing)),
+        (
+            "§2 Company description",
+            spec.company_description.status,
+            _detail(spec.company_description.missing),
+        ),
+        ("§3 Thesis", spec.thesis.status, _detail(spec.thesis.missing)),
+        ("§4 Financials (12Q)", spec.financials.status, _detail(spec.financials.missing)),
+        ("§5 Segments (12Q)", spec.segments.status, _detail(spec.segments.missing)),
+        ("§6 Earnings analysis", spec.earnings.status, _detail(spec.earnings.missing)),
+        ("§8 IR documents", spec.ir_docs.status, _detail(spec.ir_docs.missing)),
+        ("§10 Bear case", spec.bear_case.status, _detail(spec.bear_case.missing)),
+        ("§11 Provenance", spec.provenance.status, _detail(spec.provenance.missing)),
     ]
     _header_row(ws, 8, ["Section", "Status", "Detail / fix command"])
     for i, (label, status, detail) in enumerate(statuses, start=9):

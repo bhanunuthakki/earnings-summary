@@ -24,6 +24,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     BreakRuleEvaluation,
+    CompanyDescriptionSection,
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
@@ -39,6 +40,7 @@ from report.models import (
     SectionStatus,
     SegmentSeries,
     SegmentsSection,
+    SegmentWeighting,
     SnapshotSection,
     ThesisSection,
     TranscriptEntry,
@@ -58,6 +60,7 @@ def render(spec: ReportSpec) -> str:
         _evaluation_snapshot(body, spec.evaluation_snapshot)
     else:
         _snapshot(body, spec.snapshot)
+    _company_description(body, spec.company_description)
     _thesis(body, spec.thesis, spec.ticker)
     _financials(body, spec.financials)
     _segments(body, spec.segments)
@@ -257,6 +260,36 @@ details.seg-card-def { margin-top: 8px; padding-top: 6px; border-top: 1px dashed
 details.seg-card-def summary { font-size: 11px; color: var(--muted); }
 details.seg-card-def p { font-size: 11.5px; line-height: 1.4; margin: 6px 0 0; color: var(--fg); }
 .seg-def-mark { font-size: 11px; vertical-align: super; opacity: 0.6; cursor: help; }
+.company-pitch {
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 8px 0 12px;
+  padding: 12px 14px;
+  background: var(--subheader-bg);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+}
+details.company-details { margin: 10px 0 4px; }
+details.company-details > h3 { margin-top: 16px; }
+table.weighting-table td:nth-child(3) {
+  white-space: nowrap;
+  min-width: 140px;
+}
+.share-bar {
+  display: inline-block;
+  vertical-align: middle;
+  width: 60px;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  margin-right: 6px;
+  overflow: hidden;
+}
+.share-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
 """
     + CHART_CSS
     + """
@@ -308,16 +341,17 @@ pre.transcript {
 def _nav(out: StringIO) -> None:
     sections = [
         ("snapshot", "§1 Snapshot"),
-        ("thesis", "§2 Thesis"),
-        ("financials", "§3 Financials"),
-        ("segments", "§4 Segments"),
-        ("earnings", "§5 Earnings"),
-        ("saydo", "§6 Say-Do"),
-        ("ir-docs", "§7 IR docs"),
-        ("recent-developments", "§8 Recent developments"),
-        ("bear-case", "§9 Bear case"),
-        ("provenance", "§10 Provenance"),
-        ("appendix", "§11 Transcripts"),
+        ("company-description", "§2 Company"),
+        ("thesis", "§3 Thesis"),
+        ("financials", "§4 Financials"),
+        ("segments", "§5 Segments"),
+        ("earnings", "§6 Earnings"),
+        ("saydo", "§7 Say-Do"),
+        ("ir-docs", "§8 IR docs"),
+        ("recent-developments", "§9 Recent developments"),
+        ("bear-case", "§10 Bear case"),
+        ("provenance", "§11 Provenance"),
+        ("appendix", "§12 Transcripts"),
     ]
     out.write('<nav class="toc">')
     for anchor, label in sections:
@@ -610,8 +644,96 @@ def _fmt_compact_usd(v: float) -> str:
     return f"{v:,.0f}"
 
 
+def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:
+    _section_h2(out, "company-description", 2, "Company description", s.status)
+    if _missing_callout(out, s.status, s.missing):
+        return
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {html.escape(s.sector)}")
+    if s.industry:
+        chips.append(f"Industry: {html.escape(s.industry)}")
+    if s.source_fiscal_year is not None:
+        chips.append(f"Source: 10-K FY{s.source_fiscal_year}")
+    if chips:
+        out.write(f'<p class="meta">{" · ".join(chips)}</p>\n')
+    if s.elevator_pitch:
+        out.write(f'<p class="company-pitch">{html.escape(s.elevator_pitch)}</p>\n')
+
+    if not _has_expandable_content(s):
+        return
+
+    out.write(
+        '<details class="company-details"><summary>What businesses does the company operate in, '
+        "how does it make money, and what's the relative weighting</summary>\n"
+    )
+    if s.business_overview:
+        out.write('<h3>Lines of business</h3>\n')
+        out.write(_paragraphs_html(s.business_overview))
+    if s.revenue_model:
+        out.write('<h3>How it makes money</h3>\n')
+        out.write(_paragraphs_html(s.revenue_model))
+    if s.segment_breakdown:
+        out.write('<h3>Segment weighting (latest quarter)</h3>\n')
+        _weighting_table(out, s.segment_breakdown, label="Segment")
+    if s.geographic_breakdown:
+        out.write('<h3>Geographic weighting (latest quarter)</h3>\n')
+        _weighting_table(out, s.geographic_breakdown, label="Geography")
+    out.write("</details>\n")
+
+
+def _has_expandable_content(s: CompanyDescriptionSection) -> bool:
+    return bool(
+        s.business_overview
+        or s.revenue_model
+        or s.segment_breakdown
+        or s.geographic_breakdown
+    )
+
+
+def _paragraphs_html(text: str) -> str:
+    """Render LLM-supplied multi-paragraph text. Splits on blank lines."""
+    parts = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
+    if not parts:
+        return ""
+    return "".join(f"<p>{_md_inline(p)}</p>\n" for p in parts)
+
+
+def _weighting_table(out: StringIO, rows: list[SegmentWeighting], label: str) -> None:
+    out.write('<div class="table-wrap"><table class="weighting-table">\n<thead><tr>')
+    for h in (label, "Revenue (USD M)", "Share", "Description"):
+        out.write(f"<th>{html.escape(h)}</th>")
+    out.write("</tr></thead>\n<tbody>")
+    for r in rows:
+        rev = _fmt_num(r.revenue_usd_m, 0)
+        share = "—" if r.share_pct is None else f"{r.share_pct * 100:.1f}%"
+        desc = html.escape(r.description) if r.description else "—"
+        out.write(
+            f"<tr><td><strong>{html.escape(r.name)}</strong></td>"
+            f'<td class="num">{rev}</td>'
+            f'<td class="num">{_share_bar(r.share_pct)}{share}</td>'
+            f"<td>{desc}</td></tr>"
+        )
+    out.write("</tbody></table></div>\n")
+
+
+def _share_bar(share: float | None) -> str:
+    """Tiny inline bar so the table reads at a glance.
+
+    Width clamped to 0..100% on the share fraction. Empty span when share is
+    unknown so the cell still aligns.
+    """
+    if share is None:
+        return ""
+    pct = max(0.0, min(1.0, share)) * 100.0
+    return (
+        f'<span class="share-bar"><span class="share-fill" '
+        f'style="width:{pct:.1f}%"></span></span>'
+    )
+
+
 def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:
-    _section_h2(out, "thesis", 2, "Thesis & tier-1 KPIs", s.status)
+    _section_h2(out, "thesis", 3, "Thesis & tier-1 KPIs", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if s.stub_warning:
@@ -745,7 +867,7 @@ def _status_class(s: str) -> str:
 
 
 def _financials(out: StringIO, s: FinancialsSection) -> None:
-    _section_h2(out, "financials", 3, "Financials — last 12 quarters", s.status)
+    _section_h2(out, "financials", 4, "Financials — last 12 quarters", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if s.line_items and s.chart_priorities:
@@ -829,7 +951,7 @@ def _annual_table(out: StringIO, years: list[int], rows: list[AnnualLineItem]) -
 
 
 def _segments(out: StringIO, s: SegmentsSection) -> None:
-    _section_h2(out, "segments", 4, "Segments — last 12 quarters", s.status)
+    _section_h2(out, "segments", 5, "Segments — last 12 quarters", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
@@ -958,12 +1080,12 @@ def _segments_table(
 
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:
-    _section_h2(out, "earnings", 5, "Earnings analysis", s.status)
+    _section_h2(out, "earnings", 6, "Earnings analysis", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
         '<p class="meta">Each quarter shows its executive-summary digest as the visible '
-        "header; click to expand the full LLM analysis. Newest first. Full transcripts in §11.</p>\n"
+        "header; click to expand the full LLM analysis. Newest first. Full transcripts in §12.</p>\n"
     )
     cards = list(s.full_quarters) + list(s.digest_quarters)
     cards.sort(key=lambda c: (c.year, c.quarter), reverse=True)
@@ -993,7 +1115,7 @@ def _earnings_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
 
 
 def _saydo(out: StringIO, s: SayDoSection) -> None:
-    _section_h2(out, "saydo", 6, "Say-Do analysis", s.status)
+    _section_h2(out, "saydo", 7, "Say-Do analysis", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if not s.cards:
@@ -1034,7 +1156,7 @@ def _rating_class(rating: str) -> str:
 
 
 def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
-    _section_h2(out, "ir-docs", 7, "IR documents", s.status)
+    _section_h2(out, "ir-docs", 8, "IR documents", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     for c in s.cards:
@@ -1048,7 +1170,7 @@ def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
 
 
 def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
-    _section_h2(out, "recent-developments", 8, "Recent developments", s.status)
+    _section_h2(out, "recent-developments", 9, "Recent developments", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if s.cached_at is not None:
@@ -1063,7 +1185,7 @@ def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
 
 
 def _bear_case(out: StringIO, s: BearCaseSection) -> None:
-    _section_h2(out, "bear-case", 9, "Bear case", s.status)
+    _section_h2(out, "bear-case", 10, "Bear case", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     for i, fm in enumerate(s.failure_modes, 1):
@@ -1090,7 +1212,7 @@ def _bear_case(out: StringIO, s: BearCaseSection) -> None:
 
 
 def _provenance(out: StringIO, s: ProvenanceSection) -> None:
-    _section_h2(out, "provenance", 10, "Provenance & data quality", s.status)
+    _section_h2(out, "provenance", 11, "Provenance & data quality", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if s.coverage:
@@ -1118,7 +1240,7 @@ def _chk(b: bool) -> str:
 
 
 def _appendix(out: StringIO, s: AppendixSection) -> None:
-    _section_h2(out, "appendix", 11, "Appendix — full earnings-call transcripts", s.status)
+    _section_h2(out, "appendix", 12, "Appendix — full earnings-call transcripts", s.status)
     if s.status != SectionStatus.OK or not s.transcripts:
         out.write("<p>No transcripts available.</p>\n")
         return

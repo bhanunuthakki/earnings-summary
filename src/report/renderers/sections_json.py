@@ -29,6 +29,7 @@ def render(spec: ReportSpec) -> str:
             "news": _news_tab(spec),
             "financials": _financials_tab(spec),
             "valuation": _valuation_tab(spec),
+            "company_description": _company_description_tab(spec),
         },
         "report_links": {
             "html": "report.html",
@@ -102,8 +103,26 @@ def _thesis_tab(spec: ReportSpec) -> dict[str, Any]:
     }
 
 
+def _company_description_tab(spec: ReportSpec) -> dict[str, Any]:
+    """§2 Company description — what the company does + segment/geo weighting."""
+    s = spec.company_description
+    return {
+        "status": s.status.value,
+        "missing": s.missing.model_dump() if s.missing else None,
+        "elevator_pitch": s.elevator_pitch,
+        "business_overview": s.business_overview,
+        "revenue_model": s.revenue_model,
+        "sector": s.sector,
+        "industry": s.industry,
+        "source_fiscal_year": s.source_fiscal_year,
+        "cached_at": s.cached_at.isoformat() if s.cached_at else None,
+        "segment_breakdown": [r.model_dump() for r in s.segment_breakdown],
+        "geographic_breakdown": [r.model_dump() for r in s.geographic_breakdown],
+    }
+
+
 def _nuance_tab(spec: ReportSpec) -> dict[str, Any]:
-    """Map §9 (bear case) onto the existing 'Nuance' tab."""
+    """Map §10 (bear case) onto the existing 'Nuance' tab."""
     s = spec.bear_case
     return {
         "status": s.status.value,
@@ -115,7 +134,7 @@ def _nuance_tab(spec: ReportSpec) -> dict[str, Any]:
 
 
 def _news_tab(spec: ReportSpec) -> dict[str, Any]:
-    """News tab is fed by §8 Recent developments (WebSearch-driven brief)."""
+    """News tab is fed by §9 Recent developments (WebSearch-driven brief)."""
     s = spec.recent_developments
     return {
         "status": s.status.value,

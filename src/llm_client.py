@@ -95,6 +95,7 @@ LLM_MODELS: dict[str, str] = {
     "thesis_pass_b": DEFAULT_MODEL,
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
+    "company_description": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
@@ -1280,6 +1281,99 @@ Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
         return raw
     except Exception as e:
         log.error(f"CRITICAL ERROR: Bear case generation failed for {ticker}: {e}")
+        raise
+
+
+def generate_company_description(
+    ticker: str,
+    profile_description: str,
+    sector: str | None,
+    industry: str | None,
+    form_10k_text: str,
+    segment_names: list[str],
+    geo_names: list[str],
+    fiscal_year: int | None,
+) -> str:
+    """Synthesize the §2 Company description: what they do + how they make money.
+
+    Inputs come from `src/compute/company_description.py` after locating the
+    latest 10-K and pulling the actual segment / geography names that the
+    report currently displays. The LLM grounds the prose in the 10-K narrative
+    + the profile.json description, never invents segment names.
+
+    Returns a JSON string the caller parses. Schema:
+      {
+        "elevator_pitch": "1-2 sentence summary",
+        "business_overview": "multi-paragraph description of lines of business",
+        "revenue_model": "how the company makes money",
+        "segments": [{"name": "Google Services", "description": "..."}, ...],
+        "geographies": [{"name": "United States", "description": "..."}, ...]
+      }
+    """
+    segments_block = (
+        "\n".join(f"- {n}" for n in segment_names) if segment_names else "(none on file)"
+    )
+    geos_block = "\n".join(f"- {n}" for n in geo_names) if geo_names else "(none on file)"
+    prompt = f"""You are an equity analyst writing a "company description" section for a research brief on {ticker}.
+
+The reader is a portfolio analyst who needs CONTEXT to interpret financials,
+segments, and KPIs. Be concrete and grounded — do NOT invent segment names,
+geographies, or business lines. If the data below doesn't support a claim,
+omit it.
+
+INPUTS
+
+Sector: {sector or "(unknown)"}
+Industry: {industry or "(unknown)"}
+Fiscal year of source 10-K: {fiscal_year or "(unknown)"}
+
+FMP profile.json description (third-party canonical summary):
+\"\"\"
+{profile_description.strip() or "(none)"}
+\"\"\"
+
+10-K narrative excerpts (Nature of Business / Description of Business /
+Information about Segments / etc — section keys preserved in the headers):
+\"\"\"
+{form_10k_text.strip() or "(no 10-K narrative available)"}
+\"\"\"
+
+Segment names this report displays (use these EXACT names — do not rename,
+combine, or invent):
+{segments_block}
+
+Geography names this report displays (use these EXACT names):
+{geos_block}
+
+---
+
+Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
+
+{{
+  "elevator_pitch": "1-2 sentence summary of what this company does, suitable as the always-visible line at the top of the section",
+  "business_overview": "2-4 short paragraphs (use \\n\\n between paragraphs) describing the lines of business, the customers, and how the operating segments relate to each other. Reference segment names where useful.",
+  "revenue_model": "1-2 paragraphs on HOW the company generates revenue (ads, subscriptions, transactions, take rates, fee structures, etc). Be concrete; cite the mechanisms named in the 10-K.",
+  "segments": [
+    {{"name": "<exact segment name from the list above>", "description": "1-2 sentence segment description grounded in the 10-K"}}
+  ],
+  "geographies": [
+    {{"name": "<exact geography name from the list above>", "description": "1 sentence: what this region represents (single country, regional cluster, etc.) — only include if the 10-K offers material color"}}
+  ]
+}}
+
+Rules:
+- For "segments": include EVERY segment name from the list. If the 10-K offers no description, set the description to null.
+- For "geographies": only include geographies you can describe meaningfully. Skip ones that are just country names with no extra context.
+- Do not include segment / geography names that are NOT in the lists above.
+- Return strictly the JSON object — no prose before or after, no markdown fence.
+"""
+    try:
+        raw = call_llm(prompt, purpose="company_description").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Company description generation failed for {ticker}: {e}")
         raise
 
 
