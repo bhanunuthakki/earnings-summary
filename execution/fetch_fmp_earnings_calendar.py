@@ -29,18 +29,10 @@ Usage:
 import argparse
 import json
 import os
-import re
 import sys
 
 import requests
 from dotenv import load_dotenv
-
-_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
-
-
-def _redact(text: object) -> str:
-    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
-    return _APIKEY_RE.sub(r"\1***", str(text))
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -49,6 +41,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
 sys.path.append(SRC_DIR)
 
 import db  # noqa: E402
+from log_redact import redact as _redact  # noqa: E402
 
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
