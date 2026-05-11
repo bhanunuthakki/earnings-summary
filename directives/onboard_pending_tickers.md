@@ -130,12 +130,17 @@ After each scheduled run:
 - [ ] `python execution/onboard_pending_tickers.py --dry-run` returns
       `pending_count: 0`.
 
-## Coordination with autopilot
+## Coordination with the daily worker
 
-The monthly autopilot (`cron/autopilot.task.xml`) refreshes already-onboarded
-tickers' analytical state from new transcripts/IR docs. It assumes facts already
-exist. When a new ticker is added between autopilot runs, this hourly catch-up
-gets it to the "facts present" state in time for the next autopilot tick.
+The daily worker (`cron/daily_fetch_and_brief.task.xml`) drains
+`tracked_companies.brief_dirty` and runs the synth→publish slice
+(`run_thesis_evaluator → match_commitments → refresh_dcf → build_artifacts`)
+on each dirty ticker. It assumes facts already exist.
 
-Net: no edits needed to `directives/autopilot.md` — the two directives
-compose cleanly.
+When a new ticker is added between worker ticks via raw SQL / external API /
+direct DB edit, this hourly catch-up gets it to the "facts present" state
+within ~1 hour. Once the catch-up writes fact rows, the SQL triggers from
+migration 0026 flip `brief_dirty=1`, and the daily worker picks the ticker
+up on its next tick (06:30 local time).
+
+The two crons compose cleanly — no shared state beyond `brief_dirty`.

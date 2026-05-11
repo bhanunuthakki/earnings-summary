@@ -21,7 +21,7 @@ The smart search replaces the previous naive `ytsearch1`. It enumerates 5 candid
 | Purpose | Script |
 |---|---|
 | **Primary Fetcher & Transcriber** | `execution/fetch_audio_transcripts.py` |
-| **Fallback when no YouTube audio exists** | `execution/synthesize_quarterly_update.py` (see `directives/synthesize_quarterly_update.md`) |
+| **Fallback when no YouTube audio exists** | Ask the user to drop a transcript PDF into `transcripts/raw/<TICKER>_Q<N>_<YEAR>.txt` (or `.pdf`). The brief's §5 Earnings section will skip the quarter cleanly if neither exists. |
 
 ### fetch_audio_transcripts.py Responsibilities
 
@@ -63,13 +63,13 @@ The smart search replaces the previous naive `ytsearch1`. It enumerates 5 candid
       "year": 2025,
       "quarter": 4,
       "url": null,
-      "gap_reason": "Not on YouTube; route via synthesize_quarterly_update.py"
+      "gap_reason": "Not on YouTube; ask user to drop a transcript PDF"
     }
   ]
 }
 ```
 
-Entries with `url: null` are skipped with the `gap_reason` printed — they are the trigger to invoke the synthesis fallback.
+Entries with `url: null` are skipped with the `gap_reason` printed — they are the trigger to ask the user to drop a transcript PDF into `transcripts/raw/`.
 
 ## Outputs
 
@@ -91,10 +91,10 @@ Outcomes:
 | `has_qa` | Meaning | What to do |
 |---|---|---|
 | `true` | Q&A present | Proceed normally. |
-| `false` | Prepared remarks only | Fetcher prints `WARN missing_qa: ...` to stderr and the batch summary lists the affected (ticker, quarter). Either re-pull from a longer YouTube source, fall back to `synthesize_quarterly_update.py`, or ask the user to drop a full-call PDF into `transcripts/raw/`. |
+| `false` | Prepared remarks only | Fetcher prints `WARN missing_qa: ...` to stderr and the batch summary lists the affected (ticker, quarter). Either re-pull from a longer YouTube source or ask the user to drop a full-call PDF into `transcripts/raw/`. |
 | `null` | Text too short to determine (<2 KB) | Treat as broken file; investigate. |
 
-The same verdict is also persisted on `transcripts.has_qa_section` during ingest (see `directives/process_earnings_transcripts.md` and migration `0019_transcripts_has_qa_section`), so downstream extractors (Say-Do, commitments) can filter to `has_qa_section = 1` rows when analyst-question content is required.
+The same verdict is also persisted on `transcripts.has_qa_section` during ingest (see migration `0019_transcripts_has_qa_section`), so downstream extractors (Say-Do, commitments) can filter to `has_qa_section = 1` rows when analyst-question content is required.
 
 ## Edge Cases & Known Constraints
 
@@ -102,7 +102,7 @@ The same verdict is also persisted on `transcripts.has_qa_section` during ingest
 - **ffmpeg required**: yt-dlp needs it for audio extraction; faster-whisper for decode. On Windows where it isn't on PATH, set `FFMPEG_LOCATION` env var or pass `--ffmpeg-location <DIR>`. Default Windows fallback is `C:\ffmpeg\bin`.
 - **Dynamic file extensions**: yt-dlp output may be `.m4a`, `.webm`, etc.; the script discovers the produced file by basename match (largest if multiple, in case of `.part` leftovers).
 - **First-run model download**: `large-v3-turbo` (~1.6 GB) is fetched on first invocation and cached in the user's HF cache.
-- **Dual-Mode Sync**: `src/main.py` ingestion pipeline also handles direct manual `.mp3` / `.m4a` uploads from the web interface.
+- **Manual uploads**: drop `.mp3` / `.m4a` files into `transcripts/raw/` and re-run the fetcher; its skip-existing path will transcribe them in place.
 
 ## QA validation
 
@@ -117,7 +117,7 @@ QA logic lives in `src/transcript_qa.py`. Defaults are tuned against the May 202
 | Words / second | 0.5 – 5.0 |
 | Adjacent-repeat ratio (Whisper hallucination signal) | ≤ 30 % |
 
-Synthesized transcripts (from `synthesize_quarterly_update.py`) get a separate validator that just checks size + presence of the writer's banner + at least one section. See `directives/qa_transcripts.md`.
+(Synthesized transcripts produced by older pipelines used a separate validator — that path was retired in the cleanup; see git history for `synthesize_quarterly_update.py` if you need that QA spec.)
 
 ## Verification
 

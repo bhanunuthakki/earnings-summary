@@ -76,10 +76,9 @@ response = call_llm(prompt, purpose="bear_case")
 
 ## Migration history
 
-This directive supersedes the inconsistent state where two scripts called
+This directive supersedes the inconsistent state where scripts called
 `google.generativeai` directly:
 
-- `execution/extract_market_signals_from_transcripts.py` — migrated 2026-05-09
 - `execution/extract_nvo_patent_timeline.py` — migrated 2026-05-09
 
 Any future script that goes around `call_llm` is a regression and should be
