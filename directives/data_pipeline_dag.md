@@ -48,7 +48,7 @@ Per-source idempotency keys live in `directives/data_provenance.md` §4.
 
 ## Resumption
 
-After failure, `python execution/run_pipeline.py --resume {run_id}`:
+After failure, `python execution/daily_fetch_and_brief.py --ticker <T>` (or re-run the relevant per-ticker CLI):
 1. Reads `stage_transitions` for the run.
 2. Identifies the first `(ticker, period_end, stage)` with `status != ok`.
 3. Re-runs from there.

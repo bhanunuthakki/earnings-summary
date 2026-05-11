@@ -2,11 +2,11 @@
 
 ## Goal
 
-Pull just the **Question-and-Answer segment** of an earnings call from free, no-auth aggregator websites and write it into the same `transcripts/raw/` slot the audio fetcher and synthesizer use. This is the **primary** transcript-acquisition path for the say-do pipeline; audio (`fetch_audio_transcripts.py`) is the fallback when no aggregator has indexed the quarter yet.
+Pull just the **Question-and-Answer segment** of an earnings call from free, no-auth aggregator websites and write it into the same `transcripts/raw/` slot the audio fetcher uses. This is the **primary** transcript-acquisition path for the say-do pipeline; audio (`fetch_audio_transcripts.py`) is the fallback when no aggregator has indexed the quarter yet.
 
 ## Why Q&A only
 
-- **Prepared remarks** are 1:1 reproducible from the press release + investor deck (which `synthesize_quarterly_update.py` already pulls automatically). Re-transcribing them adds zero unique signal.
+- **Prepared remarks** are 1:1 reproducible from the press release + investor deck. Re-transcribing them adds zero unique signal.
 - **Q&A** is the unique audio-only content — analysts probing the edges of management's prepared message — and is exactly what say-do consistency analysis needs.
 - Aggregators publish Q&A pre-segmented and **speaker-tagged** (e.g. `B Bipul Sinha`, `F Fatima Boolani`), which is structurally cleaner than diarising audio.
 - Cost: $0 + ~1 second per quarter vs ~25 min of CPU + audio download + Whisper.

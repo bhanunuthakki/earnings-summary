@@ -60,11 +60,7 @@ User decision: stick to free search only. Paid sources are out of scope and will
    - Cross-check competitive script-volume commentary in LLY earnings calls
    - LLY reports tirzepatide volume + share commentary that's the cleanest competitive proxy
 
-4. **`execution/extract_market_signals_from_transcripts.py`** — LLM-based extraction:
-   - Reads NVO + LLY transcripts from existing pipeline
-   - Extracts structured signals: script-volume mentions, price/unit commentary, share commentary, manufacturing capacity
-   - Output: `.tmp/glp1_market_signals/<ticker>_<period>.json`
-   - Refresh cadence: per-quarter (after each transcript fetch)
+4. **GLP-1 market-signal extraction from transcripts** — was exploratory and never integrated; the dedicated script (`extract_market_signals_from_transcripts.py`) was retired in the cleanup pass. The signals it aimed to capture (script-volume, price/unit, share, manufacturing capacity) can be surfaced by extending the per-ticker enhancement pattern in `directives/per_ticker_enhancements.md` (write JSON to `data/ticker_specific/NVO/market_signals.json`; the brief's §9 bear-case prompt picks it up automatically).
 
 ### Phase 2: Paid sources (CANCELLED)
 
@@ -128,5 +124,5 @@ class MarketSignal(BaseModel):
 
 - Directive: drafted 2026-05-04
 - LLY watchlist + IR target: COMPLETE 2026-05-04
-- Phase 1 scripts (`fetch_drug_patent_status.py`, `extract_nvo_patent_timeline.py`, `extract_market_signals_from_transcripts.py`): NOT YET WRITTEN — implementation awaits explicit user sign-off
+- Phase 1 scripts: `extract_nvo_patent_timeline.py` SHIPPED (writes `data/ticker_specific/NVO/patent_timeline.json` — see `directives/per_ticker_enhancements.md`); `fetch_drug_patent_status.py` STILL PRESENT (auxiliary); `extract_market_signals_from_transcripts.py` RETIRED — re-implement as a per-ticker enhancement if needed
 - Phase 2: CANCELLED
