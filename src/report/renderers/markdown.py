@@ -12,6 +12,7 @@ from io import StringIO
 from report.models import (
     AppendixSection,
     BearCaseSection,
+    CompanyDescriptionSection,
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
@@ -27,6 +28,7 @@ from report.models import (
     SectionStatus,
     SegmentSeries,
     SegmentsSection,
+    SegmentWeighting,
     SnapshotSection,
     ThesisSection,
     TranscriptEntry,
@@ -41,6 +43,7 @@ def render(spec: ReportSpec) -> str:
         _evaluation_snapshot(out, spec.evaluation_snapshot)
     else:
         _snapshot(out, spec.snapshot)
+    _company_description(out, spec.company_description)
     _thesis(out, spec.thesis)
     _financials(out, spec.financials)
     _segments(out, spec.segments)
@@ -214,8 +217,48 @@ def _fmt_compact_usd(v: float) -> str:
     return f"{v:,.0f}"
 
 
+def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:
+    _section_header(out, 2, "Company description", s.status)
+    if _missing_block(out, s.status, s.missing):
+        return
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {s.sector}")
+    if s.industry:
+        chips.append(f"Industry: {s.industry}")
+    if s.source_fiscal_year is not None:
+        chips.append(f"Source: 10-K FY{s.source_fiscal_year}")
+    if chips:
+        out.write(f"_{' · '.join(chips)}_\n\n")
+    if s.elevator_pitch:
+        out.write(f"> {s.elevator_pitch}\n\n")
+    if s.business_overview:
+        out.write("### Lines of business\n\n")
+        out.write(s.business_overview.strip() + "\n\n")
+    if s.revenue_model:
+        out.write("### How it makes money\n\n")
+        out.write(s.revenue_model.strip() + "\n\n")
+    if s.segment_breakdown:
+        out.write("### Segment weighting (latest quarter)\n\n")
+        _weighting_table_md(out, s.segment_breakdown, label="Segment")
+    if s.geographic_breakdown:
+        out.write("### Geographic weighting (latest quarter)\n\n")
+        _weighting_table_md(out, s.geographic_breakdown, label="Geography")
+
+
+def _weighting_table_md(out: StringIO, rows: list[SegmentWeighting], label: str) -> None:
+    out.write(f"| {label} | Revenue (USD M) | Share | Description |\n")
+    out.write("|---|---|---|---|\n")
+    for r in rows:
+        rev = _fmt_num(r.revenue_usd_m, 0)
+        share = "—" if r.share_pct is None else f"{r.share_pct * 100:.1f}%"
+        desc = r.description.replace("|", "\\|") if r.description else "—"
+        out.write(f"| **{r.name}** | {rev} | {share} | {desc} |\n")
+    out.write("\n")
+
+
 def _thesis(out: StringIO, s: ThesisSection) -> None:
-    _section_header(out, 2, "Thesis & tier-1 KPIs", s.status)
+    _section_header(out, 3, "Thesis & tier-1 KPIs", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.thesis_full:
@@ -288,7 +331,7 @@ def _kpi_ledger(out: StringIO, rows: list[KpiLedgerRow]) -> None:
 
 
 def _financials(out: StringIO, s: FinancialsSection) -> None:
-    _section_header(out, 3, "Financials — last 12 quarters", s.status)
+    _section_header(out, 4, "Financials — last 12 quarters", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if not s.line_items:
@@ -317,7 +360,7 @@ def _quarterly_table(out: StringIO, quarters: list[str], rows: list[QuarterlyLin
 
 
 def _segments(out: StringIO, s: SegmentsSection) -> None:
-    _section_header(out, 4, "Segments — last 12 quarters", s.status)
+    _section_header(out, 5, "Segments — last 12 quarters", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for label, group in (
@@ -351,7 +394,7 @@ def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries
 
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:
-    _section_header(out, 5, "Earnings analysis", s.status)
+    _section_header(out, 6, "Earnings analysis", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     cards = list(s.full_quarters) + list(s.digest_quarters)
@@ -382,7 +425,7 @@ def _full_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
 
 
 def _saydo(out: StringIO, s: SayDoSection) -> None:
-    _section_header(out, 6, "Say-Do analysis", s.status)
+    _section_header(out, 7, "Say-Do analysis", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for c in s.cards:
@@ -393,7 +436,7 @@ def _saydo(out: StringIO, s: SayDoSection) -> None:
 
 
 def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
-    _section_header(out, 7, "IR documents", s.status)
+    _section_header(out, 8, "IR documents", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for c in s.cards:
@@ -405,7 +448,7 @@ def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
 
 
 def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
-    _section_header(out, 8, "Recent developments", s.status)
+    _section_header(out, 9, "Recent developments", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.cached_at is not None:
@@ -420,7 +463,7 @@ def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
 
 
 def _bear_case(out: StringIO, s: BearCaseSection) -> None:
-    _section_header(out, 9, "Bear case", s.status)
+    _section_header(out, 10, "Bear case", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for i, fm in enumerate(s.failure_modes, 1):
@@ -439,7 +482,7 @@ def _bear_case(out: StringIO, s: BearCaseSection) -> None:
 
 
 def _provenance(out: StringIO, s: ProvenanceSection) -> None:
-    _section_header(out, 10, "Provenance & data quality", s.status)
+    _section_header(out, 11, "Provenance & data quality", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.coverage:
@@ -473,7 +516,7 @@ def _chk(b: bool) -> str:
 
 def _appendix(out: StringIO, s: AppendixSection) -> None:
     out.write(
-        f"## §11 Appendix — full earnings-call transcripts\n\n_Status: `{s.status.value}`_\n\n"
+        f"## §12 Appendix — full earnings-call transcripts\n\n_Status: `{s.status.value}`_\n\n"
     )
     if s.status != SectionStatus.OK or not s.transcripts:
         out.write("_No transcripts available._\n\n")

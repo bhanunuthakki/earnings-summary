@@ -132,7 +132,59 @@ class EvaluationSnapshotSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §2 Thesis & tier-1 KPIs
+# §2 Company description — LLM-synthesized "what this company does", with
+# expandable segment / geo weighting grounded in latest-period segment_facts.
+# ---------------------------------------------------------------------------
+
+
+class SegmentWeighting(BaseModel):
+    """One row in the segment / geography weighting table.
+
+    `share_pct` is a fraction of the bucket total in [0,1] for the latest
+    period — computed by the section builder from `segment_facts` so the table
+    always reflects current realities even if the LLM-generated descriptions
+    are a quarter or two stale.
+    """
+
+    name: str
+    revenue_usd_m: float | None = None  # latest-period revenue in USD millions
+    share_pct: float | None = None  # share of the bucket (0..1)
+    description: str | None = None  # 1-2 sentence segment description from 10-K
+
+
+class CompanyDescriptionSection(BaseModel):
+    """§2 — "What does this company actually do?"
+
+    Sourced from the FMP 10-K (Nature of Business / Description of Business /
+    Information about Segments narrative) + the FMP profile.json description
+    + latest-period segment_facts for weighting. Synthesized by an LLM call;
+    cached under `data/company_description/{TICKER}.json` keyed by source
+    sha256 so re-renders are free unless the 10-K changes.
+
+    Display contract: `elevator_pitch` is always visible (a 1-2 sentence
+    summary). The remaining fields render inside an expandable `<details>`
+    block so the section stays skimmable for readers who already know the
+    company.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+
+    elevator_pitch: str | None = None  # 1-2 sentence always-visible summary
+    business_overview: str | None = None  # multi-paragraph: lines of business
+    revenue_model: str | None = None  # how they make money
+    segment_breakdown: list[SegmentWeighting] = Field(default_factory=list)
+    geographic_breakdown: list[SegmentWeighting] = Field(default_factory=list)
+
+    # Provenance
+    source_fiscal_year: int | None = None
+    cached_at: datetime | None = None
+    sector: str | None = None  # from FMP profile.json
+    industry: str | None = None  # from FMP profile.json
+
+
+# ---------------------------------------------------------------------------
+# §3 Thesis & tier-1 KPIs
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +233,7 @@ class ThesisSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §3 / §4 Financials & segments — 12-quarter wide-form
+# §4 / §5 Financials & segments — 12-quarter wide-form
 # ---------------------------------------------------------------------------
 
 
@@ -256,7 +308,7 @@ class SegmentsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §5 Earnings analysis
+# §6 Earnings analysis
 # ---------------------------------------------------------------------------
 
 
@@ -272,10 +324,10 @@ class QuarterlyEarningsCard(BaseModel):
 
 
 class EarningsSection(BaseModel):
-    """§5 — LLM summaries only, newest first.
+    """§6 — LLM summaries only, newest first.
 
     Most recent N quarters render in full; older ones collapse to a 1-paragraph
-    digest. Full transcripts live in the appendix; pairwise Say-Do lives in §6.
+    digest. Full transcripts live in the appendix; pairwise Say-Do lives in §7.
     """
 
     status: SectionStatus
@@ -305,7 +357,7 @@ class SayDoCard(BaseModel):
 
 
 class SayDoSection(BaseModel):
-    """§6 — pairwise Say-Do analyses across the available quarter sequence,
+    """§7 — pairwise Say-Do analyses across the available quarter sequence,
     newest first."""
 
     status: SectionStatus
@@ -314,7 +366,7 @@ class SayDoSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §7 IR documents
+# §8 IR documents
 # ---------------------------------------------------------------------------
 
 
@@ -334,7 +386,7 @@ class IrDocsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §9 Bear case
+# §10 Bear case
 # ---------------------------------------------------------------------------
 
 
@@ -355,7 +407,7 @@ class BearCaseSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §8 Recent developments (WebSearch-driven news brief, 7d cache)
+# §9 Recent developments (WebSearch-driven news brief, 7d cache)
 # ---------------------------------------------------------------------------
 
 
@@ -376,7 +428,7 @@ class RecentDevelopmentsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §10 Provenance & data quality
+# §11 Provenance & data quality
 # ---------------------------------------------------------------------------
 
 
@@ -408,7 +460,7 @@ class ProvenanceSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §11 Appendix — full older quarter content (transcripts + analyses)
+# §12 Appendix — full older quarter content (transcripts + analyses)
 # ---------------------------------------------------------------------------
 
 
@@ -422,7 +474,7 @@ class TranscriptEntry(BaseModel):
 
 
 class AppendixSection(BaseModel):
-    """§11 — full earnings-call transcripts, collapsible per quarter, newest first.
+    """§12 — full earnings-call transcripts, collapsible per quarter, newest first.
 
     Embedded inline (not a separate file) so the deliverable is a single
     self-contained HTML doc.
@@ -448,6 +500,7 @@ class ReportSpec(BaseModel):
 
     snapshot: SnapshotSection
     evaluation_snapshot: EvaluationSnapshotSection | None = None
+    company_description: CompanyDescriptionSection
     thesis: ThesisSection
     financials: FinancialsSection
     segments: SegmentsSection

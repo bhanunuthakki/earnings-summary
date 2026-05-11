@@ -241,6 +241,7 @@ def _build_one(
         "dcf_xlsx": str(xlsx_path),
         "section_status": {
             "snapshot": spec.snapshot.status.value,
+            "company_description": spec.company_description.status.value,
             "thesis": spec.thesis.status.value,
             "financials": spec.financials.status.value,
             "segments": spec.segments.status.value,
@@ -309,6 +310,7 @@ def _section_status_map(spec: object) -> dict[str, str]:
     """Extract {section_name: status_value} from a ReportSpec, safely."""
     sections = (
         "snapshot",
+        "company_description",
         "thesis",
         "financials",
         "segments",

@@ -14,6 +14,7 @@ from report.models import ReportFlavor, ReportSpec
 from report.sections import (
     appendix,
     bear_case,
+    company_description,
     earnings,
     evaluation_snapshot,
     financials,
@@ -48,7 +49,7 @@ def build_report(
     fallback). Default off so dev runs don't burn subscription quota or
     wall-time on the synthesis step.
 
-    `news_days` is the WebSearch lookback window for the §8 recent-developments
+    `news_days` is the WebSearch lookback window for the §9 recent-developments
     section. `news_cache_ttl_days` controls how long that section's on-disk
     cache stays fresh between regenerations; `refresh_news=True` bypasses
     the cache for this build.
@@ -63,6 +64,7 @@ def build_report(
     evaluation_snapshot_section = (
         evaluation_snapshot.build(ticker, repo_root) if flavor == ReportFlavor.EVALUATION else None
     )
+    company_description_section = company_description.build(ticker, repo_root)
     thesis_section = thesis.build(ticker, repo_root)
     financials_section = financials.build(ticker, repo_root)
     segments_section = segments.build(ticker, repo_root)
@@ -96,6 +98,7 @@ def build_report(
         flavor=flavor,
         snapshot=snapshot_section,
         evaluation_snapshot=evaluation_snapshot_section,
+        company_description=company_description_section,
         thesis=thesis_section,
         financials=financials_section,
         segments=segments_section,
