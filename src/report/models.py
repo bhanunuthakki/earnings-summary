@@ -25,6 +25,19 @@ class SectionStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"  # ticker doesn't have this kind of data
 
 
+class ReportFlavor(str, Enum):
+    """Which brief shape to render.
+
+    PORTFOLIO renders the full §1 Snapshot (verdict, thesis, KPI strip).
+    EVALUATION renders an EvaluationSnapshot at §1 instead — a 3y quick-
+    categorization data table for "should I spend more time on this name?"
+    screening. The rest of the brief renders identically.
+    """
+
+    PORTFOLIO = "portfolio"
+    EVALUATION = "evaluation"
+
+
 class MissingReason(BaseModel):
     """Why a section is missing data + how to fix it."""
 
@@ -68,6 +81,48 @@ class SnapshotSection(BaseModel):
     verdict: Literal["intact", "watch", "broken", "pending"] = "pending"
     valuation: ValuationSnapshot
     tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# §1 Evaluation snapshot (eval flavor only — replaces §1 Snapshot for
+# new-name screening: 3y quick-categorization data table over ratios + metrics)
+# ---------------------------------------------------------------------------
+
+
+class QuickCategorizationRow(BaseModel):
+    """One row of the eval-flavor §1 data table.
+
+    Values are aligned to columns: lfy_minus_2, lfy_minus_1, lfy, ttm.
+    `cagr_3y` is the LFY-2 → LFY CAGR when meaningful (absolute series only —
+    margin/ratio CAGRs are not useful and stay None).
+    """
+
+    metric: str  # e.g. "Revenue", "EPS diluted", "Operating margin"
+    unit: str  # "USD M", "USD", "%"
+    digits: int = 0  # display precision
+    lfy_minus_2: float | None = None
+    lfy_minus_1: float | None = None
+    lfy: float | None = None
+    ttm: float | None = None
+    cagr_3y: float | None = None  # decimal (0.12 = +12%)
+
+
+class EvaluationSnapshotSection(BaseModel):
+    """§1 for `flavor=evaluation` — 3y quick-categorization data table.
+
+    Intended for new-name screening before deeper diligence. Pulled from the
+    `metrics` and `ratios` views; no LLM in this section.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    ticker: str
+    company_name: str | None = None
+    sector: str | None = None
+    market_cap: float | None = None
+    current_price: float | None = None
+    rows: list[QuickCategorizationRow] = Field(default_factory=list)
+    fiscal_years: list[int] = Field(default_factory=list)  # 3 years [LFY-2, LFY-1, LFY]
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +292,9 @@ class SayDoCard(BaseModel):
     prior_year: int
     saydo_md: str
     rating: Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"] = "unknown"
-    thesis_view: str | None = None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
+    thesis_view: str | None = (
+        None  # "Bullish" / "Bearish" / "Neutral" (free text after "Thesis View:")
+    )
     attribution: str | None = None  # one-line excerpt after "Attribution:"
 
 
@@ -251,7 +308,7 @@ class SayDoSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §6 IR documents
+# §7 IR documents
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +328,7 @@ class IrDocsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §7 Bear case
+# §9 Bear case
 # ---------------------------------------------------------------------------
 
 
@@ -292,7 +349,28 @@ class BearCaseSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §8 Provenance & data quality
+# §8 Recent developments (WebSearch-driven news brief, 7d cache)
+# ---------------------------------------------------------------------------
+
+
+class RecentDevelopmentsSection(BaseModel):
+    """News + recent-developments brief sourced via Claude WebSearch.
+
+    Cached under `.tmp/news_cache/<TICKER>.json` with `cached_at` so that
+    successive brief regenerations within the TTL reuse the cached content.
+    `content_md` is rendered as-is in the HTML (sources inline as URLs in the
+    LLM output); no structural parsing keeps the section schema thin.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    cached_at: datetime | None = None
+    news_days_window: int = 7
+    content_md: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# §10 Provenance & data quality
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +402,7 @@ class ProvenanceSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# §9 Appendix — full older quarter content (transcripts + analyses)
+# §11 Appendix — full older quarter content (transcripts + analyses)
 # ---------------------------------------------------------------------------
 
 
@@ -338,7 +416,7 @@ class TranscriptEntry(BaseModel):
 
 
 class AppendixSection(BaseModel):
-    """§9 — full earnings-call transcripts, collapsible per quarter, newest first.
+    """§11 — full earnings-call transcripts, collapsible per quarter, newest first.
 
     Embedded inline (not a separate file) so the deliverable is a single
     self-contained HTML doc.
@@ -360,14 +438,17 @@ class ReportSpec(BaseModel):
     generation_date: date
     repo_root: str  # absolute path the build read from
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
+    flavor: ReportFlavor = ReportFlavor.PORTFOLIO
 
     snapshot: SnapshotSection
+    evaluation_snapshot: EvaluationSnapshotSection | None = None
     thesis: ThesisSection
     financials: FinancialsSection
     segments: SegmentsSection
     earnings: EarningsSection
     saydo: SayDoSection
     ir_docs: IrDocsSection
+    recent_developments: RecentDevelopmentsSection
     bear_case: BearCaseSection
     provenance: ProvenanceSection
     appendix: AppendixSection

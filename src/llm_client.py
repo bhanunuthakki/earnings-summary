@@ -45,6 +45,7 @@ from datetime import date
 # users to re-install for the fallback path. See:
 # https://github.com/google-gemini/deprecated-generative-ai-python
 import warnings
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
     import google.generativeai as genai
@@ -85,20 +86,20 @@ FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 #       (intake classification, per-line entity extraction).
 LLM_MODELS: dict[str, str] = {
     # Long-context analytical writing
-    "transcript_summary":      DEFAULT_MODEL,
-    "press_release_summary":   DEFAULT_MODEL,
-    "presentation_brief":      DEFAULT_MODEL,
-    "pairwise_analysis":       DEFAULT_MODEL,
-    "strategic_analysis":      DEFAULT_MODEL,
-    "thesis_pass_a":           DEFAULT_MODEL,
-    "thesis_pass_b":           DEFAULT_MODEL,
-    "bear_case":               DEFAULT_MODEL,
-    "event_brief":             DEFAULT_MODEL,
+    "transcript_summary": DEFAULT_MODEL,
+    "press_release_summary": DEFAULT_MODEL,
+    "presentation_brief": DEFAULT_MODEL,
+    "pairwise_analysis": DEFAULT_MODEL,
+    "strategic_analysis": DEFAULT_MODEL,
+    "thesis_pass_a": DEFAULT_MODEL,
+    "thesis_pass_b": DEFAULT_MODEL,
+    "bear_case": DEFAULT_MODEL,
+    "event_brief": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
-    "intake_classifier":       FAST_CLASSIFIER_MODEL,
-    "transcript_metadata":     FAST_CLASSIFIER_MODEL,
-    "market_signals":          FAST_CLASSIFIER_MODEL,
-    "patent_timeline":         FAST_CLASSIFIER_MODEL,
+    "intake_classifier": FAST_CLASSIFIER_MODEL,
+    "transcript_metadata": FAST_CLASSIFIER_MODEL,
+    "market_signals": FAST_CLASSIFIER_MODEL,
+    "patent_timeline": FAST_CLASSIFIER_MODEL,
 }
 
 
@@ -108,13 +109,16 @@ def _model_for(purpose: str) -> str:
     fallback is logged so the gap surfaces in observability."""
     model = LLM_MODELS.get(purpose)
     if model is None:
-        log.warning({
-            "event": "llm_model_purpose_unknown",
-            "purpose": purpose,
-            "fallback": DEFAULT_MODEL,
-        })
+        log.warning(
+            {
+                "event": "llm_model_purpose_unknown",
+                "purpose": purpose,
+                "fallback": DEFAULT_MODEL,
+            }
+        )
         return DEFAULT_MODEL
     return model
+
 
 # Default per-call timeout (seconds). Long-context thesis prompts can take
 # a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
@@ -126,11 +130,13 @@ DEFAULT_TIMEOUT_SECONDS = 1200
 # meant for the human reviewer (why a schema was edited, when it was last
 # revised) and bloat the prompt without aiding the analysis. Centralized so
 # both passes apply the same redaction.
-SCHEMA_LLM_REDACT_FIELDS: frozenset[str] = frozenset({
-    "thesis_status_note",
-    "schema_revision_notes",
-    "last_updated",
-})
+SCHEMA_LLM_REDACT_FIELDS: frozenset[str] = frozenset(
+    {
+        "thesis_status_note",
+        "schema_revision_notes",
+        "last_updated",
+    }
+)
 
 # Markdown JSON-fence stripper — `claude -p` occasionally wraps structured
 # JSON responses in ```json ... ``` fences even when asked not to. Used by
@@ -205,11 +211,13 @@ def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
             "See .env.example."
         ) from claude_error
 
-    log.warning({
-        "event": "claude_cli_failed_falling_back_to_gemini",
-        "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
-        "gemini_model": GEMINI_FALLBACK_MODEL,
-    })
+    log.warning(
+        {
+            "event": "claude_cli_failed_falling_back_to_gemini",
+            "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
+            "gemini_model": GEMINI_FALLBACK_MODEL,
+        }
+    )
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
     response = model_obj.generate_content(prompt)
@@ -257,7 +265,9 @@ def _call_claude(
         )
         text = result.stdout.strip()
         if not text:
-            raise RuntimeError(f"claude -p returned empty stdout. stderr: {result.stderr.strip()[:200]}")
+            raise RuntimeError(
+                f"claude -p returned empty stdout. stderr: {result.stderr.strip()[:200]}"
+            )
         log.info({"event": "llm_call_done", "response_chars": len(text)})
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError) as claude_error:
@@ -334,8 +344,12 @@ def call_llm_with_web(
     assert _claude_cli_path is not None
     log.info({"event": "llm_web_call_start", "model": model, "prompt_chars": len(prompt)})
     cmd = [
-        _claude_cli_path, "-p", "--model", model,
-        "--allowedTools", *CLAUDE_WEB_TOOLS.split(),
+        _claude_cli_path,
+        "-p",
+        "--model",
+        model,
+        "--allowedTools",
+        *CLAUDE_WEB_TOOLS.split(),
     ]
     try:
         result = subprocess.run(
@@ -356,10 +370,12 @@ def call_llm_with_web(
         log.info({"event": "llm_web_call_done", "response_chars": len(text)})
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError) as web_err:
-        log.warning({
-            "event": "llm_web_call_fallback_to_plain",
-            "error": f"{type(web_err).__name__}: {web_err}",
-        })
+        log.warning(
+            {
+                "event": "llm_web_call_fallback_to_plain",
+                "error": f"{type(web_err).__name__}: {web_err}",
+            }
+        )
         # Fall through to non-web path so the caller still gets output.
         return _call_claude(prompt, model=model, timeout_seconds=timeout_seconds)
 
@@ -387,10 +403,10 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
 
     **Input Data:**
     1.  **Previous Quarter ({prev_q_str}) Summary:**
-        {prev_summary['text']}
+        {prev_summary["text"]}
 
     2.  **Current Quarter ({curr_q_str}) Summary:**
-        {curr_summary['text']}
+        {curr_summary["text"]}
 
     **Output Format (Strict Markdown):**
     ## Analysis: {prev_q_str} vs {curr_q_str}
@@ -612,7 +628,9 @@ _ADVERSARIAL_LOOP_FORMAT_BLOCK = """**Adversarial Loop format (use these exact f
 """
 
 
-def _compute_staleness(report_date: str, corpus_latest_date: str | None) -> tuple[int, bool, str, str]:
+def _compute_staleness(
+    report_date: str, corpus_latest_date: str | None
+) -> tuple[int, bool, str, str]:
     """
     Returns (staleness_days, is_stale, staleness_line, staleness_directive).
     Centralized so both passes apply the same staleness regime.
@@ -683,7 +701,9 @@ def _build_pass_a_prompt(
 ) -> str:
     """Pass A — evidence tables. Schema Hygiene, Tier-1 Scorecard, Key Developments, Breakers, Competitive."""
     thesis_text = _serialize_schema_for_llm(schema)
-    scorecard_target_col = "vs. Latest Disclosed Forward Target" if is_stale else "vs. Break Threshold"
+    scorecard_target_col = (
+        "vs. Latest Disclosed Forward Target" if is_stale else "vs. Break Threshold"
+    )
     scorecard_staleness_col = "Staleness Adjustment | " if is_stale else ""
     scorecard_staleness_sep = "--- | " if is_stale else ""
     scorecard_distance_phrase = (
@@ -867,14 +887,16 @@ def _assemble_tracker(
     lines = [f"# Micro-Thesis Tracker: {ticker} — {report_date}", ""]
 
     if is_stale:
-        lines.extend([
-            "> **CORPUS STALENESS DISCLAIMER**: latest evidence in this tracker is "
-            f"{corpus_latest_date} — {staleness_days} days stale vs. report date {report_date} "
-            f"(threshold: {STALE_CORPUS_THRESHOLD_DAYS} days). Verdicts apply STALE-CORPUS MODE: "
-            "scorecard compares vs. latest disclosed forward target rather than break thresholds, "
-            "and adversarial-loop conviction is capped at Low absent explicit in-corpus justification.",
-            "",
-        ])
+        lines.extend(
+            [
+                "> **CORPUS STALENESS DISCLAIMER**: latest evidence in this tracker is "
+                f"{corpus_latest_date} — {staleness_days} days stale vs. report date {report_date} "
+                f"(threshold: {STALE_CORPUS_THRESHOLD_DAYS} days). Verdicts apply STALE-CORPUS MODE: "
+                "scorecard compares vs. latest disclosed forward target rather than break thresholds, "
+                "and adversarial-loop conviction is capped at Low absent explicit in-corpus justification.",
+                "",
+            ]
+        )
 
     lines.append(pass_b.strip())
     lines.append("")
@@ -920,8 +942,14 @@ def generate_thesis_update(
     quarters_context = _format_quarter_context(quarters)
 
     pass_a_prompt = _build_pass_a_prompt(
-        ticker, schema, quarters, report_date,
-        staleness_line, is_stale, staleness_directive, quarters_context,
+        ticker,
+        schema,
+        quarters,
+        report_date,
+        staleness_line,
+        is_stale,
+        staleness_directive,
+        quarters_context,
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "A"})
     try:
@@ -929,11 +957,24 @@ def generate_thesis_update(
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass A failed for {ticker}: {e}")
         raise
-    log.info({"event": "thesis_pass_done", "ticker": ticker, "pass": "A", "output_chars": len(pass_a_output)})
+    log.info(
+        {
+            "event": "thesis_pass_done",
+            "ticker": ticker,
+            "pass": "A",
+            "output_chars": len(pass_a_output),
+        }
+    )
 
     pass_b_prompt = _build_pass_b_prompt(
-        ticker, schema, quarters, report_date,
-        staleness_line, staleness_directive, quarters_context, pass_a_output,
+        ticker,
+        schema,
+        quarters,
+        report_date,
+        staleness_line,
+        staleness_directive,
+        quarters_context,
+        pass_a_output,
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "B"})
     try:
@@ -941,11 +982,23 @@ def generate_thesis_update(
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
-    log.info({"event": "thesis_pass_done", "ticker": ticker, "pass": "B", "output_chars": len(pass_b_output)})
+    log.info(
+        {
+            "event": "thesis_pass_done",
+            "ticker": ticker,
+            "pass": "B",
+            "output_chars": len(pass_b_output),
+        }
+    )
 
     return _assemble_tracker(
-        ticker, report_date, is_stale, staleness_days, corpus_latest_date,
-        pass_a_output, pass_b_output,
+        ticker,
+        report_date,
+        is_stale,
+        staleness_days,
+        corpus_latest_date,
+        pass_a_output,
+        pass_b_output,
     )
 
 
@@ -1104,6 +1157,45 @@ Event Document Text:
         raise
 
 
+def generate_recent_developments(ticker: str, news_days: int = 7) -> str:
+    """Recent-developments brief sourced via Claude WebSearch + WebFetch.
+
+    Routes through `call_llm_with_web` so the model can pull current news
+    from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
+    cite URLs inline. On Claude failure, `call_llm_with_web` falls back to
+    plain `_call_claude` (no web), then to Gemini per the standard chain.
+
+    Used by the §8 Recent developments section. Output is markdown, with
+    sources as inline links the section renderer passes through unchanged.
+    """
+    prompt = f"""You are a senior equity analyst preparing a recent-developments brief for {ticker}.
+
+Search the web for {ticker} news from the last {news_days} days. Prioritize Bloomberg,
+Reuters, CNBC, FT, WSJ, and company press releases. Skip blog spam, opinion pieces with
+no new information, and anything older than {news_days} days.
+
+**Output Format (Strict Markdown):**
+
+### Material news
+- [headline] — [1-sentence what & implication for the thesis] [Source: outlet, YYYY-MM-DD, URL]
+- ... (3-7 items, newest first; only items that could plausibly shift the thesis or valuation)
+
+### Sector / regulatory context
+- [optional 1-3 items if relevant — e.g., FDA decision affecting peer, sector ETF flows, macro]
+
+### Watch this week
+- [1-3 items: upcoming catalysts, scheduled disclosures, peer earnings within next ~7 days]
+
+If no material news found in the window, write `*No material news in the last {news_days} days.*`
+under "Material news" and skip the other two sections. Do not pad with stale items.
+"""
+    try:
+        return call_llm_with_web(prompt)
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Recent-developments generation failed for {ticker}: {e}")
+        raise
+
+
 def generate_bear_case(
     ticker: str,
     thesis: str,
@@ -1120,7 +1212,8 @@ def generate_bear_case(
     out_of_scope_flags: list[str]}.
     """
     transcripts_block = "\n\n".join(
-        f"### Quarter {i + 1} (oldest first)\n{s[:6000]}" for i, s in enumerate(last_quarter_summaries)
+        f"### Quarter {i + 1} (oldest first)\n{s[:6000]}"
+        for i, s in enumerate(last_quarter_summaries)
     )
 
     prompt = f"""You are a senior fundamental equity analyst writing the bear case for {ticker}.

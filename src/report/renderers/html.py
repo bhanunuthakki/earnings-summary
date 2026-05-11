@@ -19,19 +19,21 @@ import html
 import re
 from io import StringIO
 
-from report.renderers.charts import CHART_CSS, line_chart, sparkline
 from report.models import (
     AnnualLineItem,
     AppendixSection,
     BearCaseSection,
     BreakRuleEvaluation,
     EarningsSection,
+    EvaluationSnapshotSection,
     FinancialsSection,
     IrDocsSection,
     KpiLedgerRow,
     ProvenanceSection,
     QuarterlyEarningsCard,
     QuarterlyLineItem,
+    RecentDevelopmentsSection,
+    ReportFlavor,
     ReportSpec,
     SayDoSection,
     SectionStatus,
@@ -41,6 +43,7 @@ from report.models import (
     ThesisSection,
     TranscriptEntry,
 )
+from report.renderers.charts import CHART_CSS, line_chart, sparkline
 
 _BOLD_RX = re.compile(r"\*\*(.+?)\*\*")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
@@ -50,13 +53,17 @@ def render(spec: ReportSpec) -> str:
     body = StringIO()
     _nav(body)
     _header(body, spec)
-    _snapshot(body, spec.snapshot)
+    if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
+        _evaluation_snapshot(body, spec.evaluation_snapshot)
+    else:
+        _snapshot(body, spec.snapshot)
     _thesis(body, spec.thesis, spec.ticker)
     _financials(body, spec.financials)
     _segments(body, spec.segments)
     _earnings(body, spec.earnings)
     _saydo(body, spec.saydo)
     _ir_docs(body, spec.ir_docs)
+    _recent_developments(body, spec.recent_developments)
     _bear_case(body, spec.bear_case)
     _provenance(body, spec.provenance)
     _appendix(body, spec.appendix)
@@ -89,7 +96,8 @@ def _document(spec: ReportSpec, body: str) -> str:
 """
 
 
-_CSS = """
+_CSS = (
+    """
 :root {
   --bg: #ffffff;
   --fg: #111827;
@@ -248,7 +256,9 @@ details.seg-card-def { margin-top: 8px; padding-top: 6px; border-top: 1px dashed
 details.seg-card-def summary { font-size: 11px; color: var(--muted); }
 details.seg-card-def p { font-size: 11.5px; line-height: 1.4; margin: 6px 0 0; color: var(--fg); }
 .seg-def-mark { font-size: 11px; vertical-align: super; opacity: 0.6; cursor: help; }
-""" + CHART_CSS + """
+"""
+    + CHART_CSS
+    + """
 .summary-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -291,6 +301,7 @@ pre.transcript {
   details > *:not(summary) { display: block !important; }
 }
 """
+)
 
 
 def _nav(out: StringIO) -> None:
@@ -302,9 +313,10 @@ def _nav(out: StringIO) -> None:
         ("earnings", "§5 Earnings"),
         ("saydo", "§6 Say-Do"),
         ("ir-docs", "§7 IR docs"),
-        ("bear-case", "§8 Bear case"),
-        ("provenance", "§9 Provenance"),
-        ("appendix", "§10 Transcripts"),
+        ("recent-developments", "§8 Recent developments"),
+        ("bear-case", "§9 Bear case"),
+        ("provenance", "§10 Provenance"),
+        ("appendix", "§11 Transcripts"),
     ]
     out.write('<nav class="toc">')
     for anchor, label in sections:
@@ -316,7 +328,7 @@ def _header(out: StringIO, spec: ReportSpec) -> None:
     out.write(f"<h1>{html.escape(spec.ticker)} — research report</h1>\n")
     out.write(
         f'<p class="meta">Generated {html.escape(spec.generation_date.isoformat())} · '
-        f'repo <code>{html.escape(spec.repo_root)}</code></p>\n'
+        f"repo <code>{html.escape(spec.repo_root)}</code></p>\n"
     )
 
 
@@ -371,11 +383,7 @@ def _md_block(text: str) -> str:
             continue
         if stripped.startswith("####"):
             out.write(f"<h5>{_md_inline(stripped.lstrip('#').strip())}</h5>\n")
-        elif stripped.startswith("###"):
-            out.write(f"<h4>{_md_inline(stripped.lstrip('#').strip())}</h4>\n")
-        elif stripped.startswith("##"):
-            out.write(f"<h4>{_md_inline(stripped.lstrip('#').strip())}</h4>\n")
-        elif stripped.startswith("#"):
+        elif stripped.startswith("###") or stripped.startswith("##") or stripped.startswith("#"):
             out.write(f"<h4>{_md_inline(stripped.lstrip('#').strip())}</h4>\n")
         else:
             out.write(f"<p>{_md_inline(stripped)}</p>\n")
@@ -424,7 +432,7 @@ def _missing_callout(out: StringIO, status: SectionStatus, missing: object) -> b
     fix = html.escape(str(getattr(missing, "fix_command", "")))
     detail = getattr(missing, "detail", None)
     out.write(f'<div class="callout"><strong>Pending stage:</strong> <code>{stage}</code><br>')
-    out.write(f'<strong>Fix:</strong> <code>{fix}</code>')
+    out.write(f"<strong>Fix:</strong> <code>{fix}</code>")
     if detail:
         out.write(f"<br>{html.escape(str(detail))}")
     out.write("</div>\n")
@@ -449,23 +457,94 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
-        f'<p><strong>{html.escape(s.ticker)}</strong> — {html.escape(s.company_name or "—")}</p>\n'
+        f"<p><strong>{html.escape(s.ticker)}</strong> — {html.escape(s.company_name or '—')}</p>\n"
     )
     out.write(
-        f'<p><strong>Verdict:</strong> '
+        f"<p><strong>Verdict:</strong> "
         f'<span class="status-badge status-{_verdict_class(s.verdict)}">{s.verdict}</span></p>\n'
     )
     if s.thesis_one_liner:
-        out.write(f'<p><strong>Thesis:</strong> {html.escape(s.thesis_one_liner)}</p>\n')
+        out.write(f"<p><strong>Thesis:</strong> {html.escape(s.thesis_one_liner)}</p>\n")
     if s.valuation.model_link:
         out.write(
             f'<p class="meta">Valuation snapshot, DCF inputs, and segment NPVs live in the workbook: '
-            f'<code>{html.escape(s.valuation.model_link)}</code></p>\n'
+            f"<code>{html.escape(s.valuation.model_link)}</code></p>\n"
         )
 
 
 def _verdict_class(v: str) -> str:
     return {"intact": "ok", "watch": "partial", "broken": "missing_data"}.get(v, "not_applicable")
+
+
+def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
+    """§1 for eval flavor: 3y quick-categorization data table."""
+    _section_h2(out, "snapshot", 1, "Evaluation snapshot", s.status)
+    if _missing_callout(out, s.status, s.missing):
+        return
+    out.write(f"<p><strong>{html.escape(s.ticker)}</strong>")
+    if s.company_name:
+        out.write(f" — {html.escape(s.company_name)}")
+    out.write("</p>\n")
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {html.escape(s.sector)}")
+    if s.market_cap is not None:
+        chips.append(f"Market cap: ${_fmt_compact_usd(s.market_cap)}")
+    if s.current_price is not None:
+        chips.append(f"Current price: ${s.current_price:,.2f}")
+    if chips:
+        out.write(f'<p class="meta">{" · ".join(chips)}</p>\n')
+    if not s.rows:
+        out.write("<p><em>No metric rows available.</em></p>\n")
+        return
+    out.write(
+        '<p class="meta">3-year quick categorization '
+        "(LFY-2 → LFY columns are fiscal-year actuals; TTM is rolling).</p>\n"
+    )
+    year_labels = [str(y) for y in s.fiscal_years]
+    while len(year_labels) < 3:
+        year_labels.insert(0, "—")
+    out.write('<div class="table-wrap"><table>\n<thead><tr>')
+    for h_label in (
+        "Metric",
+        "Unit",
+        year_labels[0],
+        year_labels[1],
+        year_labels[2],
+        "TTM",
+        "3y CAGR",
+    ):
+        out.write(f"<th>{html.escape(h_label)}</th>")
+    out.write("</tr></thead>\n<tbody>")
+    for r in s.rows:
+        out.write("<tr>")
+        out.write(f"<td><strong>{html.escape(r.metric)}</strong></td>")
+        out.write(f"<td>{html.escape(r.unit)}</td>")
+        for v in (r.lfy_minus_2, r.lfy_minus_1, r.lfy, r.ttm):
+            out.write(f'<td class="num">{_fmt_metric(v, r.unit, r.digits)}</td>')
+        out.write(f'<td class="num">{_fmt_pct(r.cagr_3y)}</td>')
+        out.write("</tr>\n")
+    out.write("</tbody></table></div>\n")
+
+
+def _fmt_metric(v: float | None, unit: str, digits: int) -> str:
+    """Format a cell value: ratios as %, absolute numbers with thousands separator."""
+    if v is None:
+        return "—"
+    if unit == "%":
+        return f"{v * 100:.{digits}f}%"
+    return f"{v:,.{digits}f}"
+
+
+def _fmt_compact_usd(v: float) -> str:
+    """Compact USD format: $123B / $45M / $678K."""
+    if abs(v) >= 1e9:
+        return f"{v / 1e9:.1f}B"
+    if abs(v) >= 1e6:
+        return f"{v / 1e6:.0f}M"
+    if abs(v) >= 1e3:
+        return f"{v / 1e3:.0f}K"
+    return f"{v:,.0f}"
 
 
 def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:
@@ -488,7 +567,7 @@ def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:
         out.write("</ul>\n")
     if s.competitive_watchlist:
         out.write(
-            f'<h3>Competitive watchlist</h3><p>{html.escape(", ".join(s.competitive_watchlist))}</p>\n'
+            f"<h3>Competitive watchlist</h3><p>{html.escape(', '.join(s.competitive_watchlist))}</p>\n"
         )
     _break_rules_block(out, s, ticker)
     if s.kpi_ledger:
@@ -509,10 +588,10 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
     """Render the deterministic universal break-rules from thesis_evaluations."""
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
         out.write(
-            '<h3>Universal break rules</h3>\n'
+            "<h3>Universal break rules</h3>\n"
             f'<div class="callout"><strong>Not yet evaluated.</strong> '
-            f'Run <code>python execution/run_thesis_evaluator.py --ticker {html.escape(ticker)}</code> '
-            f'to populate <code>thesis_evaluations</code>.</div>\n'
+            f"Run <code>python execution/run_thesis_evaluator.py --ticker {html.escape(ticker)}</code> "
+            f"to populate <code>thesis_evaluations</code>.</div>\n"
         )
         return
     overall = s.overall_breach_status
@@ -524,7 +603,7 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
         else ""
     )
     out.write(
-        f'<p><strong>Overall:</strong> '
+        f"<p><strong>Overall:</strong> "
         f'<span class="status-badge status-{overall_class}">{overall}</span>{eval_when}</p>\n'
     )
     if not s.break_rule_evaluations:
@@ -562,34 +641,32 @@ def _format_observations(ev: BreakRuleEvaluation) -> str:
     return "<br>".join(cells)
 
 
-
-
 def _kpi_ledger(out: StringIO, rows: list[KpiLedgerRow]) -> None:
     tier_1 = [r for r in rows if r.tier == "tier_1"]
     lower = [r for r in rows if r.tier != "tier_1"]
     out.write("<h3>Tier-1 KPIs (thesis breakers)</h3>\n")
     out.write(
         '<p class="meta">Custom per-thesis KPIs from the holdings JSON. Status fires once '
-        '<code>kpi_facts</code> rows are populated for each name '
-        '(<code>extract_kpis_from_ir.py</code> / <code>derive_kpis_from_fmp.py</code>). '
-        'Universal financial break rules — those that always apply — are evaluated above.</p>\n'
+        "<code>kpi_facts</code> rows are populated for each name "
+        "(<code>extract_kpis_from_ir.py</code> / <code>derive_kpis_from_fmp.py</code>). "
+        "Universal financial break rules — those that always apply — are evaluated above.</p>\n"
     )
     _kpi_table(out, tier_1)
     if lower:
-        out.write(
-            f'<details><summary>Lower-tier KPIs ({len(lower)} hidden by default)</summary>\n'
-        )
+        out.write(f"<details><summary>Lower-tier KPIs ({len(lower)} hidden by default)</summary>\n")
         _kpi_table(out, lower)
         out.write("</details>\n")
 
 
 def _kpi_table(out: StringIO, rows: list[KpiLedgerRow]) -> None:
     out.write('<div class="table-wrap"><table class="kpi-table">\n')
-    out.write("<thead><tr><th>Tier</th><th>KPI</th><th>Source</th><th>Break</th><th>Status</th></tr></thead>\n<tbody>")
+    out.write(
+        "<thead><tr><th>Tier</th><th>KPI</th><th>Source</th><th>Break</th><th>Status</th></tr></thead>\n<tbody>"
+    )
     for r in rows:
         out.write(
-            f'<tr><td>{html.escape(r.tier)}</td><td>{html.escape(r.name)}</td>'
-            f'<td>{html.escape(r.source_hint or "—")}</td><td>{html.escape(r.break_condition or "—")}</td>'
+            f"<tr><td>{html.escape(r.tier)}</td><td>{html.escape(r.name)}</td>"
+            f"<td>{html.escape(r.source_hint or '—')}</td><td>{html.escape(r.break_condition or '—')}</td>"
             f'<td><span class="status-badge status-{_status_class(r.current_status)}">{r.current_status}</span></td></tr>\n'
         )
     out.write("</tbody></table></div>\n")
@@ -610,14 +687,12 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
     if s.line_items:
         out.write(
             f'<details class="financials-table"><summary>Full quarterly table — '
-            f'{len(s.line_items)} line items × {len(s.quarter_labels)} quarters</summary>\n'
+            f"{len(s.line_items)} line items × {len(s.quarter_labels)} quarters</summary>\n"
         )
         _quarterly_table(out, s.quarter_labels, s.line_items)
         out.write("</details>\n")
     if s.annual_line_items:
-        out.write(
-            f'<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n'
-        )
+        out.write(f"<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n")
         _annual_table(out, s.annual_years, s.annual_line_items)
         out.write("</details>\n")
 
@@ -636,7 +711,7 @@ def _financial_charts(
     whatever the holdings JSON requests; the grid layout adapts.
     """
     by_line_item = {li.line_item: li for li in line_items}
-    by_kpi_name = {getattr(s, "name"): s for s in kpi_series}
+    by_kpi_name = {s.name: s for s in kpi_series}
     grid_class = "chart-grid-1col" if len(priorities) == 1 else "chart-grid-2col"
     out.write(f'<div class="{grid_class}">\n')
     for name in priorities:
@@ -692,12 +767,12 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     out.write(
         '<p class="meta">Sorted by latest-quarter magnitude, descending. '
         'Segments contributing &lt;1% of the bucket roll up into "Other". '
-        'Click each bucket to expand the table; the snapshot panel is always visible.'
+        "Click each bucket to expand the table; the snapshot panel is always visible."
     )
     if s.segment_definitions and s.segment_definitions_fiscal_year:
         out.write(
-            f' Hover a segment name with the <code>📖</code> mark for the 10-K '
-            f'definition (FY{s.segment_definitions_fiscal_year}).'
+            f" Hover a segment name with the <code>📖</code> mark for the 10-K "
+            f"definition (FY{s.segment_definitions_fiscal_year})."
         )
     out.write("</p>\n")
     for label, group, anchor in (
@@ -721,7 +796,9 @@ def _segment_bucket(
     """One bucket: snapshot panel (visible) + full table (in <details>)."""
     out.write(f'<h3 id="seg-{anchor}">{html.escape(label)}</h3>\n')
     _segment_snapshot_panel(out, quarters, rows, definitions)
-    out.write(f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n')
+    out.write(
+        f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n'
+    )
     _segments_table(out, quarters, rows, definitions)
     out.write("</details>\n")
 
@@ -747,7 +824,7 @@ def _segment_snapshot_panel(
             f'<div class="seg-card-name">{_segment_name_with_def(r.segment_name, definitions)}</div>'
             f'<div class="seg-card-spark">{spark}</div>'
             f'<div class="seg-card-row"><span>{html.escape(latest_label)}</span>'
-            f'<strong>{latest_str}</strong></div>'
+            f"<strong>{latest_str}</strong></div>"
             f'<div class="seg-card-row"><span>Share</span><strong>{share_str}</strong></div>'
             f'<div class="seg-card-row"><span>YoY</span><strong>{yoy_str}</strong></div>'
         )
@@ -755,7 +832,7 @@ def _segment_snapshot_panel(
         if definition:
             out.write(
                 f'<details class="seg-card-def"><summary>10-K definition</summary>'
-                f'<p>{html.escape(definition)}</p></details>'
+                f"<p>{html.escape(definition)}</p></details>"
             )
         out.write("</div>")
     out.write("</div>\n")
@@ -801,8 +878,8 @@ def _segments_table(
     out.write("</tr></thead>\n<tbody>")
     for r in rows:
         out.write(
-            f'<tr><td>{_segment_name_with_def(r.segment_name, definitions)}</td>'
-            f'<td>{sparkline(r.values, width=100, height=24)}</td>'
+            f"<tr><td>{_segment_name_with_def(r.segment_name, definitions)}</td>"
+            f"<td>{sparkline(r.values, width=100, height=24)}</td>"
         )
         for v in r.values:
             out.write(f'<td class="num">{_fmt_num(v, 0)}</td>')
@@ -818,7 +895,7 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
         return
     out.write(
         '<p class="meta">Each quarter shows its executive-summary digest as the visible '
-        'header; click to expand the full LLM analysis. Newest first. Full transcripts in §10.</p>\n'
+        "header; click to expand the full LLM analysis. Newest first. Full transcripts in §11.</p>\n"
     )
     cards = list(s.full_quarters) + list(s.digest_quarters)
     cards.sort(key=lambda c: (c.year, c.quarter), reverse=True)
@@ -829,7 +906,9 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
 def _earnings_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
     """Uniform card: digest is always visible inside <summary>, full body expands."""
     digest_html = _md_block(q.digest_md) if q.digest_md else ""
-    summary_html = _md_block(q.summary_md) if q.summary_md else "<p><em>No LLM summary cached.</em></p>"
+    summary_html = (
+        _md_block(q.summary_md) if q.summary_md else "<p><em>No LLM summary cached.</em></p>"
+    )
     transcript_link = (
         f'<p class="meta">Transcript source: <code>{html.escape(q.transcript_path)}</code></p>'
         if q.transcript_path
@@ -837,9 +916,7 @@ def _earnings_card(out: StringIO, q: QuarterlyEarningsCard) -> None:
     )
     open_attr = " open" if q.is_recent else ""
     out.write(f'<details class="earnings-card"{open_attr}>\n')
-    out.write(
-        f'<summary><span class="earnings-title">{html.escape(q.quarter)} {q.year}</span>'
-    )
+    out.write(f'<summary><span class="earnings-title">{html.escape(q.quarter)} {q.year}</span>')
     if digest_html:
         out.write(f'<div class="earnings-digest">{digest_html}</div>')
     out.write("</summary>\n")
@@ -864,8 +941,8 @@ def _saydo(out: StringIO, s: SayDoSection) -> None:
         out.write(
             f"<tr><td>{html.escape(title)}</td>"
             f'<td><span class="status-badge status-{_rating_class(c.rating)}">{c.rating}</span></td>'
-            f'<td>{html.escape(c.attribution or "—")}</td>'
-            f'<td>{html.escape(c.thesis_view or "—")}</td></tr>\n'
+            f"<td>{html.escape(c.attribution or '—')}</td>"
+            f"<td>{html.escape(c.thesis_view or '—')}</td></tr>\n"
         )
     out.write("</tbody></table></div>\n")
 
@@ -874,7 +951,7 @@ def _saydo(out: StringIO, s: SayDoSection) -> None:
     for c in s.cards:
         title = f"{c.current_quarter} {c.current_year} vs {c.prior_quarter} {c.prior_year}"
         out.write(
-            f'<details><summary>{html.escape(title)} '
+            f"<details><summary>{html.escape(title)} "
             f'<span class="meta">— {c.rating}</span></summary>\n{_md_block(c.saydo_md)}</details>\n'
         )
 
@@ -895,23 +972,48 @@ def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
     for c in s.cards:
         out.write(f"<h3>{html.escape(c.quarter)} {c.year} — {html.escape(c.doc_type)}</h3>\n")
         if c.source_url:
-            out.write(f'<p class="meta">Source: <a href="{html.escape(c.source_url)}">{html.escape(c.source_url)}</a></p>\n')
+            out.write(
+                f'<p class="meta">Source: <a href="{html.escape(c.source_url)}">{html.escape(c.source_url)}</a></p>\n'
+            )
         if c.summary_md:
             out.write(_md_block(c.summary_md))
 
 
+def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
+    _section_h2(out, "recent-developments", 8, "Recent developments", s.status)
+    if _missing_callout(out, s.status, s.missing):
+        return
+    if s.cached_at is not None:
+        out.write(
+            f'<p class="meta">Window: last {s.news_days_window} days. '
+            f"Cached at {html.escape(s.cached_at.isoformat(timespec='seconds'))}.</p>\n"
+        )
+    if s.content_md:
+        out.write(_md_block(s.content_md))
+    else:
+        out.write("<p><em>No content available.</em></p>\n")
+
+
 def _bear_case(out: StringIO, s: BearCaseSection) -> None:
-    _section_h2(out, "bear-case", 8, "Bear case", s.status)
+    _section_h2(out, "bear-case", 9, "Bear case", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     for i, fm in enumerate(s.failure_modes, 1):
         out.write(f"<h3>Failure mode {i}: {html.escape(fm.hypothesis)}</h3>\n<ul>")
         out.write(f"<li><strong>Evidence in data:</strong> {html.escape(fm.evidence_in_data)}</li>")
-        out.write(f"<li><strong>Leading indicator:</strong> {html.escape(fm.leading_indicator)}</li>")
-        out.write(f"<li><strong>Quantitative impact:</strong> {html.escape(fm.quantitative_impact)}</li>")
-        out.write(f"<li><strong>Refutation:</strong> {html.escape(fm.refutation_criteria)}</li></ul>\n")
+        out.write(
+            f"<li><strong>Leading indicator:</strong> {html.escape(fm.leading_indicator)}</li>"
+        )
+        out.write(
+            f"<li><strong>Quantitative impact:</strong> {html.escape(fm.quantitative_impact)}</li>"
+        )
+        out.write(
+            f"<li><strong>Refutation:</strong> {html.escape(fm.refutation_criteria)}</li></ul>\n"
+        )
     if s.most_underweighted:
-        out.write(f"<h3>Most underweighted by consensus</h3><p>{html.escape(s.most_underweighted)}</p>\n")
+        out.write(
+            f"<h3>Most underweighted by consensus</h3><p>{html.escape(s.most_underweighted)}</p>\n"
+        )
     if s.out_of_scope_flags:
         out.write("<h3>Flagged for manual review</h3>\n<ul>")
         for f in s.out_of_scope_flags:
@@ -920,7 +1022,7 @@ def _bear_case(out: StringIO, s: BearCaseSection) -> None:
 
 
 def _provenance(out: StringIO, s: ProvenanceSection) -> None:
-    _section_h2(out, "provenance", 9, "Provenance & data quality", s.status)
+    _section_h2(out, "provenance", 10, "Provenance & data quality", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
     if s.coverage:
@@ -937,7 +1039,7 @@ def _provenance(out: StringIO, s: ProvenanceSection) -> None:
                 f"<td>{_chk(c.step_saydo_analyzed)}</td><td>{_chk(c.step_llm_summarized)}</td></tr>"
             )
         out.write("</tbody></table></div>\n")
-    out.write(f'<p>Open validation issues: <strong>{s.open_validation_issues}</strong></p>\n')
+    out.write(f"<p>Open validation issues: <strong>{s.open_validation_issues}</strong></p>\n")
     out.write(
         f'<p class="meta">Source documents in workbook (Provenance tab): {len(s.source_docs)}.</p>\n'
     )
@@ -948,7 +1050,7 @@ def _chk(b: bool) -> str:
 
 
 def _appendix(out: StringIO, s: AppendixSection) -> None:
-    _section_h2(out, "appendix", 10, "Appendix — full earnings-call transcripts", s.status)
+    _section_h2(out, "appendix", 11, "Appendix — full earnings-call transcripts", s.status)
     if s.status != SectionStatus.OK or not s.transcripts:
         out.write("<p>No transcripts available.</p>\n")
         return
@@ -960,7 +1062,7 @@ def _appendix(out: StringIO, s: AppendixSection) -> None:
 def _transcript_block(out: StringIO, entry: TranscriptEntry) -> None:
     char_count = f"{len(entry.text):,} chars"
     out.write(
-        f'<details><summary>{html.escape(entry.quarter)} {entry.year}'
+        f"<details><summary>{html.escape(entry.quarter)} {entry.year}"
         f' <span class="meta">— {char_count}, source <code>{html.escape(entry.source_path)}</code></span>'
         f'</summary>\n<pre class="transcript">{html.escape(entry.text)}</pre>\n</details>\n'
     )

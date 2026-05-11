@@ -10,16 +10,18 @@ from __future__ import annotations
 from io import StringIO
 
 from report.models import (
-    AnnualLineItem,
     AppendixSection,
     BearCaseSection,
     EarningsSection,
+    EvaluationSnapshotSection,
     FinancialsSection,
     IrDocsSection,
     KpiLedgerRow,
     ProvenanceSection,
     QuarterlyEarningsCard,
     QuarterlyLineItem,
+    RecentDevelopmentsSection,
+    ReportFlavor,
     ReportSpec,
     SayDoSection,
     SectionStatus,
@@ -34,13 +36,17 @@ from report.models import (
 def render(spec: ReportSpec) -> str:
     out = StringIO()
     _header(out, spec)
-    _snapshot(out, spec.snapshot)
+    if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
+        _evaluation_snapshot(out, spec.evaluation_snapshot)
+    else:
+        _snapshot(out, spec.snapshot)
     _thesis(out, spec.thesis)
     _financials(out, spec.financials)
     _segments(out, spec.segments)
     _earnings(out, spec.earnings)
     _saydo(out, spec.saydo)
     _ir_docs(out, spec.ir_docs)
+    _recent_developments(out, spec.recent_developments)
     _bear_case(out, spec.bear_case)
     _provenance(out, spec.provenance)
     _appendix(out, spec.appendix)
@@ -109,6 +115,64 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
         )
 
 
+def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
+    _section_header(out, 1, "Evaluation snapshot", s.status)
+    if _missing_block(out, s.status, s.missing):
+        return
+    out.write(f"**{s.ticker}**")
+    if s.company_name:
+        out.write(f" — {s.company_name}")
+    out.write("\n\n")
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {s.sector}")
+    if s.market_cap is not None:
+        chips.append(f"Market cap: ${_fmt_compact_usd(s.market_cap)}")
+    if s.current_price is not None:
+        chips.append(f"Current price: ${s.current_price:,.2f}")
+    if chips:
+        out.write(f"_{' · '.join(chips)}_\n\n")
+    if not s.rows:
+        out.write("_No metric rows available._\n\n")
+        return
+    year_labels = [str(y) for y in s.fiscal_years]
+    while len(year_labels) < 3:
+        year_labels.insert(0, "—")
+    headers = ["Metric", "Unit", year_labels[0], year_labels[1], year_labels[2], "TTM", "3y CAGR"]
+    out.write("| " + " | ".join(headers) + " |\n")
+    out.write("|" + "|".join(["---"] * len(headers)) + "|\n")
+    for r in s.rows:
+        cells = [
+            f"**{r.metric}**",
+            r.unit,
+            _fmt_metric_md(r.lfy_minus_2, r.unit, r.digits),
+            _fmt_metric_md(r.lfy_minus_1, r.unit, r.digits),
+            _fmt_metric_md(r.lfy, r.unit, r.digits),
+            _fmt_metric_md(r.ttm, r.unit, r.digits),
+            _fmt_pct(r.cagr_3y),
+        ]
+        out.write("| " + " | ".join(cells) + " |\n")
+    out.write("\n")
+
+
+def _fmt_metric_md(v: float | None, unit: str, digits: int) -> str:
+    if v is None:
+        return "—"
+    if unit == "%":
+        return f"{v * 100:.{digits}f}%"
+    return f"{v:,.{digits}f}"
+
+
+def _fmt_compact_usd(v: float) -> str:
+    if abs(v) >= 1e9:
+        return f"{v / 1e9:.1f}B"
+    if abs(v) >= 1e6:
+        return f"{v / 1e6:.0f}M"
+    if abs(v) >= 1e3:
+        return f"{v / 1e3:.0f}K"
+    return f"{v:,.0f}"
+
+
 def _thesis(out: StringIO, s: ThesisSection) -> None:
     _section_header(out, 2, "Thesis & tier-1 KPIs", s.status)
     if _missing_block(out, s.status, s.missing):
@@ -141,7 +205,9 @@ _COMPARATOR_SYMBOL_MD: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge"
 def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
         out.write("### Universal break rules\n\n")
-        out.write("_Not yet evaluated. Run `python execution/run_thesis_evaluator.py --ticker <T>` to populate `thesis_evaluations`._\n\n")
+        out.write(
+            "_Not yet evaluated. Run `python execution/run_thesis_evaluator.py --ticker <T>` to populate `thesis_evaluations`._\n\n"
+        )
         return
     out.write("### Universal break rules\n\n")
     eval_when = (
@@ -164,7 +230,9 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
             latest = "<br>".join(latest_cells)
         else:
             latest = "—"
-        out.write(f"| `{ev.status}` | **{ev.kpi_name}** — {ev.narrative} | {threshold} | {latest} | {ev.detail} |\n")
+        out.write(
+            f"| `{ev.status}` | **{ev.kpi_name}** — {ev.narrative} | {threshold} | {latest} | {ev.detail} |\n"
+        )
     out.write("\n")
 
 
@@ -277,7 +345,9 @@ def _saydo(out: StringIO, s: SayDoSection) -> None:
     if _missing_block(out, s.status, s.missing):
         return
     for c in s.cards:
-        out.write(f"### {c.current_quarter} {c.current_year} vs {c.prior_quarter} {c.prior_year}\n\n")
+        out.write(
+            f"### {c.current_quarter} {c.current_year} vs {c.prior_quarter} {c.prior_year}\n\n"
+        )
         out.write(c.saydo_md.strip() + "\n\n")
 
 
@@ -293,8 +363,23 @@ def _ir_docs(out: StringIO, s: IrDocsSection) -> None:
             out.write(c.summary_md.strip() + "\n\n")
 
 
+def _recent_developments(out: StringIO, s: RecentDevelopmentsSection) -> None:
+    _section_header(out, 8, "Recent developments", s.status)
+    if _missing_block(out, s.status, s.missing):
+        return
+    if s.cached_at is not None:
+        out.write(
+            f"_Window: last {s.news_days_window} days. "
+            f"Cached at {s.cached_at.isoformat(timespec='seconds')}._\n\n"
+        )
+    if s.content_md:
+        out.write(s.content_md.strip() + "\n\n")
+    else:
+        out.write("_No content available._\n\n")
+
+
 def _bear_case(out: StringIO, s: BearCaseSection) -> None:
-    _section_header(out, 8, "Bear case", s.status)
+    _section_header(out, 9, "Bear case", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     for i, fm in enumerate(s.failure_modes, 1):
@@ -313,7 +398,7 @@ def _bear_case(out: StringIO, s: BearCaseSection) -> None:
 
 
 def _provenance(out: StringIO, s: ProvenanceSection) -> None:
-    _section_header(out, 9, "Provenance & data quality", s.status)
+    _section_header(out, 10, "Provenance & data quality", s.status)
     if _missing_block(out, s.status, s.missing):
         return
     if s.coverage:
@@ -332,7 +417,9 @@ def _provenance(out: StringIO, s: ProvenanceSection) -> None:
         out.write("| doc_type | period_end | file_path | sha256 |\n|---|---|---|---|\n")
         for d in s.source_docs[:50]:  # cap to keep the doc reviewable
             sha_prefix = (d.sha256 or "")[:10]
-            out.write(f"| {d.doc_type} | {d.period_end or '—'} | `{d.file_path}` | `{sha_prefix}` |\n")
+            out.write(
+                f"| {d.doc_type} | {d.period_end or '—'} | `{d.file_path}` | `{sha_prefix}` |\n"
+            )
         if len(s.source_docs) > 50:
             out.write(f"\n_…and {len(s.source_docs) - 50} more (see workbook Provenance tab)._\n")
         out.write("\n")
@@ -344,7 +431,9 @@ def _chk(b: bool) -> str:
 
 
 def _appendix(out: StringIO, s: AppendixSection) -> None:
-    out.write(f"## §10 Appendix — full earnings-call transcripts\n\n_Status: `{s.status.value}`_\n\n")
+    out.write(
+        f"## §11 Appendix — full earnings-call transcripts\n\n_Status: `{s.status.value}`_\n\n"
+    )
     if s.status != SectionStatus.OK or not s.transcripts:
         out.write("_No transcripts available._\n\n")
         return

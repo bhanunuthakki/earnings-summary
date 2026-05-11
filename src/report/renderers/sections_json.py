@@ -103,7 +103,7 @@ def _thesis_tab(spec: ReportSpec) -> dict[str, Any]:
 
 
 def _nuance_tab(spec: ReportSpec) -> dict[str, Any]:
-    """Map §7 (bear case) onto the existing 'Nuance' tab."""
+    """Map §9 (bear case) onto the existing 'Nuance' tab."""
     s = spec.bear_case
     return {
         "status": s.status.value,
@@ -115,11 +115,14 @@ def _nuance_tab(spec: ReportSpec) -> dict[str, Any]:
 
 
 def _news_tab(spec: ReportSpec) -> dict[str, Any]:
-    """News tab is fed by §6 IR docs (presentation/press-release briefs)."""
+    """News tab is fed by §8 Recent developments (WebSearch-driven brief)."""
+    s = spec.recent_developments
     return {
-        "status": spec.ir_docs.status.value,
-        "missing": spec.ir_docs.missing.model_dump() if spec.ir_docs.missing else None,
-        "cards": [c.model_dump() for c in spec.ir_docs.cards],
+        "status": s.status.value,
+        "missing": s.missing.model_dump() if s.missing else None,
+        "cached_at": s.cached_at.isoformat() if s.cached_at else None,
+        "news_days_window": s.news_days_window,
+        "content_md": s.content_md,
     }
 
 
