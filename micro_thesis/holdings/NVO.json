@@ -1,7 +1,7 @@
 {
   "ticker": "NVO",
   "name": "Novo Nordisk",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "Long-term holder of the GLP-1 secular growth story at $37-40 cost basis. The bet is (a) global GLP-1 script volume continues compounding faster than price decline, (b) Novo defends share against Lilly through patent extensions in key emerging markets and next-gen pipeline (CagriSema, oral sema for obesity), and (c) the 2026 reset is the price-driven trough, not the structural top.",
   "verdict": "Broken (original thesis); Held under revised volume/share/patent thesis",
   "verdict_color": "red",
@@ -169,5 +169,15 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.085,
+  "mos_bar": 0.3,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 14.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

@@ -1,7 +1,7 @@
 {
   "ticker": "ASML",
   "name": "ASML Holding",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "EUV monopoly + High-NA EUV ramp; thesis is multi-year capacity ramp at $40B+ revenue tied to leading-edge logic + HBM. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -157,5 +157,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

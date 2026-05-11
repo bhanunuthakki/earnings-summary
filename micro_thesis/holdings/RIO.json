@@ -1,7 +1,7 @@
 {
   "ticker": "RIO",
   "name": "Rio Tinto",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Diversified miner with iron ore (Pilbara) + copper ramp (Oyu Tolgoi underground + Resolution); thesis is FCF + copper transition. STUB — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -160,5 +160,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

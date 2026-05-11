@@ -1,7 +1,7 @@
 {
   "ticker": "CFLT",
   "name": "Confluent",
-  "last_updated": "2026-05-09",
+  "last_updated": "2026-05-10",
   "thesis": "Confluent — data streaming SaaS. STUB: needs user-authored thesis. Default key driver: Cloud ARR growth + Flink stream-processing attach. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -111,5 +111,18 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

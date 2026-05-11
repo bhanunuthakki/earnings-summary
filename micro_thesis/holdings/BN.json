@@ -1,7 +1,7 @@
 {
   "ticker": "BN",
   "name": "Brookfield Corporation",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Three reinforcing compounders: (1) BAM fee-related earnings (capital-light, scaling with fundraising), (2) Brookfield Wealth Solutions insurance float earning a spread above cost of float across the cycle, (3) realizations cadence monetizing a $200B+ deployed-capital book on a multi-year cycle. Bet: DE/share grows 15%+ over a cycle with the share buyback closing the persistent NAV discount. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -188,5 +188,15 @@
       "consecutive_periods": 2,
       "narrative": "BAM Fee-Related Earnings growth below 15% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.09,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 15.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

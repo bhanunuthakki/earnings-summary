@@ -1,7 +1,7 @@
 {
   "ticker": "NU",
   "name": "Nu Holdings",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). Three engines: (1) customer count compounding on network effects + low-CAC acquisition, (2) ARPAC (revenue per active customer) ramping as customers add credit + investment products, (3) operating leverage as cost-to-serve stays near-zero. Bet: 25%+ revenue growth with ROE crossing 30% and durable Brazil profitability funding Mexico/Colombia expansion. STUB regenerated from corrupted source — needs user review.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -172,5 +172,15 @@
       "consecutive_periods": 2,
       "narrative": "NPL 90d+ above 7% for 2 consecutive Qs — credit cycle break."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.11,
+  "mos_bar": 0.25,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

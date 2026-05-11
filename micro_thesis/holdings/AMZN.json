@@ -1,7 +1,7 @@
 {
   "ticker": "AMZN",
   "name": "Amazon.com",
-  "last_updated": "2026-05-07",
+  "last_updated": "2026-05-10",
   "thesis": "Three engines: (1) AWS revenue + margin compounding back into the high-30s% operating margin range with AI-workload mix; (2) North-America retail operating margin expanding from regionalization + advertising attach; (3) advertising as a third leg now scaling above $60B run-rate at high incremental margin. Long-cycle capex must produce visible ROI through AWS revenue acceleration, not just AI optionality.",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -174,5 +174,15 @@
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.09,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 20.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }

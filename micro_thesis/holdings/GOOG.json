@@ -1,7 +1,7 @@
 {
   "ticker": "GOOG",
   "name": "Alphabet",
-  "last_updated": "2026-05-04",
+  "last_updated": "2026-05-10",
   "thesis": "Search cash engine remains intact-but-decelerating (still funds the model); the actual investment thesis is (1) GCP margin and revenue expansion catching up to AWS/Azure, (2) Gemini distribution capturing AI query share before search cannibalization compounds, (3) capex absorption — capex must produce visible ROI through cloud margin expansion or compute-as-a-service revenue, (4) Other Bets discipline (Waymo commercializing, burn bounded), with optionality from key private equity stakes (SpaceX, Anthropic).",
   "verdict": "Pending",
   "verdict_color": "gray",
@@ -213,5 +213,15 @@
       "consecutive_periods": 2,
       "narrative": "GCP operating margin below 15% for 2 consecutive Qs — margin expansion stalling."
     }
-  ]
+  ],
+  "schema_version": 2,
+  "wacc": 0.09,
+  "mos_bar": 0.2,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
 }
