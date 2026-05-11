@@ -1,8 +1,9 @@
 """KPI definitions, thresholds, and the per-name source-routing registry.
 
 The registry encodes which KPIs come from FMP vs. IR PDFs vs. transcripts vs.
-manual entry per ticker — drives ingestion routing in execution/run_pipeline.py.
-See directives/data_provenance.md for the source-of-truth taxonomy.
+manual entry per ticker. Persistence runs through `src/pipeline/kpi_persistence.py`;
+INGEST-stage source routing is described in `directives/data_pipeline_dag.md` §Routing.
+See `directives/data_provenance.md` for the source-of-truth taxonomy.
 """
 
 from __future__ import annotations

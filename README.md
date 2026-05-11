@@ -185,9 +185,9 @@ Strict typing is enforced (`pyright` strict + `basedpyright` all). No `Any`, no 
 ## State and idempotency
 
 - Every pipeline run has `run_id = {directive}_{ticker_scope}_{period_end}_{started_at_iso}`.
-- Stage-level keys: `(run_id, ticker, period_end, stage)`. Resumption uses `python execution/run_pipeline.py --resume <run_id>`.
+- Stage-level keys: `(run_id, ticker, period_end, stage)`. Resumption: re-run `python execution/daily_fetch_and_brief.py --ticker <T>`; it queries `stage_transitions` for the run and proceeds from the first stage where `status != ok` (see `directives/data_pipeline_dag.md` §Resumption).
 - Per-source idempotency keys: `directives/data_provenance.md` §4.
-- All ephemeral state lives in `.tmp/`; deliverables live in `transcripts/master/`, `data/`, or cloud destinations. Never mix.
+- All ephemeral state lives in `.tmp/`; deliverables live in `output/research/<TICKER>/` and `data/`. Never mix.
 
 ## Security
 

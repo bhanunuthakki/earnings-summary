@@ -1,7 +1,7 @@
 """§6 Say-Do analysis — pairwise prior-quarter guidance vs current-quarter results.
 
 Sourced from .tmp/SayDo_{TICKER}_Q{prev}_{prev_yr}_Q{curr}_{curr_yr}.txt files
-written by src/main.py during legacy transcript processing. Newest first.
+written by execution/build_saydo_pairs.py from per-quarter LLM summaries. Newest first.
 
 Each card is parsed for the LLM's verdict line so the renderer can show a
 summary table (rating + thesis view) before the per-quarter breakdown.

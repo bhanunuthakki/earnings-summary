@@ -138,10 +138,10 @@ def _create_quarterly_artifacts(cursor: sqlite3.Cursor) -> None:
 
 
 def _create_output_artifacts(cursor: sqlite3.Cursor) -> None:
-    """Per-ticker (not per-quarter) outputs the autopilot/MEMO + TRACK +
-    consolidate stages produce: HTML memos, markdown thesis trackers, and
-    master-transcript PDFs. The consolidator writes into outputs/<TICKER>/
-    and registers the latest of each kind here."""
+    """Per-ticker (not per-quarter) artifact registry: HTML memos, markdown
+    thesis trackers, and master-transcript PDFs. output_consolidator.py
+    copies the latest of each kind into outputs/<TICKER>/ and registers
+    them here so consumers can resolve "latest memo for X" via SQL."""
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS output_artifacts (

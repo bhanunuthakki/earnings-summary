@@ -1,9 +1,8 @@
 """Read the current market price + timestamp for a ticker.
 
-For Phase 3 the only source is the FMP `profile.json` cache. The autopilot
-data pipeline refreshes profile.json on each fetch cycle, so the price
-should be no more than a day stale in normal operation. Phase 4 will add a
-dedicated quote fetcher with its own freshness budget.
+The only source is the FMP `profile.json` cache, refreshed on each FMP
+fetch cycle (save_fmp_data.py / refresh_cache.py), so the price is at most
+one fetch cycle stale in normal operation.
 
 Returns None if the file is missing, malformed, or lacks a usable price.
 """

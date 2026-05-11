@@ -16,7 +16,7 @@ from alias_manager import resolve_ticker
 
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".tmp")
 
-# Legacy transcript-only index (kept for backward compat with run_pipeline / fetch_audio_transcripts)
+# Legacy transcript-only index (kept for backward compat with fetch_audio_transcripts)
 TRANSCRIPT_INDEX_PATH = os.path.join(CACHE_DIR, "transcript_index.json")
 
 # New multi-doc-type index

@@ -3,7 +3,6 @@
 Used by the NVO external-source pipeline (see directives/nvo_external_sources.md):
   - execution/fetch_drug_patent_status.py
   - execution/extract_nvo_patent_timeline.py
-  - execution/extract_market_signals_from_transcripts.py
 """
 
 from __future__ import annotations
