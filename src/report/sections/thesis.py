@@ -9,6 +9,7 @@ status='unknown' — the holdings JSON remains the contract.
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -36,13 +37,15 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
     with open(holdings_path, encoding="utf-8") as f:
         holdings = json.load(f)
 
-    ledger = _build_ledger(ticker, repo_root, holdings)
     overall, evaluations, evaluated_at = _load_break_rule_state(ticker, repo_root)
+    ledger = _build_ledger(ticker, repo_root, holdings, evaluations)
+    thesis_text, stub_warning = _split_stub_warning(holdings)
 
     return ThesisSection(
         status=SectionStatus.OK if ledger else SectionStatus.PARTIAL,
-        thesis_full=holdings.get("thesis"),
+        thesis_full=thesis_text,
         last_updated=_parse_date(holdings.get("last_updated")),
+        stub_warning=stub_warning,
         break_conditions=list(holdings.get("break_conditions") or []),
         competitive_watchlist=list(holdings.get("competitive_watchlist") or []),
         qualitative_breakers=list(holdings.get("thesis_breakers_qualitative") or []),
@@ -51,6 +54,62 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         break_rule_evaluations=evaluations,
         last_evaluated_at=evaluated_at,
     )
+
+
+_STUB_STATUS_VALUES = frozenset({
+    "stub_regenerated_from_corruption",
+    "needs_user_review",
+    "stub",
+})
+
+# Stale inline marker from commit 7b56cae's repair pass — strip it from the thesis
+# text and lift it into a separate banner so the thesis paragraph reads cleanly.
+_INLINE_STUB_MARKER_RX = re.compile(
+    r"\s*\.?\s*STUB(?:\s+regenerated\s+from\s+corrupted\s+source)?\s*(?:[—-]\s*)?"
+    r"needs?\s+user\s+review\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _split_stub_warning(holdings: dict[str, object]) -> tuple[str | None, str | None]:
+    """Return (clean_thesis, banner) extracting any stub-status marker.
+
+    Looks at (a) the explicit `_status` field, (b) any trailing
+    `STUB ... needs user review.` sentence inlined into the thesis text. The
+    cleaned thesis is what § renders; the banner is what shows above it.
+    """
+    status_field = holdings.get("_status")
+    explicit = (
+        str(status_field).strip()
+        if isinstance(status_field, str) and str(status_field).strip().lower() in _STUB_STATUS_VALUES
+        else None
+    )
+
+    raw_thesis = holdings.get("thesis")
+    if not isinstance(raw_thesis, str):
+        return (None, _stub_banner(explicit) if explicit else None)
+
+    cleaned = _INLINE_STUB_MARKER_RX.sub("", raw_thesis).rstrip()
+    if cleaned and not cleaned.endswith("."):
+        cleaned += "."
+    inline_match = cleaned != raw_thesis.rstrip()
+
+    if explicit or inline_match:
+        return (cleaned, _stub_banner(explicit or "stub_regenerated_from_corruption"))
+    return (raw_thesis, None)
+
+
+def _stub_banner(status_value: str) -> str:
+    """Human-readable banner text for the stub-warning callout."""
+    if status_value == "stub_regenerated_from_corruption":
+        return (
+            "This thesis was regenerated as a stub after the original holdings JSON "
+            "was committed corrupt. KPI names, break thresholds, and tier ordering "
+            "are placeholders — please review and replace before treating as ground truth."
+        )
+    if status_value == "needs_user_review":
+        return "This thesis is a stub pending user review."
+    return "This thesis is a stub — review before treating as ground truth."
 
 
 def _parse_date(s: object) -> date | None:
@@ -62,8 +121,30 @@ def _parse_date(s: object) -> date | None:
         return None
 
 
-def _build_ledger(ticker: str, repo_root: Path, holdings: dict[str, object]) -> list[KpiLedgerRow]:
-    """Tier order preserved (1 → 2 → 3); within each tier sorted alphabetically."""
+def _build_ledger(
+    ticker: str,
+    repo_root: Path,
+    holdings: dict[str, object],
+    evaluations: list[BreakRuleEvaluation],
+) -> list[KpiLedgerRow]:
+    """Tier order preserved (1 → 2 → 3); within each tier sorted alphabetically.
+
+    KPI status sources, in priority order:
+      1. Matching break-rule evaluation (by kpi_name) — propagate ok→green,
+         warn→yellow, breach→red.
+      2. Has kpi_facts history → green (data is flowing, but no rule fired).
+      3. Otherwise → unknown.
+    """
+    # Index break-rule evaluations by KPI name for O(1) lookup. Worst status wins
+    # if multiple rules name the same KPI.
+    by_kpi: dict[str, str] = {}  # kpi_name (lowercased) → worst status seen
+    rank = {"ok": 0, "warn": 1, "breach": 2}
+    for ev in evaluations:
+        key = ev.kpi_name.strip().lower()
+        prev = by_kpi.get(key)
+        if prev is None or rank.get(ev.status, 0) > rank.get(prev, 0):
+            by_kpi[key] = ev.status
+
     rows: list[KpiLedgerRow] = []
     for tier_key, tier_label in (
         ("tier_1_kpis", "tier_1"),
@@ -77,15 +158,17 @@ def _build_ledger(ticker: str, repo_root: Path, holdings: dict[str, object]) -> 
         for k in kpis:
             if not isinstance(k, dict):
                 continue
+            name = str(k.get("name", ""))
+            history = _kpi_history(ticker, repo_root, name)
             tier_rows.append(
                 KpiLedgerRow(
-                    name=str(k.get("name", "")),
+                    name=name,
                     tier=tier_label,  # type: ignore[arg-type]
                     unit=str(k.get("unit")) if k.get("unit") else None,
                     source_hint=str(k.get("source")) if k.get("source") else None,
                     break_condition=str(k.get("break")) if k.get("break") else None,
-                    history=_kpi_history(ticker, repo_root, str(k.get("name", ""))),
-                    current_status=_status_for(k),
+                    history=history,
+                    current_status=_status_for(name, history, by_kpi),
                 )
             )
         tier_rows.sort(key=lambda r: r.name.lower())
@@ -93,8 +176,22 @@ def _build_ledger(ticker: str, repo_root: Path, holdings: dict[str, object]) -> 
     return rows
 
 
-def _status_for(k: dict[str, object]) -> Literal["green", "yellow", "red", "unknown"]:
-    """Without runtime KPI facts wired up yet, every KPI starts at 'unknown'."""
+def _status_for(
+    name: str,
+    history: list[tuple[str, float | None]],
+    by_kpi: dict[str, str],
+) -> Literal["green", "yellow", "red", "unknown"]:
+    """Classify a tier-N KPI by (a) break-rule outcome if one names it, else (b) data presence."""
+    rule_status = by_kpi.get(name.strip().lower())
+    if rule_status == "breach":
+        return "red"
+    if rule_status == "warn":
+        return "yellow"
+    if rule_status == "ok":
+        return "green"
+    # No matching break rule: signal whether we have any data at all.
+    if any(v is not None for _, v in history):
+        return "green"
     return "unknown"
 
 

@@ -94,6 +94,24 @@
     "Casas Bahia",
     "Nubank (fintech overlap)"
   ],
+  "data_rules": {
+    "segment_name_aliases": {
+      "Service": "Service revenue (FMP generic, not MELI Commerce/Fintech)",
+      "Product": "Product revenue (FMP generic, not MELI Commerce/Fintech)",
+      "Marketplace": null,
+      "Nonmarketplace": null,
+      "Other income (expenses):": null,
+      "BRAZIL": "Brazil Segment",
+      "MEXICO": "Mexico Segment",
+      "ARGENTINA": "Argentina Segment",
+      "Other Countries": "Other Countries Segment",
+      "VENEZUELA": null,
+      "A R": null,
+      "M X": null,
+      "V E": null,
+      "V [E]": null
+    }
+  },
   "thesis_breakers_qualitative": [
     "FXN GMV growth below 25% for 2 consecutive Qs",
     "Operating margin compresses below 12%",

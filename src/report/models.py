@@ -171,6 +171,10 @@ class ThesisSection(BaseModel):
     missing: MissingReason | None = None
     thesis_full: str | None = None
     last_updated: date | None = None
+    # When the holdings JSON has `_status: stub_regenerated_from_corruption` (or
+    # any other non-empty marker), the renderer shows a banner above the thesis
+    # so the user knows the content is placeholder, not ground truth.
+    stub_warning: str | None = None
     break_conditions: list[str] = Field(default_factory=list)
     competitive_watchlist: list[str] = Field(default_factory=list)
     qualitative_breakers: list[str] = Field(default_factory=list)

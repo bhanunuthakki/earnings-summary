@@ -62,8 +62,15 @@ _SAYDO_RX = re.compile(
     r"^SayDo_(?P<ticker>[A-Za-z]+)_Q[1-4]_\d{4}_(?P<curr_q>Q[1-4])_(?P<curr_y>\d{4})$",
     re.IGNORECASE,
 )
+# Match canonical `_summary` plus the variants the summarizer also writes:
+# `_investor_update_summary` (MELI/NU investor-letter format) and
+# `_presentation_brief` (IR slide brief). Keep this regex in sync with the
+# §5 earnings renderer in src/report/sections/earnings.py — both must
+# accept exactly the same set of files or `quarterly_artifacts.step_llm_summarized`
+# silently desyncs from what the report actually renders.
 _SUMMARY_RX = re.compile(
-    r"^(?P<ticker>[A-Za-z]+)_(?P<quarter>Q[1-4])_(?P<year>\d{4})_summary$",
+    r"^(?P<ticker>[A-Za-z]+)_(?P<quarter>Q[1-4])_(?P<year>\d{4})"
+    r"_(?:investor_update_summary|presentation_brief|summary)$",
     re.IGNORECASE,
 )
 

@@ -614,6 +614,11 @@ def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:
     _section_h2(out, "thesis", 2, "Thesis & tier-1 KPIs", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
+    if s.stub_warning:
+        out.write(
+            f'<div class="callout callout-warn"><strong>Stub thesis — needs user review.</strong> '
+            f"{html.escape(s.stub_warning)}</div>\n"
+        )
     if s.thesis_full:
         out.write(f"<p>{html.escape(s.thesis_full)}</p>\n")
     if s.last_updated:
