@@ -43,8 +43,8 @@ def build(ticker: str, repo_root: Path) -> EarningsSection:
         return EarningsSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
-                stage="SYNTHESIZE(main.py)",
-                fix_command=f"python src/main.py --company {ticker.upper()}",
+                stage="SYNTHESIZE(process_ir_documents)",
+                fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
                 detail="No per-quarter summaries in .tmp/ and no transcripts in transcripts/processed/.",
             ),
         )
@@ -83,7 +83,7 @@ def _make_card(
 
 
 def _extract_digest(summary_md: str) -> str:
-    """Pull just the Executive Summary block from the legacy main.py output.
+    """Pull just the Executive Summary block from the per-quarter summary.
 
     Per-quarter summaries follow a stable structure starting with
     `## 1. Executive Summary` and ending at the next H2 header. We lift that

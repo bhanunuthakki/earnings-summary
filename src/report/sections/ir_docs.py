@@ -41,7 +41,7 @@ def build(ticker: str, repo_root: Path) -> IrDocsSection:
             status=SectionStatus.MISSING_DATA,
             missing=missing(
                 stage="SYNTHESIZE(process_ir_documents)",
-                fix_command=f"python execution/run_ir_pipeline.py --ticker {ticker.upper()}",
+                fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
                 detail="No press-release / presentation briefs found under .tmp/.",
             ),
         )
