@@ -47,6 +47,8 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.charts import CHART_CSS, line_chart, sparkline
+from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
+from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
 
 _BOLD_RX = re.compile(r"\*\*(.+?)\*\*")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
@@ -292,6 +294,7 @@ table.weighting-table td:nth-child(3) {
 }
 """
     + CHART_CSS
+    + CHARTS_V2_CSS
     + """
 .summary-grid {
   display: grid;
@@ -874,6 +877,11 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
         _financial_charts(
             out, s.quarter_labels, s.line_items, s.chart_priorities, list(s.kpi_chart_series)
         )
+    # YoY% growth matrix — dense scannable view with heat shading + trailing
+    # CAGR columns. Sits above the absolute-levels table because the YoY
+    # picture is the analyst-grade primary read.
+    if s.line_items and s.quarter_labels_full and any(li.levels_full for li in s.line_items):
+        _yoy_matrix(out, s)
     if s.line_items:
         out.write(
             f'<details class="financials-table"><summary>Full quarterly table — '
@@ -885,6 +893,23 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
         out.write(f"<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n")
         _annual_table(out, s.annual_years, s.annual_line_items)
         out.write("</details>\n")
+
+
+def _yoy_matrix(out: StringIO, s: FinancialsSection) -> None:
+    rows = [
+        MatrixRow(name=li.line_item, levels=list(li.levels_full), unit=li.unit)
+        for li in s.line_items
+        if li.levels_full
+    ]
+    if not rows:
+        return
+    out.write(yoy_heatmap_table(
+        rows=rows,
+        periods=list(s.quarter_labels_full),
+        title="YoY % growth matrix — heat-shaded, with trailing CAGR",
+        display_quarters=12,
+        cagr_periods=(4, 8, 12),
+    ))
 
 
 def _financial_charts(
