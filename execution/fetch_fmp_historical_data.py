@@ -14,19 +14,11 @@ Usage:
 """
 
 import os
-import re
 import sys
 import argparse
 import requests
 import json
 from dotenv import load_dotenv
-
-_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
-
-
-def _redact(text: object) -> str:
-    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
-    return _APIKEY_RE.sub(r"\1***", str(text))
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +28,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
 sys.path.append(SRC_DIR)
 
 import db
+from log_redact import redact as _redact  # noqa: E402
 
 # Load API Key
 load_dotenv(os.path.join(PROJECT_ROOT, ".env"))

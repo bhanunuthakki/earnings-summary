@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,20 +36,16 @@ from typing import NamedTuple
 import requests
 from dotenv import load_dotenv
 
-_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
-
-
-def _redact(text: object) -> str:
-    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
-    return _APIKEY_RE.sub(r"\1***", str(text))
-
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 ENV_PATH = PROJECT_ROOT / ".env"
+
+from log_redact import redact as _redact  # noqa: E402
 
 load_dotenv(ENV_PATH)
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")

@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
@@ -32,16 +31,10 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
-
-
-def _redact(text: object) -> str:
-    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
-    return _APIKEY_RE.sub(r"\1***", str(text))
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db as portfolio_db  # noqa: E402
+from log_redact import redact as _redact  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
 API_KEY = os.environ.get("FMP_API_KEY")

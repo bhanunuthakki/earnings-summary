@@ -1,5 +1,4 @@
 import os
-import re
 import sys
 
 # Make sure we can import from src
@@ -10,13 +9,7 @@ import requests
 import pandas as pd
 from io import StringIO
 from calendar_manager import get_earnings_date
-
-_APIKEY_RE = re.compile(r"(apikey=)[^&\s]+", re.IGNORECASE)
-
-
-def _redact(text: object) -> str:
-    """Mask FMP apikey value in a string before logging (URLs in error messages)."""
-    return _APIKEY_RE.sub(r"\1***", str(text))
+from log_redact import redact as _redact
 
 def test_sp500():
     print("\n--- Testing S&P 500 Fetch ---")
