@@ -25,6 +25,19 @@ class SectionStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"  # ticker doesn't have this kind of data
 
 
+class ReportFlavor(str, Enum):
+    """Which brief shape to render.
+
+    PORTFOLIO renders the full §1 Snapshot (verdict, thesis, KPI strip).
+    EVALUATION renders an EvaluationSnapshot at §1 instead — a 3y quick-
+    categorization data table for "should I spend more time on this name?"
+    screening. The rest of the brief renders identically.
+    """
+
+    PORTFOLIO = "portfolio"
+    EVALUATION = "evaluation"
+
+
 class MissingReason(BaseModel):
     """Why a section is missing data + how to fix it."""
 
@@ -68,6 +81,48 @@ class SnapshotSection(BaseModel):
     verdict: Literal["intact", "watch", "broken", "pending"] = "pending"
     valuation: ValuationSnapshot
     tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# §1 Evaluation snapshot (eval flavor only — replaces §1 Snapshot for
+# new-name screening: 3y quick-categorization data table over ratios + metrics)
+# ---------------------------------------------------------------------------
+
+
+class QuickCategorizationRow(BaseModel):
+    """One row of the eval-flavor §1 data table.
+
+    Values are aligned to columns: lfy_minus_2, lfy_minus_1, lfy, ttm.
+    `cagr_3y` is the LFY-2 → LFY CAGR when meaningful (absolute series only —
+    margin/ratio CAGRs are not useful and stay None).
+    """
+
+    metric: str  # e.g. "Revenue", "EPS diluted", "Operating margin"
+    unit: str  # "USD M", "USD", "%"
+    digits: int = 0  # display precision
+    lfy_minus_2: float | None = None
+    lfy_minus_1: float | None = None
+    lfy: float | None = None
+    ttm: float | None = None
+    cagr_3y: float | None = None  # decimal (0.12 = +12%)
+
+
+class EvaluationSnapshotSection(BaseModel):
+    """§1 for `flavor=evaluation` — 3y quick-categorization data table.
+
+    Intended for new-name screening before deeper diligence. Pulled from the
+    `metrics` and `ratios` views; no LLM in this section.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    ticker: str
+    company_name: str | None = None
+    sector: str | None = None
+    market_cap: float | None = None
+    current_price: float | None = None
+    rows: list[QuickCategorizationRow] = Field(default_factory=list)
+    fiscal_years: list[int] = Field(default_factory=list)  # 3 years [LFY-2, LFY-1, LFY]
 
 
 # ---------------------------------------------------------------------------
@@ -383,8 +438,10 @@ class ReportSpec(BaseModel):
     generation_date: date
     repo_root: str  # absolute path the build read from
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
+    flavor: ReportFlavor = ReportFlavor.PORTFOLIO
 
     snapshot: SnapshotSection
+    evaluation_snapshot: EvaluationSnapshotSection | None = None
     thesis: ThesisSection
     financials: FinancialsSection
     segments: SegmentsSection

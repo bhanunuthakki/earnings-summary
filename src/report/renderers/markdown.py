@@ -13,6 +13,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     EarningsSection,
+    EvaluationSnapshotSection,
     FinancialsSection,
     IrDocsSection,
     KpiLedgerRow,
@@ -20,6 +21,7 @@ from report.models import (
     QuarterlyEarningsCard,
     QuarterlyLineItem,
     RecentDevelopmentsSection,
+    ReportFlavor,
     ReportSpec,
     SayDoSection,
     SectionStatus,
@@ -34,7 +36,10 @@ from report.models import (
 def render(spec: ReportSpec) -> str:
     out = StringIO()
     _header(out, spec)
-    _snapshot(out, spec.snapshot)
+    if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
+        _evaluation_snapshot(out, spec.evaluation_snapshot)
+    else:
+        _snapshot(out, spec.snapshot)
     _thesis(out, spec.thesis)
     _financials(out, spec.financials)
     _segments(out, spec.segments)
@@ -108,6 +113,64 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
             f"_Valuation snapshot, DCF inputs, and segment NPVs live in the workbook: "
             f"`{s.valuation.model_link}`._\n\n"
         )
+
+
+def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
+    _section_header(out, 1, "Evaluation snapshot", s.status)
+    if _missing_block(out, s.status, s.missing):
+        return
+    out.write(f"**{s.ticker}**")
+    if s.company_name:
+        out.write(f" — {s.company_name}")
+    out.write("\n\n")
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {s.sector}")
+    if s.market_cap is not None:
+        chips.append(f"Market cap: ${_fmt_compact_usd(s.market_cap)}")
+    if s.current_price is not None:
+        chips.append(f"Current price: ${s.current_price:,.2f}")
+    if chips:
+        out.write(f"_{' · '.join(chips)}_\n\n")
+    if not s.rows:
+        out.write("_No metric rows available._\n\n")
+        return
+    year_labels = [str(y) for y in s.fiscal_years]
+    while len(year_labels) < 3:
+        year_labels.insert(0, "—")
+    headers = ["Metric", "Unit", year_labels[0], year_labels[1], year_labels[2], "TTM", "3y CAGR"]
+    out.write("| " + " | ".join(headers) + " |\n")
+    out.write("|" + "|".join(["---"] * len(headers)) + "|\n")
+    for r in s.rows:
+        cells = [
+            f"**{r.metric}**",
+            r.unit,
+            _fmt_metric_md(r.lfy_minus_2, r.unit, r.digits),
+            _fmt_metric_md(r.lfy_minus_1, r.unit, r.digits),
+            _fmt_metric_md(r.lfy, r.unit, r.digits),
+            _fmt_metric_md(r.ttm, r.unit, r.digits),
+            _fmt_pct(r.cagr_3y),
+        ]
+        out.write("| " + " | ".join(cells) + " |\n")
+    out.write("\n")
+
+
+def _fmt_metric_md(v: float | None, unit: str, digits: int) -> str:
+    if v is None:
+        return "—"
+    if unit == "%":
+        return f"{v * 100:.{digits}f}%"
+    return f"{v:,.{digits}f}"
+
+
+def _fmt_compact_usd(v: float) -> str:
+    if abs(v) >= 1e9:
+        return f"{v / 1e9:.1f}B"
+    if abs(v) >= 1e6:
+        return f"{v / 1e6:.0f}M"
+    if abs(v) >= 1e3:
+        return f"{v / 1e3:.0f}K"
+    return f"{v:,.0f}"
 
 
 def _thesis(out: StringIO, s: ThesisSection) -> None:

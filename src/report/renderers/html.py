@@ -25,6 +25,7 @@ from report.models import (
     BearCaseSection,
     BreakRuleEvaluation,
     EarningsSection,
+    EvaluationSnapshotSection,
     FinancialsSection,
     IrDocsSection,
     KpiLedgerRow,
@@ -32,6 +33,7 @@ from report.models import (
     QuarterlyEarningsCard,
     QuarterlyLineItem,
     RecentDevelopmentsSection,
+    ReportFlavor,
     ReportSpec,
     SayDoSection,
     SectionStatus,
@@ -51,7 +53,10 @@ def render(spec: ReportSpec) -> str:
     body = StringIO()
     _nav(body)
     _header(body, spec)
-    _snapshot(body, spec.snapshot)
+    if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
+        _evaluation_snapshot(body, spec.evaluation_snapshot)
+    else:
+        _snapshot(body, spec.snapshot)
     _thesis(body, spec.thesis, spec.ticker)
     _financials(body, spec.financials)
     _segments(body, spec.segments)
@@ -469,6 +474,77 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
 
 def _verdict_class(v: str) -> str:
     return {"intact": "ok", "watch": "partial", "broken": "missing_data"}.get(v, "not_applicable")
+
+
+def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
+    """§1 for eval flavor: 3y quick-categorization data table."""
+    _section_h2(out, "snapshot", 1, "Evaluation snapshot", s.status)
+    if _missing_callout(out, s.status, s.missing):
+        return
+    out.write(f"<p><strong>{html.escape(s.ticker)}</strong>")
+    if s.company_name:
+        out.write(f" — {html.escape(s.company_name)}")
+    out.write("</p>\n")
+    chips: list[str] = []
+    if s.sector:
+        chips.append(f"Sector: {html.escape(s.sector)}")
+    if s.market_cap is not None:
+        chips.append(f"Market cap: ${_fmt_compact_usd(s.market_cap)}")
+    if s.current_price is not None:
+        chips.append(f"Current price: ${s.current_price:,.2f}")
+    if chips:
+        out.write(f'<p class="meta">{" · ".join(chips)}</p>\n')
+    if not s.rows:
+        out.write("<p><em>No metric rows available.</em></p>\n")
+        return
+    out.write(
+        '<p class="meta">3-year quick categorization '
+        "(LFY-2 → LFY columns are fiscal-year actuals; TTM is rolling).</p>\n"
+    )
+    year_labels = [str(y) for y in s.fiscal_years]
+    while len(year_labels) < 3:
+        year_labels.insert(0, "—")
+    out.write('<div class="table-wrap"><table>\n<thead><tr>')
+    for h_label in (
+        "Metric",
+        "Unit",
+        year_labels[0],
+        year_labels[1],
+        year_labels[2],
+        "TTM",
+        "3y CAGR",
+    ):
+        out.write(f"<th>{html.escape(h_label)}</th>")
+    out.write("</tr></thead>\n<tbody>")
+    for r in s.rows:
+        out.write("<tr>")
+        out.write(f"<td><strong>{html.escape(r.metric)}</strong></td>")
+        out.write(f"<td>{html.escape(r.unit)}</td>")
+        for v in (r.lfy_minus_2, r.lfy_minus_1, r.lfy, r.ttm):
+            out.write(f'<td class="num">{_fmt_metric(v, r.unit, r.digits)}</td>')
+        out.write(f'<td class="num">{_fmt_pct(r.cagr_3y)}</td>')
+        out.write("</tr>\n")
+    out.write("</tbody></table></div>\n")
+
+
+def _fmt_metric(v: float | None, unit: str, digits: int) -> str:
+    """Format a cell value: ratios as %, absolute numbers with thousands separator."""
+    if v is None:
+        return "—"
+    if unit == "%":
+        return f"{v * 100:.{digits}f}%"
+    return f"{v:,.{digits}f}"
+
+
+def _fmt_compact_usd(v: float) -> str:
+    """Compact USD format: $123B / $45M / $678K."""
+    if abs(v) >= 1e9:
+        return f"{v / 1e9:.1f}B"
+    if abs(v) >= 1e6:
+        return f"{v / 1e6:.0f}M"
+    if abs(v) >= 1e3:
+        return f"{v / 1e3:.0f}K"
+    return f"{v:,.0f}"
 
 
 def _thesis(out: StringIO, s: ThesisSection, ticker: str) -> None:

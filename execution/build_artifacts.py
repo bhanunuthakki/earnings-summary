@@ -30,6 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
 from report.builder import build_report  # noqa: E402
+from report.models import ReportFlavor  # noqa: E402
 from report.renderers.html import render as render_html  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
@@ -58,6 +59,7 @@ def main() -> int:
         print("[]")
         return 0
 
+    flavor = ReportFlavor(args.flavor)
     summary: list[dict[str, object]] = []
     for ticker in tickers:
         result = _build_one(
@@ -67,6 +69,7 @@ def main() -> int:
             news_days=args.news_days,
             news_cache_ttl_days=args.news_cache_ttl_days,
             refresh_news=args.refresh_news,
+            flavor=flavor,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -117,6 +120,16 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Force a fresh WebSearch for §8 (bypasses the cache for this build).",
     )
+    parser.add_argument(
+        "--flavor",
+        choices=[f.value for f in ReportFlavor],
+        default=ReportFlavor.PORTFOLIO.value,
+        help=(
+            "Brief shape. 'portfolio' (default) renders the full Snapshot at §1. "
+            "'evaluation' renders an EvaluationSnapshot (3y quick-categorization "
+            "data table) at §1 instead — for new-name screening."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -165,6 +178,7 @@ def _build_one(
     news_days: int = 7,
     news_cache_ttl_days: int = 7,
     refresh_news: bool = False,
+    flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,6 +204,7 @@ def _build_one(
         news_days=news_days,
         news_cache_ttl_days=news_cache_ttl_days,
         refresh_news=refresh_news,
+        flavor=flavor,
     )
 
     html_path.write_text(render_html(spec), encoding="utf-8")

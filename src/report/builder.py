@@ -10,11 +10,12 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from report.models import ReportSpec
+from report.models import ReportFlavor, ReportSpec
 from report.sections import (
     appendix,
     bear_case,
     earnings,
+    evaluation_snapshot,
     financials,
     ir_docs,
     provenance,
@@ -34,6 +35,7 @@ def build_report(
     news_days: int = 7,
     news_cache_ttl_days: int = 7,
     refresh_news: bool = False,
+    flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -50,9 +52,17 @@ def build_report(
     section. `news_cache_ttl_days` controls how long that section's on-disk
     cache stays fresh between regenerations; `refresh_news=True` bypasses
     the cache for this build.
+
+    `flavor` controls the §1 shape. PORTFOLIO renders the full Snapshot
+    (thesis verdict, KPI strip). EVALUATION builds an additional
+    EvaluationSnapshot (3y quick-categorization data table) which renderers
+    use in §1 instead of Snapshot — for new-name screening.
     """
     ticker = ticker.upper()
     snapshot_section = snapshot.build(ticker, repo_root, model_link)
+    evaluation_snapshot_section = (
+        evaluation_snapshot.build(ticker, repo_root) if flavor == ReportFlavor.EVALUATION else None
+    )
     thesis_section = thesis.build(ticker, repo_root)
     financials_section = financials.build(ticker, repo_root)
     segments_section = segments.build(ticker, repo_root)
@@ -83,7 +93,9 @@ def build_report(
         ticker=ticker,
         generation_date=date.today(),
         repo_root=str(repo_root),
+        flavor=flavor,
         snapshot=snapshot_section,
+        evaluation_snapshot=evaluation_snapshot_section,
         thesis=thesis_section,
         financials=financials_section,
         segments=segments_section,
