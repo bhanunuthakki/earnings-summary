@@ -49,7 +49,6 @@ class ArtifactFlags(BaseModel):
     step_llm_summarized: bool = False
     step_saydo_analyzed: bool = False
     step_thesis_updated: bool = False
-    step_pdf_generated: bool = False
 
 
 _TRANSCRIPT_PROCESSED_EXTS = frozenset({".pdf", ".txt"})

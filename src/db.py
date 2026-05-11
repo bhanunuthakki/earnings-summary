@@ -66,7 +66,6 @@ def init_db() -> None:
     cursor = conn.cursor()
     _create_tracked_companies(cursor)
     _create_quarterly_artifacts(cursor)
-    _create_output_artifacts(cursor)
     _create_fmp_endpoint_status(cursor)
     conn.commit()
     conn.close()
@@ -122,7 +121,6 @@ def _create_quarterly_artifacts(cursor: sqlite3.Cursor) -> None:
             step_llm_summarized    BOOLEAN DEFAULT 0,
             step_saydo_analyzed    BOOLEAN DEFAULT 0,
             step_thesis_updated    BOOLEAN DEFAULT 0,
-            step_pdf_generated     BOOLEAN DEFAULT 0,
             UNIQUE(ticker, year, quarter)
         )
         """
@@ -132,32 +130,7 @@ def _create_quarterly_artifacts(cursor: sqlite3.Cursor) -> None:
         "quarterly_artifacts",
         [
             ("step_llm_summarized", "BOOLEAN DEFAULT 0"),
-            ("step_pdf_generated", "BOOLEAN DEFAULT 0"),
         ],
-    )
-
-
-def _create_output_artifacts(cursor: sqlite3.Cursor) -> None:
-    """Per-ticker (not per-quarter) artifact registry: HTML memos, markdown
-    thesis trackers, and master-transcript PDFs. output_consolidator.py
-    copies the latest of each kind into outputs/<TICKER>/ and registers
-    them here so consumers can resolve "latest memo for X" via SQL."""
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS output_artifacts (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker       TEXT NOT NULL,
-            kind         TEXT NOT NULL CHECK(kind IN ('memo','thesis_tracker','master_pdf','ticker_index','portfolio_index')),
-            path         TEXT NOT NULL,
-            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            is_latest    INTEGER DEFAULT 1,
-            UNIQUE(ticker, kind, path)
-        )
-        """
-    )
-    cursor.execute(
-        "CREATE INDEX IF NOT EXISTS idx_output_artifacts_latest "
-        "ON output_artifacts(ticker, kind, is_latest)"
     )
 
 
@@ -339,18 +312,6 @@ def _safe_find_ir_url(ticker: str, name: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def _master_pdf_exists(ticker: str) -> bool:
-    """Return True if transcripts/master/ has a master PDF for this ticker."""
-    master_dir = os.path.join(PROJECT_ROOT, "transcripts", "master")
-    if not os.path.exists(master_dir):
-        return False
-    upper = ticker.upper()
-    for fname in os.listdir(master_dir):
-        if fname.upper().startswith(upper) and fname.endswith("_Master_Transcripts.pdf"):
-            return True
-    return False
-
-
 def _slot(
     artifacts: dict[tuple[int, Quarter], ArtifactFlags], year: int, quarter: Quarter
 ) -> ArtifactFlags:
@@ -377,7 +338,6 @@ def _scan_processed_dir(ticker: str, artifacts: dict[tuple[int, Quarter], Artifa
 def _scan_tmp_dir(
     ticker: str,
     artifacts: dict[tuple[int, Quarter], ArtifactFlags],
-    master_exists: bool,
 ) -> None:
     """Walk .tmp/, dispatch by ArtifactKind, set the corresponding step flag."""
     tmp_dir = os.path.join(PROJECT_ROOT, ".tmp")
@@ -395,8 +355,6 @@ def _scan_tmp_dir(
             flags.step_saydo_analyzed = True
         elif parsed.kind is ArtifactKind.LLM_SUMMARY:
             flags.step_llm_summarized = True
-            if master_exists:
-                flags.step_pdf_generated = True
 
 
 def _persist_artifact_rows(
@@ -412,14 +370,13 @@ def _persist_artifact_rows(
                 ticker, year, quarter,
                 has_release_file, has_slides_file, has_transcript_file, has_audio_file,
                 step_audio_transcribed, step_llm_summarized, step_saydo_analyzed,
-                step_thesis_updated, step_pdf_generated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                step_thesis_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(ticker, year, quarter) DO UPDATE SET
                 has_transcript_file    = excluded.has_transcript_file    OR quarterly_artifacts.has_transcript_file,
                 has_audio_file         = excluded.has_audio_file         OR quarterly_artifacts.has_audio_file,
                 step_llm_summarized    = excluded.step_llm_summarized    OR quarterly_artifacts.step_llm_summarized,
-                step_saydo_analyzed    = excluded.step_saydo_analyzed    OR quarterly_artifacts.step_saydo_analyzed,
-                step_pdf_generated     = excluded.step_pdf_generated     OR quarterly_artifacts.step_pdf_generated
+                step_saydo_analyzed    = excluded.step_saydo_analyzed    OR quarterly_artifacts.step_saydo_analyzed
             """,
             (
                 ticker,
@@ -433,7 +390,6 @@ def _persist_artifact_rows(
                 flags.step_llm_summarized,
                 flags.step_saydo_analyzed,
                 flags.step_thesis_updated,
-                flags.step_pdf_generated,
             ),
         )
 
@@ -464,10 +420,9 @@ def scan_and_sync_artifacts(ticker: str) -> None:
     cursor = conn.cursor()
 
     artifacts: dict[tuple[int, Quarter], ArtifactFlags] = {}
-    master_exists = _master_pdf_exists(ticker)
 
     _scan_processed_dir(ticker, artifacts)
-    _scan_tmp_dir(ticker, artifacts, master_exists)
+    _scan_tmp_dir(ticker, artifacts)
 
     _persist_artifact_rows(cursor, ticker, artifacts)
     _update_company_fmp_state(cursor, ticker)
@@ -660,61 +615,6 @@ def get_tracked_companies(
         sql += " AND archived_at IS NULL"
     sql += " ORDER BY list_type, ticker"
     cursor.execute(sql, (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def get_company_artifacts(ticker: str) -> list[dict[str, object]]:
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT * FROM quarterly_artifacts WHERE ticker = ? ORDER BY year DESC, quarter DESC",
-        (ticker.upper(),),
-    )
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
-
-
-def register_output_artifact(ticker: str, kind: str, path: str) -> None:
-    """Insert (or upsert) an output_artifacts row, marking previous (ticker, kind)
-    rows as is_latest=0 so the latest one wins. Used by the consolidator."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE output_artifacts SET is_latest = 0 WHERE ticker = ? AND kind = ?",
-        (ticker.upper(), kind),
-    )
-    cursor.execute(
-        """
-        INSERT INTO output_artifacts (ticker, kind, path, is_latest)
-        VALUES (?, ?, ?, 1)
-        ON CONFLICT(ticker, kind, path) DO UPDATE SET
-            generated_at = CURRENT_TIMESTAMP,
-            is_latest = 1
-        """,
-        (ticker.upper(), kind, path),
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_latest_output_artifacts(ticker: str | None = None) -> list[dict[str, object]]:
-    """Return latest of each kind across (optionally filtered by) ticker."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    if ticker:
-        cursor.execute(
-            "SELECT * FROM output_artifacts WHERE ticker = ? AND is_latest = 1 "
-            "ORDER BY kind, generated_at DESC",
-            (ticker.upper(),),
-        )
-    else:
-        cursor.execute(
-            "SELECT * FROM output_artifacts WHERE is_latest = 1 "
-            "ORDER BY ticker, kind"
-        )
     rows = cursor.fetchall()
     conn.close()
     return [dict(r) for r in rows]

@@ -107,4 +107,3 @@ def test_artifact_flags_default_all_false() -> None:
     assert not f.has_transcript_file
     assert not f.has_audio_file
     assert not f.step_llm_summarized
-    assert not f.step_pdf_generated
