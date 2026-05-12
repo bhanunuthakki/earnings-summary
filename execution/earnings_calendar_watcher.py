@@ -11,7 +11,7 @@ coming this week, back enough to catch any earnings whose facts haven't
 shown up yet.
 
 Usage:
-    python execution/earnings_calendar_watcher.py             # portfolio + watchlist
+    python execution/earnings_calendar_watcher.py             # active universe (db.ACTIVE_LIST_TYPES)
     python execution/earnings_calendar_watcher.py --ticker META
     python execution/earnings_calendar_watcher.py --forward-days 21 --backward-days 60
 """
@@ -94,7 +94,7 @@ def _parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument(
-        "--ticker", help="Single ticker to scan (overrides default portfolio+watchlist scope)"
+        "--ticker", help="Single ticker to scan (overrides default active-universe scope)"
     )
     p.add_argument(
         "--forward-days",
@@ -127,7 +127,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     db.DATA_DIR = str(repo_root / "data")
     db.DB_PATH = str(repo_root / "data" / "portfolio.db")
     rows = db.get_tracked_companies()
-    return [str(r["ticker"]).upper() for r in rows if r["list_type"] in ("portfolio", "watchlist")]
+    return [str(r["ticker"]).upper() for r in rows if r["list_type"] in db.ACTIVE_LIST_TYPES]
 
 
 def _load_calendar_events(path: Path) -> list[dict[str, object]] | None:

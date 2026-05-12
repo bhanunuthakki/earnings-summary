@@ -67,7 +67,7 @@ def main() -> int:
         "--include-index-members",
         action="store_true",
         help="With --all: also show plans for index_member/etf/none (default: "
-        "portfolio+watchlist only).",
+        "active universe — portfolio+watchlist+evaluation).",
     )
     args = parser.parse_args()
 

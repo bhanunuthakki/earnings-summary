@@ -33,6 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+import db  # noqa: E402
 
 
 def main() -> int:
@@ -100,10 +103,10 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
         return [args.ticker.upper()]
     if args.all_tracked:
         cursor.execute(
-            "SELECT ticker FROM tracked_companies "
-            "WHERE list_type IN ('portfolio', 'watchlist') "
-            "AND (archived_at IS NULL) "
-            "ORDER BY ticker"
+            f"SELECT ticker FROM tracked_companies "
+            f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
+            f"AND (archived_at IS NULL) "
+            f"ORDER BY ticker"
         )
     else:
         cursor.execute(

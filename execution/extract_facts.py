@@ -153,7 +153,8 @@ def main() -> int:
         "--include-index-members",
         action="store_true",
         help="With --all: also extract for index_member/etf/none tickers (default: "
-        "portfolio+watchlist only). Required to fan extraction over the full universe.",
+        "active universe — portfolio+watchlist+evaluation). Required to fan "
+        "extraction over the full universe.",
     )
     args = parser.parse_args()
 

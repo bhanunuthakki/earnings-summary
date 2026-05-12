@@ -39,7 +39,26 @@ _FMP_ALIASES: dict[str, list[str]] = {
 
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _LIST_TYPES: frozenset[str] = frozenset(
-    {"portfolio", "watchlist", "none", "etf", "index_member"}
+    {"portfolio", "watchlist", "evaluation", "none", "etf", "index_member"}
+)
+
+# Public SQL fragments for ad-hoc callers that hand-roll SQL against
+# tracked_companies. Defined once here so adding a new list_type later is a
+# single-file edit. Prefer these over inline string literals.
+#
+# `ACTIVE_LIST_TYPES` — names the user actively analyzes (gets data refreshes,
+# KPI extraction, earnings calendar, etc.). Mirrors `ANALYZED_LIST_TYPES` in
+# `pipeline.queries` but as a SQL-fragment string for raw cursor callers.
+#
+# `BRIEFED_LIST_TYPES` — strict subset that auto-produces full briefs (portfolio
+# or eval flavor). Watchlist is a holding pen and not briefed by default.
+ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
+ACTIVE_LIST_TYPES_SQL: str = (
+    "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
+)
+BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
+BRIEFED_LIST_TYPES_SQL: str = (
+    "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
 )
 
 
@@ -80,7 +99,7 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
             list_type TEXT NOT NULL CHECK(list_type IN (
-                'portfolio', 'watchlist', 'none', 'etf', 'index_member'
+                'portfolio', 'watchlist', 'evaluation', 'none', 'etf', 'index_member'
             )),
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, ticker)
@@ -436,7 +455,7 @@ def scan_and_sync_artifacts(ticker: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-_TRACKED_LIST_TYPES_FOR_ONBOARD: frozenset[str] = frozenset({"portfolio", "watchlist"})
+_TRACKED_LIST_TYPES_FOR_ONBOARD: frozenset[str] = frozenset(ACTIVE_LIST_TYPES)
 
 
 _DETACHED_PROCESS = 0x00000008

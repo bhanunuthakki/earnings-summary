@@ -25,6 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from compute.company_description import extract_for_ticker  # noqa: E402
 
 
@@ -77,7 +78,11 @@ def _parse_args() -> argparse.Namespace:
     )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
-    g.add_argument("--all", action="store_true", help="All tracked portfolio + watchlist tickers")
+    g.add_argument(
+        "--all",
+        action="store_true",
+        help="All tickers that produce briefs (portfolio + evaluation).",
+    )
     p.add_argument("--year", type=int, default=None, help="Specific fiscal year (default: latest)")
     p.add_argument("--refresh", action="store_true", help="Ignore cache and re-extract")
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
@@ -90,9 +95,13 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     db_path = repo_root / "data" / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
+    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these
+    # are the names that auto-produce briefs and therefore need a §2 company
+    # description. Watchlist names are a holding pen; if you want to backfill
+    # one, pass it explicitly via `--ticker`.
     cur.execute(
-        "SELECT DISTINCT ticker FROM tracked_companies "
-        "WHERE list_type IN ('portfolio','watchlist') ORDER BY ticker"
+        f"SELECT DISTINCT ticker FROM tracked_companies "
+        f"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker"
     )
     rows = cur.fetchall()
     conn.close()

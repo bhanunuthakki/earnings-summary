@@ -1,9 +1,9 @@
 """Unit tests for `db.track_company`'s onboard-spawn transition logic.
 
 The spawn fires whenever a ticker *transitions into* the analytical universe
-(portfolio/watchlist) — both first-time adds AND promotions from
-non-onboardable list_types (index_member, etf, none). Re-adds within the
-onboardable set must NOT re-spawn.
+(portfolio/watchlist/evaluation, == `db.ACTIVE_LIST_TYPES`) — both first-time
+adds AND promotions from non-onboardable list_types (index_member, etf, none).
+Re-adds within the onboardable set must NOT re-spawn.
 """
 from __future__ import annotations
 
@@ -61,6 +61,21 @@ def test_new_add_to_watchlist_spawns(isolated_db: Path, spawn_calls: list[str]) 
 def test_new_add_to_portfolio_spawns(isolated_db: Path, spawn_calls: list[str]) -> None:
     db.track_company("MSFT", "Microsoft Corp.", "portfolio")
     assert spawn_calls == ["MSFT"]
+
+
+def test_new_add_to_evaluation_spawns(isolated_db: Path, spawn_calls: list[str]) -> None:
+    db.track_company("CCJ", "Cameco Corporation", "evaluation")
+    assert spawn_calls == ["CCJ"]
+
+
+def test_cross_promote_watchlist_to_evaluation_does_not_respawn(
+    isolated_db: Path, spawn_calls: list[str]
+) -> None:
+    """Watchlist → evaluation is a re-classification within ACTIVE_LIST_TYPES;
+    data already exists, no need to refetch."""
+    _seed(isolated_db, "ABNB", "watchlist")
+    db.track_company("ABNB", "Airbnb, Inc.", "evaluation")
+    assert spawn_calls == []
 
 
 def test_new_add_to_index_member_does_not_spawn(

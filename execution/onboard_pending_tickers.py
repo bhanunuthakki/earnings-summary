@@ -1,10 +1,10 @@
-"""Find P+W tickers missing data, analysis, or commitment-extraction work
-and run the appropriate subset of the pipeline for each. Closes the gap
+"""Find active-universe tickers missing data, analysis, or commitment-extraction
+work and run the appropriate subset of the pipeline for each. Closes the gap
 when tickers get added via raw SQL / direct DB writes / external API
 bypass AND keeps the commitment ledger fresh as new transcripts arrive.
 
 A ticker is "pending" when ALL of:
-  - list_type IN ('portfolio', 'watchlist')
+  - list_type IN (portfolio, watchlist, evaluation) — `db.ACTIVE_LIST_TYPES`
 
 AND ANY of:
   - instrument_type IS NULL                  -> 'no_instrument_type'
@@ -58,6 +58,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
@@ -92,7 +93,7 @@ class TickerResult:
     elapsed_seconds: float
 
 
-_PENDING_SQL = """
+_PENDING_SQL = f"""
 SELECT
   tc.ticker,
   CASE
@@ -109,7 +110,7 @@ SELECT
     ELSE 'ok'
   END AS pending_reason
 FROM tracked_companies tc
-WHERE tc.list_type IN ('portfolio', 'watchlist')
+WHERE tc.list_type IN {db.ACTIVE_LIST_TYPES_SQL}
   AND (
     tc.instrument_type IS NULL
     OR (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0

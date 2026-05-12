@@ -51,12 +51,13 @@ HINT_TTL_DAYS = 14
 
 
 def _watched_tickers() -> set[str]:
-    """Active portfolio + watchlist tickers (not archived)."""
+    """Active portfolio + watchlist + evaluation tickers (not archived)."""
     conn = portfolio_db.get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT ticker FROM tracked_companies "
-        "WHERE list_type IN ('portfolio', 'watchlist') AND archived_at IS NULL"
+        f"SELECT ticker FROM tracked_companies "
+        f"WHERE list_type IN {portfolio_db.ACTIVE_LIST_TYPES_SQL} "
+        f"AND archived_at IS NULL"
     )
     out = {row[0] for row in cur.fetchall()}
     conn.close()

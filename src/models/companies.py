@@ -33,10 +33,15 @@ class ListType(StrEnum):
     `etf` and `index_member` were added by the worktree session's FMP backfill
     (199 index tickers + FLKR). They overlap conceptually with `instrument_type`
     but the data is what it is — preserve fidelity over normalization.
+
+    `evaluation` is for new-name screening: tickers we build eval-flavor briefs
+    for but haven't committed to monitoring. Distinct from `watchlist` (holding
+    pen, no auto-brief).
     """
 
     PORTFOLIO = "portfolio"
     WATCHLIST = "watchlist"
+    EVALUATION = "evaluation"
     NONE = "none"
     ETF = "etf"
     INDEX_MEMBER = "index_member"

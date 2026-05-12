@@ -1,8 +1,9 @@
-"""Build a simple earnings calendar HTML for portfolio + watchlist.
+"""Build a simple earnings calendar HTML for the active universe.
 
 Reads earnings dates from data/historical/fmp/{TICKER}_earnings_calendar.json
-for every row in tracked_companies (portfolio + watchlist, non-archived) and
-emits output/earnings_calendar.html — a single self-contained page showing:
+for every row in tracked_companies (portfolio + watchlist + evaluation,
+non-archived) and emits output/earnings_calendar.html — a single
+self-contained page showing:
 
   - Upcoming earnings (next 90 days), sorted by date, portfolio rows pinned first
   - Recently reported (last 45 days), for context
@@ -21,10 +22,14 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+import db  # noqa: E402
 
 UPCOMING_WINDOW_DAYS = 90
 RECENT_WINDOW_DAYS = 45
@@ -97,9 +102,9 @@ def _load_tracked(repo_root: Path) -> list[tuple[str, str, str]]:
     conn = sqlite3.connect(str(db_path))
     c = conn.cursor()
     c.execute(
-        "SELECT ticker, name, list_type FROM tracked_companies "
-        "WHERE list_type IN ('portfolio', 'watchlist') AND archived_at IS NULL "
-        "ORDER BY ticker"
+        f"SELECT ticker, name, list_type FROM tracked_companies "
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} AND archived_at IS NULL "
+        f"ORDER BY ticker"
     )
     rows = c.fetchall()
     conn.close()
@@ -178,8 +183,21 @@ def _latest_report(repo_root: Path, ticker: str) -> tuple[str, str] | None:
     return d.isoformat(), rel
 
 
+_LIST_CLASS_LABELS: dict[str, tuple[str, str]] = {
+    "portfolio":  ("portfolio",  "Portfolio"),
+    "watchlist":  ("watchlist",  "Watchlist"),
+    "evaluation": ("evaluation", "Evaluation"),
+}
+
+
+def _list_class_and_label(list_type: str) -> tuple[str, str]:
+    """CSS class + human label for a row. Unknown list_types fall back to watchlist styling."""
+    return _LIST_CLASS_LABELS.get(list_type, ("watchlist", "Watchlist"))
+
+
 def _list_rank(list_type: str) -> int:
-    return 0 if list_type == "portfolio" else 1
+    """Sort key: portfolio first, then evaluation, then watchlist."""
+    return {"portfolio": 0, "evaluation": 1, "watchlist": 2}.get(list_type, 3)
 
 
 def _format_time(time_str: str) -> str:
@@ -200,8 +218,7 @@ def _render_row(row: dict, today: date, *, kind: str) -> str:
         delta_label = "tomorrow"
 
     when = _format_time(row.get("time", ""))
-    list_class = "portfolio" if row["list_type"] == "portfolio" else "watchlist"
-    list_label = "Portfolio" if row["list_type"] == "portfolio" else "Watchlist"
+    list_class, list_label = _list_class_and_label(row["list_type"])
 
     if row.get("latest_report"):
         rep_date, rep_rel = row["latest_report"]
@@ -223,8 +240,7 @@ def _render_row(row: dict, today: date, *, kind: str) -> str:
 
 
 def _render_no_data_row(row: dict) -> str:
-    list_class = "portfolio" if row["list_type"] == "portfolio" else "watchlist"
-    list_label = "Portfolio" if row["list_type"] == "portfolio" else "Watchlist"
+    list_class, list_label = _list_class_and_label(row["list_type"])
     if row.get("latest_report"):
         rep_date, rep_rel = row["latest_report"]
         report_cell = f'<a href="{rep_rel}">{rep_date}</a>'
@@ -249,7 +265,8 @@ def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data:
         '<tr><td colspan="4" class="muted">All tracked tickers have calendar data.</td></tr>'
 
     portfolio_upcoming = sum(1 for r in upcoming if r["list_type"] == "portfolio")
-    watchlist_upcoming = len(upcoming) - portfolio_upcoming
+    watchlist_upcoming = sum(1 for r in upcoming if r["list_type"] == "watchlist")
+    evaluation_upcoming = sum(1 for r in upcoming if r["list_type"] == "evaluation")
 
     return f"""<!doctype html>
 <html lang="en">
@@ -272,6 +289,8 @@ def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data:
   th {{ background: #f5f5f5; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; color: #555; }}
   tr.portfolio td {{ background: #fffbe6; }}
   tr.portfolio td.ticker {{ font-weight: 700; }}
+  tr.evaluation td {{ background: #eff6ff; }}
+  tr.evaluation td.ticker {{ font-weight: 600; color: #1e40af; }}
   tr.watchlist td.ticker {{ font-weight: 500; color: #555; }}
   td.date {{ white-space: nowrap; font-variant-numeric: tabular-nums; }}
   td.date strong {{ display: inline-block; min-width: 92px; }}
@@ -279,6 +298,7 @@ def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data:
   td.when {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: #888; }}
   .badge {{ display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }}
   .badge.portfolio {{ background: #fde68a; color: #92400e; }}
+  .badge.evaluation {{ background: #bfdbfe; color: #1e3a8a; }}
   .badge.watchlist {{ background: #e5e7eb; color: #4b5563; }}
   a {{ color: #0366d6; text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
@@ -289,7 +309,7 @@ def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data:
 </head>
 <body>
 <h1>Earnings Calendar</h1>
-<p class="meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
+<p class="meta">Generated <strong>{today.isoformat()}</strong> · Upcoming next 90d: <strong>{len(upcoming)}</strong> ({portfolio_upcoming} portfolio, {evaluation_upcoming} evaluation, {watchlist_upcoming} watchlist) · Recently reported last 45d: <strong>{len(recent)}</strong> · No calendar data: <strong>{len(no_data)}</strong></p>
 
 <h2>Upcoming (next 90 days)</h2>
 <table>
