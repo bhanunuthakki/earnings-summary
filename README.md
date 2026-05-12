@@ -22,26 +22,28 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 | Path | Purpose |
 |---|---|
-| `src/` | Core utilities: `db.py`, `llm_client.py`, `parser.py`, `portfolio.py`, `alias_manager.py`, `calendar_manager.py`, `intake.py`, `ir_uploads.py`, `index_manager.py`, `transcript_qa.py` |
-| `src/report/` | Unified brief generator. `builder.py` → `ReportSpec` (11 sections); renderers in `renderers/{html,markdown,sections_json,workbook}.py`; per-section builders in `sections/` |
+| `src/` | Core utilities: `db.py`, `llm_client.py`, `parser.py`, `portfolio.py`, `alias_manager.py`, `calendar_manager.py`, `intake.py`, `ir_uploads.py`, `index_manager.py`, `log_redact.py`, `transcript_qa.py` |
+| `src/report/` | Unified brief generator. `builder.py` → `ReportSpec` (12 sections); renderers in `renderers/{html,markdown,sections_json,workbook,charts_v2}.py`; per-section builders in `sections/` |
 | `src/dcf/` | DCF subsystem: `workbook_reader.py` extracts FCF stream, `valuation.py` computes PV/share + over-under %, `live_price.py` reads live FMP price, `persist.py` upserts `dcf_runs` |
-| `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_oi_10k`, `say_do`, `say_do_extractor`, `thesis_evaluator`, `holding_scorecard` |
+| `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `company_description`, `say_do`, `say_do_extractor`, `thesis_evaluator`, `holding_scorecard` |
 | `src/models/` | Pydantic schemas for documents, facts, KPIs, FMP payloads, patents, runs, validation |
 | `src/pipeline/` | Source routing, accounting runner, query helpers, KPI persistence, SEC XBRL parser, quarterly refresh orchestrator |
-| `execution/` | CLI entrypoints — FMP fetchers, IR doc fetchers, SEC pipelines, transcript fetcher (`yt-dlp` + `faster-whisper`), DCF refresher, brief builder + news refresher, daily worker + earnings calendar watcher, P2 (diligence + pressure-test + initiation-gate) |
+| `execution/` | CLI entrypoints — FMP fetchers, IR doc fetchers, SEC pipelines, transcript fetcher (`yt-dlp` + `faster-whisper`), DCF refresher, brief builder + news refresher + earnings-calendar HTML, daily worker + calendar fetcher + watcher, output retention sweep, P2 (diligence + pressure-test + initiation-gate) |
 | `directives/` | Layer 1 SOPs — pipeline DAG, data provenance, per-source fetch directives, per-ticker enhancements |
 | `micro_thesis/holdings/` | Per-ticker JSON KPI specs (schema v2: thesis + tier-1/2/3 KPIs + break rules + WACC + MoS bar + DCF defaults) |
 | `micro_thesis/sources/` | Per-ticker drop folders for review documents |
 | `micro_thesis/diligence/` | P2 diligence markdown per candidate ticker (built by `build_diligence.py`) |
 | `dcf/` | Canonical per-ticker DCF workbooks (`<TICKER>.xlsx`, user-edited; system refreshes historicals only) |
-| `data/ticker_specific/` | Per-ticker enhancement JSON (e.g. `NVO/patent_timeline.json`) — fed into the brief's §9 Bear Case prompt |
+| `data/ticker_specific/` | Per-ticker enhancement JSON (e.g. `NVO/patent_timeline.json`) — fed into the brief's §10 Bear Case prompt |
+| `data/company_description/` | Cached §2 Company Description payloads (LLM synthesis of 10-K business overview, keyed by source sha256) |
 | `examples/dcf/` | Reference DCF workbook templates (AMZN, GOOG, META) — seed for new `dcf/<TICKER>.xlsx` |
-| `alembic/` | Schema migrations against `data/portfolio.db` |
-| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the daily crons |
+| `alembic/` | Schema migrations against `data/portfolio.db` (head: `0027_drop_output_consolidator_remnants`) |
+| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the daily crons (see `cron/SETUP_WINDOWS_SCHEDULER.md`) |
 | `tests/` | Pytest suite covering compute modules and pipeline contracts |
 | `transcripts/raw|processed/` | Earnings transcript flow (gitignored) |
 | `ir_documents/` | Downloaded IR PDFs (gitignored) |
 | `output/research/<TICKER>/` | Generated brief artifacts (`<DATE>_report.html` etc.) — primary deliverable |
+| `output/earnings_calendar.html` | Portfolio + watchlist earnings calendar (built on demand by `build_earnings_calendar.py`) |
 | `data/` | SQLite DB + FMP JSON cache (gitignored, reproducible) |
 | `.tmp/` | Ephemeral state, parsed payloads, indexes, pressure-test audits (gitignored) |
 
@@ -66,12 +68,15 @@ FMP_API_KEY=...              # fundamentals, statements, calendar, transcripts
 
 ## Common workflows
 
-The system is built around two daily crons + a small set of on-demand CLIs. The crons keep the brief auto-refreshed; the CLIs cover one-off operations.
+The system is built around three chained daily crons + an hourly catch-up cron + a small set of on-demand CLIs. The crons keep the brief auto-refreshed; the CLIs cover one-off operations.
 
 ### Daily auto-refresh loop
 
 ```bash
-# 06:00 — scan FMP earnings calendar, populate the queue
+# 05:45 — pull fresh FMP earnings_calendar.json for every portfolio + watchlist ticker
+python execution/fetch_fmp_earnings_calendar.py
+
+# 06:00 — scan FMP earnings calendar cache, populate expected_earnings
 python execution/earnings_calendar_watcher.py
 
 # 06:30 — drain tracked_companies.brief_dirty:
@@ -79,7 +84,7 @@ python execution/earnings_calendar_watcher.py
 python execution/daily_fetch_and_brief.py --enable-llm
 ```
 
-Both are wired in `cron/*.task.xml`. Fact-table inserts auto-flip `brief_dirty=1` via the SQL triggers from migration 0026 — no manual invalidation needed.
+All three are wired in `cron/*.task.xml`; the 15/30-min gaps absorb slow FMP responses and let each step's writes commit before the next reads. Fact-table inserts auto-flip `brief_dirty=1` via the SQL triggers from migration 0026 — no manual invalidation needed. See `cron/SETUP_WINDOWS_SCHEDULER.md` for installing under Task Scheduler.
 
 ### Refresh fundamentals for a ticker
 
@@ -112,7 +117,7 @@ python execution/build_artifacts.py --ticker META --enable-llm
 python execution/build_artifacts.py --ticker AMD --flavor evaluation --allow-untracked
 ```
 
-Writes `output/research/<TICKER>/<DATE>_report.html` + `.md` + `_sections.json` + `_dcf.xlsx`. `--enable-llm` opts §8 Recent Developments + §9 Bear Case into real Claude calls (subscription billing); omit to keep them stubbed.
+Writes `output/research/<TICKER>/<DATE>_report.html` + `.md` + `_sections.json` + `_dcf.xlsx`. The 12 sections: §1 Snapshot/EvaluationSnapshot · §2 Company Description · §3 Thesis · §4 Financials (YoY% growth matrix + paired bars + 10-FY reference) · §5 Segments (stacked-area + YoY matrix) · §6 Earnings · §7 Say-Do · §8 IR docs · §9 Recent developments · §10 Bear case · §11 Provenance · §12 Transcripts. `--enable-llm` opts §9 Recent Developments + §10 Bear Case into real Claude calls (subscription billing); omit to keep them stubbed.
 
 ### Refresh just the news section (faster than a full rebuild)
 
@@ -121,6 +126,16 @@ python execution/refresh_news.py --ticker META
 ```
 
 Bypasses the 7-day news cache and re-queries WebSearch; the rest of the brief regenerates from the same DB state.
+
+### Refresh the §2 Company Description cache
+
+```bash
+python execution/extract_company_description.py --ticker META           # one ticker
+python execution/extract_company_description.py --all                   # every tracked ticker
+python execution/extract_company_description.py --ticker META --refresh # force re-call past the sha256 cache
+```
+
+Scans the latest 10-K + `profile.json`, calls Claude Sonnet for a structured business overview, caches to `data/company_description/<TICKER>.json`. The brief overlays current segment shares from `segment_facts` at render time, so the weighting tracks reality even if the prose is a quarter stale.
 
 ### IR document pipeline
 
@@ -160,7 +175,7 @@ python execution/check_initiation_gate.py --ticker AMD
 
 ### Per-ticker enhancements (custom research)
 
-Drop a JSON in `data/ticker_specific/<TICKER>/<feature>.json` (e.g. NVO patent timeline, drug pipeline milestones). The brief's §9 Bear Case prompt picks it up automatically. See `directives/per_ticker_enhancements.md`.
+Drop a JSON in `data/ticker_specific/<TICKER>/<feature>.json` (e.g. NVO patent timeline, drug pipeline milestones). The brief's §10 Bear Case prompt picks it up automatically. See `directives/per_ticker_enhancements.md`.
 
 ### Recurring catch-up for orphan tickers
 
@@ -169,6 +184,24 @@ python execution/onboard_pending_tickers.py
 ```
 
 Hourly cron. Belt-and-suspenders for tickers that enter `tracked_companies` outside the `track_company` hook — runs FMP fetch + parse + DCF for any pending ticker. See `directives/onboard_pending_tickers.md`.
+
+### Earnings calendar HTML
+
+```bash
+python execution/build_earnings_calendar.py
+```
+
+Writes `output/earnings_calendar.html` — a single page covering every portfolio + watchlist ticker, split into Upcoming (next 90d, portfolio rows pinned + amber-shaded), Recently reported (last 45d), and No calendar data (collapsed). Each row links to the most recent brief for that ticker. Overwritten in place on every run.
+
+### Output retention sweep
+
+```bash
+python execution/sweep_output_history.py --dry-run                # preview
+python execution/sweep_output_history.py                          # all tickers, keep latest 5 dates
+python execution/sweep_output_history.py --keep 10 --ticker META
+```
+
+Groups files in `output/research/<TICKER>/` by the `YYYY-MM-DD_` prefix and deletes everything older than the latest N distinct dates per ticker. Files without a date prefix are ignored — non-dated artifacts survive any sweep.
 
 ## Pre-push checklist
 
@@ -191,4 +224,4 @@ Strict typing is enforced (`pyright` strict + `basedpyright` all). No `Any`, no 
 
 ## Security
 
-`.env`, `credentials.json`, `token.json`, and any `*.pem` are gitignored and must never be logged or echoed. API keys are passed via environment variables only — never CLI args.
+`.env`, `credentials.json`, `token.json`, and any `*.pem` are gitignored and must never be logged or echoed. API keys are passed via environment variables only — never CLI args. FMP fetchers route exception strings through `src/log_redact.py` before logging, since `requests.HTTPError.__str__` embeds the full URL (with `apikey=...`) — every new integration that talks to a credentialed HTTP endpoint should import the same helper.
