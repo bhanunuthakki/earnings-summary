@@ -282,6 +282,10 @@ class KpiSeries(BaseModel):
     unit: str  # "%", "USD bn", etc.
     quarters: list[str] = Field(default_factory=list)
     values: list[float | None] = Field(default_factory=list)
+    # Full-history values aligned to FinancialsSection.quarter_labels_full —
+    # used by the paired-chart renderer to compute YoY%. Empty when KPI lacks
+    # 4+ quarters of history.
+    levels_full: list[float | None] = Field(default_factory=list)
 
 
 class FinancialsSection(BaseModel):
