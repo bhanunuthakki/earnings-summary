@@ -174,7 +174,8 @@ def _all_tracked(repo_root: Path) -> list[str]:
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT DISTINCT ticker FROM tracked_companies WHERE list_type IN ('portfolio', 'watchlist') ORDER BY ticker"
+        f"SELECT DISTINCT ticker FROM tracked_companies "
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
     )
     rows = cursor.fetchall()
     conn.close()

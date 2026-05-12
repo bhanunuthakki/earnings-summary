@@ -25,6 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from compute.segment_definitions import extract_for_ticker  # noqa: E402
 
 
@@ -88,7 +89,8 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     conn = sqlite3.connect(str(db_path))
     cur = conn.cursor()
     cur.execute(
-        "SELECT DISTINCT ticker FROM tracked_companies WHERE list_type IN ('portfolio','watchlist') ORDER BY ticker"
+        f"SELECT DISTINCT ticker FROM tracked_companies "
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
     )
     rows = cur.fetchall()
     conn.close()

@@ -69,7 +69,14 @@ def documents_for(
 # parsing/analysis over thousands of names. Callers needing the wider universe
 # pass an explicit `list_types=` set.
 ANALYZED_LIST_TYPES: frozenset[ListType] = frozenset(
-    {ListType.PORTFOLIO, ListType.WATCHLIST}
+    {ListType.PORTFOLIO, ListType.WATCHLIST, ListType.EVALUATION}
+)
+
+# Subset of ANALYZED_LIST_TYPES that produces full briefs (portfolio-flavor or
+# eval-flavor). Watchlist names are a holding pen — no auto-brief. Use this for
+# brief-producing pipelines: company description, build_artifacts.py defaults.
+BRIEFED_LIST_TYPES: frozenset[ListType] = frozenset(
+    {ListType.PORTFOLIO, ListType.EVALUATION}
 )
 
 

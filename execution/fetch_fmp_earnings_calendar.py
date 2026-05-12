@@ -21,9 +21,10 @@ Schema (list of events, FMP's native shape):
 
 Usage:
   python execution/fetch_fmp_earnings_calendar.py --ticker NVO
-  python execution/fetch_fmp_earnings_calendar.py --all
+  python execution/fetch_fmp_earnings_calendar.py --all          # active universe
   python execution/fetch_fmp_earnings_calendar.py --portfolio
   python execution/fetch_fmp_earnings_calendar.py --watchlist
+  python execution/fetch_fmp_earnings_calendar.py --evaluation
 """
 
 import argparse
@@ -98,17 +99,20 @@ def select_tickers(args: argparse.Namespace) -> list[str]:
         return [c["ticker"] for c in companies if c["list_type"] == "portfolio"]
     if args.watchlist:
         return [c["ticker"] for c in companies if c["list_type"] == "watchlist"]
-    # --all: portfolio + watchlist
-    return [c["ticker"] for c in companies if c["list_type"] in ("portfolio", "watchlist")]
+    if args.evaluation:
+        return [c["ticker"] for c in companies if c["list_type"] == "evaluation"]
+    # --all: active universe (db.ACTIVE_LIST_TYPES)
+    return [c["ticker"] for c in companies if c["list_type"] in db.ACTIVE_LIST_TYPES]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch earnings calendar from FMP")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", help="Specific ticker symbol")
-    group.add_argument("--all", action="store_true", help="Portfolio + watchlist")
+    group.add_argument("--all", action="store_true", help="Active universe (db.ACTIVE_LIST_TYPES)")
     group.add_argument("--portfolio", action="store_true", help="Portfolio only")
     group.add_argument("--watchlist", action="store_true", help="Watchlist only")
+    group.add_argument("--evaluation", action="store_true", help="Evaluation only")
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
                         help=f"Max events per ticker (default {DEFAULT_LIMIT})")
     args = parser.parse_args()

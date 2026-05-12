@@ -26,7 +26,7 @@ onboard pipeline against them.
 
 A row in `tracked_companies` is pending when ALL of:
 
-- `list_type IN ('portfolio', 'watchlist')`
+- `list_type IN ('portfolio', 'watchlist', 'evaluation')` (the `db.ACTIVE_LIST_TYPES` set)
 
 AND ANY of:
 

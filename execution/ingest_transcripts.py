@@ -21,6 +21,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from compute.transcript_ingest import (  # noqa: E402
     IngestResult,
     ParsedFilename,
@@ -36,10 +37,16 @@ _TRANSCRIPT_DIRS = (PROJECT_ROOT / "transcripts" / "processed", PROJECT_ROOT / "
 
 
 def _load_tracked_tickers(conn) -> frozenset[str]:
-    """Return the set of portfolio + watchlist + etf tickers (uppercased)."""
+    """Return the set of active analyzed + etf tickers (uppercased).
+
+    Transcripts are ingested for everything we analyze (portfolio + watchlist +
+    evaluation) plus our one ETF (FLKR), which publishes earnings-style
+    materials despite not being a single-name equity.
+    """
+    placeholders = ", ".join("?" for _ in db.ACTIVE_LIST_TYPES) + ", ?"
     cur = conn.execute(
-        "SELECT ticker FROM tracked_companies "
-        "WHERE list_type IN ('portfolio', 'watchlist', 'etf')"
+        f"SELECT ticker FROM tracked_companies WHERE list_type IN ({placeholders})",
+        (*db.ACTIVE_LIST_TYPES, "etf"),
     )
     return frozenset(r["ticker"].upper() for r in cur.fetchall())
 

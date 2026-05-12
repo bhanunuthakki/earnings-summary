@@ -128,6 +128,7 @@ def resolve_tier(explicit: str | None) -> TierConfig:
 _LIST_TYPE_BASE_FRESH_H: dict[str, int] = {
     "portfolio":    24,
     "watchlist":    24,
+    "evaluation":   24,
     "none":         24 * 90,
     "etf":          24 * 30,
     "index_member": 24 * 30,
@@ -188,6 +189,7 @@ _CLASS_PRIORITY_WEIGHT: dict[str, int] = {
 
 _LIST_TYPE_PRIORITY_WEIGHT: dict[str, int] = {
     "portfolio":    0,
+    "evaluation":   500,
     "watchlist":    1000,
     "none":         2000,
     "etf":          3000,

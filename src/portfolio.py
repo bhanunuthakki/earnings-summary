@@ -27,7 +27,7 @@ class PortfolioEntry:
     ticker: str
     name: str
     fiscal_year_end_month: int  # 1..12, parsed from DB `fiscal_year_end`
-    list_type: str               # "portfolio" | "watchlist"
+    list_type: str               # "portfolio" | "watchlist" | "evaluation"
 
 
 def _parse_fye_month(ticker: str, fye: object) -> int:
@@ -45,15 +45,25 @@ def _parse_fye_month(ticker: str, fye: object) -> int:
     return month
 
 
-def get_portfolio(include_watchlist: bool = False) -> list[PortfolioEntry]:
-    """Return the active portfolio from `tracked_companies`."""
+def get_portfolio(
+    include_watchlist: bool = False,
+    include_evaluation: bool = False,
+) -> list[PortfolioEntry]:
+    """Return the active portfolio from `tracked_companies`.
+
+    `portfolio` rows are always included. `watchlist` and `evaluation` are
+    opt-in via their respective flags so legacy callers (which only knew about
+    portfolio + watchlist) keep their previous semantics.
+    """
     rows = db.get_tracked_companies()
     out: list[PortfolioEntry] = []
     for r in rows:
         list_type = str(r.get("list_type", "portfolio"))
-        if list_type not in ("portfolio", "watchlist"):
+        if list_type not in db.ACTIVE_LIST_TYPES:
             continue
         if list_type == "watchlist" and not include_watchlist:
+            continue
+        if list_type == "evaluation" and not include_evaluation:
             continue
         ticker = str(r["ticker"]).upper()
         out.append(
@@ -69,11 +79,20 @@ def get_portfolio(include_watchlist: bool = False) -> list[PortfolioEntry]:
 
 def lookup(ticker: str) -> PortfolioEntry | None:
     canonical = ticker.strip().upper()
-    for e in get_portfolio(include_watchlist=True):
+    for e in get_portfolio(include_watchlist=True, include_evaluation=True):
         if e.ticker == canonical:
             return e
     return None
 
 
-def tickers(include_watchlist: bool = False) -> Iterable[str]:
-    return [e.ticker for e in get_portfolio(include_watchlist=include_watchlist)]
+def tickers(
+    include_watchlist: bool = False,
+    include_evaluation: bool = False,
+) -> Iterable[str]:
+    return [
+        e.ticker
+        for e in get_portfolio(
+            include_watchlist=include_watchlist,
+            include_evaluation=include_evaluation,
+        )
+    ]

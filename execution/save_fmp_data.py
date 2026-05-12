@@ -71,14 +71,16 @@ TIME_SENSITIVE_ENDPOINTS: set[str] = {
 }
 
 # Snapshot cadence by list_type. Anything not present here defaults to monthly.
-# Portfolio/watchlist names get a daily history; index members are sampled
-# monthly to keep snapshot drift bounded across thousands of tickers.
+# Active-universe names (portfolio/watchlist/evaluation) get daily history;
+# index members are sampled monthly to keep snapshot drift bounded across
+# thousands of tickers.
 _SNAPSHOT_CADENCE_DAYS: dict[str, int] = {
-    "portfolio": 1,
-    "watchlist": 1,
-    "none": 1,
+    "portfolio":    1,
+    "watchlist":    1,
+    "evaluation":   1,
+    "none":         1,
     "index_member": 30,
-    "etf": 30,
+    "etf":          30,
 }
 
 
@@ -754,13 +756,15 @@ def main():
     ap.add_argument("--tickers", help="Comma-separated tickers")
     ap.add_argument("--portfolio", action="store_true")
     ap.add_argument("--watchlist", action="store_true")
+    ap.add_argument("--evaluation", action="store_true",
+                    help="Pull all tickers with list_type='evaluation'")
     ap.add_argument("--index-members", action="store_true",
                     help="Pull all tickers with list_type='index_member' (skips 10-K JSON)")
     ap.add_argument("--etfs", action="store_true",
                     help="Pull all tickers with list_type='etf' (skips 10-K JSON)")
     ap.add_argument("--sector-industry", action="store_true")
     ap.add_argument("--all", action="store_true",
-                    help="Portfolio + watchlist + sector/industry")
+                    help="Active universe (portfolio + watchlist + evaluation) + sector/industry")
     ap.add_argument("--skip-existing", action="store_true",
                     help="Skip endpoints already 'ok' in DB")
     ap.add_argument("--force-snapshot", action="store_true",
@@ -800,6 +804,8 @@ def main():
         targets += _ticker_list("portfolio")
     if args.watchlist:
         targets += _ticker_list("watchlist")
+    if args.evaluation:
+        targets += _ticker_list("evaluation")
     if args.index_members:
         targets += _ticker_list("index_member")
     if args.etfs:
@@ -807,8 +813,9 @@ def main():
     if args.sector_industry:
         do_sector = True
     if args.all:
-        targets += (_ticker_list("portfolio") + _ticker_list("watchlist")
-                    + _ticker_list("index_member") + _ticker_list("etf"))
+        for lt in portfolio_db.ACTIVE_LIST_TYPES:
+            targets += _ticker_list(lt)
+        targets += _ticker_list("index_member") + _ticker_list("etf")
         do_sector = True
 
     seen = set()
