@@ -46,13 +46,14 @@ from report.models import (
     TranscriptEntry,
     ValuationSnapshot,
 )
-from report.renderers.charts import CHART_CSS, sparkline
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.charts_v2 import (
     BarSpec,
+    LineSeries,
     MatrixRow,
     bar_chart,
     paired_chart,
+    stacked_area,
     yoy_heatmap_table,
 )
 
@@ -299,7 +300,6 @@ table.weighting-table td:nth-child(3) {
   background: var(--accent);
 }
 """
-    + CHART_CSS
     + CHARTS_V2_CSS
     + """
 .summary-grid {
@@ -1038,8 +1038,7 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
         return
     out.write(
         '<p class="meta">Sorted by latest-quarter magnitude, descending. '
-        'Segments contributing &lt;1% of the bucket roll up into "Other". '
-        "Click each bucket to expand the table; the snapshot panel is always visible."
+        'Segments contributing &lt;1% of the bucket roll up into "Other".'
     )
     if s.segment_definitions and s.segment_definitions_fiscal_year:
         out.write(
@@ -1047,6 +1046,7 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
             f"definition (FY{s.segment_definitions_fiscal_year})."
         )
     out.write("</p>\n")
+    quarters_full = s.quarter_labels_full or s.quarter_labels
     for label, group, anchor in (
         ("Revenue by product", s.revenue_by_product, "rev-product"),
         ("Revenue by geography", s.revenue_by_geography, "rev-geo"),
@@ -1054,111 +1054,83 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     ):
         if not group:
             continue
-        _segment_bucket(out, label, anchor, s.quarter_labels, group, s.segment_definitions)
+        _segment_bucket(out, label, anchor, quarters_full, group, s.segment_definitions)
+
+
+_STACKED_AREA_DOMINANT_SHARE = 0.90  # skip stacked area when one segment dwarfs the rest
 
 
 def _segment_bucket(
     out: StringIO,
     label: str,
     anchor: str,
-    quarters: list[str],
+    quarters_full: list[str],
     rows: list[SegmentSeries],
     definitions: dict[str, str],
 ) -> None:
-    """One bucket: snapshot panel (visible) + full table (in <details>)."""
+    """One bucket: stacked-area mix-shift chart + YoY% matrix with CAGR cols."""
     out.write(f'<h3 id="seg-{anchor}">{html.escape(label)}</h3>\n')
-    _segment_snapshot_panel(out, quarters, rows, definitions)
-    out.write(
-        f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n'
-    )
-    _segments_table(out, quarters, rows, definitions)
-    out.write("</details>\n")
-
-
-def _segment_snapshot_panel(
-    out: StringIO,
-    quarters: list[str],
-    rows: list[SegmentSeries],
-    definitions: dict[str, str],
-) -> None:
-    """Top-3 (by latest magnitude) cards + sparkline-per-segment summary list."""
-    latest_label = quarters[-1] if quarters else ""
-    out.write('<div class="seg-snapshot">')
-    for r in rows[:3]:
-        latest = _last_non_null(r.values)
-        share_pct = _segment_share(r, rows)
-        latest_str = _fmt_num(latest, 0)
-        share_str = f"{share_pct * 100:.1f}%" if share_pct is not None else "—"
-        yoy_str = _fmt_pct(r.growth.yoy)
-        spark = sparkline(r.values, width=140, height=32)
-        out.write(
-            f'<div class="seg-card">'
-            f'<div class="seg-card-name">{_segment_name_with_def(r.segment_name, definitions)}</div>'
-            f'<div class="seg-card-spark">{spark}</div>'
-            f'<div class="seg-card-row"><span>{html.escape(latest_label)}</span>'
-            f"<strong>{latest_str}</strong></div>"
-            f'<div class="seg-card-row"><span>Share</span><strong>{share_str}</strong></div>'
-            f'<div class="seg-card-row"><span>YoY</span><strong>{yoy_str}</strong></div>'
-        )
-        definition = definitions.get(r.segment_name)
-        if definition:
-            out.write(
-                f'<details class="seg-card-def"><summary>10-K definition</summary>'
-                f"<p>{html.escape(definition)}</p></details>"
+    # Stacked area — only when 2+ segments AND no one segment dwarfs the rest.
+    if len(rows) >= 2 and _top_segment_share(rows) < _STACKED_AREA_DOMINANT_SHARE:
+        _segment_stacked_area(out, quarters_full, rows, label)
+    # YoY% matrix — every segment as a row, full quarter history, CAGR cols.
+    if any(r.levels_full for r in rows) and quarters_full:
+        matrix_rows = [
+            MatrixRow(
+                name=r.segment_name,
+                levels=list(r.levels_full),
+                unit=r.unit,
+                tooltip=definitions.get(r.segment_name, ""),
             )
-        out.write("</div>")
-    out.write("</div>\n")
+            for r in rows
+            if r.levels_full
+        ]
+        if matrix_rows:
+            out.write(yoy_heatmap_table(
+                rows=matrix_rows,
+                periods=[_compact_q(q) for q in quarters_full],
+                title=f"{label} — YoY % with trailing CAGR",
+                display_quarters=12,
+                cagr_periods=(4, 8, 12),
+            ))
 
 
-def _segment_name_with_def(name: str, definitions: dict[str, str]) -> str:
-    """Append a 📖 hover-mark when a definition exists. Tooltip via title attr."""
-    if name in definitions:
-        return (
-            f'<span title="{html.escape(definitions[name])}">{html.escape(name)} '
-            f'<span class="seg-def-mark">📖</span></span>'
-        )
-    return html.escape(name)
-
-
-def _segment_share(r: SegmentSeries, rows: list[SegmentSeries]) -> float | None:
-    latest = _last_non_null(r.values)
-    if latest is None:
-        return None
-    total = sum(abs(_last_non_null(s.values) or 0.0) for s in rows)
-    if total == 0:
-        return None
-    return abs(latest) / total
-
-
-def _last_non_null(values: list[float | None]) -> float | None:
-    for v in reversed(values):
-        if v is not None:
-            return v
-    return None
-
-
-def _segments_table(
+def _segment_stacked_area(
     out: StringIO,
-    quarters: list[str],
+    quarters_full: list[str],
     rows: list[SegmentSeries],
-    definitions: dict[str, str],
+    label: str,
 ) -> None:
-    headers = ["Segment", "Trend", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
-    out.write('<div class="table-wrap"><table>\n<thead><tr>')
-    for h in headers:
-        out.write(f"<th>{html.escape(h)}</th>")
-    out.write("</tr></thead>\n<tbody>")
+    """Render a stacked area chart of $ levels over the full quarter axis."""
+    compact = [_compact_q(q) for q in quarters_full]
+    series = [
+        LineSeries(name=r.segment_name, values=list(r.levels_full))
+        for r in rows
+        if r.levels_full
+    ]
+    if not series:
+        return
+    out.write(stacked_area(
+        series=series,
+        labels=compact,
+        title=f"{label} — $ levels",
+        width=1080,
+        height=280,
+    ))
+
+
+def _top_segment_share(rows: list[SegmentSeries]) -> float:
+    """What fraction of the latest-quarter total does the largest segment take?"""
+    latest_vals = []
     for r in rows:
-        out.write(
-            f"<tr><td>{_segment_name_with_def(r.segment_name, definitions)}</td>"
-            f"<td>{sparkline(r.values, width=100, height=24)}</td>"
-        )
-        for v in r.values:
-            out.write(f'<td class="num">{_fmt_num(v, 0)}</td>')
-        for v in (r.growth.qoq, r.growth.yoy, r.growth.cagr_1y_ttm, r.growth.cagr_3y_ttm):
-            out.write(f'<td class="num">{_fmt_pct(v)}</td>')
-        out.write("</tr>")
-    out.write("</tbody></table></div>\n")
+        for v in reversed(r.values):
+            if v is not None:
+                latest_vals.append(abs(v))
+                break
+    if not latest_vals:
+        return 0.0
+    total = sum(latest_vals)
+    return max(latest_vals) / total if total else 0.0
 
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:

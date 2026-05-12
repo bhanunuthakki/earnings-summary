@@ -32,7 +32,6 @@ from report.sections._common import (
     has_table,
     missing,
     open_repo_db,
-    quarter_label,
 )
 
 MetricKey = Literal["revenue_by_product", "revenue_by_geography", "operating_income"]
@@ -72,6 +71,7 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
 
     grids = _build_grids(deduped, quarters_full, display_labels)
     definitions, definitions_year = _load_segment_definitions(ticker, repo_root)
+    quarter_labels_full = [f"{y} Q{q}" for (y, q) in quarters_full]
     return SegmentsSection(
         status=SectionStatus.OK if any(grids.values()) else SectionStatus.PARTIAL,
         quarter_labels=display_labels,
@@ -80,6 +80,7 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
         operating_income=grids["operating_income"],
         segment_definitions=definitions,
         segment_definitions_fiscal_year=definitions_year,
+        quarter_labels_full=quarter_labels_full,
     )
 
 
@@ -239,6 +240,7 @@ def _build_grids(
                 quarters=display_labels,
                 values=display_values,
                 growth=compute_growth(cleaned_series),
+                levels_full=cleaned_series,
             )
             prepared.append((series, latest))
         grids[bucket] = _sort_and_rollup(prepared, display_labels, bucket)
@@ -283,6 +285,16 @@ def _aggregate_other(
     for i in range(n):
         col = [s.values[i] for s in rolled if i < len(s.values) and s.values[i] is not None]
         summed.append(sum(col) if col else None)  # type: ignore[arg-type]
+    # Aggregate full history too — uses the union of underlying quarter counts.
+    full_n = max((len(s.levels_full) for s in rolled), default=0)
+    summed_full: list[float | None] = []
+    for i in range(full_n):
+        col_full = [
+            s.levels_full[i]
+            for s in rolled
+            if i < len(s.levels_full) and s.levels_full[i] is not None
+        ]
+        summed_full.append(sum(col_full) if col_full else None)  # type: ignore[arg-type]
     label = f"Other ({len(rolled)} segments < 1%)"
     return SegmentSeries(
         segment_name=label,
@@ -290,6 +302,7 @@ def _aggregate_other(
         quarters=display_labels,
         values=summed,
         growth=compute_growth(summed),
+        levels_full=summed_full,
     )
 
 
