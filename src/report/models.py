@@ -282,6 +282,10 @@ class KpiSeries(BaseModel):
     unit: str  # "%", "USD bn", etc.
     quarters: list[str] = Field(default_factory=list)
     values: list[float | None] = Field(default_factory=list)
+    # Full-history values aligned to FinancialsSection.quarter_labels_full —
+    # used by the paired-chart renderer to compute YoY%. Empty when KPI lacks
+    # 4+ quarters of history.
+    levels_full: list[float | None] = Field(default_factory=list)
 
 
 class FinancialsSection(BaseModel):
@@ -305,6 +309,10 @@ class SegmentSeries(BaseModel):
     values: list[float | None] = Field(default_factory=list)
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
     unit: str = "USD millions"
+    # Full-history values aligned to SegmentsSection.quarter_labels_full —
+    # used by the YoY matrix renderer. Empty when section was built without
+    # full-history support.
+    levels_full: list[float | None] = Field(default_factory=list)
 
 
 class SegmentsSection(BaseModel):
@@ -316,6 +324,7 @@ class SegmentsSection(BaseModel):
     operating_income: list[SegmentSeries] = Field(default_factory=list)
     segment_definitions: dict[str, str] = Field(default_factory=dict)
     segment_definitions_fiscal_year: int | None = None
+    quarter_labels_full: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

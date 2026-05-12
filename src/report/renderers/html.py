@@ -46,9 +46,16 @@ from report.models import (
     TranscriptEntry,
     ValuationSnapshot,
 )
-from report.renderers.charts import CHART_CSS, line_chart, sparkline
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
-from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
+from report.renderers.charts_v2 import (
+    BarSpec,
+    LineSeries,
+    MatrixRow,
+    bar_chart,
+    paired_chart,
+    stacked_area,
+    yoy_heatmap_table,
+)
 
 _BOLD_RX = re.compile(r"\*\*(.+?)\*\*")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
@@ -293,7 +300,6 @@ table.weighting-table td:nth-child(3) {
   background: var(--accent);
 }
 """
-    + CHART_CSS
     + CHARTS_V2_CSS
     + """
 .summary-grid {
@@ -873,26 +879,41 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
     _section_h2(out, "financials", 4, "Financials — last 12 quarters", s.status)
     if _missing_callout(out, s.status, s.missing):
         return
+    # YoY% growth matrix — dense scannable view with heat shading + trailing
+    # CAGR columns. Lead with this; analysts read it first.
+    if s.line_items and s.quarter_labels_full and any(li.levels_full for li in s.line_items):
+        _yoy_matrix(out, s)
     if s.line_items and s.chart_priorities:
         _financial_charts(
             out, s.quarter_labels, s.line_items, s.chart_priorities, list(s.kpi_chart_series)
         )
-    # YoY% growth matrix — dense scannable view with heat shading + trailing
-    # CAGR columns. Sits above the absolute-levels table because the YoY
-    # picture is the analyst-grade primary read.
-    if s.line_items and s.quarter_labels_full and any(li.levels_full for li in s.line_items):
-        _yoy_matrix(out, s)
-    if s.line_items:
-        out.write(
-            f'<details class="financials-table"><summary>Full quarterly table — '
-            f"{len(s.line_items)} line items × {len(s.quarter_labels)} quarters</summary>\n"
-        )
-        _quarterly_table(out, s.quarter_labels, s.line_items)
-        out.write("</details>\n")
     if s.annual_line_items:
         out.write(f"<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n")
         _annual_table(out, s.annual_years, s.annual_line_items)
         out.write("</details>\n")
+
+
+_QUARTER_LABEL_RX = re.compile(r"^(\d{4}) Q(\d)$")
+
+
+def _compact_q(label: str) -> str:
+    """'2025 Q3' → 'Q3'25' for axis-label density."""
+    m = _QUARTER_LABEL_RX.match(label)
+    if m:
+        return f"Q{m.group(2)}'{m.group(1)[2:]}"
+    return label
+
+
+def _compute_yoy(levels: list[float | None]) -> list[float | None]:
+    """YoY% per position: 100 × (curr / value_4q_ago − 1). None for insufficient history."""
+    out: list[float | None] = []
+    for i, v in enumerate(levels):
+        prior = levels[i - 4] if i >= 4 else None
+        if v is None or prior is None or prior == 0:
+            out.append(None)
+        else:
+            out.append((v / prior - 1) * 100)
+    return out
 
 
 def _yoy_matrix(out: StringIO, s: FinancialsSection) -> None:
@@ -905,11 +926,21 @@ def _yoy_matrix(out: StringIO, s: FinancialsSection) -> None:
         return
     out.write(yoy_heatmap_table(
         rows=rows,
-        periods=list(s.quarter_labels_full),
+        periods=[_compact_q(q) for q in s.quarter_labels_full],
         title="YoY % growth matrix — heat-shaded, with trailing CAGR",
         display_quarters=12,
         cagr_periods=(4, 8, 12),
     ))
+
+
+def _infer_level_fmt(unit: str) -> str:
+    """Map a unit hint to the BarSpec value_fmt key."""
+    u = unit.lower()
+    if "%" in u or "percent" in u:
+        return "pct"
+    if "usd" in u or "$" in u:
+        return "dollar"
+    return "compact"
 
 
 def _financial_charts(
@@ -919,46 +950,72 @@ def _financial_charts(
     priorities: list[str],
     kpi_series: list[object],
 ) -> None:
-    """Render N line charts — one per priority — in a fluid grid.
+    """Render N paired charts (level + YoY%) — one per priority, stacked vertically.
 
     Each priority resolves first to a financials line_item, then falls back to
-    a kpi_facts series (e.g. ARPAC, GMV growth, NIM). Number of charts is
-    whatever the holdings JSON requests; the grid layout adapts.
+    a kpi_facts series (e.g. ARPAC, GMV growth, NIM). When a series has 4+
+    quarters of prior history, the right panel shows YoY% bars; otherwise it
+    silently falls back to a single level bar chart.
     """
     by_line_item = {li.line_item: li for li in line_items}
     by_kpi_name = {s.name: s for s in kpi_series}
-    grid_class = "chart-grid-1col" if len(priorities) == 1 else "chart-grid-2col"
-    out.write(f'<div class="{grid_class}">\n')
+    compact_labels = [_compact_q(q) for q in quarters]
+    n_display = len(quarters)
+    out.write('<div class="chart-grid-1col">\n')
     for name in priorities:
         if name in by_line_item:
             item = by_line_item[name]
-            title = f"{item.line_item} ({item.unit})"
-            values = item.values
+            title = item.line_item
+            full = list(item.levels_full) if item.levels_full else list(item.values)
+            level_fmt = _infer_level_fmt(item.unit)
         elif name in by_kpi_name:
             ks = by_kpi_name[name]
-            unit = getattr(ks, "unit", "")
-            title = f"{name} ({unit})" if unit else name
-            values = list(getattr(ks, "values", []))
+            title = name
+            full = list(getattr(ks, "levels_full", []) or getattr(ks, "values", []))
+            level_fmt = _infer_level_fmt(str(getattr(ks, "unit", "")))
         else:
             continue
-        out.write(f'<div class="chart-cell">{line_chart(values, quarters, title=title)}</div>\n')
+        display_levels = full[-n_display:]
+        yoy = _compute_yoy(full)[-n_display:]
+        n_level_obs = sum(1 for v in display_levels if v is not None)
+        n_yoy_obs = sum(1 for v in yoy if v is not None)
+        out.write('<div class="chart-cell">')
+        if n_yoy_obs >= 4:
+            out.write(paired_chart(
+                level_values=display_levels,
+                yoy_values=yoy,
+                labels=compact_labels,
+                title=title,
+                level_fmt=level_fmt,
+                panel_width=540,
+                height=220,
+            ))
+        elif n_level_obs >= 4:
+            out.write(bar_chart(BarSpec(
+                values=display_levels,
+                labels=compact_labels,
+                title=title,
+                width=1080,
+                height=240,
+                value_fmt=level_fmt,
+                signed_color=False,
+            )))
+        else:
+            # Too sparse for a chart — caller is likely a newly-tracked KPI
+            # with only 1-3 quarters of data. Render a compact stat row.
+            latest_label, latest_val = "", None
+            for i in range(len(display_levels) - 1, -1, -1):
+                if display_levels[i] is not None:
+                    latest_label = compact_labels[i] if i < len(compact_labels) else ""
+                    latest_val = display_levels[i]
+                    break
+            out.write(
+                f'<div class="chart-empty"><strong>{html.escape(title)}</strong> '
+                f'<span class="meta">— sparse series ({n_level_obs} obs). Latest '
+                f'{html.escape(latest_label)}: {_fmt_num(latest_val, 2)}</span></div>'
+            )
+        out.write("</div>\n")
     out.write("</div>\n")
-
-
-def _quarterly_table(out: StringIO, quarters: list[str], rows: list[QuarterlyLineItem]) -> None:
-    headers = ["Line item", "Unit", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
-    out.write('<div class="table-wrap"><table>\n<thead><tr>')
-    for h in headers:
-        out.write(f"<th>{html.escape(h)}</th>")
-    out.write("</tr></thead>\n<tbody>")
-    for r in rows:
-        out.write(f"<tr><td>{html.escape(r.line_item)}</td><td>{html.escape(r.unit)}</td>")
-        for v in r.values:
-            out.write(f'<td class="num">{_fmt_num(v, r.digits)}</td>')
-        for v in (r.growth.qoq, r.growth.yoy, r.growth.cagr_1y_ttm, r.growth.cagr_3y_ttm):
-            out.write(f'<td class="num">{_fmt_pct(v)}</td>')
-        out.write("</tr>")
-    out.write("</tbody></table></div>\n")
 
 
 def _annual_table(out: StringIO, years: list[int], rows: list[AnnualLineItem]) -> None:
@@ -981,8 +1038,7 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
         return
     out.write(
         '<p class="meta">Sorted by latest-quarter magnitude, descending. '
-        'Segments contributing &lt;1% of the bucket roll up into "Other". '
-        "Click each bucket to expand the table; the snapshot panel is always visible."
+        'Segments contributing &lt;1% of the bucket roll up into "Other".'
     )
     if s.segment_definitions and s.segment_definitions_fiscal_year:
         out.write(
@@ -990,6 +1046,7 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
             f"definition (FY{s.segment_definitions_fiscal_year})."
         )
     out.write("</p>\n")
+    quarters_full = s.quarter_labels_full or s.quarter_labels
     for label, group, anchor in (
         ("Revenue by product", s.revenue_by_product, "rev-product"),
         ("Revenue by geography", s.revenue_by_geography, "rev-geo"),
@@ -997,111 +1054,83 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
     ):
         if not group:
             continue
-        _segment_bucket(out, label, anchor, s.quarter_labels, group, s.segment_definitions)
+        _segment_bucket(out, label, anchor, quarters_full, group, s.segment_definitions)
+
+
+_STACKED_AREA_DOMINANT_SHARE = 0.90  # skip stacked area when one segment dwarfs the rest
 
 
 def _segment_bucket(
     out: StringIO,
     label: str,
     anchor: str,
-    quarters: list[str],
+    quarters_full: list[str],
     rows: list[SegmentSeries],
     definitions: dict[str, str],
 ) -> None:
-    """One bucket: snapshot panel (visible) + full table (in <details>)."""
+    """One bucket: stacked-area mix-shift chart + YoY% matrix with CAGR cols."""
     out.write(f'<h3 id="seg-{anchor}">{html.escape(label)}</h3>\n')
-    _segment_snapshot_panel(out, quarters, rows, definitions)
-    out.write(
-        f'<details class="segment-details"><summary>Full quarterly table — {len(rows)} segments</summary>\n'
-    )
-    _segments_table(out, quarters, rows, definitions)
-    out.write("</details>\n")
-
-
-def _segment_snapshot_panel(
-    out: StringIO,
-    quarters: list[str],
-    rows: list[SegmentSeries],
-    definitions: dict[str, str],
-) -> None:
-    """Top-3 (by latest magnitude) cards + sparkline-per-segment summary list."""
-    latest_label = quarters[-1] if quarters else ""
-    out.write('<div class="seg-snapshot">')
-    for r in rows[:3]:
-        latest = _last_non_null(r.values)
-        share_pct = _segment_share(r, rows)
-        latest_str = _fmt_num(latest, 0)
-        share_str = f"{share_pct * 100:.1f}%" if share_pct is not None else "—"
-        yoy_str = _fmt_pct(r.growth.yoy)
-        spark = sparkline(r.values, width=140, height=32)
-        out.write(
-            f'<div class="seg-card">'
-            f'<div class="seg-card-name">{_segment_name_with_def(r.segment_name, definitions)}</div>'
-            f'<div class="seg-card-spark">{spark}</div>'
-            f'<div class="seg-card-row"><span>{html.escape(latest_label)}</span>'
-            f"<strong>{latest_str}</strong></div>"
-            f'<div class="seg-card-row"><span>Share</span><strong>{share_str}</strong></div>'
-            f'<div class="seg-card-row"><span>YoY</span><strong>{yoy_str}</strong></div>'
-        )
-        definition = definitions.get(r.segment_name)
-        if definition:
-            out.write(
-                f'<details class="seg-card-def"><summary>10-K definition</summary>'
-                f"<p>{html.escape(definition)}</p></details>"
+    # Stacked area — only when 2+ segments AND no one segment dwarfs the rest.
+    if len(rows) >= 2 and _top_segment_share(rows) < _STACKED_AREA_DOMINANT_SHARE:
+        _segment_stacked_area(out, quarters_full, rows, label)
+    # YoY% matrix — every segment as a row, full quarter history, CAGR cols.
+    if any(r.levels_full for r in rows) and quarters_full:
+        matrix_rows = [
+            MatrixRow(
+                name=r.segment_name,
+                levels=list(r.levels_full),
+                unit=r.unit,
+                tooltip=definitions.get(r.segment_name, ""),
             )
-        out.write("</div>")
-    out.write("</div>\n")
+            for r in rows
+            if r.levels_full
+        ]
+        if matrix_rows:
+            out.write(yoy_heatmap_table(
+                rows=matrix_rows,
+                periods=[_compact_q(q) for q in quarters_full],
+                title=f"{label} — YoY % with trailing CAGR",
+                display_quarters=12,
+                cagr_periods=(4, 8, 12),
+            ))
 
 
-def _segment_name_with_def(name: str, definitions: dict[str, str]) -> str:
-    """Append a 📖 hover-mark when a definition exists. Tooltip via title attr."""
-    if name in definitions:
-        return (
-            f'<span title="{html.escape(definitions[name])}">{html.escape(name)} '
-            f'<span class="seg-def-mark">📖</span></span>'
-        )
-    return html.escape(name)
-
-
-def _segment_share(r: SegmentSeries, rows: list[SegmentSeries]) -> float | None:
-    latest = _last_non_null(r.values)
-    if latest is None:
-        return None
-    total = sum(abs(_last_non_null(s.values) or 0.0) for s in rows)
-    if total == 0:
-        return None
-    return abs(latest) / total
-
-
-def _last_non_null(values: list[float | None]) -> float | None:
-    for v in reversed(values):
-        if v is not None:
-            return v
-    return None
-
-
-def _segments_table(
+def _segment_stacked_area(
     out: StringIO,
-    quarters: list[str],
+    quarters_full: list[str],
     rows: list[SegmentSeries],
-    definitions: dict[str, str],
+    label: str,
 ) -> None:
-    headers = ["Segment", "Trend", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]
-    out.write('<div class="table-wrap"><table>\n<thead><tr>')
-    for h in headers:
-        out.write(f"<th>{html.escape(h)}</th>")
-    out.write("</tr></thead>\n<tbody>")
+    """Render a stacked area chart of $ levels over the full quarter axis."""
+    compact = [_compact_q(q) for q in quarters_full]
+    series = [
+        LineSeries(name=r.segment_name, values=list(r.levels_full))
+        for r in rows
+        if r.levels_full
+    ]
+    if not series:
+        return
+    out.write(stacked_area(
+        series=series,
+        labels=compact,
+        title=f"{label} — $ levels",
+        width=1080,
+        height=280,
+    ))
+
+
+def _top_segment_share(rows: list[SegmentSeries]) -> float:
+    """What fraction of the latest-quarter total does the largest segment take?"""
+    latest_vals = []
     for r in rows:
-        out.write(
-            f"<tr><td>{_segment_name_with_def(r.segment_name, definitions)}</td>"
-            f"<td>{sparkline(r.values, width=100, height=24)}</td>"
-        )
-        for v in r.values:
-            out.write(f'<td class="num">{_fmt_num(v, 0)}</td>')
-        for v in (r.growth.qoq, r.growth.yoy, r.growth.cagr_1y_ttm, r.growth.cagr_3y_ttm):
-            out.write(f'<td class="num">{_fmt_pct(v)}</td>')
-        out.write("</tr>")
-    out.write("</tbody></table></div>\n")
+        for v in reversed(r.values):
+            if v is not None:
+                latest_vals.append(abs(v))
+                break
+    if not latest_vals:
+        return 0.0
+    total = sum(latest_vals)
+    return max(latest_vals) / total if total else 0.0
 
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:
