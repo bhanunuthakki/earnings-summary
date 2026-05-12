@@ -548,6 +548,7 @@ class MatrixRow:
     name: str
     levels: list[float | None]    # absolute values aligned to `periods`
     unit: str = ""                # display hint
+    tooltip: str = ""             # if set, name gets a 📖 mark + title= attribute
 
 
 def yoy_heatmap_table(
@@ -618,7 +619,14 @@ def yoy_heatmap_table(
     latest = rows[0].levels[-1] if rows else None
     for row in rows:
         latest_val = row.levels[-1] if row.levels else None
-        tb.append(f'<tr><th class="cv2-matrix-label">{html.escape(row.name)}</th>')
+        if row.tooltip:
+            label_html = (
+                f'<span title="{html.escape(row.tooltip)}">{html.escape(row.name)}'
+                f' <span class="cv2-matrix-def-mark">📖</span></span>'
+            )
+        else:
+            label_html = html.escape(row.name)
+        tb.append(f'<tr><th class="cv2-matrix-label">{label_html}</th>')
         for j_display, _ in enumerate(display_periods):
             j_full = start_display + j_display
             curr = row.levels[j_full]
@@ -711,4 +719,9 @@ CSS = """
 .cv2-matrix-cagr, .cv2-matrix-cagr-cell { border-left: 2px solid #1a1f2e !important; }
 .cv2-matrix-noisy { color: #98a4af !important; font-style: italic; background: #fafbfc !important; }
 .cv2-matrix-footnote { font-size: 11px; color: #67737d; margin-top: 6px; font-style: italic; }
+.cv2-matrix-def-mark { cursor: help; opacity: 0.6; }
+.cv2-matrix-def-mark:hover { opacity: 1; }
+.chart-empty { font-size: 12px; color: var(--muted); padding: 8px 12px; background: var(--subheader-bg); border-radius: 4px; margin: 8px 0; }
+.chart-grid-1col { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 12px 0; }
+.chart-cell { width: 100%; }
 """
