@@ -113,7 +113,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
 
     requested_priorities = _read_chart_priorities_request(ticker, repo_root)
     resolved_priorities, kpi_series = _resolve_priorities(
-        requested_priorities, line_items, ticker, repo_root, display_labels
+        requested_priorities, line_items, ticker, repo_root, display_labels, quarter_labels_full
     )
 
     return FinancialsSection(
@@ -148,6 +148,7 @@ def _resolve_priorities(
     ticker: str,
     repo_root: Path,
     quarter_labels: list[str],
+    quarter_labels_full: list[str],
 ) -> tuple[list[str], list[KpiSeries]]:
     """Resolve each requested name against line_items → kpi_facts → drop.
 
@@ -173,7 +174,7 @@ def _resolve_priorities(
                 continue
             if conn is None:
                 continue
-            series = _kpi_series_for(conn, ticker, name, quarter_labels)
+            series = _kpi_series_for(conn, ticker, name, quarter_labels, quarter_labels_full)
             if series is not None:
                 kpi_series.append(series)
                 resolved.append(series.name)
@@ -189,8 +190,9 @@ def _kpi_series_for(
     ticker: str,
     kpi_name: str,
     quarter_labels: list[str],
+    quarter_labels_full: list[str],
 ) -> KpiSeries | None:
-    """Pull a 12-quarter series for a kpi_facts metric, aligned to quarter_labels."""
+    """Pull a kpi_facts series, aligned to both display + full-history labels."""
     cur = conn.cursor()
     cur.execute(
         """
@@ -229,11 +231,13 @@ def _kpi_series_for(
     values = [by_label.get(lbl) for lbl in quarter_labels]
     if all(v is None for v in values):
         return None
+    levels_full = [by_label.get(lbl) for lbl in quarter_labels_full]
     return KpiSeries(
         name=canonical_name,
         unit=_pretty_unit(canonical_unit),
         quarters=quarter_labels,
         values=values,
+        levels_full=levels_full,
     )
 
 
