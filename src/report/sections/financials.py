@@ -99,6 +99,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
                 quarters=display_labels,
                 values=full_series[-DISPLAY_QUARTERS:],
                 growth=compute_growth(full_series),
+                levels_full=full_series,
             )
         )
 
@@ -123,6 +124,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         annual_line_items=annual_items,
         chart_priorities=resolved_priorities,
         kpi_chart_series=kpi_series,
+        quarter_labels_full=quarter_labels_full,
     )
 
 

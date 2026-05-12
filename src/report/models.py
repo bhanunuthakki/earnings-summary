@@ -257,6 +257,10 @@ class QuarterlyLineItem(BaseModel):
     quarters: list[str] = Field(default_factory=list)  # 12 period labels (oldest → newest)
     values: list[float | None] = Field(default_factory=list)  # 12 values aligned to quarters
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
+    # Underlying levels for the YoY matrix renderer — includes YoY lookback +
+    # 3y-CAGR base periods (i.e. up to 24 quarters). Empty when not populated
+    # (older built reports / non-quarterly contexts).
+    levels_full: list[float | None] = Field(default_factory=list)
 
 
 class AnnualLineItem(BaseModel):
@@ -289,6 +293,9 @@ class FinancialsSection(BaseModel):
     annual_line_items: list[AnnualLineItem] = Field(default_factory=list)
     chart_priorities: list[str] = Field(default_factory=list)  # display names, dynamic count
     kpi_chart_series: list[KpiSeries] = Field(default_factory=list)
+    # Full-history quarter labels (parallel to QuarterlyLineItem.levels_full).
+    # Used by the YoY matrix renderer; empty when not populated.
+    quarter_labels_full: list[str] = Field(default_factory=list)
 
 
 class SegmentSeries(BaseModel):
