@@ -3,7 +3,8 @@
 Bridges the gap between `db.track_company` (a snappy DB upsert) and the rest of
 the pipeline (network-bound fetches + parse). Designed to be invoked as a
 fire-and-forget subprocess from `db.track_company` when a ticker is added to
-the portfolio or watchlist — see the call site there.
+the portfolio, watchlist, or evaluation list (`db.ACTIVE_LIST_TYPES`) — see
+the call site there.
 
 Sequence per ticker:
     1. FMP fetch via `execution/save_fmp_data.py --tickers TICKER --skip-existing`
@@ -11,13 +12,21 @@ Sequence per ticker:
        cleanly via fmp_endpoint_status).
     2. Quarterly refresh via `pipeline.quarterly_refresh.refresh_ticker`
        (in-process; idempotent across all 7 stages).
+    3. Transcript backfill via `execution/backfill_transcripts.py --ticker X`
+       (subprocess; fetches the last 6 fiscal quarters of Q&A from the free
+       aggregator chain, runs ingest, and extracts forward-looking
+       commitments). Tolerates aggregator misses — they don't fail the
+       onboard. The daily cron `cron/backfill_transcripts.task.xml` covers
+       the same ground for the full active universe on a daily cadence.
 
 Usage:
     python execution/onboard_ticker.py --ticker BKNG
-    python execution/onboard_ticker.py --ticker BKNG --skip-fmp   # parse-only
+    python execution/onboard_ticker.py --ticker BKNG --skip-fmp           # parse-only
+    python execution/onboard_ticker.py --ticker BKNG --skip-transcripts   # no aggregator fetch
 
-This is the FMP-only onboard path. SEC XBRL, IR-doc, and audio fetches stay
-explicit user actions per `directives/data_pipeline_dag.md`.
+This is the FMP + aggregator-transcript onboard path. SEC XBRL, IR-doc, and
+audio fallback fetches stay explicit user actions per
+`directives/data_pipeline_dag.md`.
 """
 
 from __future__ import annotations
@@ -46,6 +55,7 @@ from pipeline.run_accounting import end_run, start_run  # noqa: E402
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _FMP_SCRIPT = PROJECT_ROOT / "execution" / "save_fmp_data.py"
+_BACKFILL_SCRIPT = PROJECT_ROOT / "execution" / "backfill_transcripts.py"
 
 
 def _run_fmp_fetch(ticker: str) -> int:
@@ -60,12 +70,31 @@ def _run_fmp_fetch(ticker: str) -> int:
     return proc.returncode
 
 
+def _run_transcript_backfill(ticker: str) -> int:
+    """Invoke backfill_transcripts.py for a single ticker.
+
+    Fetches recent Q&A transcripts from free aggregators, ingests them, and
+    extracts commitments. Tolerates aggregator coverage gaps.
+    """
+    cmd = [
+        sys.executable,
+        str(_BACKFILL_SCRIPT),
+        "--ticker", ticker,
+    ]
+    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    return proc.returncode
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ticker", required=True, help="Ticker to onboard (e.g. BKNG)")
     ap.add_argument(
         "--skip-fmp", action="store_true",
         help="Skip the FMP fetch step (parse-only; useful for re-runs)",
+    )
+    ap.add_argument(
+        "--skip-transcripts", action="store_true",
+        help="Skip the aggregator-transcript backfill step (faster onboard for re-runs)",
     )
     args = ap.parse_args()
     ticker = args.ticker.upper()
@@ -107,11 +136,28 @@ def main() -> int:
         )
         for s in report.stages:
             print(f"[onboard] {ticker} {s.name.value:24s} {s.status.value:8s} rows={s.rows_processed:<5} {s.notes}", flush=True)
-        elapsed = (datetime.now() - started).total_seconds()
-        print(f"[onboard] {ticker} done in {elapsed:.1f}s; failed_stages={any_failed}", flush=True)
-        return 0 if not any_failed else 1
     finally:
         conn.close()
+
+    transcript_rc: int | None = None
+    if not args.skip_transcripts:
+        print(f"[onboard] {ticker} stage=backfill_transcripts", flush=True)
+        transcript_rc = _run_transcript_backfill(ticker)
+        if transcript_rc != 0:
+            # Aggregator gaps are expected; log but don't fail the onboard.
+            print(
+                f"[onboard] {ticker} backfill_transcripts returned rc={transcript_rc}; "
+                f"continuing (aggregator misses are tolerated)",
+                flush=True,
+            )
+
+    elapsed = (datetime.now() - started).total_seconds()
+    print(
+        f"[onboard] {ticker} done in {elapsed:.1f}s; "
+        f"failed_stages={any_failed}; transcript_rc={transcript_rc}",
+        flush=True,
+    )
+    return 0 if not any_failed else 1
 
 
 if __name__ == "__main__":

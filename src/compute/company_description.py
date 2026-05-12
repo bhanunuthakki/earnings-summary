@@ -79,7 +79,16 @@ def extract_for_ticker(
     fiscal_year: int | None = None,
     refresh: bool = False,
 ) -> CompanyDescriptionResult:
-    """End-to-end extract → cache. Idempotent on (ticker, source_sha256) unless refresh=True."""
+    """End-to-end extract → cache. Idempotent on (ticker, source_sha256) unless refresh=True.
+
+    Two source paths:
+      1. 10-K JSON available → richer narrative, segment / geography prose grounded in filings.
+      2. Profile-only fallback (no 10-K JSON, but profile.json has a description) →
+         LLM synthesizes from the profile blurb + sector/industry + any segment_facts
+         already in the DB. Used for tickers FMP can't deliver a 10-K for (legacy-
+         endpoint deprecation, non-US issuers, micro-caps with no SEC coverage).
+         The cache key in that case hashes the profile description instead.
+    """
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
@@ -89,7 +98,7 @@ def extract_for_ticker(
     sector = _profile_str(profile, "sector")
     industry = _profile_str(profile, "industry")
 
-    if source_path is None:
+    if source_path is None and not profile_description:
         return CompanyDescriptionResult(
             ticker=ticker,
             fiscal_year=None,
@@ -97,11 +106,22 @@ def extract_for_ticker(
             source_sha256=None,
             sector=sector,
             industry=industry,
-            skipped_reason=f"no _form_10k_*.json under data/historical/fmp/ for {ticker}",
+            skipped_reason=(
+                f"no _form_10k_*.json AND no profile.json description for {ticker} — "
+                f"nothing to ground the LLM in"
+            ),
         )
 
-    raw_bytes = source_path.read_bytes()
-    sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    if source_path is not None:
+        raw_bytes = source_path.read_bytes()
+        sha256 = hashlib.sha256(raw_bytes).hexdigest()
+        payload = cast("dict[str, object]", json.loads(raw_bytes.decode("utf-8")))
+        relevant_text = _extract_relevant_text(payload)
+    else:
+        # Profile-only fallback: hash the description so refresh-on-change works.
+        sha256 = hashlib.sha256(profile_description.encode("utf-8")).hexdigest()
+        relevant_text = ""
+        year = None
 
     if not refresh and cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -110,9 +130,6 @@ def extract_for_ticker(
 
     segment_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
     geo_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
-
-    payload = cast("dict[str, object]", json.loads(raw_bytes.decode("utf-8")))
-    relevant_text = _extract_relevant_text(payload)
 
     start_dt = datetime.now(UTC)
     t0 = time.perf_counter()
@@ -132,7 +149,7 @@ def extract_for_ticker(
     result = CompanyDescriptionResult(
         ticker=ticker,
         fiscal_year=year,
-        source_path=str(source_path),
+        source_path=str(source_path) if source_path is not None else None,
         source_sha256=sha256,
         extracted_at_start=start_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         extracted_at_end=end_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
