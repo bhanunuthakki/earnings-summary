@@ -1,4 +1,5 @@
-"""Tests for src/compute/holding_scorecard.py — combines thesis status, Say-Do, and recent KPIs."""
+"""Tests for src/compute/holding_scorecard.py — combines thesis status, Say-Do,
+analyst surprise, and recent KPIs."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 
-from compute.holding_scorecard import portfolio_scorecards, scorecard_for
+from compute.holding_scorecard import briefed_scorecards, portfolio_scorecards, scorecard_for
 from models.kpis import BreachStatus
 
 
@@ -65,6 +66,32 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             value NUMERIC(24, 6) NOT NULL,
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
+        );
+        CREATE TABLE earnings_surprises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            release_date TEXT NOT NULL,
+            eps_estimate NUMERIC,
+            eps_actual NUMERIC,
+            revenue_estimate NUMERIC,
+            revenue_actual NUMERIC,
+            eps_surprise_pct NUMERIC,
+            revenue_surprise_pct NUMERIC,
+            num_analysts_eps INTEGER,
+            num_analysts_revenue INTEGER,
+            source_name TEXT NOT NULL,
+            source_url TEXT,
+            fetched_at TEXT NOT NULL,
+            ingested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            archived_at TIMESTAMP,
+            UNIQUE(user_id, ticker)
         );
         """
     )
@@ -214,3 +241,119 @@ def test_portfolio_scorecards_one_per_thesis_state_row(conn: sqlite3.Connection)
     _seed_state(conn, "C", BreachStatus.BREACH)
     cards = portfolio_scorecards(conn)
     assert {c.ticker for c in cards} == {"A", "B", "C"}
+
+
+# --- Surprise scorecard integration -----------------------------------------
+
+
+def _seed_surprise(
+    conn: sqlite3.Connection,
+    ticker: str,
+    release_date: str,
+    eps_pct: str | None,
+    rev_pct: str | None,
+) -> None:
+    conn.execute(
+        "INSERT INTO earnings_surprises "
+        "(ticker, release_date, eps_surprise_pct, revenue_surprise_pct, "
+        " source_name, fetched_at) VALUES (?, ?, ?, ?, 'fmp_calendar', '2026-05-13T12:00:00')",
+        (ticker, release_date, eps_pct, rev_pct),
+    )
+    conn.commit()
+
+
+def test_scorecard_includes_empty_surprise_when_no_data(conn: sqlite3.Connection) -> None:
+    """No earnings_surprises rows for the ticker -> empty scorecard, not crash.
+
+    The existing renderers can short-circuit on total_quarters == 0."""
+    _seed_state(conn, "X", BreachStatus.OK)
+    sc = scorecard_for(conn, "X")
+    assert sc.surprise.total_quarters == 0
+    assert sc.surprise.eps.beats == 0
+    assert sc.surprise.eps.beat_rate_pct is None
+    assert sc.surprise.revenue.beat_rate_pct is None
+
+
+def test_scorecard_populates_surprise_from_table(conn: sqlite3.Connection) -> None:
+    """4 quarters: 3 beats, 1 miss on EPS -> 75% beat rate."""
+    _seed_state(conn, "X", BreachStatus.OK)
+    _seed_surprise(conn, "X", "2024-08-06", "10.0", "5.0")
+    _seed_surprise(conn, "X", "2024-11-19", "15.0", "-2.0")
+    _seed_surprise(conn, "X", "2025-02-19", "-5.0", "3.0")
+    _seed_surprise(conn, "X", "2025-05-21", "8.0", "1.0")
+    sc = scorecard_for(conn, "X")
+    assert sc.surprise.total_quarters == 4
+    assert sc.surprise.eps.beats == 3
+    assert sc.surprise.eps.misses == 1
+    assert sc.surprise.eps.beat_rate_pct == Decimal("75.0")
+    assert sc.surprise.revenue.beats == 3
+    assert sc.surprise.revenue.misses == 1
+    assert sc.surprise.revenue.beat_rate_pct == Decimal("75.0")
+
+
+def test_scorecard_surprise_handles_null_revenue(conn: sqlite3.Connection) -> None:
+    """Post-FMP-lapse: yfinance fills EPS, revenue stays NULL. Revenue side
+    reports no_data without flagging 0% beat rate."""
+    _seed_state(conn, "X", BreachStatus.OK)
+    _seed_surprise(conn, "X", "2024-08-06", "10.0", None)
+    _seed_surprise(conn, "X", "2024-11-19", "15.0", None)
+    sc = scorecard_for(conn, "X")
+    assert sc.surprise.eps.beats == 2
+    assert sc.surprise.eps.beat_rate_pct == Decimal("100.0")
+    assert sc.surprise.revenue.no_data == 2
+    assert sc.surprise.revenue.beat_rate_pct is None
+
+
+def test_scorecard_surprise_respects_lookback(conn: sqlite3.Connection) -> None:
+    """Lookback caps the window; older quarters fall out."""
+    _seed_state(conn, "X", BreachStatus.OK)
+    # Seed 5 quarters, oldest is a miss
+    _seed_surprise(conn, "X", "2024-02-19", "-20.0", None)  # oldest miss
+    _seed_surprise(conn, "X", "2024-05-21", "5.0", None)
+    _seed_surprise(conn, "X", "2024-08-06", "10.0", None)
+    _seed_surprise(conn, "X", "2024-11-19", "15.0", None)
+    _seed_surprise(conn, "X", "2025-02-19", "8.0", None)
+    sc = scorecard_for(conn, "X", surprise_lookback_quarters=4)
+    # Only the last 4 quarters — all beats, oldest miss excluded
+    assert sc.surprise.total_quarters == 4
+    assert sc.surprise.eps.misses == 0
+    assert sc.surprise.eps.beat_rate_pct == Decimal("100.0")
+
+
+# --- briefed_scorecards -----------------------------------------------------
+
+
+def _seed_tracked(
+    conn: sqlite3.Connection,
+    ticker: str,
+    list_type: str,
+    archived: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) "
+        "VALUES (?, ?, ?, ?)",
+        (ticker, ticker, list_type, archived),
+    )
+    conn.commit()
+
+
+def test_briefed_scorecards_includes_portfolio_and_eval(conn: sqlite3.Connection) -> None:
+    _seed_tracked(conn, "A", "portfolio")
+    _seed_tracked(conn, "B", "evaluation")
+    _seed_tracked(conn, "C", "watchlist")  # must be excluded
+    _seed_tracked(conn, "D", "none")        # must be excluded
+    cards = briefed_scorecards(conn)
+    assert {c.ticker for c in cards} == {"A", "B"}
+
+
+def test_briefed_scorecards_excludes_archived(conn: sqlite3.Connection) -> None:
+    _seed_tracked(conn, "A", "portfolio")
+    _seed_tracked(conn, "B", "portfolio", archived="2024-01-01")
+    cards = briefed_scorecards(conn)
+    assert {c.ticker for c in cards} == {"A"}
+
+
+def test_briefed_scorecards_returns_empty_when_no_brief_tickers(conn: sqlite3.Connection) -> None:
+    _seed_tracked(conn, "A", "watchlist")
+    cards = briefed_scorecards(conn)
+    assert cards == []
