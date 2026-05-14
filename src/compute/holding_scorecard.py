@@ -1,9 +1,11 @@
-"""Per-holding scorecard: thesis status streak + commitment hit rate + recent KPIs.
+"""Per-holding scorecard: thesis status streak + commitment hit rate + recent KPIs +
+EPS/Revenue analyst-surprise beat rate.
 
-Combines the three signals built in earlier phases into a single executive view:
+Combines the four signals built in earlier phases into a single executive view:
   1. Thesis evaluator: current breach status + streak length (from thesis_history)
   2. Say-Do: % of management commitments that HIT or BEAT vs. MISSed
-  3. Most recent kpi_facts row per registered KPI (for context)
+  3. Analyst surprise: EPS/Revenue beat rate over the last N reported quarters
+  4. Most recent kpi_facts row per registered KPI (for context)
 
 Pure read-only — all writes happen in upstream modules.
 """
@@ -15,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+import db
+from compute.earnings_surprise import SurpriseScorecard, surprise_scorecard_for
 from compute.say_do import CommitmentOutcome
 from compute.thesis_history import StreakSummary, streak_summary
 from models.kpis import BreachStatus
@@ -44,12 +48,14 @@ class RecentKpi:
 
 @dataclass(frozen=True)
 class HoldingScorecard:
-    """Single-holding rollup spanning thesis status, Say-Do, and recent KPIs."""
+    """Single-holding rollup spanning thesis status, Say-Do, analyst surprise,
+    and recent KPIs."""
 
     ticker: str
     breach_status: BreachStatus | None
     streak: StreakSummary | None
     commitments: CommitmentScorecard
+    surprise: SurpriseScorecard
     recent_kpis: tuple[RecentKpi, ...]
 
 
@@ -140,14 +146,26 @@ def _current_breach_status(
 
 
 def scorecard_for(
-    conn: sqlite3.Connection, ticker: str, *, recent_kpi_limit: int = 8
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    recent_kpi_limit: int = 8,
+    surprise_lookback_quarters: int = 8,
 ) -> HoldingScorecard:
-    """Compose all three layers into a single HoldingScorecard."""
+    """Compose all four layers into a single HoldingScorecard.
+
+    `surprise_lookback_quarters` matches the default in `backfill_earnings_surprises.py`
+    so the scorecard window aligns with the cache window — the typical street
+    view of "last 8 quarters' beat rate".
+    """
     return HoldingScorecard(
         ticker=ticker.upper(),
         breach_status=_current_breach_status(conn, ticker),
         streak=streak_summary(conn, ticker),
         commitments=_commitment_scorecard(conn, ticker),
+        surprise=surprise_scorecard_for(
+            conn, ticker, lookback_quarters=surprise_lookback_quarters
+        ),
         recent_kpis=tuple(_recent_kpis(conn, ticker, limit=recent_kpi_limit)),
     )
 
@@ -155,7 +173,41 @@ def scorecard_for(
 def portfolio_scorecards(
     conn: sqlite3.Connection, *, recent_kpi_limit: int = 8
 ) -> list[HoldingScorecard]:
-    """Scorecard for every ticker in thesis_state."""
+    """Scorecard for every ticker in thesis_state.
+
+    Scope is "tickers with an active thesis record" — narrower than
+    `briefed_scorecards()` but the historical entry point. Kept for callers
+    that specifically want the thesis-tracked subset.
+    """
     cur = conn.execute("SELECT ticker FROM thesis_state ORDER BY ticker")
     tickers = [row["ticker"] for row in cur.fetchall()]
     return [scorecard_for(conn, t, recent_kpi_limit=recent_kpi_limit) for t in tickers]
+
+
+def briefed_scorecards(
+    conn: sqlite3.Connection,
+    *,
+    recent_kpi_limit: int = 8,
+    surprise_lookback_quarters: int = 8,
+) -> list[HoldingScorecard]:
+    """Scorecard for every active portfolio + evaluation ticker (the brief set).
+
+    Uses `db.BRIEFED_LIST_TYPES_SQL` so the scope matches what gets full-brief
+    treatment elsewhere in the pipeline. Watchlist is excluded — it's a holding
+    pen and doesn't carry the data depth needed for scorecard signals.
+    """
+    cur = conn.execute(
+        f"SELECT ticker FROM tracked_companies "
+        f"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} "
+        f"AND archived_at IS NULL "
+        f"ORDER BY ticker"
+    )
+    tickers = [row["ticker"] for row in cur.fetchall()]
+    return [
+        scorecard_for(
+            conn, t,
+            recent_kpi_limit=recent_kpi_limit,
+            surprise_lookback_quarters=surprise_lookback_quarters,
+        )
+        for t in tickers
+    ]
