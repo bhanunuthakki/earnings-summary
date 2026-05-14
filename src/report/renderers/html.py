@@ -42,6 +42,7 @@ from report.models import (
     SegmentsSection,
     SegmentWeighting,
     SnapshotSection,
+    SurpriseScorecardCard,
     ThesisSection,
     TranscriptEntry,
     ValuationSnapshot,
@@ -1135,6 +1136,10 @@ def _top_segment_share(rows: list[SegmentSeries]) -> float:
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:
     _section_h2(out, "earnings", 6, "Earnings analysis", s.status)
+    # Scorecard renders BEFORE the missing-data check (see markdown renderer
+    # for the rationale) — a ticker can have populated surprise data while
+    # still missing LLM summaries.
+    _surprise_scorecard_block(out, s.surprise_scorecard)
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
@@ -1145,6 +1150,55 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
     cards.sort(key=lambda c: (c.year, c.quarter), reverse=True)
     for q in cards:
         _earnings_card(out, q)
+
+
+def _surprise_scorecard_block(out: StringIO, c: SurpriseScorecardCard | None) -> None:
+    """Header table: last N quarters' EPS/Revenue beat-rate vs street.
+
+    Renders nothing when c is None or empty. When revenue side has no source
+    coverage (post-FMP-lapse), the revenue row shows '—' across the board
+    with a meta note instead of zero values.
+    """
+    if c is None or c.total_quarters == 0:
+        return
+    out.write(
+        f'<p class="meta"><strong>Analyst surprise — last {c.total_quarters} '
+        f"reported quarters</strong></p>\n"
+    )
+    out.write('<div class="table-wrap"><table>\n<thead><tr>')
+    for h in ("Metric", "Beats", "Misses", "Beat rate", "Avg surprise", "Latest"):
+        out.write(f"<th>{h}</th>")
+    out.write("</tr></thead>\n<tbody>\n")
+    out.write(
+        f"<tr><td>EPS</td>"
+        f"<td>{c.eps_beats}</td><td>{c.eps_misses}</td>"
+        f"<td>{_fmt_surprise_pct(c.eps_beat_rate_pct, 1)}</td>"
+        f"<td>{_fmt_surprise_pct(c.eps_avg_surprise_pct, 2)}</td>"
+        f"<td>{_fmt_surprise_pct(c.eps_latest_surprise_pct, 2)}</td></tr>\n"
+    )
+    if c.revenue_no_data >= c.total_quarters:
+        out.write(
+            "<tr><td>Revenue</td><td>—</td><td>—</td><td>—</td><td>—</td>"
+            '<td>— <span class="meta">(source coverage absent)</span></td></tr>\n'
+        )
+    else:
+        out.write(
+            f"<tr><td>Revenue</td>"
+            f"<td>{c.revenue_beats}</td><td>{c.revenue_misses}</td>"
+            f"<td>{_fmt_surprise_pct(c.revenue_beat_rate_pct, 1)}</td>"
+            f"<td>{_fmt_surprise_pct(c.revenue_avg_surprise_pct, 2)}</td>"
+            f"<td>{_fmt_surprise_pct(c.revenue_latest_surprise_pct, 2)}</td></tr>\n"
+        )
+    out.write("</tbody></table></div>\n")
+
+
+def _fmt_surprise_pct(v: float | None, places: int) -> str:
+    """Sign-aware percentage formatter. None → '—'. Positive values get '+'
+    so beats and misses read at a glance."""
+    if v is None:
+        return "—"
+    sign = "+" if v > 0 else ""
+    return f"{sign}{v:.{places}f}%"
 
 
 def _earnings_card(out: StringIO, q: QuarterlyEarningsCard) -> None:

@@ -1,24 +1,38 @@
-"""§5 Earnings analysis — LLM summaries only, newest first.
+"""§6 Earnings analysis — beat-rate header + per-quarter LLM summaries.
 
 Most recent N quarters render in full; older ones collapse to a 1-paragraph
-digest. Pairwise Say-Do lives in §6; full transcripts in §9.
+digest. Pairwise Say-Do lives in §7; full transcripts in §12.
+
+When the `earnings_surprises` table has rows for the ticker, a leading
+beat-rate scorecard renders before the per-quarter cards.
 
 Sources:
   - .tmp/{TICKER}_{Q}_{YEAR}_summary.txt          per-quarter LLM summary (written by execution/process_ir_documents.py)
   - transcripts/processed/{TICKER}_Q{N}_{YEAR}.txt path provenance
+  - earnings_surprises table                       beat-rate header (FMP primary, yfinance fallback)
 """
 
 from __future__ import annotations
 
 import re
+import sys
+from decimal import Decimal
 from pathlib import Path
 
 from report.models import (
     EarningsSection,
     QuarterlyEarningsCard,
     SectionStatus,
+    SurpriseScorecardCard,
 )
-from report.sections._common import missing
+from report.sections._common import missing, open_repo_db
+
+# The compute module lives in src/compute/, accessible because src/ is on the
+# sys.path (per pyproject.toml `pythonpath = ["src"]`).
+_PROJECT_SRC = str(Path(__file__).resolve().parents[2])
+if _PROJECT_SRC not in sys.path:
+    sys.path.insert(0, _PROJECT_SRC)
+from compute.earnings_surprise import surprise_scorecard_for  # noqa: E402
 
 # `_summary.txt` is the canonical per-quarter LLM summary; `_investor_update_summary.txt`
 # is the MELI/NU variant (companies that publish investor-update letters in lieu of
@@ -38,6 +52,7 @@ def build(ticker: str, repo_root: Path) -> EarningsSection:
 
     summaries = _scan_summaries(tmp_dir, ticker)
     transcripts = _scan_transcripts(tr_dir, ticker)
+    surprise_card = _build_surprise_card(ticker, repo_root)
 
     if not summaries and not transcripts:
         return EarningsSection(
@@ -47,6 +62,7 @@ def build(ticker: str, repo_root: Path) -> EarningsSection:
                 fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
                 detail="No per-quarter summaries in .tmp/ and no transcripts in transcripts/processed/.",
             ),
+            surprise_scorecard=surprise_card,
         )
 
     # Oldest → newest first, then take last MAX_CARDS, then reverse for display.
@@ -61,8 +77,51 @@ def build(ticker: str, repo_root: Path) -> EarningsSection:
     has_any_llm = any(c.summary_md for c in cards_old_to_new)
     return EarningsSection(
         status=SectionStatus.OK if has_any_llm else SectionStatus.PARTIAL,
+        surprise_scorecard=surprise_card,
         full_quarters=list(reversed(full_old_to_new)),
         digest_quarters=list(reversed(digest_old_to_new)),
+    )
+
+
+def _dec_to_float(v: Decimal | None) -> float | None:
+    """Decimal → float at the Pydantic boundary. None passes through."""
+    return None if v is None else float(v)
+
+
+def _build_surprise_card(ticker: str, repo_root: Path) -> SurpriseScorecardCard | None:
+    """Build the §6 header beat-rate card from the `earnings_surprises` table.
+
+    Returns None when:
+      - the DB isn't reachable (open_repo_db returns None — fresh checkout)
+      - there are no rows for the ticker (backfill_earnings_surprises hasn't
+        run yet, or the ticker is brand new)
+
+    Decimal-to-float conversion happens here at the compute → Pydantic
+    boundary; the compute layer keeps full Decimal precision internally.
+    """
+    conn = open_repo_db(repo_root)
+    if conn is None:
+        return None
+    try:
+        sc = surprise_scorecard_for(conn, ticker)
+    finally:
+        conn.close()
+    if sc.total_quarters == 0:
+        return None
+    return SurpriseScorecardCard(
+        total_quarters=sc.total_quarters,
+        eps_beats=sc.eps.beats,
+        eps_misses=sc.eps.misses,
+        eps_no_data=sc.eps.no_data,
+        eps_beat_rate_pct=_dec_to_float(sc.eps.beat_rate_pct),
+        eps_avg_surprise_pct=_dec_to_float(sc.eps.avg_surprise_pct),
+        eps_latest_surprise_pct=_dec_to_float(sc.eps.latest_surprise_pct),
+        revenue_beats=sc.revenue.beats,
+        revenue_misses=sc.revenue.misses,
+        revenue_no_data=sc.revenue.no_data,
+        revenue_beat_rate_pct=_dec_to_float(sc.revenue.beat_rate_pct),
+        revenue_avg_surprise_pct=_dec_to_float(sc.revenue.avg_surprise_pct),
+        revenue_latest_surprise_pct=_dec_to_float(sc.revenue.latest_surprise_pct),
     )
 
 
