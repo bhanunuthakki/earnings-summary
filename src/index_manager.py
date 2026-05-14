@@ -14,13 +14,21 @@ import json
 import datetime
 from alias_manager import resolve_ticker
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".tmp")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+CACHE_DIR = os.path.join(PROJECT_ROOT, ".tmp")
 
 # Legacy transcript-only index (kept for backward compat with fetch_audio_transcripts)
 TRANSCRIPT_INDEX_PATH = os.path.join(CACHE_DIR, "transcript_index.json")
 
 # New multi-doc-type index
 DOCUMENT_INDEX_PATH = os.path.join(CACHE_DIR, "document_index.json")
+
+# Transcript files land in transcripts/raw/ during fetch and are later promoted
+# to transcripts/processed/. Both directories are searched when canonicalizing
+# a bare filename so the index always points at a file that actually exists on
+# disk (rather than a bare basename that only resolves with the right CWD).
+TRANSCRIPTS_RAW_DIR = os.path.join(PROJECT_ROOT, "transcripts", "raw")
+TRANSCRIPTS_PROCESSED_DIR = os.path.join(PROJECT_ROOT, "transcripts", "processed")
 
 VALID_DOC_TYPES = {
     "transcript",
@@ -71,6 +79,39 @@ def _doc_key(ticker: str, year, quarter: str, doc_type: str) -> str:
     return f"{ticker.upper()}_{year}_{quarter.upper()}_{doc_type}"
 
 
+def _canonicalize_transcript_filepath(filepath: str | None) -> str | None:
+    """Resolve a bare transcript filename to its project-root-relative location.
+
+    Callers historically passed `output_path.name` (a bare basename like
+    `AMZN_Q1_2026.txt`); `process_ir_documents.py` then ran
+    `Path(local_path).exists()` from project root and silently skipped every
+    transcript because the basename doesn't resolve from there. We pin the
+    stored path to `transcripts/{raw,processed}/<name>` so the index entry
+    always resolves regardless of caller CWD.
+
+    Pass-through cases:
+      - None stays None (callers register a stub before the file lands).
+      - A path that already contains a directory separator is trusted as-is.
+    """
+    if filepath is None:
+        return None
+    if os.sep in filepath or "/" in filepath:
+        return filepath
+    raw_candidate = os.path.join(TRANSCRIPTS_RAW_DIR, filepath)
+    processed_candidate = os.path.join(TRANSCRIPTS_PROCESSED_DIR, filepath)
+    if os.path.exists(raw_candidate):
+        chosen = raw_candidate
+    elif os.path.exists(processed_candidate):
+        chosen = processed_candidate
+    else:
+        # Default to processed/ — the steady-state location after the raw→processed
+        # promotion. Registering before the file exists is rare (fetchers register
+        # right after writing) but if it happens, the value is at least correct
+        # relative to project root.
+        chosen = processed_candidate
+    return os.path.relpath(chosen, PROJECT_ROOT).replace(os.sep, "/")
+
+
 # ---------------------------------------------------------------------------
 # Legacy transcript API (backward compatible)
 # ---------------------------------------------------------------------------
@@ -109,12 +150,14 @@ def register_transcript(
     updated_qa_status = qa_status if qa_status is not None else (existing.get("qa_status") if existing else None)
     updated_qa_details = qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
 
+    canonical_filepath = _canonicalize_transcript_filepath(filepath)
+
     index[key] = {
         "ticker": resolve_ticker(ticker).upper(),
         "year": str(year),
         "quarter": quarter.upper(),
         "source": source,
-        "filepath": filepath,
+        "filepath": canonical_filepath,
         "indexed_at": existing["indexed_at"] if existing else datetime.datetime.now().isoformat(),
         "has_qa": updated_has_qa,
         "qa_status": updated_qa_status,
@@ -134,7 +177,7 @@ def register_transcript(
         quarter=quarter,
         doc_type="transcript",
         source=source,
-        local_path=filepath,
+        local_path=canonical_filepath,
         processed=True,  # Legacy flow already processed
     )
     return True
