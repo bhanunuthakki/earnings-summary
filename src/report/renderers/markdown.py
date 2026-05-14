@@ -30,6 +30,7 @@ from report.models import (
     SegmentsSection,
     SegmentWeighting,
     SnapshotSection,
+    SurpriseScorecardCard,
     ThesisSection,
     TranscriptEntry,
     ValuationSnapshot,
@@ -395,6 +396,11 @@ def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries
 
 def _earnings(out: StringIO, s: EarningsSection) -> None:
     _section_header(out, 6, "Earnings analysis", s.status)
+    # Scorecard renders BEFORE the missing-data check because it draws from
+    # earnings_surprises — a separate pipeline from the LLM summaries that
+    # drive the MISSING_DATA status. A ticker can have a fully-populated
+    # beat-rate scorecard while still waiting on process_ir_documents.
+    _surprise_scorecard_block(out, s.surprise_scorecard)
     if _missing_block(out, s.status, s.missing):
         return
     cards = list(s.full_quarters) + list(s.digest_quarters)
@@ -404,6 +410,52 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
             _full_card(out, q)
         else:
             _digest_card(out, q)
+
+
+def _surprise_scorecard_block(out: StringIO, c: SurpriseScorecardCard | None) -> None:
+    """Header table: last N quarters' EPS/Revenue beat-rate vs street.
+
+    Each row shows beats / misses / beat rate / average surprise / latest
+    surprise. A side with no_data == total_quarters means the source was
+    absent for the entire window (post-FMP-lapse revenue is the typical
+    case); we render '—' for those cells rather than a misleading 0%.
+    """
+    if c is None or c.total_quarters == 0:
+        return
+    out.write(f"**Analyst surprise — last {c.total_quarters} reported quarters**\n\n")
+    out.write("| Metric | Beats | Misses | Beat rate | Avg surprise | Latest |\n")
+    out.write("|:--- |---:|---:|---:|---:|---:|\n")
+    out.write(
+        f"| EPS | {c.eps_beats} | {c.eps_misses} | "
+        f"{_fmt_surprise_pct(c.eps_beat_rate_pct, 1)} | {_fmt_surprise_pct(c.eps_avg_surprise_pct, 2)} | "
+        f"{_fmt_surprise_pct(c.eps_latest_surprise_pct, 2)} |\n"
+    )
+    if c.revenue_no_data >= c.total_quarters:
+        out.write("| Revenue | — | — | — | — | — _(source coverage absent)_ |\n")
+    else:
+        out.write(
+            f"| Revenue | {c.revenue_beats} | {c.revenue_misses} | "
+            f"{_fmt_surprise_pct(c.revenue_beat_rate_pct, 1)} | "
+            f"{_fmt_surprise_pct(c.revenue_avg_surprise_pct, 2)} | "
+            f"{_fmt_surprise_pct(c.revenue_latest_surprise_pct, 2)} |\n"
+        )
+    out.write("\n")
+
+
+def _fmt_surprise_pct(v: float | None, places: int) -> str:
+    """Format a percent (already in 0-100 scale) with sign + given dp.
+
+    Distinct from `_fmt_pct(v)` above, which expects 0-1 decimal input and
+    multiplies by 100. This one is for surprise/beat-rate values that come
+    out of the compute layer already pre-scaled.
+
+    `None` → '—'. Positive values get an explicit '+' sign so beat/miss
+    direction reads at a glance.
+    """
+    if v is None:
+        return "—"
+    sign = "+" if v > 0 else ""
+    return f"{sign}{v:.{places}f}%"
 
 
 def _digest_card(out: StringIO, q: QuarterlyEarningsCard) -> None:

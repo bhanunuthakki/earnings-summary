@@ -343,15 +343,50 @@ class QuarterlyEarningsCard(BaseModel):
     is_recent: bool = False  # display flag — full content vs digest
 
 
+class SurpriseScorecardCard(BaseModel):
+    """Header block for §6 — analyst beat-rate scorecard over the last N
+    reported quarters. Populated from `earnings_surprises` (FMP primary,
+    yfinance fallback).
+
+    Both sides nullable: when source coverage is empty (e.g. revenue side
+    after an FMP plan lapse), the renderer skips that row rather than
+    showing a misleading 0% beat rate. Floats here (not Decimal) to match
+    the rest of models.py — Decimal precision is preserved in the compute
+    layer; the boundary conversion happens in the section builder.
+    """
+
+    total_quarters: int
+    # EPS side
+    eps_beats: int
+    eps_misses: int
+    eps_no_data: int
+    eps_beat_rate_pct: float | None = None
+    eps_avg_surprise_pct: float | None = None
+    eps_latest_surprise_pct: float | None = None
+    # Revenue side — all-None after FMP coverage lapses since yfinance
+    # doesn't publish historical revenue actual-vs-estimate.
+    revenue_beats: int
+    revenue_misses: int
+    revenue_no_data: int
+    revenue_beat_rate_pct: float | None = None
+    revenue_avg_surprise_pct: float | None = None
+    revenue_latest_surprise_pct: float | None = None
+
+
 class EarningsSection(BaseModel):
     """§6 — LLM summaries only, newest first.
 
     Most recent N quarters render in full; older ones collapse to a 1-paragraph
     digest. Full transcripts live in the appendix; pairwise Say-Do lives in §7.
+
+    When `surprise_scorecard` is populated, it renders as a header table
+    before the per-quarter cards: a 2-row beat-rate summary for EPS and
+    Revenue over the lookback window.
     """
 
     status: SectionStatus
     missing: MissingReason | None = None
+    surprise_scorecard: SurpriseScorecardCard | None = None
     full_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
     digest_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
 
