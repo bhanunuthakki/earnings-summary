@@ -298,6 +298,92 @@ def test_markdown_renderer_emits_pipe_tables(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Platform diagram — optional §2 visual sourced from a sibling cache
+# ---------------------------------------------------------------------------
+
+
+def _write_diagram_cache(repo: Path, ticker: str, payload: dict[str, object]) -> None:
+    diagram_dir = repo / "data" / "platform_diagram"
+    diagram_dir.mkdir(parents=True, exist_ok=True)
+    (diagram_dir / f"{ticker.upper()}.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+
+
+_DIAGRAM_PAYLOAD: dict[str, object] = {
+    "ticker": "TEST",
+    "fiscal_year": 2024,
+    "source_path": "/fake/path",
+    "source_sha256": "feedface",
+    "transcript_paths": ["/fake/transcripts/TEST_Q4_2024.txt"],
+    "extracted_at_start": "2026-05-11T10:00:00Z",
+    "extracted_at_end": "2026-05-11T10:00:20Z",
+    "elapsed_ms": 20000,
+    "model": "claude-sonnet-4-6",
+    "diagram": "┌──────┐   ┌──────┐\n│ A    │──→│ B    │\n└──────┘   └──────┘",
+    "caption": "A flows into B.",
+    "skipped_reason": None,
+}
+
+
+def test_platform_diagram_attaches_when_cache_present(tmp_path: Path) -> None:
+    """Sibling `data/platform_diagram/<TICKER>.json` flows into the section."""
+    repo = _create_repo(tmp_path)
+    _write_cache(repo, "TEST", _CACHED_RESULT)
+    _write_diagram_cache(repo, "TEST", _DIAGRAM_PAYLOAD)
+    section = build_company_description("TEST", repo)
+    assert section.platform_diagram is not None
+    assert "──→" in section.platform_diagram
+    assert section.platform_caption == "A flows into B."
+
+
+def test_platform_diagram_absent_leaves_section_intact(tmp_path: Path) -> None:
+    """Missing diagram cache → §2 still renders, just without the visual."""
+    repo = _create_repo(tmp_path)
+    _write_cache(repo, "TEST", _CACHED_RESULT)
+    section = build_company_description("TEST", repo)
+    assert section.status == SectionStatus.OK
+    assert section.platform_diagram is None
+    assert section.platform_caption is None
+
+
+def test_markdown_renderer_emits_platform_overview_when_diagram_present(
+    tmp_path: Path,
+) -> None:
+    """Diagram is wrapped in a fenced code block with the caption in italics."""
+    repo = _create_repo(tmp_path)
+    _write_cache(repo, "TEST", _CACHED_RESULT)
+    _write_diagram_cache(repo, "TEST", _DIAGRAM_PAYLOAD)
+    section = build_company_description("TEST", repo)
+    out = StringIO()
+    _company_description_md(out, section)
+    md = out.getvalue()
+    assert "### Platform overview" in md
+    # Fenced code block carries the box-drawing chars verbatim
+    assert "```\n┌──────┐" in md
+    # Caption rendered in italics right under the diagram
+    assert "_A flows into B._" in md
+    # Ordering: diagram block lands between the elevator pitch and "Lines of business"
+    elevator_idx = md.index("> TestCo provides cloud + internet services.")
+    platform_idx = md.index("### Platform overview")
+    lines_idx = md.index("### Lines of business")
+    assert elevator_idx < platform_idx < lines_idx
+
+
+def test_markdown_renderer_omits_platform_block_when_diagram_absent(
+    tmp_path: Path,
+) -> None:
+    """No diagram cache → no '### Platform overview' header in output."""
+    repo = _create_repo(tmp_path)
+    _write_cache(repo, "TEST", _CACHED_RESULT)
+    section = build_company_description("TEST", repo)
+    out = StringIO()
+    _company_description_md(out, section)
+    md = out.getvalue()
+    assert "### Platform overview" not in md
+
+
+# ---------------------------------------------------------------------------
 # compute helpers — text extraction + coercion
 # ---------------------------------------------------------------------------
 

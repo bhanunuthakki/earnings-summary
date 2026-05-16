@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 from compute.company_description import load_description
+from compute.platform_diagram import load_diagram
 from report.models import (
     CompanyDescriptionSection,
     SectionStatus,
@@ -80,9 +81,18 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
         rules=rules,
     )
 
+    # Optional: platform diagram is a separate extraction pipeline so the
+    # section degrades gracefully when it hasn't been run yet. Missing cache
+    # or absent diagram fields => section still renders without the visual.
+    diagram_cached = load_diagram(repo_root, ticker)
+    platform_diagram = diagram_cached.diagram if diagram_cached else None
+    platform_caption = diagram_cached.caption if diagram_cached else None
+
     return CompanyDescriptionSection(
         status=SectionStatus.OK,
         elevator_pitch=cached.elevator_pitch,
+        platform_diagram=platform_diagram,
+        platform_caption=platform_caption,
         business_overview=cached.business_overview,
         revenue_model=cached.revenue_model,
         segment_breakdown=segment_rows,
