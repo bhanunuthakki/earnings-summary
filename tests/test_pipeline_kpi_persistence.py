@@ -17,11 +17,27 @@ from pipeline.kpi_persistence import (
     PersistResult,
     find_or_create_kpi_definition,
     persist_manifest,
+    purge_duplicate_kpi_facts,
     record_validation_issue,
 )
 
 
-def _create_schema(conn: sqlite3.Connection) -> None:
+_KPI_FACTS_LOGICAL_UNIQUE = (
+    "CREATE UNIQUE INDEX uq_kpi_facts_logical "
+    "ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id)"
+)
+_KPI_FACTS_PROVENANCE_UNIQUE = (
+    "CREATE UNIQUE INDEX uq_kpi_facts_provenance "
+    "ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id)"
+)
+
+
+def _create_schema(conn: sqlite3.Connection, *, legacy_unique: bool = False) -> None:
+    """Build the kpi_* + validation_issues tables.
+
+    `legacy_unique=True` recreates the pre-0030 wider unique index (kept for the
+    purge test, which needs to set up duplicate rows that the post-0030 schema
+    would reject outright)."""
     conn.executescript(
         """
         CREATE TABLE kpi_definitions (
@@ -48,8 +64,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
         );
-        CREATE UNIQUE INDEX uq_kpi_facts_provenance
-        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
         CREATE TABLE validation_issues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             run_id TEXT NOT NULL,
@@ -64,6 +78,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    conn.execute(_KPI_FACTS_PROVENANCE_UNIQUE if legacy_unique else _KPI_FACTS_LOGICAL_UNIQUE)
     conn.commit()
 
 
@@ -72,6 +87,16 @@ def conn() -> sqlite3.Connection:
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
     _create_schema(c)
+    return c
+
+
+@pytest.fixture
+def legacy_conn() -> sqlite3.Connection:
+    """Pre-0030 schema: the wider unique index allows different source_doc_id
+    rows for the same logical KPI period (the very state the purge cleans up)."""
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    _create_schema(c, legacy_unique=True)
     return c
 
 
@@ -183,3 +208,93 @@ def test_kpi_value_rejects_empty_name() -> None:
     """KpiValue.name must be non-empty."""
     with pytest.raises(ValueError):
         KpiValue(name="", value=Decimal("1"), unit=Unit.PERCENT)
+
+
+def test_persist_manifest_skips_different_source_doc_id(conn: sqlite3.Connection) -> None:
+    """Post-0030 narrower UNIQUE: a second run with a fresher source_doc_id for
+    the same logical KPI period must NOT land a second row (this is the bug from
+    the RBRK 2026-05-13 report — duplicate "Latest" observations). The
+    `INSERT OR IGNORE` in `_insert_kpi_fact` is what enforces DO NOTHING here."""
+    first = KpiExtractionManifest(
+        ticker="RBRK",
+        period_end=datetime(2026, 1, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=9676,
+        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)],
+    )
+    second = first.model_copy(update={"source_doc_id": 9705})
+
+    persist_manifest(conn, run_id="run-a", manifest=first)
+    result = persist_manifest(conn, run_id="run-b", manifest=second)
+
+    assert result.inserted == 0
+    assert result.skipped_existing == 1
+
+    rows = conn.execute(
+        "SELECT source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
+    ).fetchall()
+    assert len(rows) == 1
+    # First-write wins (DO NOTHING); the original source_doc_id stays in place.
+    assert dict(rows[0])["source_doc_id"] == 9676
+
+
+def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(legacy_conn: sqlite3.Connection) -> None:
+    """Backfill purge keeps exactly one row per (ticker, period_end,
+    fiscal_period_type, kpi_definition_id) — the one with the highest
+    source_doc_id (most-recently-ingested document). Mirrors the prod
+    RBRK Revenue YoY case (source_doc_id 9676 vs 9705 → keep 9705)."""
+    kpi_def_id = find_or_create_kpi_definition(
+        legacy_conn, ticker="RBRK", name="Revenue YoY Growth (USD)",
+        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+    )
+
+    rows = [
+        # Two source_doc_ids for the same logical (RBRK, 2026-01-31, Q4, Revenue YoY)
+        ("RBRK", datetime(2026, 1, 31), "Q4", kpi_def_id, "46.33", "percent", 9676),
+        ("RBRK", datetime(2026, 1, 31), "Q4", kpi_def_id, "46.33", "percent", 9705),
+        # Three for an older quarter to ensure the purge generalises beyond pairs
+        ("RBRK", datetime(2025, 10, 31), "Q3", kpi_def_id, "48.26", "percent", 9600),
+        ("RBRK", datetime(2025, 10, 31), "Q3", kpi_def_id, "48.26", "percent", 9676),
+        ("RBRK", datetime(2025, 10, 31), "Q3", kpi_def_id, "48.26", "percent", 9705),
+        # A row that should be left alone (no duplicates)
+        ("RBRK", datetime(2025, 7, 31), "Q2", kpi_def_id, "51.19", "percent", 9705),
+    ]
+    legacy_conn.executemany(
+        "INSERT INTO kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    legacy_conn.commit()
+    assert legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 6
+
+    deleted = purge_duplicate_kpi_facts(legacy_conn)
+    legacy_conn.commit()
+    assert deleted == 3  # 1 from the Q4 pair + 2 from the Q3 triple
+
+    survivors = legacy_conn.execute(
+        "SELECT period_end, source_doc_id FROM kpi_facts ORDER BY period_end DESC"
+    ).fetchall()
+    assert [(str(dict(r)["period_end"]), dict(r)["source_doc_id"]) for r in survivors] == [
+        ("2026-01-31 00:00:00", 9705),
+        ("2025-10-31 00:00:00", 9705),
+        ("2025-07-31 00:00:00", 9705),
+    ]
+
+
+def test_purge_duplicate_kpi_facts_is_idempotent(legacy_conn: sqlite3.Connection) -> None:
+    """Calling purge on an already-clean table is a no-op (returns 0)."""
+    kpi_def_id = find_or_create_kpi_definition(
+        legacy_conn, ticker="MELI", name="Revenue Growth (FXN)",
+        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+    )
+    legacy_conn.execute(
+        "INSERT INTO kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("MELI", datetime(2025, 12, 31), "Q4", kpi_def_id, "96.0", "percent", 100),
+    )
+    legacy_conn.commit()
+
+    assert purge_duplicate_kpi_facts(legacy_conn) == 0
+    assert legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1

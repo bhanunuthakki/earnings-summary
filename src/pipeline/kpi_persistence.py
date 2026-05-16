@@ -134,6 +134,29 @@ def _insert_kpi_fact(
     return cur.rowcount > 0
 
 
+def purge_duplicate_kpi_facts(conn: sqlite3.Connection) -> int:
+    """Delete kpi_facts rows that share (ticker, period_end, fiscal_period_type,
+    kpi_definition_id) with a row having a higher source_doc_id; keep only the
+    latest-source_doc_id row per logical tuple. Returns the number of rows deleted.
+
+    Used by migration 0030 to backfill legacy duplicate rows before the narrower
+    UNIQUE index `uq_kpi_facts_logical` can be applied. Safe to re-run: once the
+    table is clean, the EXISTS clause matches nothing and the call is a no-op.
+    """
+    cur = conn.execute(
+        "DELETE FROM kpi_facts "
+        "WHERE EXISTS ("
+        "  SELECT 1 FROM kpi_facts other "
+        "  WHERE other.ticker = kpi_facts.ticker "
+        "    AND other.period_end = kpi_facts.period_end "
+        "    AND other.fiscal_period_type = kpi_facts.fiscal_period_type "
+        "    AND other.kpi_definition_id = kpi_facts.kpi_definition_id "
+        "    AND other.source_doc_id > kpi_facts.source_doc_id"
+        ")"
+    )
+    return cur.rowcount
+
+
 def record_validation_issue(
     conn: sqlite3.Connection,
     *,
