@@ -857,10 +857,23 @@ _COMPARATOR_SYMBOL: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge": "
 
 
 def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
-    """Render the deterministic universal break-rules from thesis_evaluations."""
+    """Render break-rule evaluations split into two tables by tier.
+
+    Tier 1 ("Catastrophic tripwires"): a narrow set of universal rules
+    (revenue YoY < 0, FCF margin collapse, OCF YoY collapse) that should fire
+    rarely but indicate a fundamental break. Rendered first because they're the
+    backstop — if any of these are red, the rest is academic.
+
+    Tier 2 ("Thesis breakers"): per-ticker rules calibrated to the actual unit
+    economics (sub-ARR contribution margin, NIM, FRE growth, etc.). These are
+    where the thesis usually breaks first.
+
+    Empty-tier tables are suppressed entirely (the heading is also omitted) so
+    holdings without per-ticker rules don't carry an empty placeholder.
+    """
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
         out.write(
-            "<h3>Universal break rules</h3>\n"
+            "<h3>Break rules</h3>\n"
             f'<div class="callout"><strong>Not yet evaluated.</strong> '
             f"Run <code>python execution/run_thesis_evaluator.py --ticker {html.escape(ticker)}</code> "
             f"to populate <code>thesis_evaluations</code>.</div>\n"
@@ -868,7 +881,7 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
         return
     overall = s.overall_breach_status
     overall_class = _BREACH_STATUS_CLASS.get(overall, "not_applicable")
-    out.write("<h3>Universal break rules</h3>\n")
+    out.write("<h3>Break rules</h3>\n")
     eval_when = (
         f' <span class="meta">— evaluated {html.escape(s.last_evaluated_at.isoformat(timespec="seconds"))}</span>'
         if s.last_evaluated_at
@@ -880,11 +893,35 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
     )
     if not s.break_rule_evaluations:
         return
+    universal = [ev for ev in s.break_rule_evaluations if ev.tier == "universal"]
+    business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
+    if universal:
+        out.write("<h4>Catastrophic tripwires</h4>\n")
+        out.write(
+            '<p class="meta">Narrow universal set — should fire only on a '
+            "fundamental break. Wrong calibrations were removed (GAAP op margin "
+            "and net margin are SBC-distorted; capex/revenue is wrong for "
+            "capex-cycle businesses).</p>\n"
+        )
+        _break_rule_table(out, universal)
+    if business:
+        out.write("<h4>Thesis breakers</h4>\n")
+        out.write(
+            '<p class="meta">Per-ticker rules calibrated to this business\'s '
+            "unit economics — usually the first place the thesis breaks.</p>\n"
+        )
+        _break_rule_table(out, business)
+
+
+def _break_rule_table(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> None:
+    """One table body shared by both tiers — keeps the column contract identical
+    so a reader scanning across the page sees the same columns in the same order.
+    """
     out.write('<div class="table-wrap"><table>\n<thead><tr>')
     for h_label in ("Status", "Rule", "Threshold", "Latest", "Detail"):
         out.write(f"<th>{h_label}</th>")
     out.write("</tr></thead>\n<tbody>")
-    for ev in s.break_rule_evaluations:
+    for ev in evaluations:
         out.write("<tr>")
         rule_class = _BREACH_STATUS_CLASS.get(ev.status, "not_applicable")
         out.write(f'<td><span class="status-badge status-{rule_class}">{ev.status}</span></td>')

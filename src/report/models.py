@@ -205,13 +205,19 @@ class BreakRuleObservation(BaseModel):
 
 
 class BreakRuleEvaluation(BaseModel):
-    """One evaluated break rule from `thesis_evaluations.rule_evaluations_json`."""
+    """One evaluated break rule from `thesis_evaluations.rule_evaluations_json`.
+
+    `tier` partitions rules into catastrophic universal tripwires and per-ticker
+    business-model breakers. Pre-tier persisted rows default to 'business_model'
+    so they continue to render under the per-ticker table.
+    """
 
     rule_id: str
     kpi_name: str
     comparator: str  # lt / le / gt / ge / eq
     threshold: float
     consecutive_periods: int
+    tier: Literal["universal", "business_model"] = "business_model"
     status: Literal["ok", "warn", "breach"]
     detail: str
     narrative: str

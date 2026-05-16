@@ -350,13 +350,18 @@ _COMPARATOR_SYMBOL_MD: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge"
 
 
 def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
+    """Mirror the HTML two-tier layout: catastrophic tripwires then thesis breakers.
+
+    See `report.renderers.html._break_rules_block` for the framing — same column
+    contract, same suppression of empty tiers.
+    """
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
-        out.write("### Universal break rules\n\n")
+        out.write("### Break rules\n\n")
         out.write(
             "_Not yet evaluated. Run `python execution/run_thesis_evaluator.py --ticker <T>` to populate `thesis_evaluations`._\n\n"
         )
         return
-    out.write("### Universal break rules\n\n")
+    out.write("### Break rules\n\n")
     eval_when = (
         f" — evaluated {s.last_evaluated_at.isoformat(timespec='seconds')}"
         if s.last_evaluated_at
@@ -365,8 +370,25 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
     out.write(f"**Overall:** `{s.overall_breach_status}`{eval_when}\n\n")
     if not s.break_rule_evaluations:
         return
+    universal = [ev for ev in s.break_rule_evaluations if ev.tier == "universal"]
+    business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
+    if universal:
+        out.write("#### Catastrophic tripwires\n\n")
+        out.write(
+            "_Narrow universal set — should fire only on a fundamental break._\n\n"
+        )
+        _break_rule_table_md(out, universal)
+    if business:
+        out.write("#### Thesis breakers\n\n")
+        out.write(
+            "_Per-ticker rules calibrated to this business's unit economics._\n\n"
+        )
+        _break_rule_table_md(out, business)
+
+
+def _break_rule_table_md(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> None:
     out.write("| Status | Rule | Threshold | Latest | Detail |\n|---|---|---|---|---|\n")
-    for ev in s.break_rule_evaluations:
+    for ev in evaluations:
         comp = _COMPARATOR_SYMBOL_MD.get(ev.comparator, ev.comparator)
         threshold = f"{comp} {ev.threshold:g} for {ev.consecutive_periods} consecutive periods"
         if ev.observations:
