@@ -96,7 +96,10 @@ LLM_MODELS: dict[str, str] = {
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
     "company_description": DEFAULT_MODEL,
-    "platform_diagram": DEFAULT_MODEL,
+    # Platform diagram is a narrowly-scoped JSON-output task (one diagram
+    # string + one caption string). Sonnet was taking 6-20 min per call and
+    # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
+    "platform_diagram": FAST_CLASSIFIER_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,

@@ -35,7 +35,10 @@ from compute.company_description import (
     _profile_str,
     _segment_names_from_db,
 )
-from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, generate_platform_diagram
+from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, LLM_MODELS, generate_platform_diagram
+
+_PURPOSE = "platform_diagram"
+_MODEL_USED = LLM_MODELS.get(_PURPOSE, DEFAULT_MODEL)
 
 
 class _ParsedLLMOutput(TypedDict):
@@ -62,7 +65,7 @@ class PlatformDiagramResult:
     extracted_at_start: str | None = None
     extracted_at_end: str | None = None
     elapsed_ms: int = 0
-    model: str = DEFAULT_MODEL
+    model: str = _MODEL_USED
     diagram: str | None = None
     caption: str | None = None
     skipped_reason: str | None = None
@@ -153,7 +156,7 @@ def extract_for_ticker(
         extracted_at_start=start_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         extracted_at_end=end_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         elapsed_ms=elapsed_ms,
-        model=DEFAULT_MODEL,
+        model=_MODEL_USED,
         diagram=parsed["diagram"],
         caption=parsed["caption"],
     )
