@@ -108,6 +108,27 @@ def open_repo_db(repo_root: Path) -> sqlite3.Connection | None:
     return conn
 
 
+def open_portfolio_tracker_db(repo_root: Path) -> sqlite3.Connection | None:
+    """Open the companion portfolio-tracker project's SQLite read-only.
+
+    Both projects sit side-by-side under
+    ~/.gemini/antigravity/scratch/. This finds portfolio-tracker's DB
+    at `../portfolio-tracker/portfolio.db` relative to earnings-summary's
+    repo root. Returns None when the companion isn't installed so the
+    Portfolio Position section can stub itself cleanly.
+
+    Opened in URI mode with `?mode=ro` so we never accidentally write
+    to the other project's database.
+    """
+    db_path = repo_root.parent / "portfolio-tracker" / "portfolio.db"
+    if not db_path.exists():
+        return None
+    uri = f"file:{db_path.as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def has_table(conn: sqlite3.Connection, name: str) -> bool:
     cursor = conn.cursor()
     cursor.execute(

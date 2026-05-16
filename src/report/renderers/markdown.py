@@ -40,6 +40,8 @@ from report.models import (
 def render(spec: ReportSpec) -> str:
     out = StringIO()
     _header(out, spec)
+    if spec.portfolio_position is not None:
+        _portfolio_position(out, spec)
     if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
         _evaluation_snapshot(out, spec.evaluation_snapshot)
     else:
@@ -67,6 +69,66 @@ def _header(out: StringIO, spec: ReportSpec) -> None:
     out.write(f"# {spec.ticker} — research report\n\n")
     out.write(f"_Generated: {spec.generation_date.isoformat()}_\n\n")
     out.write(f"_Repo root: `{spec.repo_root}`_\n\n")
+    out.write("---\n\n")
+
+
+def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
+    pp = spec.portfolio_position
+    if pp is None or pp.status == SectionStatus.NOT_APPLICABLE:
+        return
+    out.write(f"## Your position in {spec.ticker}\n\n")
+    if pp.held and pp.total_market_value is not None:
+        pct_str = (
+            f"{pp.total_unrealized_pct * 100:+.1f}%"
+            if pp.total_unrealized_pct is not None
+            else "—"
+        )
+        pnl_str = (
+            f"${pp.total_unrealized_pnl:+,.0f}"
+            if pp.total_unrealized_pnl is not None
+            else "—"
+        )
+        out.write(
+            f"**{pp.total_quantity:,.4f} sh** · "
+            f"cost **${pp.total_cost_basis or 0:,.0f}** · "
+            f"value **${pp.total_market_value:,.0f}** · "
+            f"unrealized **{pnl_str} ({pct_str})**\n\n"
+        )
+    elif pp.held:
+        out.write(f"**{pp.total_quantity:,.4f} sh** held (cost basis unknown)\n\n")
+    if pp.accounts:
+        out.write("| Account | Qty | Cost | Value | Unrealized | Source |\n")
+        out.write("| --- | ---: | ---: | ---: | ---: | --- |\n")
+        for a in pp.accounts:
+            cost_s = f"${a.cost_basis:,.0f}" if a.cost_basis is not None else "—"
+            value_s = f"${a.market_value:,.0f}" if a.market_value is not None else "—"
+            pnl_s = (
+                f"${a.unrealized_pnl:+,.0f} ({a.unrealized_pct * 100:+.1f}%)"
+                if a.unrealized_pnl is not None and a.unrealized_pct is not None
+                else "—"
+            )
+            src = a.cost_basis_source or "broker"
+            out.write(f"| {a.account_name} | {a.quantity:,.4f} | {cost_s} | {value_s} | {pnl_s} | {src} |\n")
+        out.write("\n")
+    if pp.recent_transactions:
+        out.write("**Recent activity**\n\n")
+        for t in pp.recent_transactions:
+            out.write(
+                f"- {t.date.isoformat()} · {t.account_name} · {t.type} "
+                f"{abs(t.quantity):,.4f} sh · ${abs(t.amount):,.0f}\n"
+            )
+        out.write("\n")
+    if pp.open_decisions:
+        out.write("**Your open thesis on this name**\n\n")
+        for d in pp.open_decisions:
+            conf = f" ({d.confidence})" if d.confidence else ""
+            out.write(
+                f"- {d.decision_date.isoformat()} · **{d.action}**{conf}: "
+                f"{d.thesis[:240]}{'…' if len(d.thesis) > 240 else ''}\n"
+            )
+            if d.linked_brief_path:
+                out.write(f"  - linked brief: `{d.linked_brief_path}`\n")
+        out.write("\n")
     out.write("---\n\n")
 
 
