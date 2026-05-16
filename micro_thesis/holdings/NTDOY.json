@@ -1,0 +1,83 @@
+{
+  "ticker": "NTDOY",
+  "name": "Nintendo Co. Ltd.",
+  "last_updated": "2026-05-16",
+  "thesis": "STUB: Nintendo Co. Ltd. (NTDOY) is an evaluation candidate. Holdings JSON scaffolded by Phase F-3 to carry per-ticker break_rules for the eval brief — needs user-authored thesis + tier_1_kpis + DCF params if/when it graduates to portfolio.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "chart_priorities": [],
+  "tier_1_kpis": [],
+  "tier_2_kpis": [],
+  "nuance": {},
+  "competitive_watchlist": [],
+  "thesis_breakers_qualitative": [],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "_status": "evaluation_stub_phase_f3",
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+    },
+    {
+      "rule_id": "universal_ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "ntdoy_revenue_yoy_below_neg_15",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY < -15% for 2Q — console lifecycle valley too deep; mid-cycle Switch transition tolerance is -10% to +10%."
+    },
+    {
+      "rule_id": "ntdoy_fcf_margin_below_15",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 15% for 2Q — Nintendo's structural floor even in console valleys is 20%+; sub-15 indicates first-party software tie-ratio breaking."
+    },
+    {
+      "rule_id": "ntdoy_op_margin_below_15",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Op margin < 15% — IP-monetization profit pool breaking (theme parks, mobile, films should be absorbing console cyclicality)."
+    }
+  ]
+}

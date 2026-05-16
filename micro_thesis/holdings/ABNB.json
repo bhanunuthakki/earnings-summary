@@ -105,52 +105,16 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
@@ -171,5 +135,34 @@
   ],
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "abnb_nights_booked_below_5",
+      "kpi_name": "Nights & experiences booked YoY growth",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Nights & experiences booked YoY < 5% for 2Q — core volume metric stalling; the take-rate compounding thesis fails."
+    },
+    {
+      "rule_id": "abnb_fcf_margin_below_35",
+      "kpi_name": "Free cash flow margin",
+      "comparator": "lt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 35% for 2Q — ABNB's structural floor is high-30s; sub-35 means take-rate or fixed-cost leverage is compressing."
+    },
+    {
+      "rule_id": "abnb_adj_ebitda_margin_below_30",
+      "kpi_name": "Adjusted EBITDA margin",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Adjusted EBITDA margin < 30% for 2Q — host-supply marketing or compliance costs eroding the structural margin."
+    }
+  ]
 }

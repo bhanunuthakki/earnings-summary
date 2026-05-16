@@ -105,52 +105,16 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
@@ -171,5 +135,34 @@
   ],
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "bkng_room_nights_below_5",
+      "kpi_name": "Room nights booked YoY growth",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Room nights YoY < 5% for 2Q — core volume metric stalling. BKNG runs 8-12% in normal cycles."
+    },
+    {
+      "rule_id": "bkng_gross_bookings_fxn_below_6",
+      "kpi_name": "Gross bookings YoY growth (FX-neutral)",
+      "comparator": "lt",
+      "threshold": 6,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross bookings FX-neutral < 6% for 2Q — take-rate × volume compounding thesis breaks; this is the cleanest top-line signal for an OTA."
+    },
+    {
+      "rule_id": "bkng_fcf_margin_below_30",
+      "kpi_name": "Free cash flow margin",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 30% for 2Q — BKNG's structural floor is 35%+. Sub-30 means marketing spend or merchant-model investments are eroding cash generation."
+    }
+  ]
 }
