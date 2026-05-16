@@ -171,6 +171,8 @@ class CompanyDescriptionSection(BaseModel):
     missing: MissingReason | None = None
 
     elevator_pitch: str | None = None  # 1-2 sentence always-visible summary
+    platform_diagram: str | None = None  # ASCII platform diagram (box-drawing chars)
+    platform_caption: str | None = None  # 1-2 sentence caption under the diagram
     business_overview: str | None = None  # multi-paragraph: lines of business
     revenue_model: str | None = None  # how they make money
     segment_breakdown: list[SegmentWeighting] = Field(default_factory=list)

@@ -96,6 +96,7 @@ LLM_MODELS: dict[str, str] = {
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
     "company_description": DEFAULT_MODEL,
+    "platform_diagram": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
@@ -1374,6 +1375,99 @@ Rules:
         return raw
     except Exception as e:
         log.error(f"CRITICAL ERROR: Company description generation failed for {ticker}: {e}")
+        raise
+
+
+def generate_platform_diagram(
+    ticker: str,
+    profile_description: str,
+    sector: str | None,
+    industry: str | None,
+    form_10k_text: str,
+    transcript_excerpts: str,
+    segment_names: list[str],
+    fiscal_year: int | None,
+) -> str:
+    """Synthesize a monospace platform-overview diagram for §2.
+
+    Reads the same 10-K + profile inputs used by `generate_company_description`
+    plus excerpts from the two most recent earnings transcripts (Q&A segments)
+    so the visual reflects how management currently frames the platform —
+    investor decks aren't on disk, but call language is the closest proxy for
+    the "platform diagram slide" they'd use.
+
+    Returns a JSON string the caller parses. Schema:
+      {
+        "diagram": "<fenced monospace block, <= 80 cols, box-drawing chars>",
+        "caption": "1-2 sentence caption explaining the diagram"
+      }
+    """
+    segments_block = (
+        "\n".join(f"- {n}" for n in segment_names) if segment_names else "(none on file)"
+    )
+    prompt = f"""You are an equity analyst building a "platform overview" visual for a research brief on {ticker}.
+
+The goal is a compact ASCII / monospace diagram that captures HOW the
+company's platform connects inputs (customers, suppliers, capital) to
+outputs (products, revenue). Think of the kind of "platform slide" an
+investor deck would show — the one diagram that, on its own, communicates
+what the business is.
+
+INPUTS
+
+Sector: {sector or "(unknown)"}
+Industry: {industry or "(unknown)"}
+Fiscal year of source 10-K: {fiscal_year or "(unknown)"}
+
+FMP profile.json description:
+\"\"\"
+{profile_description.strip() or "(none)"}
+\"\"\"
+
+10-K narrative excerpts (business description / segments):
+\"\"\"
+{form_10k_text.strip() or "(no 10-K narrative available)"}
+\"\"\"
+
+Recent earnings-call Q&A excerpts (how management frames the platform NOW):
+\"\"\"
+{transcript_excerpts.strip() or "(no transcripts available)"}
+\"\"\"
+
+Segment names this report displays (use these where they fit; do not invent new ones):
+{segments_block}
+
+---
+
+Produce a JSON object with EXACTLY these keys (no markdown around the JSON, no commentary):
+
+{{
+  "diagram": "<a single monospace block, 60-78 columns wide, drawn with Unicode box-drawing chars (┌─┐│└┘├┤┬┴┼) and directional arrows (→ ← ↑ ↓). NO leading or trailing fence markers — the renderer wraps the block in a code fence itself.>",
+  "caption": "1-2 sentences (plain prose, no markdown) explaining what the diagram shows and what makes the platform distinctive"
+}}
+
+Diagram rules:
+- Aim for THREE conceptual columns or layers, e.g. (Inputs/Customers) → (Platform/Core) → (Products/Revenue).
+  Use what fits this business; a two-sided marketplace is two columns flowing into a middle, a vertical SaaS is a stack, etc.
+- Each box should hold a short label (2-5 words) plus optionally a one-line concrete detail (a KPI, a count, a product name).
+- Width: keep every line <= 78 characters. Height: aim for 8-16 lines total. The block must look balanced when rendered in a fixed-width font.
+- Use ONLY: ┌ ─ ┐ │ └ ┘ ├ ┤ ┬ ┴ ┼ → ← ↑ ↓ plus ASCII letters, digits, spaces, common punctuation. No emoji, no Markdown bold, no HTML.
+- Anchor the labels in concrete facts from the inputs above. If a fact isn't in the inputs, leave the label generic rather than invent.
+- Do NOT escape characters inside the JSON string except for required \\n (newlines between diagram rows) and \\". The renderer interprets the string as-is in a code fence.
+
+Caption rules:
+- Plain English. Reference the platform's distinctive mechanism (network effect, vertical integration, data flywheel, regulatory moat, etc.) only if the inputs actually support it.
+- Do NOT restate the diagram literally; add the "why this shape" insight.
+
+Return strictly the JSON object — no prose before or after, no markdown fence around the JSON.
+"""
+    try:
+        raw = call_llm(prompt, purpose="platform_diagram").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Platform diagram generation failed for {ticker}: {e}")
         raise
 
 

@@ -295,6 +295,13 @@ def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:
         out.write(f"_{' · '.join(chips)}_\n\n")
     if s.elevator_pitch:
         out.write(f"> {s.elevator_pitch}\n\n")
+    if s.platform_diagram:
+        out.write("### Platform overview\n\n")
+        out.write("```\n")
+        out.write(s.platform_diagram.rstrip() + "\n")
+        out.write("```\n\n")
+        if s.platform_caption:
+            out.write(f"_{s.platform_caption.strip()}_\n\n")
     if s.business_overview:
         out.write("### Lines of business\n\n")
         out.write(s.business_overview.strip() + "\n\n")
