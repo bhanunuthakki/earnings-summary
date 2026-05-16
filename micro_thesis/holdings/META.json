@@ -129,85 +129,22 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
-    },
-    {
-      "rule_id": "meta_foa_revenue_below_10",
-      "kpi_name": "Family of Apps revenue growth (CC)",
-      "comparator": "lt",
-      "threshold": 10,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Family of Apps revenue growth below 10% CC for 2 consecutive Qs."
-    },
-    {
-      "rule_id": "meta_dap_below_3",
-      "kpi_name": "Family DAP (daily active people) growth",
-      "comparator": "lt",
-      "threshold": 3,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Family DAP growth below 3% for 2 consecutive Qs — engagement saturation."
-    },
-    {
-      "rule_id": "meta_op_margin_below_35",
-      "kpi_name": "Consolidated operating margin",
-      "comparator": "lt",
-      "threshold": 35,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Consolidated operating margin below 35% for 2 consecutive Qs."
     }
   ],
   "schema_version": 2,
@@ -219,5 +156,43 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "meta_foa_revenue_below_10",
+      "kpi_name": "Family of Apps revenue growth (CC)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FoA revenue CC growth < 10% for 2Q — the ad business is the entire profit pool; sub-10 is a structural growth break."
+    },
+    {
+      "rule_id": "meta_dap_below_3",
+      "kpi_name": "Family DAP (daily active people) growth",
+      "comparator": "lt",
+      "threshold": 3,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Family DAP growth < 3% YoY for 2Q — engagement saturation; ad-impression volume floor breaks."
+    },
+    {
+      "rule_id": "meta_consolidated_op_margin_below_35",
+      "kpi_name": "Consolidated operating margin",
+      "comparator": "lt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Consolidated op margin < 35% for 2Q — would need ad price + RL bleed combined; the profit-pool integrity check."
+    },
+    {
+      "rule_id": "meta_reality_labs_loss_below_neg_5b",
+      "kpi_name": "Reality Labs operating loss",
+      "comparator": "lt",
+      "threshold": -5000000000,
+      "unit": "actual",
+      "consecutive_periods": 2,
+      "narrative": "Reality Labs op loss > $5B/quarter for 2Q — the lid is off on the metaverse bet; consolidated margin gets compressed regardless of FoA performance. (Threshold is in raw dollars to match kpi_facts.unit='actual' for this KPI.)"
+    }
+  ]
 }
