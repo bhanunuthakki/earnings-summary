@@ -1,0 +1,83 @@
+{
+  "ticker": "WGS",
+  "name": "GeneDx",
+  "last_updated": "2026-05-16",
+  "thesis": "STUB: GeneDx (WGS) is an evaluation candidate. Holdings JSON scaffolded by Phase F-3 to carry per-ticker break_rules for the eval brief — needs user-authored thesis + tier_1_kpis + DCF params if/when it graduates to portfolio.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "chart_priorities": [],
+  "tier_1_kpis": [],
+  "tier_2_kpis": [],
+  "nuance": {},
+  "competitive_watchlist": [],
+  "thesis_breakers_qualitative": [],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 18.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "_status": "evaluation_stub_phase_f3",
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+    },
+    {
+      "rule_id": "universal_ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "wgs_revenue_yoy_below_30",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY < 30% for 2Q — STUB; whole-genome testing volume + reimbursement-rate compounding thesis."
+    },
+    {
+      "rule_id": "wgs_gross_margin_below_50",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 50,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GM < 50% for 2Q — STUB; reimbursed-rate-per-test and scale economics need to compound; sub-50 means the structural margin story is broken."
+    },
+    {
+      "rule_id": "wgs_op_margin_below_neg_20",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": -20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Op margin < -20% for 2Q — STUB cash-burn floor; refine based on runway model."
+    }
+  ]
+}

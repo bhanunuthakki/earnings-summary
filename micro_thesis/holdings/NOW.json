@@ -103,52 +103,16 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
@@ -166,5 +130,43 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "now_crpo_growth_below_18",
+      "kpi_name": "cRPO Growth (CC)",
+      "comparator": "lt",
+      "threshold": 18,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "cRPO CC growth < 18% YoY for 2Q — the forward-revenue indicator that matters most for SaaS retention thesis."
+    },
+    {
+      "rule_id": "now_assist_acv_growth_below_60",
+      "kpi_name": "Now Assist >$1M ACV YoY Growth",
+      "comparator": "lt",
+      "threshold": 60,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Now Assist >$1M ACV cohort growth < 60% YoY for 2Q — AI attach thesis breaks; this is the next-gen ARR driver."
+    },
+    {
+      "rule_id": "now_large_customer_growth_below_15",
+      "kpi_name": "Customers >$5M ACV YoY Growth",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Customers >$5M ACV YoY < 15% for 2Q — large-deal motion stalls; the enterprise-scale moat weakens."
+    },
+    {
+      "rule_id": "now_fcf_margin_below_28",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 28,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 28% for 2Q — NOW's structural floor is ~30%; sub-28 means SBC efficiency or capex absorption broke."
+    }
+  ]
 }

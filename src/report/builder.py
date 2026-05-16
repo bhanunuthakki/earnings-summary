@@ -19,6 +19,7 @@ from report.sections import (
     evaluation_snapshot,
     financials,
     ir_docs,
+    portfolio_position,
     provenance,
     recent_developments,
     saydo,
@@ -60,6 +61,7 @@ def build_report(
     use in §1 instead of Snapshot — for new-name screening.
     """
     ticker = ticker.upper()
+    portfolio_position_section = portfolio_position.build(ticker, repo_root)
     snapshot_section = snapshot.build(ticker, repo_root, model_link)
     evaluation_snapshot_section = (
         evaluation_snapshot.build(ticker, repo_root) if flavor == ReportFlavor.EVALUATION else None
@@ -96,6 +98,7 @@ def build_report(
         generation_date=date.today(),
         repo_root=str(repo_root),
         flavor=flavor,
+        portfolio_position=portfolio_position_section,
         snapshot=snapshot_section,
         evaluation_snapshot=evaluation_snapshot_section,
         company_description=company_description_section,

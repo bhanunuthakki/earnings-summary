@@ -88,52 +88,16 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
@@ -151,5 +115,43 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "wix_revenue_growth_below_10",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY < 10% for 2Q — durable creator-tooling growth thesis breaks; consumer SaaS floor."
+    },
+    {
+      "rule_id": "wix_fcf_margin_below_18",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 18,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 18% for 2Q — WIX's structural floor is ~20%; the FCF-compounder thesis depends on this holding."
+    },
+    {
+      "rule_id": "wix_studio_arr_growth_below_30",
+      "kpi_name": "Wix Studio ARR YoY Growth",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Studio ARR YoY < 30% — Studio is the agency-tier growth lever; sub-30 means the upmarket expansion stalls."
+    },
+    {
+      "rule_id": "wix_partners_revenue_share_below_30",
+      "kpi_name": "Partners Revenue Share",
+      "comparator": "lt",
+      "threshold": 30,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Partners (agency / pro creator) revenue share < 30% for 2Q — the high-AOV monetization mix-shift thesis reverses."
+    }
+  ]
 }

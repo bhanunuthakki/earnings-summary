@@ -269,11 +269,24 @@ def _parse_evaluation(raw: dict[str, object]) -> BreakRuleEvaluation:
         comparator=str(raw.get("comparator", "")),
         threshold=float(str(raw.get("threshold", "0"))),
         consecutive_periods=int(raw.get("consecutive_periods", 1) or 1),
+        tier=_coerce_tier(raw.get("tier")),
         status=_coerce_status(str(raw.get("status", "unknown"))),  # type: ignore[arg-type]
         detail=str(raw.get("detail", "")),
         narrative=str(raw.get("narrative", "")),
         observations=observations,
     )
+
+
+def _coerce_tier(v: object) -> Literal["universal", "business_model"]:
+    """Map a persisted tier value to the literal enum.
+
+    Pre-tier rows (written before this field existed) come back as None or
+    missing. Treat them as business_model so the existing per-ticker overlay
+    keeps rendering until a new evaluator run re-persists with explicit tiers.
+    """
+    if v == "universal":
+        return "universal"
+    return "business_model"
 
 
 def _kpi_history(ticker: str, repo_root: Path, kpi_name: str) -> list[tuple[str, float | None]]:

@@ -66,6 +66,8 @@ def render(spec: ReportSpec) -> str:
     body = StringIO()
     _nav(body)
     _header(body, spec)
+    if spec.portfolio_position is not None:
+        _portfolio_position(body, spec)
     if spec.flavor == ReportFlavor.EVALUATION and spec.evaluation_snapshot is not None:
         _evaluation_snapshot(body, spec.evaluation_snapshot)
     else:
@@ -375,6 +377,76 @@ def _header(out: StringIO, spec: ReportSpec) -> None:
         f'<p class="meta">Generated {html.escape(spec.generation_date.isoformat())} · '
         f"repo <code>{html.escape(spec.repo_root)}</code></p>\n"
     )
+
+
+def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
+    pp = spec.portfolio_position
+    if pp is None or pp.status == SectionStatus.NOT_APPLICABLE:
+        return
+    out.write('<section class="portfolio-position" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin:12px 0;">\n')
+    out.write(f"<h2 style=\"margin-top:0;font-size:16px;\">Your position in {html.escape(spec.ticker)}</h2>\n")
+    if pp.held and pp.total_market_value is not None:
+        pnl = pp.total_unrealized_pnl or 0.0
+        pct = pp.total_unrealized_pct
+        pnl_color = "#16a34a" if pnl >= 0 else "#dc2626"
+        pct_str = f"{pct * 100:+.1f}%" if pct is not None else "—"
+        out.write(
+            '<p style="margin:4px 0;">'
+            f"<strong>{pp.total_quantity:,.4f} sh</strong> · "
+            f"cost <strong>${(pp.total_cost_basis or 0):,.0f}</strong> · "
+            f"value <strong>${pp.total_market_value:,.0f}</strong> · "
+            f'unrealized <strong style="color:{pnl_color};">${pnl:+,.0f} ({pct_str})</strong>'
+            "</p>\n"
+        )
+    elif pp.held:
+        out.write(f'<p style="margin:4px 0;"><strong>{pp.total_quantity:,.4f} sh</strong> held (cost basis unknown)</p>\n')
+    if pp.accounts:
+        out.write('<table style="width:100%;margin-top:8px;font-size:13px;border-collapse:collapse;">\n')
+        out.write('<thead><tr style="text-align:left;border-bottom:1px solid #e2e8f0;"><th>Account</th><th style="text-align:right;">Qty</th><th style="text-align:right;">Cost</th><th style="text-align:right;">Value</th><th style="text-align:right;">Unrealized</th><th>Source</th></tr></thead>\n<tbody>\n')
+        for a in pp.accounts:
+            cost_s = f"${a.cost_basis:,.0f}" if a.cost_basis is not None else "—"
+            value_s = f"${a.market_value:,.0f}" if a.market_value is not None else "—"
+            if a.unrealized_pnl is not None and a.unrealized_pct is not None:
+                color = "#16a34a" if a.unrealized_pnl >= 0 else "#dc2626"
+                pnl_s = f'<span style="color:{color};">${a.unrealized_pnl:+,.0f} ({a.unrealized_pct * 100:+.1f}%)</span>'
+            else:
+                pnl_s = "—"
+            src = a.cost_basis_source or "broker"
+            out.write(
+                f"<tr><td>{html.escape(a.account_name)}</td>"
+                f"<td style=\"text-align:right;\">{a.quantity:,.4f}</td>"
+                f"<td style=\"text-align:right;\">{cost_s}</td>"
+                f"<td style=\"text-align:right;\">{value_s}</td>"
+                f"<td style=\"text-align:right;\">{pnl_s}</td>"
+                f"<td>{html.escape(src)}</td></tr>\n"
+            )
+        out.write("</tbody></table>\n")
+    if pp.recent_transactions:
+        out.write('<details style="margin-top:8px;"><summary><strong>Recent activity</strong></summary>\n<ul style="font-size:13px;">\n')
+        for t in pp.recent_transactions:
+            out.write(
+                "<li>"
+                f"{t.date.isoformat()} · {html.escape(t.account_name)} · {t.type} "
+                f"{abs(t.quantity):,.4f} sh · ${abs(t.amount):,.0f}"
+                "</li>\n"
+            )
+        out.write("</ul></details>\n")
+    if pp.open_decisions:
+        out.write('<div style="margin-top:8px;"><strong>Your open thesis on this name</strong>\n<ul style="font-size:13px;">\n')
+        for d in pp.open_decisions:
+            conf = f" ({d.confidence})" if d.confidence else ""
+            thesis_truncated = d.thesis[:240] + ("…" if len(d.thesis) > 240 else "")
+            brief_link = (
+                f' <code style="font-size:11px;">linked: {html.escape(d.linked_brief_path)}</code>'
+                if d.linked_brief_path
+                else ""
+            )
+            out.write(
+                f"<li>{d.decision_date.isoformat()} · <strong>{html.escape(d.action)}</strong>{conf}: "
+                f"{html.escape(thesis_truncated)}{brief_link}</li>\n"
+            )
+        out.write("</ul></div>\n")
+    out.write("</section>\n")
 
 
 # ---------------------------------------------------------------------------
@@ -785,10 +857,23 @@ _COMPARATOR_SYMBOL: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge": "
 
 
 def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
-    """Render the deterministic universal break-rules from thesis_evaluations."""
+    """Render break-rule evaluations split into two tables by tier.
+
+    Tier 1 ("Catastrophic tripwires"): a narrow set of universal rules
+    (revenue YoY < 0, FCF margin collapse, OCF YoY collapse) that should fire
+    rarely but indicate a fundamental break. Rendered first because they're the
+    backstop — if any of these are red, the rest is academic.
+
+    Tier 2 ("Thesis breakers"): per-ticker rules calibrated to the actual unit
+    economics (sub-ARR contribution margin, NIM, FRE growth, etc.). These are
+    where the thesis usually breaks first.
+
+    Empty-tier tables are suppressed entirely (the heading is also omitted) so
+    holdings without per-ticker rules don't carry an empty placeholder.
+    """
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
         out.write(
-            "<h3>Universal break rules</h3>\n"
+            "<h3>Break rules</h3>\n"
             f'<div class="callout"><strong>Not yet evaluated.</strong> '
             f"Run <code>python execution/run_thesis_evaluator.py --ticker {html.escape(ticker)}</code> "
             f"to populate <code>thesis_evaluations</code>.</div>\n"
@@ -796,7 +881,7 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
         return
     overall = s.overall_breach_status
     overall_class = _BREACH_STATUS_CLASS.get(overall, "not_applicable")
-    out.write("<h3>Universal break rules</h3>\n")
+    out.write("<h3>Break rules</h3>\n")
     eval_when = (
         f' <span class="meta">— evaluated {html.escape(s.last_evaluated_at.isoformat(timespec="seconds"))}</span>'
         if s.last_evaluated_at
@@ -808,11 +893,35 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
     )
     if not s.break_rule_evaluations:
         return
+    universal = [ev for ev in s.break_rule_evaluations if ev.tier == "universal"]
+    business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
+    if universal:
+        out.write("<h4>Catastrophic tripwires</h4>\n")
+        out.write(
+            '<p class="meta">Narrow universal set — should fire only on a '
+            "fundamental break. Wrong calibrations were removed (GAAP op margin "
+            "and net margin are SBC-distorted; capex/revenue is wrong for "
+            "capex-cycle businesses).</p>\n"
+        )
+        _break_rule_table(out, universal)
+    if business:
+        out.write("<h4>Thesis breakers</h4>\n")
+        out.write(
+            '<p class="meta">Per-ticker rules calibrated to this business\'s '
+            "unit economics — usually the first place the thesis breaks.</p>\n"
+        )
+        _break_rule_table(out, business)
+
+
+def _break_rule_table(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> None:
+    """One table body shared by both tiers — keeps the column contract identical
+    so a reader scanning across the page sees the same columns in the same order.
+    """
     out.write('<div class="table-wrap"><table>\n<thead><tr>')
     for h_label in ("Status", "Rule", "Threshold", "Latest", "Detail"):
         out.write(f"<th>{h_label}</th>")
     out.write("</tr></thead>\n<tbody>")
-    for ev in s.break_rule_evaluations:
+    for ev in evaluations:
         out.write("<tr>")
         rule_class = _BREACH_STATUS_CLASS.get(ev.status, "not_applicable")
         out.write(f'<td><span class="status-badge status-{rule_class}">{ev.status}</span></td>')

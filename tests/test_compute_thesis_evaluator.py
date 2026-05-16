@@ -14,6 +14,7 @@ from compute.thesis_evaluator import (
     BreakRule,
     Comparator,
     KpiObservation,
+    RuleTier,
     ThesisVerdict,
     evaluate_rule,
     evaluate_ticker_thesis,
@@ -178,7 +179,11 @@ def test_evaluate_rule_supports_gt_comparator() -> None:
 
 
 def test_load_holdings_spec_reads_break_rules(tmp_path: Path) -> None:
-    """JSON loader picks up break_rules and ignores extra fields."""
+    """JSON loader picks up break_rules and ignores extra fields.
+
+    Also pins that rules from the `break_rules` array get tier=UNIVERSAL — array
+    placement is the source of truth for the tier classification.
+    """
     payload = {
         "ticker": "TEST",
         "thesis": "...",
@@ -201,14 +206,69 @@ def test_load_holdings_spec_reads_break_rules(tmp_path: Path) -> None:
     assert spec.ticker == "TEST"
     assert len(spec.break_rules) == 1
     assert spec.break_rules[0].kpi_name == "Foo"
+    assert spec.break_rules[0].tier == RuleTier.UNIVERSAL
+    assert spec.business_model_rules == []
+
+
+def test_load_holdings_spec_tags_business_model_rules(tmp_path: Path) -> None:
+    """Rules listed under `business_model_rules` get tier=BUSINESS_MODEL."""
+    payload = {
+        "ticker": "RBRK",
+        "thesis": "...",
+        "business_model_rules": [
+            {
+                "rule_id": "sub_arr_contribution_margin_reversal",
+                "kpi_name": "Sub ARR Contribution Margin",
+                "comparator": "lt",
+                "threshold": 5,
+                "unit": "percent",
+                "consecutive_periods": 2,
+                "narrative": "Contribution margin inflection reverses",
+            }
+        ],
+    }
+    (tmp_path / "RBRK.json").write_text(json.dumps(payload), encoding="utf-8")
+    spec = load_holdings_spec(tmp_path, "RBRK")
+    assert spec.break_rules == []
+    assert len(spec.business_model_rules) == 1
+    assert spec.business_model_rules[0].tier == RuleTier.BUSINESS_MODEL
+
+
+def test_load_holdings_spec_array_placement_wins_over_explicit_tier(
+    tmp_path: Path,
+) -> None:
+    """Even if a rule in `break_rules` has `"tier": "business_model"` in JSON,
+    the array placement wins. This prevents a JSON-level mistake (wrong tier
+    string) from producing a rule that lives in `break_rules` but renders under
+    the per-ticker table."""
+    payload = {
+        "ticker": "TEST",
+        "thesis": "...",
+        "break_rules": [
+            {
+                "rule_id": "x",
+                "kpi_name": "Foo",
+                "comparator": "lt",
+                "threshold": 0,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Foo < 0",
+                "tier": "business_model",  # explicit override should be ignored
+            }
+        ],
+    }
+    (tmp_path / "TEST.json").write_text(json.dumps(payload), encoding="utf-8")
+    spec = load_holdings_spec(tmp_path, "TEST")
+    assert spec.break_rules[0].tier == RuleTier.UNIVERSAL
 
 
 def test_load_holdings_spec_handles_missing_break_rules(tmp_path: Path) -> None:
-    """Missing break_rules -> empty list, no error."""
+    """Missing arrays -> empty lists, no error."""
     p = tmp_path / "X.json"
     p.write_text(json.dumps({"ticker": "X", "thesis": "x"}), encoding="utf-8")
     spec = load_holdings_spec(tmp_path, "X")
     assert spec.break_rules == []
+    assert spec.business_model_rules == []
 
 
 def test_load_holdings_spec_raises_on_missing_file(tmp_path: Path) -> None:
@@ -324,6 +384,47 @@ def test_persist_verdict_appends_to_thesis_evaluations(
     assert dict(rows[1])["run_id"] == "r2"
 
 
+def test_evaluate_ticker_thesis_iterates_both_arrays(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Both `break_rules` (universal) and `business_model_rules` are evaluated,
+    in that order, in a single ThesisVerdict.
+
+    Order matters because the §2 renderer relies on universal-first sequencing
+    to keep catastrophic tripwires visually above per-ticker breakers.
+    """
+    payload = {
+        "ticker": "RBRK",
+        "thesis": "...",
+        "break_rules": [
+            {
+                "rule_id": "universal_revenue_decline",
+                "kpi_name": "Revenue YoY Growth (USD)",
+                "comparator": "lt", "threshold": 0, "unit": "percent",
+                "consecutive_periods": 1, "narrative": "Revenue declining YoY",
+            },
+        ],
+        "business_model_rules": [
+            {
+                "rule_id": "rbrk_sub_arr_growth_below_25",
+                "kpi_name": "Sub ARR YoY Growth",
+                "comparator": "lt", "threshold": 25, "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Sub ARR YoY growth below 25% — deceleration",
+            },
+        ],
+    }
+    (tmp_path / "RBRK.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "RBRK", "Revenue YoY Growth (USD)", [("2026-01-31", 46)])  # OK
+    _seed_kpi(conn, "RBRK", "Sub ARR YoY Growth", [("2026-01-31", 34)])  # OK
+
+    verdict = evaluate_ticker_thesis(conn, ticker="RBRK", holdings_dir=tmp_path)
+    assert len(verdict.rule_evaluations) == 2
+    # Universal first, then business_model — order is a contract for the renderer.
+    assert verdict.rule_evaluations[0].rule.tier == RuleTier.UNIVERSAL
+    assert verdict.rule_evaluations[1].rule.tier == RuleTier.BUSINESS_MODEL
+
+
 def test_persist_verdict_serializes_rule_evaluations(
     conn: sqlite3.Connection,
 ) -> None:
@@ -337,7 +438,7 @@ def test_persist_verdict_serializes_rule_evaluations(
     rule = BreakRule(
         rule_id="r1", kpi_name="NPL", comparator=Comparator.GT,
         threshold=Decimal("7"), unit=Unit.PERCENT, consecutive_periods=1,
-        narrative="NPL > 7",
+        narrative="NPL > 7", tier=RuleTier.BUSINESS_MODEL,
     )
     obs = KpiObservation(
         period_end=datetime(2025, 12, 31), value=Decimal("8.5"), unit=Unit.PERCENT
@@ -356,6 +457,7 @@ def test_persist_verdict_serializes_rule_evaluations(
     assert len(parsed) == 1
     assert parsed[0]["rule_id"] == "r1"
     assert parsed[0]["status"] == "breach"
+    assert parsed[0]["tier"] == "business_model"
     assert parsed[0]["observations"][0]["value"] == "8.5"
 
 

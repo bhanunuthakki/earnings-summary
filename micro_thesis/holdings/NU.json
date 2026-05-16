@@ -108,69 +108,6 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
-    },
-    {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
-      "kpi_name": "FCF Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 5,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
-    },
-    {
-      "rule_id": "ocf_decline_yoy",
-      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
-      "comparator": "lt",
-      "threshold": -10,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
-    },
-    {
-      "rule_id": "nu_npl_above_7",
-      "kpi_name": "NPL 90d+",
-      "comparator": "gt",
-      "threshold": 7,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "NPL 90d+ above 7% for 2 consecutive Qs — credit cycle break."
     }
   ],
   "schema_version": 2,
@@ -182,5 +119,43 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "nu_npl_above_7",
+      "kpi_name": "NPL 90d+",
+      "comparator": "gt",
+      "threshold": 7,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "90d+ NPL > 7% for 2Q — credit-quality break; their underwriting thesis depends on the 5-6% historical range holding."
+    },
+    {
+      "rule_id": "nu_arpac_below_10",
+      "kpi_name": "Monthly ARPAC",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "actual",
+      "consecutive_periods": 2,
+      "narrative": "Monthly ARPAC < $10 for 2Q — cross-sell stalling; expanding ARPAC is the unit-economics flywheel."
+    },
+    {
+      "rule_id": "nu_activity_rate_below_82",
+      "kpi_name": "Activity Rate",
+      "comparator": "lt",
+      "threshold": 82,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Activity rate < 82% for 2Q — customers becoming dormant; engagement-flywheel signal."
+    },
+    {
+      "rule_id": "nu_early_npl_above_5",
+      "kpi_name": "NPL 15-90d",
+      "comparator": "gt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "15-90d NPL > 5% for 2Q — leading indicator of cohort credit deterioration; fires 1-2Q before 90d+ trips."
+    }
+  ]
 }

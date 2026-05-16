@@ -115,78 +115,6 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
-    },
-    {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
-      "kpi_name": "FCF Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 5,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
-    },
-    {
-      "rule_id": "ocf_decline_yoy",
-      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
-      "comparator": "lt",
-      "threshold": -10,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
-    },
-    {
-      "rule_id": "bn_de_per_share_below_15",
-      "kpi_name": "Distributable Earnings (DE) per share growth YoY (TTM)",
-      "comparator": "lt",
-      "threshold": 15,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "DE/share growth below 15% YoY for 2 consecutive Qs — core compounder broken."
-    },
-    {
-      "rule_id": "bn_fre_growth_below_15",
-      "kpi_name": "Fee-Related Earnings (FRE) growth (BAM segment)",
-      "comparator": "lt",
-      "threshold": 15,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "BAM Fee-Related Earnings growth below 15% YoY for 2 consecutive Qs."
     }
   ],
   "schema_version": 2,
@@ -198,5 +126,43 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "bn_de_per_share_below_15",
+      "kpi_name": "Distributable Earnings (DE) per share growth YoY (TTM)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "DE/share growth < 15% YoY (TTM) — the owner-economics floor; this is what compounds equity value."
+    },
+    {
+      "rule_id": "bn_fre_growth_below_15",
+      "kpi_name": "Fee-Related Earnings (FRE) growth (BAM segment)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "BAM-segment FRE growth < 15% YoY — asset manager scale thesis breaks here."
+    },
+    {
+      "rule_id": "bn_fee_bearing_capital_below_10",
+      "kpi_name": "Fee-bearing capital growth",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Fee-bearing capital growth < 10% — the leading indicator of future FRE; if AUM raise stalls, FRE follows."
+    },
+    {
+      "rule_id": "bn_wealth_solutions_roe_below_15",
+      "kpi_name": "Brookfield Wealth Solutions ROE",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "BWS ROE < 15% for 2Q — the insurance leg's spread economics are degrading."
+    }
+  ]
 }

@@ -36,12 +36,34 @@ class Comparator(StrEnum):
     EQ = "eq"
 
 
+class RuleTier(StrEnum):
+    """Two-tier rule taxonomy.
+
+    UNIVERSAL: catastrophic tripwires that apply to every holding (e.g. outright
+    revenue decline). Kept intentionally narrow — the noisy GAAP-margin universals
+    were removed in favor of per-ticker thresholds because SBC-heavy software,
+    capex-cycle pharma, and banks all distort GAAP op/net margin in different ways.
+
+    BUSINESS_MODEL: per-ticker breakers that reflect the actual unit economics of
+    the business (sub-ARR contribution margin for RBRK, NIM/efficiency ratio for
+    NU, FRE growth for BN, etc.). These are the rules that should fire FIRST when
+    the thesis is genuinely breaking.
+    """
+
+    UNIVERSAL = "universal"
+    BUSINESS_MODEL = "business_model"
+
+
 class BreakRule(BaseModel):
     """One deterministic break rule from a holdings JSON.
 
     `consecutive_periods` defaults to 1 (instantaneous breach). The most-recent
     `consecutive_periods` kpi_facts values for `kpi_name` are inspected; the rule
     fires if all of them satisfy `comparator threshold`.
+
+    `tier` distinguishes catastrophic tripwires (universal) from per-ticker
+    thesis breakers (business_model). Defaults to business_model so rules added
+    only to the per-ticker list inherit the correct tag without explicit marking.
     """
 
     rule_id: str = Field(min_length=1, max_length=80)
@@ -51,14 +73,23 @@ class BreakRule(BaseModel):
     unit: Unit
     consecutive_periods: int = Field(ge=1, le=12, default=1)
     narrative: str = Field(min_length=1, max_length=500)
+    tier: RuleTier = RuleTier.BUSINESS_MODEL
 
 
 class HoldingsSpec(BaseModel):
-    """Subset of holdings JSON used by the evaluator."""
+    """Subset of holdings JSON used by the evaluator.
+
+    Two parallel arrays of rules. `break_rules` carries the (narrow) universal
+    tripwires shared across holdings; `business_model_rules` carries the
+    per-ticker breakers that reflect the actual unit economics. Tier is assigned
+    at load time based on which array a rule came from — the evaluator merges
+    them into a single sequence before fetching history.
+    """
 
     ticker: str
     thesis: str
     break_rules: list[BreakRule] = Field(default_factory=list)
+    business_model_rules: list[BreakRule] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -96,19 +127,41 @@ def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
 
     The on-disk JSON may have other fields (tier_1_kpis, break_conditions, etc.)
     used by the LLM skill — we deliberately ignore those and only consume
-    `break_rules`. Missing `break_rules` returns an empty list (no rules to evaluate).
+    `break_rules` + `business_model_rules`. Missing arrays return empty (no rules
+    to evaluate).
+
+    Rules in `break_rules` are tagged tier=universal at load time; rules in
+    `business_model_rules` are tagged tier=business_model. Any explicit `tier`
+    in the on-disk JSON is overridden by the array the rule lives in — the JSON
+    layout is the source of truth, not a redundant field.
     """
     path = holdings_dir / f"{ticker.upper()}.json"
     if not path.exists():
         raise FileNotFoundError(f"Holdings spec not found: {path}")
     with open(path, encoding="utf-8") as f:
         payload = json.load(f)
-    rules_raw = payload.get("break_rules", [])
+    universal_raw = payload.get("break_rules", []) or []
+    business_raw = payload.get("business_model_rules", []) or []
+    universal_rules = [_load_rule(r, RuleTier.UNIVERSAL) for r in universal_raw]
+    business_rules = [_load_rule(r, RuleTier.BUSINESS_MODEL) for r in business_raw]
     return HoldingsSpec(
         ticker=payload["ticker"],
         thesis=payload["thesis"],
-        break_rules=[BreakRule.model_validate(r) for r in rules_raw],
+        break_rules=universal_rules,
+        business_model_rules=business_rules,
     )
+
+
+def _load_rule(raw: dict[str, object], tier: RuleTier) -> BreakRule:
+    """Validate one rule dict, forcing the tier based on its parent array.
+
+    `raw` may not be a dict at runtime (malformed JSON) — Pydantic raises a
+    ValidationError there which propagates naturally. We strip any caller-set
+    `tier` so the array placement always wins.
+    """
+    cleaned = {k: v for k, v in raw.items() if k != "tier"}
+    rule = BreakRule.model_validate(cleaned)
+    return rule.model_copy(update={"tier": tier})
 
 
 def _fetch_kpi_history(
@@ -230,10 +283,15 @@ def evaluate_ticker_thesis(
     ticker: str,
     holdings_dir: Path,
 ) -> ThesisVerdict:
-    """End-to-end: load rules, fetch history, evaluate, roll up. No DB writes."""
+    """End-to-end: load rules, fetch history, evaluate, roll up. No DB writes.
+
+    Universal tripwires (`spec.break_rules`) are evaluated before per-ticker
+    business-model rules (`spec.business_model_rules`); the §2 renderer relies
+    on this order to keep catastrophic breakers visually first.
+    """
     spec = load_holdings_spec(holdings_dir, ticker)
     evaluations: list[RuleEvaluation] = []
-    for rule in spec.break_rules:
+    for rule in (*spec.break_rules, *spec.business_model_rules):
         history = _fetch_kpi_history(
             conn, ticker, rule.kpi_name, rule.consecutive_periods
         )
@@ -249,7 +307,13 @@ def evaluate_ticker_thesis(
 
 
 def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
-    """Render rule_evaluations as a stable JSON string for thesis_evaluations history."""
+    """Render rule_evaluations as a stable JSON string for thesis_evaluations history.
+
+    `tier` is included so the §2 renderer can split universal tripwires from
+    per-ticker business-model breakers without re-reading the holdings JSON.
+    Older persisted rows without `tier` are treated as business_model at parse
+    time (see report.sections.thesis._parse_evaluation).
+    """
     payload = [
         {
             "rule_id": e.rule.rule_id,
@@ -257,6 +321,7 @@ def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
             "comparator": e.rule.comparator.value,
             "threshold": str(e.rule.threshold),
             "consecutive_periods": e.rule.consecutive_periods,
+            "tier": e.rule.tier.value,
             "status": e.status.value,
             "detail": e.detail,
             "narrative": e.rule.narrative,

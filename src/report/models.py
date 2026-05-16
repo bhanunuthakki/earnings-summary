@@ -205,13 +205,19 @@ class BreakRuleObservation(BaseModel):
 
 
 class BreakRuleEvaluation(BaseModel):
-    """One evaluated break rule from `thesis_evaluations.rule_evaluations_json`."""
+    """One evaluated break rule from `thesis_evaluations.rule_evaluations_json`.
+
+    `tier` partitions rules into catastrophic universal tripwires and per-ticker
+    business-model breakers. Pre-tier persisted rows default to 'business_model'
+    so they continue to render under the per-ticker table.
+    """
 
     rule_id: str
     kpi_name: str
     comparator: str  # lt / le / gt / ge / eq
     threshold: float
     consecutive_periods: int
+    tier: Literal["universal", "business_model"] = "business_model"
     status: Literal["ok", "warn", "breach"]
     detail: str
     narrative: str
@@ -544,6 +550,61 @@ class AppendixSection(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PortfolioPositionAccountRow(BaseModel):
+    """One account's worth of the user's position in this name."""
+
+    account_name: str
+    quantity: float
+    cost_basis: float | None
+    cost_basis_source: str | None = None  # None=broker, 'manual', 'inferred_acats', etc.
+    market_value: float | None
+    unrealized_pnl: float | None
+    unrealized_pct: float | None  # decimal, 0.12 = +12%
+
+
+class PortfolioPositionTransaction(BaseModel):
+    """Most-recent transaction in this ticker for context."""
+
+    date: date
+    account_name: str
+    type: str
+    quantity: float
+    amount: float
+
+
+class PortfolioPositionDecision(BaseModel):
+    """Open trade decision linked to this ticker — the user's own thesis
+    against this name from portfolio-tracker's decision log."""
+
+    decision_date: date
+    action: str
+    confidence: str | None
+    thesis: str  # full text (caller decides whether to truncate)
+    linked_brief_path: str | None = None
+
+
+class PortfolioPositionSection(BaseModel):
+    """Pre-§1 callout: 'your position in this name right now'.
+
+    Reads from the companion portfolio-tracker project. When it's
+    unavailable the section is hidden entirely. When the user doesn't
+    hold the ticker (no position rows AND no recent decisions), it's
+    also hidden — no point in noise.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    held: bool = False
+    accounts: list[PortfolioPositionAccountRow] = Field(default_factory=list)
+    total_quantity: float = 0.0
+    total_cost_basis: float | None = None
+    total_market_value: float | None = None
+    total_unrealized_pnl: float | None = None
+    total_unrealized_pct: float | None = None
+    recent_transactions: list[PortfolioPositionTransaction] = Field(default_factory=list)
+    open_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
+
+
 class ReportSpec(BaseModel):
     """The unified report. One per (ticker, generation_date)."""
 
@@ -553,6 +614,7 @@ class ReportSpec(BaseModel):
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO
 
+    portfolio_position: PortfolioPositionSection | None = None
     snapshot: SnapshotSection
     evaluation_snapshot: EvaluationSnapshotSection | None = None
     company_description: CompanyDescriptionSection

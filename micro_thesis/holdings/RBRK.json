@@ -115,58 +115,87 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker FCF/SBC rules are stricter.)"
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "rbrk_sub_arr_yoy_below_25",
+      "kpi_name": "Subscription ARR YoY Growth",
+      "comparator": "lt",
+      "threshold": 25,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Subscription ARR YoY growth below 25% for 2 consecutive Qs — the law-of-large-numbers floor; below this the moat-attach thesis is in question."
+    },
+    {
+      "rule_id": "rbrk_net_new_sub_arr_below_80m",
+      "kpi_name": "Net New Subscription ARR (USD millions)",
+      "comparator": "lt",
+      "threshold": 80,
+      "unit": "millions",
+      "consecutive_periods": 2,
+      "narrative": "Net new sub ARR < $80M for 2 consecutive Qs — deceleration to pre-FY26 cadence."
+    },
+    {
+      "rule_id": "rbrk_nrr_below_115",
+      "kpi_name": "Net Revenue Retention Rate (NRR)",
+      "comparator": "lt",
+      "threshold": 115,
+      "unit": "percent",
+      "consecutive_periods": 1,
+      "narrative": "NRR < 115% — land-and-expand stalling within existing accounts."
+    },
+    {
+      "rule_id": "rbrk_sub_arr_contribution_margin_reverses",
+      "kpi_name": "Sub ARR Contribution Margin",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Sub ARR contribution margin reverses below 5% for 2 consecutive Qs — operating leverage thesis breaks (FY26 ran 11.6% vs 2.1% prior year)."
+    },
+    {
+      "rule_id": "rbrk_large_customer_growth_below_15",
+      "kpi_name": "Customers >$100K ARR YoY Growth",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Large-customer (>$100K ARR) count growing < 15% YoY — moat-attach signal weakening."
+    },
+    {
+      "rule_id": "rbrk_fcf_margin_below_10",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 10% for 2 consecutive Qs — FY26 ran ~13%, sub-10 is a structural cash-conversion regression (not the catastrophic 5% universal floor)."
+    },
+    {
+      "rule_id": "rbrk_sbc_intensity_rising",
+      "kpi_name": "SBC / Subscription Revenue",
+      "comparator": "gt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "SBC as % of subscription revenue > 35% for 2 consecutive Qs — efficiency curve flatlining; the GAAP-margin-inflection thesis depends on this ratio falling."
     }
   ],
   "schema_version": 2,
