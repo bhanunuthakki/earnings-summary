@@ -44,10 +44,11 @@ def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
         accounts = _holding_accounts(conn, ticker)
         transactions = _recent_transactions(conn, ticker)
         decisions = _open_decisions(conn, ticker)
+        closed = _closed_decisions(conn, ticker)
     finally:
         conn.close()
 
-    if not accounts and not transactions and not decisions:
+    if not accounts and not transactions and not decisions and not closed:
         # No exposure whatsoever — hide the section.
         return PortfolioPositionSection(status=SectionStatus.NOT_APPLICABLE)
 
@@ -73,6 +74,7 @@ def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
         total_unrealized_pct=total_pct,
         recent_transactions=transactions,
         open_decisions=decisions,
+        closed_decisions=closed,
     )
 
 
@@ -208,6 +210,43 @@ def _open_decisions(
             confidence=r["confidence"],
             thesis=r["thesis"],
             linked_brief_path=r["linked_brief_path"],
+            outcome_status=r["outcome_status"],
+        )
+        for r in rows
+    ]
+
+
+def _closed_decisions(
+    conn: sqlite3.Connection, ticker: str, lookback_days: int = 730
+) -> list[PortfolioPositionDecision]:
+    """Track record: closed decisions on this ticker. outcome_status in
+    ('validated', 'invalidated', 'partial'). Longer lookback than the
+    open-decision query (~2y) so the user sees the full history of past
+    calls when re-evaluating the name."""
+    cutoff = (date.today() - timedelta(days=lookback_days)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT decision_date, action, confidence, thesis, linked_brief_path,
+               outcome_status, outcome_date, outcome_notes
+        FROM trade_decisions
+        WHERE UPPER(ticker) = ?
+          AND decision_date >= ?
+          AND outcome_status IN ('validated', 'invalidated', 'partial')
+        ORDER BY decision_date DESC
+        LIMIT 10
+        """,
+        (ticker.upper().strip(), cutoff),
+    ).fetchall()
+    return [
+        PortfolioPositionDecision(
+            decision_date=_parse_iso_date(r["decision_date"]),
+            action=r["action"],
+            confidence=r["confidence"],
+            thesis=r["thesis"],
+            linked_brief_path=r["linked_brief_path"],
+            outcome_status=r["outcome_status"],
+            outcome_date=_parse_iso_date(r["outcome_date"]) if r["outcome_date"] else None,
+            outcome_notes=r["outcome_notes"],
         )
         for r in rows
     ]

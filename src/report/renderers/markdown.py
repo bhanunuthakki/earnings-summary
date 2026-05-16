@@ -129,6 +129,27 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
             if d.linked_brief_path:
                 out.write(f"  - linked brief: `{d.linked_brief_path}`\n")
         out.write("\n")
+    if pp.closed_decisions:
+        out.write("**Track record on this name**\n\n")
+        for d in pp.closed_decisions:
+            conf = f" ({d.confidence})" if d.confidence else ""
+            outcome_label = {
+                "validated": "✓ validated",
+                "invalidated": "✗ invalidated",
+                "partial": "~ partial",
+            }.get(d.outcome_status or "", d.outcome_status or "")
+            outcome_when = (
+                f" → {d.outcome_date.isoformat()} **{outcome_label}**"
+                if d.outcome_date
+                else f" → **{outcome_label}**"
+            )
+            out.write(
+                f"- {d.decision_date.isoformat()} · **{d.action}**{conf}: "
+                f"{d.thesis[:160]}{'…' if len(d.thesis) > 160 else ''}{outcome_when}\n"
+            )
+            if d.outcome_notes:
+                out.write(f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n")
+        out.write("\n")
     out.write("---\n\n")
 
 

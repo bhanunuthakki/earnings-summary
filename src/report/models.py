@@ -575,14 +575,23 @@ class PortfolioPositionTransaction(BaseModel):
 
 
 class PortfolioPositionDecision(BaseModel):
-    """Open trade decision linked to this ticker — the user's own thesis
-    against this name from portfolio-tracker's decision log."""
+    """A trade decision logged against this ticker — the user's own thesis
+    against this name from portfolio-tracker's decision log.
+
+    Same shape for open and closed: open decisions have
+    outcome_status in (None, 'open'); closed have it in
+    ('validated', 'invalidated', 'partial') with outcome_date and
+    optional outcome_notes set.
+    """
 
     decision_date: date
     action: str
     confidence: str | None
     thesis: str  # full text (caller decides whether to truncate)
     linked_brief_path: str | None = None
+    outcome_status: str | None = None
+    outcome_date: date | None = None
+    outcome_notes: str | None = None
 
 
 class PortfolioPositionSection(BaseModel):
@@ -605,6 +614,7 @@ class PortfolioPositionSection(BaseModel):
     total_unrealized_pct: float | None = None
     recent_transactions: list[PortfolioPositionTransaction] = Field(default_factory=list)
     open_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
+    closed_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
 
 
 class ReportSpec(BaseModel):

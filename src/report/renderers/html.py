@@ -446,6 +446,36 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                 f"{html.escape(thesis_truncated)}{brief_link}</li>\n"
             )
         out.write("</ul></div>\n")
+    if pp.closed_decisions:
+        out.write('<details style="margin-top:8px;"><summary><strong>Track record on this name</strong> ({} closed)</summary>\n<ul style="font-size:13px;">\n'.format(len(pp.closed_decisions)))
+        for d in pp.closed_decisions:
+            conf = f" ({d.confidence})" if d.confidence else ""
+            outcome_color = {
+                "validated": "#16a34a",
+                "invalidated": "#dc2626",
+                "partial": "#ca8a04",
+            }.get(d.outcome_status or "", "#475569")
+            outcome_label = {
+                "validated": "validated",
+                "invalidated": "invalidated",
+                "partial": "partial",
+            }.get(d.outcome_status or "", d.outcome_status or "")
+            outcome_when = (
+                f"{d.outcome_date.isoformat()} " if d.outcome_date else ""
+            )
+            thesis_truncated = d.thesis[:160] + ("…" if len(d.thesis) > 160 else "")
+            notes = (
+                f' <em style="color:#64748b;">— {html.escape(d.outcome_notes[:160])}{("…" if len(d.outcome_notes) > 160 else "")}</em>'
+                if d.outcome_notes
+                else ""
+            )
+            out.write(
+                f"<li>{d.decision_date.isoformat()} · <strong>{html.escape(d.action)}</strong>{conf}: "
+                f"{html.escape(thesis_truncated)} → "
+                f'{outcome_when}<strong style="color:{outcome_color};">{outcome_label}</strong>'
+                f"{notes}</li>\n"
+            )
+        out.write("</ul></details>\n")
     out.write("</section>\n")
 
 
