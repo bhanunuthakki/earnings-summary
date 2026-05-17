@@ -263,3 +263,74 @@ def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> 
     conn.commit()
     emitted, _inserted = derive_for_ticker(conn, "Z")
     assert emitted == 0
+
+
+def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
+    conn: sqlite3.Connection,
+) -> None:
+    """FMP coverage-gap signature: OCF=Capex=FCF=0 with non-zero revenue means
+    the upstream parser failed (Nintendo's JP filing format, HDFC Bank's IN
+    format). Treat all three as missing so FCF Margin / Capex Ratio / OCF YoY
+    are NOT emitted as 0% / 0% / -100% — instead they're omitted entirely.
+    Income-statement margins still emit normally."""
+    doc_id = _insert_doc(conn, "NTDOY", "data/historical/fmp/NTDOY_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    for line, val in [
+        ("revenue", 432_919_000_000),
+        ("operating_income", 100_000_000_000),
+        ("net_income", 80_000_000_000),
+        ("gross_profit", 200_000_000_000),
+        ("operating_cash_flow", 0),
+        ("capital_expenditure", 0),
+        ("free_cash_flow", 0),
+    ]:
+        _insert_fact(conn, ticker="NTDOY", period_end=pe, fpt="Q3", line_item=line, value=val, source_doc_id=doc_id)
+    conn.commit()
+
+    emitted, inserted = derive_for_ticker(conn, "NTDOY")
+    # Should emit only the three income-statement margins, NOT FCF margin
+    # or Capex/Revenue. (No YoY without a prior year.)
+    assert emitted == 3
+    assert inserted == 3
+    names = [
+        r["name"] for r in conn.execute(
+            "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd "
+            "ON kd.id = kf.kpi_definition_id WHERE kf.ticker='NTDOY'"
+        ).fetchall()
+    ]
+    assert "FCF Margin (GAAP)" not in names
+    assert "Capex / Revenue (GAAP)" not in names
+
+
+def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
+    conn: sqlite3.Connection,
+) -> None:
+    """An asset-light business with capex=0 but real OCF and FCF should NOT be
+    treated as a coverage gap. Only ALL THREE simultaneously zero is the FMP
+    parser-failure signature."""
+    doc_id = _insert_doc(conn, "Y", "data/historical/fmp/Y_income_statement_quarterly.json")
+    pe = datetime(2024, 12, 31)
+    for line, val in [
+        ("revenue", 100),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+        ("operating_cash_flow", 18),  # real
+        ("capital_expenditure", 0),   # asset-light, legitimately zero
+        ("free_cash_flow", 18),       # real
+    ]:
+        _insert_fact(conn, ticker="Y", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    conn.commit()
+
+    derive_for_ticker(conn, "Y")
+    names = [
+        r["name"] for r in conn.execute(
+            "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd "
+            "ON kd.id = kf.kpi_definition_id WHERE kf.ticker='Y'"
+        ).fetchall()
+    ]
+    # FCF Margin must still be emitted (FCF is real, just capex happens to be 0)
+    assert "FCF Margin (GAAP)" in names
+    # Capex / Revenue can still be emitted as 0% — that's a legitimate value
+    # for an asset-light quarter
+    assert "Capex / Revenue (GAAP)" in names
