@@ -62,7 +62,11 @@ def _verify_setup_once() -> None:
     global _setup_verified, _claude_cli_path
     if _setup_verified:
         return
-    if "ANTHROPIC_API_KEY" in os.environ:
+    # Treat an empty-string value as unset. Claude Code's Bash tool leaks
+    # ANTHROPIC_API_KEY='' into subshells even when the user has it unset, which
+    # used to trip this guard as a false positive. Only a non-empty value would
+    # actually route the CLI to API billing.
+    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
         raise RuntimeError(
             "ANTHROPIC_API_KEY is set in the environment. The Claude Code CLI will silently "
             "route calls to API billing instead of your subscription. Unset it before running:\n"
