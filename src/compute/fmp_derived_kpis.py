@@ -136,6 +136,19 @@ def _fetch_quarterly_facts(
         rev = bucket["revenue"]
         if not isinstance(rev, Decimal) or rev == 0:
             continue
+        ocf = bucket.get("operating_cash_flow")
+        capex = bucket.get("capital_expenditure")
+        fcf = bucket.get("free_cash_flow")
+        # FMP coverage-gap signature: when OCF, Capex, AND FCF are all
+        # simultaneously exactly zero in a quarter with non-zero revenue, the
+        # upstream parser failed (NTDOY's JP filing format and HDB's IN filing
+        # format are the known cases). Treat all three as missing so downstream
+        # derivers skip them rather than emitting 0% FCF Margin and -100% OCF YoY.
+        # A real operating business with revenue cannot simultaneously have all
+        # three cash-flow line items at exactly zero — at minimum working capital
+        # moves something.
+        if ocf == Decimal(0) and capex == Decimal(0) and fcf == Decimal(0):
+            ocf = capex = fcf = None
         results.append(
             QuarterlyFacts(
                 ticker=ticker.upper(),
@@ -146,9 +159,9 @@ def _fetch_quarterly_facts(
                 net_income=bucket["net_income"],
                 gross_profit=bucket["gross_profit"],
                 source_doc_id=int(bucket["_source_doc_id"]),
-                capital_expenditure=bucket.get("capital_expenditure"),  # type: ignore[arg-type]
-                free_cash_flow=bucket.get("free_cash_flow"),  # type: ignore[arg-type]
-                operating_cash_flow=bucket.get("operating_cash_flow"),  # type: ignore[arg-type]
+                capital_expenditure=capex,  # type: ignore[arg-type]
+                free_cash_flow=fcf,  # type: ignore[arg-type]
+                operating_cash_flow=ocf,  # type: ignore[arg-type]
             )
         )
     return results

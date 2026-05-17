@@ -1,8 +1,9 @@
 {
   "ticker": "HDB",
   "name": "HDFC Bank",
-  "last_updated": "2026-05-10",
+  "last_updated": "2026-05-17",
   "thesis": "India's largest private sector bank, post-merger digestion of HDFC Ltd; thesis is ROA recovery + advance growth as merger integration normalizes. STUB — needs user review.",
+  "_data_quality_note": "FMP returns OCF=Capex=FCF=0 for ~58% of HDB quarters (HDFC Bank files in India, FMP's parser doesn't reliably extract Indian cash-flow statements). Capex/Revenue, FCF margin collapse, and OCF YoY universal rules are intentionally omitted so the evaluator doesn't fire false breaches against the parser failure. Cash-flow rules irrelevant for banks anyway — NIM, NPL, and ROA are the right tier-1 KPIs (see tier_1_kpis above).",
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Advances growth × NIM × credit cost",
@@ -130,33 +131,6 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
-      "kpi_name": "FCF Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 5,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
-    },
-    {
-      "rule_id": "ocf_decline_yoy",
-      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
-      "comparator": "lt",
-      "threshold": -10,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
   ],
   "schema_version": 2,
