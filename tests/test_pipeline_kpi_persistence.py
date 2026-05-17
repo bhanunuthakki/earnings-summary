@@ -210,11 +210,13 @@ def test_kpi_value_rejects_empty_name() -> None:
         KpiValue(name="", value=Decimal("1"), unit=Unit.PERCENT)
 
 
-def test_persist_manifest_skips_different_source_doc_id(conn: sqlite3.Connection) -> None:
-    """Post-0030 narrower UNIQUE: a second run with a fresher source_doc_id for
-    the same logical KPI period must NOT land a second row (this is the bug from
-    the RBRK 2026-05-13 report — duplicate "Latest" observations). The
-    `INSERT OR IGNORE` in `_insert_kpi_fact` is what enforces DO NOTHING here."""
+def test_persist_manifest_overwrites_with_newer_source_doc_id(
+    conn: sqlite3.Connection,
+) -> None:
+    """A second run with a strictly newer source_doc_id overwrites value /
+    unit / source_doc_id in place — latest extracted document wins. Mirrors
+    the RBRK Revenue YoY case (source_doc_id 9676 displaced by 9705): one
+    row remains, carrying the 9705 provenance."""
     first = KpiExtractionManifest(
         ticker="RBRK",
         period_end=datetime(2026, 1, 31),
@@ -222,20 +224,66 @@ def test_persist_manifest_skips_different_source_doc_id(conn: sqlite3.Connection
         source_doc_id=9676,
         values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)],
     )
-    second = first.model_copy(update={"source_doc_id": 9705})
+    later = first.model_copy(
+        update={
+            "source_doc_id": 9705,
+            "values": [
+                KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)
+            ],
+        }
+    )
 
     persist_manifest(conn, run_id="run-a", manifest=first)
-    result = persist_manifest(conn, run_id="run-b", manifest=second)
+    result = persist_manifest(conn, run_id="run-b", manifest=later)
+
+    # ON CONFLICT DO UPDATE fired ⇒ rowcount=1 ⇒ counted as `inserted`.
+    assert result.inserted == 1
+    assert result.skipped_existing == 0
+
+    rows = conn.execute(
+        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
+    ).fetchall()
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert Decimal(str(row["value"])) == Decimal("47.10")
+    assert row["source_doc_id"] == 9705
+
+
+def test_persist_manifest_no_op_when_older_source_doc_id(
+    conn: sqlite3.Connection,
+) -> None:
+    """Replaying an older extractor run after a newer one already landed is a
+    true no-op: the WHERE guard `excluded.source_doc_id > kpi_facts.source_doc_id`
+    blocks the update, and the existing row keeps its newer-source value."""
+    newer = KpiExtractionManifest(
+        ticker="RBRK",
+        period_end=datetime(2026, 1, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=9705,
+        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)],
+    )
+    older = newer.model_copy(
+        update={
+            "source_doc_id": 9676,
+            "values": [
+                KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+            ],
+        }
+    )
+
+    persist_manifest(conn, run_id="run-a", manifest=newer)
+    result = persist_manifest(conn, run_id="run-b", manifest=older)
 
     assert result.inserted == 0
     assert result.skipped_existing == 1
 
     rows = conn.execute(
-        "SELECT source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
+        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
     ).fetchall()
     assert len(rows) == 1
-    # First-write wins (DO NOTHING); the original source_doc_id stays in place.
-    assert dict(rows[0])["source_doc_id"] == 9676
+    row = dict(rows[0])
+    assert Decimal(str(row["value"])) == Decimal("47.10")
+    assert row["source_doc_id"] == 9705
 
 
 def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(legacy_conn: sqlite3.Connection) -> None:
