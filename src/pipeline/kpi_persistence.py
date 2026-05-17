@@ -115,12 +115,27 @@ def _insert_kpi_fact(
     unit: Unit,
     source_doc_id: int,
 ) -> bool:
-    """Insert one kpi_facts row. Returns True if a new row was inserted."""
+    """Upsert one kpi_facts row keyed on the post-0030 logical tuple
+    (ticker, period_end, fiscal_period_type, kpi_definition_id).
+
+    When a row already exists for that tuple, ON CONFLICT DO UPDATE
+    overwrites value/unit/source_doc_id only if the incoming row carries a
+    strictly newer source_doc_id — latest extracted document wins, but a
+    same-doc replay is a true no-op (rowcount stays at 0) and an older-doc
+    replay never clobbers fresher data. Returns True iff a write happened
+    (insert or in-place update); False on the no-op path.
+    """
     cur = conn.execute(
-        "INSERT OR IGNORE INTO kpi_facts "
+        "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
         " value, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(ticker, period_end, fiscal_period_type, kpi_definition_id) "
+        "DO UPDATE SET "
+        "    value = excluded.value, "
+        "    unit = excluded.unit, "
+        "    source_doc_id = excluded.source_doc_id "
+        "WHERE excluded.source_doc_id > kpi_facts.source_doc_id",
         (
             ticker.upper(),
             period_end,
