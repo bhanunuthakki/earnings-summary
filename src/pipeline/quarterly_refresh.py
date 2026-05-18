@@ -193,9 +193,16 @@ def _stage_extract_fmp_facts(
 ) -> StageResult:
     """Run every fact-producing FMP extractor for the ticker. Idempotent (INSERT OR IGNORE)."""
     placeholders = ",".join("?" for _ in _FACT_EXTRACTOR_DISPATCH)
+    # Order matters: segment extractors gate on financial_facts.revenue from the
+    # income-statement extractor — see compute/segments._passes_reconciliation —
+    # so income_statement docs must commit first within this stage.
     cur = conn.execute(
         f"SELECT id, doc_type FROM documents "
-        f"WHERE ticker = ? AND doc_type IN ({placeholders})",
+        f"WHERE ticker = ? AND doc_type IN ({placeholders}) "
+        f"ORDER BY CASE doc_type "
+        f"  WHEN 'fmp_income_statement' THEN 0 "
+        f"  WHEN 'fmp_as_reported_income' THEN 1 "
+        f"  ELSE 2 END, id",
         (ticker.upper(), *_FACT_EXTRACTOR_DISPATCH.keys()),
     )
     docs = cur.fetchall()
