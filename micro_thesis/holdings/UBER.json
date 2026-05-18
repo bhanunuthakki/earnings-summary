@@ -1,0 +1,207 @@
+{
+  "ticker": "UBER",
+  "name": "Uber Technologies",
+  "last_updated": "2026-05-18",
+  "thesis": "Global mobility + delivery marketplace with structural compounding from trip frequency, cross-sell into membership (Uber One), and operating leverage on a now-profitable cost base. Asset-light take-rate × gross-bookings business with widening adj. EBITDA margins and rising FCF conversion. STUB — needs user review.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Monthly Active Platform Consumers (MAPCs) × trips/MAPC × take-rate × segment mix (Mobility vs Delivery vs Freight)",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "FCF Margin (GAAP)"
+  ],
+  "_status": "needs_user_review",
+  "tier_1_kpis": [
+    {
+      "name": "Gross bookings YoY growth (constant-currency)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<12% YoY (cc) for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Trips YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Monthly Active Platform Consumers (MAPCs) YoY growth",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<10% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA margin (% of gross bookings)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Adj. EBITDA / gross bookings stops expanding YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free cash flow margin (FCF / revenue, GAAP)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 12% on TTM basis",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Mobility take-rate (Mobility revenue / Mobility gross bookings)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Delivery take-rate (Delivery revenue / Delivery gross bookings)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Uber One membership growth",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Advertising revenue run-rate",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Insurance reserve true-ups (Mobility cost pressure)",
+      "source": "10-Q"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Autonomous-vehicle partnership rollouts (Waymo, etc.)",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Driver supply / earnings disclosures",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Capital return pace (buybacks initiated 2024)",
+      "source": "earnings release"
+    }
+  ],
+  "competitive_watchlist": [
+    "Lyft (US mobility)",
+    "DoorDash (US delivery)",
+    "Instacart (US delivery)",
+    "DiDi (international mobility)",
+    "Waymo / robotaxi entrants",
+    "Tesla robotaxi"
+  ],
+  "thesis_breakers_qualitative": [
+    "Trips growth turns negative",
+    "Autonomous disintermediation (Waymo / Tesla taking dense urban markets)",
+    "Driver-classification ruling forcing W-2 in core US states (CA-style spread)",
+    "Take-rate compression from regulator caps or competitive intensity",
+    "Insurance cost inflation outrunning pricing power"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+    },
+    {
+      "rule_id": "universal_ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [
+    {
+      "name": "Mobility",
+      "description": "Ride-hailing globally (UberX, comfort, premium, taxi partnerships)."
+    },
+    {
+      "name": "Delivery",
+      "description": "Uber Eats food + grocery/retail delivery, plus advertising."
+    },
+    {
+      "name": "Freight",
+      "description": "Logistics marketplace connecting shippers and carriers; sub-scale, lower-margin."
+    }
+  ],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "uber_trips_below_8",
+      "kpi_name": "Trips YoY growth",
+      "comparator": "lt",
+      "threshold": 8,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Trips YoY < 8% for 2Q — core volume metric stalling. Uber has been compounding trips ~15-20% post-COVID; sub-8% means frequency growth and MAPC adds are both decelerating."
+    },
+    {
+      "rule_id": "uber_gross_bookings_cc_below_10",
+      "kpi_name": "Gross bookings YoY growth (constant-currency)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross bookings cc < 10% for 2Q — the volume × take-rate compounding thesis breaks. Mid-teens is the structural normal."
+    },
+    {
+      "rule_id": "uber_adj_ebitda_margin_below_4_of_gb",
+      "kpi_name": "Adjusted EBITDA margin (% of gross bookings)",
+      "comparator": "lt",
+      "threshold": 4.0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Adj. EBITDA / gross bookings < 4.0% for 2Q — operating leverage thesis breaks. Mgmt guides toward continued YoY margin expansion off the ~3.5-4.0% bar; failure to grind higher signals competitive intensity, insurance pressure, or growth-investment overflow."
+    },
+    {
+      "rule_id": "uber_fcf_margin_below_15",
+      "kpi_name": "Free cash flow margin (FCF / revenue, GAAP)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin < 15% (FCF / revenue) for 2Q — Uber's structural FCF conversion is high-teens once insurance + working-capital normalize; sub-15 means investment cycle is consuming the operating leverage."
+    }
+  ]
+}

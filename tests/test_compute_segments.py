@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
-from compute.segments import extract_facts_from_record, extract_segment_facts
+from compute.segments import (
+    _passes_reconciliation,
+    extract_facts_from_record,
+    extract_segment_facts,
+)
 from models.facts import Currency, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpSegmentRecord
 
@@ -68,7 +74,36 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         CREATE UNIQUE INDEX uq_segment_facts_provenance
         ON segment_facts (ticker, period_end, fiscal_period_type, segment_name, metric, source_doc_id);
+        CREATE TABLE financial_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            line_item TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        );
         """
+    )
+    conn.commit()
+
+
+def _seed_revenue(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: str,
+    period_type: str,
+    value: int,
+) -> None:
+    conn.execute(
+        "INSERT INTO financial_facts "
+        "(ticker, period_end, fiscal_period_type, line_item, value, unit, source_doc_id) "
+        "VALUES (?, ?, ?, 'revenue', ?, 'actual', 1)",
+        (ticker, period_end, period_type, value),
     )
     conn.commit()
 
@@ -120,7 +155,89 @@ def test_extract_segment_facts_rejects_wrong_doc_type(
     )
     conn.commit()
     document_id = conn.execute("SELECT id FROM documents").fetchone()["id"]
-    from pathlib import Path
 
     with pytest.raises(ValueError, match="not one of"):
         extract_segment_facts(conn, document_id, project_root=Path("."))
+
+
+def test_reconciliation_accepts_well_formed_record(conn: sqlite3.Connection) -> None:
+    """Segment sum within ±10% of revenue passes the gate."""
+    _seed_revenue(conn, ticker="GOOG", period_end="2025-12-31 00:00:00",
+                  period_type="FY", value=350_018_000_000)
+    record = FmpSegmentRecord.model_validate(_PRODUCT_SAMPLE)  # sum ≈ 325B; ratio ≈ 0.93
+    assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=42) is True
+
+
+def test_reconciliation_rejects_contaminated_record(
+    conn: sqlite3.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The UBER Q4-2025 contamination pattern (sum ≈ 3.4x revenue) is rejected."""
+    _seed_revenue(conn, ticker="UBER", period_end="2025-12-31 00:00:00",
+                  period_type="Q4", value=14_366_000_000)
+    contaminated = {
+        "date": "2025-12-31",
+        "symbol": "UBER",
+        "reportedCurrency": "USD",
+        "period": "Q4",
+        "fiscalYear": 2025,
+        "data": {
+            "United States And Canada": 30_762_000_000,
+            "EMEA": 15_367_000_000,
+            "Asia Pacific": 1_625_000_000,
+            "Latin America": 992_000_000,
+        },
+    }
+    record = FmpSegmentRecord.model_validate(contaminated)
+    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=99) is False
+    err = capsys.readouterr().err
+    log = json.loads(err.strip().splitlines()[-1])
+    assert log["event"] == "segment_record_rejected"
+    assert log["reason"] == "sum_exceeds_revenue"
+    assert log["ticker"] == "UBER"
+    assert log["ratio"] > 3.0
+
+
+def test_reconciliation_accepts_under_revenue(conn: sqlite3.Connection) -> None:
+    """Sum < revenue (missing 'Other' bucket case) always passes."""
+    _seed_revenue(conn, ticker="ACN", period_end="2024-08-31 00:00:00",
+                  period_type="FY", value=64_896_000_000)
+    record = FmpSegmentRecord.model_validate({
+        "date": "2024-08-31",
+        "symbol": "ACN",
+        "reportedCurrency": "USD",
+        "period": "FY",
+        "fiscalYear": 2024,
+        "data": {"North America": 30_000_000_000, "EMEA": 18_000_000_000},  # ratio 0.74
+    })
+    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
+
+
+def test_reconciliation_no_revenue_accepts(conn: sqlite3.Connection) -> None:
+    """If income_statement hasn't been ingested yet, can't disprove — accept."""
+    record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
+    assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
+
+
+def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
+    """Exactly 10% over revenue is the cap — values at or below the cap accept."""
+    _seed_revenue(conn, ticker="TEST", period_end="2024-12-31 00:00:00",
+                  period_type="FY", value=100_000_000)
+    record = FmpSegmentRecord.model_validate({
+        "date": "2024-12-31",
+        "symbol": "TEST",
+        "reportedCurrency": "USD",
+        "period": "FY",
+        "fiscalYear": 2024,
+        "data": {"A": 60_000_000, "B": 50_000_000},  # sum=110M; ratio=1.10 (==cap)
+    })
+    assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=1) is True
+
+    record_over = FmpSegmentRecord.model_validate({
+        "date": "2024-12-31",
+        "symbol": "TEST",
+        "reportedCurrency": "USD",
+        "period": "FY",
+        "fiscalYear": 2024,
+        "data": {"A": 60_000_000, "B": 51_000_000},  # sum=111M; ratio=1.11 (>cap)
+    })
+    assert _passes_reconciliation(conn, record_over, "revenue_by_product", source_doc_id=1) is False
