@@ -8,10 +8,11 @@ canonical extractors). The fact-table writes flip
 For each dirty ticker, this worker runs the synthesize → publish slice of
 the canonical pipeline:
 
-  thesis evaluator  → writes a fresh thesis_evaluations row
-  match_commitments → fills Say-Do outcomes for periods that just landed
-  refresh_dcf       → re-reads the DCF workbook, recomputes PV / over-under
-  build_artifacts   → regenerates the brief (HTML / MD / JSON / xlsx)
+  thesis evaluator    → writes a fresh thesis_evaluations row
+  match_commitments   → fills Say-Do outcomes for periods that just landed
+  refresh_dcf         → re-reads the DCF workbook, recomputes PV / over-under
+  build_artifacts     → regenerates the brief (HTML / MD / JSON / xlsx)
+  sweep_output_history→ moves prior dated artifacts into output/research/<T>/archive/
 
 Then clears brief_dirty. Each step is run as a subprocess so a failure in
 one ticker doesn't poison the worker's Python state.
@@ -177,6 +178,24 @@ def _refresh_one_ticker(
     if args.enable_llm:
         build_cmd.append("--enable-llm")
     stages.append(_run_step("build_artifacts", build_cmd, cwd=repo_root))
+
+    # Only sweep when build_artifacts succeeded — otherwise a stale prior
+    # artifact is the only thing the user has to look at.
+    if stages[-1]["exit_code"] == 0:
+        stages.append(
+            _run_step(
+                "sweep_output_history",
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "execution" / "sweep_output_history.py"),
+                    "--ticker",
+                    ticker,
+                    "--repo-root",
+                    str(repo_root),
+                ],
+                cwd=repo_root,
+            )
+        )
 
     overall_ok = all(s["exit_code"] == 0 for s in stages)
     if overall_ok:
