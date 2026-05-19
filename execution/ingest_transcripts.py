@@ -37,16 +37,16 @@ _TRANSCRIPT_DIRS = (PROJECT_ROOT / "transcripts" / "processed", PROJECT_ROOT / "
 
 
 def _load_tracked_tickers(conn) -> frozenset[str]:
-    """Return the set of active analyzed + etf tickers (uppercased).
+    """Return the set of active analyzed tickers (uppercased).
 
     Transcripts are ingested for everything we analyze (portfolio + watchlist +
-    evaluation) plus our one ETF (FLKR), which publishes earnings-style
-    materials despite not being a single-name equity.
+    evaluation). ETFs are deliberately excluded — the `etf` list_type is the
+    skip-signal used across report steps.
     """
-    placeholders = ", ".join("?" for _ in db.ACTIVE_LIST_TYPES) + ", ?"
+    placeholders = ", ".join("?" for _ in db.ACTIVE_LIST_TYPES)
     cur = conn.execute(
         f"SELECT ticker FROM tracked_companies WHERE list_type IN ({placeholders})",
-        (*db.ACTIVE_LIST_TYPES, "etf"),
+        db.ACTIVE_LIST_TYPES,
     )
     return frozenset(r["ticker"].upper() for r in cur.fetchall())
 
