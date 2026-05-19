@@ -482,7 +482,11 @@ python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\int
 ```
 The intake classifier identifies ticker + period + doc-type, files into
 `ir_documents/<T>/<period>/`, registers in `document_index.json`, and
-chains into the LLM summarizer.
+chains into the LLM summarizer. When a transcript is among the dropped
+files, the chain additionally bridges it into `transcripts` +
+`transcript_segments` (so the Say-Do tab sees it) and runs the
+forward-looking commitment extractor — matching what
+`refresh_transcripts.bat` does for auto-fetched transcripts.
 
 **(b) Manual registration** — if a PDF is already filed but not in the
 index (e.g., bulk-imported from another source), reset its `processed`
@@ -558,6 +562,8 @@ python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\ext
 
 1. Drop the PDF into `_inbox/` (or wherever you keep them)
 2. Run `python execution/intake_documents.py --process` (classifies +
-   files into `ir_documents/<T>/<period>/` + registers in `document_index.json`
-   + chains into the LLM summarizer)
+   files into `ir_documents/<T>/<period>/` + registers in
+   `document_index.json` + chains into the LLM summarizer; if the drop
+   includes a transcript, also bridges into the `transcripts` table and
+   runs Say-Do commitment extraction)
 3. Rebuild the report: `build_report.bat <T> --enable-llm`
