@@ -23,12 +23,12 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 | Path | Purpose |
 |---|---|
 | `src/` | Core utilities: `db.py`, `llm_client.py`, `parser.py`, `alias_manager.py`, `intake.py`, `ir_uploads.py`, `index_manager.py`, `log_redact.py`, `transcript_qa.py`, `aggregator_sources.py`, `surprise_sources.py`, `comments.py`, `chat_session.py` |
-| `src/report/` | Unified brief generator. `builder.py` → `ReportSpec` (12 sections); renderers in `renderers/{html,markdown,sections_json,workbook,charts_v2}.py`; per-section builders in `sections/` |
+| `src/report/` | Unified brief generator. `builder.py` → `ReportSpec` (12 sections + optional `hero_quote`/`qa_roster` for the workspace renderer); renderers in `renderers/{html,markdown,sections_json,workbook,charts_v2,workspace_*}.py`; per-section builders in `sections/` |
 | `src/dcf/` | DCF subsystem: `workbook_reader.py` extracts FCF stream, `valuation.py` computes PV/share + over-under %, `live_price.py` reads live FMP price, `persist.py` upserts `dcf_runs` |
 | `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `company_description`, `say_do`, `say_do_extractor`, `thesis_evaluator`, `holding_scorecard` |
 | `src/models/` | Pydantic schemas for documents, facts, KPIs, FMP payloads, patents, runs, validation |
 | `src/pipeline/` | Source routing, accounting runner, query helpers, KPI persistence, SEC XBRL parser, quarterly refresh orchestrator |
-| `execution/` | CLI entrypoints — FMP fetchers, IR doc fetchers, SEC pipelines, transcript fetcher (`yt-dlp` + `faster-whisper`), DCF refresher, brief builder + news refresher + earnings-calendar HTML, daily worker + calendar fetcher + watcher, output retention sweep, P2 (diligence + pressure-test + initiation-gate) |
+| `execution/` | CLI entrypoints — FMP fetchers, IR doc fetchers, SEC pipelines, transcript fetcher (`yt-dlp` + `faster-whisper`), DCF refresher, brief builder + news refresher + earnings-calendar HTML, daily worker + calendar fetcher, output retention sweep, P2 (diligence + pressure-test + initiation-gate), comments/chat server |
 | `directives/` | Layer 1 SOPs — pipeline DAG, data provenance, per-source fetch directives, per-ticker enhancements |
 | `micro_thesis/holdings/` | Per-ticker JSON KPI specs (schema v2: thesis + tier-1/2/3 KPIs + break rules + WACC + MoS bar + DCF defaults) |
 | `micro_thesis/sources/` | Per-ticker drop folders for review documents |
@@ -37,7 +37,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 | `data/ticker_specific/` | Per-ticker enhancement JSON (e.g. `NVO/patent_timeline.json`) — fed into the brief's §10 Bear Case prompt |
 | `data/company_description/` | Cached §2 Company Description payloads (LLM synthesis of 10-K business overview, keyed by source sha256) |
 | `examples/dcf/` | Reference DCF workbook templates (AMZN, GOOG, META) — seed for new `dcf/<TICKER>.xlsx` |
-| `alembic/` | Schema migrations against `data/portfolio.db` (head: `0027_drop_output_consolidator_remnants`) |
+| `alembic/` | Schema migrations against `data/portfolio.db` (head: `0031_drop_dead_tables`) |
 | `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the daily crons (see `cron/SETUP_WINDOWS_SCHEDULER.md`) |
 | `tests/` | Pytest suite covering compute modules and pipeline contracts |
 | `transcripts/raw|processed/` | Earnings transcript flow (gitignored) |
@@ -69,7 +69,7 @@ FMP_API_KEY=...              # fundamentals, statements, calendar, transcripts
 
 ## Common workflows
 
-The system is built around three chained daily crons + an hourly catch-up cron + a small set of on-demand CLIs. The crons keep the brief auto-refreshed; the CLIs cover one-off operations.
+The system is built around four daily crons chained 04:30→06:30 (transcripts → FMP calendar → surprises → brief worker) + an hourly catch-up cron + a small set of on-demand CLIs. The crons keep the brief auto-refreshed; the CLIs cover one-off operations. The full cron table lives in `cron/SETUP_WINDOWS_SCHEDULER.md`.
 
 ### Daily auto-refresh loop
 
@@ -116,6 +116,8 @@ python execution/build_artifacts.py --ticker AMD --flavor evaluation --allow-unt
 ```
 
 Writes `output/research/<TICKER>/<DATE>_report.html` + `.md` + `_sections.json` + `_dcf.xlsx`. The 12 sections: §1 Snapshot/EvaluationSnapshot · §2 Company Description · §3 Thesis · §4 Financials (YoY% growth matrix + paired bars + 10-FY reference) · §5 Segments (stacked-area + YoY matrix) · §6 Earnings · §7 Say-Do · §8 IR docs · §9 Recent developments · §10 Bear case · §11 Provenance · §12 Transcripts. `--enable-llm` opts §9 Recent Developments + §10 Bear Case into real Claude calls (via the `claude` CLI subprocess); omit to keep them stubbed.
+
+Pass `--renderer workspace` to additionally emit `<DATE>_workspace.html` — the in-progress tabbed analyst workspace that includes the `hero_quote` and `qa_roster` panels. `--renderer both` writes both formats.
 
 ### Refresh just the news section (faster than a full rebuild)
 
@@ -200,6 +202,13 @@ python execution/sweep_output_history.py --keep 10 --ticker META
 ```
 
 Groups files in `output/research/<TICKER>/` by the `YYYY-MM-DD_` prefix and deletes everything older than the latest N distinct dates per ticker. Files without a date prefix are ignored — non-dated artifacts survive any sweep.
+
+## Analyst usage
+
+Day-to-day analyst operation is documented in [HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md) (also rendered as `HOW_TO_USE_REPORTS.html` for in-browser reading). The user-facing surface:
+
+- **Windows `.bat` launchers** at the repo root wrap the most common commands so you don't need a venv-active shell: `build_report.bat <TICKER>` (single ticker), `full_refresh.bat` (FMP → transcripts → news → briefs for the whole portfolio), `refresh_fmp.bat`, `refresh_transcripts.bat`, `refresh_news.bat`, `process_comments.bat`, `start_comments_server.bat`.
+- **Comments / chat system** — start `start_comments_server.bat` (or `python execution/comments_server.py`) and open any `_workspace.html` brief. Free-text comments are persisted under `data/report_comments/<TICKER>/<YYYY-MM-DD>.json`. Slash-keyword shortcuts at the start of a comment route the intent: `/kpi`, `/thesis`, `/q`, `/ask`, `/fix`, `/update`, `/rewrite`. `process_comments.bat` drains pending comment-driven edits via `execution/process_report_comments.py`.
 
 ## Pre-push checklist
 
