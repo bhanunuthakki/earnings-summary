@@ -249,27 +249,223 @@ JS = r"""
   }
 
   // ---------------------------------------------------------------
-  // Init
+  // Free-text commenting (Google-Docs style)
   // ---------------------------------------------------------------
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', renderPins);
-  } else {
-    renderPins();
+  var floater = null;
+  function ensureFloater() {
+    if (floater) return floater;
+    floater = document.createElement('div');
+    floater.className = 'cmt-floater';
+    floater.style.display = 'none';
+    floater.innerHTML = '<button type="button" class="cmt-floater-btn">+ Comment</button>';
+    document.body.appendChild(floater);
+    floater.querySelector('button').addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      onFloaterClick();
+    });
+    return floater;
+  }
+  function hideFloater() { if (floater) floater.style.display = 'none'; }
+
+  function onSelectionChange() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return hideFloater();
+    var text = (sel.toString() || '').trim();
+    if (text.length < 2) return hideFloater();
+    var node = sel.anchorNode;
+    while (node && node !== document.body) {
+      if (node.classList) {
+        if (node.classList.contains('cmt-sidebar') ||
+            node.classList.contains('cmt-floater') ||
+            node.classList.contains('chat-drawer')) return hideFloater();
+      }
+      node = node.parentNode;
+    }
+    var range = sel.getRangeAt(0);
+    var rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return hideFloater();
+    ensureFloater();
+    floater.style.display = 'block';
+    floater.style.left = Math.round(rect.left + window.scrollX + rect.width / 2 - 56) + 'px';
+    floater.style.top = Math.round(rect.bottom + window.scrollY + 6) + 'px';
   }
 
-  // Re-render pins when tabs switch (anchors in hidden tabs were
-  // skipped on first paint if their DOM isn't constructed yet — in our
-  // case they are, but this also catches dynamic re-renders).
+  function onFloaterClick() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return hideFloater();
+    var text = (sel.toString() || '').trim();
+    if (!text) return hideFloater();
+    var anchorNode = sel.anchorNode;
+    var anchorEl = (anchorNode && anchorNode.nodeType === 1) ? anchorNode
+      : (anchorNode && anchorNode.parentElement) || document.body;
+    var landmark = findLandmark(anchorEl);
+    var occurrence = countOccurrencesBefore(landmark.scope, text, sel.getRangeAt(0));
+    var tabAttr = anchorEl.closest ? anchorEl.closest('[data-tab]') : null;
+    var anchor = {
+      type: 'free_text',
+      key: text.substring(0, 200),
+      tab: tabAttr ? tabAttr.getAttribute('data-tab') : null,
+      parent_landmark: landmark.label,
+      occurrence_index: occurrence
+    };
+    hideFloater();
+    openSidebarForAnchor(anchor);
+  }
+
+  function findLandmark(el) {
+    var cur = el;
+    while (cur && cur !== document.body) {
+      if (cur.classList && cur.classList.contains('panel')) {
+        var title = cur.querySelector(':scope > .panel-head .panel-title');
+        var t = (title && title.textContent || '').trim();
+        if (t) return {label: 'panel: ' + t, scope: cur};
+      }
+      if (cur.classList && cur.classList.contains('tab-body')) {
+        var tab = cur.closest('[data-tab]');
+        var tabName = (tab && tab.getAttribute('data-tab')) || 'unknown';
+        return {label: 'tab: ' + tabName, scope: cur};
+      }
+      cur = cur.parentNode;
+    }
+    return {label: 'document', scope: document.body};
+  }
+
+  function countOccurrencesBefore(scope, needle, range) {
+    var pre = range.cloneRange();
+    pre.selectNodeContents(scope);
+    pre.setEnd(range.startContainer, range.startOffset);
+    var before = pre.toString();
+    var count = 0;
+    var seek = 0;
+    while ((seek = before.indexOf(needle, seek)) !== -1) {
+      count++;
+      seek += needle.length;
+    }
+    return count;
+  }
+
+  function openSidebarForAnchor(anchor) {
+    ensureSidebar();
+    currentAnchor = anchor;
+    sidebar.setAttribute('aria-hidden', 'false');
+    sidebar.classList.add('open');
+    var label = anchor.type === 'free_text'
+      ? ((anchor.parent_landmark || 'document') + ' · "' +
+         anchor.key.substring(0, 60) + (anchor.key.length > 60 ? '…' : '') + '"')
+      : humanAnchor(anchor);
+    document.getElementById('cmt-anchor-label').textContent = label;
+    renderList();
+  }
+
+  function renderFreeTextHighlights() {
+    document.querySelectorAll('mark.cmt-highlight').forEach(function(m) {
+      var parent = m.parentNode; if (!parent) return;
+      while (m.firstChild) parent.insertBefore(m.firstChild, m);
+      parent.removeChild(m);
+      parent.normalize();
+    });
+    var freeText = commentStore.comments.filter(function(c) {
+      return c.anchor && c.anchor.type === 'free_text';
+    });
+    freeText.forEach(highlightFreeText);
+  }
+
+  function highlightFreeText(c) {
+    var scope = locateLandmarkScope(c.anchor.parent_landmark || '', c.anchor.tab);
+    if (!scope) return;
+    var ranges = findTextRanges(scope, c.anchor.key);
+    if (ranges.length === 0) return;
+    var pick = ranges[Math.min(c.anchor.occurrence_index || 0, ranges.length - 1)];
+    var mark = document.createElement('mark');
+    mark.className = 'cmt-highlight';
+    if (c.status !== 'open') mark.classList.add('addressed');
+    mark.setAttribute('data-cmt-id', c.id);
+    mark.setAttribute('title', 'Comment · click to view');
+    try { pick.surroundContents(mark); } catch (_) { return; }
+    mark.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      openSidebarForAnchor(c.anchor);
+    });
+  }
+
+  function locateLandmarkScope(label, tab) {
+    if (!label) return document.body;
+    if (label.indexOf('panel: ') === 0) {
+      var title = label.substring(7);
+      var panels = document.querySelectorAll('.panel');
+      for (var i = 0; i < panels.length; i++) {
+        var t = panels[i].querySelector(':scope > .panel-head .panel-title');
+        if (t && (t.textContent || '').trim() === title) return panels[i];
+      }
+      return null;
+    }
+    if (label.indexOf('tab: ') === 0) {
+      var name = label.substring(5);
+      var pane = document.querySelector('[data-tab="' + name + '"].tab-pane');
+      return pane || null;
+    }
+    if (tab) {
+      var fallback = document.querySelector('[data-tab="' + tab + '"].tab-pane');
+      if (fallback) return fallback;
+    }
+    return document.body;
+  }
+
+  function findTextRanges(scope, needle) {
+    var out = [];
+    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, null);
+    while (walker.nextNode()) {
+      var node = walker.currentNode;
+      var text = node.nodeValue;
+      var pos = 0;
+      while ((pos = text.indexOf(needle, pos)) !== -1) {
+        var r = document.createRange();
+        r.setStart(node, pos);
+        r.setEnd(node, pos + needle.length);
+        out.push(r);
+        pos += needle.length;
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------
+  // Init
+  // ---------------------------------------------------------------
+  function bootAll() {
+    renderPins();
+    renderFreeTextHighlights();
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootAll);
+  } else {
+    bootAll();
+  }
   document.addEventListener('click', function(ev) {
     if (ev.target && ev.target.matches('.tab')) {
-      setTimeout(renderPins, 0);
+      setTimeout(bootAll, 0);
     }
   });
-
-  // ESC closes sidebar.
-  document.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') closeSidebar();
+  document.addEventListener('mouseup', function() {
+    setTimeout(onSelectionChange, 0);
   });
+  document.addEventListener('selectionchange', function() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed) hideFloater();
+  });
+  document.addEventListener('scroll', hideFloater, true);
+  document.addEventListener('keydown', function(ev) {
+    if (ev.key === 'Escape') { hideFloater(); closeSidebar(); }
+  });
+
+  // Re-render highlights after a successful POST so new free_text
+  // comments light up without a page reload.
+  var origRenderPins = renderPins;
+  renderPins = function() {
+    origRenderPins();
+    renderFreeTextHighlights();
+  };
 })();
 """
 
@@ -385,4 +581,32 @@ CSS = r"""
   font-weight: 600; font-size: 12px; cursor: pointer;
 }
 .cmt-form-hint { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 14px; }
+
+/* Floating "+ Comment" button on text selection (Google-Docs style) */
+.cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
+.cmt-floater-btn {
+  background: var(--accent, #6db3ff); color: #0d1117;
+  border: none; border-radius: 14px;
+  padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+  cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+.cmt-floater-btn:hover { filter: brightness(1.08); }
+
+/* Free-text highlight (the underlined excerpt the user commented on) */
+mark.cmt-highlight {
+  background: rgba(255, 196, 0, 0.18);
+  border-bottom: 2px solid rgba(255, 196, 0, 0.7);
+  color: inherit;
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 1px;
+  transition: background 0.12s;
+}
+mark.cmt-highlight:hover { background: rgba(255, 196, 0, 0.32); }
+mark.cmt-highlight.addressed {
+  background: rgba(60, 200, 120, 0.14);
+  border-bottom-color: rgba(60, 200, 120, 0.6);
+}
+mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
 """
