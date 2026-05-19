@@ -57,6 +57,20 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             rule_evaluations_json TEXT,
             run_id TEXT
         );
+        CREATE TABLE fmp_endpoint_status (
+            ticker TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            period TEXT NOT NULL,
+            status TEXT,
+            http_code INTEGER,
+            record_count INTEGER,
+            earliest_date TEXT,
+            latest_date TEXT,
+            file_path TEXT,
+            file_bytes INTEGER,
+            error_msg TEXT,
+            last_pulled TIMESTAMP
+        );
         """
     )
     conn.commit()
@@ -71,12 +85,12 @@ def app_repo(tmp_path: Path):
     conn = sqlite3.connect(str(db_path))
     _create_schema(conn)
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type, fmp_data_upto) "
-        "VALUES ('NU', 'Nu Holdings', 'portfolio', 'equity', '2026-05-12')"
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+        "VALUES ('NU', 'Nu Holdings', 'portfolio', 'equity')"
     )
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type, fmp_data_upto) "
-        "VALUES ('MELI', 'MercadoLibre', 'evaluation', 'equity', '2026-05-10')"
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+        "VALUES ('MELI', 'MercadoLibre', 'evaluation', 'equity')"
     )
     conn.execute(
         "INSERT INTO transcripts (ticker, period_end, has_qa_section) "
@@ -85,6 +99,10 @@ def app_repo(tmp_path: Path):
     conn.execute(
         "INSERT INTO thesis_evaluations (ticker, evaluated_at, overall_status, rule_evaluations_json) "
         "VALUES ('NU', '2026-05-18T10:00:00', 'intact', '[]')"
+    )
+    conn.execute(
+        "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, last_pulled) "
+        "VALUES ('NU', 'income-statement', 'annual', 'ok', '2026-05-11T01:02:14')"
     )
     conn.commit()
     conn.close()
@@ -116,7 +134,7 @@ def test_dashboard_api_returns_grouped_json(client):
     assert [r["ticker"] for r in payload["evaluation"]] == ["MELI"]
 
     nu_row = payload["portfolio"][0]
-    assert nu_row["fmp_data_upto"] == "2026-05-12"
+    assert nu_row["fmp_last_pulled"] == "2026-05-11T01:02:14"
     assert nu_row["last_transcript"]["period_end"] == "2026-03-31"
     assert nu_row["last_transcript"]["has_qa_section"] is True
     assert nu_row["breach_status"] == "intact"

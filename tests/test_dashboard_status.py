@@ -59,6 +59,20 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             rule_evaluations_json TEXT,
             run_id TEXT
         );
+        CREATE TABLE fmp_endpoint_status (
+            ticker TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            period TEXT NOT NULL,
+            status TEXT,
+            http_code INTEGER,
+            record_count INTEGER,
+            earliest_date TEXT,
+            latest_date TEXT,
+            file_path TEXT,
+            file_bytes INTEGER,
+            error_msg TEXT,
+            last_pulled TIMESTAMP
+        );
         """
     )
     conn.commit()
@@ -68,12 +82,22 @@ def _seed_company(
     conn: sqlite3.Connection,
     ticker: str,
     list_type: str,
-    fmp_data_upto: str | None = None,
 ) -> None:
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, name, list_type, fmp_data_upto, instrument_type) "
-        "VALUES (?, ?, ?, ?, 'equity')",
-        (ticker, f"{ticker} Inc", list_type, fmp_data_upto),
+        "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
+        "VALUES (?, ?, ?, 'equity')",
+        (ticker, f"{ticker} Inc", list_type),
+    )
+    conn.commit()
+
+
+def _seed_fmp_pull(
+    conn: sqlite3.Connection, ticker: str, endpoint: str, last_pulled: str
+) -> None:
+    conn.execute(
+        "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, last_pulled) "
+        "VALUES (?, ?, 'annual', 'ok', ?)",
+        (ticker, endpoint, last_pulled),
     )
     conn.commit()
 
@@ -162,10 +186,28 @@ def test_build_rows_groups_by_list_type_and_excludes_watchlist(conn, tmp_path):
     assert [r.ticker for r in out["evaluation"]] == ["MELI"]
 
 
-def test_row_carries_fmp_data_upto(conn, tmp_path):
-    _seed_company(conn, "NU", "portfolio", fmp_data_upto="2026-05-12")
+def test_row_uses_max_fmp_endpoint_pull_time_not_data_upto(conn, tmp_path):
+    """Last FMP must show when the fetcher last ran, not the latest data point.
+
+    tracked_companies.fmp_data_upto holds the latest fiscal period in the
+    fetched payload (often a forward quarter like 2030-12-31), which is the
+    wrong column for "freshness". The right source is the MAX(last_pulled)
+    across fmp_endpoint_status for the ticker.
+    """
+    _seed_company(conn, "NU", "portfolio")
+    _seed_fmp_pull(conn, "NU", "income-statement", "2026-05-03T12:00:00")
+    _seed_fmp_pull(conn, "NU", "balance-sheet", "2026-05-11T01:02:14")
+    _seed_fmp_pull(conn, "NU", "cash-flow", "2026-04-15T09:00:00")
+
     row = build_dashboard_rows(conn, tmp_path)["portfolio"][0]
-    assert row.fmp_data_upto == "2026-05-12"
+    # MAX across endpoints — 2026-05-11 wins
+    assert row.fmp_last_pulled == "2026-05-11T01:02:14"
+
+
+def test_row_fmp_last_pulled_none_when_no_endpoints_recorded(conn, tmp_path):
+    _seed_company(conn, "NU", "portfolio")
+    row = build_dashboard_rows(conn, tmp_path)["portfolio"][0]
+    assert row.fmp_last_pulled is None
 
 
 def test_row_uses_most_recent_transcript_when_multiple_present(conn, tmp_path):
@@ -248,14 +290,15 @@ def test_row_breach_status_none_when_no_evaluations(conn, tmp_path):
 
 
 def test_to_dict_serialization_round_trip(conn, tmp_path):
-    _seed_company(conn, "NU", "portfolio", fmp_data_upto="2026-05-12")
+    _seed_company(conn, "NU", "portfolio")
+    _seed_fmp_pull(conn, "NU", "income-statement", "2026-05-11T01:02:14")
     _seed_transcript(conn, "NU", "2026-03-31", has_qa_section=True)
     _seed_thesis_eval(conn, "NU", "2026-05-18T10:00:00", "intact")
     row = build_dashboard_rows(conn, tmp_path)["portfolio"][0]
     d = row.to_dict()
     assert d["ticker"] == "NU"
     assert d["list_type"] == "portfolio"
-    assert d["fmp_data_upto"] == "2026-05-12"
+    assert d["fmp_last_pulled"] == "2026-05-11T01:02:14"
     assert d["last_transcript"] == {
         "period_end": "2026-03-31",
         "has_qa_section": True,

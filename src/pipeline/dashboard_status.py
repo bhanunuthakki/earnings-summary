@@ -38,7 +38,7 @@ class DashboardRow:
 
     ticker: str
     list_type: str  # "portfolio" or "evaluation"
-    fmp_data_upto: str | None  # ISO date
+    fmp_last_pulled: str | None  # ISO datetime — most recent fmp_endpoint_status.last_pulled
     last_transcript: TranscriptStatus | None
     last_build_at: str | None  # ISO datetime (UTC)
     open_comments_count: int
@@ -48,7 +48,7 @@ class DashboardRow:
         return {
             "ticker": self.ticker,
             "list_type": self.list_type,
-            "fmp_data_upto": self.fmp_data_upto,
+            "fmp_last_pulled": self.fmp_last_pulled,
             "last_transcript": (
                 {
                     "period_end": self.last_transcript.period_end,
@@ -91,12 +91,33 @@ def _build_one_row(
     return DashboardRow(
         ticker=company.ticker,
         list_type=company.list_type.value,
-        fmp_data_upto=company.fmp_data_upto,
+        fmp_last_pulled=_last_fmp_pulled_for(conn, company.ticker),
         last_transcript=_last_transcript_for(conn, company.ticker),
         last_build_at=_last_build_at(repo_root, company.ticker),
         open_comments_count=_open_comments_count(repo_root, company.ticker),
         breach_status=_latest_breach_status(conn, company.ticker),
     )
+
+
+def _last_fmp_pulled_for(conn: sqlite3.Connection, ticker: str) -> str | None:
+    """When did the FMP fetcher most recently hit any endpoint for this ticker.
+
+    `fmp_endpoint_status.last_pulled` is per (ticker, endpoint, period). The
+    MAX across all of a ticker's endpoints is the user's mental model of
+    "when did I last refresh FMP for this name." NOTE: this is the fetch
+    timestamp, NOT `tracked_companies.fmp_data_upto`, which is the latest
+    fiscal-period in the fetched payload (often a forward quarter).
+    """
+    cur = conn.execute(
+        "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status "
+        "WHERE ticker = ?",
+        (ticker.upper(),),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    value = row["last_pulled"]
+    return str(value) if value else None
 
 
 def _last_transcript_for(
