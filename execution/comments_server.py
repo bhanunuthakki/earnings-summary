@@ -36,7 +36,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 try:
-    from flask import Flask, Response, request, stream_with_context  # noqa: E402
+    from flask import Flask, Response, abort, request, send_file, stream_with_context  # noqa: E402
 except ImportError:  # pragma: no cover - install hint
     print(
         "Flask not installed. Install with: pip install flask",
@@ -45,11 +45,21 @@ except ImportError:  # pragma: no cover - install hint
     sys.exit(1)
 
 import comments  # noqa: E402
+import sqlite3  # noqa: E402
+
 from chat_session import build_chat_response, apply_chat_diff  # noqa: E402
+from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
+from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 
 
 def create_app(repo_root: Path) -> Flask:
     app = Flask(__name__)
+    db_path = repo_root / "data" / "portfolio.db"
+
+    def _open_db() -> sqlite3.Connection:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        return conn
 
     @app.after_request
     def add_cors_headers(response):
@@ -63,6 +73,42 @@ def create_app(repo_root: Path) -> Flask:
     @app.route("/healthz", methods=["GET"])
     def healthz():
         return {"status": "ok", "repo_root": str(repo_root)}
+
+    # ----- DASHBOARD (PR 1 — read-only) -----
+
+    @app.route("/", methods=["GET"])
+    def dashboard_page():
+        conn = _open_db()
+        try:
+            rows = build_dashboard_rows(conn, repo_root)
+        finally:
+            conn.close()
+        return Response(render_dashboard_html(rows), mimetype="text/html")
+
+    @app.route("/api/dashboard", methods=["GET"])
+    def dashboard_api():
+        conn = _open_db()
+        try:
+            rows = build_dashboard_rows(conn, repo_root)
+        finally:
+            conn.close()
+        payload = {k: [r.to_dict() for r in v] for k, v in rows.items()}
+        return payload
+
+    @app.route("/reports/<ticker>", methods=["GET"])
+    def latest_report_for_ticker(ticker: str):
+        """Serve the most recently built workspace HTML for the ticker.
+
+        Uses the latest filename (`<DATE>_workspace.html`) since YYYY-MM-DD
+        sorts chronologically. Returns 404 if no build exists.
+        """
+        research_dir = repo_root / "output" / "research" / ticker.upper()
+        if not research_dir.exists():
+            abort(404)
+        matches = sorted(research_dir.glob("*_workspace.html"))
+        if not matches:
+            abort(404)
+        return send_file(matches[-1])
 
     # ----- COMMENTS -----
 
