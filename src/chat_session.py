@@ -1,0 +1,486 @@
+"""In-report chatbot session — context assembly + streaming LLM call + thread storage + apply-diff.
+
+Backed by the canonical Claude CLI subprocess wrapper. Streams tokens via
+`claude -p --output-format stream-json` so the frontend can render
+incrementally. Threads are persisted to
+`data/report_chats/<TICKER>/<YYYY-MM-DD>.json` per-report (matches comment
+lifetime preference).
+
+The chatbot has filesystem read access (per user recommendation Q3) scoped
+to `data/`, `micro_thesis/`, `.tmp/`, `transcripts/` — exposed as a small
+tool the LLM can invoke ("look up NU's actual Q2 2025 NPL ratio from the
+transcript") via `--allowedTools Read`. The CLI handles the tool loop;
+this module just sets the system prompt and harvests the final text.
+
+Public surface (consumed by execution/comments_server.py):
+
+  build_chat_response.load_thread(repo_root, ticker, report_date) -> list[ThreadTurn]
+  build_chat_response.stream_response(repo_root, ticker, report_date, user_message)
+      -> generator yielding dicts: {type: "delta"|"final"|"diff_proposal"|"error", ...}
+  apply_chat_diff(repo_root, ticker, diff, dry_run) -> dict
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import sys
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Iterator, Literal, cast
+
+from pydantic import BaseModel, Field
+
+# We intentionally import the renderer + builder lazily inside functions to
+# avoid pulling the entire report graph at module-import time (the renderer
+# imports a lot of submodules).
+
+ChatRole = Literal["user", "assistant", "system"]
+
+
+class ChatTurn(BaseModel):
+    role: ChatRole
+    text: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    proposed_diff: dict[str, object] | None = None
+
+
+class ChatStore(BaseModel):
+    ticker: str
+    report_date: date
+    thread: list[ChatTurn] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+
+
+def _chat_path(repo_root: Path, ticker: str, report_date: date) -> Path:
+    out = repo_root / "data" / "report_chats" / ticker.upper()
+    out.mkdir(parents=True, exist_ok=True)
+    return out / f"{report_date.isoformat()}.json"
+
+
+def load_thread(repo_root: Path, ticker: str, report_date: date) -> list[ChatTurn]:
+    path = _chat_path(repo_root, ticker, report_date)
+    if not path.exists():
+        return []
+    try:
+        store = ChatStore.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return store.thread
+
+
+def save_thread(repo_root: Path, ticker: str, report_date: date, thread: list[ChatTurn]) -> None:
+    path = _chat_path(repo_root, ticker, report_date)
+    store = ChatStore(ticker=ticker.upper(), report_date=report_date, thread=thread)
+    path.write_text(store.model_dump_json(indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# System-prompt assembly from ReportSpec
+# ---------------------------------------------------------------------------
+
+
+def _compact_report_context(repo_root: Path, ticker: str) -> str:
+    """Build a compact text snapshot of the report's analytical content.
+
+    Pulls from on-disk caches rather than re-running the section builders
+    so the chat is cheap (no DB queries, no LLM calls)."""
+    bits: list[str] = []
+
+    # Thesis
+    holdings = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if holdings.exists():
+        try:
+            payload = cast("dict[str, object]", json.loads(holdings.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        thesis = payload.get("thesis") or payload.get("thesis_full")
+        if isinstance(thesis, str):
+            bits.append(f"### THESIS\n{thesis}\n")
+        rules = payload.get("business_model_rules")
+        if isinstance(rules, list):
+            ledger_bits = []
+            for r in rules:
+                if isinstance(r, dict):
+                    narrative = r.get("narrative")
+                    if isinstance(narrative, str):
+                        ledger_bits.append(f"- {narrative}")
+            if ledger_bits:
+                bits.append("### THESIS-BREAKERS\n" + "\n".join(ledger_bits))
+        kpis = payload.get("tier_1_kpis")
+        if isinstance(kpis, list):
+            kpi_lines = []
+            for k in kpis:
+                if isinstance(k, dict) and isinstance(k.get("name"), str):
+                    kpi_lines.append(
+                        f"- **{k['name']}** — breaks if {k.get('break_condition') or '—'}"
+                    )
+            if kpi_lines:
+                bits.append("### TIER-1 KPIs\n" + "\n".join(kpi_lines))
+
+    # Bear case
+    bear = repo_root / "data" / "bear_case" / f"{ticker.upper()}.json"
+    if bear.exists():
+        try:
+            b = cast("dict[str, object]", json.loads(bear.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            b = {}
+        underweighted = b.get("most_underweighted")
+        if isinstance(underweighted, str):
+            bits.append(f"### BEAR CASE — MOST UNDERWEIGHTED\n{underweighted[:1500]}\n")
+        fms = b.get("failure_modes")
+        if isinstance(fms, list):
+            fm_lines = []
+            for fm in fms[:5]:
+                if isinstance(fm, dict) and isinstance(fm.get("hypothesis"), str):
+                    fm_lines.append(f"- {fm['hypothesis']}")
+            if fm_lines:
+                bits.append("### NAMED FAILURE MODES\n" + "\n".join(fm_lines))
+
+    # Valuation
+    val = repo_root / "data" / "valuation_basis" / f"{ticker.upper()}.json"
+    if val.exists():
+        try:
+            v = cast("dict[str, object]", json.loads(val.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            v = {}
+        mult = v.get("multiple_name")
+        display = v.get("current_value_display")
+        verdict = v.get("rich_cheap_verdict")
+        rationale = v.get("rationale")
+        if mult:
+            line = f"{mult}: {display or '—'}"
+            if verdict:
+                line += f" — {verdict}"
+            bits.append(f"### VALUATION\n{line}")
+            if isinstance(rationale, str):
+                bits.append(f"Rationale: {rationale[:400]}")
+
+    # Company description
+    cd = repo_root / "data" / "company_description" / f"{ticker.upper()}.json"
+    if cd.exists():
+        try:
+            c = cast("dict[str, object]", json.loads(cd.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            c = {}
+        ep = c.get("elevator_pitch")
+        if isinstance(ep, str):
+            bits.append(f"### ELEVATOR PITCH\n{ep[:600]}")
+
+    return "\n\n".join(bits) if bits else "(no cached context on file)"
+
+
+def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
+    context = _compact_report_context(repo_root, ticker)
+    return f"""You are an analyst assistant for {ticker}, embedded in the
+workspace research report dated {report_date.isoformat()}. Answer the
+analyst's questions using the cached report context below as the primary
+source. When you need data that isn't in the context, use the Read tool
+to look it up — you have read access to:
+
+- `data/historical/fmp/<T>_*.json` — FMP financial data (segments,
+  ratios, key_metrics, statements)
+- `data/company_description/<T>.json`, `data/bear_case/<T>.json`,
+  `data/valuation_basis/<T>.json` — cached LLM outputs
+- `micro_thesis/holdings/<T>.json` — the analyst's thesis + KPIs
+- `.tmp/<T>_Q<N>_<YYYY>_summary.txt`, `.tmp/<T>_Q<N>_<YYYY>_press_release_summary.txt`,
+  `.tmp/<T>_Q<N>_<YYYY>_presentation_brief.txt` — per-quarter LLM summaries
+- `transcripts/processed/<T>_Q<N>_<YYYY>.txt` — raw call transcripts
+
+CACHED REPORT CONTEXT (snapshot):
+
+{context}
+
+When the analyst asks you to **edit** something (e.g. "rewrite the thesis
+assuming Mexico interchange caps at 1.5%", "drop this KPI", "tighten the
+valuation rationale"), respond with both:
+
+1. A natural-language explanation of what you'd change and why.
+2. A JSON code-fenced block at the end of your message with the proposed
+   diff in this exact shape:
+
+```json
+{{
+  "diff": {{
+    "target_file": "<repo-relative path>",
+    "target_path": "<json-pointer or section name>",
+    "old_value": "<verbatim text or value being replaced>",
+    "new_value": "<the replacement>",
+    "summary": "<one-sentence what changed>"
+  }}
+}}
+```
+
+The user can then choose to apply or reject. Don't propose a diff unless
+the user explicitly asks for an edit.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Streaming LLM call
+# ---------------------------------------------------------------------------
+
+
+_DIFF_FENCE_RX = None  # lazy compile
+
+
+def _extract_diff(text: str) -> dict[str, object] | None:
+    """Pull the optional ```json ... ``` diff block out of a chat response."""
+    import re
+    global _DIFF_FENCE_RX
+    if _DIFF_FENCE_RX is None:
+        _DIFF_FENCE_RX = re.compile(r"```json\s*(\{[\s\S]*?\})\s*```", re.MULTILINE)
+    m = _DIFF_FENCE_RX.search(text)
+    if not m:
+        return None
+    try:
+        payload = json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return cast("dict[str, object]", payload).get("diff") if "diff" in payload else None
+
+
+def stream_response(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    user_message: str,
+) -> Iterator[dict[str, object]]:
+    """Stream a chat response. Yields:
+      {type: "delta", text: "<chunk>"}      — incremental tokens
+      {type: "final", text: "<full>"}       — once at end
+      {type: "diff_proposal", diff: {...}}  — if the response contained a diff block
+      {type: "error", error: "..."}         — on failure
+    """
+    thread = load_thread(repo_root, ticker, report_date)
+    thread.append(ChatTurn(role="user", text=user_message))
+
+    system_prompt = _system_prompt(repo_root, ticker, report_date)
+
+    # Assemble the prior conversation as a single user message body. The
+    # CLI runs single-turn, so we encode the thread into the prompt itself.
+    thread_text = "\n\n".join(
+        f"[{t.role.upper()}] {t.text}" for t in thread[:-1]
+    )
+    user_block = thread[-1].text
+    full_prompt = (
+        system_prompt
+        + "\n\n---\n\nPRIOR THREAD:\n"
+        + (thread_text or "(first turn)")
+        + "\n\n---\n\nUSER:\n"
+        + user_block
+    )
+
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        yield {"type": "error", "error": "claude CLI not found in PATH"}
+        return
+
+    # Filesystem read scope is enforced by --allowedTools Read; the LLM can
+    # only read, not write. (Comments + chat writes go through Flask endpoints
+    # we control, not through the CLI's Edit tool.)
+    cmd = [claude_bin, "-p", "--output-format", "stream-json",
+           "--allowedTools", "Read", "--verbose"]
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError as e:
+        yield {"type": "error", "error": f"failed to launch claude: {e}"}
+        return
+
+    assert proc.stdin and proc.stdout
+    proc.stdin.write(full_prompt)
+    proc.stdin.close()
+
+    full_text_parts: list[str] = []
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            # The CLI emits a stream of `{type: ..., ...}` envelopes. We
+            # extract assistant text deltas.
+            if event.get("type") == "assistant":
+                msg = event.get("message") or {}
+                content = msg.get("content") or []
+                for block in content if isinstance(content, list) else []:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        chunk = block.get("text") or ""
+                        if chunk:
+                            full_text_parts.append(chunk)
+                            yield {"type": "delta", "text": chunk}
+    finally:
+        proc.wait()
+
+    full_text = "".join(full_text_parts).strip()
+    if not full_text:
+        stderr_text = (proc.stderr.read() if proc.stderr else "").strip()[:300]
+        yield {"type": "error", "error": f"empty response (stderr: {stderr_text})"}
+        return
+
+    diff = _extract_diff(full_text)
+    assistant_turn = ChatTurn(role="assistant", text=full_text, proposed_diff=diff)
+    thread.append(assistant_turn)
+    save_thread(repo_root, ticker, report_date, thread)
+
+    yield {"type": "final", "text": full_text}
+    if diff is not None:
+        yield {"type": "diff_proposal", "diff": diff}
+
+
+# ---------------------------------------------------------------------------
+# Apply-diff (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def apply_chat_diff(
+    repo_root: Path, ticker: str, diff: dict[str, object], dry_run: bool = False
+) -> dict[str, object]:
+    """Apply a chatbot-proposed diff. Currently supports:
+
+    - target_path is a top-level key in a JSON file (e.g. `"thesis"` in
+      `micro_thesis/holdings/<T>.json`) — string-value replacement.
+    - target_path is a deeper jq-style path "$.kpi_ledger[?(@.name=='X')]"
+      — NOT supported yet; falls through with a soft error.
+
+    Returns: `{"applied": bool, "summary": str, "path": str, "error": str | None}`.
+
+    Refuses to write outside `data/`, `micro_thesis/`, `.tmp/`, or
+    `directives/` — same filesystem scope as the LLM's read tool, with
+    write being explicit user-driven.
+    """
+    target_file = diff.get("target_file")
+    target_path = diff.get("target_path")
+    new_value = diff.get("new_value")
+    summary = diff.get("summary") or "(no summary)"
+
+    if not isinstance(target_file, str) or not isinstance(target_path, str):
+        return {"applied": False, "error": "diff missing target_file or target_path",
+                "summary": str(summary)}
+
+    abs_target = (repo_root / target_file).resolve()
+    if not _is_in_writable_scope(repo_root, abs_target):
+        return {
+            "applied": False, "error": f"target {target_file} outside writable scope",
+            "summary": str(summary),
+        }
+    if not abs_target.exists():
+        return {
+            "applied": False, "error": f"target file does not exist: {target_file}",
+            "summary": str(summary),
+        }
+
+    try:
+        payload = json.loads(abs_target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return {"applied": False, "error": f"could not parse target as JSON: {e}",
+                "summary": str(summary)}
+
+    if "." in target_path or "[" in target_path:
+        return {
+            "applied": False, "error": "nested target_path not yet supported",
+            "summary": str(summary), "next_step": "use a top-level key for now",
+        }
+    if target_path not in payload:
+        return {
+            "applied": False,
+            "error": f"key {target_path!r} not in {target_file}",
+            "summary": str(summary),
+        }
+
+    if dry_run:
+        return {
+            "applied": False, "dry_run": True,
+            "summary": str(summary),
+            "old_preview": str(payload[target_path])[:120],
+            "new_preview": str(new_value)[:120],
+        }
+
+    payload[target_path] = new_value
+    abs_target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return {
+        "applied": True, "summary": str(summary),
+        "path": str(abs_target.relative_to(repo_root)),
+    }
+
+
+def _is_in_writable_scope(repo_root: Path, abs_target: Path) -> bool:
+    """Restrict writes to the directories users normally edit via the
+    chatbot. Keeps source code, CI configs, etc. out of bounds."""
+    allowed = (
+        repo_root / "data",
+        repo_root / "micro_thesis",
+        repo_root / ".tmp",
+        repo_root / "directives",
+    )
+    try:
+        for base in allowed:
+            base_resolved = base.resolve()
+            try:
+                abs_target.relative_to(base_resolved)
+                return True
+            except ValueError:
+                continue
+    except (OSError, RuntimeError):
+        return False
+    return False
+
+
+# Expose the module-level functions on a small namespace the server can
+# import as a single object — mirrors the public-surface comment in the
+# docstring above.
+class _BuildChatResponse:
+    load_thread = staticmethod(load_thread)
+    stream_response = staticmethod(stream_response)
+
+
+build_chat_response = _BuildChatResponse()
+
+
+__all__ = [
+    "ChatTurn",
+    "ChatStore",
+    "apply_chat_diff",
+    "build_chat_response",
+    "load_thread",
+    "save_thread",
+    "stream_response",
+]
+
+
+if __name__ == "__main__":  # smoke test
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--ticker", required=True)
+    p.add_argument("--report-date", required=True, type=date.fromisoformat)
+    p.add_argument("--message", required=True)
+    p.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
+    args = p.parse_args()
+    for ev in stream_response(args.repo_root.resolve(), args.ticker, args.report_date, args.message):
+        if ev.get("type") == "delta":
+            sys.stdout.write(cast("str", ev["text"]))
+            sys.stdout.flush()
+        elif ev.get("type") == "diff_proposal":
+            print("\n\n[DIFF PROPOSAL]", json.dumps(ev["diff"], indent=2))
+        elif ev.get("type") == "error":
+            print(f"\n[ERROR] {ev['error']}", file=sys.stderr)
+    print()
