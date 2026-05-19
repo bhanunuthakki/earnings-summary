@@ -33,6 +33,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from intake import INBOX_DIR, IntakeResult, scan_inbox  # noqa: E402
+from models.documents import DocType  # noqa: E402
 
 
 def summarize(results: list[IntakeResult]) -> dict:
@@ -54,21 +55,69 @@ def summarize(results: list[IntakeResult]) -> dict:
 
 
 def chain_processing(results: list[IntakeResult]) -> None:
-    """Run `process_ir_documents.py --ticker <T>` for each ticker that got new IR docs."""
-    tickers = sorted({
-        r.classification.ticker
-        for r in results
-        if not r.skipped and r.classification is not None
-    })
-    if not tickers:
+    """Run downstream pipelines for each ticker that got new IR docs.
+
+    Every ticker with new docs gets `process_ir_documents.py` (LLM summary).
+    Tickers that received transcripts additionally get
+    `ingest_transcripts.py --include-ir-transcripts` (bridges intake-filed
+    transcripts into the `transcripts` + `transcript_segments` tables) and
+    `extract_commitments_from_transcript.py --auto` (Say-Do extraction).
+
+    This matches what `backfill_transcripts.py` runs for auto-fetched
+    transcripts so the manual-drop path doesn't leave Say-Do blind.
+    """
+    new_filings = [
+        r for r in results if not r.skipped and r.classification is not None
+    ]
+    if not new_filings:
         print("[intake] No newly-filed IR documents — skipping process chain.", file=sys.stderr)
         return
 
+    tickers = sorted({r.classification.ticker for r in new_filings if r.classification})
+    transcript_tickers = sorted({
+        r.classification.ticker
+        for r in new_filings
+        if r.classification and r.classification.doc_type == DocType.EARNINGS_CALL_TRANSCRIPT
+    })
+
     process_script = SCRIPT_DIR / "process_ir_documents.py"
+    ingest_script = SCRIPT_DIR / "ingest_transcripts.py"
+    commitments_script = SCRIPT_DIR / "extract_commitments_from_transcript.py"
+
     for ticker in tickers:
         print(f"[intake] Chaining: process_ir_documents.py --ticker {ticker}", file=sys.stderr)
         subprocess.run(
             [sys.executable, str(process_script), "--ticker", ticker],
+            check=False,
+        )
+
+    for ticker in transcript_tickers:
+        print(
+            f"[intake] Chaining: ingest_transcripts.py --ticker {ticker} --include-ir-transcripts",
+            file=sys.stderr,
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(ingest_script),
+                "--ticker",
+                ticker,
+                "--include-ir-transcripts",
+            ],
+            check=False,
+        )
+        print(
+            f"[intake] Chaining: extract_commitments_from_transcript.py --auto --ticker {ticker}",
+            file=sys.stderr,
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(commitments_script),
+                "--auto",
+                "--ticker",
+                ticker,
+            ],
             check=False,
         )
 
