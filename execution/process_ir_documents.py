@@ -33,7 +33,15 @@ sys.path.insert(0, str(SRC_DIR))
 
 import index_manager
 from parser import extract_text_from_pdf, read_text_file
-from llm_client import generate_summary, generate_press_release_summary, generate_presentation_brief, generate_event_brief
+from llm_client import (
+    compose_anchor_block,
+    generate_summary,
+    generate_press_release_summary,
+    generate_presentation_brief,
+    generate_event_brief,
+    load_bear_anchor,
+    load_thesis_anchor,
+)
 from alias_manager import resolve_ticker
 
 CACHE_DIR = PROJECT_ROOT / ".tmp"
@@ -45,21 +53,29 @@ log = logging.getLogger(__name__)
 # Seconds to sleep between LLM calls to avoid rate limiting
 RATE_LIMIT_SLEEP = 15
 
+# `uses_anchor` marks doc types whose LLM prompt accepts a thesis/bear-case
+# anchor block (transcripts → analytical takeaway needs KPI anchor; events →
+# §7 thesis-read-through needs the same). Press-release and presentation
+# briefs are pure structured-data summaries — no anchor needed; their job is
+# to be factual condensers, not to render thesis judgments.
 DOC_TYPE_CONFIG: dict[str, dict] = {
     "press_release": {
         "cache_suffix": "press_release_summary.txt",
         "llm_fn": generate_press_release_summary,
         "label": "Press Release Summary",
+        "uses_anchor": False,
     },
     "presentation": {
         "cache_suffix": "presentation_brief.txt",
         "llm_fn": generate_presentation_brief,
         "label": "Presentation Brief",
+        "uses_anchor": False,
     },
     "transcript": {
         "cache_suffix": "summary.txt",
         "llm_fn": generate_summary,
         "label": "Transcript Summary",
+        "uses_anchor": True,
     },
     # Letters to shareholders / investor updates summarize quarter highlights, so they
     # share the press-release LLM path. The cache suffix differs to keep artifacts distinct.
@@ -67,6 +83,7 @@ DOC_TYPE_CONFIG: dict[str, dict] = {
         "cache_suffix": "investor_update_summary.txt",
         "llm_fn": generate_press_release_summary,
         "label": "Investor Update Summary",
+        "uses_anchor": False,
     },
     # Non-quarterly IR events: investor days, AGMs, capital markets days, conference decks.
     # Uses the dedicated event-brief prompt focused on multi-year strategy + capital allocation.
@@ -74,6 +91,7 @@ DOC_TYPE_CONFIG: dict[str, dict] = {
         "cache_suffix": "event_brief.txt",
         "llm_fn": generate_event_brief,
         "label": "Event Brief",
+        "uses_anchor": True,
     },
 }
 
@@ -154,7 +172,14 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
             log.error({"event": "empty_text", "local_path": local_path})
             return False
 
-        result_text = config["llm_fn"](text)
+        if config.get("uses_anchor", False):
+            anchor_block = compose_anchor_block(
+                load_thesis_anchor(PROJECT_ROOT, doc["ticker"]),
+                load_bear_anchor(PROJECT_ROOT, doc["ticker"]),
+            )
+            result_text = config["llm_fn"](text, anchor_block=anchor_block)
+        else:
+            result_text = config["llm_fn"](text)
 
         with open(cache, "w", encoding="utf-8") as f:
             f.write(result_text)

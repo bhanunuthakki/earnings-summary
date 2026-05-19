@@ -112,8 +112,8 @@ def extract_timeline(pdf_path: Path) -> NvoSelfDisclosedTimeline:
 
     # Cap to ~80k chars — extraction quality falls off when the relevant
     # section is buried; trim to first 80k. Routes through llm_client.call_llm
-    # (Claude CLI subscription billing first, Gemini Flash fallback) — model
-    # selected via LLM_MODELS["patent_timeline"] (Haiku for batch latency).
+    # (Claude CLI first, Gemini Flash fallback) — model selected via
+    # LLM_MODELS["patent_timeline"] (Haiku for batch latency).
     capped = text[:80_000]
 
     raw = call_llm(EXTRACTION_PROMPT + capped, purpose="patent_timeline").strip()

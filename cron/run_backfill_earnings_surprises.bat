@@ -15,18 +15,11 @@ REM                                        earnings_surprises table
 REM
 REM Stage 2 only runs if stage 1 exits 0 — partial failures don't poison
 REM the DB with half a refresh.
-REM
-REM ANTHROPIC_API_KEY is unset locally for consistency with the rest of the
-REM cron chain. Neither script makes LLM calls today, but the leakage guard
-REM (see CLAUDE.md "Unset ANTHROPIC_API_KEY in subshells") is cheap insurance
-REM in case future enrichment steps want LLM extraction here.
 
 setlocal
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
-
-set "ANTHROPIC_API_KEY="
 
 for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')"`) do set "TS=%%t"
 

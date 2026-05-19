@@ -17,7 +17,12 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from llm_client import generate_recent_developments
+from llm_client import (
+    compose_anchor_block,
+    generate_recent_developments,
+    load_bear_anchor,
+    load_thesis_anchor,
+)
 from report.models import (
     RecentDevelopmentsSection,
     SectionStatus,
@@ -54,14 +59,20 @@ def build(
                 ),
                 detail=(
                     f"Pass --enable-llm to populate. Routes through Claude WebSearch+WebFetch "
-                    f"(subscription billing) with Gemini fallback. Cache TTL {cache_ttl_days}d "
+                    f"with Gemini fallback. Cache TTL {cache_ttl_days}d "
                     f"at {NEWS_CACHE_DIRNAME}/{ticker.upper()}.json."
                 ),
             ),
             news_days_window=news_days,
         )
 
-    content_md = generate_recent_developments(ticker, news_days=news_days)
+    anchor_block = compose_anchor_block(
+        load_thesis_anchor(repo_root, ticker),
+        load_bear_anchor(repo_root, ticker),
+    )
+    content_md = generate_recent_developments(
+        ticker, news_days=news_days, anchor_block=anchor_block
+    )
     section = RecentDevelopmentsSection(
         status=SectionStatus.OK,
         cached_at=datetime.now(UTC),

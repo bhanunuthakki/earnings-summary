@@ -60,11 +60,12 @@ alembic upgrade head         # initialize data/portfolio.db
 Create `.env` with whichever providers you need:
 
 ```env
-GEMINI_API_KEY=...           # transcript summaries / Say-Do analysis
+ANTHROPIC_API_KEY=...        # Claude CLI (metered API billing — the default)
+GEMINI_API_KEY=...           # automatic fallback when the Claude CLI fails
 FMP_API_KEY=...              # fundamentals, statements, calendar, transcripts
 ```
 
-> Python scripts that call Claude must route through `C:\Users\Bhanu\.gemini\snippets\claude_cli.py` so they bill against the user's subscription, not the metered API. See global `CLAUDE.md` for the rationale.
+> Claude calls go through the `claude` CLI as a subprocess (see [src/llm_client.py](src/llm_client.py)). The CLI honors whichever auth is configured — set `ANTHROPIC_API_KEY` for metered API billing, or run `claude auth login` for Pro/Max subscription billing.
 
 ## Common workflows
 
@@ -117,7 +118,7 @@ python execution/build_artifacts.py --ticker META --enable-llm
 python execution/build_artifacts.py --ticker AMD --flavor evaluation --allow-untracked
 ```
 
-Writes `output/research/<TICKER>/<DATE>_report.html` + `.md` + `_sections.json` + `_dcf.xlsx`. The 12 sections: §1 Snapshot/EvaluationSnapshot · §2 Company Description · §3 Thesis · §4 Financials (YoY% growth matrix + paired bars + 10-FY reference) · §5 Segments (stacked-area + YoY matrix) · §6 Earnings · §7 Say-Do · §8 IR docs · §9 Recent developments · §10 Bear case · §11 Provenance · §12 Transcripts. `--enable-llm` opts §9 Recent Developments + §10 Bear Case into real Claude calls (subscription billing); omit to keep them stubbed.
+Writes `output/research/<TICKER>/<DATE>_report.html` + `.md` + `_sections.json` + `_dcf.xlsx`. The 12 sections: §1 Snapshot/EvaluationSnapshot · §2 Company Description · §3 Thesis · §4 Financials (YoY% growth matrix + paired bars + 10-FY reference) · §5 Segments (stacked-area + YoY matrix) · §6 Earnings · §7 Say-Do · §8 IR docs · §9 Recent developments · §10 Bear case · §11 Provenance · §12 Transcripts. `--enable-llm` opts §9 Recent Developments + §10 Bear Case into real Claude calls (via the `claude` CLI subprocess); omit to keep them stubbed.
 
 ### Refresh just the news section (faster than a full rebuild)
 

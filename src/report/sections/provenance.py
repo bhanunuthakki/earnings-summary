@@ -10,6 +10,7 @@ from report.models import (
     ProvenanceSection,
     SectionStatus,
     SourceDocRow,
+    ValidationIssueRow,
 )
 from report.sections._common import has_table, missing, open_repo_db
 
@@ -28,7 +29,7 @@ def build(ticker: str, repo_root: Path) -> ProvenanceSection:
 
     coverage = _coverage(conn, ticker)
     source_docs = _source_docs(conn, ticker)
-    open_issues = _open_validation_issues(conn, ticker)
+    open_issues_count, open_issues_detail = _open_validation_issues(conn, ticker)
     conn.close()
 
     if not coverage and not source_docs:
@@ -45,7 +46,8 @@ def build(ticker: str, repo_root: Path) -> ProvenanceSection:
         status=SectionStatus.OK,
         coverage=coverage,
         source_docs=source_docs,
-        open_validation_issues=open_issues,
+        open_validation_issues=open_issues_count,
+        open_issues_detail=open_issues_detail,
     )
 
 
@@ -103,9 +105,17 @@ def _source_docs(conn: sqlite3.Connection, ticker: str) -> list[SourceDocRow]:
     ]
 
 
-def _open_validation_issues(conn: sqlite3.Connection, ticker: str) -> int:
+def _open_validation_issues(
+    conn: sqlite3.Connection, ticker: str
+) -> tuple[int, list[ValidationIssueRow]]:
+    """Return (total open count, first 50 rows as ValidationIssueRow).
+
+    Renderers can use the count for a summary chip and the row list for an
+    expandable detail panel. Capped at 50 rows so a runaway extractor
+    doesn't blow up the HTML payload.
+    """
     if not has_table(conn, "validation_issues"):
-        return 0
+        return 0, []
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -115,4 +125,29 @@ def _open_validation_issues(conn: sqlite3.Connection, ticker: str) -> int:
         """,
         (ticker.upper(),),
     )
-    return int(cursor.fetchone()["n"])
+    n = int(cursor.fetchone()["n"])
+    if n == 0:
+        return 0, []
+    cursor.execute(
+        """
+        SELECT severity, rule, raw_value, expected, raised_at
+        FROM validation_issues
+        WHERE ticker = ? AND resolved_at IS NULL
+        ORDER BY
+          CASE severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+          raised_at DESC
+        LIMIT 50
+        """,
+        (ticker.upper(),),
+    )
+    rows = [
+        ValidationIssueRow(
+            severity=str(r["severity"] or ""),
+            rule=str(r["rule"] or ""),
+            raw_value=str(r["raw_value"]) if r["raw_value"] else None,
+            expected=str(r["expected"]) if r["expected"] else None,
+            raised_at=str(r["raised_at"]) if r["raised_at"] else None,
+        )
+        for r in cursor.fetchall()
+    ]
+    return n, rows

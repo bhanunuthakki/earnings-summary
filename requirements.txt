@@ -7,9 +7,9 @@ pypdf
 reportlab
 mcp
 # LLM access — primary path: Claude Code CLI (`claude -p`) via subprocess. No Python
-# SDK dependency. Install separately: see https://code.claude.com/docs/en/setup, then
-# `claude auth login`. ANTHROPIC_API_KEY MUST be unset in the runtime env (silently
-# overrides to API billing). src/llm_client.py enforces this with a fail-loud lazy check.
+# SDK dependency. Install separately: see https://code.claude.com/docs/en/setup. The
+# CLI honors either ANTHROPIC_API_KEY (metered API billing) or `claude auth login`
+# (Pro/Max subscription) — see .env.example.
 #
 # LLM access — fallback path: Gemini via google-generativeai SDK. Used only when the
 # Claude CLI call fails (timeout, non-zero exit, empty output, binary missing). Reads

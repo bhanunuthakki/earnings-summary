@@ -19,14 +19,16 @@ response = call_llm(prompt, purpose="bear_case")
 
 1. Resolves `purpose` to a Claude model id via `LLM_MODELS` (or uses an
    explicit `model` arg as escape hatch).
-2. Calls the Claude Code CLI subprocess (subscription billing per global
-   `CLAUDE.md` rule on metered-API avoidance).
+2. Calls the Claude Code CLI subprocess. The CLI honors whatever auth is
+   configured in the environment — `ANTHROPIC_API_KEY` for metered API
+   billing, or `claude auth login` for subscription billing — operator's
+   choice.
 3. On any operational failure (timeout / non-zero exit / empty stdout / binary
    missing mid-run), **automatically** falls back to Gemini Flash if a
    `GEMINI_API_KEY` is configured. No per-call wiring needed.
-4. Setup errors (`ANTHROPIC_API_KEY` accidentally set, `claude` binary
-   missing on first call) raise loudly without engaging the fallback —
-   those are operator problems, not retry-able failures.
+4. Setup errors (`claude` binary missing on first call) raise loudly without
+   engaging the fallback — those are operator problems, not retry-able
+   failures.
 
 ## Hard rules
 
@@ -63,7 +65,6 @@ response = call_llm(prompt, purpose="bear_case")
 ## Failure modes you don't have to handle
 
 - Claude CLI missing → `_verify_setup_once` raises with install instructions.
-- `ANTHROPIC_API_KEY` set → `_verify_setup_once` raises with unset instructions.
 - Claude CLI timeout / empty output → automatic Gemini fallback if key set.
 - Both Claude and Gemini fail → `_try_gemini_fallback` re-raises the original
   Claude error chained with the Gemini error so both surface together.

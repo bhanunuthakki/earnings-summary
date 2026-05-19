@@ -35,6 +35,7 @@ from report.renderers.html import render as render_html  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
 from report.renderers.workbook import render as render_workbook  # noqa: E402
+from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
 
 
 def _sync_db_to_repo(repo_root: Path) -> None:
@@ -71,6 +72,7 @@ def main() -> int:
             refresh_news=args.refresh_news,
             flavor=flavor,
             trigger=args.trigger,
+            renderer=args.renderer,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -101,8 +103,8 @@ def _parse_args() -> argparse.Namespace:
         "--enable-llm",
         action="store_true",
         help="Run the §8 recent-developments and §9 bear-case LLM calls. Routes "
-        "through llm_client: Claude CLI first (subscription billing), Gemini Flash "
-        "fallback if Claude fails. Without --enable-llm, both sections are stubbed.",
+        "through llm_client: Claude CLI first, Gemini Flash fallback if Claude fails. "
+        "Without --enable-llm, both sections are stubbed.",
     )
     parser.add_argument(
         "--news-days",
@@ -138,6 +140,17 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "What triggered this brief build. Logged to brief_provenance_log for audit. "
             "Daily worker passes 'daily_worker'; refresh_news.py passes 'news_refresh'."
+        ),
+    )
+    parser.add_argument(
+        "--renderer",
+        choices=("default", "workspace", "both"),
+        default="default",
+        help=(
+            "Which HTML renderer to emit. 'default' (current behavior) writes "
+            "{DATE}_report.html via the legacy long-form renderer. 'workspace' "
+            "writes {DATE}_workspace.html via the tabbed workspace renderer. "
+            "'both' writes both files."
         ),
     )
     return parser.parse_args()
@@ -191,11 +204,13 @@ def _build_one(
     refresh_news: bool = False,
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
     trigger: str = "manual",
+    renderer: str = "default",
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
     html_path = out_dir / f"{today}_report.html"
+    workspace_html_path = out_dir / f"{today}_workspace.html"
     md_path = out_dir / f"{today}_report.md"
     json_path = out_dir / f"{today}_sections.json"
     xlsx_path = out_dir / f"{today}_dcf.xlsx"
@@ -219,8 +234,16 @@ def _build_one(
         flavor=flavor,
     )
 
-    html_path.write_text(render_html(spec), encoding="utf-8")
-    _emit("wrote_html", {"ticker": ticker, "path": str(html_path)})
+    if renderer in ("default", "both"):
+        html_path.write_text(render_html(spec), encoding="utf-8")
+        _emit("wrote_html", {"ticker": ticker, "path": str(html_path)})
+
+    if renderer in ("workspace", "both"):
+        workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
+        _emit(
+            "wrote_workspace_html",
+            {"ticker": ticker, "path": str(workspace_html_path)},
+        )
 
     md_path.write_text(render_markdown(spec), encoding="utf-8")
     _emit("wrote_markdown", {"ticker": ticker, "path": str(md_path)})
@@ -236,7 +259,8 @@ def _build_one(
 
     return {
         "ticker": ticker,
-        "report_html": str(html_path),
+        "report_html": str(html_path) if renderer in ("default", "both") else None,
+        "workspace_html": str(workspace_html_path) if renderer in ("workspace", "both") else None,
         "report_md": str(md_path),
         "sections_json": str(json_path),
         "dcf_xlsx": str(xlsx_path),

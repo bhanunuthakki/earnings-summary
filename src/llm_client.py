@@ -3,30 +3,22 @@ src/llm_client.py
 -----------------
 LLM client for the earnings-summary pipeline. Two-tier execution:
 
-  PRIMARY: Claude Code CLI (`claude -p`) via subprocess. Bills against the user's
-  Claude Pro/Max subscription. Zero per-call cost.
+  PRIMARY: Claude Code CLI (``claude -p``) via subprocess. The CLI honors
+  whichever auth is configured in the environment — ``ANTHROPIC_API_KEY`` for
+  metered API billing, or ``claude auth login`` for a Pro/Max subscription.
 
   FALLBACK: Gemini via google-generativeai. Fires automatically when the Claude
   CLI call fails (timeout, non-zero exit, empty output, binary missing).
   Per-call cost on Gemini Flash is sub-penny; the fallback prevents single-ticker
   failures from blocking batch runs.
 
-CRITICAL: The Claude Agent SDK does NOT support subscription billing — it
-requires ANTHROPIC_API_KEY (separate API billing). The CLI is the ONLY path
-to subscription billing. Even the CLI silently falls back to API billing if
-ANTHROPIC_API_KEY is set in the environment, so the module's lazy setup check
-fails loud when that key is present. The Gemini fallback is intentionally a
-separate, opt-in path that requires its own GEMINI_API_KEY in .env — it cannot
-be triggered by accidentally setting ANTHROPIC_API_KEY.
-
 Setup (one-time, user action required):
 1. Install Claude Code CLI: see https://code.claude.com/docs/en/setup
-2. Authenticate to your subscription: `claude auth login`
-3. Ensure ANTHROPIC_API_KEY is unset in the shell that runs this pipeline:
-     PowerShell: Remove-Item env:ANTHROPIC_API_KEY
-     Bash:       unset ANTHROPIC_API_KEY
-4. (Optional but recommended) Add GEMINI_API_KEY to .env to enable the fallback
-   path. Without it, Claude CLI failures surface as hard errors. See .env.example.
+2. Set ``ANTHROPIC_API_KEY`` in the shell / ``.env``, OR run ``claude auth login``
+   for the subscription path. Either works.
+3. (Optional but recommended) Add ``GEMINI_API_KEY`` to ``.env`` to enable the
+   fallback path. Without it, Claude CLI failures surface as hard errors. See
+   .env.example.
 """
 
 from __future__ import annotations
@@ -37,7 +29,6 @@ import os
 import re
 import shutil
 import subprocess
-from datetime import date
 
 # NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
 # is `google-genai` with a different API (genai.Client / client.models.generate_content).
@@ -45,6 +36,9 @@ from datetime import date
 # users to re-install for the fallback path. See:
 # https://github.com/google-gemini/deprecated-generative-ai-python
 import warnings
+from datetime import date
+from pathlib import Path
+from typing import cast
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
@@ -95,11 +89,25 @@ LLM_MODELS: dict[str, str] = {
     "thesis_pass_b": DEFAULT_MODEL,
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
-    "company_description": DEFAULT_MODEL,
+    # Company description is the analytical spine of the memo — Opus follows
+    # nuanced instruction-following ("don't write Wikipedia-style", "anchor
+    # on thesis pillars") far better than Sonnet on this kind of writeup
+    # where the model has a strong prior toward corporate boilerplate.
+    "company_description": "claude-opus-4-7",
     # Platform diagram is a narrowly-scoped JSON-output task (one diagram
     # string + one caption string). Sonnet was taking 6-20 min per call and
     # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
     "platform_diagram": FAST_CLASSIFIER_MODEL,
+    "qa_topics": DEFAULT_MODEL,
+    "saydo_filter": DEFAULT_MODEL,
+    # Valuation multiple selection is a sector/business-model judgment that
+    # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
+    # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call
+    # per ticker, cached on disk — cost is bounded.
+    "valuation_basis": "claude-opus-4-7",
+    # SayDo importance ordering — judgmental sort across many commitments,
+    # benefits from Opus's stronger ranking discipline.
+    "saydo_importance": "claude-opus-4-7",
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
@@ -166,32 +174,21 @@ _claude_cli_path: str | None = None
 
 
 def _verify_setup_once() -> None:
-    """
-    Lazy environment check on first LLM call — fails loud rather than mis-billing.
-    Also resolves and caches the absolute path to the `claude` binary, because
-    on Windows the CLI is installed as `claude.cmd` and Python's subprocess does
-    not apply PATHEXT to bare names — passing "claude" would CreateProcess-fail.
+    """Resolve and cache the absolute path to the ``claude`` binary on first call.
+
+    Windows-specific: bare ``"claude"`` fails because the npm-installed binary
+    is ``claude.cmd`` and Python's subprocess doesn't apply PATHEXT to bare
+    names. Cached so repeat calls in a long-running batch are free.
     """
     global _setup_verified, _claude_cli_path
     if _setup_verified:
         return
-    # Treat an empty-string value as unset. Claude Code's Bash tool leaks
-    # ANTHROPIC_API_KEY='' into subshells even when the user has it unset in
-    # their actual env, which used to trip this guard as a false positive and
-    # forced every pipeline call to be prefixed with `unset ANTHROPIC_API_KEY`.
-    # Only a non-empty value would actually route the CLI to API billing.
-    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is set in the environment. The Claude Code CLI will silently "
-            "route calls to API billing instead of your subscription. Unset it before running:\n"
-            "  PowerShell:  Remove-Item env:ANTHROPIC_API_KEY\n"
-            "  Bash:        unset ANTHROPIC_API_KEY"
-        )
     resolved = shutil.which("claude")
     if resolved is None:
         raise RuntimeError(
             "Claude Code CLI ('claude') not found in PATH. Install it from "
-            "https://code.claude.com/docs/en/setup, then run `claude auth login`."
+            "https://code.claude.com/docs/en/setup, then either set "
+            "ANTHROPIC_API_KEY in your shell / .env or run `claude auth login`."
         )
     _claude_cli_path = resolved
     _setup_verified = True
@@ -208,9 +205,9 @@ def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     original Claude error and points the user at .env.example. This makes the
     failure mode explicit: setup an LLM, see the prompt, fix the cause.
 
-    Setup-class Claude errors (ANTHROPIC_API_KEY set, claude binary missing)
-    are NOT routed here — they propagate from _verify_setup_once() before the
-    subprocess call ever runs.
+    Setup-class Claude errors (``claude`` binary missing) are NOT routed here —
+    they propagate from ``_verify_setup_once()`` before the subprocess call
+    ever runs.
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
@@ -247,14 +244,14 @@ def _call_claude(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> str:
     """
-    Single-shot LLM call. Tries the Claude Code CLI first (subscription billing).
-    On any operational failure — timeout, non-zero exit, empty output, or the
-    binary becoming unavailable mid-run — falls back to Gemini Flash if a
-    GEMINI_API_KEY is available in the environment.
+    Single-shot LLM call. Tries the Claude Code CLI first. On any operational
+    failure — timeout, non-zero exit, empty output, or the binary becoming
+    unavailable mid-run — falls back to Gemini Flash if ``GEMINI_API_KEY`` is
+    available in the environment.
 
-    Setup errors (ANTHROPIC_API_KEY set, claude binary missing on first call)
-    raise RuntimeError directly without invoking the fallback — those need to
-    be fixed by the operator, not papered over.
+    Setup errors (``claude`` binary missing on first call) raise RuntimeError
+    directly without invoking the fallback — that needs to be fixed by the
+    operator, not papered over.
 
     Prompts are passed via stdin to avoid Windows CreateProcess command-line
     length limits (32K).
@@ -391,13 +388,179 @@ def call_llm_with_web(
 
 
 # ---------------------------------------------------------------------------
+# Thesis / bear-case anchor blocks — shared context for analytical prompts
+# ---------------------------------------------------------------------------
+#
+# Several prompts (per-quarter summary, pairwise SayDo, recent developments,
+# SayDo filter, event brief) promise "thesis-anchored analysis" but currently
+# have no thesis on hand. These helpers pull two small blocks of context that
+# can be appended to those prompts so the LLM has the pillars / KPIs / break
+# rules / non-consensus risks to anchor against. Both helpers are tolerant:
+# missing files → empty string, so watchlist/evaluation tickers (no thesis,
+# no cached bear case) still work and the prompt shape is unchanged.
+
+# Hard cap on the assembled anchor blocks so a verbose holdings JSON cannot
+# blow the prompt budget on any single prompt. Trim is deterministic
+# (truncation at the section boundary), not a smart compressor.
+ANCHOR_BLOCK_CHAR_CAP = 3500
+
+_HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
+_BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
+
+
+def _load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | None:
+    """Read ``micro_thesis/holdings/<TICKER>.json`` defensively. Returns None
+    for any read or parse failure so callers degrade to no-anchor mode."""
+    path = repo_root.joinpath(*_HOLDINGS_DIRNAME) / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None
+    try:
+        return cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _kpi_anchor_lines(payload: dict[str, object]) -> list[str]:
+    """Render `tier_1_kpis` as one-line bullets: name + break condition."""
+    raw = payload.get("tier_1_kpis")
+    if not isinstance(raw, list):
+        return []
+    lines: list[str] = []
+    for entry in cast("list[object]", raw):
+        if not isinstance(entry, dict):
+            continue
+        e = cast("dict[str, object]", entry)
+        name = e.get("name")
+        bc = e.get("break_condition")
+        if not isinstance(name, str) or not name.strip():
+            continue
+        bc_text = bc.strip() if isinstance(bc, str) and bc.strip() else "—"
+        lines.append(f"- **{name.strip()}** — breaks if {bc_text}")
+    return lines
+
+
+def _business_rule_anchor_lines(payload: dict[str, object]) -> list[str]:
+    """Render quantitative `business_model_rules` as scannable bullets."""
+    raw = payload.get("business_model_rules")
+    if not isinstance(raw, list):
+        return []
+    lines: list[str] = []
+    for entry in cast("list[object]", raw):
+        if not isinstance(entry, dict):
+            continue
+        e = cast("dict[str, object]", entry)
+        narrative = e.get("narrative")
+        if isinstance(narrative, str) and narrative.strip():
+            lines.append(f"- {narrative.strip()}")
+    return lines
+
+
+def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
+    """Compose a compact thesis anchor for prompt injection. Empty string
+    when no holdings JSON exists. Output is markdown, ~300-1500 chars."""
+    payload = _load_holdings_json(repo_root, ticker)
+    if payload is None:
+        return ""
+
+    parts: list[str] = ["## THESIS ANCHOR (analyst's own framing of this name)"]
+
+    thesis = payload.get("thesis")
+    if isinstance(thesis, str) and thesis.strip():
+        parts.append(f"\n**Thesis statement:**\n{thesis.strip()}")
+
+    key_driver = payload.get("key_driver")
+    if isinstance(key_driver, str) and key_driver.strip():
+        parts.append(f"\n**Key driver tracked:** {key_driver.strip()}")
+
+    kpi_lines = _kpi_anchor_lines(payload)
+    if kpi_lines:
+        parts.append("\n**Tier-1 KPIs (with break conditions):**")
+        parts.extend(kpi_lines)
+
+    rule_lines = _business_rule_anchor_lines(payload)
+    if rule_lines:
+        parts.append("\n**Quantitative thesis-breakers:**")
+        parts.extend(rule_lines)
+
+    if len(parts) == 1:  # only the header — no usable content
+        return ""
+
+    assembled = "\n".join(parts).strip()
+    if len(assembled) > ANCHOR_BLOCK_CHAR_CAP:
+        assembled = assembled[:ANCHOR_BLOCK_CHAR_CAP].rstrip() + "\n[...truncated]"
+    return assembled
+
+
+def load_bear_anchor(repo_root: Path, ticker: str) -> str:
+    """Compose a compact bear-case anchor from the on-disk cache (written by
+    the bear_case section after a successful LLM run). Returns the
+    `most_underweighted` paragraph plus the top 3 failure-mode hypotheses so
+    the per-quarter summary / news / SayDo can engage with the analyst's
+    existing bear framing without re-running the bear case.
+
+    Returns "" when no cache exists (no prior `--enable-llm` run) so the
+    first-ever build of a ticker still works without circular dependency.
+    """
+    path = repo_root.joinpath(*_BEAR_CASE_CACHE_DIRNAME) / f"{ticker.upper()}.json"
+    if not path.exists():
+        return ""
+    try:
+        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+    parts: list[str] = ["## BEAR-CASE ANCHOR (from analyst's prior bear review)"]
+
+    underweighted = payload.get("most_underweighted")
+    if isinstance(underweighted, str) and underweighted.strip():
+        parts.append(f"\n**Most underweighted by consensus:**\n{underweighted.strip()}")
+
+    fms = payload.get("failure_modes")
+    if isinstance(fms, list):
+        hyps: list[str] = []
+        for entry in cast("list[object]", fms)[:3]:
+            if not isinstance(entry, dict):
+                continue
+            e = cast("dict[str, object]", entry)
+            h = e.get("hypothesis")
+            if isinstance(h, str) and h.strip():
+                hyps.append(f"- {h.strip()}")
+        if hyps:
+            parts.append("\n**Named failure modes the analyst is tracking:**")
+            parts.extend(hyps)
+
+    if len(parts) == 1:
+        return ""
+
+    assembled = "\n".join(parts).strip()
+    if len(assembled) > ANCHOR_BLOCK_CHAR_CAP:
+        assembled = assembled[:ANCHOR_BLOCK_CHAR_CAP].rstrip() + "\n[...truncated]"
+    return assembled
+
+
+def compose_anchor_block(thesis_anchor: str, bear_anchor: str) -> str:
+    """Join thesis + bear anchors with a separator, omitting empties.
+    Returns "" when both are empty so the caller can conditionally insert."""
+    blocks = [b for b in (thesis_anchor, bear_anchor) if b.strip()]
+    if not blocks:
+        return ""
+    return "\n\n---\n\n".join(blocks) + "\n\n---\n\n"
+
+
+# ---------------------------------------------------------------------------
 # Prompt-bearing functions (signatures preserved — callers unchanged)
 # ---------------------------------------------------------------------------
 
 
-def generate_pairwise_analysis(prev_summary, curr_summary):
+def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = ""):
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
+
+    ``anchor_block`` is an optional pre-formatted markdown block (typically
+    from ``compose_anchor_block(load_thesis_anchor(...), load_bear_anchor(...))``)
+    that anchors the §5 Thesis Impact section against the analyst's actual
+    tier-1 KPIs and named bear-case failure modes. Empty string → no anchor
+    block injected (back-compat for watchlist tickers).
     """
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
@@ -410,8 +573,9 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     - Every numeric figure, dated event, and management quote must be traceable to the input summaries below. If something is not present, write `[not disclosed]`. Do not invent, infer, or back-fill from prior knowledge of this company.
     - Verbatim quotes belong in quotation marks with a source tag like `[Source: {prev_q_str} prepared remarks]` or `[Source: {curr_q_str} Q&A]`.
     - The Attribution call (Execution vs. Exogenous) is a judgment, so it MUST go through the adversarial loop below — no shortcut to a verdict.
+    - **Bullet ordering:** Within EVERY section that has bullets (Say, Do, Gap Analysis), order bullets by THESIS IMPACT — most thesis-relevant first, immaterial line items (FX, share count, depreciation timing, tax rate) last. Bullets tied to a TIER-1 KPI from the THESIS ANCHOR (when provided) rank above all others, regardless of magnitude. If you would include a bullet that isn't thesis-relevant AT ALL, drop it instead of relegating it to the bottom.
 
-    **Input Data:**
+    {anchor_block}**Input Data:**
     1.  **Previous Quarter ({prev_q_str}) Summary:**
         {prev_summary["text"]}
 
@@ -439,7 +603,10 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
     *   **Sensitivity:** [If the primary read is wrong by ±X% on the key variable, what changes about the verdict or thesis impact?]
 
     ### 5. Thesis Impact
-    *   [Structural vs. temporary blip — must follow from §4, not asserted independently.]
+    *   **Structural vs temporary:** [Must follow from §4, not asserted independently.]
+    *   **Concrete delta:** [Translate the verdict into a quantified thesis impact: e.g., "raises NPV/share by ~$30 if Cloud op margin expansion sustains 200bps/q for 4 more quarters" / "compresses 2026 FCF estimate by ~$8B if capex re-rates above $185B". Show the working chain; the reader should be able to replicate.]
+    *   **Tier-1 KPI implication:** [Reference the THESIS ANCHOR KPIs above by name. For each tier-1 KPI the print materially moves: state the KPI by its exact anchor name + direction (faster / slower / sideways) + how this print changes the distance to its break condition. If no anchor was provided, fall back to "tier-1 KPIs unavailable" rather than inventing KPI names.]
+    *   **Bear-case engagement:** [If a BEAR-CASE ANCHOR was provided above, explicitly state which named failure mode this print confirms, refutes, or leaves unchanged. Cite the failure-mode hypothesis verbatim from the anchor so the reader can map the connection. If no bear anchor, write "no prior bear-case anchor on file" and skip — do not fabricate.]
     """
 
     try:
@@ -449,46 +616,110 @@ def generate_pairwise_analysis(prev_summary, curr_summary):
         return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
 
 
-def generate_summary(text):
+def generate_summary(text: str, anchor_block: str = "") -> str:
     """
-    Generates a 1-2 page summary of the earnings transcript.
+    Generates an analyst-grade prose summary of an earnings transcript.
+
+    Output is a tight markdown writeup — opens with the analytical takeaway,
+    surfaces what's accelerating / decelerating / structurally changing,
+    flags management spin vs reality, and forecasts what the next quarter
+    looks like given this print. Replaces the templated bullets+tables
+    format that produced bureaucratic checklists.
+
+    ``anchor_block`` is an optional markdown block carrying the analyst's
+    thesis + tier-1 KPIs + named bear-case failure modes. When provided,
+    the opening analytical takeaway and the "Next-quarter setup" section
+    are explicitly framed against the anchor. Empty string → no anchor
+    (back-compat for non-tracked tickers; the per-quarter narrative is
+    still useful in isolation).
     """
-    prompt = """
-    You are an expert financial analyst. Please provide a detailed 1-2 page summary of the provided earnings call transcript.
+    prompt = f"""
+    You are writing the per-quarter earnings note for an analyst-grade
+    research memo. The reader already has the numbers from the workspace
+    renderer (a separate FMP-driven table renders below this writeup) —
+    your job is the INTERPRETATION, not the data dump.
 
-    **STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
+    {anchor_block}
 
-    **Output Format (Strict Markdown):**
+    BAR: this should read like a senior buy-side analyst's quarterly note,
+    not a Yahoo Finance recap. Think *Stock Market Nerd* per-quarter
+    debriefs: opinion-bearing, specific, willing to call out spin, and
+    explicitly forward-looking.
 
-    # Earnings Call Summary: [Company Ticker] [Quarter] [Year]
+    EXPLICITLY FORBIDDEN — these earn an automatic rewrite:
+    - Templated section headers like "## 1. Executive Summary" / "## 2.
+      Financial Highlights" — write FLOWING PROSE with at most 3-4 H3
+      subheads of your own choosing, not a checklist
+    - Re-listing the headline financials (Revenue / EPS / Op Margin) — the
+      workspace renders these from FMP data adjacent to your writeup
+    - "Key Drivers: [text analysis of what drove the numbers]" generic
+      paraphrasing — be specific about which lever moved
+    - "Strategic Initiatives:" bucket — name a specific initiative, frame
+      it analytically, or omit
+    - Listing every product launch — only mention launches that move the
+      thesis
+    - Restating analyst Q&A topic by topic — the workspace shows the full
+      parsed Q&A roster separately; pull only the Q&A moments that REVEAL
+      something (management dodge, surprising disclosure, contentious
+      pushback)
 
-    ## 1. Executive Summary
-    *   **High-Level Narrative:** [2-3 sentences on the main story of the quarter]
-    *   **Segment Performance:** [Brief overview by business unit]
+    OUTPUT FORMAT (markdown, no front-matter, no title page):
 
-    ## 2. Financial Highlights
-    | Metric | Value | QoQ | YoY | Miss/Beat |
-    | :--- | :--- | :--- | :--- | :--- |
-    | **Revenue** | [Value] | [Growth] | [Growth] | [Context] |
-    | **EPS** | [Value] | [Growth] | [Growth] | [Context] |
-    | **Gross Margin**| [Value] | [Change] | [Change] | [Context] |
-    | **Op. Inc.** | [Value] | [Change] | [Change] | [Context] |
+    Open with a 1-paragraph **analytical takeaway** (NOT a recap): what is
+    the single most important thing this quarter, framed as it bears on
+    the thesis? Lead with the verdict, then the reasoning. ~3-5 sentences.
+    If a THESIS ANCHOR is provided above, the takeaway MUST name at least
+    one tier-1 KPI from the anchor and state how this print moves its
+    distance to break. If a BEAR-CASE ANCHOR is provided, the takeaway
+    must state whether this print confirms or refutes one of the named
+    failure modes (cite the failure-mode hypothesis verbatim).
 
-    *   **Key Drivers:** [Text analysis of what drove the numbers]
+    Then 3-5 H3-led prose paragraphs (use your own headers — don't pick
+    from a template). Suggested directions to cover (pick what's relevant,
+    skip what's not):
 
-    ## 3. Operational Highlights
-    *   **Product:** [Launches, updates]
-    *   **Regional:** [Geo performance]
-    *   **Strategic Initiatives:** [M&A, Partnerships, Restructuring]
+      ### What accelerated
+      Which lines / KPIs broke trend vs prior quarter? Quantify deltas
+      against the prior 2-4 quarters, not just YoY. Tie each to the
+      underlying driver where management explained it.
 
-    ## 4. Management Outlook (Guidance)
-    *   **Next Quarter:** [Revenue, EPS, Margin targets]
-    *   **Full Year:** [Updated FY guidance]
-    *   **Commentary:** [CEO/CFO sentiment, headwinds/tailwinds]
+      ### What decelerated or hit headwinds
+      Same treatment for negative deltas. Distinguish secular vs cyclical
+      vs one-off. If management's framing differs from the print, say so.
 
-    ## 5. Q&A Key Points
-    *   **Analyst Concerns:** [Top 2-3 contentious questions]
-    *   **Management Response:** [How they answered usually defense or explanation]
+      ### What changed structurally
+      New disclosures, mix shifts, segment redefinitions, guidance-shape
+      changes. Things that change the modeling baseline, not just the
+      print.
+
+      ### What management is / isn't talking about
+      Where did management lean in (and why)? What got conspicuously
+      light coverage? Call out specific Q&A dodges or topic shifts vs
+      the prior call.
+
+      ### Next-quarter setup
+      Concrete: what should we expect in the next print given THIS
+      quarter's signals? Frame as a 1-quarter-out check on the thesis.
+      When a THESIS ANCHOR is provided above, list the specific tier-1
+      KPI values to watch (by their anchor names) and what reading
+      would confirm or break the thesis next quarter.
+
+    Then a final **Quotes worth keeping** subsection (optional, omit if
+    nothing earns its place) — 2-4 verbatim quotes from the transcript
+    that EARN inclusion (i.e., couldn't be paraphrased without losing
+    signal). Format each as:
+      > "verbatim quote text"
+      > — Speaker Name · role
+
+    Rules:
+    - No invented numbers. Every quantitative claim must be grounded in
+      the transcript or derivable from numbers IN the transcript.
+    - Verbatim quotes belong in blockquote format above. Inline
+      paraphrasing should not use quotation marks.
+    - Skip sections that don't have signal — better a tight 4-paragraph
+      note than 6 paragraphs padded with filler.
+    - The writeup should be 400-900 words total. Anything shorter is
+      probably under-developed; anything longer is probably padded.
 
     Transcript:
     """
@@ -1108,7 +1339,7 @@ def identify_transcript_metadata(text_snippet):
         return "UNKNOWN"
 
 
-def generate_event_brief(text: str) -> str:
+def generate_event_brief(text: str, anchor_block: str = "") -> str:
     """
     Generate a structured brief for a non-quarterly IR event: investor day, AGM,
     capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
@@ -1117,15 +1348,19 @@ def generate_event_brief(text: str) -> str:
     discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
     M&A rationale) rather than near-term financial results. Skip period numbers unless
     they materially shape the multi-year framework.
+
+    ``anchor_block`` (optional) injects the thesis + tier-1 KPIs so §7 (Thesis
+    Read-Through) can name specific pillars rather than write generic
+    "strengthens / weakens / neutral" prose.
     """
-    prompt = """You are a senior equity analyst summarizing an IR event document.
+    prompt = f"""You are a senior equity analyst summarizing an IR event document.
 
 Events differ from quarterly artifacts: they are usually long-horizon strategy
 discussions (3-5 year targets, capital allocation philosophy, segment deep-dives,
 M&A rationale) rather than near-term financial results. Skip period numbers unless
 they materially shape the multi-year framework.
 
-**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
+{anchor_block}**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
 
 **Output Format (Strict Markdown):**
 
@@ -1156,7 +1391,7 @@ or DIFFERENT vs. prior management framing.]
 *   **Unaddressed:** [What investors will want to ask but didn't get clear answers on]
 
 ## 7. Thesis Read-Through
-[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis]
+[2-3 sentences on whether this strengthens, weakens, or is neutral to a long-term holder's thesis. When a THESIS ANCHOR is provided above, name the specific tier-1 KPIs or business-model rules this event moves and in what direction. Generic "strengthens long-term thesis" earns a rewrite.]
 
 Event Document Text:
 """
@@ -1167,7 +1402,9 @@ Event Document Text:
         raise
 
 
-def generate_recent_developments(ticker: str, news_days: int = 7) -> str:
+def generate_recent_developments(
+    ticker: str, news_days: int = 7, anchor_block: str = ""
+) -> str:
     """Recent-developments brief sourced via Claude WebSearch + WebFetch.
 
     Routes through `call_llm_with_web` so the model can pull current news
@@ -1177,27 +1414,54 @@ def generate_recent_developments(ticker: str, news_days: int = 7) -> str:
 
     Used by the §8 Recent developments section. Output is markdown, with
     sources as inline links the section renderer passes through unchanged.
-    """
-    prompt = f"""You are a senior equity analyst preparing a recent-developments brief for {ticker}.
 
-Search the web for {ticker} news from the last {news_days} days. Prioritize Bloomberg,
-Reuters, CNBC, FT, WSJ, and company press releases. Skip blog spam, opinion pieces with
-no new information, and anything older than {news_days} days.
+    ``anchor_block`` (optional) injects the thesis + bear-case anchor so the
+    "rank by thesis impact" rule and the per-item implication clauses can
+    actually reference the analyst's tier-1 KPIs and named bear failures
+    rather than guessing.
+    """
+    prompt = f"""You are a senior equity analyst preparing a recent-developments
+brief for {ticker} for an analyst-grade research memo. Bar: every item
+must move the thesis or be tracking a specific known catalyst — pure news
+recap earns an automatic rewrite.
+
+{anchor_block}Search the web for {ticker} news from the last {news_days} days. Prioritize
+Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog
+spam, opinion pieces with no new information, recapitulation of older news,
+and analyst initiation reports unless they include a non-obvious data point.
+
+RANKING + filtering rules:
+- Order each section by THESIS IMPACT (highest first), NOT chronologically.
+  When a THESIS ANCHOR is provided above, "thesis impact" means: which
+  named tier-1 KPI does this item move, and in what direction relative to
+  its break condition? Items that touch a tier-1 KPI rank above items
+  that touch a tier-2 KPI; items that touch nothing in the anchor rank
+  last (or are dropped).
+- For each item: the gloss must explain the IMPLICATION for the investor,
+  not just restate the headline. "X happened" is wrong; "X happened, which
+  shortens the runway for Y by ~Z months" is right. When the anchor names
+  a relevant KPI or failure mode, cite it explicitly in the implication
+  clause (e.g., "tightens the GCP-margin trajectory KPI", "partially
+  confirms the AI-Mode query-dilution failure mode").
+- Skip items that are purely stock-price commentary, sell-side rating
+  changes without a new data point, or pure recapitulation of prior news.
+- Skip ANY item that's older than {news_days} days. Don't pad.
 
 **Output Format (Strict Markdown):**
 
 ### Material news
-- [headline] — [1-sentence what & implication for the thesis] [Source: outlet, YYYY-MM-DD, URL]
-- ... (3-7 items, newest first; only items that could plausibly shift the thesis or valuation)
+- **[Headline]** — [1-2 sentences: what happened AND specific implication for the thesis / valuation / KPI trajectory. Quantify the implication where the news supports it.] [Source: outlet, YYYY-MM-DD, URL]
+- ... (3-7 items, ranked by thesis impact)
 
 ### Sector / regulatory context
-- [optional 1-3 items if relevant — e.g., FDA decision affecting peer, sector ETF flows, macro]
+- [optional 1-3 items: peer earnings prints, FDA / antitrust decisions affecting peers, sector ETF flows, macro shifts that hit this ticker's specific exposures. Each item must have a "why this matters for {ticker}" clause.]
 
 ### Watch this week
-- [1-3 items: upcoming catalysts, scheduled disclosures, peer earnings within next ~7 days]
+- [1-3 items: upcoming earnings calls (this ticker or named peers), scheduled disclosures, investor days, regulatory dockets within the next ~7 days. Format: `**Date · Event** — what to watch for`]
 
-If no material news found in the window, write `*No material news in the last {news_days} days.*`
-under "Material news" and skip the other two sections. Do not pad with stale items.
+If no material news found in the window, write `*No material news in the last
+{news_days} days.*` under "Material news" and skip the other two sections.
+Do not pad with stale or low-signal items just to fill the section.
 """
     try:
         return call_llm_with_web(prompt)
@@ -1238,11 +1502,38 @@ def generate_bear_case(
         for i, s in enumerate(last_quarter_summaries)
     )
 
-    prompt = f"""You are a senior fundamental equity analyst writing the bear case for {ticker}.
-Be specific, quantified, and grounded ONLY in the data below. Do not fabricate
-metrics or external events. If a real risk exists but the data here doesn't
-support it, list it under `out_of_scope_flags` for manual review — do not invent
-detail.
+    prompt = f"""You are a senior fundamental equity analyst writing the bear
+case for {ticker}. The bar is a deep-dive newsletter take, not a Yahoo
+Finance risks list. You are arguing the SHORT side to a thoughtful portfolio
+manager who already knows the bull case.
+
+BAR + framing rules:
+- Every failure_mode must be SPECIFIC to {ticker}'s business model. Generic
+  risks ("revenue could decelerate", "macro could weaken", "competition")
+  earn an automatic rewrite. Tie each risk to a named mechanic of THIS
+  business — its pricing, unit economics, regulatory exposure, capex
+  profile, channel concentration, switching-cost economics, etc.
+- At least TWO of the failure_modes must be NON-CONSENSUS — risks that
+  sell-side coverage has NOT broadly flagged or that are systematically
+  underweighted by buy-side because of organizational bias, model inertia,
+  or framing blind-spots. If you can't think of a non-consensus failure
+  mode for this business, you haven't thought hard enough.
+- Cite competitive dynamics with NAMED rivals where relevant ("OpenAI
+  + Anthropic capture X% of the GenAI query budget that was previously
+  Google Search... ", "AWS retains the enterprise-AI workload pipeline
+  via Bedrock's distribution lead..."). Quantify where the input data
+  supports it; otherwise be honest about the qualitative claim.
+- Each `evidence_in_data` MUST cite a specific number or trend from the
+  inputs (e.g., "FCF dropped from $24.6B Q4'25 to $5.3B Q2'25 — capex
+  inflection running ahead of OCF growth"). Vague "growth is decelerating"
+  doesn't qualify.
+- `quantitative_impact` must do the actual math: link the failure mode to
+  a specific revenue / margin / FCF / NPV-per-share delta with the
+  reasoning chain shown. The reader should be able to plug your numbers
+  into a model and replicate your scenario.
+- Grounded ONLY in the data below. Don't fabricate. If a real risk is
+  real but not derivable from these inputs, put it under
+  `out_of_scope_flags` with a 1-line explanation of why it's parked.
 
 THESIS:
 {thesis}
@@ -1269,18 +1560,19 @@ Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
 {{
   "failure_modes": [
     {{
-      "hypothesis": "one-sentence concrete failure mode",
-      "evidence_in_data": "which data point above supports it (cite a number or trend)",
-      "leading_indicator": "what would confirm it next quarter",
-      "quantitative_impact": "magnitude of revenue/margin/segment compression with reasoning chain",
-      "refutation_criteria": "what mgmt would have to demonstrate over next 2-4Q to neutralize"
+      "hypothesis": "one-sentence concrete failure mode — must name a specific business-model mechanic of {ticker}",
+      "evidence_in_data": "cite a specific number or trend from the inputs above (with the value AND the time period). Vague paraphrasing earns an automatic rewrite.",
+      "leading_indicator": "what would confirm it in the NEXT 1-2 prints. Must be a numerical / disclosed metric, not a qualitative vibe.",
+      "quantitative_impact": "do the math: link the failure mode to a specific revenue / margin / FCF / NPV-per-share delta. Show the reasoning chain so the reader can replicate or stress-test.",
+      "refutation_criteria": "what management would have to disclose or demonstrate over the next 2-4Q to neutralize this thesis. Specific and falsifiable."
     }}
   ],
-  "most_underweighted": "one paragraph: which failure mode is most underweighted by consensus and why",
-  "out_of_scope_flags": ["risks real but not derivable from the inputs above (regulatory, macro)"]
+  "most_underweighted": "one-paragraph editorial argument: which of the failure modes above is most underweighted by sell-side / consensus, and WHY consensus is structurally blind to it (e.g., model inertia, organizational bias of legacy bull-side analysts, framing blind-spot, etc.). Don't pick the most-likely failure mode — pick the one that consensus is most-wrongly-pricing relative to its actual probability × impact.",
+  "out_of_scope_flags": ["each entry: a real risk that's NOT derivable from the inputs above (regulatory, macro, technological, etc.) — with a brief reason why we're parking it. 1-3 entries max."]
 }}
 
-Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
+Provide 3 to 5 failure_modes. At least 2 must be non-consensus per the rule
+above. Return strictly the JSON object — nothing else.
 """
     try:
         raw = call_llm(prompt, purpose="bear_case").strip()
@@ -1293,6 +1585,108 @@ Provide 3 to 5 failure_modes. Return strictly the JSON object — nothing else.
         raise
 
 
+def generate_qa_topics(
+    ticker: str,
+    quarter_label: str,
+    questions: list[dict[str, str]],
+) -> str:
+    """Generate short topic labels for a batch of analyst Q&A questions.
+
+    ``questions`` is a list of ``{"id": "0", "analyst": str, "question": str}``
+    dicts. Returns a JSON list ``[{"id": str, "topic": str, "tag": str}, ...]``
+    where ``topic`` is a 4-7 word noun phrase and ``tag`` is one of the
+    coarse business-area chips the renderer styles (INFRA, CLOUD, SEARCH,
+    MARGIN, CAPEX, AGENT, LEGAL, OTHER BETS, CONSUMER, Q&A as fallback).
+
+    Batched per quarter (one LLM call per quarter instead of one per question)
+    so the cost stays in the sub-penny range for the typical 6-10 question
+    transcript.
+    """
+    payload = json.dumps(questions, ensure_ascii=False)
+    prompt = f"""You are labelling analyst-call Q&A topics for an equity research dashboard.
+For each analyst question below, return a short, scannable topic phrase that
+captures the substance — what's actually being asked — NOT throat-clearing or
+sequence ("two for me", "one for Anat"). 4-7 words. Use noun phrases, not
+sentences. Also pick a coarse business-area tag from this set:
+INFRA, CLOUD, SEARCH, MARGIN, CAPEX, AGENT, LEGAL, OTHER BETS, CONSUMER, Q&A.
+
+TICKER: {ticker}
+QUARTER: {quarter_label}
+
+QUESTIONS (JSON):
+{payload}
+
+Return ONLY a JSON array (no markdown, no commentary):
+
+[
+  {{"id": "0", "topic": "Compute allocation across internal vs Cloud", "tag": "INFRA"}},
+  ...
+]
+
+The "id" must echo back the input id verbatim. The "topic" must read cleanly
+on its own — no "asks about" prefix; just the topic itself.
+"""
+    try:
+        raw = call_llm(prompt, purpose="qa_topics").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Q&A topic generation failed for {ticker}: {e}")
+        raise
+
+
+def generate_saydo_filter(
+    ticker: str,
+    quarter_label: str,
+    rows: list[dict[str, str]],
+    anchor_block: str = "",
+) -> str:
+    """Pick the strategically important commitments out of a print-vs-guide table.
+
+    ``rows`` is ``[{"id": str, "metric": str, "guide": str, "actual": str,
+    "verdict": str}, ...]``. Returns a JSON list of the IDs that matter for
+    the thesis — skips FX trivia, share count noise, and other below-the-line
+    items. Up to 6 rows kept.
+
+    ``anchor_block`` (optional) injects the thesis + tier-1 KPI list so the
+    "matters for the thesis" judgment can be made against the analyst's
+    actual KPIs rather than the model's generic prior about what matters.
+    """
+    payload = json.dumps(rows, ensure_ascii=False)
+    prompt = f"""You are filtering an analyst's print-vs-guide commitments table
+for {ticker} {quarter_label}. Most rows in these tables are noise (FX, share
+count, tax rate, depreciation timing). The reader wants ONLY the commitments
+that move the investment thesis — revenue trajectory, segment growth,
+margin direction, capex / FCF, major product or partnership commitments,
+balance-sheet structural shifts.
+
+{anchor_block}ROWS (JSON):
+{payload}
+
+Return ONLY a JSON array of the IDs to KEEP (up to 6, ordered by importance):
+
+["3", "1", "5"]
+
+Skip anything that's a maintenance/macro line. Prefer rows where the verdict
+is EXCEEDED or MISSED (signal) over rows that are clean MET (less signal).
+
+When a THESIS ANCHOR is provided above, prioritize rows whose metric maps
+to one of the named tier-1 KPIs or business-model rules. Rows that touch a
+tier-1 KPI rank above rows that don't, even if the latter is a bigger
+delta. The point is to filter for THESIS-relevant signal, not generic
+beats/misses.
+"""
+    try:
+        raw = call_llm(prompt, purpose="saydo_filter").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: SayDo filter failed for {ticker}: {e}")
+        raise
+
+
 def generate_company_description(
     ticker: str,
     profile_description: str,
@@ -1302,19 +1696,23 @@ def generate_company_description(
     segment_names: list[str],
     geo_names: list[str],
     fiscal_year: int | None,
+    thesis_text: str = "",
+    recent_earnings_md: str = "",
+    recent_ir_md: str = "",
 ) -> str:
-    """Synthesize the §2 Company description: what they do + how they make money.
+    """Synthesize the §2 Company description as an analyst-grade business writeup.
 
-    Inputs come from `src/compute/company_description.py` after locating the
-    latest 10-K and pulling the actual segment / geography names that the
-    report currently displays. The LLM grounds the prose in the 10-K narrative
-    + the profile.json description, never invents segment names.
+    Inputs go beyond the 10-K — the prompt is fed the user's own thesis
+    statement, the most recent earnings narrative(s), and recent IR document
+    summaries. The intent is to elicit a *thesis-anchored* take on the
+    business (what makes it interesting as an INVESTMENT, where the moat
+    actually is, what consensus underweights) rather than a 10-K paraphrase.
 
     Returns a JSON string the caller parses. Schema:
       {
-        "elevator_pitch": "1-2 sentence summary",
-        "business_overview": "multi-paragraph description of lines of business",
-        "revenue_model": "how the company makes money",
+        "elevator_pitch": "1-2 sentence positioning statement",
+        "business_overview": "multi-paragraph analytical take on the business",
+        "revenue_model": "how the company makes money, with take-rate / unit-economics specifics",
         "segments": [{"name": "Google Services", "description": "..."}, ...],
         "geographies": [{"name": "United States", "description": "..."}, ...]
       }
@@ -1323,58 +1721,115 @@ def generate_company_description(
         "\n".join(f"- {n}" for n in segment_names) if segment_names else "(none on file)"
     )
     geos_block = "\n".join(f"- {n}" for n in geo_names) if geo_names else "(none on file)"
-    prompt = f"""You are an equity analyst writing a "company description" section for a research brief on {ticker}.
+    thesis_block = (
+        f"INVESTOR THESIS ON FILE (the analyst's own framing of this name):\n"
+        f'"""\n{thesis_text.strip()}\n"""\n'
+        if thesis_text.strip()
+        else ""
+    )
+    recent_earnings_block = (
+        f"RECENT EARNINGS NARRATIVE (most recent management framing — use this to "
+        f"anchor the business writeup, not the 10-K boilerplate):\n"
+        f'"""\n{recent_earnings_md.strip()[:12000]}\n"""\n'
+        if recent_earnings_md.strip()
+        else ""
+    )
+    recent_ir_block = (
+        f"RECENT IR DOCUMENT EXCERPTS (press releases, investor day decks):\n"
+        f'"""\n{recent_ir_md.strip()[:8000]}\n"""\n'
+        if recent_ir_md.strip()
+        else ""
+    )
+    prompt = f"""You are writing the "Company" section of an analyst-grade
+investment memo on {ticker}. Voice: a senior buy-side analyst's working
+note. Not Wikipedia. Not a 10-K paraphrase.
 
-The reader is a portfolio analyst who needs CONTEXT to interpret financials,
-segments, and KPIs. Be concrete and grounded — do NOT invent segment names,
-geographies, or business lines. If the data below doesn't support a claim,
-omit it.
+ANCHOR YOUR WRITEUP ON THE ANALYST'S THESIS (below). Every paragraph
+should advance one of the thesis pillars (value driver, moat, pressure
+point, optionality) with specific numbers and named competitors.
 
-INPUTS
-
-Sector: {sector or "(unknown)"}
-Industry: {industry or "(unknown)"}
-Fiscal year of source 10-K: {fiscal_year or "(unknown)"}
-
-FMP profile.json description (third-party canonical summary):
-\"\"\"
-{profile_description.strip() or "(none)"}
-\"\"\"
-
-10-K narrative excerpts (Nature of Business / Description of Business /
-Information about Segments / etc — section keys preserved in the headers):
-\"\"\"
-{form_10k_text.strip() or "(no 10-K narrative available)"}
-\"\"\"
-
-Segment names this report displays (use these EXACT names — do not rename,
-combine, or invent):
+{thesis_block}{recent_earnings_block}{recent_ir_block}
+SEGMENTS this report displays (use these EXACT names):
 {segments_block}
 
-Geography names this report displays (use these EXACT names):
+GEOGRAPHIES this report displays (use these EXACT names):
 {geos_block}
+
+10-K segment-naming excerpts (factual grounding only — do not paraphrase):
+\"\"\"
+{form_10k_text.strip()[:2500] or "(none)"}
+\"\"\"
+
+Profile blurb (third-party — do not copy):
+"{profile_description.strip()[:500] or "(none)"}"
+
+Sector/Industry/Source-FY: {sector or "?"} / {industry or "?"} / {fiscal_year or "?"}
 
 ---
 
-Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
+OUTPUT — a JSON object with EXACTLY these fields. The schema is
+**component-based**: you emit analytical pieces, the renderer assembles
+the final prose. Do NOT try to write a polished elevator pitch or
+business overview yourself — the schema fields are deliberately structured
+so the analytical voice is forced by the format, not by your prose
+choices.
 
+```json
 {{
-  "elevator_pitch": "1-2 sentence summary of what this company does, suitable as the always-visible line at the top of the section",
-  "business_overview": "2-4 short paragraphs (use \\n\\n between paragraphs) describing the lines of business, the customers, and how the operating segments relate to each other. Reference segment names where useful.",
-  "revenue_model": "1-2 paragraphs on HOW the company generates revenue (ads, subscriptions, transactions, take rates, fee structures, etc). Be concrete; cite the mechanisms named in the 10-K.",
+  "value_driver_phrase": "noun-phrase clause, 6-15 words, that will be CONCATENATED into the string '{ticker}: <phrase>.'. Must read as a continuation of '{ticker}: ', NOT as a standalone sentence. Must name the cash-engine mechanic AND a concrete economic anchor (margin, take rate, scale figure).",
+  "central_bet": "10-20 words framing the central bull-vs-bear debate as a TESTABLE quantified hypothesis. Will be concatenated as 'The bet: <central_bet>'. Examples: 'whether GCP margin expansion absorbs the $180B+ 2026 capex before Gemini cannibalization compresses Search', 'whether ARPAC sustains 25%+ CAGR through 2028 once secured-credit saturates Brazil'.",
+  "swing_variable": "Optional null-able 1-sentence on what to watch for the next 4 quarters — the single most important number that will resolve the bet. Pass null if no clean swing variable exists.",
+  "paragraphs": [
+    {{
+      "opener": "<ONE OF: 'The cash engine is' / 'The growth optionality is' / 'The structural debate is' / 'The pressure point most analysts underweight is' / 'What is non-obvious is' / 'The competitive dynamic is' / 'The moat depends on'>",
+      "body": "Rest of the paragraph, ~80-200 words. MUST cite at least one specific number from the inputs (revenue, margin, growth rate, market share). MUST name at least one specific competitor or comparable company. MUST tie back to a thesis pillar."
+    }}
+  ],
+  "revenue_mechanics": [
+    {{
+      "topic": "<ONE OF: 'take_rate' / 'unit_economics' / 'capex_intensity' / 'mix_shift' / 'scale_dynamics' / 'cash_conversion'>",
+      "body": "1 paragraph (~80-150 words) on the economic mechanic. Use specific numbers + comparison to peers where available. Do NOT write 'X generates revenue through Y' descriptions."
+    }}
+  ],
   "segments": [
-    {{"name": "<exact segment name from the list above>", "description": "1-2 sentence segment description grounded in the 10-K"}}
+    {{"name": "<exact segment name from the SEGMENTS list above>", "description": "1-2 sentences with a SPECIFIC economic mechanic (margin trajectory, growth rate, contribution to OI) + competitive position. Forbidden phrases: 'includes products such as', 'encompasses', 'generates revenue from'. Immaterial segments: 'immaterial (<X% of revenue), primarily Y, runs Z operating loss/year'."}}
   ],
   "geographies": [
-    {{"name": "<exact geography name from the list above>", "description": "1 sentence: what this region represents (single country, regional cluster, etc.) — only include if the 10-K offers material color"}}
+    {{"name": "<exact geography name from the GEOGRAPHIES list above>", "description": "1 sentence with analytical content (concentration, growth differential, regulatory exposure). Skip generic geo-disclosure rows."}}
   ]
 }}
+```
 
-Rules:
-- For "segments": include EVERY segment name from the list. If the 10-K offers no description, set the description to null.
-- For "geographies": only include geographies you can describe meaningfully. Skip ones that are just country names with no extra context.
-- Do not include segment / geography names that are NOT in the lists above.
-- Return strictly the JSON object — no prose before or after, no markdown fence.
+Field-by-field rules:
+
+- `value_driver_phrase`: must be a NOUN PHRASE. It will be string-
+  concatenated as `f"{ticker}: {{value_driver_phrase}}."`. So "a
+  search-ads cash engine ($240B run-rate)" is valid; "the company
+  operates a search business" is invalid because it parses as a verb
+  phrase + the assembled sentence would read awkwardly. Good examples:
+  * "a search-ads quasi-monopoly funding the largest first-party AI
+    distribution stack in the world (~$240B run-rate, 35%+ op margin)"
+  * "the per-customer monetization arc compounding ~3x faster than
+    incumbent banks at 1/10th the cost-to-serve"
+  * "a semiconductor monopoly capturing ~$0.92 of every hyperscaler GPU
+    dollar at 73% gross margin"
+
+- `paragraphs`: emit 3-5 entries. Use openers from the allowed list.
+  Don't reuse the same opener twice. Order them by analytical priority
+  (cash engine first, then growth optionality, then debates/pressure
+  points).
+
+- `revenue_mechanics`: emit 1-3 entries. Pick the topics that actually
+  matter for THIS business. If take rate doesn't apply (e.g., for a pure
+  consumption-fee model), pick mix_shift or scale_dynamics instead.
+
+- `segments`: include EVERY segment name from the list — even
+  immaterial ones (with a 1-line note).
+
+- `geographies`: only entries with analytical signal. Skip rows where
+  the only thing to say is "represents Western Europe".
+
+Return ONLY the JSON object. No markdown fence, no prose before or after.
 """
     try:
         raw = call_llm(prompt, purpose="company_description").strip()
@@ -1531,3 +1986,165 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
     except Exception as e:
         log.error(f"classify_intake_document failed: {e}")
         return None
+
+
+# ---------------------------------------------------------------------------
+# Valuation basis (Opus picks ONE multiple per ticker)
+# ---------------------------------------------------------------------------
+
+# Allowed multiples — the compute layer knows how to fetch the numeric value
+# for each. The LLM's choice MUST be in this set; out-of-set picks get
+# rejected by the parser and fall back to a sector-default heuristic.
+VALUATION_MULTIPLE_CHOICES: tuple[str, ...] = (
+    "EV/NTM Revenue",
+    "EV/LTM Revenue",
+    "EV/NTM EBITDA",
+    "EV/LTM EBITDA",
+    "P/E (NTM)",
+    "P/E (LTM)",
+    "P/B",
+    "P/TBV",
+    "P/FCF",
+    "EV/FCF",
+)
+
+
+def generate_valuation_basis(
+    ticker: str,
+    sector: str | None,
+    industry: str | None,
+    thesis_text: str,
+    financial_profile_md: str,
+    available_estimates_md: str,
+) -> str:
+    """Pick the ONE valuation multiple that best frames this business.
+
+    Returns a JSON string the caller parses. Schema:
+      {
+        "multiple": "<one of VALUATION_MULTIPLE_CHOICES>",
+        "rationale": "<1-2 sentence why this is the right lens for THIS ticker>",
+        "target_band": "<optional qualitative target read, e.g. 'historical range 12-18x; deserves the upper half given GCP margin trajectory'>",
+        "notes": "<optional caveat, e.g. 'NTM not available — fell back to LTM'>"
+      }
+
+    The LLM picks based on:
+    - Sector / industry conventions (banks: P/B or P/TBV; SaaS: EV/NTM Revenue;
+      capital-intensive: EV/EBITDA; cyclicals: through-cycle P/E; etc.)
+    - The actual investment thesis (if thesis hinges on FCF inflection,
+      P/FCF lens; if on top-line, EV/Revenue; etc.)
+    - What's computable — only pick NTM-based multiples when analyst
+      estimates are listed as available.
+    """
+    choices_block = "\n".join(f"- {m}" for m in VALUATION_MULTIPLE_CHOICES)
+    prompt = f"""You are a senior buy-side analyst picking THE SINGLE multiple
+that best frames {ticker} for an investment memo. Not 2-3 multiples. ONE.
+The reader will see this number prominently on the report's Valuation tab;
+your pick must answer the question "is this stock rich or cheap?" in the
+lens that's most diagnostic for THIS specific business.
+
+TICKER: {ticker}
+SECTOR / INDUSTRY: {sector or "?"} / {industry or "?"}
+
+THESIS (the analyst's investment case):
+\"\"\"
+{thesis_text.strip()[:2000] or "(no thesis on file)"}
+\"\"\"
+
+FINANCIAL PROFILE (recent quarterly + TTM shape):
+\"\"\"
+{financial_profile_md.strip()[:2500]}
+\"\"\"
+
+AVAILABLE ANALYST ESTIMATES (use to know which NTM multiples are computable):
+\"\"\"
+{available_estimates_md.strip()[:1200]}
+\"\"\"
+
+PICK FROM EXACTLY THESE OPTIONS (verbatim string match):
+{choices_block}
+
+Selection guidance:
+- Banks / fintech-with-balance-sheet (NU, MELI's credit book, SOFI): P/B or P/TBV is the canonical lens. P/E only if earnings power is the bet.
+- SaaS / high-growth software with negative or thin GAAP earnings: EV/NTM Revenue, EV/LTM Revenue as fallback.
+- Profitable platforms / GARP (GOOG, META, NOW at scale): EV/NTM EBITDA or P/E (NTM) when consensus EBITDA / EPS is available.
+- Capital-intensive / industrial / commodity (BHP, FCX, CGEH): EV/LTM EBITDA — through-cycle.
+- FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.
+- If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.
+- Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.
+
+Return ONLY a JSON object (no markdown fence, no prose):
+
+{{
+  "multiple": "<one of the options above, exact string>",
+  "rationale": "1-2 sentence why THIS multiple is the diagnostic lens for THIS ticker's thesis. Reference the specific thesis pillar or business-model mechanic that makes it the right pick. Generic 'standard SaaS lens' earns a rewrite.",
+  "target_band": "Optional 1-sentence qualitative read of where the multiple SHOULD trade (e.g. 'historical 10-15x range; deserves the upper half if margin expansion sustains', or 'currently in a re-rating window — base-case 4-6x P/TBV'). Pass empty string if no view.",
+  "notes": "Optional 1-line caveat, e.g. 'NTM not available, fell back to LTM' or 'historical P/B distorted by 2022 IPO multiple compression'. Empty string if none."
+}}
+"""
+    try:
+        raw = call_llm(prompt, purpose="valuation_basis").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Valuation basis generation failed for {ticker}: {e}")
+        raise
+
+
+# ---------------------------------------------------------------------------
+# SayDo importance ranking (Opus orders pairwise SayDo bullets by thesis impact)
+# ---------------------------------------------------------------------------
+
+
+def generate_saydo_importance(
+    ticker: str,
+    quarter_label: str,
+    bullets: list[dict[str, str]],
+    anchor_block: str = "",
+) -> str:
+    """Order a list of SayDo bullet snippets by thesis impact.
+
+    ``bullets`` is ``[{"id": str, "snippet": str}, ...]`` where each snippet
+    is one short paragraph or bullet from the pairwise SayDo analysis (e.g.
+    "Revenue: guided $X, printed $Y, +5% delta..." or "CLIP rollout pace...").
+
+    Returns a JSON list of the IDs in importance order (most thesis-relevant
+    first). Bullets the LLM judges immaterial may be omitted. Up to 8 kept.
+
+    Used by the renderer to sort the pairwise SayDo card before display so
+    the top of each card is what actually matters for the thesis, not what
+    happened to appear first in the LLM's pairwise output.
+    """
+    payload = json.dumps(bullets, ensure_ascii=False)
+    prompt = f"""You are ranking SayDo (commitments vs. delivery) bullets from
+the {ticker} {quarter_label} pairwise analysis BY THESIS IMPACT — what
+moves the investment case the most, not what was disclosed first.
+
+{anchor_block}BULLETS (JSON):
+{payload}
+
+RANKING rules:
+- A bullet that moves a TIER-1 KPI ranks above one that doesn't.
+- A bullet that confirms or refutes a named bear-case failure mode ranks
+  high regardless of magnitude (it resolves analytical uncertainty).
+- Items that are bookkeeping / FX / share-count / tax-rate / one-off
+  accounting noise rank LOW and should be dropped if you have more than 8
+  bullets.
+- Items framed as "what didn't happen" or "what's unchanged" can still be
+  important if the unchanged direction confirms a thesis pillar.
+
+Return ONLY a JSON array of the IDs in importance order (up to 8):
+
+["2", "0", "5", "1", ...]
+
+Echo IDs verbatim from input. Do NOT invent IDs. Do NOT include omitted
+bullets.
+"""
+    try:
+        raw = call_llm(prompt, purpose="saydo_importance").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: SayDo importance ranking failed for {ticker}: {e}")
+        raise
