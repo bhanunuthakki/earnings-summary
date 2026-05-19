@@ -71,6 +71,64 @@ IntentType = Literal[
 CommentStatus = Literal["open", "addressed", "dismissed"]
 
 
+# ---------------------------------------------------------------------------
+# Keyword shortcuts in the comment body
+# ---------------------------------------------------------------------------
+#
+# Prefixing a comment with a slash-keyword sets the intent verbatim and
+# skips Haiku auto-classification. Saves an LLM call and is more reliable
+# than natural-language inference.
+#
+# Examples:
+#   "/kpi SuperCore split made this irrelevant"
+#       → intent=drop_kpi, comment="SuperCore split made this irrelevant"
+#   "/q what's NU's NPL trend over 8 quarters?"
+#       → intent=ask_question, comment="what's NU's NPL trend over 8 quarters?"
+#   "/update revise to flag the FGTS regulation"
+#       → intent=edit_thesis, comment="revise to flag the FGTS regulation"
+#
+# The keyword + leading space are stripped from the stored comment text.
+# Explicit dropdown picks (caller passes `intent=...`) always override the
+# keyword, so the dropdown still wins if you set both.
+
+import re
+
+_KEYWORD_TO_INTENT: dict[str, str] = {
+    "kpi": "drop_kpi",
+    "thesis": "edit_thesis",
+    "update": "edit_thesis",  # alias — "update the thesis"
+    "q": "ask_question",
+    "ask": "ask_question",
+    "fix": "fix_data",
+    "rewrite": "rewrite_section",
+}
+
+_KEYWORD_RX = re.compile(
+    r"^/(" + "|".join(re.escape(k) for k in _KEYWORD_TO_INTENT) + r")\b[ \t:]*",
+    re.IGNORECASE,
+)
+
+
+def extract_intent_from_text(text: str) -> tuple[str | None, str]:
+    """Parse a leading `/keyword` from the comment body.
+
+    Returns ``(intent, cleaned_text)``. When no keyword is present, returns
+    ``(None, text)`` unchanged — caller falls back to the explicit
+    dropdown pick or Haiku auto-classify.
+
+    Match rules:
+    - Keyword must be at the very start (no leading whitespace stripped first)
+    - Followed by a word boundary plus optional ``:`` / space separator
+    - Case-insensitive
+    """
+    m = _KEYWORD_RX.match(text)
+    if not m:
+        return (None, text)
+    keyword = m.group(1).lower()
+    cleaned = text[m.end():].lstrip()
+    return (_KEYWORD_TO_INTENT[keyword], cleaned)
+
+
 class Anchor(BaseModel):
     """Structured pointer to the report element a comment is attached to.
 
@@ -177,7 +235,19 @@ def append_comment(
     selected_text: str | None = None,
     intent: IntentType = None,
 ) -> Comment:
-    """Persist a new comment. Returns the created Comment with assigned id."""
+    """Persist a new comment. Returns the created Comment with assigned id.
+
+    If the caller didn't pass an explicit ``intent`` and the comment text
+    starts with a recognized slash-keyword (``/kpi``, ``/thesis``, ``/q``,
+    ``/ask``, ``/fix``, ``/update``, ``/rewrite``), the keyword is extracted
+    + stripped from the stored text and the matching intent is recorded.
+    Explicit ``intent`` always wins over the keyword.
+    """
+    if intent is None:
+        keyword_intent, cleaned = extract_intent_from_text(text)
+        if keyword_intent is not None:
+            intent = cast("IntentType", keyword_intent)
+            text = cleaned
     store = load_store(repo_root, ticker, report_date)
     comment = Comment(
         id=_next_id(report_date),

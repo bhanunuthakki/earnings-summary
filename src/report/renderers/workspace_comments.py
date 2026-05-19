@@ -97,7 +97,7 @@ JS = r"""
       + '</header>'
       + '<div class="cmt-list" id="cmt-list"></div>'
       + '<form class="cmt-form" id="cmt-form">'
-      + '  <textarea name="comment" placeholder="Write a comment…" rows="3" required></textarea>'
+      + '  <textarea name="comment" placeholder="Write a comment… (tip: prefix with /kpi /thesis /q /ask /fix /update /rewrite to skip auto-classify)" rows="3" required></textarea>'
       + '  <div class="cmt-form-row">'
       + '    <select name="intent" title="What should the processor do?">'
       + '      <option value="">Auto-classify</option>'
