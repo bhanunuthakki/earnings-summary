@@ -48,13 +48,16 @@ import comments  # noqa: E402
 import sqlite3  # noqa: E402
 
 from chat_session import build_chat_response, apply_chat_diff  # noqa: E402
+from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 
 
-def create_app(repo_root: Path) -> Flask:
+def create_app(repo_root: Path, *, registry: Registry | None = None) -> Flask:
     app = Flask(__name__)
     db_path = repo_root / "data" / "portfolio.db"
+    job_registry = registry or Registry()
+    app.config["DISPATCH_REGISTRY"] = job_registry
 
     def _open_db() -> sqlite3.Connection:
         conn = sqlite3.connect(str(db_path))
@@ -109,6 +112,53 @@ def create_app(repo_root: Path) -> Flask:
         if not matches:
             abort(404)
         return send_file(matches[-1])
+
+    # ----- ACTIONS (PR 2a — refresh dispatcher) -----
+
+    @app.route("/actions/refresh", methods=["POST", "OPTIONS"])
+    def start_refresh():
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True) or {}
+        try:
+            ticker = str(body["ticker"]).upper()
+            mode = body.get("mode", "stale")
+        except (KeyError, TypeError):
+            return ({"error": "ticker required"}, 400)
+        if mode not in ("stale", "full"):
+            return ({"error": f"mode must be 'stale' or 'full', got {mode!r}"}, 400)
+
+        dispatcher = repo_root / "execution" / "refresh_dispatch.py"
+        argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
+        try:
+            job = job_registry.start(
+                ticker=ticker, kind=f"refresh-{mode}", argv=argv,
+            )
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+
+        return ({
+            "job_id": job.job_id,
+            "ticker": job.ticker,
+            "kind": job.kind,
+            "stream_url": f"/actions/stream/{job.job_id}",
+            "started_at": job.started_at.isoformat(),
+        }, 201)
+
+    @app.route("/actions/stream/<job_id>", methods=["GET"])
+    def stream_action(job_id: str):
+        job = job_registry.get(job_id)
+        if job is None:
+            return ({"error": "job not found"}, 404)
+        return Response(
+            stream_with_context(job.stream_events()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.route("/actions/jobs", methods=["GET"])
+    def list_jobs():
+        return {"jobs": job_registry.list_jobs()}
 
     # ----- COMMENTS -----
 
