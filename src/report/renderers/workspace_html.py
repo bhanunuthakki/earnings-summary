@@ -68,6 +68,10 @@ from report.renderers.workspace_data import (
     select_kpi_strip,
     structure_news_by_section,
 )
+from report.renderers.workspace_chat import CSS as CHAT_CSS
+from report.renderers.workspace_chat import JS as CHAT_JS
+from report.renderers.workspace_comments import CSS as COMMENTS_CSS
+from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_script import JS
 from report.renderers.workspace_styles import CSS
 
@@ -91,6 +95,10 @@ _TIMES = chr(0x00D7)  # multiplication sign for WACC x g header
 
 def render(spec: ReportSpec) -> str:
     body = StringIO()
+    # Comments + chat boot data: inlined as JSON so the JS UI can render
+    # pins without a server fetch. Server is needed for posting NEW
+    # comments + chat, but read-only display works file://.
+    _comment_boot_data(body, spec)
     body.write('<div class="l1-root">')
     _identity(body, spec)
     _thesis_strip(body, spec.snapshot, spec.thesis)
@@ -125,10 +133,14 @@ def _document(spec: ReportSpec, body: str) -> str:
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
 <style>{CSS}</style>
 <style>{CHARTS_V2_CSS}</style>
+<style>{COMMENTS_CSS}</style>
+<style>{CHAT_CSS}</style>
 </head>
 <body>
 {body}
 <script>{JS}</script>
+<script>{COMMENTS_JS}</script>
+<script>{CHAT_JS}</script>
 </body>
 </html>
 """
@@ -214,7 +226,11 @@ def _thesis_strip(body: StringIO, snap: SnapshotSection, thesis: ThesisSection) 
     text = snap.thesis_one_liner or thesis.thesis_full
     if not text:
         return
-    body.write('<div class="l1-thesis">')
+    body.write(
+        '<div class="l1-thesis" data-commentable="true" '
+        'data-anchor-type="thesis_lede" data-anchor-key="thesis_lede" '
+        'data-anchor-tab="thesis">'
+    )
     body.write('<span class="thesis-label">Thesis</span>')
     body.write(f"<p>{_esc(text)}</p>")
     body.write("</div>")
@@ -296,7 +312,12 @@ def _news_tab(body: StringIO, section: RecentDevelopmentsSection) -> None:
 
 
 def _news_tile(body: StringIO, t: NewsTile) -> None:
-    body.write(f'<article class="news-item tone-{_esc(t.tone)}">')
+    anchor_key = _esc(t.headline[:80])
+    body.write(
+        f'<article class="news-item tone-{_esc(t.tone)}" '
+        f'data-commentable="true" data-anchor-type="news_item" '
+        f'data-anchor-key="{anchor_key}" data-anchor-tab="news">'
+    )
     body.write('<div class="news-meta">')
     if t.tag:
         body.write(f'<span class="news-tag">{_esc(t.tag)}</span>')
@@ -1340,9 +1361,11 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
         )
     body.write("</div>")
 
-    # Sparkline of 12Q history.
-    hist_values = [h.value for h in vb.history]
-    if any(v is not None for v in hist_values):
+    # Sparkline of 12Q history. Drop None values — sparkline doesn't
+    # handle them (NTM history has gaps for periods where the
+    # forward-4Q realized series isn't fully on file).
+    hist_values = [h.value for h in vb.history if h.value is not None]
+    if hist_values:
         body.write(
             f'<div class="valuation-spark">{sparkline(hist_values, width=560, height=60)}</div>'
         )
@@ -1359,7 +1382,9 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     # Rationale panel.
     if vb.rationale:
         body.write(
-            '<div class="panel"><div class="panel-head">'
+            '<div class="panel" data-commentable="true" '
+            'data-anchor-type="valuation_rationale" data-anchor-key="valuation_rationale" '
+            'data-anchor-tab="valuation"><div class="panel-head">'
             '<span class="panel-title">Why this multiple</span>'
             '<span class="panel-sub">Opus rationale</span></div>'
             f'<div class="prose-pad">{_render_markdown(vb.rationale)}</div>'
@@ -1511,7 +1536,9 @@ def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
                 "unknown": "muted",
             }.get(r.current_status, "muted")
             body.write(
-                f"<tr><td>{_esc(r.name)}</td>"
+                f'<tr data-commentable="true" data-anchor-type="kpi_ledger_row" '
+                f'data-anchor-key="{_esc(r.name)}" data-anchor-tab="thesis">'
+                f"<td>{_esc(r.name)}</td>"
                 f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
                 f"<td>{_esc(r.unit or '')}</td>"
                 f'<td class="num {status_cls}">{_esc(r.current_status.upper())}</td>'
@@ -1670,8 +1697,11 @@ def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
 
 
 def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
+    anchor_key = _esc(fm.hypothesis[:80])
     body.write(
-        f'<div class="failure"><div class="failure-num">{idx + 1:02d}</div>'
+        f'<div class="failure" data-commentable="true" data-anchor-type="failure_mode" '
+        f'data-anchor-key="{anchor_key}" data-anchor-tab="bear">'
+        f'<div class="failure-num">{idx + 1:02d}</div>'
         '<div class="failure-body">'
         f'<div class="failure-title">{_esc(fm.hypothesis)}</div>'
         '<div class="failure-meta">'
@@ -1802,7 +1832,9 @@ def _company_tab(body: StringIO, cd: CompanyDescriptionSection, ir: IrDocsSectio
         body.write('<div class="grid-2col">')
         if cd.business_overview:
             body.write(
-                '<div class="panel"><div class="panel-head">'
+                '<div class="panel" data-commentable="true" '
+                'data-anchor-type="company_overview" data-anchor-key="company_overview" '
+                'data-anchor-tab="company"><div class="panel-head">'
                 '<span class="panel-title">Business overview</span>'
                 '<span class="panel-sub">analytical take</span></div>'
                 f'<div class="prose-pad">{_render_markdown(cd.business_overview)}</div></div>'
@@ -2149,6 +2181,49 @@ def _sources_tab(body: StringIO, prov: ProvenanceSection, app: AppendixSection) 
         body.write("</tbody></table></div></div>")
 
     body.write("</div>")
+
+
+# ---------------------------------------------------------------------------
+# Comment + chat boot data — inlined JSON for the JS UI
+# ---------------------------------------------------------------------------
+
+
+def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
+    """Embed `<script type="application/json">` blocks the JS modules pick up:
+    - workspace-boot: ticker, report_date, server URL (default localhost:7421)
+    - workspace-comments: existing comments for this (ticker, date) so pins
+      render on first paint without a server fetch.
+
+    No server connection required for read-only display (pins + side panel).
+    POSTing new comments + chat needs the server (`python execution/comments_server.py`)."""
+    import json as _json
+
+    from comments import load_store, to_json_payload
+
+    boot = {
+        "ticker": spec.ticker,
+        "report_date": spec.generation_date.isoformat(),
+        "server_url": "http://localhost:7421",
+    }
+    body.write(
+        '<script id="workspace-boot" type="application/json">'
+        f"{_json.dumps(boot)}"
+        "</script>"
+    )
+    try:
+        store = load_store(Path(spec.repo_root), spec.ticker, spec.generation_date)
+        payload = to_json_payload(store)
+    except Exception:
+        payload = {
+            "ticker": spec.ticker,
+            "report_date": spec.generation_date.isoformat(),
+            "comments": [],
+        }
+    body.write(
+        '<script id="workspace-comments" type="application/json">'
+        f"{_json.dumps(payload)}"
+        "</script>"
+    )
 
 
 # ---------------------------------------------------------------------------
