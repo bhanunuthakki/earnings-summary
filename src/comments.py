@@ -72,11 +72,30 @@ CommentStatus = Literal["open", "addressed", "dismissed"]
 
 
 class Anchor(BaseModel):
-    """Structured pointer to the report element a comment is attached to."""
+    """Structured pointer to the report element a comment is attached to.
+
+    Two anchor regimes:
+
+    1. **Structured** (kpi_ledger_row, failure_mode, ...): `key` is a
+       semantic identifier (KPI name, segment name) the renderer emits as
+       `data-anchor-key`. Comments survive any re-render that keeps the
+       same identifier — even across quarters and code changes.
+
+    2. **Free-text** (type == 'free_text'): the user highlighted arbitrary
+       text. `key` is the selected text excerpt (up to 200 chars). The
+       optional `parent_landmark` + `occurrence_index` fields let the JS
+       re-find the same selection on later renders even if the text
+       appears multiple times (occurrence_index is 0-based within the
+       parent_landmark scope). Falls back gracefully when the underlying
+       text changes — the highlight is silently dropped, the comment
+       stays in the store as a record.
+    """
 
     type: AnchorType
     key: str
     tab: str | None = None  # which tab (thesis / earnings / saydo / ...)
+    parent_landmark: str | None = None  # nearest section/panel title (free_text only)
+    occurrence_index: int | None = None  # which match if landmark has duplicates
 
 
 class ThreadEntry(BaseModel):
