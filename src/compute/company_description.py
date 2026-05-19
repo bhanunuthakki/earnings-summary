@@ -123,9 +123,21 @@ def extract_for_ticker(
         relevant_text = ""
         year = None
 
+    # Investor-material inputs — these give the LLM something to anchor an
+    # analytical writeup on, instead of paraphrasing the 10-K. We hash them
+    # into the cache key so a fresh earnings call invalidates the cached
+    # description (the prompt's analytical anchor will have shifted).
+    thesis_text = _load_thesis(repo_root, ticker)
+    recent_earnings_md = _load_recent_earnings_md(repo_root, ticker, n=2)
+    recent_ir_md = _load_recent_ir_docs_md(repo_root, ticker, n=3)
+    inputs_sha = hashlib.sha256(
+        (thesis_text + "\x00" + recent_earnings_md + "\x00" + recent_ir_md).encode("utf-8")
+    ).hexdigest()
+    composite_sha = hashlib.sha256((sha256 + "\x00" + inputs_sha).encode("utf-8")).hexdigest()
+
     if not refresh and cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("source_sha256") == sha256 and cached.get("fiscal_year") == year:
+        if cached.get("source_sha256") == composite_sha and cached.get("fiscal_year") == year:
             return CompanyDescriptionResult(**cached)
 
     segment_names = _segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
@@ -142,6 +154,9 @@ def extract_for_ticker(
         segment_names=segment_names,
         geo_names=geo_names,
         fiscal_year=year,
+        thesis_text=thesis_text,
+        recent_earnings_md=recent_earnings_md,
+        recent_ir_md=recent_ir_md,
     )
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     end_dt = datetime.now(UTC)
@@ -150,7 +165,7 @@ def extract_for_ticker(
         ticker=ticker,
         fiscal_year=year,
         source_path=str(source_path) if source_path is not None else None,
-        source_sha256=sha256,
+        source_sha256=composite_sha,
         extracted_at_start=start_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         extracted_at_end=end_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         elapsed_ms=elapsed_ms,
@@ -293,7 +308,19 @@ def _call_llm(
     segment_names: list[str],
     geo_names: list[str],
     fiscal_year: int | None,
+    thesis_text: str = "",
+    recent_earnings_md: str = "",
+    recent_ir_md: str = "",
 ) -> _ParsedLLMOutput:
+    """Call the LLM with the component-based schema and assemble the prose.
+
+    The LLM emits analytical components (value_driver_phrase, central_bet,
+    paragraphs[], revenue_mechanics[]) and this function string-assembles
+    them into the report's elevator_pitch / business_overview /
+    revenue_model fields. This sidesteps the LLM's strong "elevator pitch"
+    prior (which kept producing Wikipedia-style "X Inc. is the parent of...")
+    by forcing the analytical voice through the schema structure itself.
+    """
     raw = generate_company_description(
         ticker=ticker,
         profile_description=profile_description,
@@ -303,17 +330,205 @@ def _call_llm(
         segment_names=segment_names,
         geo_names=geo_names,
         fiscal_year=fiscal_year,
+        thesis_text=thesis_text,
+        recent_earnings_md=recent_earnings_md,
+        recent_ir_md=recent_ir_md,
     ).strip()
     if raw.startswith("```"):
         raw = JSON_FENCE_RE.sub("", raw).strip()
     parsed = cast("dict[str, object]", json.loads(raw))
+
+    elevator_pitch = _assemble_elevator_pitch(ticker, parsed)
+    business_overview = _assemble_business_overview(parsed)
+    revenue_model = _assemble_revenue_model(parsed)
+
     return _ParsedLLMOutput(
-        elevator_pitch=_str_or_none(parsed.get("elevator_pitch")),
-        business_overview=_str_or_none(parsed.get("business_overview")),
-        revenue_model=_str_or_none(parsed.get("revenue_model")),
+        elevator_pitch=elevator_pitch,
+        business_overview=business_overview,
+        revenue_model=revenue_model,
         segments=_coerce_named_rows(parsed.get("segments"), allowed=set(segment_names)),
         geographies=_coerce_named_rows(parsed.get("geographies"), allowed=set(geo_names)),
     )
+
+
+def _assemble_elevator_pitch(ticker: str, parsed: dict[str, object]) -> str | None:
+    """String-assemble ``{ticker}: {value_driver_phrase}. The bet: {central_bet}.
+    {swing_variable?}`` from the LLM's component fields.
+
+    Defensive parsing: if any component is missing/empty, fall back gracefully
+    rather than producing a malformed pitch. Strip stray trailing punctuation
+    on each component so the assembled string reads naturally.
+    """
+    phrase = _str_or_none(parsed.get("value_driver_phrase"))
+    bet = _str_or_none(parsed.get("central_bet"))
+    swing = _str_or_none(parsed.get("swing_variable"))
+
+    # Strip leading "<TICKER>: " if the LLM included it (despite the schema
+    # asking for a bare noun phrase). Then strip trailing punctuation so we
+    # don't double-period.
+    if phrase is None and bet is None:
+        return None
+    if phrase is not None:
+        phrase = phrase.removeprefix(f"{ticker}: ").rstrip(" .")
+    if bet is not None:
+        bet = bet.removeprefix("The bet: ").rstrip(" .")
+    if swing is not None:
+        swing = swing.rstrip(" .")
+
+    parts: list[str] = [f"{ticker}:"]
+    if phrase:
+        parts.append(f" {phrase}.")
+    if bet:
+        parts.append(f" The bet: {bet}.")
+    if swing:
+        parts.append(f" {swing}.")
+    return "".join(parts).strip()
+
+
+def _assemble_business_overview(parsed: dict[str, object]) -> str | None:
+    """Concatenate ``{opener} {body}`` for each paragraph in ``parsed.paragraphs``
+    with ``\\n\\n`` between, so the assembled string fits the existing
+    business_overview field's renderer (markdown paragraphs)."""
+    raw = parsed.get("paragraphs")
+    if not isinstance(raw, list):
+        return None
+    paragraphs: list[str] = []
+    for entry in cast("list[object]", raw):
+        if not isinstance(entry, dict):
+            continue
+        entry_dict = cast("dict[str, object]", entry)
+        opener = _str_or_none(entry_dict.get("opener"))
+        body = _str_or_none(entry_dict.get("body"))
+        if body is None:
+            continue
+        # The opener is the analytical lede; concatenate with a single space.
+        # If the body already starts with the opener (LLM included it
+        # verbatim), don't double it.
+        if opener and not body.lstrip().lower().startswith(opener.lower()):
+            paragraphs.append(f"{opener} {body}".strip())
+        else:
+            paragraphs.append(body.strip())
+    if not paragraphs:
+        return None
+    return "\n\n".join(paragraphs)
+
+
+def _assemble_revenue_model(parsed: dict[str, object]) -> str | None:
+    """Concatenate the revenue_mechanics bodies with ``\\n\\n``. The topic
+    label (take_rate / unit_economics / etc.) is used only as a sort hint
+    by the LLM; we drop it from the rendered prose to keep the paragraphs
+    flowing naturally."""
+    raw = parsed.get("revenue_mechanics")
+    if not isinstance(raw, list):
+        return None
+    bodies: list[str] = []
+    for entry in cast("list[object]", raw):
+        if not isinstance(entry, dict):
+            continue
+        entry_dict = cast("dict[str, object]", entry)
+        body = _str_or_none(entry_dict.get("body"))
+        if body is None:
+            continue
+        bodies.append(body.strip())
+    if not bodies:
+        return None
+    return "\n\n".join(bodies)
+
+
+def _load_thesis(repo_root: Path, ticker: str) -> str:
+    """Pull the analyst's own thesis statement from micro_thesis/holdings/<T>.json.
+
+    Looks for `thesis` (the canonical free-text field) and falls back to
+    `thesis_full` for legacy schemas. Returns empty string when missing —
+    the prompt's thesis-block is then suppressed.
+    """
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return ""
+    try:
+        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    for key in ("thesis", "thesis_full", "thesis_one_liner"):
+        v = payload.get(key)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+_TMP_SUMMARY_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_"
+    r"(?:investor_update_)?summary\.txt$"
+)
+_TMP_IR_DOC_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_"
+    r"(?P<kind>press_release_summary|presentation_brief)\.txt$"
+)
+
+
+def _load_recent_earnings_md(repo_root: Path, ticker: str, n: int = 2) -> str:
+    """Most-recent N per-quarter earnings summaries concatenated, newest first.
+
+    Source: `.tmp/{TICKER}_Q{N}_{YEAR}_summary.txt` files written by
+    ``execution/process_ir_documents.py``. Returns empty string when nothing's
+    on file — the prompt's recent-earnings block is then suppressed and the
+    LLM has to lean harder on the 10-K factual baseline.
+    """
+    tmp = repo_root / ".tmp"
+    if not tmp.exists():
+        return ""
+    upper = ticker.upper()
+    hits: list[tuple[int, int, Path]] = []
+    for p in tmp.iterdir():
+        m = _TMP_SUMMARY_RX.match(p.name)
+        if not m or m.group("ticker") != upper:
+            continue
+        hits.append((int(m.group("y")), int(m.group("q")), p))
+    if not hits:
+        return ""
+    hits.sort(reverse=True)
+    chunks: list[str] = []
+    for y, q, p in hits[:n]:
+        try:
+            body = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if len(body) < 200:
+            continue
+        chunks.append(f"### Q{q} {y}\n{body}")
+    return "\n\n---\n\n".join(chunks)
+
+
+def _load_recent_ir_docs_md(repo_root: Path, ticker: str, n: int = 3) -> str:
+    """Recent press-release + presentation summaries, newest first.
+
+    Source: ``.tmp/{TICKER}_Q{N}_{YEAR}_{press_release_summary,presentation_brief}.txt``.
+    Useful for catching management's NARRATIVE framing of the business
+    between earnings calls.
+    """
+    tmp = repo_root / ".tmp"
+    if not tmp.exists():
+        return ""
+    upper = ticker.upper()
+    hits: list[tuple[int, int, str, Path]] = []
+    for p in tmp.iterdir():
+        m = _TMP_IR_DOC_RX.match(p.name)
+        if not m or m.group("ticker") != upper:
+            continue
+        hits.append((int(m.group("y")), int(m.group("q")), m.group("kind"), p))
+    if not hits:
+        return ""
+    hits.sort(reverse=True)
+    chunks: list[str] = []
+    for y, q, kind, p in hits[:n]:
+        try:
+            body = p.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if len(body) < 200:
+            continue
+        chunks.append(f"### {kind} · Q{q} {y}\n{body}")
+    return "\n\n---\n\n".join(chunks)
 
 
 def _str_or_none(v: object) -> str | None:

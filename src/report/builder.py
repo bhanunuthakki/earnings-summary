@@ -21,11 +21,13 @@ from report.sections import (
     ir_docs,
     portfolio_position,
     provenance,
+    qa_roster,
     recent_developments,
     saydo,
     segments,
     snapshot,
     thesis,
+    valuation,
 )
 
 
@@ -92,13 +94,20 @@ def build_report(
     )
     provenance_section = provenance.build(ticker, repo_root)
     appendix_section = appendix.build(earnings_section)
-
+    qa_roster_section = qa_roster.build(
+        appendix=appendix_section, ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
+    )
+    valuation_section = valuation.build(
+        ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
+    )
     return ReportSpec(
         ticker=ticker,
         generation_date=date.today(),
         repo_root=str(repo_root),
         flavor=flavor,
+        llm_enabled=enable_llm,
         portfolio_position=portfolio_position_section,
+        valuation_basis=valuation_section,
         snapshot=snapshot_section,
         evaluation_snapshot=evaluation_snapshot_section,
         company_description=company_description_section,
@@ -112,4 +121,5 @@ def build_report(
         bear_case=bear_case_section,
         provenance=provenance_section,
         appendix=appendix_section,
+        qa_roster=qa_roster_section,
     )

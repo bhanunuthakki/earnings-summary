@@ -29,9 +29,7 @@ The script is idempotent at every layer:
 Designed to run unattended:
   - Hooked into `execution/onboard_ticker.py` (final stage; fire-and-forget)
   - Cron entry point at `cron/backfill_transcripts.task.xml` (daily 04:30,
-    before the earnings-calendar fetcher at 05:45). The .bat wrapper unsets
-    ANTHROPIC_API_KEY so the LLM extraction routes via the Claude Code CLI
-    subscription rather than metered API billing.
+    before the earnings-calendar fetcher at 05:45).
 
 Usage:
     python execution/backfill_transcripts.py                       # all active tickers

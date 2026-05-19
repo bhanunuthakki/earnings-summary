@@ -514,12 +514,25 @@ class SourceDocRow(BaseModel):
     fetched_at: str | None = None
 
 
+class ValidationIssueRow(BaseModel):
+    """One open validation issue (resolved_at IS NULL). Populated alongside
+    ``open_validation_issues`` so renderers can surface the actual list, not
+    just the count."""
+
+    severity: str  # "error" | "warning" | "info" (free text from the rule engine)
+    rule: str
+    raw_value: str | None = None
+    expected: str | None = None
+    raised_at: str | None = None
+
+
 class ProvenanceSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     coverage: list[CoverageRow] = Field(default_factory=list)
     source_docs: list[SourceDocRow] = Field(default_factory=list)
     open_validation_issues: int = 0
+    open_issues_detail: list[ValidationIssueRow] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +558,78 @@ class AppendixSection(BaseModel):
 
     status: SectionStatus
     transcripts: list[TranscriptEntry] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Hero quote — single thesis-anchoring quote pulled from the latest call
+# ---------------------------------------------------------------------------
+
+
+class HeroQuote(BaseModel):
+    """A single quote selected by an LLM as the most thesis-relevant line
+    from the most recent earnings call. Used by the workspace renderer's
+    Earnings tab as the hero panel."""
+
+    speaker: str  # full name as it appears in the transcript ("Sundar Pichai")
+    role: str  # title + context ("CEO, Alphabet · Q1 2026 earnings call")
+    body: str  # verbatim quote, with surrounding quote marks stripped
+    rationale: str | None = None  # one-line why-this-matters from the LLM
+    source_quarter: str | None = None
+    source_year: int | None = None
+
+
+class HeroQuoteSection(BaseModel):
+    """Hero-quote container. Used by the workspace renderer."""
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    quote: HeroQuote | None = None
+
+
+# ---------------------------------------------------------------------------
+# Q&A roster — structured analyst-Q&A rows for the workspace Earnings tab
+# ---------------------------------------------------------------------------
+
+
+class QAEntry(BaseModel):
+    """One Q&A exchange: analyst question, company response, optional follow-up.
+
+    ``analysts`` is the comma-joined "Name (Firm)" header from the transcript.
+    ``answers`` collects each speaker's reply paragraph in order. ``follow_up``
+    is set when the same analyst speaks again before the next operator hand-off.
+    ``topic`` is the first short clause of the question — extracted heuristically
+    for the panel's collapsed-row label.
+    """
+
+    analysts: str
+    topic: str
+    tag: str  # short uppercased keyword used as the colored chip in the design
+    question: str
+    answers: list[tuple[str, str]] = Field(default_factory=list)  # [(speaker, text)]
+    follow_up: str | None = None
+    transcript_ref: str | None = None  # offset / page when known
+
+
+class QARosterQuarter(BaseModel):
+    """Per-quarter Q&A roster — one bundle of entries from one transcript."""
+
+    quarter: str
+    year: int
+    entries: list[QAEntry] = Field(default_factory=list)
+
+
+class QARosterSection(BaseModel):
+    """Container for parsed Q&A rosters across the most recent N transcripts.
+
+    The workspace renderer drives display via the same quarter selector as the
+    earnings cards: each ``QARosterQuarter`` is matched to its earnings card by
+    (quarter, year). Older quarters whose transcripts haven't been parsed are
+    simply absent from ``quarters`` — the renderer falls through to a stub.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    quarters: list[QARosterQuarter] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +702,42 @@ class PortfolioPositionSection(BaseModel):
     closed_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
 
 
+class ValuationBasisHistoricalPoint(BaseModel):
+    """One historical observation of the chosen multiple. Used to render the
+    sparkline + show the historical range so the analyst can eyeball whether
+    the current print is rich/cheap vs trailing 8Q."""
+
+    period_end: date
+    value: float | None  # None for periods FMP doesn't disclose
+
+
+class ValuationBasisSection(BaseModel):
+    """The valuation tab. Opus picks ONE multiple per ticker (based on sector
+    + thesis + financial profile + what's actually computable from the
+    available analyst estimates), the compute layer fetches its current value
+    and 8Q history, and the renderer shows current + trend + LLM rationale.
+
+    The chosen multiple is cached at ``data/valuation_basis/<T>.json`` so
+    repeat renders don't re-call Opus. The cache key incorporates the
+    thesis SHA + the latest period_end so refreshing the thesis or a fresh
+    quarterly print invalidates the cached choice.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    multiple_name: str | None = None  # e.g. "EV/NTM Revenue", "P/B", "EV/LTM EBITDA"
+    rationale: str | None = None  # 1-2 sentence Opus rationale
+    current_value: float | None = None  # the multiple's current numeric value
+    current_value_display: str | None = None  # formatted display, e.g. "15.1x"
+    current_period_end: date | None = None
+    history: list[ValuationBasisHistoricalPoint] = Field(default_factory=list)
+    historical_min: float | None = None
+    historical_max: float | None = None
+    historical_median: float | None = None
+    rich_cheap_verdict: str | None = None  # e.g. "rich vs 8Q median 12.4x"
+    notes: str | None = None  # qualitative target band or caveats from Opus
+
+
 class ReportSpec(BaseModel):
     """The unified report. One per (ticker, generation_date)."""
 
@@ -625,8 +746,13 @@ class ReportSpec(BaseModel):
     repo_root: str  # absolute path the build read from
     run_id: str | None = None  # ingestion_runs.run_id if produced under one
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO
+    # True when this build was invoked with --enable-llm. Renderers consult
+    # this to decide whether to run optional LLM filters (e.g. SayDo
+    # commitment importance ranking) without requiring per-call wiring.
+    llm_enabled: bool = False
 
     portfolio_position: PortfolioPositionSection | None = None
+    valuation_basis: ValuationBasisSection | None = None
     snapshot: SnapshotSection
     evaluation_snapshot: EvaluationSnapshotSection | None = None
     company_description: CompanyDescriptionSection
@@ -640,3 +766,7 @@ class ReportSpec(BaseModel):
     bear_case: BearCaseSection
     provenance: ProvenanceSection
     appendix: AppendixSection
+    # Workspace-renderer-specific sections — None when not produced; renderers
+    # that don't consume them simply ignore the field.
+    hero_quote: HeroQuoteSection | None = None
+    qa_roster: QARosterSection | None = None

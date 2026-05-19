@@ -30,7 +30,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-from llm_client import generate_pairwise_analysis  # noqa: E402
+from llm_client import (  # noqa: E402
+    compose_anchor_block,
+    generate_pairwise_analysis,
+    load_bear_anchor,
+    load_thesis_anchor,
+)
 
 _SUMMARY_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
@@ -98,6 +103,12 @@ def _process_ticker(
     pairs_skipped = 0
     error: str | None = None
 
+    # Anchor is constant across all pairs for this ticker — load once.
+    anchor_block = compose_anchor_block(
+        load_thesis_anchor(repo_root, ticker),
+        load_bear_anchor(repo_root, ticker),
+    )
+
     for i in range(1, len(summaries)):
         prev = summaries[i - 1]
         curr = summaries[i]
@@ -111,7 +122,7 @@ def _process_ticker(
             pairs_skipped += 1
             continue
         try:
-            text = generate_pairwise_analysis(prev, curr)
+            text = generate_pairwise_analysis(prev, curr, anchor_block=anchor_block)
         except Exception as e:
             error = (
                 f"{prev['quarter']} {prev['year']}→{curr['quarter']} {curr['year']}: "

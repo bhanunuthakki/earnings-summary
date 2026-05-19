@@ -73,7 +73,30 @@ def build(
         kpi_status_md=_kpi_status_md(thesis),
         ticker_specific_md=_ticker_specific_md(ticker, repo_root),
     )
+    # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
+    # pairwise SayDo) can cross-pollinate the analyst's named bear failure
+    # modes via load_bear_anchor() — see llm_client.py.
+    _cache_bear_response(ticker, repo_root, response_text)
     return _parse_response(response_text)
+
+
+def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> None:
+    """Persist the LLM's raw JSON to data/bear_case/<TICKER>.json. Best-effort:
+    a write failure does not break the report build (the bear case section
+    still renders from the parsed in-memory payload)."""
+    try:
+        payload = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", response_text.strip(), flags=re.MULTILINE))
+    except json.JSONDecodeError:
+        return
+    if not isinstance(payload, dict):
+        return
+    out_dir = repo_root / "data" / "bear_case"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{ticker.upper()}.json"
+    try:
+        out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return
 
 
 def _ticker_specific_md(ticker: str, repo_root: Path) -> str:

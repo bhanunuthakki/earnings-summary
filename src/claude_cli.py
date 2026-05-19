@@ -1,37 +1,32 @@
 """
-claude_cli.py — Reusable wrapper for calling Claude from Python via the user's
-Claude Pro/Max subscription (NOT the metered Anthropic API).
+claude_cli.py — Reusable wrapper for calling Claude from Python via the
+``claude`` CLI as a subprocess.
 
 WHY THIS EXISTS
 ---------------
-The `claude_agent_sdk` Python package and the Anthropic SDK both bill against
-the metered Anthropic API (`ANTHROPIC_API_KEY`). The ONLY path to use a Claude
-Code subscription from a Python script is to invoke the `claude` CLI as a
-subprocess.
+The CLI accepts a prompt on stdin and returns the model's text on stdout,
+honoring whatever auth mechanism is configured in the environment
+(``ANTHROPIC_API_KEY`` for metered API billing, or ``claude auth login`` for
+subscription billing — whichever the user has set up).
 
-Three Windows-specific gotchas this wrapper handles:
-  1. `subprocess.run(["claude", ...])` fails with FileNotFoundError on Windows
-     because the npm-installed binary is `claude.CMD` and Python's subprocess
+Two Windows-specific gotchas this wrapper handles:
+  1. ``subprocess.run(["claude", ...])`` fails with FileNotFoundError on Windows
+     because the npm-installed binary is ``claude.CMD`` and Python's subprocess
      doesn't apply PATHEXT to bare names. Fix: resolve the absolute path with
-     shutil.which() at first call.
-  2. `subprocess.run(input=str, text=True)` defaults to cp1252 on Windows and
+     ``shutil.which()`` at first call.
+  2. ``subprocess.run(input=str, text=True)`` defaults to cp1252 on Windows and
      dies on financial/scientific Unicode (U+2212 minus, en/em dashes, arrows).
-     Fix: force `encoding="utf-8"` and `errors="replace"`.
-  3. Even with subscription auth set up, if `ANTHROPIC_API_KEY` is set in the
-     environment, the CLI silently falls back to API billing. Fix: lazy check
-     at first call, raise loudly with the unset instructions.
+     Fix: force ``encoding="utf-8"`` and ``errors="replace"``.
 
 ONE-TIME SETUP (per machine)
 ----------------------------
 1. Install Node.js (https://nodejs.org).
 2. Install the CLI:
      npm install -g @anthropic-ai/claude-code
-3. Authenticate to your subscription (browser flow):
-     claude auth login
+3. Set ``ANTHROPIC_API_KEY`` in your shell / ``.env``, OR run ``claude auth login``
+   for the subscription path. Either works.
 4. Verify:
-     claude auth status     # should show your subscription account
      claude --version       # confirms binary is on PATH
-5. Remove ANTHROPIC_API_KEY from your shell env / .env / shell profile.
 
 USAGE
 -----
@@ -44,7 +39,6 @@ Or as a CLI test:
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -58,27 +52,22 @@ _claude_cli_path: str | None = None
 
 
 def _verify_setup_once() -> None:
-    """Lazy environment check on first call — fails loud rather than mis-billing."""
+    """Resolve the absolute path to the ``claude`` binary on first call.
+
+    Bare ``"claude"`` fails in Windows subprocess because PATHEXT isn't applied
+    to bare names — the binary is ``claude.CMD``. Cached so repeat calls are
+    free.
+    """
     global _setup_verified, _claude_cli_path
     if _setup_verified:
         return
-    # Treat an empty-string value as unset. Claude Code's Bash tool leaks
-    # ANTHROPIC_API_KEY='' into subshells even when the user has it unset, which
-    # used to trip this guard as a false positive. Only a non-empty value would
-    # actually route the CLI to API billing.
-    if os.environ.get("ANTHROPIC_API_KEY", "").strip():
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is set in the environment. The Claude Code CLI will silently "
-            "route calls to API billing instead of your subscription. Unset it before running:\n"
-            "  PowerShell:  Remove-Item env:ANTHROPIC_API_KEY\n"
-            "  Bash:        unset ANTHROPIC_API_KEY"
-        )
     resolved = shutil.which("claude")
     if resolved is None:
         raise RuntimeError(
             "Claude Code CLI ('claude') not found in PATH. Install it with:\n"
             "  npm install -g @anthropic-ai/claude-code\n"
-            "Then authenticate with: claude auth login"
+            "Then either set ANTHROPIC_API_KEY in your shell / .env, "
+            "or run: claude auth login"
         )
     _claude_cli_path = resolved
     _setup_verified = True
@@ -97,7 +86,7 @@ def call_claude(
     bytes from upstream sources (e.g., PDF extraction) don't crash the call.
 
     Raises:
-      RuntimeError: setup is wrong (CLI not installed, or ANTHROPIC_API_KEY set).
+      RuntimeError: CLI binary missing on PATH.
       subprocess.CalledProcessError: CLI returned non-zero exit; stderr in .stderr.
       subprocess.TimeoutExpired: prompt didn't finish within timeout_seconds.
     """
