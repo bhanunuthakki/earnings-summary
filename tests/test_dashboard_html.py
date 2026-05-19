@@ -19,7 +19,7 @@ def _row(
     ticker: str,
     list_type: str = "portfolio",
     *,
-    fmp_data_upto: str | None = "2026-05-12",
+    fmp_last_pulled: str | None = "2026-05-11T01:02:14",
     last_transcript: TranscriptStatus | None = TranscriptStatus(
         period_end="2026-03-31", has_qa_section=True, call_date=None
     ),
@@ -30,7 +30,7 @@ def _row(
     return DashboardRow(
         ticker=ticker,
         list_type=list_type,
-        fmp_data_upto=fmp_data_upto,
+        fmp_last_pulled=fmp_last_pulled,
         last_transcript=last_transcript,
         last_build_at=last_build_at,
         open_comments_count=open_comments_count,

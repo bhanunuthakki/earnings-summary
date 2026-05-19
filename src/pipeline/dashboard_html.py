@@ -78,7 +78,7 @@ def _render_row(row: DashboardRow) -> str:
     build_cell = _format_relative_time(row.last_build_at)
     comments_cell = _format_comments_count(row.open_comments_count)
     breach_cell = _format_breach(row.breach_status)
-    fmp_cell = escape(row.fmp_data_upto) if row.fmp_data_upto else "<span class='muted'>—</span>"
+    fmp_cell = _format_relative_time(row.fmp_last_pulled)
     open_cell = (
         f"<a class='open-link' href='/reports/{escape(row.ticker)}'>Open↗</a>"
         if row.last_build_at
