@@ -22,7 +22,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 | Path | Purpose |
 |---|---|
-| `src/` | Core utilities: `db.py`, `llm_client.py`, `parser.py`, `portfolio.py`, `alias_manager.py`, `calendar_manager.py`, `intake.py`, `ir_uploads.py`, `index_manager.py`, `log_redact.py`, `transcript_qa.py` |
+| `src/` | Core utilities: `db.py`, `llm_client.py`, `parser.py`, `alias_manager.py`, `intake.py`, `ir_uploads.py`, `index_manager.py`, `log_redact.py`, `transcript_qa.py`, `aggregator_sources.py`, `surprise_sources.py`, `comments.py`, `chat_session.py` |
 | `src/report/` | Unified brief generator. `builder.py` → `ReportSpec` (12 sections); renderers in `renderers/{html,markdown,sections_json,workbook,charts_v2}.py`; per-section builders in `sections/` |
 | `src/dcf/` | DCF subsystem: `workbook_reader.py` extracts FCF stream, `valuation.py` computes PV/share + over-under %, `live_price.py` reads live FMP price, `persist.py` upserts `dcf_runs` |
 | `src/compute/` | Deterministic financial computations: `income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `segments`, `segment_definitions`, `segment_oi_10k`, `company_description`, `say_do`, `say_do_extractor`, `thesis_evaluator`, `holding_scorecard` |
