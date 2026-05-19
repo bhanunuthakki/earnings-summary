@@ -1,6 +1,6 @@
 ---
 name: micro-thesis-tracker
-description: Use this skill when the user asks to run a monthly micro-thesis check, evaluate a specific holding's fundamentals, update the thesis ledger, or process a new earnings release / 10-Q / transcript for NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOGL, META, FLKR, or BN. Triggers include phrases like "run the thesis tracker," "monthly review," "did [TICKER] earnings break the thesis," "update KPIs for [TICKER]," "I added docs for [TICKER]," "process [TICKER] earnings," or when the user uploads or drops an earnings transcript, 10-Q, or earnings presentation into a source folder. Source documents live in micro_thesis/sources/<TICKER>/ subfolders. Do NOT use for pure valuation/price-trigger questions (those are handled by the Code's existing threshold matrix) or for new-name diligence (use a separate initiation skill).
+description: Use this skill when the user asks to run a monthly micro-thesis check, evaluate a specific holding's fundamentals, update the thesis ledger, or process a new earnings release / 10-Q / transcript for NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOG, META, AMZN, or BN. Triggers include phrases like "run the thesis tracker," "monthly review," "did [TICKER] earnings break the thesis," "update KPIs for [TICKER]," "I added docs for [TICKER]," "process [TICKER] earnings," or when the user uploads or drops an earnings transcript, 10-Q, or earnings presentation into a source folder. Source documents live in micro_thesis/sources/<TICKER>/ subfolders. Do NOT use for pure valuation/price-trigger questions (those are handled by the Code's existing threshold matrix) or for new-name diligence (use a separate initiation skill).
 ---
 
 # Micro-Thesis Tracker
@@ -16,7 +16,7 @@ Monitor the Tier-1 KPIs for each concentrated satellite holding against the pre-
 - When user says "I added docs for [TICKER]" or "process [TICKER] earnings"
 
 ## Holdings coverage
-Per-holding KPI specs live in `micro_thesis/holdings/<TICKER>.json`. Currently covered: NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOGL, META, FLKR, BN.
+Per-holding KPI specs live in `micro_thesis/holdings/<TICKER>.json`. Currently covered: NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOG, META, AMZN, BN.
 
 Each JSON contains:
 - `thesis`: one-sentence core thesis
@@ -66,7 +66,6 @@ For each holding in scope, acquire T1 KPI values in this priority order:
 2. **Web search** — for publicly reported metrics not found in source folder docs, search issuer IR pages, press releases, and earnings slide decks. Cite sources. Only fall through to this step after explicitly telling the user which T1 KPIs were NOT found in their dropped docs.
 3. **Third-party datasets** — for the specific trackers listed below, attempt web fetch; if paywalled, ask user to provide:
    - NVO: IQVIA weekly Rx data (GLP-1 US volume)
-   - FLKR: TrendForce DRAM/NAND contract prices
    - MELI/NU: Similarweb or SensorTower app rankings (optional, T2)
    - NOW/RBRK: Gartner MQ position (annual)
 4. **Explicitly flag missing data** — never guess or interpolate. If a T1 KPI is unavailable, the verdict is "Incomplete" until the user provides it.
