@@ -77,15 +77,12 @@ The system is built around three chained daily crons + an hourly catch-up cron +
 # 05:45 — pull fresh FMP earnings_calendar.json for every portfolio + watchlist ticker
 python execution/fetch_fmp_earnings_calendar.py
 
-# 06:00 — scan FMP earnings calendar cache, populate expected_earnings
-python execution/earnings_calendar_watcher.py
-
 # 06:30 — drain tracked_companies.brief_dirty:
 #   thesis_evaluator → match_commitments → refresh_dcf → build_artifacts
 python execution/daily_fetch_and_brief.py --enable-llm
 ```
 
-All three are wired in `cron/*.task.xml`; the 15/30-min gaps absorb slow FMP responses and let each step's writes commit before the next reads. Fact-table inserts auto-flip `brief_dirty=1` via the SQL triggers from migration 0026 — no manual invalidation needed. See `cron/SETUP_WINDOWS_SCHEDULER.md` for installing under Task Scheduler.
+Both are wired in `cron/*.task.xml`; the 45-min gap absorbs slow FMP responses and lets the calendar fetch commit before the worker reads. Fact-table inserts auto-flip `brief_dirty=1` via the SQL triggers from migration 0026 — no manual invalidation needed. See `cron/SETUP_WINDOWS_SCHEDULER.md` for installing under Task Scheduler.
 
 ### Refresh fundamentals for a ticker
 

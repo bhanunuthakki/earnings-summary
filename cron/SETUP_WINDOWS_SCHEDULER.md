@@ -11,19 +11,17 @@ GUI.
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
 | `earnings-summary\backfill_transcripts` | Daily 04:30 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | For every active-universe ticker (`db.ACTIVE_LIST_TYPES`), fetches the last 6 fiscal quarters of Q&A from the free aggregator chain, runs ingest, extracts commitments. Idempotent — re-running with no missing quarters is a no-op. |
-| `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker. Source of truth for the watcher 15 min later. |
-| `earnings-summary\earnings_calendar_watcher` | Daily 06:00 | `earnings_calendar_watcher.task.xml` | `run_earnings_calendar_watcher.bat` | Scans the FMP earnings calendar cache and populates the `expected_earnings` table for the daily worker to drain. |
+| `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker. Source of truth for the surprises backfill 30 min later. |
 | `earnings-summary\backfill_earnings_surprises` | Daily 06:15 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | For every active-universe ticker, merges `<TICKER>_earnings_calendar.json` (FMP primary, full EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Idempotent. Revenue surprise degrades to NULL when FMP coverage lapses. |
 | `earnings-summary\daily_fetch_and_brief` | Daily 06:30 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Drains `tracked_companies.brief_dirty`, runs the thesis evaluator + DCF refresh + brief regen per ticker. Runs with `--enable-llm` so §8/§9 populate via the Claude CLI (Gemini fallback). |
 | `earnings-summary\onboard_pending` | Hourly at :17 | `onboard_pending_tickers.task.xml` | `run_onboard_pending.bat` | Catches up tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Idempotent — no-op when nothing is pending. |
 
-The five daily crons run as a chain: backfill_transcripts (04:30) pulls fresh
+The four daily crons run as a chain: backfill_transcripts (04:30) pulls fresh
 Q&A transcripts + commitments, fetch_fmp_earnings_calendar (05:45) refreshes
-the JSON cache, earnings_calendar_watcher (06:00) reads it into
-`expected_earnings`, backfill_earnings_surprises (06:15) writes the merged
+the JSON cache, backfill_earnings_surprises (06:15) writes the merged
 EPS/Revenue beat-rate cache + DB, and daily_fetch_and_brief (06:30) drains
-`brief_dirty=1` and regenerates briefs. The 75-min / 15-min / 15-min / 15-min
-gaps absorb slow aggregator/FMP responses and let each step's writes commit
+`brief_dirty=1` and regenerates briefs. The 75-min / 30-min / 15-min gaps
+absorb slow aggregator/FMP responses and let each step's writes commit
 before the next reads.
 
 ## Prerequisites
@@ -48,10 +46,6 @@ schtasks /create /tn "earnings-summary\backfill_transcripts" ^
 
 schtasks /create /tn "earnings-summary\fetch_fmp_earnings_calendar" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_fmp_earnings_calendar.task.xml" ^
-  /ru "%USERNAME%"
-
-schtasks /create /tn "earnings-summary\earnings_calendar_watcher" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\earnings_calendar_watcher.task.xml" ^
   /ru "%USERNAME%"
 
 schtasks /create /tn "earnings-summary\backfill_earnings_surprises" ^
@@ -97,8 +91,6 @@ Then check:
   fetched/skipped/miss counts.
 - For `fetch_fmp_earnings_calendar`: file mtimes on
   `data/historical/fmp/*_earnings_calendar.json` updated to the run time.
-- For `earnings_calendar_watcher`: row count in the `expected_earnings`
-  table (rows for the watcher's [today−30d, today+14d] window).
 - For `backfill_earnings_surprises`: new/refreshed
   `data/surprise/<TICKER>_surprises.json` files (one per active ticker) +
   rows in the `earnings_surprises` table. The JSON summary at the end of the

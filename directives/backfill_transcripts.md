@@ -90,6 +90,6 @@ the existing aggregator filename pattern `<T>_Q<n>_<Y>.txt`:
 | 6 (Jun, KLAC) | Sep Y-1 | Dec Y-1 | Mar Y | Jun Y |
 | 3 (Mar, HDB/NTDOY) | Jun Y-1 | Sep Y-1 | Dec Y-1 | Mar Y |
 
-The script does NOT consult `expected_earnings` — it just attempts the
-last N quarter ends that have already passed and lets the aggregator
-chain tell us via "miss" whether the call happened yet.
+The script attempts the last N quarter ends that have already passed
+and lets the aggregator chain tell us via "miss" whether the call
+happened yet.

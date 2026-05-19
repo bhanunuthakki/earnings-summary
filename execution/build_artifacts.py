@@ -254,9 +254,6 @@ def _build_one(
     render_workbook(spec, xlsx_path)
     _emit("wrote_workbook", {"ticker": ticker, "path": str(xlsx_path)})
 
-    _write_provenance_log(repo_root, spec, str(html_path), trigger)
-    _emit("wrote_provenance_log", {"ticker": ticker, "trigger": trigger})
-
     return {
         "ticker": ticker,
         "report_html": str(html_path) if renderer in ("default", "both") else None,
@@ -283,84 +280,6 @@ def _build_one(
 def _emit(event: str, payload: dict[str, object]) -> None:
     """One JSON line per event to stderr."""
     sys.stderr.write(json.dumps({"event": event, **payload}) + "\n")
-
-
-def _write_provenance_log(
-    repo_root: Path,
-    spec: object,
-    artifact_path: str,
-    trigger: str,
-) -> None:
-    """Insert one row into brief_provenance_log capturing the render's audit trail.
-
-    No-op if the table doesn't exist (pre-migration-0023 DB) — keeps the
-    builder backward-compatible during phased rollout.
-    """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return
-    sections_status = _section_status_map(spec)
-    # `sources_used` is a forward-looking column. Phase 4 captures section
-    # status as a proxy; later phases will track per-metric source_type as
-    # the §3 / §4 builders evolve to honor the provenance trust order.
-    sources_used = sections_status
-    with sqlite3.connect(str(db_path)) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='brief_provenance_log'"
-        )
-        if cursor.fetchone() is None:
-            return
-        cursor.execute(
-            """
-            INSERT INTO brief_provenance_log (
-                ticker, generation_date, sources_used, sections_status, trigger, artifact_path
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                getattr(spec, "ticker", "?"),
-                getattr(spec, "generation_date", "?").isoformat()
-                if hasattr(spec, "generation_date")
-                else "?",
-                json.dumps(sources_used, default=str),
-                json.dumps(sections_status, default=str),
-                trigger,
-                artifact_path,
-            ),
-        )
-        conn.commit()
-
-
-def _section_status_map(spec: object) -> dict[str, str]:
-    """Extract {section_name: status_value} from a ReportSpec, safely."""
-    sections = (
-        "snapshot",
-        "company_description",
-        "thesis",
-        "financials",
-        "segments",
-        "earnings",
-        "saydo",
-        "ir_docs",
-        "recent_developments",
-        "bear_case",
-        "provenance",
-    )
-    out: dict[str, str] = {}
-    for name in sections:
-        section = getattr(spec, name, None)
-        if section is None:
-            continue
-        status = getattr(section, "status", None)
-        if status is None:
-            continue
-        out[name] = getattr(status, "value", str(status))
-    eval_snapshot = getattr(spec, "evaluation_snapshot", None)
-    if eval_snapshot is not None:
-        status = getattr(eval_snapshot, "status", None)
-        if status is not None:
-            out["evaluation_snapshot"] = getattr(status, "value", str(status))
-    return out
 
 
 if __name__ == "__main__":
