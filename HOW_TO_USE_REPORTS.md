@@ -52,6 +52,17 @@ Or just **double-click** `start_comments_server.bat` in Explorer.
 - **Keep this terminal window open** while you're reviewing the report.
 - `Ctrl+C` to stop.
 
+### 2a. (Optional) Open the dashboard
+
+Once the server is running, visit `http://localhost:7421/` for a
+read-only status view across portfolio + evaluation tickers — last FMP
+date, last transcript quarter (with Q&A marker), last build mtime, open
+comment count, and current breach state per ticker. Click **Open↗** on
+any row to load that ticker's latest workspace report.
+
+Per-ticker refresh / per-step / comments-processing / bulk actions land
+in later PRs; right now the dashboard is read-only.
+
 ### 3. Open the report in your browser
 
 Open `C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\output\research\NU\<DATE>_workspace.html`
