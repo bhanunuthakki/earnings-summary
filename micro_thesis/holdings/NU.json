@@ -157,5 +157,6 @@
       "consecutive_periods": 2,
       "narrative": "15-90d NPL > 5% for 2Q — leading indicator of cohort credit deterioration; fires 1-2Q before 90d+ trips."
     }
-  ]
+  ],
+  "valuation_multiple_override": "P/E (NTM)"
 }
