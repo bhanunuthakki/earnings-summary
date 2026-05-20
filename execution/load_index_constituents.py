@@ -128,7 +128,7 @@ def upsert_index_members(
 ) -> dict[str, int]:
     """Upsert (ticker, name) as list_type='index_member'; never downgrade analyzed lists."""
     existing = _existing_tickers_by_list_type(conn)
-    protected = {ListType.PORTFOLIO.value, ListType.WATCHLIST.value}
+    protected = {ListType.PORTFOLIO.value, ListType.WATCHLIST.value, ListType.EVALUATION.value}
     stats = {"inserted": 0, "updated": 0, "skipped_protected": 0}
     cur = conn.cursor()
     for ticker, name in rows:
