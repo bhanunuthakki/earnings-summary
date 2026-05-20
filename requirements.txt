@@ -22,3 +22,7 @@ faster-whisper
 pydantic
 beautifulsoup4
 markdown
+# Free fallback source for live price + earnings calendar (src/sources/) and
+# EPS surprise (src/surprise_sources.py). Wraps Yahoo Finance's unofficial
+# endpoints — fragile but durable across an FMP downgrade.
+yfinance

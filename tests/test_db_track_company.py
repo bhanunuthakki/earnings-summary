@@ -20,11 +20,38 @@ import db  # noqa: E402
 
 @pytest.fixture()
 def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point db.DB_PATH at a fresh sqlite file and recreate the schema there."""
+    """Point db.DB_PATH at a fresh sqlite file and recreate the schema there.
+
+    `init_db()` creates the baseline 3 tables only. The columns added by
+    alembic migrations 0001-0032 (archived_at, brief_dirty, etc.) are
+    appended inline below so this fixture matches the production schema
+    without paying alembic's per-test setup cost (would also pull in
+    holdings/JSON dependencies migration 0008 needs).
+    """
     test_db = tmp_path / "portfolio.db"
     monkeypatch.setattr(db, "DB_PATH", str(test_db))
     monkeypatch.setattr(db, "DATA_DIR", str(tmp_path))
     db.init_db()
+
+    import sqlite3  # noqa: PLC0415
+
+    conn = sqlite3.connect(str(test_db))
+    try:
+        # Columns added by migrations 0001 / 0020 / 0021 / 0022 / 0032.
+        # Mirror the column types from those migrations.
+        for ddl in (
+            "ALTER TABLE tracked_companies ADD COLUMN instrument_type VARCHAR",
+            "ALTER TABLE tracked_companies ADD COLUMN filing_regime VARCHAR",
+            "ALTER TABLE tracked_companies ADD COLUMN fiscal_year_end VARCHAR(5)",
+            "ALTER TABLE tracked_companies ADD COLUMN archived_at TIMESTAMP",
+            "ALTER TABLE tracked_companies ADD COLUMN brief_dirty BOOLEAN DEFAULT 0 NOT NULL",
+            "ALTER TABLE tracked_companies ADD COLUMN last_built_at TIMESTAMP",
+            "ALTER TABLE tracked_companies ADD COLUMN last_brief_hash VARCHAR(64)",
+        ):
+            conn.execute(ddl)
+        conn.commit()
+    finally:
+        conn.close()
     return test_db
 
 

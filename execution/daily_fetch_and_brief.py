@@ -1,12 +1,20 @@
 """Daily worker: drain the brief_dirty queue, refresh DCFs, regenerate briefs.
 
-Runs after the earnings_calendar_watcher (which populates `expected_earnings`)
-and the existing FMP/SEC fetch crons (which write to financial_facts via the
+Runs after the FMP/SEC fetch crons (which write to financial_facts via the
 canonical extractors). The fact-table writes flip
 `tracked_companies.brief_dirty = 1` via the SQL triggers from migration 0026.
 
-For each dirty ticker, this worker runs the synthesize → publish slice of
-the canonical pipeline:
+For each dirty ticker, this worker first checks two gates (B + C from the
+Phase B+ proposal):
+
+  B. Material-change gate: hash (max financial_facts.period_end + max
+     kpi_facts.period_end + transcripts count + commitments count + holdings
+     JSON bytes + DCF workbook mtime). Compare to `last_brief_hash`. If they
+     match AND last_built_at < 7 days ago → skip rebuild (clear brief_dirty).
+  C. Evaluation cadence: if list_type='evaluation' AND last_built_at < 7
+     days ago → skip rebuild. (Portfolio remains daily.)
+
+If neither gate skips, runs the synthesize → publish chain:
 
   thesis evaluator    → writes a fresh thesis_evaluations row
   match_commitments   → fills Say-Do outcomes for periods that just landed
@@ -14,29 +22,36 @@ the canonical pipeline:
   build_artifacts     → regenerates the brief (HTML / MD / JSON / xlsx)
   sweep_output_history→ moves prior dated artifacts into output/research/<T>/archive/
 
-Then clears brief_dirty. Each step is run as a subprocess so a failure in
-one ticker doesn't poison the worker's Python state.
+Then clears brief_dirty, records last_built_at and last_brief_hash. Each step
+is run as a subprocess so a failure in one ticker doesn't poison the worker's
+Python state.
 
 Usage:
     python execution/daily_fetch_and_brief.py                   # all dirty tickers
-    python execution/daily_fetch_and_brief.py --ticker META     # force-refresh one
+    python execution/daily_fetch_and_brief.py --ticker META     # force-refresh one (bypasses both gates)
     python execution/daily_fetch_and_brief.py --enable-llm      # populate §8/§9 LLM sections
+    python execution/daily_fetch_and_brief.py --force           # bypass both gates for all queued tickers
+    python execution/daily_fetch_and_brief.py --eval-cadence-days 14  # tune evaluation cadence
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+
+DEFAULT_EVAL_CADENCE_DAYS = 7
+DEFAULT_NO_CHANGE_TTL_DAYS = 7
 
 
 def main() -> int:
@@ -73,7 +88,7 @@ def _parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--ticker", help="Force-refresh a specific ticker, ignoring brief_dirty")
+    g.add_argument("--ticker", help="Force-refresh a specific ticker, ignoring brief_dirty + bypassing gates")
     g.add_argument(
         "--all-tracked", action="store_true", help="Refresh every tracked ticker (heavy)"
     )
@@ -93,6 +108,23 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="If > 0, cap the number of tickers refreshed this run (useful for testing).",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass material-change gate (B) and evaluation-cadence gate (C). Rebuilds every queued ticker.",
+    )
+    p.add_argument(
+        "--eval-cadence-days",
+        type=int,
+        default=DEFAULT_EVAL_CADENCE_DAYS,
+        help=f"Minimum days between rebuilds for list_type='evaluation' (default {DEFAULT_EVAL_CADENCE_DAYS}).",
+    )
+    p.add_argument(
+        "--no-change-ttl-days",
+        type=int,
+        default=DEFAULT_NO_CHANGE_TTL_DAYS,
+        help=f"Max age in days for a 'same content' skip to apply (default {DEFAULT_NO_CHANGE_TTL_DAYS}).",
     )
     return p.parse_args()
 
@@ -122,10 +154,161 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     return tickers
 
 
+def _compute_brief_hash(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> str:
+    """SHA256 of the material inputs that feed a brief.
+
+    Stable when nothing meaningful has changed since the last build:
+      - max(financial_facts.period_end) for the ticker
+      - max(kpi_facts.period_end) for the ticker
+      - COUNT(transcripts) for the ticker
+      - COUNT(management_commitments) for the ticker
+      - holdings JSON bytes (catches thesis/KPI/break-rule edits)
+      - DCF workbook mtime (catches user workbook edits)
+
+    Live price is deliberately excluded — it ticks daily and would never
+    let the hash stabilize. The brief's DCF over/under % shifting by 0.x%
+    isn't worth re-running the LLM sections.
+    """
+    h = hashlib.sha256()
+    for sql in (
+        "SELECT COALESCE(MAX(period_end), '') FROM financial_facts WHERE UPPER(ticker)=?",
+        "SELECT COALESCE(MAX(period_end), '') FROM kpi_facts WHERE UPPER(ticker)=?",
+    ):
+        row = conn.execute(sql, (ticker.upper(),)).fetchone()
+        h.update(b"\x00")
+        h.update(str(row[0] if row else "").encode())
+    for sql in (
+        "SELECT COUNT(*) FROM transcripts WHERE UPPER(ticker)=?",
+        "SELECT COUNT(*) FROM management_commitments WHERE UPPER(ticker)=?",
+    ):
+        row = conn.execute(sql, (ticker.upper(),)).fetchone()
+        h.update(b"\x00")
+        h.update(str(row[0] if row else 0).encode())
+
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    h.update(b"\x00")
+    if holdings_path.exists():
+        try:
+            h.update(holdings_path.read_bytes())
+        except OSError:
+            h.update(b"holdings_unreadable")
+
+    dcf_path = repo_root / "dcf" / f"{ticker.upper()}.xlsx"
+    h.update(b"\x00")
+    if dcf_path.exists():
+        try:
+            h.update(str(dcf_path.stat().st_mtime).encode())
+        except OSError:
+            h.update(b"dcf_unreadable")
+
+    return h.hexdigest()
+
+
+def _check_skip_gates(
+    conn: sqlite3.Connection,
+    ticker: str,
+    repo_root: Path,
+    *,
+    force: bool,
+    eval_cadence_days: int,
+    no_change_ttl_days: int,
+) -> tuple[bool, str | None, str]:
+    """Apply gates B (material change) and C (eval cadence).
+
+    Returns (skip, reason_if_skip, current_hash). The current_hash is always
+    computed so we can persist it on a successful rebuild.
+    """
+    current_hash = _compute_brief_hash(conn, ticker, repo_root)
+    if force:
+        return (False, None, current_hash)
+
+    row = conn.execute(
+        "SELECT list_type, last_built_at, last_brief_hash FROM tracked_companies "
+        "WHERE UPPER(ticker)=?",
+        (ticker.upper(),),
+    ).fetchone()
+    if row is None:
+        return (False, None, current_hash)
+
+    list_type = row["list_type"] if hasattr(row, "keys") else row[0]
+    last_built_at_str = row["last_built_at"] if hasattr(row, "keys") else row[1]
+    last_brief_hash = row["last_brief_hash"] if hasattr(row, "keys") else row[2]
+
+    last_built_at: datetime | None = None
+    if last_built_at_str:
+        try:
+            last_built_at = datetime.fromisoformat(str(last_built_at_str))
+        except ValueError:
+            last_built_at = None
+
+    now = datetime.now()
+
+    # Gate C: evaluation cadence — weekly rebuild even if dirty
+    if list_type == "evaluation" and last_built_at is not None:
+        age = now - last_built_at
+        if age < timedelta(days=eval_cadence_days):
+            return (True, f"evaluation_cadence (age={age.days}d < {eval_cadence_days}d)", current_hash)
+
+    # Gate B: material-change — if hash matches AND build is fresh, skip
+    if (
+        last_brief_hash
+        and current_hash == last_brief_hash
+        and last_built_at is not None
+    ):
+        age = now - last_built_at
+        if age < timedelta(days=no_change_ttl_days):
+            return (True, f"no_material_change (age={age.days}d, hash matches)", current_hash)
+
+    return (False, None, current_hash)
+
+
+def _record_skip(
+    db_path: Path, ticker: str, current_hash: str, reason: str
+) -> None:
+    """On gate skip: clear brief_dirty + record last_built_at + last_brief_hash.
+
+    Clearing the dirty flag is intentional — the gate is saying "nothing new to
+    build". Recording last_built_at + hash means subsequent runs will keep
+    skipping until either content changes (hash flips) or the TTL elapses.
+    """
+    now = datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute(
+            "UPDATE tracked_companies "
+            "SET brief_dirty = 0, last_built_at = ?, last_brief_hash = ? "
+            "WHERE UPPER(ticker) = ?",
+            (now, current_hash, ticker.upper()),
+        )
+        conn.commit()
+
+
 def _refresh_one_ticker(
     ticker: str, repo_root: Path, db_path: Path, args: argparse.Namespace
 ) -> dict[str, object]:
-    """Run the synth-and-publish chain for one ticker; clear dirty flag on success."""
+    """Run the synth-and-publish chain for one ticker; clear dirty flag on success.
+
+    Skips the chain entirely (per gates B + C) when content hasn't changed
+    materially OR an evaluation ticker is within its cadence window. Per-ticker
+    `--ticker` overrides bypass gates implicitly via `args.force`-equivalent.
+    """
+    # Per-ticker explicit invocation = force (bypass gates)
+    forced = bool(args.force or args.ticker)
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        skip, reason, current_hash = _check_skip_gates(
+            conn,
+            ticker,
+            repo_root,
+            force=forced,
+            eval_cadence_days=args.eval_cadence_days,
+            no_change_ttl_days=args.no_change_ttl_days,
+        )
+
+    if skip:
+        _record_skip(db_path, ticker, current_hash, reason or "skipped")
+        return {"ticker": ticker, "status": "skipped", "skip_reason": reason}
+
     stages: list[dict[str, object]] = []
 
     stages.append(
@@ -199,10 +382,15 @@ def _refresh_one_ticker(
 
     overall_ok = all(s["exit_code"] == 0 for s in stages)
     if overall_ok:
+        # Re-compute hash AFTER build because match_commitments / refresh_dcf
+        # may have written new rows that should be reflected.
         with sqlite3.connect(str(db_path)) as conn:
+            final_hash = _compute_brief_hash(conn, ticker, repo_root)
             conn.execute(
-                "UPDATE tracked_companies SET brief_dirty = 0 WHERE ticker = ?",
-                (ticker,),
+                "UPDATE tracked_companies "
+                "SET brief_dirty = 0, last_built_at = ?, last_brief_hash = ? "
+                "WHERE UPPER(ticker) = ?",
+                (datetime.now().isoformat(timespec="seconds"), final_hash, ticker.upper()),
             )
             conn.commit()
     return {"ticker": ticker, "status": "ok" if overall_ok else "failed", "stages": stages}
