@@ -119,7 +119,6 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
             ("fmp_data_upto", "TEXT DEFAULT NULL"),
             ("manual_data_quarters", "TEXT DEFAULT '[]'"),
             ("fmp_data_saved", "BOOLEAN DEFAULT 0"),
-            ("archived_at", "TIMESTAMP DEFAULT NULL"),
         ],
     )
 
