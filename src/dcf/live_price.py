@@ -1,50 +1,15 @@
-"""Read the current market price + timestamp for a ticker.
+"""Backward-compatible re-export from `sources.price`.
 
-The only source is the FMP `profile.json` cache, refreshed on each FMP
-fetch cycle (save_fmp_data.py / refresh_cache.py), so the price is at most
-one fetch cycle stale in normal operation.
+The live-price logic moved to `src/sources/price.py` when the multi-source
+preference stack (yfinance -> FMP cache) was added. This module re-exports
+the public API so existing imports (`from dcf import live_price`) keep
+working without churn.
 
-Returns None if the file is missing, malformed, or lacks a usable price.
+Prefer importing `sources.price` directly in new code.
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import cast
+from sources.price import LivePrice, read_live_price
 
-
-@dataclass(frozen=True)
-class LivePrice:
-    price: float
-    fetched_at: datetime  # mtime of the profile.json cache file (UTC)
-
-
-def read_live_price(repo_root: Path, ticker: str) -> LivePrice | None:
-    path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
-    if not path.exists():
-        return None
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    rec: dict[str, object] | None = None
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        rec = cast("dict[str, object]", payload[0])
-    elif isinstance(payload, dict):
-        rec = cast("dict[str, object]", payload)
-    if rec is None:
-        return None
-
-    raw_price = rec.get("price")
-    if not isinstance(raw_price, (int, float)):
-        return None
-    price = float(raw_price)
-    if price <= 0:
-        return None
-
-    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    return LivePrice(price=price, fetched_at=mtime)
+__all__ = ["LivePrice", "read_live_price"]

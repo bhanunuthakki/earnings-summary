@@ -1,16 +1,22 @@
 """§7 Bear case — strategically deep, structured, LLM-driven.
 
 When `enable_llm` is False (default for dev runs), returns LLM_PENDING with
-the prompt template embedded for review. When True, assembles inputs from
-the upstream sections, calls llm_client.generate_bear_case, and parses the
-JSON into FailureMode rows. Any LLM / parsing error surfaces — no silent
-stub on failure (per repo's "fail loudly" rule).
+the prompt template embedded for review. When True, first checks the on-disk
+cache (`data/bear_case/<TICKER>.json`); if the file exists and is younger than
+`cache_ttl_days`, parses it and returns without re-calling the LLM. Otherwise
+assembles inputs from the upstream sections, calls llm_client.generate_bear_case,
+caches the raw JSON, and parses into FailureMode rows. Any LLM / parsing error
+surfaces — no silent stub on failure (per repo's "fail loudly" rule).
+
+The on-disk cache existed pre-Phase-A as a sidecar for cross-section anchoring
+(load_bear_anchor); this module now also READS from it for cost containment.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 from typing import cast
@@ -27,6 +33,8 @@ from report.models import (
 )
 from report.sections._common import missing
 
+DEFAULT_CACHE_TTL_DAYS = 7
+
 
 def build(
     ticker: str,
@@ -36,6 +44,8 @@ def build(
     financials: FinancialsSection,
     segments: SegmentsSection,
     earnings: EarningsSection,
+    cache_ttl_days: int = DEFAULT_CACHE_TTL_DAYS,
+    force_refresh: bool = False,
 ) -> BearCaseSection:
     if not enable_llm:
         return BearCaseSection(
@@ -63,6 +73,11 @@ def build(
             ),
         )
 
+    if not force_refresh:
+        cached = _read_cache(ticker, repo_root, cache_ttl_days)
+        if cached is not None:
+            return cached
+
     response_text = generate_bear_case(
         ticker=ticker,
         thesis=thesis.thesis_full or "",
@@ -78,6 +93,33 @@ def build(
     # modes via load_bear_anchor() — see llm_client.py.
     _cache_bear_response(ticker, repo_root, response_text)
     return _parse_response(response_text)
+
+
+def _read_cache(
+    ticker: str, repo_root: Path, cache_ttl_days: int
+) -> BearCaseSection | None:
+    """Read data/bear_case/<TICKER>.json if it exists and is younger than TTL.
+
+    Returns a parsed BearCaseSection on hit, None on miss / stale / unreadable.
+    """
+    path = repo_root / "data" / "bear_case" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+    if datetime.now(timezone.utc) - mtime > timedelta(days=cache_ttl_days):
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        return _parse_response(raw)
+    except (json.JSONDecodeError, ValueError):
+        # Corrupt cache — let the caller re-fetch.
+        return None
 
 
 def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> None:
