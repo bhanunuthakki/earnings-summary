@@ -409,7 +409,12 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; }
 }
 .lede {
   font-size: 15px; color: var(--fg-soft); margin: 0;
-  line-height: 1.6; max-width: 760px;
+  line-height: 1.6;
+  /* No max-width — the thesis lede should fill the tab's content area so
+     dense, structured theses don't wrap at awkwardly narrow column widths.
+     Originally capped at 760px for legibility on wide monitors; that turned
+     out to be too narrow for theses that name multiple break rules + KPI
+     tiers inline. The parent panel still provides outer padding. */
 }
 .row-split {
   display: flex; justify-content: space-between; align-items: flex-start;
