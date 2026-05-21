@@ -1289,7 +1289,10 @@ a.peer:hover { background: var(--paper); }
    Thesis lede prominence (top of report, below identity)
    ============================================================ */
 .l1-thesis {
-  margin: 0 24px 8px;
+  /* Align side margins to the shell's standard inset so the thesis card
+     spans the full content width (matched edges with the KPI strip / tabs
+     below it) instead of inset further. */
+  margin: 0 var(--pad-x) 8px;
   padding: 12px 16px;
   background: var(--panel);
   border-left: 3px solid var(--accent, var(--ok));
@@ -1302,6 +1305,10 @@ a.peer:hover { background: var(--paper); }
 .l1-thesis p {
   margin: 4px 0 0; font-family: var(--font-serif, var(--font-body));
   font-size: 14px; line-height: 1.55; color: var(--ink);
+  /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis
+     paragraph should span the full available width of the workspace shell
+     so dense theses don't break across short, awkward lines. */
+  max-width: none;
 }
 
 /* ============================================================
