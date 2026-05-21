@@ -4,8 +4,13 @@ Loop through every OPEN comment on a (ticker, report_date) report and
 take action based on the comment's `intent`.
 
   drop_kpi         → remove the named KPI from micro_thesis/holdings/<T>.json
-  edit_thesis      → ask Opus to revise the thesis paragraph using the comment as
-                     guidance; write the revised thesis back
+  edit_thesis      → ask Opus to revise the thesis NARRATIVE paragraph;
+                     when multiple edit_thesis comments are queued, they are
+                     BATCHED into a single LLM call so the revised thesis is
+                     coherent (not a serial accretion of clauses)
+  edit_structured  → mutate STRUCTURED fields (break_rules, tier_1/2/3_kpis,
+                     chart_priorities, competitive_watchlist) via a JSON-patch
+                     LLM call. Applied per-comment.
   ask_question     → ask Opus the question (with ReportSpec context); append
                      the answer to follow_up_thread as an `assistant` turn
   fix_data         → log a TODO in directives/data_fixes.md (manual ticket)
@@ -15,30 +20,34 @@ take action based on the comment's `intent`.
 
 Comments with `intent = null` get auto-classified via a Haiku bucketer first.
 
-Two-pass apply flow:
-  PASS 1 (always): classify intent + dry-run draft each comment to capture
-                   the proposed change. No writes.
-  PASS 2 (apply only): a sequencer LLM call inspects all edit_thesis drafts
-                   and reorders them so foundational reframings land first,
-                   narrative refinements next, structured-field edits last.
-                   Non-edit_thesis items keep their relative positions.
-  PASS 3 (apply only): execute each route in sequenced order. Each
-                   edit_thesis is re-drafted on the CURRENT state of the
-                   holdings JSON, so later edits build on earlier writes.
+Three-pass apply flow:
+  PASS 1 (always): classify intent + dry-run draft each comment. No writes.
+  PASS 2 (apply only): a sequencer LLM call orders edit_thesis +
+                   edit_structured items — narrative reframes before
+                   refinements before structured edits.
+  PASS 3 (apply only): execute the routes:
+                   - All edit_thesis comments are BATCHED into ONE LLM call
+                     that takes them all as input and produces ONE coherent
+                     revised thesis (no more serial layering).
+                   - edit_structured runs per-comment in sequenced order
+                     against the (now-revised) holdings JSON.
+                   - Other intents run individually.
 
-Pass 2 + 3 are skipped when `--apply` is not set. Pass 1's drafts form the
-dry-run output.
+Pass 4 (apply only, auto): if any holdings JSON mutation landed, invalidate
+                   the bear_case cache (stale vs new thesis) and spawn
+                   build_artifacts to regenerate the workspace HTML.
 
 Default mode is `--dry-run` (print the plan, don't touch files). Pass
 `--apply` to execute. `--clear` drops all addressed + dismissed comments
-after the run. `--no-sequence` bypasses the sequencing layer (apply in
-classify order — debug only).
+after the run. `--no-sequence` bypasses the sequencing layer. `--no-rebuild`
+skips the auto-rebuild (debug only — leaves the report stale vs JSON).
 
 Usage:
   python execution/process_report_comments.py --ticker NU
   python execution/process_report_comments.py --ticker NU --apply
   python execution/process_report_comments.py --ticker NU --apply --clear
   python execution/process_report_comments.py --ticker NU --apply --no-sequence
+  python execution/process_report_comments.py --ticker NU --apply --no-rebuild
   python execution/process_report_comments.py --all
 """
 
@@ -46,6 +55,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -77,14 +87,20 @@ def process_comments_for_ticker(
     apply: bool,
     clear: bool,
     sequence: bool = True,
+    auto_rebuild: bool = True,
 ) -> dict[str, object]:
-    """Three-pass processing: draft → sequence → apply.
+    """Four-pass processing: draft → sequence → apply (batched thesis) → rebuild.
 
-    Pass 1 always runs (drafts every comment). Pass 2 + 3 only run when
-    `apply=True`. The sequencer reorders only edit_thesis items so
-    foundational reframings land before narrative refinements before
-    structured-field edits. Other intents (ask_question, fix_data, etc.)
-    keep their classified order.
+    Pass 1 always runs (drafts every comment).
+    Pass 2 + 3 + 4 only run when `apply=True`.
+
+    Pass 3 batches ALL edit_thesis comments into one LLM call so the revised
+    thesis is coherent, not a serial accretion. edit_structured comments run
+    individually in sequenced order against the (newly-coherent) holdings JSON.
+
+    Pass 4 invalidates downstream caches that depend on the thesis/structured
+    fields (bear_case.json) and spawns build_artifacts to refresh the
+    workspace HTML. Skipped via auto_rebuild=False.
     """
     open_comments = comments.list_comments(repo_root, ticker, report_date, status="open")
 
@@ -128,24 +144,68 @@ def process_comments_for_ticker(
         plan, sequence_decision = sequence_resolutions(plan, ticker)
 
     # -------------------------------------------------------------------
-    # PASS 3: execute in (possibly reordered) sequence
+    # PASS 3: execute. edit_thesis items are BATCHED; others run in sequence.
     # -------------------------------------------------------------------
     results: list[dict[str, object]] = []
-    for item in plan:
-        c: Comment = item["comment"]
-        intent: str = item["intent"]
-        if item.get("_error") and item.get("dry") is None:
-            # Pass-1 error — surface and move on without applying
-            results.append({
-                "id": c.id, "intent": intent, "status": "error",
-                "error": item["_error"], "stage": "draft",
-            })
-            continue
 
+    # First, write back any reclassified intents to the on-disk comment
+    # store so subsequent runs see them — this is independent of execution.
+    for item in plan:
+        c, intent = item["comment"], item["intent"]
         if intent != c.intent:
             comments.update_comment(
                 repo_root, ticker, report_date, c.id, intent=intent
             )
+
+    # Surface pass-1 errors first so they don't get lost.
+    for item in plan:
+        if item.get("_error") and item.get("dry") is None:
+            c: Comment = item["comment"]
+            results.append({
+                "id": c.id, "intent": item["intent"], "status": "error",
+                "error": item["_error"], "stage": "draft",
+            })
+
+    # Batch all edit_thesis comments into ONE LLM call for a coherent rewrite.
+    edit_thesis_items = [
+        item for item in plan
+        if item["intent"] == "edit_thesis" and not (item.get("_error") and item.get("dry") is None)
+    ]
+    if edit_thesis_items:
+        batch_comments_list = [item["comment"] for item in edit_thesis_items]
+        try:
+            batch_resolution = _route_edit_thesis_batch(
+                repo_root, ticker, batch_comments_list, apply=True
+            )
+            for c in batch_comments_list:
+                comments.update_comment(
+                    repo_root, ticker, report_date, c.id,
+                    status="addressed",
+                    resolution_note=batch_resolution.get("summary", "applied"),
+                )
+                results.append({
+                    "id": c.id, "intent": "edit_thesis", "status": "ok",
+                    "resolution": batch_resolution,
+                    "batched": True,
+                })
+        except Exception as e:
+            for c in batch_comments_list:
+                results.append({
+                    "id": c.id, "intent": "edit_thesis", "status": "error",
+                    "error": f"{type(e).__name__}: {e}",
+                    "stage": "apply_batch",
+                })
+
+    # Now run the remaining (non-edit_thesis, non-error) items in plan order.
+    # This preserves the sequencer's relative ordering of edit_structured vs
+    # ask_question vs drop_kpi etc.
+    for item in plan:
+        c = item["comment"]
+        intent = item["intent"]
+        if item.get("_error") and item.get("dry") is None:
+            continue  # already surfaced above
+        if intent == "edit_thesis":
+            continue  # already batched
         try:
             resolution = _route(repo_root, ticker, report_date, c, intent, apply=True)
             if intent == "ask_question" and resolution.get("answer"):
@@ -177,6 +237,13 @@ def process_comments_for_ticker(
     if clear:
         cleared = comments.clear_addressed(repo_root, ticker, report_date)
 
+    # -------------------------------------------------------------------
+    # PASS 4: auto-rebuild downstream artifacts if any holdings JSON mutation landed
+    # -------------------------------------------------------------------
+    rebuild_info: dict[str, object] | None = None
+    if auto_rebuild:
+        rebuild_info = maybe_auto_rebuild(repo_root, ticker, results)
+
     return {
         "ticker": ticker,
         "report_date": report_date.isoformat(),
@@ -185,7 +252,94 @@ def process_comments_for_ticker(
         "cleared": cleared,
         "sequence_used": sequence,
         "sequence_decision": sequence_decision,
+        "auto_rebuild": rebuild_info,
         "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pass 4 — auto-rebuild downstream artifacts after holdings JSON changes
+# ---------------------------------------------------------------------------
+
+# Intents that mutate the holdings JSON. When any of these applied, the
+# workspace HTML / sections.json / bear_case cache are stale and need refresh.
+_HOLDINGS_MUTATING_INTENTS: frozenset[str] = frozenset(
+    {"edit_thesis", "edit_structured", "drop_kpi"}
+)
+
+
+def maybe_auto_rebuild(
+    repo_root: Path, ticker: str, results: list[dict[str, object]]
+) -> dict[str, object]:
+    """If any holdings JSON mutation applied, invalidate dependent caches and
+    spawn `build_artifacts` to regenerate the workspace HTML.
+
+    Returns a record describing whether a rebuild fired and its outcome.
+    Always best-effort: a rebuild failure does not raise; the caller's
+    comment-application results are already persisted regardless.
+
+    Caches invalidated:
+      - data/bear_case/<TICKER>.json (its prompt embeds the thesis; stale on edit_thesis)
+
+    The news cache (.tmp/news_cache/<TICKER>.json) is NOT invalidated — its
+    inputs are unrelated to the thesis JSON.
+    """
+    mutated = [
+        r for r in results
+        if r.get("status") == "ok" and r.get("intent") in _HOLDINGS_MUTATING_INTENTS
+    ]
+    if not mutated:
+        return {"rebuilt": False, "reason": "no holdings-mutating comments applied"}
+
+    # Invalidate the bear case cache so the next build regenerates from the new thesis.
+    invalidated: list[str] = []
+    bear_case_path = repo_root / "data" / "bear_case" / f"{ticker.upper()}.json"
+    if bear_case_path.exists():
+        try:
+            bear_case_path.unlink()
+            invalidated.append(str(bear_case_path.relative_to(repo_root)))
+        except OSError:
+            pass
+
+    # Spawn build_artifacts. --enable-llm + workspace renderer is the canonical
+    # post-comment-apply target (the workspace HTML is what the user opens).
+    cmd = [
+        sys.executable,
+        str(repo_root / "execution" / "build_artifacts.py"),
+        "--ticker", ticker,
+        "--renderer", "workspace",
+        "--enable-llm",
+        "--repo-root", str(repo_root),
+    ]
+    try:
+        proc = subprocess.run(  # noqa: S603 — internal script, args fully controlled
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=900,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "rebuilt": False, "reason": "build_artifacts timeout (>900s)",
+            "caches_invalidated": invalidated,
+            "mutating_intents_applied": len(mutated),
+        }
+    except OSError as e:
+        return {
+            "rebuilt": False, "reason": f"spawn failed: {e}",
+            "caches_invalidated": invalidated,
+            "mutating_intents_applied": len(mutated),
+        }
+
+    return {
+        "rebuilt": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "caches_invalidated": invalidated,
+        "mutating_intents_applied": len(mutated),
+        "stderr_tail": (proc.stderr or "")[-400:] if proc.returncode != 0 else "",
     }
 
 
@@ -436,6 +590,83 @@ Return ONLY the JSON object. No markdown fence, no prose.
     }
 
 
+def _route_edit_thesis_batch(
+    repo_root: Path, ticker: str, comments_list: list[Comment], apply: bool
+) -> dict[str, object]:
+    """One LLM call that revises the thesis incorporating ALL pending edit_thesis comments.
+
+    Replaces the previous serial-rewrite behavior where each edit_thesis
+    comment triggered an independent LLM call that took the prior call's
+    output as input — the result accreted clauses without holistic rewrite,
+    producing run-on, redundant theses. Batching lets the LLM see every
+    requested change at once and produce ONE coherent thesis.
+
+    Single-comment case delegates to `_route_edit_thesis` for simplicity.
+    """
+    if len(comments_list) == 1:
+        return _route_edit_thesis(repo_root, ticker, comments_list[0], apply=apply)
+
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return {"summary": "edit_thesis_batch: holdings JSON not found"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    current_thesis = payload.get("thesis") or payload.get("thesis_full") or ""
+    if not current_thesis:
+        return {"summary": "edit_thesis_batch: no thesis field on file"}
+
+    edits_text = "\n\n".join(
+        f"### Comment {i + 1} (id={c.id}, anchor={c.anchor.key!r})\n{c.comment}"
+        for i, c in enumerate(comments_list)
+    )
+
+    prompt = f"""You are revising an analyst's investment thesis for {ticker}, incorporating {len(comments_list)} analyst comments at once.
+
+CURRENT THESIS:
+\"\"\"
+{current_thesis}
+\"\"\"
+
+ANALYST COMMENTS (incorporate ALL of these into ONE coherent revised thesis):
+{edits_text}
+
+REQUIREMENTS:
+- Produce ONE coherent revised thesis — same density and analytical voice as the original. Aim for similar length, not longer.
+- Every comment's intent should be visibly addressed, but the result must read as a UNIFIED thesis, NOT a serial list of edits.
+- TIGHTEN, CONSOLIDATE, and RESTRUCTURE as needed. Don't just append clauses or paste each edit verbatim. Cut redundancy aggressively — if two comments overlap (e.g. both reference ROE), express the merged point once.
+- The structured fields (KPI tiers, break_rules, chart_priorities) will be handled separately. Don't enumerate quantitative thresholds in the prose unless they're truly thesis-defining — keep the thesis at the "what's the bet and what could break it" altitude.
+- If two comments conflict, defer to the more specific / quantitative one and flag the conflict in diff_summary.
+
+Return a JSON object with EXACTLY these fields:
+{{
+  "revised_thesis": "<coherent, dense, unified thesis>",
+  "diff_summary": "<one-sentence summary of what overall changed vs the original>"
+}}
+
+Return ONLY the JSON object. No markdown fence, no prose.
+"""
+    raw = call_llm(prompt, purpose="company_description").strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RE.sub("", raw).strip()
+    parsed = json.loads(raw)
+    revised = parsed.get("revised_thesis")
+    diff = parsed.get("diff_summary") or "(no diff summary)"
+    if not isinstance(revised, str):
+        return {"summary": "edit_thesis_batch: LLM did not return a revised_thesis string"}
+
+    if apply:
+        payload["thesis"] = revised
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    return {
+        "summary": f"edit_thesis_batch ({len(comments_list)} comments): {diff}",
+        "diff_summary": diff,
+        "revised_preview": revised[:300] + ("..." if len(revised) > 300 else ""),
+        "batched_count": len(comments_list),
+        "batched_ids": [c.id for c in comments_list],
+        "dry_run": not apply,
+    }
+
+
 def _route_edit_structured(
     repo_root: Path, ticker: str, c: Comment, apply: bool
 ) -> dict[str, object]:
@@ -674,6 +905,10 @@ def main() -> int:
         "--no-sequence", action="store_true",
         help="skip the sequencer pass (apply in classify order). Debug only — without sequencing, edit_thesis items can compound in surprising ways.",
     )
+    p.add_argument(
+        "--no-rebuild", action="store_true",
+        help="skip the auto-rebuild after apply (debug only — leaves the workspace HTML stale vs the updated holdings JSON).",
+    )
     args = p.parse_args()
     repo_root = args.repo_root.resolve()
 
@@ -693,6 +928,7 @@ def main() -> int:
         result = process_comments_for_ticker(
             repo_root, t, rd, apply=args.apply, clear=args.clear,
             sequence=not args.no_sequence,
+            auto_rebuild=not args.no_rebuild,
         )
         summary.append(result)
         print(
