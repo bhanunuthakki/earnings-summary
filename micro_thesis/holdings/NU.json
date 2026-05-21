@@ -2,17 +2,23 @@
   "ticker": "NU",
   "name": "Nu Holdings",
   "last_updated": "2026-05-10",
-  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). Three engines: (1) customer acquisition, where Brazil is now a saturation/monetization story and the leading indicator has migrated to net adds and primary-banking share in Mexico and Colombia; (2) ARPAC ramping as customers layer credit and investment products onto the deposit relationship, with near-zero incremental cost-to-serve translating revenue growth into operating leverage; (3) exceptional ROE driven by expanding risk-adjusted NIM, seasonal NPL ratios kept in hand, and a prudent capital cushion preserved through the credit cycle. Bet: 25%+ revenue growth with ROE crossing 30%, where durable Brazil profitability \u2014 earned on risk-adjusted spread, not scale leverage \u2014 funds the Mexico/Colombia land-grab without forcing underwriting compromise.",
+  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). In Brazil \u2014 now a mature, ~60%+ penetrated market \u2014 the story shifts from customer adds to monetization: ARPAC compounding as cohorts deepen product penetration into credit card, personal loan, investments, and insurance, with risk-adjusted NIM (NIM minus cost of risk) expanding as cost-to-serve stays near-zero. In Mexico and Colombia, total customer count remains the primary signal \u2014 these are the new acquisition engines, compounding on network effects and low CAC, but Mexico's credit book mix is the watch-item (unhedged expansion if it grows >50% QoQ). Bet: durable Brazil profitability \u2014 ROE crossing 30% on a consolidated basis, held above a 25% floor \u2014 funds growth-market expansion while consolidated revenue growth holds the 25%+ track and CET1 stays above 13%. Thesis breaks if ROE sustains below 25% for two quarters, risk-adjusted NIM contracts YoY for two quarters, revenue growth decelerates by more than 80% versus the prior-year same quarter, consolidated NPL 15d+ deteriorates YoY by more than 150bps for two same-fiscal-quarter prints, or net customer adds fall below 5M/Q while Brazil flagship-product penetration rolls over QoQ.",
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "Customer count \u00d7 ARPAC \u00d7 NIM with NPL controlled",
   "chart_priorities": [
-    "Products per active customer by country (BR / MX / CO)",
-    "Credit exposure mix by product x country",
-    "Return on equity (ROE)",
+    "ROE",
     "Risk-adjusted NIM",
-    "Monthly ARPAC by country (BR / MX / CO)",
-    "NPL ratio by country and bucket (15-90d + 90d+ : BR / MX / CO)",
+    "NIM",
+    "Cost of risk",
+    "Capital adequacy ratio",
+    "Monthly ARPAC",
+    "Product penetration by country",
+    "Credit exposure by product x country",
+    "NPL 15d+ total (consolidated, YoY)",
+    "NPL 90d+",
+    "NPL 15-90d",
+    "NPL 90d+ by product",
     "Revenue",
     "Operating income",
     "Net income"
@@ -20,49 +26,67 @@
   "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {
-      "name": "Product penetration by country (products per active customer: BR / MX / CO)",
+      "name": "ROE (annualized, consolidated)",
       "current": "TBV",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "MX or CO products-per-active flat QoQ for 2 consecutive Qs while BR also fails to expand",
-      "source": "earnings release / investor presentation segment slides"
-    },
-    {
-      "name": "Credit exposure mix by product x country (% of loan book: credit card / personal loan / secured x BR / MX / CO)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "MX or CO credit-card share of book grows >500bps QoQ without matching NPL coverage build",
-      "source": "earnings release / investor presentation segment slides"
-    },
-    {
-      "name": "Return on equity (ROE)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "ROE <25% for 2 consecutive Qs, or sustained downward trend over 3+ Qs",
+      "break_condition": "Consolidated ROE <25% for 2 consecutive Qs (thesis bet is ROE crossing 30% durably)",
       "source": "earnings release"
     },
     {
-      "name": "Risk-adjusted NIM (NIM net of cost of risk)",
+      "name": "Risk-adjusted NIM (NIM minus cost of risk)",
       "current": "TBV",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Risk-adjusted NIM compresses >100bps YoY for 2 consecutive Qs (precursor to ROE break)",
+      "break_condition": "Risk-adjusted NIM contracts YoY for 2 consecutive Qs (cost of risk outrunning NIM expansion)",
       "source": "earnings release"
     },
     {
-      "name": "Monthly ARPAC by country (USD: BR / MX / CO)",
+      "name": "Capital adequacy ratio (CET1 / Basel III total)",
       "current": "TBV",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "BR ARPAC growth <15% YoY or MX ARPAC growth <30% YoY for 2 consecutive Qs",
+      "break_condition": "Capital ratio falls below 13% OR drops >150bps QoQ without explicit growth-deployment rationale (cushion erosion)",
+      "source": "earnings release + 20-F"
+    },
+    {
+      "name": "NPL 15d+ ratio (consolidated total: early-stage 15-90d + severe 90d+, YoY-tracked)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Total NPL (15d+ consolidated) YoY deterioration >150bps for 2 consecutive Qs in the same fiscal quarter \u2014 YoY framing controls for LatAm consumer-credit seasonality; absolute level is allowed to drift with the evolving underwriting mix, but rapid YoY worsening signals a credit-cycle break rather than a seasonal pattern",
       "source": "earnings release"
+    },
+    {
+      "name": "Monthly ARPAC (USD)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "ARPAC growth <15% YoY for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Product penetration by country (% of customers using each product, Brazil/Mexico/Colombia x credit card/personal loan/investments/insurance)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Brazil flagship-product penetration declines QoQ for 2 consecutive Qs OR Mexico penetration ramp stalls",
+      "source": "earnings release + investor presentation"
+    },
+    {
+      "name": "Credit exposure by product x country (loan book mix: credit card / personal loan / SMB / FGTS, split Brazil/Mexico/Colombia)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Single-product concentration >60% of consolidated book OR Mexico credit book grows >50% QoQ (unhedged expansion risk)",
+      "source": "earnings release + 20-F"
     },
     {
       "name": "Total customers (millions)",
@@ -71,15 +95,6 @@
       "yoy": null,
       "status": "Unknown",
       "break_condition": "Net adds <5M per quarter for 2 consecutive Qs",
-      "source": "earnings release"
-    },
-    {
-      "name": "NPL ratio by country and bucket (15-90d + 90d+ : BR / MX / CO)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Consolidated (15-90d + 90d+) NPL rises >150bps YoY for 2 consecutive Qs (YoY framing strips seasonality; absolute level secondary as the underwriting mix evolves), or MX/CO total NPL diverges >200bps above BR YoY-change while their books are still scaling",
       "source": "earnings release"
     },
     {
@@ -93,6 +108,10 @@
     }
   ],
   "tier_2_kpis": [
+    {
+      "name": "NPL 90d+ by product (credit card vs personal loan vs SMB) \u2014 early warning on which product cycle is breaking",
+      "source": "earnings release supplementary"
+    },
     {
       "name": "Mexico customer + revenue growth",
       "source": "earnings release segment"
@@ -110,10 +129,6 @@
     {
       "name": "Investment AUC (assets under custody)",
       "source": "earnings release"
-    },
-    {
-      "name": "Capital adequacy ratio",
-      "source": "earnings release"
     }
   ],
   "competitive_watchlist": [
@@ -124,52 +139,59 @@
     "PicPay"
   ],
   "thesis_breakers_qualitative": [
-    "ROE sustained below 25% (core profitability engine breaking)",
-    "Risk-adjusted NIM compression (precursor to ROE break \u2014 NIM pressure or rising cost of risk)",
-    "Product penetration in MX/CO stalls (cross-sell engine fails to replicate BR playbook)",
-    "Credit exposure tilts toward unsecured in MX/CO faster than NPL coverage can absorb",
-    "BR ARPAC growth <15% YoY (monetization story stalls in the saturated core)",
+    "ROE fails to durably cross 30% / drifts below 25% (exceptional-profitability thesis breaks)",
+    "Risk-adjusted NIM stops expanding (pricing power vs. credit-cost balance lost)",
+    "Capital cushion erodes without growth-deployment rationale",
+    "Total NPL (15d+ consolidated) deteriorates YoY beyond ~150bps in the same fiscal quarter \u2014 i.e. worsening that exceeds seasonality and is not explained by deliberate underwriting-mix shifts (credit-cycle break)",
     "Customer net adds <5M/Q",
-    "Consolidated NPL (15-90d + 90d+) rises >150bps YoY sustained (credit-cycle break, isolated from underwriting-mix evolution via YoY framing)",
-    "Revenue YoY growth rate decelerates >80% QoQ (e.g. from +50% YoY to <+10% YoY) \u2014 sharp loss of top-line momentum, not outright contraction",
+    "ARPAC stalls (cross-sell saturating)",
     "Mexico expansion stalls without offset"
   ],
   "break_rules": [
     {
-      "rule_id": "roe_below_25",
-      "kpi_name": "Return on equity (ROE)",
+      "rule_id": "revenue_growth_deceleration_80pct",
+      "kpi_name": "Revenue YoY Growth Deceleration (YoY of YoY growth rate)",
+      "comparator": "gt",
+      "threshold": 80,
+      "unit": "percent",
+      "consecutive_periods": 1,
+      "narrative": "Revenue YoY growth rate decelerates by more than 80% compared to the same quarter a year prior (e.g. prior-year same-Q YoY growth of 30% collapsing to <6% this Q). Thesis bet is consolidated revenue growth holding 25%+; a single-quarter 80%+ collapse in the growth rate itself signals the growth engine has stalled, even if absolute revenue is still nominally positive YoY."
+    },
+    {
+      "rule_id": "roe_below_25pct_sustained",
+      "kpi_name": "ROE (annualized, consolidated)",
       "comparator": "lt",
       "threshold": 25,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "ROE falls below 25% for 2 consecutive quarters \u2014 the core profitability engine (expanding risk-adjusted NIM + operating leverage) is breaking down."
+      "narrative": "Consolidated ROE below 25% for 2 consecutive quarters \u2014 thesis bet is durable ROE crossing 30%; sustained sub-25% means the exceptional-profitability story is broken."
     },
     {
-      "rule_id": "risk_adjusted_nim_compression",
-      "kpi_name": "Risk-adjusted NIM (NIM net of cost of risk)",
+      "rule_id": "risk_adjusted_nim_yoy_compression",
+      "kpi_name": "Risk-adjusted NIM YoY change (bps)",
       "comparator": "lt",
-      "threshold": -100,
+      "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Risk-adjusted NIM compresses more than 100bps YoY for 2 consecutive quarters \u2014 precursor to ROE break, signals either NIM pressure or rising cost of risk eroding unit economics."
+      "narrative": "Risk-adjusted NIM (NIM minus cost of risk) contracting YoY for 2 consecutive quarters \u2014 either pricing power is eroding or cost of risk is outrunning yield, undermining the expanding-spread thesis."
     },
     {
-      "rule_id": "revenue_growth_deceleration",
-      "kpi_name": "Revenue YoY Growth Deceleration (QoQ)",
+      "rule_id": "capital_adequacy_below_13pct",
+      "kpi_name": "Capital adequacy ratio",
       "comparator": "lt",
-      "threshold": -80,
+      "threshold": 13,
       "unit": "percent",
       "consecutive_periods": 1,
-      "narrative": "Revenue YoY growth rate decelerates by more than 80% from the prior quarter's YoY growth rate \u2014 sharp loss of growth momentum."
+      "narrative": "Capital ratio below 13% \u2014 prudent-cushion thesis breaks; well-capitalized banks in LatAm typically run 14-18%, sub-13% signals either aggressive deployment or stress."
     },
     {
       "rule_id": "npl_total_yoy_deterioration",
-      "kpi_name": "NPL ratio by country and bucket (15-90d + 90d+ : BR / MX / CO)",
+      "kpi_name": "NPL 15d+ total YoY change (pp)",
       "comparator": "gt",
-      "threshold": 150,
+      "threshold": 1.5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Consolidated NPL (15-90d early-stage + 90d+ late-stage, summed) rises more than 150bps YoY for 2 consecutive quarters. YoY framing is intentional \u2014 the underwriting mix is actively evolving (geographic and product expansion), so a static absolute threshold misreads either seasonality or a deliberately riskier book that is still being priced correctly. YoY change isolates credit-cycle deterioration from underwriting-mix drift."
+      "narrative": "Consolidated NPL (15d+ total, covering both early-stage 15-90d and severe 90d+) deteriorating YoY by more than 150bps (1.5pp) for 2 consecutive quarters in the same fiscal quarter comparison. YoY framing rather than absolute level \u2014 the underwriting mix legitimately shifts the steady-state NPL ratio (more credit card / SMB / FGTS each have different baseline NPLs), so absolute thresholds break as the book evolves. YoY same-quarter comparison neutralizes LatAm consumer-credit ..."
     }
   ],
   "schema_version": 2,

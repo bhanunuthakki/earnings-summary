@@ -20,7 +20,7 @@ take action based on the comment's `intent`.
 
 Comments with `intent = null` get auto-classified via a Haiku bucketer first.
 
-Three-pass apply flow:
+Five-pass apply flow:
   PASS 1 (always): classify intent + dry-run draft each comment. No writes.
   PASS 2 (apply only): a sequencer LLM call orders edit_thesis +
                    edit_structured items — narrative reframes before
@@ -32,10 +32,18 @@ Three-pass apply flow:
                    - edit_structured runs per-comment in sequenced order
                      against the (now-revised) holdings JSON.
                    - Other intents run individually.
-
-Pass 4 (apply only, auto): if any holdings JSON mutation landed, invalidate
-                   the bear_case cache (stale vs new thesis) and spawn
-                   build_artifacts to regenerate the workspace HTML.
+  PASS 3.5 (apply only, conditional): if any edit_structured succeeded, a
+                   synthesis LLM call rewrites the thesis prose so it
+                   explicitly grounds in the (just-mutated) structured
+                   fields — naming the actual KPI titles, break-rule
+                   conditions, and chart priorities. Skipped when only
+                   edit_thesis ran (the batched call already produced
+                   coherent prose).
+  PASS 4 (apply only, auto): if any holdings JSON mutation landed,
+                   invalidate the bear_case cache, then chain through
+                   run_thesis_evaluator (refreshes break_rule_evaluations
+                   against the new break_rules) followed by build_artifacts
+                   to regenerate the workspace HTML.
 
 Default mode is `--dry-run` (print the plan, don't touch files). Pass
 `--apply` to execute. `--clear` drops all addressed + dismissed comments
@@ -238,6 +246,18 @@ def process_comments_for_ticker(
         cleared = comments.clear_addressed(repo_root, ticker, report_date)
 
     # -------------------------------------------------------------------
+    # PASS 3.5: synthesis pass — align thesis prose with the structured fields
+    # touched by edit_structured comments. Skipped when only edit_thesis ran
+    # (the batched edit_thesis already produced a coherent prose).
+    # -------------------------------------------------------------------
+    synthesis_info: dict[str, object] | None = None
+    applied_intents = {
+        r.get("intent") for r in results if r.get("status") == "ok"
+    }
+    if "edit_structured" in applied_intents:
+        synthesis_info = _synthesize_holdings_coherence(repo_root, ticker)
+
+    # -------------------------------------------------------------------
     # PASS 4: auto-rebuild downstream artifacts if any holdings JSON mutation landed
     # -------------------------------------------------------------------
     rebuild_info: dict[str, object] | None = None
@@ -252,8 +272,122 @@ def process_comments_for_ticker(
         "cleared": cleared,
         "sequence_used": sequence,
         "sequence_decision": sequence_decision,
+        "synthesis": synthesis_info,
         "auto_rebuild": rebuild_info,
         "results": results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pass 3.5 — synthesis pass: align thesis prose with structured fields
+# ---------------------------------------------------------------------------
+
+
+# Fields the synthesis pass reads + may consider when grounding the prose.
+# Listed in roughly priority order so the LLM has a clear hierarchy.
+_SYNTHESIS_STRUCTURED_FIELDS: tuple[str, ...] = (
+    "tier_1_kpis",
+    "break_rules",
+    "break_rules_soft",
+    "chart_priorities",
+    "tier_2_kpis",
+    "tier_3_kpis",
+    "thesis_breakers_qualitative",
+)
+
+
+def _synthesize_holdings_coherence(
+    repo_root: Path, ticker: str
+) -> dict[str, object]:
+    """Final pass: rewrite thesis prose to ground in the (updated) structured fields.
+
+    Triggered when `edit_structured` has succeeded — the structured fields
+    just changed, so the existing thesis prose may no longer reference the
+    actual monitorables / break rules / KPI tier ordering. One LLM call
+    reads the current holdings JSON, identifies the structured monitorables
+    that should be visible in the prose, and rewrites the thesis to
+    explicitly thread them through.
+
+    The structured fields are NOT touched by this pass — they're the
+    authoritative source of truth that the prose must align with.
+
+    Returns a record with status + diff summary. On parse / LLM failure,
+    leaves the thesis unchanged and reports `ran=False`.
+    """
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return {"ran": False, "reason": "holdings JSON not found"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    current_thesis = (payload.get("thesis") or "").strip()
+    if not current_thesis:
+        return {"ran": False, "reason": "no thesis on file"}
+
+    structured_view = {
+        k: payload[k] for k in _SYNTHESIS_STRUCTURED_FIELDS
+        if k in payload and payload[k]
+    }
+    if not structured_view:
+        return {"ran": False, "reason": "no structured fields to ground in"}
+
+    prompt = f"""You are doing a coherence pass on an analyst's investment thesis for {ticker}.
+
+CURRENT THESIS PROSE:
+\"\"\"
+{current_thesis}
+\"\"\"
+
+CURRENT STRUCTURED FIELDS (authoritative — do NOT change):
+{json.dumps(structured_view, indent=2)}
+
+TASK: Rewrite the thesis prose so it explicitly grounds in the structured fields above. The prose should:
+  - Reference the actual KPI names from tier_1_kpis (e.g. \"ROE\", \"risk-adjusted NIM\", \"product penetration by country\") rather than vague proxies.
+  - Name the actual break-rule conditions in plain language (e.g. \"if ROE sustains below 25%\", \"if revenue growth decelerates by more than 80% YoY\") in the thesis-killer / break-condition part.
+  - Reflect the priority order of chart_priorities (the highest-priority monitorables should be featured first or most prominently).
+  - Carry the analytical \"what's the bet\" framing — DON'T just enumerate fields. Keep the prose intentional.
+
+REQUIREMENTS:
+  - Same density and analytical voice as the original. Similar length, not longer.
+  - Don't reference KPIs / rules that aren't in the structured fields.
+  - Don't list every field exhaustively — pick the ones that carry the most analytical weight.
+  - If the existing prose ALREADY grounds well in the structured fields, return it essentially unchanged with diff_summary describing it as a no-op.
+
+Return ONLY a JSON object:
+{{
+  "revised_thesis": "<coherent thesis grounded in structured fields>",
+  "diff_summary": "<one sentence: what shifted vs the prior thesis, or 'no material change'>"
+}}
+
+No markdown fence, no prose outside the JSON.
+"""
+
+    try:
+        raw = call_llm(prompt, purpose="company_description").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        parsed = json.loads(raw)
+    except Exception as e:  # noqa: BLE001 — synthesis must never crash the apply path
+        return {"ran": False, "reason": f"LLM/parse error: {type(e).__name__}: {e}"}
+
+    revised = parsed.get("revised_thesis") if isinstance(parsed, dict) else None
+    diff = (parsed.get("diff_summary") or "(no diff summary)") if isinstance(parsed, dict) else "(no diff summary)"
+    if not isinstance(revised, str) or not revised.strip():
+        return {"ran": False, "reason": "LLM did not return a usable revised_thesis"}
+
+    # Only write if the revised thesis is materially different — avoids needless churn.
+    if revised.strip() == current_thesis:
+        return {
+            "ran": True, "wrote": False,
+            "diff_summary": "no change after synthesis",
+            "structured_fields_considered": list(structured_view.keys()),
+        }
+
+    payload["thesis"] = revised
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return {
+        "ran": True, "wrote": True,
+        "diff_summary": diff,
+        "structured_fields_considered": list(structured_view.keys()),
+        "new_thesis_length": len(revised),
     }
 
 
@@ -271,18 +405,22 @@ _HOLDINGS_MUTATING_INTENTS: frozenset[str] = frozenset(
 def maybe_auto_rebuild(
     repo_root: Path, ticker: str, results: list[dict[str, object]]
 ) -> dict[str, object]:
-    """If any holdings JSON mutation applied, invalidate dependent caches and
-    spawn `build_artifacts` to regenerate the workspace HTML.
+    """If any holdings JSON mutation applied, refresh the full downstream chain.
 
-    Returns a record describing whether a rebuild fired and its outcome.
-    Always best-effort: a rebuild failure does not raise; the caller's
-    comment-application results are already persisted regardless.
+    Two-step chain (matches `daily_fetch_and_brief`'s synthesize→publish slice):
 
-    Caches invalidated:
-      - data/bear_case/<TICKER>.json (its prompt embeds the thesis; stale on edit_thesis)
+      1. run_thesis_evaluator — re-evaluates `break_rules` against the latest
+         kpi_facts time-series and writes a new `thesis_evaluations` row.
+         Required because build_artifacts reads break_rule_evaluations from
+         the DB, not from the holdings JSON; without this step, the brief's
+         "Universal break rules" panel still shows the OLD evaluations even
+         though the JSON has new rules.
+      2. build_artifacts (workspace + enable-llm) — regenerates the HTML,
+         sections JSON, DCF xlsx, and (with the bear_case cache invalidated)
+         a fresh bear_case payload reflecting the new thesis.
 
-    The news cache (.tmp/news_cache/<TICKER>.json) is NOT invalidated — its
-    inputs are unrelated to the thesis JSON.
+    Returns a record describing each step's outcome. Best-effort: a failure
+    in one step does not raise; results are already persisted regardless.
     """
     mutated = [
         r for r in results
@@ -301,44 +439,66 @@ def maybe_auto_rebuild(
         except OSError:
             pass
 
-    # Spawn build_artifacts. --enable-llm + workspace renderer is the canonical
-    # post-comment-apply target (the workspace HTML is what the user opens).
-    cmd = [
-        sys.executable,
-        str(repo_root / "execution" / "build_artifacts.py"),
-        "--ticker", ticker,
-        "--renderer", "workspace",
-        "--enable-llm",
-        "--repo-root", str(repo_root),
-    ]
+    steps: list[dict[str, object]] = []
+
+    # Step 1 — re-evaluate break_rules against fresh kpi_facts so the brief's
+    # Universal break rules panel reflects the new rules.
+    steps.append(_spawn_step(
+        repo_root,
+        name="run_thesis_evaluator",
+        cmd=[
+            sys.executable,
+            str(repo_root / "execution" / "run_thesis_evaluator.py"),
+            "--ticker", ticker,
+        ],
+        timeout=300,
+    ))
+
+    # Step 2 — regenerate the workspace HTML from the updated DB + holdings.
+    steps.append(_spawn_step(
+        repo_root,
+        name="build_artifacts",
+        cmd=[
+            sys.executable,
+            str(repo_root / "execution" / "build_artifacts.py"),
+            "--ticker", ticker,
+            "--renderer", "workspace",
+            "--enable-llm",
+            "--repo-root", str(repo_root),
+        ],
+        timeout=900,
+    ))
+
+    overall_ok = all(s.get("exit_code") == 0 for s in steps)
+    return {
+        "rebuilt": overall_ok,
+        "caches_invalidated": invalidated,
+        "mutating_intents_applied": len(mutated),
+        "steps": steps,
+    }
+
+
+def _spawn_step(
+    repo_root: Path, *, name: str, cmd: list[str], timeout: int
+) -> dict[str, object]:
+    """Run one subprocess step; return a structured record. Never raises."""
     try:
-        proc = subprocess.run(  # noqa: S603 — internal script, args fully controlled
+        proc = subprocess.run(  # noqa: S603 — internal script
             cmd,
             cwd=str(repo_root),
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=900,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return {
-            "rebuilt": False, "reason": "build_artifacts timeout (>900s)",
-            "caches_invalidated": invalidated,
-            "mutating_intents_applied": len(mutated),
-        }
+        return {"name": name, "exit_code": -1, "error": f"timeout after {timeout}s"}
     except OSError as e:
-        return {
-            "rebuilt": False, "reason": f"spawn failed: {e}",
-            "caches_invalidated": invalidated,
-            "mutating_intents_applied": len(mutated),
-        }
-
+        return {"name": name, "exit_code": -1, "error": f"spawn failed: {e}"}
     return {
-        "rebuilt": proc.returncode == 0,
+        "name": name,
         "exit_code": proc.returncode,
-        "caches_invalidated": invalidated,
-        "mutating_intents_applied": len(mutated),
         "stderr_tail": (proc.stderr or "")[-400:] if proc.returncode != 0 else "",
     }
 
@@ -709,7 +869,8 @@ Anchor key: {c.anchor.key}
 
 Editable fields (return any subset; each field is REPLACED in full by what you return):
 - tier_1_kpis / tier_2_kpis / tier_3_kpis: list of KPI dicts. Each: {{"name": str, "current": str|null, "prior": str|null, "yoy": str|null, "status": str, "break_condition": str, "source": str}}
-- break_rules / break_rules_soft: list of structured rule dicts. Each: {{"rule_id": str, "kpi_name": str, "comparator": str ("lt"|"gt"|"le"|"ge"|"eq"), "threshold": number, "unit": str ("percent"|"usd"|"ratio"|"count"), "consecutive_periods": int, "narrative": str}}
+- break_rules: list of structured rule dicts. **PREFER THIS** for analyst-authored tripwires with a definite numeric threshold + comparator (e.g. "ROE < 25% for 2Q", "revenue YoY < -80%"). These get auto-evaluated against kpi_facts every cycle and rendered in the workspace "Universal break rules" panel. Each: {{"rule_id": str, "kpi_name": str, "comparator": str ("lt"|"gt"|"le"|"ge"|"eq"), "threshold": number, "unit": str ("percent"|"usd"|"ratio"|"count"), "consecutive_periods": int, "narrative": str (HARD LIMIT 500 chars — keep terse, one analytical sentence)}}
+- break_rules_soft: same shape as break_rules. **Use ONLY for fuzzy/qualitative tripwires** that can't yet be expressed numerically. The soft-rule evaluator is not yet wired up, so these are dormant — don't put numeric analyst tripwires here even if the language was "soft" (e.g. "should be monitored", "if dipping below"); those still belong in break_rules with a definite threshold.
 - chart_priorities: list of KPI name strings (order matters)
 - competitive_watchlist: list of competitor name strings
 - thesis_breakers_qualitative: list of structured-qualitative breaker dicts (free shape)
@@ -740,7 +901,17 @@ Return ONLY the JSON object. No markdown fence, no prose.
     touched: list[str] = []
     for field in _STRUCTURED_EDITABLE_FIELDS:
         if field in parsed:
-            payload[field] = parsed[field]
+            value = parsed[field]
+            # Defensive: BreakRule's `narrative` is capped at 500 chars by the
+            # Pydantic model — truncate over-long LLM-generated entries so
+            # the thesis_evaluator load doesn't crash. Same for break_rules_soft.
+            if field in ("break_rules", "break_rules_soft") and isinstance(value, list):
+                for rule in value:
+                    if isinstance(rule, dict):
+                        narr = rule.get("narrative")
+                        if isinstance(narr, str) and len(narr) > 500:
+                            rule["narrative"] = narr[:480].rstrip() + "..."
+            payload[field] = value
             touched.append(field)
 
     if not touched:
