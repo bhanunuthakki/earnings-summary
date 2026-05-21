@@ -68,7 +68,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import sqlite3
 import subprocess
 import sys
 from datetime import UTC, date, datetime
@@ -404,7 +406,11 @@ No markdown fence, no prose outside the JSON.
 # Intents that mutate the holdings JSON. When any of these applied, the
 # workspace HTML / sections.json / bear_case cache are stale and need refresh.
 _HOLDINGS_MUTATING_INTENTS: frozenset[str] = frozenset(
-    {"edit_thesis", "edit_structured", "drop_kpi"}
+    # All of these change DB or holdings-JSON state that the brief reads;
+    # auto-rebuild fires whenever any of them succeed. `extract_kpi` writes
+    # to kpi_facts (not holdings JSON), but still warrants a refresh so the
+    # thesis tab's KPI ledger reflects the new value.
+    {"edit_thesis", "edit_structured", "drop_kpi", "extract_kpi"}
 )
 
 
@@ -464,20 +470,34 @@ def maybe_auto_rebuild(
         timeout=60,
     ))
 
-    # Step 2 — LLM-extract values for the (now seeded) tier_1 KPIs from
-    # existing per-quarter transcript summaries. Idempotent on
-    # (ticker, period, KPI name) — values already in kpi_facts are skipped,
-    # so adding new KPI names only re-prompts for the new ones. Without
-    # this step the kpi_facts join still returns empty history for any
-    # newly-added KPIs.
+    # Step 2a — LLM-extract values from per-quarter EARNINGS-CALL summaries.
+    # Idempotent on (ticker, period, KPI name) — values already in kpi_facts
+    # are skipped, so adding new KPI names only re-prompts for the new ones.
     steps.append(_spawn_step(
         repo_root,
-        name="extract_kpis_from_summaries",
+        name="extract_kpis_from_summaries(earnings)",
         cmd=[
             sys.executable,
             str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
             "--ticker", ticker,
             "--source", "earnings",
+            "--repo-root", str(repo_root),
+        ],
+        timeout=900,
+    ))
+
+    # Step 2b — LLM-extract values from IR PRESS-RELEASE / PRESENTATION briefs.
+    # These are typically richer with explicit numeric KPIs (NPL ratios,
+    # capital adequacy, segment margins) than the qualitative earnings-call
+    # summaries, so this step fills gaps that 2a couldn't.
+    steps.append(_spawn_step(
+        repo_root,
+        name="extract_kpis_from_summaries(ir)",
+        cmd=[
+            sys.executable,
+            str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
+            "--ticker", ticker,
+            "--source", "ir",
             "--repo-root", str(repo_root),
         ],
         timeout=900,
@@ -682,6 +702,8 @@ def _route(
         return _route_edit_thesis(repo_root, ticker, c, apply=apply)
     if intent == "edit_structured":
         return _route_edit_structured(repo_root, ticker, c, apply=apply)
+    if intent == "extract_kpi":
+        return _route_extract_kpi(repo_root, ticker, c, apply=apply)
     if intent == "ask_question":
         return _route_ask_question(repo_root, ticker, report_date, c)
     if intent == "fix_data":
@@ -976,6 +998,221 @@ Return ONLY the JSON object. No markdown fence, no prose.
     }
 
 
+def _route_extract_kpi(
+    repo_root: Path, ticker: str, c: Comment, apply: bool
+) -> dict[str, object]:
+    """Comment-driven KPI extraction.
+
+    The user comments on a `kpi_ledger_row` anchor (or any tier_*_kpi name)
+    and supplies either a verbatim quote from a transcript / IR doc / filing
+    OR a direct value statement. The LLM parses the comment into
+    (value, period_end, source_excerpt) and persists into kpi_facts.
+
+    Persistence path:
+      1. Resolve anchor.key → kpi_definitions row (must already exist; the
+         auto-rebuild's seed_kpi_definitions step keeps this in sync with
+         tier_*_kpis).
+      2. INSERT a synthetic `documents` row of type ANALYST_COMMENT / source
+         ANALYST_COMMENT, file_path pointing at the comment's id, so the
+         NOT-NULL source_doc_id FK on kpi_facts is satisfied.
+      3. UPSERT kpi_facts row keyed on (ticker, period_end, fiscal_period_type,
+         kpi_definition_id) with the LLM-parsed value, unit, and
+         source_excerpt = the verbatim quote / user statement.
+
+    On any LLM/parse/DB failure, returns a `summary` describing what went
+    wrong without raising.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return {"summary": "extract_kpi: portfolio.db not found"}
+
+    # Resolve the targeted KPI by name. Anchor key is the most reliable signal
+    # (the comment was attached to a specific row); fall back to scanning the
+    # comment body for a KPI name match.
+    kpi_name = (c.anchor.key or "").strip() if c.anchor else ""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        kdef_row = conn.execute(
+            "SELECT id, name, unit FROM kpi_definitions WHERE ticker = ? AND name = ?",
+            (ticker.upper(), kpi_name),
+        ).fetchone()
+        if kdef_row is None:
+            return {
+                "summary": (
+                    f"extract_kpi: no kpi_definitions row for ticker={ticker!r} "
+                    f"name={kpi_name!r}. Run seed_kpi_definitions first or fix the anchor."
+                ),
+            }
+
+        # LLM parses the comment for (value, period_end, source_excerpt).
+        prompt = f"""You are extracting a KPI value the analyst supplied in a workspace comment.
+
+TICKER: {ticker.upper()}
+KPI: {kpi_name} (unit: {kdef_row['unit']})
+
+ANALYST COMMENT (this is the source — it may contain a verbatim quote from a
+transcript / IR doc / filing, OR a direct value statement, OR both):
+\"\"\"
+{c.comment}
+\"\"\"
+
+Extract:
+  - value: the numeric value the analyst is asserting for this KPI
+  - period_end: the fiscal-period end date (YYYY-MM-DD). Infer from context
+    (e.g. "Q3 2025" → 2025-09-30, "Q4 2024" → 2024-12-31). If the comment
+    references "latest" or "current" without naming a quarter, return null.
+  - source_excerpt: the verbatim quote the value came from (keep ≤ 500 chars).
+    If the analyst stated the value directly without a quote, use the
+    analyst's exact words.
+  - fiscal_period_type: "quarter" by default, "annual" only when the comment
+    is clearly about a fiscal year.
+
+Return ONLY a JSON object:
+{{
+  "value": <number or null>,
+  "period_end": "<YYYY-MM-DD or null>",
+  "fiscal_period_type": "quarter" | "annual",
+  "source_excerpt": "<verbatim quote or analyst statement, ≤500 chars>"
+}}
+
+If the comment doesn't contain enough information to extract a value, return
+{{"value": null, "source_excerpt": "<reason>"}} with no other fields. No
+markdown fence, no prose.
+"""
+        raw = call_llm(prompt, purpose="company_description").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return {"summary": "extract_kpi: LLM did not return a JSON object"}
+
+        value = parsed.get("value")
+        period_end_str = parsed.get("period_end")
+        excerpt = str(parsed.get("source_excerpt") or "")[:1024]
+        fiscal_period_type = str(parsed.get("fiscal_period_type") or "quarter").lower()
+        if fiscal_period_type not in ("quarter", "annual"):
+            fiscal_period_type = "quarter"
+
+        if value is None:
+            return {
+                "summary": f"extract_kpi: LLM couldn't extract a value: {excerpt or '(no reason given)'}",
+                "extracted_value": None,
+            }
+        if not isinstance(value, (int, float)):
+            return {
+                "summary": f"extract_kpi: LLM returned non-numeric value: {value!r}",
+            }
+        if not period_end_str or not isinstance(period_end_str, str):
+            return {
+                "summary": (
+                    "extract_kpi: LLM couldn't infer the fiscal period. "
+                    "Re-comment with explicit quarter context (e.g. 'Q3 2025')."
+                ),
+            }
+        try:
+            period_end_dt = datetime.strptime(period_end_str[:10], "%Y-%m-%d")
+        except ValueError:
+            return {
+                "summary": f"extract_kpi: LLM returned malformed period_end {period_end_str!r}",
+            }
+
+        if not apply:
+            return {
+                "summary": (
+                    f"extract_kpi: would upsert {kpi_name}={value} for "
+                    f"{ticker} {period_end_str} from comment quote"
+                ),
+                "extracted_value": value,
+                "period_end": period_end_str,
+                "fiscal_period_type": fiscal_period_type,
+                "source_excerpt": excerpt[:200] + ("..." if len(excerpt) > 200 else ""),
+                "dry_run": True,
+            }
+
+        # Insert the synthetic ANALYST_COMMENT document row so kpi_facts has
+        # a valid source_doc_id FK. file_path encodes the comment id so we
+        # can trace back; sha256 is a stable hash of the comment text + id.
+        sha = hashlib.sha256(f"{c.id}::{c.comment}".encode("utf-8")).hexdigest()
+        doc_cur = conn.execute(
+            "INSERT OR IGNORE INTO documents "
+            "(ticker, source_type, doc_type, period_end, file_path, sha256, "
+            " fetched_at, fetch_status, raw_bytes_size, source_url) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+            (
+                ticker.upper(),
+                # source_type stays in the SourceType enum (MANUAL_ENTRY covers
+                # any analyst-entered value); doc_type is the distinct
+                # ANALYST_COMMENT value so we can filter for comment-sourced
+                # facts in audits without colliding with the SourceType keys.
+                "manual_entry",
+                "analyst_comment",
+                period_end_dt,
+                f"comments://{ticker.upper()}/{c.id}",
+                sha,
+                datetime.now(UTC),
+                "ok",
+                len(c.comment.encode("utf-8")),
+            ),
+        )
+        if doc_cur.rowcount > 0:
+            doc_id = doc_cur.lastrowid
+        else:
+            # Already-inserted with the same sha → look it up.
+            existing = conn.execute(
+                "SELECT id FROM documents WHERE sha256 = ?", (sha,)
+            ).fetchone()
+            doc_id = int(existing["id"]) if existing else None
+        if doc_id is None:
+            return {"summary": "extract_kpi: failed to resolve synthetic document_id"}
+
+        # UPSERT the kpi_facts row. Mirrors persist_one_kpi_fact's logical-key
+        # contract, but allows source_excerpt and treats analyst-supplied
+        # values as authoritative (highest doc_id always wins on conflict).
+        conn.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
+            " value, unit, source_doc_id, source_excerpt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(ticker, period_end, fiscal_period_type, kpi_definition_id) "
+            "DO UPDATE SET "
+            "    value = excluded.value, "
+            "    unit = excluded.unit, "
+            "    source_doc_id = excluded.source_doc_id, "
+            "    source_excerpt = excluded.source_excerpt",
+            (
+                ticker.upper(),
+                period_end_dt,
+                fiscal_period_type,
+                int(kdef_row["id"]),
+                str(value),
+                str(kdef_row["unit"]),
+                doc_id,
+                excerpt or None,
+            ),
+        )
+        conn.commit()
+
+        return {
+            "summary": (
+                f"extract_kpi: upserted {kpi_name}={value} for "
+                f"{ticker} {period_end_str} (kpi_definition_id={kdef_row['id']}, "
+                f"source_doc_id={doc_id})"
+            ),
+            "extracted_value": value,
+            "period_end": period_end_str,
+            "fiscal_period_type": fiscal_period_type,
+            "source_excerpt": excerpt[:200] + ("..." if len(excerpt) > 200 else ""),
+            "kpi_definition_id": int(kdef_row["id"]),
+            "source_doc_id": int(doc_id),
+            "dry_run": False,
+        }
+    except Exception as e:  # noqa: BLE001 — extract path must never crash the loop
+        return {"summary": f"extract_kpi: error: {type(e).__name__}: {e}"}
+    finally:
+        conn.close()
+
+
 def _route_ask_question(
     repo_root: Path, ticker: str, report_date: date, c: Comment
 ) -> dict[str, object]:
@@ -1067,6 +1304,12 @@ buckets:
   comment names a specific monitorable / break rule / threshold / KPI tier
   movement. If the comment touches BOTH narrative and structured changes,
   prefer edit_structured (the structured fields are the more specific signal).
+- extract_kpi: user is SUPPLYING a KPI value with provenance — a verbatim
+  quote from a transcript / IR doc / filing, OR a direct value statement
+  like "ROE Q3 2025 was 32.0%". The comment names a specific period + value
+  for a SPECIFIC KPI (typically anchored to a kpi_ledger_row). Picks this
+  when the comment is asserting a number, not asking for the thesis or
+  structured fields to change.
 - ask_question: user is asking a question or wanting more info
 - fix_data: user is reporting a data error / inaccuracy
 - rewrite_section: user wants a specific section (company overview,
@@ -1076,10 +1319,10 @@ Anchor type: {c.anchor.type}
 Anchor key: {c.anchor.key}
 Comment: \"\"\"{c.comment}\"\"\"
 
-Reply with just one of: drop_kpi, edit_thesis, edit_structured, ask_question, fix_data, rewrite_section
+Reply with just one of: drop_kpi, edit_thesis, edit_structured, extract_kpi, ask_question, fix_data, rewrite_section
 """
     raw = call_llm(prompt, purpose="intake_classifier").strip().lower()
-    valid = {"drop_kpi", "edit_thesis", "edit_structured", "ask_question", "fix_data", "rewrite_section"}
+    valid = {"drop_kpi", "edit_thesis", "edit_structured", "extract_kpi", "ask_question", "fix_data", "rewrite_section"}
     for tok in raw.split():
         if tok in valid:
             return tok

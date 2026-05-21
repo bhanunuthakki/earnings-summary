@@ -63,6 +63,7 @@ IntentType = Literal[
     "drop_kpi",
     "edit_thesis",
     "edit_structured",  # mutate structured fields (break_rules, tier_*_kpis, etc.)
+    "extract_kpi",      # supply a KPI value (with quote/source) via comment text
     "ask_question",
     "fix_data",
     "rewrite_section",

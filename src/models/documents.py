@@ -85,6 +85,11 @@ class DocType(StrEnum):
     IR_EVENT = "ir_event"
     EARNINGS_CALL_AUDIO = "earnings_call_audio"
     EARNINGS_CALL_TRANSCRIPT = "earnings_call_transcript"
+    # Synthetic "document" backing a comment-driven KPI extraction. Each
+    # extract_kpi comment lands one row of this type so kpi_facts retains its
+    # NOT-NULL source_doc_id FK; the verbatim quote travels in
+    # kpi_facts.source_excerpt.
+    ANALYST_COMMENT = "analyst_comment"
 
 
 class FetchStatus(StrEnum):
