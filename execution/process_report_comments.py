@@ -40,10 +40,16 @@ Five-pass apply flow:
                    edit_thesis ran (the batched call already produced
                    coherent prose).
   PASS 4 (apply only, auto): if any holdings JSON mutation landed,
-                   invalidate the bear_case cache, then chain through
-                   run_thesis_evaluator (refreshes break_rule_evaluations
-                   against the new break_rules) followed by build_artifacts
-                   to regenerate the workspace HTML.
+                   invalidate the bear_case cache, then chain through:
+                     seed_kpi_definitions   sync kpi_definitions with the
+                                            current tier_*_kpis (idempotent)
+                     extract_kpis_from_summaries  LLM-extract values for
+                                            newly-added KPIs from transcript
+                                            summaries (idempotent skip on
+                                            existing facts)
+                     run_thesis_evaluator   refresh break_rule_evaluations
+                                            with the latest kpi_facts
+                     build_artifacts        regenerate workspace HTML.
 
 Default mode is `--dry-run` (print the plan, don't touch files). Pass
 `--apply` to execute. `--clear` drops all addressed + dismissed comments
@@ -441,8 +447,45 @@ def maybe_auto_rebuild(
 
     steps: list[dict[str, object]] = []
 
-    # Step 1 — re-evaluate break_rules against fresh kpi_facts so the brief's
-    # Universal break rules panel reflects the new rules.
+    # Step 1 — keep kpi_definitions in sync with the (possibly mutated)
+    # tier_*_kpis arrays. Comment processor edits tier_1_kpis in the
+    # holdings JSON but kpi_definitions is what the brief's KPI history
+    # join uses. Without this, new tier-1 KPIs show empty history forever.
+    # Idempotent: INSERT OR IGNORE on (ticker, name).
+    steps.append(_spawn_step(
+        repo_root,
+        name="seed_kpi_definitions",
+        cmd=[
+            sys.executable,
+            str(repo_root / "execution" / "seed_kpi_definitions.py"),
+            "--ticker", ticker,
+            "--repo-root", str(repo_root),
+        ],
+        timeout=60,
+    ))
+
+    # Step 2 — LLM-extract values for the (now seeded) tier_1 KPIs from
+    # existing per-quarter transcript summaries. Idempotent on
+    # (ticker, period, KPI name) — values already in kpi_facts are skipped,
+    # so adding new KPI names only re-prompts for the new ones. Without
+    # this step the kpi_facts join still returns empty history for any
+    # newly-added KPIs.
+    steps.append(_spawn_step(
+        repo_root,
+        name="extract_kpis_from_summaries",
+        cmd=[
+            sys.executable,
+            str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
+            "--ticker", ticker,
+            "--source", "earnings",
+            "--repo-root", str(repo_root),
+        ],
+        timeout=900,
+    ))
+
+    # Step 3 — re-evaluate break_rules against the (now populated) kpi_facts
+    # so the brief's Universal break rules panel reflects the new rules
+    # with their actual current values.
     steps.append(_spawn_step(
         repo_root,
         name="run_thesis_evaluator",
@@ -454,7 +497,7 @@ def maybe_auto_rebuild(
         timeout=300,
     ))
 
-    # Step 2 — regenerate the workspace HTML from the updated DB + holdings.
+    # Step 4 — regenerate the workspace HTML from the updated DB + holdings.
     steps.append(_spawn_step(
         repo_root,
         name="build_artifacts",
