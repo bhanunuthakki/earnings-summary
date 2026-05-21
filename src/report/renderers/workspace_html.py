@@ -1521,6 +1521,7 @@ def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
             f"KPI ledger detail ({len(thesis.kpi_ledger)} rows)</summary>"
             '<div class="table-scroll"><table class="fin-table"><thead><tr>'
             "<th>KPI</th><th>Tier</th><th>Unit</th>"
+            '<th class="num">Latest</th>'
             "<th>Status</th><th>Break condition</th><th>Source</th>"
             "</tr></thead><tbody>"
         )
@@ -1535,12 +1536,28 @@ def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
                 "red": "neg",
                 "unknown": "muted",
             }.get(r.current_status, "muted")
+            # Latest value cell. Shows `value (period)` when history exists,
+            # `—` otherwise. When latest_source_excerpt is set, attach it
+            # as a `title` tooltip so hovering reveals the verbatim quote /
+            # analyst statement that produced the value.
+            if r.history:
+                period_label, value = r.history[-1]
+                latest_text = f"{value:.2f}".rstrip("0").rstrip(".") if value is not None else "—"
+                latest_html = (
+                    f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
+                )
+            else:
+                latest_html = '<span class="muted">—</span>'
+            tooltip_attr = (
+                f' title="{_esc(r.latest_source_excerpt)}"' if r.latest_source_excerpt else ""
+            )
             body.write(
                 f'<tr data-commentable="true" data-anchor-type="kpi_ledger_row" '
                 f'data-anchor-key="{_esc(r.name)}" data-anchor-tab="thesis">'
                 f"<td>{_esc(r.name)}</td>"
                 f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
                 f"<td>{_esc(r.unit or '')}</td>"
+                f'<td class="num"{tooltip_attr}>{latest_html}</td>'
                 f'<td class="num {status_cls}">{_esc(r.current_status.upper())}</td>'
                 f"<td>{_esc(r.break_condition or '')}</td>"
                 f"<td>{_esc(r.source_hint or '')}</td></tr>"
