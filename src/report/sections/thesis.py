@@ -159,7 +159,7 @@ def _build_ledger(
             if not isinstance(k, dict):
                 continue
             name = str(k.get("name", ""))
-            history = _kpi_history(ticker, repo_root, name)
+            history, latest_excerpt = _kpi_history(ticker, repo_root, name)
             tier_rows.append(
                 KpiLedgerRow(
                     name=name,
@@ -169,6 +169,7 @@ def _build_ledger(
                     break_condition=str(k.get("break")) if k.get("break") else None,
                     history=history,
                     current_status=_status_for(name, history, by_kpi),
+                    latest_source_excerpt=latest_excerpt,
                 )
             )
         tier_rows.sort(key=lambda r: r.name.lower())
@@ -289,20 +290,35 @@ def _coerce_tier(v: object) -> Literal["universal", "business_model"]:
     return "business_model"
 
 
-def _kpi_history(ticker: str, repo_root: Path, kpi_name: str) -> list[tuple[str, float | None]]:
-    """Return [(period_label, value)] from kpi_facts joined to kpi_definitions, or []."""
+def _kpi_history(
+    ticker: str, repo_root: Path, kpi_name: str
+) -> tuple[list[tuple[str, float | None]], str | None]:
+    """Return ([(period, value), ...], latest_source_excerpt or None).
+
+    The history list is chronological (oldest → newest) so the brief's
+    sparkline renders left-to-right. The latest_source_excerpt is pulled
+    from the row with the most recent period_end whose source_excerpt is
+    non-null — gives the reader provenance for the headline value without
+    surfacing per-period quotes.
+    """
     if not kpi_name:
-        return []
+        return [], None
     conn = open_repo_db(repo_root)
     if conn is None:
-        return []
+        return [], None
     if not (has_table(conn, "kpi_facts") and has_table(conn, "kpi_definitions")):
         conn.close()
-        return []
+        return [], None
     cursor = conn.cursor()
+    # Defensive: source_excerpt may not exist on pre-0033 DBs. Detect column.
+    has_excerpt_col = any(
+        c["name"] == "source_excerpt"
+        for c in cursor.execute("PRAGMA table_info(kpi_facts)").fetchall()
+    )
+    cols = "f.period_end, f.value" + (", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt")
     cursor.execute(
-        """
-        SELECT f.period_end, f.value
+        f"""
+        SELECT {cols}
         FROM kpi_facts f
         JOIN kpi_definitions d ON d.id = f.kpi_definition_id
         WHERE d.ticker = ? AND d.name = ?
@@ -311,8 +327,15 @@ def _kpi_history(ticker: str, repo_root: Path, kpi_name: str) -> list[tuple[str,
         (ticker.upper(), kpi_name),
     )
     out: list[tuple[str, float | None]] = []
+    latest_excerpt: str | None = None
     for row in cursor.fetchall():
         period = str(row["period_end"])[:10]
         out.append((period, row["value"]))
+        excerpt = row["source_excerpt"] if has_excerpt_col else None
+        if excerpt:
+            # Last non-null excerpt wins since rows are ASC by period_end —
+            # the analyst's most-recent supplied quote is the most relevant
+            # context for the headline value.
+            latest_excerpt = excerpt
     conn.close()
-    return out
+    return out, latest_excerpt
