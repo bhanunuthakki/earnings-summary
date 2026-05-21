@@ -62,6 +62,7 @@ AnchorType = Literal[
 IntentType = Literal[
     "drop_kpi",
     "edit_thesis",
+    "edit_structured",  # mutate structured fields (break_rules, tier_*_kpis, etc.)
     "ask_question",
     "fix_data",
     "rewrite_section",
