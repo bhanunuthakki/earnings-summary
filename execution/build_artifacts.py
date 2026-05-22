@@ -29,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
+from compute.segment_definitions import extract_for_ticker as _extract_segment_definitions  # noqa: E402
 from report.builder import build_report  # noqa: E402
 from report.models import ReportFlavor  # noqa: E402
 from report.renderers.html import render as render_html  # noqa: E402
@@ -36,6 +37,36 @@ from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
 from report.renderers.workbook import render as render_workbook  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
+
+
+def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
+    """Idempotently populate data/segment_definitions/<T>.json before render.
+
+    Hashes the latest form_10k JSON; if the cache already matches the sha,
+    returns in milliseconds. Otherwise fires one Haiku call (~20s) and
+    writes the cache. Failures don't abort the build — they emit a
+    diagnostic and leave the tooltips empty for this ticker.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        _emit("segment_defs_skipped", {"ticker": ticker, "reason": "no DB"})
+        return
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        result = _extract_segment_definitions(ticker, repo_root, conn)
+        _emit("segment_defs_refreshed", {
+            "ticker": ticker,
+            "fiscal_year": result.fiscal_year,
+            "definitions_found": sum(1 for v in result.definitions.values() if v),
+            "skipped": result.skipped_reason,
+        })
+    except Exception as e:  # noqa: BLE001 — extraction must never crash the build
+        _emit("segment_defs_error", {
+            "ticker": ticker, "error": f"{type(e).__name__}: {e}",
+        })
+    finally:
+        conn.close()
 
 
 def _sync_db_to_repo(repo_root: Path) -> None:
@@ -222,6 +253,13 @@ def _build_one(
     _sync_db_to_repo(repo_root)
     db.scan_and_sync_artifacts(ticker)
     _emit("synced_quarterly_artifacts", {"ticker": ticker})
+
+    # Refresh segment_definitions cache. sha256-keyed on the latest form_10k JSON
+    # — only fires a Haiku call when the 10-K source changes; otherwise a fast
+    # no-op. Without this step, the segments tab matrix has no tooltips and the
+    # 📖 mark never appears (renderer correctly drops the mark when no
+    # definition is loaded).
+    _ensure_segment_definitions(ticker, repo_root)
 
     spec = build_report(
         ticker=ticker,
