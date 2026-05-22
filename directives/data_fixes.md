@@ -1,0 +1,1 @@
+- [ ] **AMZN** (free_text · `-1469.5%`) — reported 2026-05-22: Looks wrong
