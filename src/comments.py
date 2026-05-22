@@ -67,6 +67,7 @@ IntentType = Literal[
     "ask_question",
     "fix_data",
     "rewrite_section",
+    "platform_change",  # cross-workspace bug or feature — not a single-ticker brief edit
     None,  # not yet classified — processor will run an LLM bucketer first
 ]
 
@@ -103,6 +104,9 @@ _KEYWORD_TO_INTENT: dict[str, str] = {
     "ask": "ask_question",
     "fix": "fix_data",
     "rewrite": "rewrite_section",
+    "platform": "platform_change",  # cross-workspace bug or feature
+    "feature": "platform_change",
+    "bug": "platform_change",
 }
 
 _KEYWORD_RX = re.compile(
