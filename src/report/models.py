@@ -426,6 +426,25 @@ class SayDoCard(BaseModel):
     attribution: str | None = None  # one-line excerpt after "Attribution:"
 
 
+class SayDoHistoricalMetric(BaseModel):
+    """One structured guidance→realized row from `saydo_historical_metrics`.
+
+    Populated alongside `SayDoCard` so the renderer can show KPI-grain
+    promise-vs-delivery rows beside the LLM's narrative pairwise cards.
+    """
+
+    id: int
+    period_made: datetime
+    period_target: datetime
+    kpi_name: str
+    comparator: str
+    target_value: float
+    realized_value: float | None = None
+    outcome: str | None = None
+    guidance_narrative: str | None = None
+    realized_narrative: str | None = None
+
+
 class SayDoSection(BaseModel):
     """§7 — pairwise Say-Do analyses across the available quarter sequence,
     newest first."""
@@ -433,6 +452,7 @@ class SayDoSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     cards: list[SayDoCard] = Field(default_factory=list)
+    historical_metrics: list[SayDoHistoricalMetric] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

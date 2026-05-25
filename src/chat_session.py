@@ -190,7 +190,7 @@ to look it up — you have read access to:
 - `micro_thesis/holdings/<T>.json` — the analyst's thesis + KPIs
 - `.tmp/<T>_Q<N>_<YYYY>_summary.txt`, `.tmp/<T>_Q<N>_<YYYY>_press_release_summary.txt`,
   `.tmp/<T>_Q<N>_<YYYY>_presentation_brief.txt` — per-quarter LLM summaries
-- `transcripts/processed/<T>_Q<N>_<YYYY>.txt` — raw call transcripts
+- `transcripts/{{processed,raw}}/<T>_Q<N>_<YYYY>.txt` — raw call transcripts
 
 CACHED REPORT CONTEXT (snapshot):
 
