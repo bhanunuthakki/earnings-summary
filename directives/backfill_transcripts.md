@@ -32,7 +32,8 @@ commitments existed in `management_commitments` to render.
 | 1. Quarter calendar | `backfill_transcripts.recent_fiscal_quarters()` | Pure function; `(fye_month, today, n) → [(fiscal_year, fiscal_quarter), ...]` |
 | 2. Aggregator fetch | `fetch_qa_transcript.fetch_qa()` | Writes `transcripts/raw/<T>_Q<n>_<Y>.txt` if any source in the chain has it |
 | 3. Ingest | `execution/ingest_transcripts.py` (subprocess) | Walks `transcripts/{raw,processed}/`, registers files in `transcripts` + `transcript_segments` keyed by sha256 |
-| 4. Extract commitments | `execution/extract_commitments_from_transcript.py --auto --ticker X` (subprocess, one per ticker) | LLM extracts forward-looking commitments from transcripts not already in `management_commitments` |
+| 4. Promote | `ingest_transcripts._promote_raw_to_processed` (in-process, same script as Ingest) | After a successful fresh ingest, atomically moves the source file to `transcripts/processed/` and updates `documents.file_path` + index entries. Idempotent on re-runs; opt out with `--no-promote`. |
+| 5. Extract commitments | `execution/extract_commitments_from_transcript.py --auto --ticker X` (subprocess, one per ticker) | LLM extracts forward-looking commitments from transcripts not already in `management_commitments` |
 
 ## Entry points
 
