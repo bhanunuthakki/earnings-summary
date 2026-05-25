@@ -2,7 +2,7 @@
   "ticker": "AMZN",
   "name": "Amazon.com",
   "last_updated": "2026-05-10",
-  "thesis": "Three engines: (1) AWS revenue + margin compounding back into the high-30s% operating margin range with AI-workload mix; (2) North-America retail operating margin expanding from regionalization + advertising attach; (3) advertising as a third leg now scaling above $60B run-rate at high incremental margin. Long-cycle capex must produce visible ROI through AWS revenue acceleration, not just AI optionality.",
+  "thesis": "Three engines anchored by dual margin expansion, monitored top-down through revenue, operating income, and cash conversion (OCF/FCF/capex intensity): (1) AWS revenue reaccelerating off the ~19% trough with operating margin compounding in the high-30s \u2014 validated by AWS YoY growth, segment operating margin, RPO outgrowing recognized revenue, and sequential net-new-revenue dollars stepping up rather than flatlining at scale; (2) North-America retail operating margin expanding structurally from regionalization and cost-to-serve leverage, with NA retail revenue ex-ads carrying its own acceleration so the call isn't just ads attach in disguise; (3) advertising as a third leg compounding at a high-incremental-margin clip that drips through to both retail and consolidated margins. The bet breaks if AWS YoY sits below 20% for two consecutive quarters (share loss vs Azure/GCP), AWS segment margin compresses below 32% for two quarters (depreciation lap unrecovered), NA retail ex-ads YoY runs below 8% for two quarters (ads masking core decel), advertising YoY drops below 18% (category saturation), or capex/AWS-revenue keeps rising while AWS growth fails to reaccelerate \u2014 the 'spending without payoff' signal that converts long-cycle capex from earned ROI into stranded AI optionality.",
   "verdict": "Pending",
   "verdict_color": "gray",
   "key_driver": "AWS revenue growth re-acceleration + advertising scale + retail margin",
@@ -21,7 +21,7 @@
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<18% YoY for 2 consecutive Qs (vs Azure ~30s%, GCP ~30s%) — implies share loss or workload migration delay",
+      "break_condition": "<20% YoY for 2 consecutive Qs \u2014 thesis requires reacceleration off ~19% trough; flatlining vs Azure/GCP at ~30s% implies share loss",
       "source": "earnings release"
     },
     {
@@ -32,6 +32,33 @@
       "status": "Unknown",
       "break_condition": "Compresses below 32% for 2 consecutive Qs (depreciation lap from accelerated server lives)",
       "source": "earnings release segment"
+    },
+    {
+      "name": "AWS Remaining Performance Obligations (RPO)",
+      "current": "TBV from latest 10-Q",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "RPO YoY growth decelerates below AWS revenue YoY for 2 consecutive Qs \u2014 backlog is the leading indicator; if contracted revenue is growing slower than recognized revenue, the reacceleration call is unsupported",
+      "source": "10-Q commitments footnote"
+    },
+    {
+      "name": "AWS net new revenue $ added (QoQ sequential)",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Sequential $ adds decline for 2 consecutive Qs \u2014 absolute dollar adds (not just %) must keep stepping up to validate AI-workload mix translating to revenue; flat/down $ adds at scale = saturation",
+      "source": "earnings release segment"
+    },
+    {
+      "name": "North America retail revenue growth ex-ads (YoY)",
+      "current": "TBV from latest earnings release (NA segment revenue minus advertising allocated to NA)",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "<8% YoY for 2 consecutive Qs \u2014 underlying retail must accelerate independent of ads attach; ads tailwind alone is not the thesis",
+      "source": "earnings release segment + ads disclosure"
     },
     {
       "name": "North America retail operating margin",
@@ -96,7 +123,7 @@
   "nuance": {
     "bear_case": "AWS growth stuck in the 18-22% band while capex compounds at 25%+ creates a 2027 margin shock similar to 2018-2019. Retail margin gains stall as regionalization saturates.",
     "adversarial_take": "If AI workloads concentrate at Azure (OpenAI partnership) and GCP (Anthropic, Vertex AI), AWS share losses compound. Bedrock has not produced a clear winner model the way GPT-4/Claude have.",
-    "stress_test": "If AWS prints <18% for 2 Qs AND advertising decelerates below 18%, NA retail margin would have to carry the entire incremental story — historically a bumpy line."
+    "stress_test": "If AWS prints <18% for 2 Qs AND advertising decelerates below 18%, NA retail margin would have to carry the entire incremental story \u2014 historically a bumpy line."
   },
   "competitive_watchlist": [
     "Microsoft Azure",
@@ -105,7 +132,8 @@
     "Shopify (merchant tooling)"
   ],
   "thesis_breakers_qualitative": [
-    "AWS YoY <18% for 2 consecutive Qs",
+    "AWS YoY <20% for 2 consecutive Qs (no reacceleration)",
+    "NA retail ex-ads YoY <8% for 2 consecutive Qs (ads masking retail decel)",
     "AWS operating margin below 32% for 2 consecutive Qs",
     "Advertising growth below 18%",
     "FTC structural separation remedy"
@@ -118,7 +146,7 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+      "narrative": "Revenue declining YoY for 2 consecutive quarters \u2014 outright top-line contraction."
     },
     {
       "rule_id": "universal_fcf_margin_collapse",
@@ -127,7 +155,7 @@
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+      "narrative": "FCF margin below 5% for 2 consecutive Qs \u2014 cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
     },
     {
       "rule_id": "universal_ocf_decline_yoy",
@@ -137,6 +165,24 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    },
+    {
+      "rule_id": "aws_growth_not_accelerating",
+      "kpi_name": "AWS Revenue YoY Growth",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "AWS revenue YoY <20% for 2 consecutive Qs \u2014 thesis requires reacceleration off the ~19% trough into the 20s+ (Azure/GCP ~30s%); failure to accelerate implies share loss and breaks the AWS margin-compounding leg."
+    },
+    {
+      "rule_id": "na_retail_ex_ads_not_accelerating",
+      "kpi_name": "North America Retail Revenue ex-Ads YoY Growth",
+      "comparator": "lt",
+      "threshold": 8,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "NA retail revenue ex-advertising YoY <8% for 2 consecutive Qs \u2014 high-margin ads attach can mask underlying retail deceleration; the dual-margin thesis requires core retail (ex-ads) to accelerate on its own."
     }
   ],
   "schema_version": 2,
@@ -157,7 +203,7 @@
       "threshold": 15,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "AWS revenue YoY < 15% for 2Q — the cloud-growth thesis is the AMZN multiple driver; sustained sub-15 breaks it."
+      "narrative": "AWS revenue YoY < 15% for 2Q \u2014 the cloud-growth thesis is the AMZN multiple driver; sustained sub-15 breaks it."
     },
     {
       "rule_id": "amzn_aws_op_margin_below_28",
@@ -166,7 +212,7 @@
       "threshold": 28,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "AWS op margin < 28% for 2Q — high-30s is the recent run rate; sub-28 means AI infra capex is no longer absorbing into operating leverage."
+      "narrative": "AWS op margin < 28% for 2Q \u2014 high-30s is the recent run rate; sub-28 means AI infra capex is no longer absorbing into operating leverage."
     },
     {
       "rule_id": "amzn_na_retail_op_margin_below_4",
@@ -175,7 +221,7 @@
       "threshold": 4,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "NA Retail op margin < 4% for 2Q — retail flywheel margin thesis depends on continued levering past 5%."
+      "narrative": "NA Retail op margin < 4% for 2Q \u2014 retail flywheel margin thesis depends on continued levering past 5%."
     },
     {
       "rule_id": "amzn_ads_growth_below_18",
@@ -184,7 +230,7 @@
       "threshold": 18,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Ads revenue YoY < 18% for 2Q — third profit-pool thesis (after AWS and Prime) fails."
+      "narrative": "Ads revenue YoY < 18% for 2Q \u2014 third profit-pool thesis (after AWS and Prime) fails."
     }
   ]
 }

@@ -17,6 +17,11 @@ take action based on the comment's `intent`.
   rewrite_section  → ask Opus to rewrite the targeted section (company
                      overview / valuation rationale / bear failure mode);
                      write the rewrite back to its cache
+  platform_change  → cross-workspace bug or feature. Logged to
+                     directives/platform_backlog.md (NOT data_fixes.md, which
+                     is for single-ticker data corrections) so it doesn't get
+                     confused with brief-level edits. Skipped by auto-rebuild
+                     (no holdings JSON mutation).
 
 Comments with `intent = null` get auto-classified via a Haiku bucketer first.
 
@@ -710,6 +715,8 @@ def _route(
         return _route_fix_data(repo_root, ticker, c, apply=apply)
     if intent == "rewrite_section":
         return _route_rewrite_section(repo_root, ticker, c, apply=apply)
+    if intent == "platform_change":
+        return _route_platform_change(repo_root, ticker, c, apply=apply)
     return {"summary": f"no router for intent={intent!r} — left as open"}
 
 
@@ -1264,6 +1271,72 @@ def _route_fix_data(
     }
 
 
+# Phrase → backlog area heuristic. The LLM classifier sets the intent; this
+# secondary pass extracts a coarse "where in the codebase does this likely
+# land" tag so the backlog is grep-able by feature area. Keep it small —
+# better to under-classify (and tag `general`) than to invent buckets.
+_PLATFORM_AREA_HEURISTICS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("renderer",  ("hover", "tooltip", "click", "panel", "column", "render", "display", "ui")),
+    ("saydo",     ("saydo", "say-do", "say do", "attribution", "execution vs")),
+    ("pipeline",  ("fetch", "pull", "transcript", "ingest", "backfill", "refresh")),
+    ("kpi",       ("kpi", "break rule", "status", "tier")),
+    ("chart",     ("yoy", "chart", "matrix", "geography", "segment")),
+    ("dcf",       ("dcf", "valuation", "discounted cash flow")),
+)
+
+
+def _classify_platform_area(comment_text: str) -> str:
+    text = comment_text.lower()
+    for area, keywords in _PLATFORM_AREA_HEURISTICS:
+        if any(k in text for k in keywords):
+            return area
+    return "general"
+
+
+def _route_platform_change(
+    repo_root: Path, ticker: str, c: Comment, apply: bool
+) -> dict[str, object]:
+    """Log a cross-workspace bug/feature to directives/platform_backlog.md.
+
+    Distinct from `fix_data` (single-ticker data correction): the entry is
+    NOT tagged primarily by ticker, but by feature area + the originating
+    workspace. The intent is that the next engineering pass groups by area
+    and ships the renderer/pipeline change once for every workspace.
+
+    Best-effort area tagging via simple phrase heuristic — gives the
+    backlog a grep-able structure without needing another LLM call.
+    """
+    area = _classify_platform_area(c.comment)
+    out = repo_root / "directives" / "platform_backlog.md"
+    today = datetime.now(UTC).date().isoformat()
+    line = (
+        f"- [ ] **[{area}]** ({c.anchor.type} · `{c.anchor.key}` · tab={c.anchor.tab or '-'}) "
+        f"— reported {today} from {ticker}: {c.comment}\n"
+    )
+    if apply:
+        # Create the file with a header on first write so it doesn't look like
+        # an accidentally-empty markdown stub.
+        if not out.exists():
+            out.write_text(
+                "# Platform backlog\n\n"
+                "Cross-workspace bugs and features captured via the comment "
+                "processor (intent=`platform_change`). Entries are tagged by "
+                "feature area and the originating workspace. Group by area "
+                "when planning engineering work — every entry should land as "
+                "ONE renderer/pipeline change applied across all workspaces, "
+                "not as a per-ticker brief edit.\n\n",
+                encoding="utf-8",
+            )
+        with out.open("a", encoding="utf-8") as f:
+            f.write(line)
+    return {
+        "summary": f"platform_change: logged to {out.relative_to(repo_root)} as [{area}]",
+        "area": area,
+        "line": line.strip(),
+        "dry_run": not apply,
+    }
+
+
 def _route_rewrite_section(
     repo_root: Path, ticker: str, c: Comment, apply: bool
 ) -> dict[str, object]:
@@ -1294,7 +1367,19 @@ def _classify_intent(c: Comment) -> str:
     prompt = f"""Classify the following analyst comment into ONE of these
 buckets:
 
-- drop_kpi: user wants to remove this KPI from the thesis
+- platform_change: user is reporting a BUG or requesting a FEATURE that
+  applies BEYOND the current workspace. Strong signals: explicit phrases
+  like "across reports", "across workspaces", "across briefs", "every
+  workspace", "all tickers", "investigate ... bug", "should also be a
+  change across workspaces", "make sure this is not a bug across
+  workspaces". Also implicit signals where the symptom is structural
+  rather than name-specific: a renderer/UI bug (tooltips not showing,
+  panels empty for everyone, columns missing), a pipeline/ingestion change
+  (pull more transcripts, fetch additional history), a feature request
+  that names "the report" / "the workspace" generically rather than a
+  specific KPI or thesis claim. CRITICAL: pick this OVER fix_data or
+  edit_structured when the issue is plainly not single-ticker.
+- drop_kpi: user wants to remove this KPI from the thesis (single ticker)
 - edit_thesis: user wants the thesis NARRATIVE paragraph rewritten (framing,
   emphasis, story arc, prose-level changes). Picks this when the comment
   is about HOW the thesis is told.
@@ -1302,27 +1387,35 @@ buckets:
   a break_rule, change a KPI's break_condition, add a KPI to a tier,
   consolidate rules, reorder chart_priorities, etc. Picks this when the
   comment names a specific monitorable / break rule / threshold / KPI tier
-  movement. If the comment touches BOTH narrative and structured changes,
-  prefer edit_structured (the structured fields are the more specific signal).
+  movement FOR THIS ticker. If the comment touches BOTH narrative and
+  structured changes, prefer edit_structured (structured fields are the
+  more specific signal). If the comment is asking for the FEATURE that
+  produces a column / panel / rule to exist across all workspaces, prefer
+  platform_change.
 - extract_kpi: user is SUPPLYING a KPI value with provenance — a verbatim
   quote from a transcript / IR doc / filing, OR a direct value statement
   like "ROE Q3 2025 was 32.0%". The comment names a specific period + value
   for a SPECIFIC KPI (typically anchored to a kpi_ledger_row). Picks this
   when the comment is asserting a number, not asking for the thesis or
   structured fields to change.
-- ask_question: user is asking a question or wanting more info
-- fix_data: user is reporting a data error / inaccuracy
+- ask_question: user is asking a question or wanting more info about THIS
+  ticker's numbers / thesis / data
+- fix_data: user is reporting a data error / inaccuracy SPECIFIC to this
+  ticker (a wrong YoY value, a stale figure, a transcription error). NOT
+  the same as platform_change — fix_data is "this one cell on this one
+  workspace is wrong"; platform_change is "the renderer is buggy for
+  everyone".
 - rewrite_section: user wants a specific section (company overview,
-  valuation rationale, failure mode) rewritten
+  valuation rationale, failure mode) rewritten for THIS ticker
 
 Anchor type: {c.anchor.type}
 Anchor key: {c.anchor.key}
 Comment: \"\"\"{c.comment}\"\"\"
 
-Reply with just one of: drop_kpi, edit_thesis, edit_structured, extract_kpi, ask_question, fix_data, rewrite_section
+Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi, ask_question, fix_data, rewrite_section
 """
     raw = call_llm(prompt, purpose="intake_classifier").strip().lower()
-    valid = {"drop_kpi", "edit_thesis", "edit_structured", "extract_kpi", "ask_question", "fix_data", "rewrite_section"}
+    valid = {"platform_change", "drop_kpi", "edit_thesis", "edit_structured", "extract_kpi", "ask_question", "fix_data", "rewrite_section"}
     for tok in raw.split():
         if tok in valid:
             return tok
