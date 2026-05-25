@@ -456,6 +456,54 @@ class SayDoSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# §7.5 Filing Intelligence — buy-side 10-K narrative synthesis
+# ---------------------------------------------------------------------------
+
+
+class SegmentChangeDetail(BaseModel):
+    has_changes: bool
+    description: str | None = None
+
+
+class MetricRedefinitionDetail(BaseModel):
+    has_changes: bool
+    description: str | None = None
+
+
+class ExecutiveCompAlignmentDetail(BaseModel):
+    metrics_used: list[str] = Field(default_factory=list)
+    targets_and_thresholds: str | None = None
+    alignment_verdict: str | None = None
+
+
+class InvestmentSignalDetail(BaseModel):
+    signal_type: str
+    severity: Literal["High", "Medium", "Low"]
+    description: str
+
+
+class FilingIntelligenceSection(BaseModel):
+    """§7.5 — buy-side 10-K narrative synthesis cached under
+    ``data/filing_intelligence/<T>.json`` by execution/analyze_filing_intelligence.py.
+
+    Carries segment-boundary shifts, metric redefinitions, executive-comp
+    alignment, and surfaced tail-risk signals from the Focus Algorithm's
+    footnote extraction. Rendered in the Company Description tab.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    ticker: str
+    fiscal_year: int | None = None
+    analyzed_at: str | None = None
+    segment_changes: SegmentChangeDetail | None = None
+    metric_redefinitions: MetricRedefinitionDetail | None = None
+    executive_comp: ExecutiveCompAlignmentDetail | None = None
+    investment_signals: list[InvestmentSignalDetail] = Field(default_factory=list)
+    raw_synthesis_md: str | None = None
+
+
+# ---------------------------------------------------------------------------
 # §8 IR documents
 # ---------------------------------------------------------------------------
 
@@ -797,3 +845,4 @@ class ReportSpec(BaseModel):
     # that don't consume them simply ignore the field.
     hero_quote: HeroQuoteSection | None = None
     qa_roster: QARosterSection | None = None
+    filing_intelligence: FilingIntelligenceSection | None = None

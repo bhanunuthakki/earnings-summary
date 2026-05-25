@@ -17,6 +17,7 @@ from report.sections import (
     company_description,
     earnings,
     evaluation_snapshot,
+    filing_intelligence,
     financials,
     ir_docs,
     portfolio_position,
@@ -100,6 +101,7 @@ def build_report(
     valuation_section = valuation.build(
         ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
     )
+    filing_intelligence_section = filing_intelligence.build(ticker, repo_root)
     return ReportSpec(
         ticker=ticker,
         generation_date=date.today(),
@@ -122,4 +124,5 @@ def build_report(
         provenance=provenance_section,
         appendix=appendix_section,
         qa_roster=qa_roster_section,
+        filing_intelligence=filing_intelligence_section,
     )
