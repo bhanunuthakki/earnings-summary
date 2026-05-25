@@ -64,6 +64,15 @@ CSS = r"""
   --section-gap: 28px;
   --kpi-pad: 22px;
   --table-pad-y: 10px;
+
+  /* Aliases used by chat/comments modules */
+  --bg-elev: var(--surface);
+  --panel: var(--surface);
+  --panel-alt: var(--paper);
+  --ink: var(--fg);
+  --ink-muted: var(--muted);
+  --font-mono: var(--mono);
+  --font-body: var(--sans);
 }
 
 :root[data-theme="white"] {
@@ -119,8 +128,8 @@ CSS = r"""
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
-body { font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); height: 100%; }
+body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; }
 
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
@@ -188,7 +197,10 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; }
    Workspace shell
    ============================================================ */
 .l1-root {
-  min-height: 100vh;
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  overflow-y: auto;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--sans);

@@ -122,15 +122,27 @@ JS = r"""
     currentAnchor = {type: type, key: key, tab: anchorNode.getAttribute('data-anchor-tab')};
     sidebar.setAttribute('aria-hidden', 'false');
     sidebar.classList.add('open');
+    document.documentElement.style.setProperty('--sidebar-open-width', '380px');
     document.getElementById('cmt-anchor-label').textContent = humanAnchor(currentAnchor);
     renderList();
+    // Defer so this open-click doesn't immediately re-close via the listener.
+    setTimeout(function() {
+      document.addEventListener('click', _onDocClick, true);
+    }, 0);
   }
 
   function closeSidebar() {
     if (!sidebar) return;
     sidebar.setAttribute('aria-hidden', 'true');
     sidebar.classList.remove('open');
+    document.documentElement.style.removeProperty('--sidebar-open-width');
     currentAnchor = null;
+    document.removeEventListener('click', _onDocClick, true);
+  }
+
+  function _onDocClick(ev) {
+    if (!sidebar || !sidebar.classList.contains('open')) return;
+    if (!sidebar.contains(ev.target)) closeSidebar();
   }
 
   function humanAnchor(a) {
@@ -350,12 +362,16 @@ JS = r"""
     currentAnchor = anchor;
     sidebar.setAttribute('aria-hidden', 'false');
     sidebar.classList.add('open');
+    document.documentElement.style.setProperty('--sidebar-open-width', '380px');
     var label = anchor.type === 'free_text'
       ? ((anchor.parent_landmark || 'document') + ' · "' +
          anchor.key.substring(0, 60) + (anchor.key.length > 60 ? '…' : '') + '"')
       : humanAnchor(anchor);
     document.getElementById('cmt-anchor-label').textContent = label;
     renderList();
+    setTimeout(function() {
+      document.addEventListener('click', _onDocClick, true);
+    }, 0);
   }
 
   function renderFreeTextHighlights() {
@@ -495,16 +511,23 @@ CSS = r"""
 .cmt-pin.all-addressed { background: rgba(60, 200, 120, 0.12); border-color: rgba(60, 200, 120, 0.4); color: #3cc878; opacity: 0.9; }
 
 .cmt-sidebar {
-  position: fixed; top: 0; right: 0; bottom: 0; width: 420px;
+  /* True push-sidebar: flex sibling to .l1-root */
+  flex-shrink: 0;
+  width: 0;
+  height: 100vh;
+  overflow: hidden;
   background: var(--bg-elev, var(--panel));
-  border-left: 1px solid var(--hairline);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
-  transform: translateX(100%);
-  transition: transform 0.18s ease;
-  z-index: 100;
+  border-left: 0 solid var(--hairline);
+  transition: width 0.2s ease, border-left-width 0s 0.2s;
   display: flex; flex-direction: column;
+  position: sticky; top: 0;
 }
-.cmt-sidebar.open { transform: translateX(0); }
+.cmt-sidebar.open {
+  width: 380px;
+  border-left-width: 1px;
+  transition: width 0.2s ease, border-left-width 0s;
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+}
 .cmt-sidebar-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline);
