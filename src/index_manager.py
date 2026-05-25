@@ -203,6 +203,39 @@ def update_transcript_qa(
     return True
 
 
+def update_local_path(
+    ticker: str,
+    year,
+    quarter: str,
+    doc_type: str,
+    new_path: str,
+) -> bool:
+    """Rewrite the on-disk location for an existing index entry.
+
+    Returns True if any index was touched. The transcript flow writes to both
+    `transcript_index.json` (legacy) and `document_index.json` (multi-doctype),
+    so the raw→processed promoter calls this for `doc_type="transcript"` to
+    keep both stores in sync. `new_path` is expected to be project-root
+    relative with forward slashes.
+    """
+    touched = False
+    if doc_type == "transcript":
+        t_index = _load(TRANSCRIPT_INDEX_PATH)
+        t_key = _transcript_key(ticker, year, quarter)
+        if t_key in t_index:
+            t_index[t_key]["filepath"] = new_path
+            _save(TRANSCRIPT_INDEX_PATH, t_index)
+            touched = True
+    d_index = _load(DOCUMENT_INDEX_PATH)
+    d_key = _doc_key(ticker, year, quarter, doc_type)
+    if d_key in d_index:
+        d_index[d_key]["local_path"] = new_path
+        d_index[d_key]["updated_at"] = datetime.datetime.now().isoformat()
+        _save(DOCUMENT_INDEX_PATH, d_index)
+        touched = True
+    return touched
+
+
 # ---------------------------------------------------------------------------
 # New multi-doc-type API
 # ---------------------------------------------------------------------------

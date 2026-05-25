@@ -50,6 +50,8 @@ If no start cue is found in a page's visible text, that source is skipped and th
 
 `transcript_qa.validate_transcript` routes `aggregator_*` sources to the synthesized-flavor validator (size + banner + section count) since these files have no Whisper timestamps.
 
+Files land in `transcripts/raw/` and are promoted to `transcripts/processed/` on the next `execution/ingest_transcripts.py` run; that step also rewrites `documents.file_path` and the index entries so downstream readers see the processed-dir path.
+
 ## CLI
 
 ```

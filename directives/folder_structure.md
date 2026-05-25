@@ -10,7 +10,7 @@ To enforce a standardized, deterministic directory hierarchy for data flow and s
 |---|---|---|
 | `_inbox/` | The single drop folder for any user-supplied artifact (IR PDF, transcript text, earnings audio). The intake handler classifies and files contents into `ir_documents/` or `transcripts/raw/`. | Staging only. Files are moved out on successful intake. |
 | `transcripts/raw/` | The entry point for the audio/legacy transcript pipeline. Audio files land here (filed by intake or fetched by `fetch_audio_transcripts.py`); whisper consumes them in-place. | Source material. Safe to delete only after successful processing. |
-| `transcripts/processed/` | Archive of raw files that have been successfully parsed, transcribed, or evaluated. | Retained for reference and raw text serving. |
+| `transcripts/processed/` | Archive of raw files that have been successfully parsed, transcribed, or evaluated (populated automatically by `execution/ingest_transcripts.py`; no manual moves needed). | Retained for reference and raw text serving. |
 | `output/research/<TICKER>/` | Generated brief artifacts (`<DATE>_report.html`/`.md`/`_sections.json`/`_dcf.xlsx`) — the primary deliverable per ticker, written by `execution/build_artifacts.py`. | Long-term storage. Reproducible from inputs. |
 | `.tmp/` | Canonical ephemeral state storage. Used for caches, indexes, temporary audio downloads, JSON status dumps, intermediate PDF building blocks, and test scripts. | Ephemeral. Safe to wipe completely. |
 | `execution/` | Isolated, deterministic Python tools that act as Layer 3 executors. No ad-hoc debug scripts. | Source code. Should not be written to programmatically by the pipeline. |

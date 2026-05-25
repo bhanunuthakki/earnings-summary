@@ -14,7 +14,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -22,18 +25,94 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+import index_manager  # noqa: E402
 from compute.transcript_ingest import (  # noqa: E402
     IngestResult,
     ParsedFilename,
     ingest_existing_ir_transcript,
     ingest_one,
     parse_transcript_filename,
+    sha256_of,
 )
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
 _TRANSCRIPT_DIRS = (PROJECT_ROOT / "transcripts" / "processed", PROJECT_ROOT / "transcripts" / "raw")
+
+
+def _promote_raw_to_processed(
+    result: IngestResult,
+    parsed: ParsedFilename,
+    conn: sqlite3.Connection,
+    project_root: Path,
+) -> Path:
+    """Move a freshly-ingested `transcripts/raw/<name>` file to `transcripts/processed/<name>`.
+
+    Side effects on success: updates `documents.file_path` for the row and
+    rewrites `local_path`/`filepath` in the two on-disk indexes via
+    `index_manager.update_local_path`.
+
+    No-op (returns `result.file_path` unchanged) if:
+      - the source file is not in a `raw/` directory (already promoted or
+        living somewhere else like `intake_documents/`), or
+      - `result.skipped_existing` is True (no fresh ingest → nothing to update).
+
+    Conflict handling at the target slot:
+      - target missing: atomic `os.replace`, then DB + index updates.
+      - target exists with **matching** sha256: the raw/ duplicate is removed
+        and the DB/index are pointed at the surviving processed/ file.
+      - target exists with **different** sha256: both files are left in place,
+        a `transcript_promotion_conflict` JSON event is written to stderr,
+        and no DB write occurs. Rare; flagged for human investigation.
+    """
+    if result.skipped_existing:
+        return result.file_path
+    if result.file_path.parent.name != "raw":
+        return result.file_path
+
+    src = result.file_path
+    target = project_root / "transcripts" / "processed" / src.name
+    new_rel = str(target.relative_to(project_root)).replace("\\", "/")
+    fiscal_quarter = f"Q{parsed.quarter_idx}"
+
+    if target.exists():
+        src_sha = sha256_of(src)
+        target_sha = sha256_of(target)
+        if src_sha == target_sha:
+            os.remove(src)
+        else:
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "transcript_promotion_conflict",
+                        "src": str(src.relative_to(project_root)).replace("\\", "/"),
+                        "target": new_rel,
+                        "src_sha256": src_sha,
+                        "target_sha256": target_sha,
+                        "document_id": result.document_id,
+                    }
+                )
+                + "\n"
+            )
+            return src
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, target)
+
+    conn.execute(
+        "UPDATE documents SET file_path = ? WHERE id = ?",
+        (new_rel, result.document_id),
+    )
+    conn.commit()
+    index_manager.update_local_path(
+        ticker=parsed.ticker,
+        year=parsed.fiscal_year_label,
+        quarter=fiscal_quarter,
+        doc_type="transcript",
+        new_path=new_rel,
+    )
+    return target
 
 
 def _load_tracked_tickers(conn) -> frozenset[str]:
@@ -170,6 +249,11 @@ def main() -> int:
     parser.add_argument(
         "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"), help="Path to portfolio.db"
     )
+    parser.add_argument(
+        "--no-promote",
+        action="store_true",
+        help="Skip the raw/→processed/ promotion step (kill switch for the auto-mover).",
+    )
     args = parser.parse_args()
 
     conn = open_db(args.db)
@@ -238,6 +322,10 @@ def main() -> int:
                     period_end=result.period_end,
                 )
             else:
+                if not args.no_promote:
+                    new_path = _promote_raw_to_processed(result, parsed, conn, PROJECT_ROOT)
+                    if new_path != result.file_path:
+                        result = dataclasses.replace(result, file_path=new_path)
                 record_stage(
                     conn,
                     run_id,
@@ -253,7 +341,7 @@ def main() -> int:
                         "document_id": result.document_id,
                         "transcript_id": result.transcript_id,
                         "segments": result.segment_count,
-                        "file": str(path.relative_to(PROJECT_ROOT)),
+                        "file": str(result.file_path.relative_to(PROJECT_ROOT)),
                         "qa_status": result.qa_status.value,
                         "qa_signals": list(result.qa_signals),
                     }
