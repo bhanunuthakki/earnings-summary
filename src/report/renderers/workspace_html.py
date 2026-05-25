@@ -29,6 +29,7 @@ from report.models import (
     BreakRuleEvaluation,
     CompanyDescriptionSection,
     EarningsSection,
+    FilingIntelligenceSection,
     EvaluationSnapshotSection,
     FailureMode,
     FinancialsSection,
@@ -407,7 +408,7 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
             "company",
             "Company",
             None,
-            lambda b: _company_tab(b, spec.company_description, spec.ir_docs),
+            lambda b: _company_tab(b, spec.company_description, spec.ir_docs, spec.filing_intelligence),
         ),
     ]
     if is_eval:
@@ -1884,7 +1885,12 @@ def _fmt_usd_compact(v: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _company_tab(body: StringIO, cd: CompanyDescriptionSection, ir: IrDocsSection) -> None:
+def _company_tab(
+    body: StringIO,
+    cd: CompanyDescriptionSection,
+    ir: IrDocsSection,
+    filing: FilingIntelligenceSection | None = None,
+) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
     eyebrow_bits = ["What this company does"]
@@ -1947,9 +1953,107 @@ def _company_tab(body: StringIO, cd: CompanyDescriptionSection, ir: IrDocsSectio
             body.write("</div>")
         body.write("</div>")
 
+    if filing and filing.status == SectionStatus.OK:
+        _render_filing_intelligence(body, filing)
+
     if cd.status != SectionStatus.OK and not cd.elevator_pitch:
         _missing_panel(body, cd.status, cd.missing)
     body.write("</div>")
+
+
+def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSection) -> None:
+    """§7.5 — buy-side 10-K narrative synthesis rendered in the Company tab.
+
+    Layout: header + optional buy-side synthesis panel + 2-col (segment-shifts /
+    exec-comp) grid + optional investment-signals table. Severity pills are
+    explicit: High = pill-bad, Medium = pill-warn, Low = pill-neutral.
+    """
+    fy_label = f"FY {section.fiscal_year}" if section.fiscal_year else "Latest filing"
+    body.write('<div class="row-split" style="margin-top: 30px;"><div>')
+    body.write('<div class="eyebrow">10-K Narrative Intelligence</div>')
+    body.write(f'<h2 class="section-title">{_esc(f"Filing review · {fy_label}")}</h2>')
+    body.write("</div></div>")
+
+    if section.raw_synthesis_md:
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Buy-side narrative synthesis</span>'
+            '<span class="panel-sub">Critical operational shifts &amp; strategic takeaways</span></div>'
+        )
+        body.write(f'<div class="prose-pad">{_render_markdown(section.raw_synthesis_md)}</div></div>')
+
+    seg = section.segment_changes
+    comp = section.executive_comp
+    if seg or comp:
+        body.write('<div class="grid-2col">')
+
+        if seg is not None:
+            body.write(
+                '<div class="panel"><div class="panel-head">'
+                '<span class="panel-title">Reporting &amp; segment boundary changes</span>'
+            )
+            if seg.has_changes:
+                body.write('<span class="pill pill-warn">DETECTED SHIFT</span>')
+            else:
+                body.write('<span class="pill pill-ok">NO CHANGE</span>')
+            body.write('</div><div class="prose-pad">')
+            seg_desc = seg.description or (
+                "No reporting segment boundary changes or reclassifications detected in footnote disclosures."
+            )
+            body.write(f"<p>{_esc(seg_desc)}</p>")
+            body.write("</div></div>")
+
+        if comp is not None:
+            body.write(
+                '<div class="panel"><div class="panel-head">'
+                '<span class="panel-title">Executive compensation alignment</span>'
+                '</div><div class="prose-pad">'
+            )
+            metrics_str = ", ".join(comp.metrics_used) if comp.metrics_used else "—"
+            body.write(f"<p><strong>Metrics tracked:</strong> {_esc(metrics_str)}</p>")
+            body.write(
+                f'<p><strong>Targets:</strong> {_esc(comp.targets_and_thresholds or "—")}</p>'
+            )
+            body.write(
+                '<p style="margin-top: 10px; font-style: italic;">'
+                f'<strong>Thesis alignment:</strong> {_esc(comp.alignment_verdict or "—")}</p>'
+            )
+            body.write("</div></div>")
+
+        body.write("</div>")
+
+    metric = section.metric_redefinitions
+    if metric is not None and (metric.has_changes or metric.description):
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Metric redefinitions</span>'
+        )
+        if metric.has_changes:
+            body.write('<span class="pill pill-warn">DEFINITION SHIFT</span>')
+        else:
+            body.write('<span class="pill pill-ok">UNCHANGED</span>')
+        body.write('</div><div class="prose-pad">')
+        body.write(f'<p>{_esc(metric.description or "No operational/financial metric redefinitions detected.")}</p>')
+        body.write("</div></div>")
+
+    if section.investment_signals:
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Investment signals &amp; tail risks</span>'
+            '<span class="panel-sub">Surfaced from commitments, litigation, and tax footnotes</span></div>'
+        )
+        body.write('<table class="saydo-table"><thead><tr>')
+        body.write("<th>Signal type</th><th>Severity</th><th>Analytical insight</th>")
+        body.write("</tr></thead><tbody>")
+        sev_class = {"High": "bad", "Medium": "warn", "Low": "neutral"}
+        for sig in section.investment_signals:
+            tone = sev_class.get(sig.severity, "muted")
+            body.write("<tr>")
+            body.write(f'<td class="saydo-metric">{_esc(sig.signal_type)}</td>')
+            body.write(f'<td><span class="pill pill-{tone}">{_esc(sig.severity.upper())}</span></td>')
+            body.write(f'<td class="saydo-guide">{_esc(sig.description)}</td>')
+            body.write("</tr>")
+        body.write("</tbody></table></div>")
 
 
 def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeighting]) -> None:
