@@ -274,6 +274,54 @@ def match_commitment(
             commitment.id,
         ),
     )
+    
+    # Persist to saydo_historical_metrics ledger if the table exists (supports test db isolation)
+    table_check = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='saydo_historical_metrics'"
+    ).fetchone()
+    if table_check:
+        cur_hist = conn.execute(
+            "SELECT id FROM saydo_historical_metrics "
+            "WHERE ticker = ? AND period_made = ? AND period_target = ? AND kpi_name = ?",
+            (commitment.ticker, commitment.period_made, commitment.period_target, commitment.kpi_name),
+        )
+        existing = cur_hist.fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE saydo_historical_metrics SET "
+                "  comparator = ?, target_value = ?, realized_value = ?, outcome = ?, "
+                "  guidance_narrative = ?, evaluated_at = ? "
+                "WHERE id = ?",
+                (
+                    commitment.comparator.value,
+                    str(commitment.target_value),
+                    str(realized_value),
+                    outcome.value,
+                    commitment.narrative,
+                    datetime.now(),
+                    existing["id"],
+                ),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO saydo_historical_metrics "
+                "(ticker, period_made, period_target, kpi_name, comparator, "
+                " target_value, realized_value, outcome, guidance_narrative, evaluated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    commitment.ticker,
+                    commitment.period_made,
+                    commitment.period_target,
+                    commitment.kpi_name,
+                    commitment.comparator.value,
+                    str(commitment.target_value),
+                    str(realized_value),
+                    outcome.value,
+                    commitment.narrative,
+                    datetime.now(),
+                ),
+            )
+            
     conn.commit()
     return MatchResult(
         commitment_id=commitment.id,

@@ -215,6 +215,25 @@ def test_match_pending_marks_no_data_when_kpi_missing(conn: sqlite3.Connection) 
 
 def test_match_pending_full_cycle(conn: sqlite3.Connection) -> None:
     """End-to-end: persist -> match -> outcome written back -> no longer pending."""
+    # Create saydo_historical_metrics table in-memory for testing
+    conn.execute(
+        """
+        CREATE TABLE saydo_historical_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_made TIMESTAMP NOT NULL,
+            period_target TIMESTAMP NOT NULL,
+            kpi_name TEXT NOT NULL,
+            comparator TEXT NOT NULL,
+            target_value NUMERIC(24, 6) NOT NULL,
+            realized_value NUMERIC(24, 6),
+            outcome TEXT NOT NULL,
+            guidance_narrative TEXT NOT NULL,
+            realized_narrative TEXT,
+            evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
     seg = _seed_segment(conn, "MELI")
     _seed_kpi_fact(
         conn, ticker="MELI", kpi_name="Operating Margin",
@@ -233,6 +252,13 @@ def test_match_pending_full_cycle(conn: sqlite3.Connection) -> None:
     assert len(results) == 1
     assert results[0].outcome == CommitmentOutcome.HIT
     assert results[0].realized_value == Decimal("13.5")
+
+    # Verify historical ledger persistence
+    hist_row = conn.execute("SELECT * FROM saydo_historical_metrics WHERE ticker='MELI'").fetchone()
+    assert hist_row is not None
+    assert dict(hist_row)["kpi_name"] == "Operating Margin"
+    assert Decimal(str(dict(hist_row)["realized_value"])) == Decimal("13.5")
+    assert dict(hist_row)["outcome"] == "hit"
 
     # Re-running should be idempotent — outcome already set, nothing pending
     pending = fetch_pending_commitments(conn, ticker="MELI")
