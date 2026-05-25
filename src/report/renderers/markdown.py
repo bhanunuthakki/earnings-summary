@@ -338,13 +338,26 @@ def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:
 
 
 def _weighting_table_md(out: StringIO, rows: list[SegmentWeighting], label: str) -> None:
-    out.write(f"| {label} | Revenue (USD M) | Share | Description |\n")
-    out.write("|---|---|---|---|\n")
+    # Match the HTML/workspace renderers: column shows only with ≥ 2 OI rows.
+    has_oi = sum(1 for r in rows if r.operating_income_usd_m is not None) >= 2
+    if has_oi:
+        out.write(
+            f"| {label} | Revenue (USD M) | Share | Op income (USD M) | OI share | Description |\n"
+        )
+        out.write("|---|---|---|---|---|---|\n")
+    else:
+        out.write(f"| {label} | Revenue (USD M) | Share | Description |\n")
+        out.write("|---|---|---|---|\n")
     for r in rows:
         rev = _fmt_num(r.revenue_usd_m, 0)
         share = "—" if r.share_pct is None else f"{r.share_pct * 100:.1f}%"
         desc = r.description.replace("|", "\\|") if r.description else "—"
-        out.write(f"| **{r.name}** | {rev} | {share} | {desc} |\n")
+        if has_oi:
+            oi = _fmt_num(r.operating_income_usd_m, 0)
+            oi_share = "—" if r.oi_share_pct is None else f"{r.oi_share_pct * 100:.1f}%"
+            out.write(f"| **{r.name}** | {rev} | {share} | {oi} | {oi_share} | {desc} |\n")
+        else:
+            out.write(f"| **{r.name}** | {rev} | {share} | {desc} |\n")
     out.write("\n")
 
 

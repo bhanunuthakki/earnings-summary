@@ -812,8 +812,17 @@ def _paragraphs_html(text: str) -> str:
 
 
 def _weighting_table(out: StringIO, rows: list[SegmentWeighting], label: str) -> None:
+    # Show OI columns only when ≥ 2 rows carry an OI value — a lone OI row
+    # surrounded by "—" reads as missing data, not as the table's actual
+    # shape. See workspace_html._segment_breakdown_panel for the same rule.
+    has_oi = sum(1 for r in rows if r.operating_income_usd_m is not None) >= 2
+
     out.write('<div class="table-wrap"><table class="weighting-table">\n<thead><tr>')
-    for h in (label, "Revenue (USD M)", "Share", "Description"):
+    headers: tuple[str, ...] = (label, "Revenue (USD M)", "Share")
+    if has_oi:
+        headers = (*headers, "Op income (USD M)", "OI share")
+    headers = (*headers, "Description")
+    for h in headers:
         out.write(f"<th>{html.escape(h)}</th>")
     out.write("</tr></thead>\n<tbody>")
     for r in rows:
@@ -824,8 +833,12 @@ def _weighting_table(out: StringIO, rows: list[SegmentWeighting], label: str) ->
             f"<tr><td><strong>{html.escape(r.name)}</strong></td>"
             f'<td class="num">{rev}</td>'
             f'<td class="num">{_share_bar(r.share_pct)}{share}</td>'
-            f"<td>{desc}</td></tr>"
         )
+        if has_oi:
+            oi = _fmt_num(r.operating_income_usd_m, 0)
+            oi_share = "—" if r.oi_share_pct is None else f"{r.oi_share_pct * 100:.1f}%"
+            out.write(f'<td class="num">{oi}</td><td class="num">{oi_share}</td>')
+        out.write(f"<td>{desc}</td></tr>")
     out.write("</tbody></table></div>\n")
 
 
