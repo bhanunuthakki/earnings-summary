@@ -446,6 +446,19 @@ def maybe_auto_rebuild(
     if not mutated:
         return {"rebuilt": False, "reason": "no holdings-mutating comments applied"}
 
+    # When edit_structured fired, the KPI roster in tier_*_kpis likely changed.
+    # New KPI names need a fresh extraction attempt across ALL quarters — the
+    # default per-period idempotency check would skip quarters where the first
+    # auto-rebuild's LLM pass returned nothing for the new KPI (Haiku is
+    # noisy on the first ask for unfamiliar names). --refresh is one wasted
+    # re-extraction of stable KPIs in exchange for materially better
+    # population of the new ones the analyst just added.
+    structured_changed = any(
+        r.get("intent") == "edit_structured" and r.get("status") == "ok"
+        for r in results
+    )
+    refresh_kpi_facts = structured_changed
+
     # Invalidate the bear case cache so the next build regenerates from the new thesis.
     invalidated: list[str] = []
     bear_case_path = repo_root / "data" / "bear_case" / f"{ticker.upper()}.json"
@@ -478,16 +491,23 @@ def maybe_auto_rebuild(
     # Step 2a — LLM-extract values from per-quarter EARNINGS-CALL summaries.
     # Idempotent on (ticker, period, KPI name) — values already in kpi_facts
     # are skipped, so adding new KPI names only re-prompts for the new ones.
+    # When edit_structured fired this round, we --refresh so newly-added KPI
+    # names get a clean re-attempt across all quarters.
+    earnings_cmd = [
+        sys.executable,
+        str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
+        "--ticker", ticker,
+        "--source", "earnings",
+        "--repo-root", str(repo_root),
+    ]
+    if refresh_kpi_facts:
+        earnings_cmd.append("--refresh")
     steps.append(_spawn_step(
         repo_root,
-        name="extract_kpis_from_summaries(earnings)",
-        cmd=[
-            sys.executable,
-            str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-            "--ticker", ticker,
-            "--source", "earnings",
-            "--repo-root", str(repo_root),
-        ],
+        name="extract_kpis_from_summaries(earnings)" + (
+            " [refresh]" if refresh_kpi_facts else ""
+        ),
+        cmd=earnings_cmd,
         timeout=900,
     ))
 
@@ -495,16 +515,21 @@ def maybe_auto_rebuild(
     # These are typically richer with explicit numeric KPIs (NPL ratios,
     # capital adequacy, segment margins) than the qualitative earnings-call
     # summaries, so this step fills gaps that 2a couldn't.
+    ir_cmd = [
+        sys.executable,
+        str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
+        "--ticker", ticker,
+        "--source", "ir",
+        "--repo-root", str(repo_root),
+    ]
+    if refresh_kpi_facts:
+        ir_cmd.append("--refresh")
     steps.append(_spawn_step(
         repo_root,
-        name="extract_kpis_from_summaries(ir)",
-        cmd=[
-            sys.executable,
-            str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-            "--ticker", ticker,
-            "--source", "ir",
-            "--repo-root", str(repo_root),
-        ],
+        name="extract_kpis_from_summaries(ir)" + (
+            " [refresh]" if refresh_kpi_facts else ""
+        ),
+        cmd=ir_cmd,
         timeout=900,
     ))
 
