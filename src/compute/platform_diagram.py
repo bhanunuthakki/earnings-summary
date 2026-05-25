@@ -180,24 +180,27 @@ def _cache_path(repo_root: Path, ticker: str) -> Path:
 
 
 def _latest_transcripts(repo_root: Path, ticker: str, n: int) -> list[tuple[Path, str]]:
-    """Return up to `n` most recent processed-transcript (path, text) pairs.
+    """Return up to `n` most recent transcript (path, text) pairs.
 
-    Sorts by (year, quarter) descending. Reads from `transcripts/processed/`
-    only — the raw/master directories carry duplicates or pre-processed forms.
-    Silently skips files that can't be read so a single bad file doesn't
-    block the rest.
+    Sorts by (year, quarter) descending. Reads from both `transcripts/processed/`
+    and `transcripts/raw/`; if the same (quarter, year) exists in both, `processed/`
+    wins (it's the promoted canonical location). Silently skips files that can't
+    be read so a single bad file doesn't block the rest.
     """
-    proc_dir = repo_root / "transcripts" / "processed"
-    if not proc_dir.exists():
-        return []
-    candidates: list[tuple[int, int, Path]] = []
-    for p in proc_dir.iterdir():
-        m = _TRANSCRIPT_FILENAME_RE.match(p.name)
-        if not m:
+    upper = ticker.upper()
+    by_key: dict[tuple[int, int], Path] = {}
+    for subdir in ("processed", "raw"):
+        d = repo_root / "transcripts" / subdir
+        if not d.exists():
             continue
-        if m.group("ticker").upper() != ticker.upper():
-            continue
-        candidates.append((int(m.group("y")), int(m.group("q")), p))
+        for p in d.iterdir():
+            m = _TRANSCRIPT_FILENAME_RE.match(p.name)
+            if not m or m.group("ticker").upper() != upper:
+                continue
+            key = (int(m.group("y")), int(m.group("q")))
+            if key not in by_key:
+                by_key[key] = p
+    candidates: list[tuple[int, int, Path]] = [(y, q, path) for (y, q), path in by_key.items()]
     if not candidates:
         return []
     candidates.sort(reverse=True)

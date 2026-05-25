@@ -1,4 +1,4 @@
-"""Filename parsers for pipeline artifacts in transcripts/processed/ and .tmp/.
+"""Filename parsers for pipeline artifacts in transcripts/{processed,raw}/ and .tmp/.
 
 Replaces the position-based split-by-underscore parsing that lived in
 db.scan_and_sync_artifacts. The old approach silently misclassified any
@@ -88,7 +88,8 @@ def _build_name(
 
 
 def parse_transcript_processed(filename: str) -> ArtifactName | None:
-    """Match `{TICKER}_{Q}_{YYYY}.{pdf,txt}` for files in transcripts/processed/."""
+    """Match `{TICKER}_{Q}_{YYYY}.{pdf,txt}` (same filename shape lives in
+    transcripts/processed/ AND transcripts/raw/; callers walk both dirs)."""
     p = Path(filename)
     if p.suffix.lower() not in _TRANSCRIPT_PROCESSED_EXTS:
         return None
