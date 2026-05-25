@@ -66,12 +66,19 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
         )
 
     rules = load_rules(ticker, repo_root)
+    # OI by segment name is requested on BOTH tables — for most companies OI
+    # aligns with the product breakdown (META, GOOG, MELI, NU), but for
+    # geography-segmented P&L reporters (AMZN reports OI by NA / International
+    # / AWS, not by product line) it only joins to the geography table. The
+    # renderer hides the column on tables where no row carries OI, so this is
+    # a no-op for tickers where the join fails on both sides.
     segment_rows = _build_weighting_rows(
         ticker=ticker,
         repo_root=repo_root,
         metric="revenue_by_product",
         descriptions=cached.segments,
         rules=rules,
+        include_operating_income=True,
     )
     geo_rows = _build_weighting_rows(
         ticker=ticker,
@@ -79,6 +86,7 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
         metric="revenue_by_geography",
         descriptions=cached.geographies,
         rules=rules,
+        include_operating_income=True,
     )
 
     # Optional: platform diagram is a separate extraction pipeline so the
@@ -104,18 +112,50 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
     )
 
 
+# Aliases applied AFTER " Segment" suffix-stripping and lowercasing — joins
+# revenue-side names to OI-side names that differ only by abbreviation /
+# common synonyms. Add new entries here when a ticker has a documented
+# revenue↔OI naming gap that the suffix strip alone doesn't bridge.
+_OI_KEY_ALIASES: dict[str, str] = {
+    "amazon web services": "aws",
+    "google services": "services",  # GOOG: Search/YouTube/Apps roll up to "Services"
+}
+
+
+def _normalize_oi_key(name: str) -> str:
+    """Collapse minor naming variation between the revenue and OI segment_facts rows.
+
+    Lowercases, strips a trailing " segment" suffix (the most common gap —
+    AMZN's revenue_by_geography rows are "...Segment" while OI rows are
+    not), then applies a small alias table for abbreviation collisions
+    (e.g. "Amazon Web Services" ↔ "AWS").
+    """
+    base = name.strip().lower()
+    if base.endswith(" segment"):
+        base = base[: -len(" segment")].rstrip()
+    return _OI_KEY_ALIASES.get(base, base)
+
+
 def _build_weighting_rows(
     ticker: str,
     repo_root: Path,
     metric: str,
     descriptions: list[dict[str, str | None]],
     rules: TickerRules,
+    include_operating_income: bool = False,
 ) -> list[SegmentWeighting]:
     """Merge latest-period segment_facts revenue with LLM-written descriptions.
 
     Returns rows sorted by descending share. Segments below 1% of the bucket
     roll up into a single "Other" row (matching the §5 segments behavior so
     the weighting summary is consistent with the detail table).
+
+    When `include_operating_income=True` (typically the product/segment table,
+    NOT the geography table), also pulls the latest-period operating_income
+    metric from segment_facts and merges it onto each row by canonical
+    segment name. Rows without an OI fact get `operating_income_usd_m=None`
+    and the renderer shows "—" for that cell — common for sub-segments and
+    geography buckets that aren't reported as P&L segments.
     """
     description_by_name = {
         str(d["name"]): d.get("description") for d in descriptions if d.get("name")
@@ -132,14 +172,46 @@ def _build_weighting_rows(
             SegmentWeighting(name=name, description=desc)
             for name, desc in description_by_name.items()
         ]
+
+    # Pull OI by-segment for the same latest quarter. The OI table often uses
+    # different naming than revenue (e.g. AMZN reports OI as "North America" /
+    # "International" / "AWS" while geographic revenue is "North America
+    # Segment" / "International Segment" / "Amazon Web Services Segment", and
+    # product revenue is "Online Stores" / "Third-Party Seller Services" /
+    # ...). We try exact match first, then a normalized match that strips the
+    # " Segment" suffix and applies a small alias table. Rows that still fail
+    # to join show `operating_income_usd_m=None` and the renderer suppresses
+    # the column when no row in the table has OI.
+    oi_by_name: dict[str, float] = {}
+    if include_operating_income:
+        oi_by_name = _latest_period_totals(
+            ticker, repo_root, "operating_income", rules
+        )
+    oi_total = sum(abs(v) for v in oi_by_name.values()) if oi_by_name else 0.0
+    oi_lookup_normalized = {_normalize_oi_key(k): v for k, v in oi_by_name.items()}
+
+    def _resolve_oi(rev_name: str) -> float | None:
+        # Exact match wins (most companies — META/GOOG/MELI/NU/NOW segment
+        # names line up across metrics).
+        if rev_name in oi_by_name:
+            return oi_by_name[rev_name]
+        # Otherwise try the normalized key: strip " Segment" suffix and run
+        # both sides through a tiny alias table so "Amazon Web Services" /
+        # "AWS" / "Amazon Web Services Segment" collapse onto the same key.
+        return oi_lookup_normalized.get(_normalize_oi_key(rev_name))
+
     rows: list[SegmentWeighting] = []
     other_rev = 0.0
+    other_oi = 0.0
     other_count = 0
     sorted_items = sorted(latest.items(), key=lambda kv: abs(kv[1]), reverse=True)
     for name, value in sorted_items:
         share = abs(value) / total
+        oi_value = _resolve_oi(name)
         if share < 0.01:
             other_rev += value
+            if oi_value is not None:
+                other_oi += oi_value
             other_count += 1
             continue
         rows.append(
@@ -147,6 +219,14 @@ def _build_weighting_rows(
                 name=name,
                 revenue_usd_m=value / 1_000_000.0,
                 share_pct=share,
+                operating_income_usd_m=(
+                    oi_value / 1_000_000.0 if oi_value is not None else None
+                ),
+                oi_share_pct=(
+                    abs(oi_value) / oi_total
+                    if oi_value is not None and oi_total > 0
+                    else None
+                ),
                 description=description_by_name.get(name),
             )
         )
@@ -156,6 +236,14 @@ def _build_weighting_rows(
                 name=f"Other ({other_count} < 1%)",
                 revenue_usd_m=other_rev / 1_000_000.0,
                 share_pct=abs(other_rev) / total,
+                operating_income_usd_m=(
+                    other_oi / 1_000_000.0 if other_oi != 0 else None
+                ),
+                oi_share_pct=(
+                    abs(other_oi) / oi_total
+                    if other_oi != 0 and oi_total > 0
+                    else None
+                ),
                 description=None,
             )
         )

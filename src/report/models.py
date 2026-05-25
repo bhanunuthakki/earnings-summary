@@ -149,6 +149,8 @@ class SegmentWeighting(BaseModel):
     name: str
     revenue_usd_m: float | None = None  # latest-period revenue in USD millions
     share_pct: float | None = None  # share of the bucket (0..1)
+    operating_income_usd_m: float | None = None  # latest-period segment OI in USD millions; None when segment_facts has no OI row for this segment (typical for geography rows + some sub-segments)
+    oi_share_pct: float | None = None  # share of TOTAL segment OI (0..1); None when total is zero or this row has no OI
     description: str | None = None  # 1-2 sentence segment description from 10-K
 
 

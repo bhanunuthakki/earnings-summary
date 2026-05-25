@@ -1897,6 +1897,15 @@ def _company_tab(body: StringIO, cd: CompanyDescriptionSection, ir: IrDocsSectio
 
 
 def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeighting]) -> None:
+    # Show OI columns only when at least 2 rows carry an OI value — a single
+    # OI row alongside many "—" rows reads as missing data rather than as a
+    # ticker that reports OI on only one sub-segment. Common shape: AMZN's
+    # product table has OI only on the AWS row (other products aren't P&L
+    # segments), so the product table stays 4-column while the geography
+    # table (3 rows, all with OI) gets the 6-column view.
+    oi_row_count = sum(1 for r in rows if r.operating_income_usd_m is not None)
+    has_oi = oi_row_count >= 2
+
     body.write(
         f'<div class="panel"><div class="panel-head">'
         f'<span class="panel-title">{_esc(title)}</span>'
@@ -1905,8 +1914,13 @@ def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeigh
         "<th>Segment</th>"
         '<th class="num">Revenue ($M)</th>'
         '<th class="num">Share</th>'
-        "<th>Description</th></tr></thead><tbody>"
     )
+    if has_oi:
+        body.write(
+            '<th class="num">Op income ($M)</th>'
+            '<th class="num">OI share</th>'
+        )
+    body.write("<th>Description</th></tr></thead><tbody>")
     for r in rows:
         body.write(f"<tr><td><strong>{_esc(r.name)}</strong></td>")
         body.write(
@@ -1922,6 +1936,17 @@ def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeigh
             )
         else:
             body.write('<td class="num muted">—</td>')
+        if has_oi:
+            if r.operating_income_usd_m is not None:
+                # OI can be negative (loss-making segment) — keep the sign
+                # visible via standard comma-separated number formatting.
+                body.write(f'<td class="num">{r.operating_income_usd_m:,.0f}</td>')
+            else:
+                body.write('<td class="num muted">—</td>')
+            if r.oi_share_pct is not None:
+                body.write(f'<td class="num">{r.oi_share_pct * 100:.1f}%</td>')
+            else:
+                body.write('<td class="num muted">—</td>')
         body.write(f'<td class="seg-desc">{_esc(r.description or "")}</td></tr>')
     body.write("</tbody></table></div>")
 
