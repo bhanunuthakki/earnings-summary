@@ -341,16 +341,23 @@ def _slot(
 
 
 def _scan_processed_dir(ticker: str, artifacts: dict[tuple[int, Quarter], ArtifactFlags]) -> None:
-    """Walk transcripts/processed/, set has_transcript_file flag for matches."""
-    processed_dir = os.path.join(PROJECT_ROOT, "transcripts", "processed")
-    if not os.path.exists(processed_dir):
-        return
+    """Walk transcripts/processed/ + transcripts/raw/, set has_transcript_file flag for matches.
+
+    Both dirs are valid transcript locations (see index_manager.py and
+    ingest_transcripts.py); `processed/` is the promoted canonical spot but
+    files often live in `raw/` straight from fetch_qa_transcript.py until a
+    promotion step lands.
+    """
     upper = ticker.upper()
-    for fname in os.listdir(processed_dir):
-        parsed = parse_transcript_processed(fname)
-        if parsed is None or parsed.ticker != upper:
+    for subdir in ("processed", "raw"):
+        d = os.path.join(PROJECT_ROOT, "transcripts", subdir)
+        if not os.path.exists(d):
             continue
-        _slot(artifacts, parsed.year, parsed.quarter).has_transcript_file = True
+        for fname in os.listdir(d):
+            parsed = parse_transcript_processed(fname)
+            if parsed is None or parsed.ticker != upper:
+                continue
+            _slot(artifacts, parsed.year, parsed.quarter).has_transcript_file = True
 
 
 def _scan_tmp_dir(

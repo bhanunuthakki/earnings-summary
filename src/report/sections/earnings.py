@@ -8,7 +8,7 @@ beat-rate scorecard renders before the per-quarter cards.
 
 Sources:
   - .tmp/{TICKER}_{Q}_{YEAR}_summary.txt          per-quarter LLM summary (written by execution/process_ir_documents.py)
-  - transcripts/processed/{TICKER}_Q{N}_{YEAR}.txt path provenance
+  - transcripts/processed/ + transcripts/raw/     path provenance (processed wins on collision)
   - earnings_surprises table                       beat-rate header (FMP primary, yfinance fallback)
 """
 
@@ -48,10 +48,10 @@ RECENT_FULL_COUNT = 3  # most recent N quarters get full content in §5
 
 def build(ticker: str, repo_root: Path) -> EarningsSection:
     tmp_dir = repo_root / ".tmp"
-    tr_dir = repo_root / "transcripts" / "processed"
+    tr_root = repo_root / "transcripts"
 
     summaries = _scan_summaries(tmp_dir, ticker)
-    transcripts = _scan_transcripts(tr_dir, ticker)
+    transcripts = _scan_transcripts(tr_root, ticker)
     surprise_card = _build_surprise_card(ticker, repo_root)
 
     if not summaries and not transcripts:
@@ -60,7 +60,7 @@ def build(ticker: str, repo_root: Path) -> EarningsSection:
             missing=missing(
                 stage="SYNTHESIZE(process_ir_documents)",
                 fix_command=f"python execution/process_ir_documents.py --ticker {ticker.upper()}",
-                detail="No per-quarter summaries in .tmp/ and no transcripts in transcripts/processed/.",
+                detail="No per-quarter summaries in .tmp/ and no transcripts in transcripts/{processed,raw}/.",
             ),
             surprise_scorecard=surprise_card,
         )
@@ -184,16 +184,27 @@ def _scan_summaries(tmp_dir: Path, ticker: str) -> dict[tuple[int, int], str]:
     return out
 
 
-def _scan_transcripts(processed_dir: Path, ticker: str) -> dict[tuple[int, int], str]:
+def _scan_transcripts(tr_root: Path, ticker: str) -> dict[tuple[int, int], str]:
+    """Scan both transcripts/processed/ and transcripts/raw/.
+
+    `processed/` is the canonical promoted location (see index_manager.py); a
+    file living there wins over the same (quarter, year) in `raw/`. We scan
+    `raw/` second and only fill slots that processed/ left empty, matching the
+    dual-dir convention `ingest_transcripts.py` already uses.
+    """
     out: dict[tuple[int, int], str] = {}
-    if not processed_dir.exists():
-        return out
     upper = ticker.upper()
-    for path in processed_dir.iterdir():
-        if not path.is_file():
+    for subdir in ("processed", "raw"):
+        d = tr_root / subdir
+        if not d.exists():
             continue
-        m = _TRANSCRIPT_RX.match(path.name)
-        if not m or m.group("ticker").upper() != upper:
-            continue
-        out[(int(m.group("q")), int(m.group("y")))] = str(path)
+        for path in d.iterdir():
+            if not path.is_file():
+                continue
+            m = _TRANSCRIPT_RX.match(path.name)
+            if not m or m.group("ticker").upper() != upper:
+                continue
+            key = (int(m.group("q")), int(m.group("y")))
+            if key not in out:
+                out[key] = str(path)
     return out

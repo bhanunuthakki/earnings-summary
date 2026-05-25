@@ -138,7 +138,7 @@ def build(
             status=SectionStatus.PARTIAL,
             missing=missing(
                 stage="TRANSCRIBE(format_drift)",
-                fix_command="inspect transcripts/processed/<T>_Q<n>_<yyyy>.txt",
+                fix_command="inspect transcripts/{processed,raw}/<T>_Q<n>_<yyyy>.txt",
                 detail=(
                     "Transcripts present but the Q&A boundary parser found no "
                     "turns in any — the source format may have drifted from "
