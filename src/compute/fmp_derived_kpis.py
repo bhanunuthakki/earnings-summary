@@ -19,10 +19,13 @@ downstream break_rules can reference them by string match.
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
@@ -298,6 +301,155 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
     return out
 
 
+def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedKpiRow]:
+    """Derive segment-level growth and margins dynamically based on holdings.json."""
+    # Check if segment_facts table exists first to support test fixtures without segment tables
+    table_check = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='segment_facts'"
+    ).fetchone()
+    if not table_check:
+        return []
+
+    cur = conn.execute(
+        "SELECT DISTINCT segment_name FROM segment_facts WHERE ticker = ?",
+        (ticker.upper(),),
+    )
+    segments = [str(r["segment_name"]) for r in cur.fetchall() if r["segment_name"]]
+    if not segments:
+        return []
+        
+    repo_root = Path(__file__).resolve().parents[2]
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    
+    kpi_targets: list[tuple[str, str, str]] = []
+    if holdings_path.exists():
+        try:
+            with open(holdings_path, encoding="utf-8") as f:
+                data = json.load(f)
+            kpi_names: set[str] = set()
+            for key in ("tier_1_kpis", "tier_2_kpis", "tier_3_kpis", "business_model_rules"):
+                items = data.get(key) or []
+                for item in items:
+                    name = item.get("name") or item.get("kpi_name")
+                    if name:
+                        kpi_names.add(str(name).strip())
+            
+            for kpi in kpi_names:
+                kpi_lower = kpi.lower()
+                for seg in segments:
+                    if re.search(r'\b' + re.escape(seg.lower()) + r'\b', kpi_lower):
+                        if "margin" in kpi_lower or "operating margin" in kpi_lower:
+                            kpi_targets.append((kpi, seg, "operating_margin"))
+                        elif "growth" in kpi_lower or "yoy" in kpi_lower:
+                            if "operating income" in kpi_lower or "operating profit" in kpi_lower:
+                                kpi_targets.append((kpi, seg, "operating_income_growth"))
+                            else:
+                                kpi_targets.append((kpi, seg, "revenue_growth"))
+        except Exception:
+            pass
+            
+    if ticker.upper() == "AMZN":
+        default_amzn = [
+            ("AWS operating margin", "AWS", "operating_margin"),
+            ("AWS Operating Margin", "AWS", "operating_margin"),
+            ("North America retail operating margin", "North America", "operating_margin"),
+            ("North America Retail Operating Margin", "North America", "operating_margin"),
+            ("AWS revenue growth (YoY)", "AWS", "revenue_growth"),
+            ("AWS Revenue YoY Growth", "AWS", "revenue_growth"),
+        ]
+        existing_keys = {(t[0], t[1]) for t in kpi_targets}
+        for k, s, m in default_amzn:
+            if (k, s) not in existing_keys:
+                kpi_targets.append((k, s, m))
+
+    if not kpi_targets:
+        return []
+
+    cur = conn.execute(
+        """
+        SELECT period_end, fiscal_period_type, segment_name, metric, value, source_doc_id
+        FROM segment_facts
+        WHERE ticker = ? AND metric IN ('revenue_by_product', 'operating_income')
+          AND fiscal_period_type IN ('Q1', 'Q2', 'Q3', 'Q4')
+        ORDER BY period_end ASC
+        """,
+        (ticker.upper(),),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return []
+
+    grouped: dict[tuple[datetime, str], dict[str, dict[str, Decimal]]] = {}
+    source_docs: dict[tuple[datetime, str], int] = {}
+    for r in rows:
+        pe = r["period_end"]
+        if isinstance(pe, str):
+            pe = datetime.fromisoformat(pe)
+        key = (pe, r["fiscal_period_type"])
+        seg = r["segment_name"]
+        metric = r["metric"]
+        val = Decimal(str(r["value"]))
+        source_docs[key] = int(r["source_doc_id"])
+        
+        grouped.setdefault(key, {}).setdefault(seg, {})[metric] = val
+
+    out: list[DerivedKpiRow] = []
+    history: dict[str, dict[str, dict[str, dict[int, tuple[Decimal, int]]]]] = {}
+
+    sorted_keys = sorted(grouped.keys(), key=lambda k: k[0])
+    for key in sorted_keys:
+        pe, fpt = key
+        segments_data = grouped[key]
+        doc_id = source_docs[key]
+        
+        for kpi_name, seg_name, metric_type in kpi_targets:
+            if seg_name not in segments_data:
+                continue
+            seg_data = segments_data[seg_name]
+            
+            if metric_type == "operating_margin":
+                rev = seg_data.get("revenue_by_product")
+                oi = seg_data.get("operating_income")
+                if rev and oi is not None:
+                    margin = (oi / rev) * Decimal(100)
+                    out.append(DerivedKpiRow(pe, FiscalPeriodType(fpt), kpi_name, margin, Unit.PERCENT, doc_id))
+            
+            elif metric_type == "revenue_growth":
+                rev = seg_data.get("revenue_by_product")
+                if rev:
+                    history.setdefault(seg_name, {}).setdefault("revenue", {}).setdefault(fpt, {})[pe.year] = (rev, doc_id)
+                    
+            elif metric_type == "operating_income_growth":
+                oi = seg_data.get("operating_income")
+                if oi is not None:
+                    history.setdefault(seg_name, {}).setdefault("operating_income", {}).setdefault(fpt, {})[pe.year] = (oi, doc_id)
+
+    for seg_name, metrics in history.items():
+        for metric_name, fpt_map in metrics.items():
+            targets = [
+                kpi_name for kpi_name, s, m in kpi_targets
+                if s == seg_name and (
+                    (metric_name == "revenue" and m == "revenue_growth") or
+                    (metric_name == "operating_income" and m == "operating_income_growth")
+                )
+            ]
+            if not targets:
+                continue
+                
+            for fpt, year_map in fpt_map.items():
+                for year, (val, doc_id) in year_map.items():
+                    prior_year = year - 1
+                    if prior_year in year_map:
+                        prior_val, _ = year_map[prior_year]
+                        if prior_val > 0:
+                            yoy = ((val - prior_val) / prior_val) * Decimal(100)
+                            pe_current = next(k[0] for k in sorted_keys if k[0].year == year and k[1] == fpt)
+                            for kpi_name in targets:
+                                out.append(DerivedKpiRow(pe_current, FiscalPeriodType(fpt), kpi_name, yoy, Unit.PERCENT, doc_id))
+
+    return out
+
+
 def persist_derived_kpis(
     conn: sqlite3.Connection,
     *,
@@ -338,8 +490,15 @@ def persist_derived_kpis(
 def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
     """End-to-end: fetch quarterly facts, derive KPIs, persist. Returns (rows_emitted, rows_inserted)."""
     facts = _fetch_quarterly_facts(conn, ticker)
-    if not facts:
+    rows = []
+    if facts:
+        rows.extend(derive_for_facts(facts))
+        
+    segment_rows = _derive_segment_kpis(conn, ticker)
+    rows.extend(segment_rows)
+    
+    if not rows:
         return (0, 0)
-    rows = derive_for_facts(facts)
+        
     inserted = persist_derived_kpis(conn, ticker=ticker, rows=rows)
     return (len(rows), inserted)
