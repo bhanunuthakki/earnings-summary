@@ -220,7 +220,12 @@ CSS = r"""
 /* ============================================================
    Chat drawer
    ============================================================ */
-.chat-drawer { position: fixed; bottom: 16px; right: 16px; z-index: 95; }
+.chat-drawer {
+  position: fixed; bottom: 16px;
+  right: calc(var(--sidebar-open-width, 0px) + 16px);
+  z-index: 95;
+  transition: right 0.2s ease;
+}
 .chat-toggle {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px;
@@ -232,13 +237,16 @@ CSS = r"""
 .chat-toggle.open { background: var(--ink-muted); }
 .chat-toggle-icon { font-family: var(--font-mono); }
 .chat-panel {
-  position: fixed; right: 16px; bottom: 70px;
+  position: fixed;
+  right: calc(var(--sidebar-open-width, 0px) + 16px);
+  bottom: 70px;
   width: 480px; max-width: calc(100vw - 32px);
   height: 600px; max-height: calc(100vh - 100px);
   background: var(--bg-elev, var(--panel));
   border: 1px solid var(--hairline);
   border-radius: 8px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
   display: none; flex-direction: column;
+  transition: right 0.2s ease;
 }
 .chat-panel.open { display: flex; }
 .chat-head {

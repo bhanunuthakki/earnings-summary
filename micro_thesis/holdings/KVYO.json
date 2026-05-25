@@ -1,0 +1,160 @@
+{
+  "ticker": "KVYO",
+  "name": "Klaviyo",
+  "last_updated": "2026-05-21",
+  "thesis": "Stub — thesis to be built.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "NDR × customer count × ARPU expansion",
+  "chart_priorities": [
+    "Net Dollar Retention (NDR)",
+    "ARR / Revenue",
+    "Customers >$50K ARR",
+    "ARPU",
+    "Gross margin",
+    "Operating income / FCF",
+    "Customer count (total + cohort)",
+    "Shopify GMV attach rate"
+  ],
+  "tier_1_kpis": [
+    {
+      "name": "Net Dollar Retention (NDR / NRR)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "NDR falls below 100% for 2 consecutive quarters (net churn = expansion engine broken)",
+      "source": "earnings release / 10-Q"
+    },
+    {
+      "name": "Total customers",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Customer growth decelerates below 10% YoY for 2 consecutive quarters",
+      "source": "earnings release"
+    },
+    {
+      "name": "Customers >$50K ARR",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Growth in $50K+ cohort stalls (upmarket motion failing)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Revenue / ARR",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Revenue growth decelerates >50% YoY for 2 consecutive quarters",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross margin",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Gross margin compresses below 70% (infrastructure cost discipline lost)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free Cash Flow margin",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "FCF margin turns negative for 2 consecutive quarters (profitability regression)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "ARPU (ARR / total customers)",
+      "source": "earnings release / derived"
+    },
+    {
+      "name": "Shopify GMV attach rate or Shopify-sourced % of revenue",
+      "source": "10-K / investor day"
+    },
+    {
+      "name": "S&M as % of revenue (efficiency)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "SMS / CDP attach rate as % of customer base",
+      "source": "investor day / supplemental"
+    }
+  ],
+  "competitive_watchlist": [
+    "Braze",
+    "Attentive",
+    "HubSpot Marketing Hub",
+    "Mailchimp (Intuit)",
+    "Salesforce Marketing Cloud"
+  ],
+  "thesis_breakers_qualitative": [
+    "NDR falls below 100% — net churn means the expansion flywheel is broken",
+    "Shopify platform risk materializes (Shopify launches native email/SMS or changes partner terms)",
+    "Gross margin compression below 70% from AI/SMS infrastructure cost",
+    "Upmarket motion fails — $50K+ cohort stalls, ARPU growth reverses",
+    "Competitive displacement by Braze in mid-market or Attentive in SMS"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "kvyo_ndr_below_100",
+      "kpi_name": "Net Dollar Retention (NDR)",
+      "comparator": "lt",
+      "threshold": 100,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "NDR below 100% for 2 consecutive quarters — net revenue churn means existing customers are contracting faster than they expand, breaking the core SaaS expansion flywheel."
+    },
+    {
+      "rule_id": "kvyo_revenue_decel_50pct",
+      "kpi_name": "Revenue YoY Growth",
+      "comparator": "lt",
+      "threshold": 50,
+      "unit": "percent_decel",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY growth rate decelerates by more than 50% versus prior-year same quarter for 2 consecutive quarters — signals structural demand deceleration, not a one-quarter anomaly."
+    },
+    {
+      "rule_id": "kvyo_gross_margin_below_70",
+      "kpi_name": "Gross margin",
+      "comparator": "lt",
+      "threshold": 70,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 70% for 2 consecutive quarters — SMS cost, AI infrastructure, or competitive pricing pressures are eroding the economics of the platform."
+    }
+  ],
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "kvyo_ndr_below_105",
+      "kpi_name": "Net Dollar Retention (NDR)",
+      "comparator": "lt",
+      "threshold": 105,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "NDR below 105% for 2 consecutive quarters — deterioration from the ~115-120% range signals expansion-motion slowdown; not a hard break but a watch item."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": 0.10,
+  "mos_bar": 0.25,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 30.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "valuation_multiple_override": "EV/NTM Revenue"
+}
