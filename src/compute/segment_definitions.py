@@ -26,8 +26,8 @@ from pathlib import Path
 
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 
-_SECTION_KEYWORDS = ("segment", "geographic", "description of business", "operating segments")
-_MAX_TEXT_BUDGET = 18000  # chars sent to LLM — caps prompt size on chatty filings
+_SECTION_KEYWORDS = ("segment", "geographic", "description of business", "operating segments", "revenue", "sales")
+_MAX_TEXT_BUDGET = 60000  # chars sent to LLM — caps prompt size on chatty filings
 
 
 @dataclass
@@ -217,9 +217,11 @@ def _ask_claude(
     ticker: str, year: int | None, segment_names: list[str], text: str
 ) -> dict[str, str | None]:
     names_block = "\n".join(f"- {n}" for n in segment_names)
-    prompt = f"""You are extracting segment definitions from a 10-K filing for {ticker} (fiscal year {year}).
+    prompt = f"""You are synthesizing high-fidelity, analytical segment definitions from a 10-K filing for {ticker} (fiscal year {year}).
 
-Here are the segment names this report displays. For EACH name, find the definition in the 10-K text below and return it verbatim where possible (companies typically open the segment section with a short bulleted definition like "Segment X includes products and services such as A, B, C…").
+For EACH segment name listed below, analyze the 10-K text to produce a precise, condensed, and analytical review (1-3 sentences) explaining exactly what the segment measures, what major business lines/revenues are included, and any notable exclusions. 
+
+The summary must be highly useful for buy-side investment analysis—avoid generic boilerplate or plain copies; instead, capture the segment's true operational boundaries and structural drivers.
 
 Segments to define:
 {names_block}
@@ -229,10 +231,10 @@ Segments to define:
 {text}
 \"\"\"
 
-Return STRICT JSON with one key per segment name above. Value is the definition string (1–4 sentences, copied verbatim from the 10-K where possible) or `null` if you cannot find it. Do NOT invent a definition.
+Return STRICT JSON with one key per segment name above. The value must be the synthesized definition string (1–3 analytical sentences) or `null` if you cannot find any information about it. Do NOT invent information.
 
 Example:
-{{"Google Services": "Includes products and services such as ads, Android…", "Other Bets": null}}
+{{"Google Services": "Encompasses core monetization engines including Search, YouTube Ads, hardware, and Play Store fees; excludes higher-beta infrastructure bets like Waymo.", "Other Bets": null}}
 
 Return ONLY the JSON object — no markdown fence, no commentary."""
 

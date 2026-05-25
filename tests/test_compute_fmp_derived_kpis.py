@@ -334,3 +334,61 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
     # Capex / Revenue can still be emitted as 0% — that's a legitimate value
     # for an asset-light quarter
     assert "Capex / Revenue (GAAP)" in names
+
+
+def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
+    # 1. Create segment_facts table
+    conn.execute(
+        """
+        CREATE TABLE segment_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            segment_name TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL
+        );
+        """
+    )
+    
+    # 2. Insert docs
+    doc_id = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_income_statement.json")
+    
+    # 3. Seed segment_facts for AWS Q4 2023 & Q4 2024
+    conn.executemany(
+        "INSERT INTO segment_facts "
+        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, currency, unit, source_doc_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, 'USD', 'actual', ?)",
+        [
+            ("AMZN", datetime(2023, 12, 31), "Q4", "AWS", "revenue_by_product", 20_000_000_000, doc_id),
+            ("AMZN", datetime(2023, 12, 31), "Q4", "AWS", "operating_income", 5_000_000_000, doc_id),
+            ("AMZN", datetime(2024, 12, 31), "Q4", "AWS", "revenue_by_product", 30_000_000_000, doc_id),
+            ("AMZN", datetime(2024, 12, 31), "Q4", "AWS", "operating_income", 12_000_000_000, doc_id),
+            ("AMZN", datetime(2024, 12, 31), "Q4", "North America", "revenue_by_product", 100_000_000_000, doc_id),
+            ("AMZN", datetime(2024, 12, 31), "Q4", "North America", "operating_income", 5_000_000_000, doc_id),
+        ]
+    )
+    conn.commit()
+
+    from compute.fmp_derived_kpis import _derive_segment_kpis
+    derived = _derive_segment_kpis(conn, "AMZN")
+    
+    by_name_and_pe: dict[tuple[str, datetime], Decimal] = {
+        (r.name, r.period_end): r.value for r in derived
+    }
+    
+    assert by_name_and_pe[("AWS operating margin", datetime(2023, 12, 31))] == Decimal("25")
+    assert by_name_and_pe[("AWS Operating Margin", datetime(2023, 12, 31))] == Decimal("25")
+    
+    assert by_name_and_pe[("AWS operating margin", datetime(2024, 12, 31))] == Decimal("40")
+    assert by_name_and_pe[("AWS Operating Margin", datetime(2024, 12, 31))] == Decimal("40")
+    
+    assert by_name_and_pe[("North America retail operating margin", datetime(2024, 12, 31))] == Decimal("5")
+    assert by_name_and_pe[("North America Retail Operating Margin", datetime(2024, 12, 31))] == Decimal("5")
+    
+    assert by_name_and_pe[("AWS revenue growth (YoY)", datetime(2024, 12, 31))] == Decimal("50")
+    assert by_name_and_pe[("AWS Revenue YoY Growth", datetime(2024, 12, 31))] == Decimal("50")
