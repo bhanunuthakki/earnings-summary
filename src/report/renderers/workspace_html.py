@@ -18,6 +18,7 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Callable
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import TypeAlias
@@ -46,6 +47,7 @@ from report.models import (
     ReportFlavor,
     ReportSpec,
     SayDoCard,
+    SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
     SegmentSeries,
@@ -796,6 +798,9 @@ def _saydo_tab(body: StringIO, section: SayDoSection, spec: ReportSpec) -> None:
     if len(cards) >= 2:
         _saydo_summary_table(body, cards)
 
+    if section.historical_metrics:
+        _saydo_historical_ledger(body, section.historical_metrics)
+
     pvg = parse_print_vs_guide(card)
     if pvg:
         # LLM-filter to drop trivial commitments (FX, tax rate, share count
@@ -917,6 +922,57 @@ def _rating_pill(rating: str) -> str:
     }
     tone = mapping.get(rating, "muted")
     return f'<span class="pill pill-{tone}">{_esc(rating)}</span>'
+
+
+def _outcome_pill(outcome: str) -> str:
+    mapping = {
+        "beat": ("ok", "BEAT"),
+        "hit": ("ok", "HIT"),
+        "miss": ("bad", "MISS"),
+        "no_data": ("muted", "NO DATA"),
+    }
+    tone, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
+    return f'<span class="pill pill-{tone}">{_esc(label)}</span>'
+
+
+def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric]) -> None:
+    """Persistent guidance-outcomes ledger sourced from saydo_historical_metrics."""
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        '<span class="panel-title">Persistent guidance outcomes ledger</span>'
+        f'<span class="panel-sub">{len(metrics)} tracked commitments · stored in database</span></div>'
+    )
+    body.write('<table class="saydo-table"><thead><tr>')
+    body.write("<th>Metric</th>")
+    body.write("<th>Comparator</th>")
+    body.write("<th>Guidance Target</th>")
+    body.write("<th>Realized Value</th>")
+    body.write("<th>Outcome</th>")
+    body.write("<th>Guidance Period</th>")
+    body.write("<th>Target Period</th>")
+    body.write("</tr></thead><tbody>")
+
+    comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
+
+    def _fmt_period(dt: datetime) -> str:
+        quarter = (dt.month - 1) // 3 + 1
+        return f"Q{quarter} '{str(dt.year)[2:]}"
+
+    for m in metrics:
+        comp_symbol = comp_map.get(m.comparator.lower(), m.comparator)
+        target_display = f"{m.target_value:.2f}%"
+        realized_display = f"{m.realized_value:.2f}%" if m.realized_value is not None else "—"
+        outcome_label = m.outcome if m.outcome else "no_data"
+        body.write("<tr>")
+        body.write(f'<td class="saydo-metric">{_esc(m.kpi_name)}</td>')
+        body.write(f'<td class="mono">{_esc(comp_symbol)}</td>')
+        body.write(f'<td class="saydo-guide">{_esc(target_display)}</td>')
+        body.write(f'<td class="saydo-actual"><strong>{_esc(realized_display)}</strong></td>')
+        body.write(f"<td>{_outcome_pill(outcome_label)}</td>")
+        body.write(f'<td class="saydo-guide">{_esc(_fmt_period(m.period_made))}</td>')
+        body.write(f'<td class="saydo-actual">{_esc(_fmt_period(m.period_target))}</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
 
 
 # ---------------------------------------------------------------------------
