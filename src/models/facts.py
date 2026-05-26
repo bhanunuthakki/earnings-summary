@@ -139,6 +139,13 @@ class SegmentDimension(BaseModel):
     `dim_name` is the label itself (e.g. "AWS", "United States"); `metric` is
     the measurement kind (revenue / operating_income / ...). Multiple cells
     sharing a period_id form a cross-section or a true cross-tab.
+
+    `unit` is an optional per-dim override of the period's unit. Used when a
+    period anchor needs to host mixed-unit cells — most often Unit.ACTUAL
+    (revenue / OI / capex) alongside Unit.COUNT (headcount) under the same
+    (ticker, period, source_doc) tuple. Leave it `None` to inherit the
+    period row's unit; readers compute the effective unit as
+    `COALESCE(sd.unit, sp.unit)`.
     """
 
     id: int | None = None
@@ -147,3 +154,4 @@ class SegmentDimension(BaseModel):
     dim_name: str
     value: Decimal
     metric: str
+    unit: Unit | None = None

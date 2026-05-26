@@ -1,8 +1,8 @@
 """LLM canonicalizer for unmapped segment names.
 
 After `execution/seed_entity_graph.py` lands its deterministic mappings,
-this script walks the remaining `segment_facts` rows with segment_entity_id
-IS NULL and asks Haiku, per ticker, to:
+this script walks the remaining `segment_dimensions` rows with
+segment_entity_id IS NULL and asks Haiku, per ticker, to:
 
   1. Identify which observed segment names refer to the same business unit.
   2. Pick a canonical name for each group.
@@ -13,7 +13,7 @@ For each canonical group the script either:
     (e.g., a watchlist company's "AI Software" segment that's a clean addition)
   - Creates a new segment-kind entity with parent_entity_id = company's entity_id
   - Registers each observed surface form as an alias
-  - Backfills segment_facts.segment_entity_id
+  - Backfills segment_dimensions.segment_entity_id
 
 Skip cases (these stay unmapped — they're not real segments):
   - "Operating Segments", "Reconciling items", "Other Segments", "Other"
@@ -78,7 +78,12 @@ def _sync_db(repo_root: Path) -> None:
 
 
 def _unmapped_by_ticker(repo_root: Path, tickers: list[str] | None) -> dict[str, list[str]]:
-    """Return {ticker: [segment_name, ...]} for unmapped segment_facts rows."""
+    """Return {ticker: [segment_name, ...]} for unmapped segment_dimensions rows.
+
+    Reads from segment_periods + segment_dimensions; the segment_entity_id
+    column on segment_dimensions was carried over from segment_facts in
+    migration 0056. dim_name plays the role of the old segment_name.
+    """
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     try:
         conn.row_factory = sqlite3.Row
@@ -86,16 +91,20 @@ def _unmapped_by_ticker(repo_root: Path, tickers: list[str] | None) -> dict[str,
             placeholders = ",".join("?" * len(tickers))
             rows = conn.execute(
                 f"""
-                SELECT DISTINCT ticker, segment_name FROM segment_facts
-                WHERE segment_entity_id IS NULL AND ticker IN ({placeholders})
+                SELECT DISTINCT sp.ticker AS ticker, sd.dim_name AS segment_name
+                FROM segment_periods sp
+                JOIN segment_dimensions sd ON sd.period_id = sp.id
+                WHERE sd.segment_entity_id IS NULL AND sp.ticker IN ({placeholders})
                 """,
                 tickers,
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT DISTINCT ticker, segment_name FROM segment_facts
-                WHERE segment_entity_id IS NULL
+                SELECT DISTINCT sp.ticker AS ticker, sd.dim_name AS segment_name
+                FROM segment_periods sp
+                JOIN segment_dimensions sd ON sd.period_id = sp.id
+                WHERE sd.segment_entity_id IS NULL
                 """
             ).fetchall()
     finally:
@@ -269,13 +278,24 @@ def _apply_groups(
             to_entity_id=company_entity_id,
         )
 
-        # Backfill segment_facts for each alias
+        # Backfill segment_dimensions for each alias (via segment_periods to
+        # filter on ticker — segment_dimensions itself has no ticker column).
         conn = sqlite3.connect(str(db_path))
         try:
             for alias in aliases:
                 cur = conn.execute(
-                    "UPDATE segment_facts SET segment_entity_id = ? "
-                    "WHERE ticker = ? AND segment_name = ? AND segment_entity_id IS NULL",
+                    """
+                    UPDATE segment_dimensions
+                    SET segment_entity_id = ?
+                    WHERE id IN (
+                        SELECT sd.id
+                        FROM segment_dimensions sd
+                        JOIN segment_periods sp ON sp.id = sd.period_id
+                        WHERE sp.ticker = ?
+                          AND sd.dim_name = ?
+                          AND sd.segment_entity_id IS NULL
+                    )
+                    """,
                     (seg_id, ticker, alias),
                 )
                 rows_mapped += cur.rowcount
@@ -365,17 +385,17 @@ def main() -> int:
     conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
     try:
         mapped = conn.execute(
-            "SELECT COUNT(*) FROM segment_facts WHERE segment_entity_id IS NOT NULL"
+            "SELECT COUNT(*) FROM segment_dimensions WHERE segment_entity_id IS NOT NULL"
         ).fetchone()[0]
         unmapped = conn.execute(
-            "SELECT COUNT(*) FROM segment_facts WHERE segment_entity_id IS NULL"
+            "SELECT COUNT(*) FROM segment_dimensions WHERE segment_entity_id IS NULL"
         ).fetchone()[0]
     finally:
         conn.close()
     print(
         f"\nCanonicalization done · {total_mapped} new rows mapped this run.\n"
-        f"  segment_facts mapped:   {mapped}\n"
-        f"  segment_facts unmapped: {unmapped}\n"
+        f"  segment_dimensions mapped:   {mapped}\n"
+        f"  segment_dimensions unmapped: {unmapped}\n"
     )
     return 0
 

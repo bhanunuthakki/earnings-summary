@@ -303,15 +303,22 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
 
 def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedKpiRow]:
     """Derive segment-level growth and margins dynamically based on holdings.json."""
-    # Check if segment_facts table exists first to support test fixtures without segment tables
+    # Junction tables must exist for any segment-derived KPI to make sense —
+    # test fixtures without segment data fall through to an empty result.
     table_check = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='segment_facts'"
+        "SELECT COUNT(*) FROM sqlite_master "
+        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
     ).fetchone()
-    if not table_check:
+    if not table_check or table_check[0] < 2:
         return []
 
     cur = conn.execute(
-        "SELECT DISTINCT segment_name FROM segment_facts WHERE ticker = ?",
+        """
+        SELECT DISTINCT sd.dim_name AS segment_name
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+        """,
         (ticker.upper(),),
     )
     segments = [str(r["segment_name"]) for r in cur.fetchall() if r["segment_name"]]
@@ -365,13 +372,33 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
     if not kpi_targets:
         return []
 
+    # Pull the same shape the legacy segment_facts query produced: one row per
+    # (period, segment, metric) cell, with `metric` mapped back to the legacy
+    # vocabulary so the downstream grouping logic — which keys off
+    # `revenue_by_product` / `operating_income` — keeps working unchanged.
     cur = conn.execute(
         """
-        SELECT period_end, fiscal_period_type, segment_name, metric, value, source_doc_id
-        FROM segment_facts
-        WHERE ticker = ? AND metric IN ('revenue_by_product', 'operating_income')
-          AND fiscal_period_type IN ('Q1', 'Q2', 'Q3', 'Q4')
-        ORDER BY period_end ASC
+        SELECT
+            sp.period_end AS period_end,
+            sp.fiscal_period_type AS fiscal_period_type,
+            sd.dim_name AS segment_name,
+            CASE
+                WHEN sd.dim_type = 'product' AND sd.metric = 'revenue'
+                    THEN 'revenue_by_product'
+                WHEN sd.dim_type = 'business_unit' AND sd.metric = 'operating_income'
+                    THEN 'operating_income'
+            END AS metric,
+            sd.value AS value,
+            sp.source_doc_id AS source_doc_id
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND (
+            (sd.dim_type = 'product' AND sd.metric = 'revenue')
+            OR (sd.dim_type = 'business_unit' AND sd.metric = 'operating_income')
+          )
+          AND sp.fiscal_period_type IN ('Q1', 'Q2', 'Q3', 'Q4')
+        ORDER BY sp.period_end ASC
         """,
         (ticker.upper(),),
     )

@@ -6,6 +6,12 @@ writes each group as one segment_periods row plus one segment_dimensions row
 per legacy fact. Idempotent: re-running on an already-backfilled DB is a no-op
 (the writer dedupes by the natural key on both sides).
 
+One-shot historical tool: as of migration 0056 the legacy `segment_facts`
+table no longer exists, so running this against a post-0056 DB exits with a
+clear message instead of a sqlite OperationalError. Kept on disk so the
+backfill code path stays test-covered (see tests/test_segment_junction.py
+::test_backfill_matches_unique_period_tuples).
+
 Usage:
     python scratch/backfill_segment_junction.py
     python scratch/backfill_segment_junction.py --db /path/to/portfolio.db
@@ -206,6 +212,19 @@ def main() -> int:
 
     conn = _open_db(Path(args.db))
     try:
+        # Guard: migration 0056 dropped the legacy table. Without this check
+        # the script crashes with a sqlite OperationalError on the first
+        # SELECT — clearer to exit with a one-liner explanation.
+        cur = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='segment_facts'"
+        )
+        if cur.fetchone() is None:
+            sys.stderr.write(
+                "backfill_segment_junction: segment_facts no longer exists "
+                "in this DB (dropped by migration 0056). "
+                "The backfill has already happened; nothing to do.\n"
+            )
+            return 0
         groups, periods, dimensions = backfill(
             conn, ticker=args.ticker, dry_run=args.dry_run
         )

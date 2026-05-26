@@ -239,7 +239,11 @@ def test_segment_fact_to_dimension_maps_headcount() -> None:
 
 
 def _create_junction_schema(conn: sqlite3.Connection) -> None:
-    """Schema mirroring migrations 0004 + 0055 for in-memory junction tests."""
+    """Schema mirroring migrations 0004 + 0055 + 0057 for in-memory junction tests.
+
+    Includes the per-dim `unit` column added by 0057 so the writer can store
+    headcount (Unit.COUNT) alongside ACTUAL-unit dims under one period
+    anchor."""
     conn.executescript(
         """
         CREATE TABLE documents (
@@ -272,7 +276,9 @@ def _create_junction_schema(conn: sqlite3.Connection) -> None:
             dim_type VARCHAR(16) NOT NULL,
             dim_name VARCHAR(128) NOT NULL,
             value NUMERIC(20, 4) NOT NULL,
-            metric VARCHAR(32) NOT NULL
+            metric VARCHAR(32) NOT NULL,
+            unit VARCHAR(16),
+            segment_entity_id INTEGER
         );
         """
     )
@@ -357,34 +363,37 @@ def test_junction_writer_round_trips_headcount_count(
 
 
 def _seed_renderer_repo(tmp_path: Path) -> Path:
-    """Build a tmp repo_root with portfolio.db + segment_facts schema seeded.
+    """Build a tmp repo_root with portfolio.db + junction schema seeded.
 
-    Mirrors the columns the renderer queries (period_end, segment_name, metric,
-    value, fiscal_period_type). Returns the repo_root path for build().
+    Bootstraps the post-0057 schema (segment_periods + segment_dimensions
+    with per-dim `unit`), then seeds one period anchor per (ticker, quarter,
+    source_doc) tuple plus capex + headcount dim cells under each. Returns
+    the repo_root path for build().
     """
     (tmp_path / "data").mkdir()
     db_path = tmp_path / "data" / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
     try:
-        conn.executescript(
-            """
-            CREATE TABLE segment_facts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL,
-                period_end TIMESTAMP NOT NULL,
-                fiscal_period_type TEXT NOT NULL,
-                segment_name TEXT NOT NULL,
-                metric TEXT NOT NULL,
-                value NUMERIC(24, 6) NOT NULL,
-                currency TEXT,
-                unit TEXT NOT NULL,
-                source_doc_id INTEGER NOT NULL
-            );
-            """
-        )
-        # Seed 4 quarters × 3 segments × 2 metrics so the section builder has
-        # enough data to render the bucket.
-        rows: list[tuple[str, str, str, str, str, str, str]] = []
+        _create_junction_schema(conn)
+        # _create_junction_schema seeds a placeholder document with id=1 —
+        # reuse it as the source for every fact row here.
+        period_ids: dict[tuple[str, str], int] = {}
+        for q, pe in (
+            ("Q1", "2024-03-31"),
+            ("Q2", "2024-06-30"),
+            ("Q3", "2024-09-30"),
+            ("Q4", "2024-12-31"),
+        ):
+            cur = conn.execute(
+                "INSERT INTO segment_periods "
+                "(ticker, period_end, fiscal_period_type, source_doc_id, "
+                " currency, unit) VALUES ('AMZN', ?, ?, 1, 'USD', 'actual')",
+                (pe, q),
+            )
+            assert cur.lastrowid is not None
+            period_ids[(q, pe)] = cur.lastrowid
+
+        dim_rows: list[tuple[int, str, str, str, str, str | None]] = []
         for segment in ("AWS", "North America", "International"):
             for q, pe, val in [
                 ("Q1", "2024-03-31", 10_000_000_000),
@@ -392,19 +401,27 @@ def _seed_renderer_repo(tmp_path: Path) -> Path:
                 ("Q3", "2024-09-30", 12_000_000_000),
                 ("Q4", "2024-12-31", 13_000_000_000),
             ]:
-                rows.append(("AMZN", pe, q, segment, "capex", str(val), "actual"))
+                # ACTUAL-unit capex matches the period's unit → unit=NULL
+                # (inherit).
+                dim_rows.append(
+                    (period_ids[(q, pe)], "business_unit", segment, str(val), "capex", None)
+                )
             for q, pe, val in [
                 ("Q1", "2024-03-31", 150_000),
                 ("Q2", "2024-06-30", 152_000),
                 ("Q3", "2024-09-30", 155_000),
                 ("Q4", "2024-12-31", 158_000),
             ]:
-                rows.append(("AMZN", pe, q, segment, "headcount", str(val), "count"))
+                # COUNT headcount differs from the period's ACTUAL → store
+                # the override on the dim row.
+                dim_rows.append(
+                    (period_ids[(q, pe)], "business_unit", segment, str(val), "headcount", "count")
+                )
         conn.executemany(
-            "INSERT INTO segment_facts "
-            "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-            " unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-            rows,
+            "INSERT INTO segment_dimensions "
+            "(period_id, dim_type, dim_name, value, metric, unit) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            dim_rows,
         )
         conn.commit()
     finally:
@@ -438,35 +455,27 @@ def test_renderer_surfaces_headcount_by_segment_with_count_unit(
 
 
 def test_renderer_empty_when_no_capex_or_headcount_rows(tmp_path: Path) -> None:
-    """A ticker whose segment_facts has only revenue rows still builds, with
+    """A ticker whose junction has only revenue rows still builds, with
     capex_by_segment and headcount_by_segment as empty lists."""
     (tmp_path / "data").mkdir()
     db_path = tmp_path / "data" / "portfolio.db"
     conn = sqlite3.connect(str(db_path))
     try:
-        conn.executescript(
-            """
-            CREATE TABLE segment_facts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL,
-                period_end TIMESTAMP NOT NULL,
-                fiscal_period_type TEXT NOT NULL,
-                segment_name TEXT NOT NULL,
-                metric TEXT NOT NULL,
-                value NUMERIC(24, 6) NOT NULL,
-                currency TEXT,
-                unit TEXT NOT NULL,
-                source_doc_id INTEGER NOT NULL
-            );
-            """
+        _create_junction_schema(conn)
+        cur = conn.execute(
+            "INSERT INTO segment_periods "
+            "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+            "VALUES ('GOOG', '2024-12-31', 'Q4', 1, 'USD', 'actual')"
         )
+        period_id = cur.lastrowid
+        assert period_id is not None
         conn.executemany(
-            "INSERT INTO segment_facts "
-            "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-            " unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, 'actual', 1)",
+            "INSERT INTO segment_dimensions "
+            "(period_id, dim_type, dim_name, value, metric) "
+            "VALUES (?, 'product', ?, ?, 'revenue')",
             [
-                ("GOOG", "2024-12-31", "Q4", "Search", "revenue_by_product", "50000000000"),
-                ("GOOG", "2024-12-31", "Q4", "Cloud", "revenue_by_product", "10000000000"),
+                (period_id, "Search", "50000000000"),
+                (period_id, "Cloud", "10000000000"),
             ],
         )
         conn.commit()
@@ -484,12 +493,13 @@ def test_renderer_empty_when_no_capex_or_headcount_rows(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_segment_oi_facts_mirrors_capex_to_junction(tmp_path: Path) -> None:
-    """End-to-end: extract_segment_oi_facts populates segment_facts AND
-    segment_dimensions with capex rows for AMZN's primary segments.
+def test_extract_segment_oi_facts_writes_capex_to_junction(tmp_path: Path) -> None:
+    """End-to-end: extract_segment_oi_facts populates segment_dimensions with
+    capex rows for AMZN's primary segments under one period anchor.
 
-    Matches acceptance criterion #2: running the CLI extractor against an AMZN
-    10-K JSON populates BOTH tables.
+    Matches acceptance criterion #2 (post-0057 rewording): running the CLI
+    extractor against an AMZN 10-K JSON populates the junction. The legacy
+    segment_facts table no longer exists.
     """
     (tmp_path / "data" / "historical" / "fmp").mkdir(parents=True)
     json_path = tmp_path / "data" / "historical" / "fmp" / "AMZN_form_10k_2024.json"
@@ -520,24 +530,6 @@ def test_extract_segment_oi_facts_mirrors_capex_to_junction(tmp_path: Path) -> N
     conn.row_factory = sqlite3.Row
     try:
         _create_junction_schema(conn)
-        conn.executescript(
-            """
-            CREATE TABLE segment_facts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker TEXT NOT NULL,
-                period_end TIMESTAMP NOT NULL,
-                fiscal_period_type TEXT NOT NULL,
-                segment_name TEXT NOT NULL,
-                metric TEXT NOT NULL,
-                value NUMERIC(24, 6) NOT NULL,
-                currency TEXT,
-                unit TEXT NOT NULL,
-                source_doc_id INTEGER NOT NULL
-            );
-            CREATE UNIQUE INDEX uq_segment_facts_provenance
-            ON segment_facts (ticker, period_end, fiscal_period_type, segment_name, metric, source_doc_id);
-            """
-        )
         # Replace the placeholder document with an AMZN 10-K row pointing at
         # the fixture JSON.
         conn.execute("DELETE FROM documents")
@@ -554,15 +546,7 @@ def test_extract_segment_oi_facts_mirrors_capex_to_junction(tmp_path: Path) -> N
         inserted = extract_segment_oi_facts(conn, document_id=7, project_root=tmp_path)
         assert inserted > 0
 
-        # Legacy table populated.
-        legacy_capex = conn.execute(
-            "SELECT segment_name, value FROM segment_facts "
-            "WHERE ticker='AMZN' AND metric='capex' ORDER BY segment_name"
-        ).fetchall()
-        legacy_segments = {r["segment_name"] for r in legacy_capex}
-        assert {"AWS", "International", "North America"}.issubset(legacy_segments)
-
-        # Junction also populated — same three segments under dim_type=business_unit.
+        # Junction populated — same three segments under dim_type=business_unit.
         junction_capex = conn.execute(
             "SELECT sd.dim_name, sd.value FROM segment_dimensions sd "
             "JOIN segment_periods sp ON sd.period_id = sp.id "

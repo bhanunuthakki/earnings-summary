@@ -259,7 +259,7 @@ def _latest_period_totals(
     weighting matches the table elsewhere in the report.
     """
     conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "segment_facts"):
+    if conn is None or not has_table(conn, "segment_dimensions"):
         if conn is not None:
             conn.close()
         return {}
@@ -285,15 +285,36 @@ def _latest_period_totals(
 def _load_rows(
     conn: sqlite3.Connection, ticker: str, metric: str
 ) -> list[dict[str, object]]:
+    """Read segment cells matching a legacy `segment_facts` metric.
+
+    Maps the legacy metric to the junction's (dim_type, metric) pair before
+    querying; the returned rows expose the legacy column names
+    (period_end, segment_name, value) so the caller's grid math stays
+    unchanged.
+    """
+    if metric == "revenue_by_product":
+        dim_type, junction_metric = ("product", "revenue")
+    elif metric == "revenue_by_geography":
+        dim_type, junction_metric = ("geography", "revenue")
+    elif metric == "operating_income":
+        dim_type, junction_metric = ("business_unit", "operating_income")
+    else:
+        dim_type, junction_metric = ("business_unit", metric)
     placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
     cur = conn.execute(
         f"""
-        SELECT period_end, segment_name, value
-        FROM segment_facts
-        WHERE ticker = ? AND metric = ?
-          AND fiscal_period_type IN ({placeholders})
+        SELECT
+            sp.period_end AS period_end,
+            sd.dim_name AS segment_name,
+            sd.value AS value
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+          AND sp.fiscal_period_type IN ({placeholders})
         """,
-        (ticker, metric, *QUARTERLY_PERIOD_TYPES),
+        (ticker, dim_type, junction_metric, *QUARTERLY_PERIOD_TYPES),
     )
     return [dict(cast("sqlite3.Row", r)) for r in cur.fetchall()]
 

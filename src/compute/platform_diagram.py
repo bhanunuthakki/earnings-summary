@@ -5,8 +5,8 @@ Per-ticker pipeline (mirrors `compute/company_description.py`):
      `{TICKER}_profile.json` for the canonical narrative + sector/industry.
   2. Pull the two most recent processed transcripts (`transcripts/processed/
      {TICKER}_Q*_*.txt`) for how management currently frames the platform.
-  3. Pull the segment names this report displays from `segment_facts` so the
-     diagram labels can lean on real product lines.
+  3. Pull the segment names this report displays from `segment_dimensions`
+     so the diagram labels can lean on real product lines.
   4. Single Claude call returning {diagram, caption}.
   5. Cache to `data/platform_diagram/{TICKER}.json` keyed by a sha256 over
      the combined inputs (10-K bytes + profile description + transcript text).

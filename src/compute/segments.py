@@ -1,8 +1,9 @@
-"""Extract segment_facts from FMP product / geographic segment documents.
+"""Extract segment data from FMP product / geographic segment documents.
 
 Each FmpSegmentRecord has a `data: dict[segment_name -> revenue]` field. We
-emit one segment_facts row per segment_name. The `metric` column distinguishes
-product vs geographic dimensions ('revenue_by_product' vs 'revenue_by_geography').
+emit one segment_dimensions cell per segment_name, hung off one
+segment_periods anchor per (ticker, period_end, fiscal_period_type, source_doc).
+`dim_type` distinguishes product vs geographic dimensions.
 
 Reconciliation gate: FMP's revenue-geographic-segments endpoint (and to a lesser
 extent revenue-product-segmentation) occasionally returns inflated values for
@@ -38,7 +39,10 @@ from models.facts import (
     Unit,
 )
 from models.fmp_payloads import FmpSegmentRecord
-from pipeline.segment_junction_writer import write_segment_facts_junction
+from pipeline.segment_junction_writer import (
+    write_segment_facts_junction,
+    write_segment_facts_via_junction,
+)
 
 _DOC_TYPE_TO_METRIC: dict[str, str] = {
     "fmp_segment_product": "revenue_by_product",
@@ -151,90 +155,21 @@ def extract_facts_from_record(
 
 
 def insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) -> int:
-    """Bulk-insert segment facts via INSERT OR IGNORE. Returns rowcount."""
-    insert_sql = (
-        "INSERT OR IGNORE INTO segment_facts "
-        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-        " currency, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    inserted = 0
-    for f in facts:
-        result = conn.execute(
-            insert_sql,
-            (
-                f.ticker,
-                f.period_end,
-                f.fiscal_period_type.value,
-                f.segment_name,
-                f.metric,
-                str(f.value),
-                f.currency.value if f.currency is not None else None,
-                f.unit.value,
-                f.source_doc_id,
-            ),
-        )
-        if result.rowcount > 0:
-            inserted += 1
-    return inserted
+    """Persist a batch of segment facts via the segment_periods + segment_dimensions junction.
 
-
-def _mirror_record_to_junction(
-    conn: sqlite3.Connection,
-    record: FmpSegmentRecord,
-    *,
-    source_doc_id: int,
-    dim_type: SegmentDimType,
-    junction_metric: str = "revenue",
-) -> None:
-    """Mirror one FMP segment record into segment_periods + segment_dimensions.
-
-    Writes alongside the legacy segment_facts insert (additive — both tables
-    are populated). Failure here MUST NOT block the legacy path; the junction
-    tables only exist after migration 0053 has run, so the writer is wrapped
-    in defensive table-existence checks. The caller commits after the loop.
+    Returns the number of NEW dimension rows inserted. Idempotent — re-running
+    over the same source is a no-op (writer dedupes on the natural key).
     """
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
-    )
-    if len(cur.fetchall()) < 2:
-        return  # migration 0053 not yet applied; legacy-only mode
-
-    period_end = datetime.fromisoformat(record.date)
-    period_type = FiscalPeriodType(record.period)
-    currency = parse_currency(record.reportedCurrency)
-    dimensions = [
-        SegmentDimension(
-            dim_type=dim_type,
-            dim_name=segment_name,
-            value=Decimal(str(value)),
-            metric=junction_metric,
-        )
-        for segment_name, value in record.data.items()
-    ]
-    if not dimensions:
-        return
-    write_segment_facts_junction(
-        conn,
-        ticker=record.symbol.upper(),
-        period_end=period_end,
-        fiscal_period_type=period_type,
-        source_doc_id=source_doc_id,
-        currency=currency,
-        unit=Unit.ACTUAL,
-        dimensions=dimensions,
-    )
+    return write_segment_facts_via_junction(conn, facts)
 
 
 def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
-    """Read documents[document_id]'s segment file, write SegmentFact rows.
+    """Read documents[document_id]'s segment file, write junction rows.
 
     Auto-detects product vs geographic from doc_type. Idempotent. Rejects
     records that fail the revenue-reconciliation gate (see module docstring).
-    Also mirrors each accepted record into the junction tables when they
-    exist (additive; legacy segment_facts is still the source of truth for
-    existing loaders).
+    Writes into segment_periods + segment_dimensions; the legacy segment_facts
+    table was retired in migration 0056.
     """
     cur = conn.cursor()
     cur.execute("SELECT doc_type FROM documents WHERE id = ?", (document_id,))
@@ -258,9 +193,7 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
         rec = FmpSegmentRecord.model_validate(rec_data)
         if not _passes_reconciliation(conn, rec, metric, document_id):
             continue
-        facts = extract_facts_from_record(rec, source_doc_id=document_id, metric=metric)
-        inserted += insert_segment_facts(conn, facts)
-        _mirror_record_to_junction(
+        inserted += _write_record_to_junction(
             conn,
             rec,
             source_doc_id=document_id,
@@ -269,3 +202,44 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
         )
     conn.commit()
     return inserted
+
+
+def _write_record_to_junction(
+    conn: sqlite3.Connection,
+    record: FmpSegmentRecord,
+    *,
+    source_doc_id: int,
+    dim_type: SegmentDimType,
+    junction_metric: str = "revenue",
+) -> int:
+    """Persist one FMP segment record into segment_periods + segment_dimensions.
+
+    Returns the number of NEW dimension rows inserted. Replaces the previous
+    additive `insert_segment_facts` + `_mirror_record_to_junction` pair —
+    only the junction is written now.
+    """
+    period_end = datetime.fromisoformat(record.date)
+    period_type = FiscalPeriodType(record.period)
+    currency = parse_currency(record.reportedCurrency)
+    dimensions = [
+        SegmentDimension(
+            dim_type=dim_type,
+            dim_name=segment_name,
+            value=Decimal(str(value)),
+            metric=junction_metric,
+        )
+        for segment_name, value in record.data.items()
+    ]
+    if not dimensions:
+        return 0
+    _, dims_inserted = write_segment_facts_junction(
+        conn,
+        ticker=record.symbol.upper(),
+        period_end=period_end,
+        fiscal_period_type=period_type,
+        source_doc_id=source_doc_id,
+        currency=currency,
+        unit=Unit.ACTUAL,
+        dimensions=dimensions,
+    )
+    return dims_inserted

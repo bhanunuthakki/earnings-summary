@@ -435,26 +435,42 @@ def test_loader_multi_dim_filters_with_and(
 
 
 # ---------------------------------------------------------------------------
-# Backward compatibility — segment_facts queries unchanged
+# Legacy-API shim — load_segment_series translates legacy metric strings into
+# the junction's (dim_type, metric) shape and delegates to the junction loader.
 # ---------------------------------------------------------------------------
 
 
-def test_load_segment_series_unchanged_by_junction(
+def test_load_segment_series_translates_legacy_metric(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """Existing load_segment_series should still query segment_facts only — even
-    when the junction tables exist alongside, the legacy loader returns the
-    legacy series."""
+    """`load_segment_series(... metric='revenue_by_product')` reads the same
+    series the writer persisted under (dim_type=product, metric=revenue).
+
+    Guards the legacy-metric → junction-tuple translation in the shim so
+    older callers (DCF, derived KPIs, etc.) keep working unchanged after the
+    junction migration."""
     _insert_document(conn, doc_id=1, ticker="GOOG")
-    conn.executemany(
-        "INSERT INTO segment_facts "
-        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-        " currency, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, 'USD', 'actual', 1)",
-        [
-            ("GOOG", datetime(2025, 3, 31), "Q1", "Google Cloud", "revenue_by_product", "10"),
-            ("GOOG", datetime(2025, 6, 30), "Q2", "Google Cloud", "revenue_by_product", "11"),
-        ],
-    )
+    for pe, pt, val in (
+        (datetime(2025, 3, 31), FiscalPeriodType.Q1, Decimal("10")),
+        (datetime(2025, 6, 30), FiscalPeriodType.Q2, Decimal("11")),
+    ):
+        write_segment_facts_junction(
+            conn,
+            ticker="GOOG",
+            period_end=pe,
+            fiscal_period_type=pt,
+            source_doc_id=1,
+            currency=Currency.USD,
+            unit=Unit.ACTUAL,
+            dimensions=[
+                SegmentDimension(
+                    dim_type=SegmentDimType.PRODUCT,
+                    dim_name="Google Cloud",
+                    value=val,
+                    metric="revenue",
+                )
+            ],
+        )
     conn.commit()
 
     db_path = tmp_path / "portfolio.db"
@@ -559,3 +575,206 @@ def test_migration_module_metadata() -> None:
 
     assert mod.revision == "0055_segment_junction"
     assert mod.down_revision == "0054_audit_columns"
+
+
+def test_drop_segment_facts_migration_metadata() -> None:
+    """0057_drop_segment_facts chains off 0056_earnings_themes_split_budget —
+    guards against the next migration accidentally bypassing the junction-first
+    work or the LLM-budget seed."""
+    import importlib.util
+
+    here = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "mig_0057",
+        here / "alembic" / "versions" / "0057_drop_segment_facts.py",
+    )
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    assert mod.revision == "0057_drop_segment_facts"
+    assert mod.down_revision == "0056_earnings_themes_split_budget"
+
+
+def test_drop_segment_facts_migration_removes_table_and_adds_entity_column(
+    tmp_path: Path,
+) -> None:
+    """After upgrade to 0057: segment_facts is gone and segment_dimensions
+    carries both the segment_entity_id and unit columns. After downgrade:
+    the table is restored with its 0004 + 0011 + 0037 shape and both dim
+    columns are gone.
+
+    Exercises the migration directly against a temp DB (no alembic env)
+    so the test is hermetic and fast."""
+    import importlib.util
+    from sqlalchemy import create_engine
+
+    here = Path(__file__).resolve().parent.parent
+    spec_055 = importlib.util.spec_from_file_location(
+        "mig_0055_for_test",
+        here / "alembic" / "versions" / "0055_segment_junction.py",
+    )
+    spec_057 = importlib.util.spec_from_file_location(
+        "mig_0057_for_test",
+        here / "alembic" / "versions" / "0057_drop_segment_facts.py",
+    )
+    assert spec_055 is not None and spec_055.loader is not None
+    assert spec_057 is not None and spec_057.loader is not None
+    mod_055 = importlib.util.module_from_spec(spec_055)
+    mod_057 = importlib.util.module_from_spec(spec_057)
+    spec_055.loader.exec_module(mod_055)
+    spec_057.loader.exec_module(mod_057)
+
+    # Bootstrap the minimum shape 0057 needs to introspect / drop / re-create.
+    db_path = tmp_path / "round_trip.db"
+    boot = sqlite3.connect(str(db_path))
+    boot.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            doc_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            fetched_at TIMESTAMP NOT NULL,
+            fetch_status TEXT NOT NULL,
+            raw_bytes_size INTEGER NOT NULL,
+            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
+        );
+        CREATE TABLE segment_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            segment_name TEXT NOT NULL,
+            metric TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            segment_entity_id INTEGER
+        );
+        CREATE UNIQUE INDEX uq_segment_facts_provenance
+        ON segment_facts (ticker, period_end, fiscal_period_type, segment_name, metric, source_doc_id);
+        CREATE INDEX idx_segment_facts_entity ON segment_facts (segment_entity_id);
+        CREATE TABLE tracked_companies (ticker TEXT, brief_dirty INTEGER DEFAULT 0);
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT,
+            purpose TEXT,
+            dirty INTEGER DEFAULT 0,
+            dirty_reason TEXT,
+            superseded_by_id INTEGER
+        );
+        """
+    )
+    boot.commit()
+    boot.close()
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    with engine.begin() as connection:
+        ctx = MigrationContext.configure(connection)
+        op_proxy = Operations(ctx)
+        # Patch alembic.op to point at our context-bound proxy. The migration
+        # modules import `op` from `alembic` at module level, so we swap the
+        # symbol on each module rather than calling op directly.
+        import alembic as alembic_pkg
+
+        original_op = alembic_pkg.op
+        mod_055.op = op_proxy
+        mod_057.op = op_proxy
+        try:
+            mod_055.upgrade()  # creates the junction tables
+            mod_057.upgrade()
+        finally:
+            alembic_pkg.op = original_op
+
+    # State after upgrade
+    inspect_conn = sqlite3.connect(str(db_path))
+    inspect_conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            r["name"]
+            for r in inspect_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "segment_facts" not in tables, "segment_facts must be dropped by 0057"
+        assert {"segment_periods", "segment_dimensions"} <= tables
+        dim_cols = {
+            str(r["name"])
+            for r in inspect_conn.execute("PRAGMA table_info(segment_dimensions)").fetchall()
+        }
+        assert "segment_entity_id" in dim_cols, (
+            "0057 must carry the segment_entity_id column over to segment_dimensions"
+        )
+        assert "unit" in dim_cols, (
+            "0057 must add the per-dim unit override column to segment_dimensions"
+        )
+        triggers = {
+            r["name"]
+            for r in inspect_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            ).fetchall()
+        }
+        assert "trg_dirty_segment_dimensions_ins" in triggers
+        assert "trg_artifacts_dirty_on_segment_dimensions_insert" in triggers
+    finally:
+        inspect_conn.close()
+
+    # Round-trip: downgrade should restore segment_facts and roll back the
+    # dim column / triggers.
+    with engine.begin() as connection:
+        ctx = MigrationContext.configure(connection)
+        op_proxy = Operations(ctx)
+        import alembic as alembic_pkg
+
+        original_op = alembic_pkg.op
+        mod_057.op = op_proxy
+        try:
+            mod_057.downgrade()
+        finally:
+            alembic_pkg.op = original_op
+
+    inspect_conn = sqlite3.connect(str(db_path))
+    inspect_conn.row_factory = sqlite3.Row
+    try:
+        tables = {
+            r["name"]
+            for r in inspect_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "segment_facts" in tables, "downgrade must restore segment_facts"
+        sf_cols = {
+            str(r["name"])
+            for r in inspect_conn.execute("PRAGMA table_info(segment_facts)").fetchall()
+        }
+        # Recreated table preserves both the original wide columns and the
+        # 0037 entity FK column the original carried.
+        assert {"ticker", "segment_name", "metric", "segment_entity_id"} <= sf_cols
+        dim_cols = {
+            str(r["name"])
+            for r in inspect_conn.execute("PRAGMA table_info(segment_dimensions)").fetchall()
+        }
+        assert "segment_entity_id" not in dim_cols, (
+            "downgrade must remove the segment_entity_id column from segment_dimensions"
+        )
+        assert "unit" not in dim_cols, (
+            "downgrade must remove the per-dim unit column from segment_dimensions"
+        )
+        # Original 0026 / 0043 triggers should be back.
+        triggers = {
+            r["name"]
+            for r in inspect_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger'"
+            ).fetchall()
+        }
+        assert "trg_dirty_segment_facts_ins" in triggers
+        assert "trg_artifacts_dirty_on_segment_insert" in triggers
+    finally:
+        inspect_conn.close()
