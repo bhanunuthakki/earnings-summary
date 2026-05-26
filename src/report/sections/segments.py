@@ -19,6 +19,7 @@ from typing import Literal, cast
 
 from report.models import (
     SectionStatus,
+    SegmentSecondaryExpansion,
     SegmentSeries,
     SegmentsSection,
 )
@@ -72,6 +73,24 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
     grids = _build_grids(deduped, quarters_full, display_labels)
     definitions, definitions_year = _load_segment_definitions(ticker, repo_root)
     quarter_labels_full = [f"{y} Q{q}" for (y, q) in quarters_full]
+
+    # Junction-driven secondary expansions (e.g. AWS by geography). Empty when
+    # the junction tables are absent OR carry only the same single-dim
+    # breakdowns that are already represented in `grids`.
+    conn2 = open_repo_db(repo_root)
+    secondary_expansions: list[SegmentSecondaryExpansion] = []
+    if conn2 is not None:
+        try:
+            secondary_expansions = _build_secondary_expansions(
+                conn2,
+                ticker,
+                quarters_full,
+                display_labels,
+                primary_segment_names=_primary_segment_names(grids),
+            )
+        finally:
+            conn2.close()
+
     return SegmentsSection(
         status=SectionStatus.OK if any(grids.values()) else SectionStatus.PARTIAL,
         quarter_labels=display_labels,
@@ -81,6 +100,7 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
         segment_definitions=definitions,
         segment_definitions_fiscal_year=definitions_year,
         quarter_labels_full=quarter_labels_full,
+        secondary_expansions=secondary_expansions,
     )
 
 
@@ -315,3 +335,140 @@ def _last_non_null(values: list[float | None]) -> float | None:
 
 def _optional_millions(value: float | None) -> float | None:
     return None if value is None else value / 1_000_000.0
+
+
+# ---------------------------------------------------------------------------
+# Junction (segment_periods + segment_dimensions) — secondary expansions
+# ---------------------------------------------------------------------------
+
+
+def _primary_segment_names(
+    grids: dict[MetricKey, list[SegmentSeries]],
+) -> set[str]:
+    """Names that already render in the primary grids — we skip them when
+    building secondary expansions so the user doesn't see the same axis
+    twice (once in the main table, once in the "by ..." expander)."""
+    out: set[str] = set()
+    for series_list in grids.values():
+        for s in series_list:
+            out.add(s.segment_name)
+    return out
+
+
+def _junction_tables_present(conn: sqlite3.Connection) -> bool:
+    """Both junction tables must exist for an expansion to be possible."""
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
+    ).fetchall()
+    return len(rows) >= 2
+
+
+def _build_secondary_expansions(
+    conn: sqlite3.Connection,
+    ticker: str,
+    quarters_full: list[tuple[int, int]],
+    display_labels: list[str],
+    *,
+    primary_segment_names: set[str],
+) -> list[SegmentSecondaryExpansion]:
+    """Group junction dim rows into per-dim_type secondary breakdowns.
+
+    Each dim_type (geography / channel / customer_segment / business_unit)
+    that carries rows OTHER than those already rendered in the primary grids
+    becomes one SegmentSecondaryExpansion. `parent_label` is None at this
+    stage — the renderer presents a flat "by <dim_type>" subtable beneath the
+    primary segments grid.
+    """
+    if not _junction_tables_present(conn):
+        return []
+    placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
+    # Pull every revenue-flavored dim cell — anything whose metric is 'revenue'
+    # itself OR carries a 'revenue' / 'sales' / 'gmv' affix (e.g. AWS_revenue,
+    # cloud_revenue) so cross-tab expansions for specific lines surface here.
+    rows = conn.execute(
+        f"""
+        SELECT sp.period_end, sd.dim_type, sd.dim_name, sd.value, sd.metric
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sp.fiscal_period_type IN ({placeholders})
+          AND (
+            sd.metric = 'revenue'
+            OR sd.metric LIKE '%revenue%'
+            OR sd.metric LIKE '%sales%'
+            OR sd.metric LIKE '%gmv%'
+          )
+        """,
+        (ticker.upper(), *QUARTERLY_PERIOD_TYPES),
+    ).fetchall()
+    if not rows:
+        return []
+
+    # Group by (dim_type, metric) so AWS_revenue-by-geography is its own
+    # expansion, distinct from the global revenue-by-geography table that
+    # already appears in the primary grids.
+    by_axis: dict[tuple[str, str], dict[str, dict[tuple[int, int], float]]] = (
+        defaultdict(lambda: defaultdict(dict))
+    )
+    for r in rows:
+        dim_type = str(r["dim_type"])
+        metric_str = str(r["metric"])
+        dim_name = str(r["dim_name"])
+        # Skip cells already represented in a primary grid (avoid double-render)
+        # — but ONLY when the metric is the generic 'revenue', because a more
+        # specific metric (AWS_revenue) is genuinely a different cross-section.
+        if metric_str == "revenue" and dim_name in primary_segment_names:
+            continue
+        qkey = calendar_quarter_key(r["period_end"])
+        if qkey not in quarters_full:
+            continue
+        try:
+            v = float(r["value"])
+        except (TypeError, ValueError):
+            continue
+        by_axis[(dim_type, metric_str)][dim_name][qkey] = v
+
+    display_quarter_count = len(display_labels)
+    out: list[SegmentSecondaryExpansion] = []
+    for (dim_type, metric_str), by_name in by_axis.items():
+        rows_out: list[SegmentSeries] = []
+        for name, qmap in by_name.items():
+            full_series = [_optional_millions(qmap.get(q)) for q in quarters_full]
+            display_values = full_series[-display_quarter_count:]
+            rows_out.append(
+                SegmentSeries(
+                    segment_name=name,
+                    metric="revenue_by_product",
+                    quarters=display_labels,
+                    values=display_values,
+                    growth=compute_growth(full_series),
+                    levels_full=full_series,
+                )
+            )
+        if not rows_out:
+            continue
+        rows_out.sort(
+            key=lambda s: -(
+                next((v for v in reversed(s.values) if v is not None), 0.0)
+            )
+        )
+        # When the metric encodes a specific subject (e.g. 'AWS_revenue' →
+        # parent="AWS"), surface that as the parent_label so the renderer can
+        # caption the expansion as "by geography under AWS". Cells with the
+        # generic 'revenue' metric have no parent — they're a flat secondary
+        # axis breakdown of the consolidated business.
+        if metric_str != "revenue":
+            parent = metric_str.rsplit("_revenue", 1)[0].rsplit("_sales", 1)[0]
+            parent_label: str | None = parent.replace("_", " ").strip() or None
+        else:
+            parent_label = None
+        out.append(
+            SegmentSecondaryExpansion(
+                dim_type=dim_type,
+                parent_label=parent_label,
+                rows=rows_out,
+            )
+        )
+    out.sort(key=lambda e: (e.dim_type, e.parent_label or ""))
+    return out

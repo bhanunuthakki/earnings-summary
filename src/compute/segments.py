@@ -30,12 +30,24 @@ from compute._common import (
     parse_currency,
     read_records_json,
 )
-from models.facts import FiscalPeriodType, SegmentFact, Unit
+from models.facts import (
+    FiscalPeriodType,
+    SegmentDimension,
+    SegmentDimType,
+    SegmentFact,
+    Unit,
+)
 from models.fmp_payloads import FmpSegmentRecord
+from pipeline.segment_junction_writer import write_segment_facts_junction
 
 _DOC_TYPE_TO_METRIC: dict[str, str] = {
     "fmp_segment_product": "revenue_by_product",
     "fmp_segment_geographic": "revenue_by_geography",
+}
+
+_DOC_TYPE_TO_DIM_TYPE: dict[str, SegmentDimType] = {
+    "fmp_segment_product": SegmentDimType.PRODUCT,
+    "fmp_segment_geographic": SegmentDimType.GEOGRAPHY,
 }
 
 # Reject a segment record if sum(values) > revenue * (1 + tolerance). 0.10
@@ -167,11 +179,62 @@ def insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) -> 
     return inserted
 
 
+def _mirror_record_to_junction(
+    conn: sqlite3.Connection,
+    record: FmpSegmentRecord,
+    *,
+    source_doc_id: int,
+    dim_type: SegmentDimType,
+    junction_metric: str = "revenue",
+) -> None:
+    """Mirror one FMP segment record into segment_periods + segment_dimensions.
+
+    Writes alongside the legacy segment_facts insert (additive — both tables
+    are populated). Failure here MUST NOT block the legacy path; the junction
+    tables only exist after migration 0053 has run, so the writer is wrapped
+    in defensive table-existence checks. The caller commits after the loop.
+    """
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
+    )
+    if len(cur.fetchall()) < 2:
+        return  # migration 0053 not yet applied; legacy-only mode
+
+    period_end = datetime.fromisoformat(record.date)
+    period_type = FiscalPeriodType(record.period)
+    currency = parse_currency(record.reportedCurrency)
+    dimensions = [
+        SegmentDimension(
+            dim_type=dim_type,
+            dim_name=segment_name,
+            value=Decimal(str(value)),
+            metric=junction_metric,
+        )
+        for segment_name, value in record.data.items()
+    ]
+    if not dimensions:
+        return
+    write_segment_facts_junction(
+        conn,
+        ticker=record.symbol.upper(),
+        period_end=period_end,
+        fiscal_period_type=period_type,
+        source_doc_id=source_doc_id,
+        currency=currency,
+        unit=Unit.ACTUAL,
+        dimensions=dimensions,
+    )
+
+
 def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
     """Read documents[document_id]'s segment file, write SegmentFact rows.
 
     Auto-detects product vs geographic from doc_type. Idempotent. Rejects
     records that fail the revenue-reconciliation gate (see module docstring).
+    Also mirrors each accepted record into the junction tables when they
+    exist (additive; legacy segment_facts is still the source of truth for
+    existing loaders).
     """
     cur = conn.cursor()
     cur.execute("SELECT doc_type FROM documents WHERE id = ?", (document_id,))
@@ -187,6 +250,7 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
 
     _ticker, file_path_str = load_document_row(conn, document_id, doc_type)
     metric = _DOC_TYPE_TO_METRIC[doc_type]
+    dim_type = _DOC_TYPE_TO_DIM_TYPE[doc_type]
     records = read_records_json(project_root / file_path_str)
 
     inserted = 0
@@ -196,5 +260,12 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
             continue
         facts = extract_facts_from_record(rec, source_doc_id=document_id, metric=metric)
         inserted += insert_segment_facts(conn, facts)
+        _mirror_record_to_junction(
+            conn,
+            rec,
+            source_doc_id=document_id,
+            dim_type=dim_type,
+            junction_metric="revenue",
+        )
     conn.commit()
     return inserted

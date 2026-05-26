@@ -97,3 +97,53 @@ class KpiFact(BaseModel):
     value: Decimal
     unit: Unit
     source_doc_id: int
+
+
+class SegmentDimType(StrEnum):
+    """Allowed dim_type values on segment_dimensions rows.
+
+    A cross-tab cell carries one dim_type per axis. Adding a new dim_type
+    means extending this enum and (usually) teaching the renderer about a
+    new secondary-expansion bucket.
+    """
+
+    PRODUCT = "product"
+    GEOGRAPHY = "geography"
+    CHANNEL = "channel"
+    CUSTOMER_SEGMENT = "customer_segment"
+    BUSINESS_UNIT = "business_unit"
+
+
+class SegmentPeriod(BaseModel):
+    """Time + provenance anchor for one or more segment dimension cells.
+
+    Unique by (ticker, period_end, fiscal_period_type, source_doc_id) — the
+    same shape as segment_facts.uq_provenance so a single FMP / 10-K
+    extraction maps to one period row.
+    """
+
+    id: int | None = None
+    ticker: str
+    period_end: datetime
+    fiscal_period_type: FiscalPeriodType
+    source_doc_id: int
+    currency: Currency | None = None
+    unit: Unit
+    created_at: datetime | None = None
+
+
+class SegmentDimension(BaseModel):
+    """One cell of a segment cross-section.
+
+    `dim_type` says WHICH axis the label sits on (product vs geography vs ...);
+    `dim_name` is the label itself (e.g. "AWS", "United States"); `metric` is
+    the measurement kind (revenue / operating_income / ...). Multiple cells
+    sharing a period_id form a cross-section or a true cross-tab.
+    """
+
+    id: int | None = None
+    period_id: int | None = None
+    dim_type: SegmentDimType
+    dim_name: str
+    value: Decimal
+    metric: str

@@ -533,6 +533,14 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
         out.write(f"### {label}\n\n")
         _segments_table(out, s.quarter_labels, group)
 
+    for exp in s.secondary_expansions:
+        if not exp.rows:
+            continue
+        axis_label = exp.dim_type.replace("_", " ").title()
+        parent_suffix = f" — under {exp.parent_label}" if exp.parent_label else ""
+        out.write(f"### By {axis_label}{parent_suffix} (cross-tab)\n\n")
+        _segments_table(out, s.quarter_labels, exp.rows)
+
 
 def _segments_table(out: StringIO, quarters: list[str], rows: list[SegmentSeries]) -> None:
     headers = ["Segment", "Unit", *quarters, "QoQ", "YoY", "1Y CAGR", "3Y CAGR"]

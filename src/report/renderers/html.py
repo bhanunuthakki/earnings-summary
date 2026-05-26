@@ -39,6 +39,7 @@ from report.models import (
     ReportSpec,
     SayDoSection,
     SectionStatus,
+    SegmentSecondaryExpansion,
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
@@ -1319,6 +1320,49 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
         if not group:
             continue
         _segment_bucket(out, label, anchor, quarters_full, group, s.segment_definitions)
+
+    if s.secondary_expansions:
+        _segment_secondary_expansions(out, quarters_full, s.secondary_expansions)
+
+
+def _segment_secondary_expansions(
+    out: StringIO,
+    quarters_full: list[str],
+    expansions: list[SegmentSecondaryExpansion],
+) -> None:
+    """Render junction-derived secondary breakdowns as collapsible subtables."""
+    out.write('<h3 id="seg-secondary">Cross-tab breakdowns</h3>\n')
+    out.write(
+        '<p class="meta">Optional secondary-axis splits sourced from the segment '
+        "junction tables (geography / channel / customer breakdowns of the rows above).</p>\n"
+    )
+    for exp in expansions:
+        if not exp.rows:
+            continue
+        axis_label = exp.dim_type.replace("_", " ").title()
+        parent = f" — under {html.escape(exp.parent_label)}" if exp.parent_label else ""
+        out.write('<details class="segments-expander" open>\n')
+        out.write(f"<summary>By {html.escape(axis_label)}{parent}</summary>\n")
+        if any(r.levels_full for r in exp.rows) and quarters_full:
+            matrix_rows = [
+                MatrixRow(
+                    name=r.segment_name,
+                    levels=list(r.levels_full or r.values),
+                    unit=r.unit,
+                    tooltip="",
+                )
+                for r in exp.rows
+                if (r.levels_full or any(v is not None for v in r.values))
+            ]
+            if matrix_rows:
+                out.write(yoy_heatmap_table(
+                    rows=matrix_rows,
+                    periods=[_compact_q(q) for q in quarters_full],
+                    title=f"By {axis_label} — YoY % with trailing CAGR",
+                    display_quarters=12,
+                    cagr_periods=(4, 8, 12),
+                ))
+        out.write("</details>\n")
 
 
 _STACKED_AREA_DOMINANT_SHARE = 0.90  # skip stacked area when one segment dwarfs the rest
