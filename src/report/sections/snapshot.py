@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from report.models import (
+    DecisionBadge,
     KpiSnapshotRow,
     SectionStatus,
     SnapshotSection,
@@ -33,6 +34,7 @@ def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSecti
     valuation = _valuation_snapshot(ticker, repo_root, current_price, model_link, mos_bar)
     verdict = _verdict(ticker, repo_root)
     tier_1_strip = _tier_1_strip(holdings)
+    recent_decisions = _recent_decisions(ticker, repo_root)
 
     if holdings is None and valuation.consolidated_npv_per_share is None:
         return SnapshotSection(
@@ -47,6 +49,7 @@ def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSecti
             ticker=ticker.upper(),
             company_name=company_name,
             valuation=valuation,
+            recent_decisions=recent_decisions,
         )
 
     thesis_clean, _ = _split_stub_warning(holdings or {})
@@ -58,6 +61,7 @@ def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSecti
         verdict=verdict,
         valuation=valuation,
         tier_1_kpi_row=tier_1_strip,
+        recent_decisions=recent_decisions,
     )
 
 
@@ -285,6 +289,51 @@ def _verdict(ticker: str, repo_root: Path) -> Literal["intact", "watch", "broken
     if status == "breach":
         return "broken"
     return "pending"
+
+
+_VALID_OUTCOME_LABELS: frozenset[str] = frozenset(
+    {"correct", "wrong", "mixed", "unfalsifiable", "pending"}
+)
+_RATIONALE_MAX_CHARS = 80
+
+
+def _recent_decisions(ticker: str, repo_root: Path) -> list[DecisionBadge]:
+    """Return the 3 most-recent decisions for `ticker` as DecisionBadge rows.
+
+    Reads via decision_extractor.history so we inherit its db-absent / table-
+    absent tolerance (both return []). Empty list means the renderer omits
+    the sidebar entirely.
+    """
+    try:
+        from decision_extractor import history as decision_history
+    except ImportError:
+        return []
+    db_path = repo_root / "data" / "portfolio.db"
+    rows = decision_history(ticker=ticker.upper(), limit=3, db_path=db_path)
+    badges: list[DecisionBadge] = []
+    for r in rows:
+        raw = r.outcome_label if r.outcome_label in _VALID_OUTCOME_LABELS else "pending"
+        outcome = cast(
+            'Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]', raw
+        )
+        badges.append(
+            DecisionBadge(
+                date_short=r.made_at.strftime("%Y-%m"),
+                recommendation_kind=r.recommendation_kind,
+                outcome_label=outcome,
+                rationale_short=_rationale_short(r.rationale_excerpt),
+            )
+        )
+    return badges
+
+
+def _rationale_short(text: str | None) -> str:
+    if not text:
+        return ""
+    cleaned = text.strip()
+    if len(cleaned) <= _RATIONALE_MAX_CHARS:
+        return cleaned
+    return cleaned[:_RATIONALE_MAX_CHARS].rstrip() + "..."
 
 
 def _tier_1_strip(holdings: dict[str, object] | None) -> list[KpiSnapshotRow]:

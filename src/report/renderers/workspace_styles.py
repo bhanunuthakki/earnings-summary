@@ -1491,4 +1491,64 @@ ul.flag-list li.flag-positive {
   margin-top: 1em;
 }
 .lens-five_min_reread .lens-body strong { color: var(--fg); }
+
+/* ============================================================
+   Decision history — last 3 LLM recommendations from the
+   audit ledger (decisions table, migration 0046). Rendered in
+   the Thesis tab between the valuation/break-rule grid and the
+   thesis-hygiene panels.
+   ============================================================ */
+.decision-history-panel { margin-top: 14px; }
+.decision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.decision-badge {
+  display: grid;
+  grid-template-columns: 72px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  font-size: 12.5px;
+}
+.decision-badge .decision-date { color: var(--muted); }
+.decision-badge .decision-kind {
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  color: var(--fg);
+}
+.decision-badge .decision-outcome {
+  font-size: 10.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+}
+.decision-badge.outcome-correct .decision-outcome {
+  background: var(--accent-soft);
+  color: var(--ok);
+}
+.decision-badge.outcome-wrong .decision-outcome {
+  background: #fdecec;
+  color: var(--bad);
+}
+.decision-badge.outcome-mixed .decision-outcome {
+  background: var(--tone-opt);
+  color: var(--warn);
+}
+.decision-badge.outcome-pending .decision-outcome {
+  background: var(--paper);
+  color: var(--muted);
+}
+.decision-badge.outcome-unfalsifiable .decision-outcome {
+  background: var(--paper);
+  color: var(--muted);
+  font-style: italic;
+}
 """

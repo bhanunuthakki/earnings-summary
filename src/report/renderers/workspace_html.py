@@ -28,6 +28,7 @@ from report.models import (
     BearCaseSection,
     BreakRuleEvaluation,
     CompanyDescriptionSection,
+    DecisionBadge,
     EarningsSection,
     ExecCompRowModel,
     ExecCompSectionModel,
@@ -1512,6 +1513,10 @@ def _thesis_tab(
     _break_rules_panel(body, thesis)
     body.write("</div>")
 
+    # Decision history sidebar — only when the audit ledger has rows for this
+    # ticker. Reads `snap.recent_decisions` (last 3 LLM recommendations).
+    _decision_history_panel(body, snap.recent_decisions)
+
     # Thesis hygiene: break conditions (narrative thresholds), qualitative
     # breakers (soft thesis-breakers), competitive watchlist (who to track),
     # full tier-2/3 KPI ledger (collapsible). Each panel skips itself when
@@ -1801,6 +1806,35 @@ def _soft_rules_panel(body: StringIO, soft_evals: list[SoftRuleEvaluation]) -> N
 
 def _summarize_rule(r: BreakRuleEvaluation) -> str:
     return f"{r.kpi_name} ({r.consecutive_periods}q)"
+
+
+def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> None:
+    """Last 3 LLM recommendations from the decisions audit ledger.
+
+    Skips itself entirely when the list is empty so the thesis tab doesn't
+    show a "no decisions yet" placeholder. Each badge surfaces date · kind
+    · outcome chip, with the rationale excerpt as a hover tooltip.
+    """
+    if not decisions:
+        return
+    body.write(
+        '<div class="panel decision-history-panel"><div class="panel-head">'
+        '<span class="panel-title">Recent decisions</span>'
+        f'<span class="panel-sub">last {len(decisions)} LLM recommendation'
+        f'{"s" if len(decisions) != 1 else ""}</span></div>'
+        '<div class="decision-list">'
+    )
+    for d in decisions:
+        cls = f"decision-badge outcome-{_esc(d.outcome_label)}"
+        tooltip = f' title="{_esc(d.rationale_short)}"' if d.rationale_short else ""
+        body.write(
+            f'<div class="{cls}"{tooltip}>'
+            f'<span class="decision-date mono">{_esc(d.date_short)}</span>'
+            f'<span class="decision-kind">{_esc(d.recommendation_kind.upper())}</span>'
+            f'<span class="decision-outcome">{_esc(d.outcome_label)}</span>'
+            "</div>"
+        )
+    body.write("</div></div>")
 
 
 def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
