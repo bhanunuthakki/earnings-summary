@@ -92,7 +92,7 @@ def _print_summary_table(report: RefreshReport) -> None:
     print()
     header = (
         f"{'Ticker':6}  {'Status':6}  {'Chg':3}  "
-        f"{'Facts':>6}  {'Trnsc':>6}  {'Drv':>4}  {'Cmt':>4}  Pending"
+        f"{'Facts':>6}  {'Trnsc':>6}  {'Drv':>4}  {'Cmt':>4}  {'Sig':>4}  Pending"
     )
     print(header)
     print("-" * len(header))
@@ -102,6 +102,8 @@ def _print_summary_table(report: RefreshReport) -> None:
         trnsc = by_name["ingest_ir_transcripts"].rows_processed
         drv = by_name["derive_fmp_kpis"].rows_processed
         cmt = by_name["match_commitments"].rows_processed
+        sig_stage = by_name.get("persist_timeseries_signals")
+        sig = sig_stage.rows_processed if sig_stage is not None else 0
         pending = by_name["surface_pending_llm"].rows_processed
         sec = by_name.get("fetch_sec_xbrl")
         if sec is not None and sec.rows_processed:
@@ -111,7 +113,7 @@ def _print_summary_table(report: RefreshReport) -> None:
         change_str = "*" if t.breach_status_changed else ""
         print(
             f"{t.ticker:6}  {status_str:6}  {change_str:3}  "
-            f"{facts:>6}  {trnsc:>6}  {drv:>4}  {cmt:>4}  {pending}"
+            f"{facts:>6}  {trnsc:>6}  {drv:>4}  {cmt:>4}  {sig:>4}  {pending}"
         )
 
     changed = [t for t in report.tickers if t.breach_status_changed]
