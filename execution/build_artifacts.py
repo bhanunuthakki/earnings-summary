@@ -29,14 +29,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
-from compute.segment_definitions import extract_for_ticker as _extract_segment_definitions  # noqa: E402
+from compute.segment_definitions import (  # noqa: E402
+    extract_for_ticker as _extract_segment_definitions,
+)
+from instrument_store import get_instrument_kind  # noqa: E402
+from models.companies import InstrumentType  # noqa: E402
 from report.builder import build_report  # noqa: E402
 from report.models import ReportFlavor  # noqa: E402
+from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
 from report.renderers.html import render as render_html  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
 from report.renderers.workbook import render as render_workbook  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
+from report.sections.etf_holdings import build_etf_brief  # noqa: E402
 
 
 def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
@@ -61,7 +67,7 @@ def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
             "definitions_found": sum(1 for v in result.definitions.values() if v),
             "skipped": result.skipped_reason,
         })
-    except Exception as e:  # noqa: BLE001 — extraction must never crash the build
+    except Exception as e:
         _emit("segment_defs_error", {
             "ticker": ticker, "error": f"{type(e).__name__}: {e}",
         })
@@ -246,11 +252,17 @@ def _build_one(
     json_path = out_dir / f"{today}_sections.json"
     xlsx_path = out_dir / f"{today}_dcf.xlsx"
 
+    _sync_db_to_repo(repo_root)
+
+    # Cross-asset dispatch: ETF tickers get the ETF brief shape (no DCF,
+    # no segments, no 10-K narrative). See directives/cross_asset_data_model.md.
+    if _resolve_kind(repo_root, ticker) is InstrumentType.ETF:
+        return _build_etf(ticker, repo_root, md_path, today)
+
     # Refresh quarterly_artifacts (audio/transcript/release/slides + step_* flags)
     # from the filesystem before the provenance section reads them. This is what
     # links the coverage matrix to the DB — without this, new .tmp summaries and
     # SayDo files don't land in the table until something else syncs.
-    _sync_db_to_repo(repo_root)
     db.scan_and_sync_artifacts(ticker)
     _emit("synced_quarterly_artifacts", {"ticker": ticker})
 
@@ -318,6 +330,42 @@ def _build_one(
 def _emit(event: str, payload: dict[str, object]) -> None:
     """One JSON line per event to stderr."""
     sys.stderr.write(json.dumps({"event": event, **payload}) + "\n")
+
+
+def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
+    """Look up tracked_companies.instrument_type for `ticker`."""
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return None
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return get_instrument_kind(conn, ticker)
+    finally:
+        conn.close()
+
+
+def _build_etf(
+    ticker: str, repo_root: Path, md_path: Path, today: str
+) -> dict[str, object]:
+    """ETF brief build path — markdown only for the MVP.
+
+    HTML / workspace / xlsx renderers are equity-shaped and not adapted yet;
+    they'll graduate to multi-kind dispatch in a follow-up. For now the
+    markdown brief is the canary deliverable that proves the dispatch works.
+    """
+    brief = build_etf_brief(ticker, repo_root)
+    md_path.write_text(render_etf_markdown(brief), encoding="utf-8")
+    _emit("wrote_etf_markdown", {"ticker": ticker, "path": str(md_path)})
+    return {
+        "ticker": ticker,
+        "report_md": str(md_path),
+        "instrument_kind": InstrumentType.ETF.value,
+        "section_status": {
+            "etf_profile": brief.profile.status.value,
+            "etf_holdings": brief.holdings.status.value,
+        },
+    }
 
 
 if __name__ == "__main__":
