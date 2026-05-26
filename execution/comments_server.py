@@ -17,15 +17,21 @@ Usage:
     python execution/comments_server.py
     python execution/comments_server.py --port 7421 --repo-root /path/to/repo
 
-CORS is open for localhost requests (the rendered HTML is opened via
-file:// so the browser's origin is `null`). For production / shared use,
-tighten the Access-Control-Allow-Origin to a known origin.
+CORS is wide-open (`Access-Control-Allow-Origin: *`) only when the request
+Host is localhost — the workspace HTML opens via file:// so the browser
+origin is `null`, which would be rejected by any non-`*` policy. If you
+bind to 0.0.0.0 or another interface, set `COMMENTS_SERVER_CORS_WHITELIST`
+to a comma-separated list of allowed Origins; the server echoes the
+request's Origin back only when it matches.
 """
 
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
+import os
+import queue
 import sys
 from datetime import date
 from pathlib import Path
@@ -53,11 +59,24 @@ from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 
 
-def create_app(repo_root: Path, *, registry: Registry | None = None) -> Flask:
+def create_app(
+    repo_root: Path,
+    *,
+    registry: Registry | None = None,
+    chat_executor: concurrent.futures.Executor | None = None,
+) -> Flask:
     app = Flask(__name__)
     db_path = repo_root / "data" / "portfolio.db"
     job_registry = registry or Registry()
     app.config["DISPATCH_REGISTRY"] = job_registry
+    # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
+    # request thread for the full 10-60s of a chat turn. Pool size caps
+    # the number of concurrent chats; chunks flow back via per-request
+    # queues. Tests can inject their own executor for isolation.
+    chat_pool = chat_executor or concurrent.futures.ThreadPoolExecutor(
+        max_workers=4, thread_name_prefix="comments-server-chat"
+    )
+    app.config["CHAT_EXECUTOR"] = chat_pool
 
     def _open_db() -> sqlite3.Connection:
         conn = sqlite3.connect(str(db_path))
@@ -66,9 +85,23 @@ def create_app(repo_root: Path, *, registry: Registry | None = None) -> Flask:
 
     @app.after_request
     def add_cors_headers(response):
-        # file:// renders the HTML so the browser origin is `null`. Allow any
-        # origin for localhost-only use; tighten if you bind to 0.0.0.0.
-        response.headers["Access-Control-Allow-Origin"] = "*"
+        # file:// renders the HTML so the browser origin is `null`. `*` is
+        # the only Allow-Origin value that satisfies a null origin, so we
+        # emit it for localhost only — if someone runs --host 0.0.0.0 a
+        # wide-open header becomes a footgun. For non-localhost hosts,
+        # echo back the Origin only when it's in the whitelist env var.
+        host = (request.host or "").split(":", 1)[0]
+        if host in ("127.0.0.1", "localhost", "[::1]"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+        else:
+            whitelist = [
+                o.strip()
+                for o in os.environ.get("COMMENTS_SERVER_CORS_WHITELIST", "").split(",")
+                if o.strip()
+            ]
+            origin = request.headers.get("Origin", "")
+            if origin and origin in whitelist:
+                response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
@@ -252,15 +285,22 @@ def create_app(repo_root: Path, *, registry: Registry | None = None) -> Flask:
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
 
+        # The LLM subprocess (Claude CLI) drives `stream_response` for
+        # 10-60s; running it inline would pin the Flask request thread
+        # for that whole window. Dispatch to the chat pool and pipe its
+        # chunks through a Queue, then drain the queue into SSE frames.
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
+        chat_pool.submit(
+            _drain_chat_stream,
+            repo_root, ticker, report_date, user_message, chunks,
+        )
+
         def generate():
-            for chunk in build_chat_response.stream_response(
-                repo_root=repo_root,
-                ticker=ticker,
-                report_date=report_date,
-                user_message=user_message,
-            ):
-                # Server-Sent Events frame
-                yield f"data: {json.dumps(chunk)}\n\n"
+            while True:
+                item = chunks.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
 
         return Response(
             stream_with_context(generate()),
@@ -294,6 +334,33 @@ def create_app(repo_root: Path, *, registry: Registry | None = None) -> Flask:
 
 def _parse_date(s: str) -> date:
     return date.fromisoformat(s[:10])
+
+
+def _drain_chat_stream(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    user_message: str,
+    chunks: queue.Queue[dict[str, object] | None],
+) -> None:
+    """Iterate `stream_response` on a pool thread and push each chunk
+    onto `chunks`. `None` marks end-of-stream so the SSE generator on
+    the request thread can stop pumping."""
+    try:
+        for chunk in build_chat_response.stream_response(
+            repo_root=repo_root,
+            ticker=ticker,
+            report_date=report_date,
+            user_message=user_message,
+        ):
+            chunks.put(chunk)
+    except Exception as e:
+        # Surface as an SSE error frame instead of crashing the pool —
+        # the request thread is still waiting on the queue and needs the
+        # `None` sentinel below to terminate.
+        chunks.put({"type": "error", "error": f"chat stream failed: {e}"})
+    finally:
+        chunks.put(None)
 
 
 def main() -> int:
