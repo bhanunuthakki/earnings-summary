@@ -1551,4 +1551,62 @@ ul.flag-list li.flag-positive {
   color: var(--muted);
   font-style: italic;
 }
+
+/* ============================================================
+   Cross-quarter themes — prepared remarks vs Q&A rollup (§5 split)
+   ============================================================ */
+.theme-bucket { margin-top: 14px; }
+.theme-bucket:first-of-type { margin-top: 4px; }
+.theme-bucket-title {
+  margin: 8px 0 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.theme-rollup-list { list-style: none; padding: 0; margin: 0; }
+.theme-row {
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--hairline);
+}
+.theme-row:first-child { border-top: 0; }
+.theme-head { margin-bottom: 4px; font-size: 14px; }
+.theme-spark {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 6px;
+}
+.theme-spark-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: var(--paper);
+  border-radius: 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.theme-spark-n {
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.theme-evidence {
+  list-style: none;
+  padding: 0 0 0 12px;
+  margin: 4px 0 0;
+  border-left: 2px solid var(--border);
+}
+.theme-evidence li {
+  font-size: 12px;
+  margin: 4px 0;
+  color: var(--fg-soft);
+  line-height: 1.45;
+}
+.theme-evidence em { font-style: normal; }
+.theme-note {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
 """

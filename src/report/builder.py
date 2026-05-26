@@ -75,7 +75,7 @@ def build_report(
     thesis_section = thesis.build(ticker, repo_root)
     financials_section = financials.build(ticker, repo_root)
     segments_section = segments.build(ticker, repo_root)
-    earnings_section = earnings.build(ticker, repo_root)
+    earnings_section = earnings.build(ticker, repo_root, enable_llm=enable_llm)
     saydo_section = saydo.build(ticker, repo_root)
     ir_docs_section = ir_docs.build(ticker, repo_root)
     recent_developments_section = recent_developments.build(

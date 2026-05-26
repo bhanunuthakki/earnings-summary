@@ -1781,3 +1781,162 @@ bullets.
     except Exception as e:
         log.error(f"CRITICAL ERROR: SayDo importance ranking failed for {ticker}: {e}")
         raise
+
+
+# ---------------------------------------------------------------------------
+# Earnings themes split — prepared remarks vs Q&A theme rollup (Phase 2c §5)
+# ---------------------------------------------------------------------------
+
+# Per-transcript section character cap. Each side of each quarter is trimmed
+# to this length before prompt assembly so 4 quarters × 2 sides stays within
+# Sonnet's effective context window. Sized to preserve the bulk of a typical
+# Q&A segment (~30k chars uncompressed) while keeping the prompt under ~200k.
+_THEMES_SECTION_CHAR_CAP = 22000
+
+
+def extract_qa_vs_prepared_themes(
+    ticker: str,
+    transcripts: list[dict[str, object]],
+) -> str:
+    """Roll up recurring themes across 4 quarters, split prepared vs Q&A.
+
+    ``transcripts`` is a chronological list (oldest → newest) of
+    ``{"period": "Q1 2026", "prepared": str | None, "qa": str | None}``
+    dicts. ``prepared`` / ``qa`` are the raw text segments for that quarter;
+    either may be None when the source transcript didn't carry that
+    section (e.g. Q&A-only aggregator pulls have prepared=None).
+
+    Returns the raw JSON string the caller parses. Schema:
+
+      {
+        "prepared_themes": [
+          {
+            "theme_name": "AI compute capacity allocation",
+            "mentions_per_quarter": {"Q1 2026": 3, "Q4 2025": 2, ...},
+            "evidence": [
+              {"period": "Q1 2026", "speaker": "Sundar Pichai",
+               "text": "we are constrained by compute..."}
+            ]
+          }, ...
+        ],
+        "qa_themes": [ ... same shape ... ]
+      }
+
+    The caller is responsible for stripping ``prepared_themes`` /
+    ``qa_themes`` to [] when the corresponding input side was empty across
+    every quarter (the LLM is instructed to do this but we defensively
+    enforce in the section builder).
+    """
+    # Build per-section blocks separately so the LLM sees the prepared/Q&A
+    # boundary explicitly. Period labels appear in every block so cross-
+    # quarter mention counting is grounded in the same labels we'll render.
+    prepared_blocks: list[str] = []
+    qa_blocks: list[str] = []
+    any_prepared = False
+    any_qa = False
+    for t in transcripts:
+        period = str(t.get("period") or "")
+        prepared = t.get("prepared")
+        qa = t.get("qa")
+        if isinstance(prepared, str) and prepared.strip():
+            any_prepared = True
+            prepared_blocks.append(
+                f"### {period} — prepared remarks\n{prepared[:_THEMES_SECTION_CHAR_CAP]}\n"
+            )
+        if isinstance(qa, str) and qa.strip():
+            any_qa = True
+            qa_blocks.append(
+                f"### {period} — analyst Q&A\n{qa[:_THEMES_SECTION_CHAR_CAP]}\n"
+            )
+
+    prepared_block = "\n".join(prepared_blocks) if prepared_blocks else "(no prepared-remarks segments available across the window)"
+    qa_block = "\n".join(qa_blocks) if qa_blocks else "(no Q&A segments available across the window)"
+    periods = [str(t.get("period") or "") for t in transcripts]
+    periods_csv = ", ".join(periods)
+
+    prompt = f"""You are surfacing the analyst-side narrative shape of {ticker}'s
+last {len(transcripts)} earnings calls. Two distinct cross-quarter rollups:
+
+1. PREPARED-REMARKS THEMES — what MANAGEMENT chose to lead with across calls.
+   These show the company's own narrative — capital allocation framing,
+   product positioning, recurring strategic talking points.
+2. Q&A THEMES — what ANALYSTS pressed management on across calls. These show
+   buy-side concern shape — what the street keeps asking about,
+   contentious topics, areas of management dodging.
+
+The contrast between the two is itself the signal: a topic that dominates
+prepared remarks but never gets pressed on means management is leading the
+narrative successfully; a topic that recurs in Q&A but is absent from
+prepared remarks means the street has a concern management isn't addressing.
+
+PERIODS in chronological order (oldest → newest): {periods_csv}
+
+=== PREPARED REMARKS BLOCKS ===
+{prepared_block}
+
+=== Q&A BLOCKS ===
+{qa_block}
+
+---
+
+Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
+
+{{
+  "prepared_themes": [
+    {{
+      "theme_name": "concise 4-7 word noun phrase (e.g. 'AI compute capacity allocation', 'CapEx trajectory through 2027')",
+      "mentions_per_quarter": {{"Q1 2026": 3, "Q4 2025": 2, ...}},
+      "evidence": [
+        {{"period": "Q1 2026", "speaker": "Sundar Pichai", "text": "verbatim short quote (1-2 sentences max)"}}
+      ]
+    }}
+  ],
+  "qa_themes": [
+    {{
+      "theme_name": "concise 4-7 word noun phrase",
+      "mentions_per_quarter": {{...}},
+      "evidence": [
+        {{"period": "Q1 2026", "speaker": "Brian Nowak (Morgan Stanley)", "text": "verbatim short analyst question or follow-up"}}
+      ]
+    }}
+  ]
+}}
+
+HARD RULES:
+- 3-5 themes per side. If a side has no source material at all, emit `[]`
+  for that side and DO NOT invent themes from the other side's content.
+- `theme_name` must be a NOUN PHRASE, not a sentence. "Capital allocation
+  framing" is valid; "Management discussed capital allocation" is not.
+- `mentions_per_quarter` keys MUST be drawn from the PERIODS list above
+  verbatim. Omit any quarter where the theme didn't surface — do NOT
+  pad with zero counts.
+- Counts are conservative — count distinct discussion turns, not every
+  word reference. A single Q&A exchange that touches the theme counts as 1.
+- `evidence` carries 1-2 verbatim quotes per theme. Each quote must be
+  pulled from the appropriate source side (prepared themes draw from
+  prepared blocks, Q&A themes draw from Q&A blocks). Strip filler /
+  cross-talk; quote 1-2 sentences max each. Use speaker attribution
+  exactly as it appears in the transcript when available; otherwise pass
+  an empty string for speaker.
+- Order themes by total mention count (`sum(mentions_per_quarter.values())`)
+  descending — most recurring themes first.
+- Themes within a side must be DISTINCT. If two candidate themes overlap,
+  pick the more specific framing and drop the broader one.
+
+Return strictly the JSON object — nothing else.
+"""
+
+    if not any_prepared and not any_qa:
+        # No source material at all — surface that to the caller so it can
+        # short-circuit without an LLM call. Return the canonical empty
+        # shape; the caller's parse path will produce empty rollups.
+        return '{"prepared_themes": [], "qa_themes": []}'
+
+    try:
+        raw = call_llm(prompt, purpose="earnings_themes_split", ticker=ticker).strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        return raw
+    except Exception as e:
+        log.error(f"CRITICAL ERROR: Earnings themes split failed for {ticker}: {e}")
+        raise

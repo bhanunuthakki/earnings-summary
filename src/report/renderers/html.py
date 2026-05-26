@@ -1447,6 +1447,7 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
     # for the rationale) — a ticker can have populated surprise data while
     # still missing LLM summaries.
     _surprise_scorecard_block(out, s.surprise_scorecard)
+    _themes_block(out, s)
     if _missing_callout(out, s.status, s.missing):
         return
     out.write(
@@ -1457,6 +1458,71 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
     cards.sort(key=lambda c: (c.year, c.quarter), reverse=True)
     for q in cards:
         _earnings_card(out, q)
+
+
+def _themes_block(out: StringIO, s: EarningsSection) -> None:
+    """4Q cross-quarter theme rollup, split prepared vs Q&A.
+
+    Skips entirely when both sides are empty AND no themes_note exists
+    (offline / dev builds without --enable-llm). Each theme renders as a
+    line item with a sparkline showing per-quarter mention counts plus the
+    LLM-selected supporting quote(s).
+    """
+    has_any = bool(s.prepared_remarks_themes) or bool(s.qa_themes)
+    if not has_any and not s.themes_note:
+        return
+    out.write('<h3>Cross-quarter themes (last 4Q)</h3>\n')
+    if s.themes_note:
+        out.write(f'<p class="meta">{html.escape(s.themes_note)}</p>\n')
+    if s.prepared_remarks_themes:
+        out.write('<h4>Prepared remarks themes</h4>\n<ul class="theme-rollup">\n')
+        for theme in s.prepared_remarks_themes:
+            _theme_li(out, theme)
+        out.write("</ul>\n")
+    if s.qa_themes:
+        out.write('<h4>Q&amp;A themes</h4>\n<ul class="theme-rollup">\n')
+        for theme in s.qa_themes:
+            _theme_li(out, theme)
+        out.write("</ul>\n")
+
+
+def _theme_li(out: StringIO, theme) -> None:
+    sparkline = ""
+    if theme.mentions_per_quarter:
+        ordered = sorted(
+            theme.mentions_per_quarter.items(),
+            key=lambda kv: _theme_period_sort_key(kv[0]),
+        )
+        parts = [
+            f'<span class="theme-spark-cell">{html.escape(q)}:<strong>{n}</strong></span>'
+            for q, n in ordered
+        ]
+        sparkline = ' <span class="theme-spark">' + " ".join(parts) + "</span>"
+    out.write(
+        f'<li><strong>{html.escape(theme.theme_name)}</strong> '
+        f'<span class="meta">({theme.last_4q_count} mentions)</span>{sparkline}'
+    )
+    if theme.evidence:
+        out.write('<ul class="theme-evidence">\n')
+        for ev in theme.evidence:
+            speaker = f"{html.escape(ev.speaker)} · " if ev.speaker else ""
+            out.write(
+                f'<li><em>"{html.escape(ev.text)}"</em> — '
+                f'<span class="meta">{speaker}{html.escape(ev.period)}</span></li>\n'
+            )
+        out.write("</ul>\n")
+    out.write("</li>\n")
+
+
+def _theme_period_sort_key(period: str) -> tuple[int, int]:
+    """Chronological sort key for 'Qx YYYY' (or 'YYYY Qx') labels."""
+    import re as _re
+
+    y_match = _re.search(r"(20\d{2})", period)
+    q_match = _re.search(r"Q([1-4])", period)
+    if y_match and q_match:
+        return (int(y_match.group(1)), int(q_match.group(1)))
+    return (9999, 9)
 
 
 def _surprise_scorecard_block(out: StringIO, c: SurpriseScorecardCard | None) -> None:
