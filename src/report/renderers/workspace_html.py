@@ -1055,6 +1055,11 @@ def _financials_tab(body: StringIO, fin: FinancialsSection, seg: SegmentsSection
     # the line-items axis (ARPAC, GMV growth, NIM, etc.).
     _kpi_series_yoy_panel(body, fin)
 
+    # 3d) Junction-driven secondary-dim expansions (geography / channel /
+    # customer cross-tabs of segment data). Only renders when the section
+    # builder found junction rows; otherwise the panel is silently skipped.
+    _segment_secondary_expansions_panel(body, seg)
+
     # 4) 12-quarter levels with segment drill-down.
     _line_items_levels_panel(body, fin, seg)
 
@@ -1106,6 +1111,47 @@ def _segments_yoy_panel_for_metric(
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
     body.write("</div></div>")
+
+
+def _segment_secondary_expansions_panel(body: StringIO, seg: SegmentsSection) -> None:
+    """Render junction-derived secondary-dim breakdowns as expandable panels.
+
+    One panel per expansion (one per dim_type). Each panel shows a YoY heatmap
+    over the same 12-quarter axis the rest of the tab uses. Silently skipped
+    when the section builder didn't surface any expansions for this ticker.
+    """
+    expansions = getattr(seg, "secondary_expansions", None) or []
+    if not expansions:
+        return
+    periods = seg.quarter_labels_full or seg.quarter_labels
+    if not periods:
+        return
+    for exp in expansions:
+        if not exp.rows:
+            continue
+        axis_label = exp.dim_type.replace("_", " ").title()
+        matrix_rows: list[MatrixRow] = []
+        for s in exp.rows:
+            levels = s.levels_full or s.values
+            if not levels or all(v is None for v in levels):
+                continue
+            matrix_rows.append(
+                MatrixRow(name=s.segment_name, levels=list(levels), unit=s.unit, tooltip="")
+            )
+        if not matrix_rows:
+            continue
+        parent = f" — under {exp.parent_label}" if exp.parent_label else ""
+        body.write('<div class="panel"><div class="panel-head">')
+        body.write(
+            f'<span class="panel-title">By {_esc(axis_label)}{_esc(parent)} '
+            f"· cross-tab</span>"
+        )
+        body.write(
+            f'<span class="panel-sub">{len(matrix_rows)} rows · junction data</span></div>'
+        )
+        body.write('<div class="prose-pad">')
+        body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
+        body.write("</div></div>")
 
 
 def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:

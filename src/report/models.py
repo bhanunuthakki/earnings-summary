@@ -366,6 +366,22 @@ class SegmentSeries(BaseModel):
     levels_full: list[float | None] = Field(default_factory=list)
 
 
+class SegmentSecondaryExpansion(BaseModel):
+    """Optional secondary-dim breakdown rendered under the primary segments table.
+
+    Populated by the section builder when junction rows (segment_periods +
+    segment_dimensions) carry a breakdown on an axis OTHER than the primary
+    one — e.g. AWS revenue split by geography under AMZN's product-segment
+    table. `dim_type` is the breakdown axis ("geography", "channel", ...);
+    `parent_label` is the primary segment the breakdown sits under (or None
+    for a standalone "by geography" expansion at the bucket level).
+    """
+
+    dim_type: str
+    parent_label: str | None = None
+    rows: list[SegmentSeries] = Field(default_factory=list)
+
+
 class SegmentsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -376,6 +392,11 @@ class SegmentsSection(BaseModel):
     segment_definitions: dict[str, str] = Field(default_factory=dict)
     segment_definitions_fiscal_year: int | None = None
     quarter_labels_full: list[str] = Field(default_factory=list)
+    # When junction data carries secondary-dim breakdowns (migration 0053+),
+    # the section builder pushes them here and the renderer surfaces them as
+    # collapsible subtables below the primary segments grid. Empty list when
+    # the junction tables are empty or unavailable.
+    secondary_expansions: list[SegmentSecondaryExpansion] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

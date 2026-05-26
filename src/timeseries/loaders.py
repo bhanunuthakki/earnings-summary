@@ -404,6 +404,109 @@ def load_kpi_series(
         conn.close()
 
 
+def load_segment_junction_series(
+    ticker: str,
+    dims: list[tuple[str, str]],
+    metric: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+) -> list[Observation]:
+    """Load a chronological series from segment_periods + segment_dimensions.
+
+    `dims` is a list of (dim_type, dim_name) constraints. With one entry the
+    loader returns a simple 1-D series (mirrors load_segment_series). With
+    multiple entries the loader self-joins segment_dimensions so the returned
+    periods carry a dim row matching EACH constraint — the AND semantics
+    needed for cross-tab queries like ``[("product","AWS"), ("geography","US")]``.
+
+    The numeric value is taken from the FIRST dim filter (i.e. the leading
+    axis of the requested cross-tab). When the same period has multiple
+    matching rows for that filter, the most recently ingested row wins
+    (max(id) per period — same convention as the other loaders).
+    """
+    if not dims:
+        return []
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return []
+    conn = _open(resolved)
+    if conn is None:
+        return []
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    period_placeholders = ",".join("?" * len(period_list))
+    try:
+        for required in ("segment_periods", "segment_dimensions"):
+            if (
+                conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (required,),
+                ).fetchone()
+                is None
+            ):
+                return []
+
+        head_dim_type, head_dim_name = dims[0]
+        extra_dim_joins: list[str] = []
+        extra_dim_params: list[object] = []
+        for idx, (dt, dn) in enumerate(dims[1:], start=2):
+            alias = f"sd{idx}"
+            extra_dim_joins.append(
+                f"JOIN segment_dimensions {alias} "
+                f"ON {alias}.period_id = sp.id "
+                f"AND {alias}.dim_type = ? "
+                f"AND {alias}.dim_name = ? "
+                f"AND {alias}.metric = ?"
+            )
+            extra_dim_params.extend([dt, dn, metric])
+        joins = "\n".join(extra_dim_joins)
+
+        sql = f"""
+            SELECT sp.period_end, sd1.value
+            FROM segment_periods sp
+            JOIN segment_dimensions sd1
+              ON sd1.period_id = sp.id
+              AND sd1.dim_type = ?
+              AND sd1.dim_name = ?
+              AND sd1.metric = ?
+            {joins}
+            WHERE sp.ticker = ?
+              AND sp.fiscal_period_type IN ({period_placeholders})
+              AND sd1.id = (
+                SELECT MAX(sd1b.id) FROM segment_dimensions sd1b
+                WHERE sd1b.period_id = sp.id
+                  AND sd1b.dim_type = sd1.dim_type
+                  AND sd1b.dim_name = sd1.dim_name
+                  AND sd1b.metric = sd1.metric
+              )
+            ORDER BY sp.period_end ASC
+        """
+        params: list[object] = [
+            head_dim_type,
+            head_dim_name,
+            metric,
+            *extra_dim_params,
+            ticker.upper(),
+            *period_list,
+        ]
+        rows = conn.execute(sql, params).fetchall()
+        return _rows_to_series(rows)
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_segment_junction_failed",
+                "ticker": ticker,
+                "dims": dims,
+                "metric": metric,
+                "error": str(exc),
+            }
+        )
+        return []
+    finally:
+        conn.close()
+
+
 def load_segment_series(
     ticker: str,
     segment_name: str,
