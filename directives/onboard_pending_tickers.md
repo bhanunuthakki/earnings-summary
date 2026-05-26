@@ -17,7 +17,7 @@ onboard pipeline against them.
 | Catch-up CLI | `execution/onboard_pending_tickers.py` |
 | Per-ticker onboarder | `execution/onboard_ticker.py` |
 | Thesis evaluator | `execution/run_thesis_evaluator.py` |
-| DCF runner | `execution/batch_dcf.py` |
+| DCF runner | `execution/refresh_dcf.py` |
 | **Auto commitment extractor** | `execution/extract_commitments_from_transcript.py --auto` |
 | Cron wrapper | `cron/run_onboard_pending.bat` |
 | Scheduled-task definition | `cron/onboard_pending_tickers.task.xml` |
@@ -50,14 +50,14 @@ Stage subset depends on `pending_reason`:
 
 | pending_reason | Stages run |
 |---|---|
-| `no_instrument_type`, `no_financial_facts`, `no_dcf_run` | `onboard_ticker` → `run_thesis_evaluator` → `batch_dcf` → `extract_commitments` |
+| `no_instrument_type`, `no_financial_facts`, `no_dcf_run` | `onboard_ticker` → `run_thesis_evaluator` → `refresh_dcf` → `extract_commitments` |
 | `no_commitments` | `extract_commitments` only (heavy stages skipped because the ticker is already onboarded) |
 
 ```
 no_instrument_type / no_financial_facts / no_dcf_run:
   onboard_ticker (FMP fetch + parse)
     -> run_thesis_evaluator
-    -> batch_dcf
+    -> refresh_dcf  (seeds dcf/<TICKER>.xlsx if absent, then refreshes Historicals + PV)
     -> extract_commitments_from_transcript --auto
 
 no_commitments:
@@ -80,8 +80,10 @@ runtime predictable).
   on already-fetched endpoints.
 - `run_thesis_evaluator` always recomputes from current facts — repeated runs
   produce identical outputs given identical inputs.
-- `batch_dcf` returns `skipped` when a ticker already has a current-quarter
-  DCF run.
+- `refresh_dcf` seeds `dcf/<TICKER>.xlsx` from a template if absent and
+  refreshes the Historicals sheet from FMP on every run; the PV calc is
+  re-run from the user-owned Valuation sheet. Tickers without a `wacc` in
+  their holdings JSON exit `skipped` (no dcf_runs write).
 - `extract_commitments --auto` skips transcripts that already have ≥1
   `management_commitments` row. New transcripts arriving between cron
   ticks get extracted on the next run.

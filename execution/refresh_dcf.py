@@ -1,15 +1,21 @@
-"""Refresh a ticker's DCF: read workbook → PV calc → live-price compare → persist.
+"""Refresh a ticker's DCF: seed/refresh Historicals -> PV calc -> live-price compare -> persist.
 
 The canonical workbook for each ticker lives at `dcf/<TICKER>.xlsx` under the
-repo root. If absent (Phase 3 doesn't auto-seed), the CLI falls back to the
-latest matching template in `examples/dcf/<TICKER>-*.xlsx`. Pass `--workbook
-<path>` to override.
+repo root. On each run:
+
+  * If the workbook is missing, `dcf.seeder` copies an example template and
+    populates the Historicals sheet from 20 quarters of FMP data. The user
+    must then edit Forecast / Model / Valuation before the next refresh
+    produces a valid PV.
+  * If the workbook exists, `dcf.refresher` rewrites ONLY the Historicals
+    sheet from the latest FMP data. User-owned sheets round-trip unchanged.
+
+After Historicals is up to date, the script reads the Valuation sheet, runs
+the PV calc, compares to live price, and upserts a dcf_runs row.
 
 Per-ticker WACC, MoS bar, and terminal multiple come from
-`micro_thesis/holdings/<TICKER>.json` (schema v2).
-
-Live price comes from `data/historical/fmp/<TICKER>_profile.json` —
-populated by the standard FMP refresh cron.
+`micro_thesis/holdings/<TICKER>.json` (schema v2). Live price comes from
+`data/historical/fmp/<TICKER>_profile.json`.
 
 Usage:
     python execution/refresh_dcf.py --ticker META
@@ -31,11 +37,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
+from dcf import refresher as refresher_mod  # noqa: E402
+from dcf import seeder as seeder_mod  # noqa: E402
 from dcf import valuation as valuation_mod  # noqa: E402
 from dcf import workbook_reader  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
 EXAMPLES_DIR_NAME = "examples/dcf"
+FMP_QUARTERLY_DIR = Path("data") / "historical" / "fmp"
 CURRENCY_DEFAULT = "USD"
 
 
@@ -146,11 +155,41 @@ def _refresh_one(
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 
     workbook_path = _resolve_workbook(repo_root, ticker, args.workbook)
-    if workbook_path is None:
+    fmp_dir = repo_root / FMP_QUARTERLY_DIR
+
+    # Seed-or-refresh the Historicals sheet. Both operations leave user-owned
+    # sheets untouched; the result is what the workbook_reader then parses.
+    seed_refresh: dict[str, object] = {}
+    try:
+        if workbook_path is None:
+            new_path = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
+            seeder_mod.seed_workbook(
+                ticker,
+                template_dir=repo_root / EXAMPLES_DIR_NAME,
+                fmp_quarterly_dir=fmp_dir,
+                output_path=new_path,
+            )
+            workbook_path = new_path
+            seed_refresh = {"historicals": "seeded"}
+        else:
+            try:
+                refresh_result = refresher_mod.refresh_historicals(
+                    workbook_path, fmp_dir, ticker=ticker
+                )
+                seed_refresh = {
+                    "historicals": "refreshed",
+                    "cells_written": refresh_result.cells_written,
+                }
+            except refresher_mod.RefresherError as e:
+                # An older workbook predates the Historicals sheet — keep going
+                # with the PV calc but record the skip in the result.
+                seed_refresh = {"historicals": "skipped", "reason": str(e)}
+    except seeder_mod.SeederError as e:
         return {
             "ticker": ticker,
-            "status": "skipped",
-            "reason": f"no workbook at dcf/{ticker}.xlsx or examples/dcf/{ticker}-*.xlsx",
+            "status": "failed",
+            "reason": f"seed: {e}",
+            "workbook": str(workbook_path) if workbook_path else None,
         }
 
     try:
@@ -161,6 +200,7 @@ def _refresh_one(
             "status": "failed",
             "reason": str(e),
             "workbook": str(workbook_path),
+            **seed_refresh,
         }
 
     fcf_stream = [snapshot.fcf_by_year[y] for y in snapshot.forecast_years[:5]]
@@ -229,6 +269,7 @@ def _refresh_one(
         "live_price": live.price if live else None,
         "over_under_pct": over_under,
         "mos_bar": mos_bar_f,
+        **seed_refresh,
     }
 
 
@@ -248,19 +289,17 @@ def _load_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
 
 
 def _resolve_workbook(repo_root: Path, ticker: str, override: Path | None) -> Path | None:
-    """Resolve the workbook path: --workbook flag, then dcf/<TICKER>.xlsx, then
-    the latest examples/dcf/<TICKER>-*.xlsx fallback.
+    """Resolve the workbook path: --workbook flag, then dcf/<TICKER>.xlsx.
+
+    Returns None if neither is present — the caller treats that as the
+    seed-needed branch and writes a fresh workbook at dcf/<TICKER>.xlsx.
+    The examples/dcf/ directory holds read-only templates; never refresh in
+    place there.
     """
     if override is not None:
         return override.resolve() if override.exists() else None
     primary = repo_root / DCF_DIR_NAME / f"{ticker.upper()}.xlsx"
-    if primary.exists():
-        return primary
-    fallback_dir = repo_root / EXAMPLES_DIR_NAME
-    if not fallback_dir.exists():
-        return None
-    matches = sorted(fallback_dir.glob(f"{ticker.upper()}-*.xlsx"))
-    return matches[-1] if matches else None
+    return primary if primary.exists() else None
 
 
 if __name__ == "__main__":
