@@ -46,6 +46,18 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             unit TEXT NOT NULL,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE financial_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            period_end TIMESTAMP NOT NULL,
+            fiscal_period_type TEXT NOT NULL,
+            line_item TEXT NOT NULL,
+            value NUMERIC(24, 6) NOT NULL,
+            currency TEXT,
+            unit TEXT NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            confidence REAL NOT NULL DEFAULT 1.0
+        );
         CREATE TABLE thesis_state (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL UNIQUE,
@@ -61,6 +73,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             evaluated_at TIMESTAMP NOT NULL,
             overall_status TEXT NOT NULL,
             rule_evaluations_json TEXT NOT NULL,
+            soft_rule_results_json TEXT,
             run_id TEXT
         );
         """
@@ -541,3 +554,192 @@ def test_persist_verdict_preserves_existing_raw_json(
     ).fetchone()
     assert raw["raw_json"] == seeded_raw
     assert raw["breach_status"] == "breach"
+
+
+# ---------------------------------------------------------------------------
+# Soft rule integration — predicates from break_rules_soft drive YELLOW
+# without escalating past WARN.
+# ---------------------------------------------------------------------------
+
+
+def _seed_financial_fact(
+    conn: sqlite3.Connection,
+    ticker: str,
+    line_item: str,
+    values: list[tuple[str, float]],
+) -> None:
+    """Insert one financial_facts row per (period_end, value) entry."""
+    for i, (period_end, val) in enumerate(values):
+        conn.execute(
+            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
+            "line_item, value, currency, unit, source_doc_id) "
+            "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', 1)",
+            (ticker, period_end, f"Q{(i % 4) + 1}", line_item, str(val)),
+        )
+    conn.commit()
+
+
+def test_load_holdings_spec_reads_break_rules_soft(tmp_path: Path) -> None:
+    """`break_rules_soft` round-trips through load_holdings_spec into spec.soft_rules."""
+    payload = {
+        "ticker": "VEEV",
+        "thesis": "...",
+        "break_rules_soft": [
+            {
+                "name": "rev_decel_2q",
+                "predicate": {
+                    "type": "series_decel",
+                    "params": {"metric": "revenue", "periods": 2, "threshold_bps": 200},
+                },
+                "evidence_template": "decel {first_bps}→{second_bps}bps",
+            }
+        ],
+    }
+    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    spec = load_holdings_spec(tmp_path, "VEEV")
+    assert len(spec.soft_rules) == 1
+    assert spec.soft_rules[0].name == "rev_decel_2q"
+
+
+def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """When all hard rules are OK and one soft rule fires, overall = WARN (YELLOW).
+
+    This is the canonical user-visible flow: VEEV's revenue YoY collapses for
+    2Q, no hard threshold is hit, but the soft rule surfaces it.
+    """
+    payload = {
+        "ticker": "VEEV",
+        "thesis": "vertical-SaaS compounder",
+        "break_rules_soft": [
+            {
+                "name": "growth_decel_2q",
+                "predicate": {
+                    "type": "series_decel",
+                    "params": {"metric": "revenue", "periods": 2, "threshold_bps": 200},
+                },
+                "evidence_template": "Revenue YoY decel {first_bps}→{second_bps} bps",
+            }
+        ],
+    }
+    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    # 12 quarters: baseline year ~100, growth year +50%, then 3Q of decelerating growth.
+    periods = [
+        ("2022-03-31", 100.0), ("2022-06-30", 100.0),
+        ("2022-09-30", 100.0), ("2022-12-31", 100.0),
+        ("2023-03-31", 150.0), ("2023-06-30", 150.0),
+        ("2023-09-30", 150.0), ("2023-12-31", 150.0),
+        ("2024-03-31", 170.0),  # 13.3% YoY
+        ("2024-06-30", 155.0),  # 3.3% YoY — decel 1000bps
+        ("2024-09-30", 148.0),  # -1.3% YoY — decel 460bps
+    ]
+    _seed_financial_fact(conn, "VEEV", "revenue", periods)
+    verdict = evaluate_ticker_thesis(conn, ticker="VEEV", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.WARN
+    assert len(verdict.soft_rule_results) == 1
+    soft = verdict.soft_rule_results[0]
+    assert soft.status.value == "yellow"
+    assert "bps" in soft.evidence
+
+
+def test_evaluate_ticker_thesis_hard_breach_outranks_soft_yellow(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Hard BREACH wins over soft YELLOW in the rollup."""
+    payload = {
+        "ticker": "VEEV",
+        "thesis": "...",
+        "break_rules": [
+            {
+                "rule_id": "rev_decline", "kpi_name": "Revenue YoY Growth (USD)",
+                "comparator": "lt", "threshold": 0, "unit": "percent",
+                "consecutive_periods": 1, "narrative": "Revenue YoY < 0",
+            },
+        ],
+        "break_rules_soft": [
+            {
+                "name": "any_soft",
+                "predicate": {
+                    "type": "series_below",
+                    "params": {"metric": "fcf_margin", "source": "kpi", "threshold": 100, "periods": 1},
+                },
+            }
+        ],
+    }
+    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "VEEV", "Revenue YoY Growth (USD)", [("2025-12-31", -5)])  # BREACH
+    _seed_kpi(conn, "VEEV", "fcf_margin", [("2025-12-31", 5)])  # soft fires too
+    verdict = evaluate_ticker_thesis(conn, ticker="VEEV", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.BREACH
+
+
+def test_evaluate_ticker_thesis_green_when_nothing_fires(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Soft rule defined but doesn't fire, no hard rules → overall OK (GREEN)."""
+    payload = {
+        "ticker": "VEEV",
+        "thesis": "...",
+        "break_rules_soft": [
+            {
+                "name": "margin_floor",
+                "predicate": {
+                    "type": "series_below",
+                    "params": {"metric": "margin", "source": "kpi", "threshold": 40, "periods": 2},
+                },
+            }
+        ],
+    }
+    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "VEEV", "margin", [("2024-12-31", 42), ("2025-03-31", 41)])
+    verdict = evaluate_ticker_thesis(conn, ticker="VEEV", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.OK
+    assert verdict.soft_rule_results[0].status.value == "green"
+
+
+def test_persist_verdict_writes_soft_rule_results_json(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """soft_rule_results_json column populated with the rendered evidence."""
+    payload = {
+        "ticker": "VEEV",
+        "thesis": "...",
+        "break_rules_soft": [
+            {
+                "name": "m_below",
+                "predicate": {
+                    "type": "series_below",
+                    "params": {"metric": "m", "source": "kpi", "threshold": 5, "periods": 1},
+                },
+            }
+        ],
+    }
+    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "VEEV", "m", [("2025-12-31", 1)])
+    verdict = evaluate_ticker_thesis(conn, ticker="VEEV", holdings_dir=tmp_path)
+    persist_verdict(conn, verdict, run_id="r1")
+    row = conn.execute(
+        "SELECT soft_rule_results_json FROM thesis_evaluations WHERE ticker='VEEV'"
+    ).fetchone()
+    raw = row["soft_rule_results_json"]
+    assert raw is not None
+    parsed = json.loads(raw)
+    assert len(parsed) == 1
+    assert parsed[0]["rule_name"] == "m_below"
+    assert parsed[0]["status"] == "yellow"
+
+
+def test_persist_verdict_soft_column_null_when_no_soft_rules(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """No soft rules in holdings → column stays NULL, distinguishable from
+    "rules evaluated, all green"."""
+    payload: dict[str, object] = {"ticker": "PURE", "thesis": "...", "break_rules_soft": []}
+    (tmp_path / "PURE.json").write_text(json.dumps(payload), encoding="utf-8")
+    verdict = evaluate_ticker_thesis(conn, ticker="PURE", holdings_dir=tmp_path)
+    persist_verdict(conn, verdict, run_id="r1")
+    row = conn.execute(
+        "SELECT soft_rule_results_json FROM thesis_evaluations WHERE ticker='PURE'"
+    ).fetchone()
+    assert row["soft_rule_results_json"] is None

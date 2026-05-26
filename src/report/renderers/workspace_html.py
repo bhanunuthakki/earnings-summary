@@ -58,6 +58,7 @@ from report.models import (
     SegmentsSection,
     SegmentWeighting,
     SnapshotSection,
+    SoftRuleEvaluation,
     SurpriseScorecardCard,
     SynthesisLensRow,
     SynthesisSection,
@@ -1768,6 +1769,33 @@ def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:
                 f'<span class="xsmall mono muted">{_esc(" · ".join(obs_pieces))}</span>'
                 "</td></tr>"
             )
+    body.write("</tbody></table></div>")
+    if thesis.soft_rule_evaluations:
+        _soft_rules_panel(body, thesis.soft_rule_evaluations)
+
+
+def _soft_rules_panel(body: StringIO, soft_evals: list[SoftRuleEvaluation]) -> None:
+    """Render predicate-style soft signals as a sibling panel to break rules.
+
+    Lives next to (not inside) the break-rules panel so the YELLOW-only
+    semantics stay visually distinct: hard rules can go RED, soft rules can't.
+    """
+    fired = sum(1 for ev in soft_evals if ev.status == "yellow")
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        '<span class="panel-title">Soft signals</span>'
+        f'<span class="panel-sub">{fired} of {len(soft_evals)} fired</span></div>'
+    )
+    body.write('<table class="break-table"><thead><tr>')
+    body.write('<th>Rule</th><th>Evidence</th><th class="num">Status</th></tr></thead><tbody>')
+    for ev in soft_evals:
+        body.write('<tr class="break-row">')
+        body.write(f"<td><strong>{_esc(ev.rule_name)}</strong></td>")
+        body.write(f'<td><span class="xsmall muted">{_esc(ev.evidence)}</span></td>')
+        status_cls = "break-status-warn" if ev.status == "yellow" else "break-status-ok"
+        label = "YELLOW" if ev.status == "yellow" else "OK"
+        body.write(f'<td class="num {status_cls}">{label}</td>')
+        body.write("</tr>")
     body.write("</tbody></table></div>")
 
 

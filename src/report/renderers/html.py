@@ -42,6 +42,7 @@ from report.models import (
     SegmentsSection,
     SegmentWeighting,
     SnapshotSection,
+    SoftRuleEvaluation,
     SurpriseScorecardCard,
     ThesisSection,
     TranscriptEntry,
@@ -896,6 +897,10 @@ _BREACH_STATUS_CLASS: dict[str, str] = {
     "unknown": "not_applicable",
 }
 
+# Soft rules map to the same badge palette as hard rules so the §2 reader sees
+# one consistent set of colors: green = no signal, partial (yellow) = fired.
+_SOFT_STATUS_CLASS: dict[str, str] = {"green": "ok", "yellow": "partial"}
+
 _COMPARATOR_SYMBOL: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge": "≥", "eq": "="}
 
 
@@ -934,7 +939,7 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
         f"<p><strong>Overall:</strong> "
         f'<span class="status-badge status-{overall_class}">{overall}</span>{eval_when}</p>\n'
     )
-    if not s.break_rule_evaluations:
+    if not s.break_rule_evaluations and not s.soft_rule_evaluations:
         return
     universal = [ev for ev in s.break_rule_evaluations if ev.tier == "universal"]
     business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
@@ -954,6 +959,14 @@ def _break_rules_block(out: StringIO, s: ThesisSection, ticker: str) -> None:
             "unit economics — usually the first place the thesis breaks.</p>\n"
         )
         _break_rule_table(out, business)
+    if s.soft_rule_evaluations:
+        out.write("<h4>Soft signals</h4>\n")
+        out.write(
+            '<p class="meta">Predicate-style watch signals — '
+            "deceleration, ratio drift, multi-period thresholds. Fire as "
+            "YELLOW only (never escalate to RED on their own).</p>\n"
+        )
+        _soft_rule_table(out, s.soft_rule_evaluations)
 
 
 def _break_rule_table(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> None:
@@ -979,6 +992,24 @@ def _break_rule_table(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> 
         out.write(f"<td>{html.escape(threshold_label)}</td>")
         out.write(f"<td>{_format_observations(ev)}</td>")
         out.write(f"<td>{html.escape(ev.detail)}</td>")
+        out.write("</tr>\n")
+    out.write("</tbody></table></div>\n")
+
+
+def _soft_rule_table(out: StringIO, evaluations: list[SoftRuleEvaluation]) -> None:
+    """Three-column table: status badge, rule name, evidence string."""
+    out.write('<div class="table-wrap"><table>\n<thead><tr>')
+    for h_label in ("Status", "Rule", "Evidence"):
+        out.write(f"<th>{h_label}</th>")
+    out.write("</tr></thead>\n<tbody>")
+    for ev in evaluations:
+        out.write("<tr>")
+        status_cls = _SOFT_STATUS_CLASS.get(ev.status, "not_applicable")
+        out.write(
+            f'<td><span class="status-badge status-{status_cls}">{ev.status}</span></td>'
+        )
+        out.write(f"<td><strong>{html.escape(ev.rule_name)}</strong></td>")
+        out.write(f"<td>{html.escape(ev.evidence)}</td>")
         out.write("</tr>\n")
     out.write("</tbody></table></div>\n")
 

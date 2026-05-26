@@ -22,6 +22,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from compute.soft_rule_evaluator import (
+    SoftRule,
+    SoftRuleResult,
+    SoftRuleStatus,
+    evaluate_soft_rules,
+    load_soft_rules,
+)
 from models.facts import Unit
 from models.kpis import BreachStatus
 
@@ -79,17 +86,22 @@ class BreakRule(BaseModel):
 class HoldingsSpec(BaseModel):
     """Subset of holdings JSON used by the evaluator.
 
-    Two parallel arrays of rules. `break_rules` carries the (narrow) universal
-    tripwires shared across holdings; `business_model_rules` carries the
-    per-ticker breakers that reflect the actual unit economics. Tier is assigned
-    at load time based on which array a rule came from — the evaluator merges
-    them into a single sequence before fetching history.
+    Two parallel arrays of hard rules. `break_rules` carries the (narrow)
+    universal tripwires shared across holdings; `business_model_rules` carries
+    the per-ticker breakers that reflect the actual unit economics. Tier is
+    assigned at load time based on which array a rule came from — the evaluator
+    merges them into a single sequence before fetching history.
+
+    `soft_rules` is the predicate-style YELLOW signals from `break_rules_soft`
+    in the on-disk JSON. They never drive RED — the rollup escalates only to
+    WARN when any soft rule fires (see `evaluate_ticker_thesis`).
     """
 
     ticker: str
     thesis: str
     break_rules: list[BreakRule] = Field(default_factory=list)
     business_model_rules: list[BreakRule] = Field(default_factory=list)
+    soft_rules: list[SoftRule] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -113,13 +125,19 @@ class RuleEvaluation:
 
 @dataclass(frozen=True)
 class ThesisVerdict:
-    """Holding-level rollup of all rule evaluations."""
+    """Holding-level rollup of all rule evaluations.
+
+    `soft_rule_results` are predicate-style YELLOW signals. They never bubble
+    a verdict to BREACH — only WARN when any one is YELLOW and no hard rule
+    breached. See `_rollup_with_soft` for the precedence.
+    """
 
     ticker: str
     thesis: str
     overall_status: BreachStatus
     rule_evaluations: tuple[RuleEvaluation, ...]
     evaluated_at: datetime
+    soft_rule_results: tuple[SoftRuleResult, ...] = ()
 
 
 def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
@@ -142,13 +160,16 @@ def load_holdings_spec(holdings_dir: Path, ticker: str) -> HoldingsSpec:
         payload = json.load(f)
     universal_raw = payload.get("break_rules", []) or []
     business_raw = payload.get("business_model_rules", []) or []
+    soft_raw = payload.get("break_rules_soft", []) or []
     universal_rules = [_load_rule(r, RuleTier.UNIVERSAL) for r in universal_raw]
     business_rules = [_load_rule(r, RuleTier.BUSINESS_MODEL) for r in business_raw]
+    soft_rules = load_soft_rules(soft_raw if isinstance(soft_raw, list) else [])
     return HoldingsSpec(
         ticker=payload["ticker"],
         thesis=payload["thesis"],
         break_rules=universal_rules,
         business_model_rules=business_rules,
+        soft_rules=soft_rules,
     )
 
 
@@ -271,10 +292,29 @@ _STATUS_RANK: dict[BreachStatus, int] = {
 
 
 def _rollup_status(evaluations: list[RuleEvaluation]) -> BreachStatus:
-    """Holding-level status = worst-rule status. Empty -> OK."""
+    """Holding-level status from hard rules only = worst-rule status. Empty -> OK."""
     if not evaluations:
         return BreachStatus.OK
     return max(evaluations, key=lambda e: _STATUS_RANK[e.status]).status
+
+
+def _rollup_with_soft(
+    hard_evaluations: list[RuleEvaluation],
+    soft_results: list[SoftRuleResult],
+) -> BreachStatus:
+    """Combined rollup: hard BREACH wins; else any soft YELLOW → WARN; else OK.
+
+    Hard WARN (some-but-not-all consecutive periods matched) is preserved as
+    WARN. Soft rules never escalate past WARN — that's a design contract:
+    "the curve is bending" is a watch signal, not a thesis-broken signal.
+    """
+    hard_status = _rollup_status(hard_evaluations)
+    if hard_status is BreachStatus.BREACH:
+        return BreachStatus.BREACH
+    any_soft_fired = any(r.status is SoftRuleStatus.YELLOW for r in soft_results)
+    if any_soft_fired:
+        return BreachStatus.WARN
+    return hard_status
 
 
 def evaluate_ticker_thesis(
@@ -296,14 +336,38 @@ def evaluate_ticker_thesis(
             conn, ticker, rule.kpi_name, rule.consecutive_periods
         )
         evaluations.append(evaluate_rule(rule, history))
-    overall = _rollup_status(evaluations)
+    soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)
+    overall = _rollup_with_soft(evaluations, soft_results)
     return ThesisVerdict(
         ticker=spec.ticker.upper(),
         thesis=spec.thesis,
         overall_status=overall,
         rule_evaluations=tuple(evaluations),
         evaluated_at=datetime.now(),
+        soft_rule_results=tuple(soft_results),
     )
+
+
+def _serialize_soft_rule_results(verdict: ThesisVerdict) -> str | None:
+    """Render soft rule results as a stable JSON string for the soft column.
+
+    Returns None when there are no soft results, so the column stays NULL for
+    holdings without `break_rules_soft` and the renderer can distinguish
+    "no rules" from "rules evaluated, all green".
+    """
+    if not verdict.soft_rule_results:
+        return None
+    payload = [
+        {
+            "rule_name": r.rule_name,
+            "status": r.status.value,
+            "evidence": r.evidence,
+            "evaluated_at": r.evaluated_at.isoformat(),
+            "details": r.details,
+        }
+        for r in verdict.soft_rule_results
+    ]
+    return json.dumps(payload, separators=(",", ":"), default=str)
 
 
 def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
@@ -368,16 +432,40 @@ def persist_verdict(
             verdict.evaluated_at,  # ingested_at = evaluated_at for newly-created rows
         ),
     )
-    conn.execute(
-        "INSERT INTO thesis_evaluations "
-        "(ticker, evaluated_at, overall_status, rule_evaluations_json, run_id) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (
-            verdict.ticker,
-            verdict.evaluated_at,
-            verdict.overall_status.value,
-            _serialize_rule_evaluations(verdict),
-            run_id,
-        ),
+    # soft_rule_results_json is added by migration 0053. Older DBs without the
+    # column will be missed by Alembic's auto-discovery only if someone bypasses
+    # the migration path entirely — we detect that case and fall back to the
+    # pre-0053 INSERT so the evaluator stays runnable on a stale schema.
+    has_soft_col = any(
+        row[1] == "soft_rule_results_json"
+        for row in conn.execute("PRAGMA table_info(thesis_evaluations)").fetchall()
     )
+    if has_soft_col:
+        conn.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker, evaluated_at, overall_status, rule_evaluations_json, "
+            "soft_rule_results_json, run_id) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                verdict.ticker,
+                verdict.evaluated_at,
+                verdict.overall_status.value,
+                _serialize_rule_evaluations(verdict),
+                _serialize_soft_rule_results(verdict),
+                run_id,
+            ),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO thesis_evaluations "
+            "(ticker, evaluated_at, overall_status, rule_evaluations_json, run_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                verdict.ticker,
+                verdict.evaluated_at,
+                verdict.overall_status.value,
+                _serialize_rule_evaluations(verdict),
+                run_id,
+            ),
+        )
     conn.commit()

@@ -233,6 +233,21 @@ class BreakRuleEvaluation(BaseModel):
     observations: list[BreakRuleObservation] = Field(default_factory=list)
 
 
+class SoftRuleEvaluation(BaseModel):
+    """One evaluated soft (predicate-style) rule.
+
+    Soft rules emit only green / yellow — never red. The §2 renderer surfaces
+    fired (yellow) rules inline with hard-rule tables, color-coded by status.
+    `details` carries the predicate-specific payload (deceleration bps, ratio
+    values, etc.) so the renderer can show numeric evidence beside the prose.
+    """
+
+    rule_name: str
+    status: Literal["green", "yellow"]
+    evidence: str
+    details: dict[str, object] = Field(default_factory=dict)
+
+
 class ThesisSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -248,6 +263,7 @@ class ThesisSection(BaseModel):
     kpi_ledger: list[KpiLedgerRow] = Field(default_factory=list)
     overall_breach_status: Literal["ok", "warn", "breach", "unknown"] = "unknown"
     break_rule_evaluations: list[BreakRuleEvaluation] = Field(default_factory=list)
+    soft_rule_evaluations: list[SoftRuleEvaluation] = Field(default_factory=list)
     last_evaluated_at: datetime | None = None
 
 
