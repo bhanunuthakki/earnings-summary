@@ -61,6 +61,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from pipeline.cadence_policy import (  # noqa: E402
+    ESTIMATED_FMP_CALLS_PER_ONBOARD,
+    check_onboarding_budget,
+)
 from pipeline.queries import open_db  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
@@ -239,6 +243,25 @@ def _result_to_dict(r: TickerResult) -> dict[str, object]:
     }
 
 
+def _remaining_fmp_budget() -> int:
+    """Best-effort read of today's remaining FMP tier budget.
+
+    Imports refresh_cache lazily so cron-only environments that don't have
+    FMP_API_KEY set still let `--skip-budget-gate` runs work. Returns a
+    very large int (effectively unlimited) when the budget tracker is
+    unavailable so the gate only fires when the data is reliable.
+    """
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+        import refresh_cache  # noqa: E402
+
+        tier = refresh_cache.resolve_tier(None)
+        return refresh_cache.remaining_budget(tier)
+    except (ImportError, SystemExit, ValueError, KeyError):
+        # Can't read the tier or budget file — don't block the run.
+        return 10**9
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(_DB_PATH), help="Path to portfolio.db")
@@ -249,6 +272,20 @@ def main() -> int:
         "--skip-commitments",
         action="store_true",
         help="Skip the LLM commitment-extraction stage (faster runs; useful when LLM auth is unavailable)",
+    )
+    ap.add_argument(
+        "--skip-budget-gate",
+        action="store_true",
+        help="Skip the pre-flight FMP tier-cap check. Use with caution — bulk "
+             "onboarding on the basic tier (250 calls/day) can blow the cap "
+             "halfway through.",
+    )
+    ap.add_argument(
+        "--calls-per-onboard",
+        type=int,
+        default=ESTIMATED_FMP_CALLS_PER_ONBOARD,
+        help=f"Estimated FMP calls per ticker for the gate (default: "
+             f"{ESTIMATED_FMP_CALLS_PER_ONBOARD})",
     )
     args = ap.parse_args()
 
@@ -276,6 +313,37 @@ def main() -> int:
             indent=2,
         ))
         return 0
+
+    # Skip the gate for fmp-skipped runs (no FMP calls fire) and for
+    # commitment-only batches (heavy stages already done).
+    needs_budget_gate = (
+        not args.skip_budget_gate
+        and not args.skip_fmp
+        and any(r != _COMMITMENT_ONLY_REASON for _, r in pending)
+    )
+    if needs_budget_gate:
+        full_onboards = sum(
+            1 for _, r in pending if r != _COMMITMENT_ONLY_REASON
+        )
+        remaining = _remaining_fmp_budget()
+        allowed, reason = check_onboarding_budget(
+            pending_count=full_onboards,
+            remaining_calls=remaining,
+            calls_per_onboard=args.calls_per_onboard,
+        )
+        if not allowed:
+            report = {
+                "run_id": stamp,
+                "blocked": True,
+                "block_reason": "fmp_budget_gate",
+                "detail": reason,
+                "pending_count": len(pending),
+                "log": str(log_path),
+            }
+            print(json.dumps(report, indent=2))
+            log.warning("budget gate blocked run: %s", reason)
+            return 2
+        log.info("budget gate passed: %s", reason)
 
     log.info("starting run %s — %d pending tickers — log: %s", stamp, len(pending), log_path)
     results: list[TickerResult] = []

@@ -5,6 +5,16 @@ writes raw JSON to `data/historical/sec/{TICKER}_companyfacts.json`, registers
 one `documents` row per unique accession number, then inserts `financial_facts`
 rows for the curated GAAP/IFRS tag map.
 
+Silent-staleness detector
+-------------------------
+The brief_dirty SQL triggers (migration 0026) flip brief_dirty=1 on any
+INSERT to financial_facts. If an accession registers but extraction emits
+zero fact rows (parser fell behind a tag-map change, the filing carried no
+mapped tags, all values were YTD aggregates that got skipped, etc.) those
+triggers never fire and the next brief render uses stale data. After each
+ticker's ingest we check (accessions_inserted > 0 AND facts_inserted == 0)
+and force-flip brief_dirty so the daily worker re-attempts the build.
+
 Rate-limited per SEC fair-use policy: ~10 req/sec absolute max; we sleep 0.2s
 between tickers (~5 req/sec) to stay polite.
 
@@ -17,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -24,12 +35,31 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, start_run  # noqa: E402
 from pipeline.sec_xbrl import CIK_MAP, ingest_for_ticker  # noqa: E402
 
 _PER_TICKER_DELAY_S = 0.2
+
+
+def _flag_silent_staleness(conn: sqlite3.Connection, ticker: str) -> bool:
+    """Force-flip tracked_companies.brief_dirty=1 for `ticker`.
+
+    Returns True if a row was updated. Schema-tolerant: returns False
+    silently when the column is missing (synthetic envs without 0022).
+    """
+    try:
+        cur = conn.execute(
+            "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?",
+            (ticker.upper(),),
+        )
+    except sqlite3.OperationalError:
+        # brief_dirty column absent (pre-0022) — nothing to flip.
+        return False
+    conn.commit()
+    return cur.rowcount > 0
 
 
 def _resolve_tickers(args: argparse.Namespace) -> list[str]:
@@ -89,11 +119,40 @@ def main() -> int:
                 })
                 failed += 1
                 continue
+            silent_staleness = (
+                stats.accessions_inserted > 0 and stats.facts_inserted == 0
+            )
+            flagged_dirty = False
+            artifacts_flipped = 0
+            if silent_staleness:
+                flagged_dirty = _flag_silent_staleness(conn, ticker)
+                # Also invalidate fact-dependent LLM artifacts so the eventual
+                # rebuild regenerates them with the new filing's content.
+                artifacts_flipped = mark_artifacts_dirty_for_fact_change(
+                    ticker=ticker,
+                    reason="sec_silent_staleness",
+                    db_path=args.db,
+                )
             rows.append({
                 "ticker": ticker,
                 "accessions_registered": stats.accessions_inserted,
                 "facts_inserted": stats.facts_inserted,
+                "silent_staleness": silent_staleness,
+                "brief_dirty_forced": flagged_dirty,
+                "llm_artifacts_marked_dirty": artifacts_flipped,
             })
+            if silent_staleness:
+                # Emit a watch event so cron logs surface the divergence
+                # (filings landed but no facts extracted) for operator review.
+                sys.stderr.write(
+                    json.dumps({
+                        "event": "sec_silent_staleness_detected",
+                        "ticker": ticker,
+                        "accessions_registered": stats.accessions_inserted,
+                        "brief_dirty_forced": flagged_dirty,
+                        "llm_artifacts_marked_dirty": artifacts_flipped,
+                    }) + "\n"
+                )
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(conn, run_id, terminal,

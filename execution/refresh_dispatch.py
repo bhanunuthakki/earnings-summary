@@ -44,6 +44,9 @@ from pathlib import Path
 from typing import Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from pipeline.cadence_policy import STATEMENT_STALE_DAYS  # noqa: E402
 
 Mode = Literal["full", "stale"]
 
@@ -66,7 +69,7 @@ def build_plan(
     ticker: str,
     mode: Mode,
     db_path: Path,
-    stale_fmp_days: int = 7,
+    stale_fmp_days: int = STATEMENT_STALE_DAYS,
     now: datetime | None = None,
 ) -> Plan:
     """Pure decision: given DB state, return what to skip.
