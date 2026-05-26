@@ -91,6 +91,7 @@ def build(
         segments_table_md=_segments_md(segments),
         kpi_status_md=_kpi_status_md(thesis),
         ticker_specific_md=_ticker_specific_md(ticker, repo_root),
+        repo_root=repo_root,
     )
     # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
     # pairwise SayDo) can cross-pollinate the analyst's named bear failure
