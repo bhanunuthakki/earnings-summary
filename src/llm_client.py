@@ -175,6 +175,23 @@ GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
 log = logging.getLogger(__name__)
 
+
+class LLMBudgetExceeded(RuntimeError):
+    """Raised by `_call_claude` when the per-purpose monthly cap is at/over
+    AND the budget row has hard_block=True. Callers can catch this to
+    degrade gracefully (skip the section, write a stub, queue for next
+    month). Soft caps do NOT raise — they log a warning and the call
+    proceeds. See src/llm_budget.py for the enforcement details.
+
+    Attaches the failing BudgetCheck so structured callers can surface
+    spend / cap / headroom without re-running the check.
+    """
+
+    def __init__(self, message: str, *, check: object | None = None) -> None:
+        super().__init__(message)
+        self.check = check
+
+
 _setup_verified: bool = False
 _claude_cli_path: str | None = None
 
@@ -347,6 +364,79 @@ def _record_to_ledger(
         log.debug({"event": "llm_call_ledger_record_failed", "error": str(exc)})
 
 
+def _enforce_budget_pre_call(
+    purpose: str | None, *, force_budget_bypass: bool
+) -> None:
+    """Pre-call hook: consult llm_budget.check_budget for `purpose` and:
+
+      * raise LLMBudgetExceeded when over a hard-block cap,
+      * log a warning + proceed when over a soft cap,
+      * log a warning + record a one-shot alert at the 80% threshold.
+
+    Best-effort throughout — any unexpected error in the budget module
+    is swallowed (we'd rather over-spend by one call than block the
+    pipeline because of a budget bug). `force_budget_bypass=True` skips
+    the check entirely for CLI tools that need to override.
+    """
+    if force_budget_bypass or purpose is None:
+        return
+    try:
+        from llm_budget import check_budget, record_alert
+
+        check = check_budget(purpose)
+    except Exception as exc:
+        log.debug(
+            {
+                "event": "llm_budget_check_skipped",
+                "purpose": purpose,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return
+    if not check.allowed:
+        if check.hard_block:
+            log.warning(
+                {
+                    "event": "llm_budget_hard_block",
+                    "purpose": purpose,
+                    "spend_usd": str(check.current_spend),
+                    "cap_usd": str(check.cap),
+                    "reason": check.reason,
+                }
+            )
+            raise LLMBudgetExceeded(
+                check.reason or f"{purpose}: monthly cap exceeded", check=check
+            )
+        log.warning(
+            {
+                "event": "llm_budget_soft_cap_exceeded",
+                "purpose": purpose,
+                "spend_usd": str(check.current_spend),
+                "cap_usd": str(check.cap),
+                "reason": check.reason,
+            }
+        )
+        try:
+            record_alert(purpose, 1.0, check.current_spend)
+        except Exception:
+            pass
+    if check.warn:
+        log.warning(
+            {
+                "event": "llm_budget_warn_threshold",
+                "purpose": purpose,
+                "spend_usd": str(check.current_spend),
+                "cap_usd": str(check.cap),
+                "headroom_pct": check.headroom_pct,
+                "reason": check.reason,
+            }
+        )
+        try:
+            record_alert(purpose, 0.80, check.current_spend)
+        except Exception:
+            pass
+
+
 def _call_claude(
     prompt: str,
     model: str = DEFAULT_MODEL,
@@ -356,6 +446,7 @@ def _call_claude(
     ticker: str | None = None,
     scope: str | None = None,
     run_id: str | None = None,
+    force_budget_bypass: bool = False,
 ) -> str:
     """
     Single-shot LLM call. Tries the Claude Code CLI first. On any operational
@@ -374,7 +465,13 @@ def _call_claude(
     The optional ``purpose``/``ticker``/``scope``/``run_id`` arguments are
     pass-through metadata for the ledger — they have no effect on the LLM call
     itself but enable cost-attribution queries downstream.
+
+    Pre-call budget enforcement: when ``purpose`` is set, consults
+    ``llm_budget.check_budget`` and raises ``LLMBudgetExceeded`` if the
+    per-purpose monthly cap is at/over with hard_block=True. Pass
+    ``force_budget_bypass=True`` to skip the check (CLI escape hatch).
     """
+    _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()  # setup errors propagate; do NOT route to fallback
     assert _claude_cli_path is not None  # set by _verify_setup_once when it returns successfully
     log.info(
@@ -517,6 +614,7 @@ def call_llm(
     ticker: str | None = None,
     scope: str | None = None,
     run_id: str | None = None,
+    force_budget_bypass: bool = False,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
@@ -542,6 +640,10 @@ def call_llm(
         run_id: Optional grouping key — typically a uuid4 hex per logical
             refresh (one build_artifacts invocation, one daily cron) so the
             spend report can show "this run cost $X across N calls".
+        force_budget_bypass: When True, skip the per-purpose budget check
+            entirely. Use sparingly — CLI tools that need to force a refresh
+            past a hard cap should pass this. Soft caps log+proceed anyway,
+            so this is only meaningful when the cap is hard-blocked.
     """
     if model is None:
         if purpose is None:
@@ -559,6 +661,7 @@ def call_llm(
         ticker=ticker,
         scope=scope,
         run_id=run_id,
+        force_budget_bypass=force_budget_bypass,
     )
 
 
@@ -580,6 +683,7 @@ def call_llm_with_web(
     ticker: str | None = None,
     scope: str | None = None,
     run_id: str | None = None,
+    force_budget_bypass: bool = False,
 ) -> str:
     """LLM call with Claude WebSearch + WebFetch tools enabled.
 
@@ -591,7 +695,11 @@ def call_llm_with_web(
 
     Use for memo generation, fact-finding on recent news, anything where
     the upstream context is stale and Claude needs to look something up.
+
+    Same per-purpose budget enforcement as `_call_claude`; pass
+    ``force_budget_bypass=True`` to skip the check.
     """
+    _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()
     assert _claude_cli_path is not None
     log.info(
