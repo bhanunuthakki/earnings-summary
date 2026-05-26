@@ -527,6 +527,8 @@ def _segments(out: StringIO, s: SegmentsSection) -> None:
         ("Revenue by product", s.revenue_by_product),
         ("Revenue by geography", s.revenue_by_geography),
         ("Operating income", s.operating_income),
+        ("Capex by segment", s.capex_by_segment),
+        ("Headcount by segment", s.headcount_by_segment),
     ):
         if not group:
             continue

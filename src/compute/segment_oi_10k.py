@@ -33,6 +33,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from models.facts import FiscalPeriodType, SegmentFact, Unit
+from pipeline.segment_junction_writer import (
+    segment_fact_to_dimension,
+    write_segment_facts_junction,
+)
 
 _DOC_TYPES: frozenset[str] = frozenset({"fmp_10k_json", "fmp_10q_json"})
 _NBSP = "\xa0"
@@ -260,6 +264,34 @@ _OI_PREFIXES: tuple[str, ...] = (
     "income/(loss) before income tax",
     "income (loss) before income taxes",
 )
+# Per-segment capex disclosures live in their own section in capital-intensive
+# 10-Ks. Labels span "Capital expenditures" (most common), "Property and
+# equipment additions" (AMZN convention), and a few synonyms — kept broad
+# enough to catch common variants without false-positive on a balance-sheet
+# stock like "Property and equipment, net" (matcher is whitespace-anchored).
+_CAPEX_PREFIXES: tuple[str, ...] = (
+    "capital expenditures",
+    "capital expenditure",
+    "capital additions",
+    "property and equipment additions",
+    "purchases of property",
+    "purchases of property, plant and equipment",
+    "additions to long-lived assets",
+    "additions to property",
+    "additions to property, plant and equipment",
+)
+# Per-segment headcount disclosures are rarer than capex, but a few filers
+# break them out — typically in human-capital sub-sections. The matcher is
+# whitespace-anchored so "Employee benefits" (a comp line item) won't trip
+# on the "employees" prefix.
+_HEADCOUNT_PREFIXES: tuple[str, ...] = (
+    "employees",
+    "full-time employees",
+    "headcount",
+    "associates",
+    "number of employees",
+    "total employees",
+)
 
 
 def _matches_any(label: str, prefixes: tuple[str, ...]) -> bool:
@@ -280,11 +312,58 @@ def _is_oi_label(label: str) -> bool:
     return _matches_any(label, _OI_PREFIXES)
 
 
+def _is_capex_label(label: str) -> bool:
+    return _matches_any(label, _CAPEX_PREFIXES)
+
+
+def _is_headcount_label(label: str) -> bool:
+    return _matches_any(label, _HEADCOUNT_PREFIXES)
+
+
 def _normalize_segment_name(label: str) -> str:
     """Strip XBRL prefixes like 'Operating Segments | ' from segment header labels."""
     if " | " in label:
         return label.rsplit(" | ", 1)[-1].strip()
     return label.strip()
+
+
+def _emit_metric(
+    segment: str,
+    metric: str,
+    values_per_period: list[float | int],
+    periods: list[tuple[FiscalPeriodType | None, datetime | None]],
+    ticker: str,
+    source_doc_id: int,
+    scale: int,
+    unit: Unit,
+) -> list[SegmentFact]:
+    """Emit one SegmentFact per recognized period column for a metric row.
+
+    Same period-column filtering as _emit_oi (skip None descriptors). Used
+    for direct-emit metrics (capex, headcount) where a single row carries
+    the segment's value verbatim — no rev/cost subtraction needed.
+    """
+    out: list[SegmentFact] = []
+    for i, (period_type, period_end) in enumerate(periods):
+        if period_type is None or period_end is None or i >= len(values_per_period):
+            continue
+        v = values_per_period[i]
+        if not isinstance(v, (int, float)):
+            continue
+        out.append(
+            SegmentFact(
+                ticker=ticker,
+                period_end=period_end,
+                fiscal_period_type=period_type,
+                segment_name=segment,
+                metric=metric,
+                value=Decimal(str(v * scale)),
+                currency=None,
+                unit=unit,
+                source_doc_id=source_doc_id,
+            )
+        )
+    return out
 
 
 def _emit_oi(
@@ -379,9 +458,12 @@ def _walk_section(
     pending_revenue: list[float | int] | None = None
     pending_costs: list[float | int] | None = None
     pending_oi: list[float | int] | None = None
+    pending_capex: list[float | int] | None = None
+    pending_headcount: list[float | int] | None = None
 
     def flush() -> None:
         nonlocal pending_revenue, pending_costs, pending_oi
+        nonlocal pending_capex, pending_headcount
         if current_segment is not None:
             segment = _normalize_segment_name(current_segment)
             if pending_oi is not None:
@@ -398,9 +480,40 @@ def _walk_section(
                         scale,
                     )
                 )
+            if pending_capex is not None:
+                facts.extend(
+                    _emit_metric(
+                        segment,
+                        "capex",
+                        pending_capex,
+                        periods,
+                        ticker,
+                        source_doc_id,
+                        scale,
+                        Unit.ACTUAL,
+                    )
+                )
+            if pending_headcount is not None:
+                # Headcount is a count, not a currency-scaled amount — ignore
+                # the section's "$ in Millions" multiplier so an employee
+                # count of 100,000 doesn't end up as 100B.
+                facts.extend(
+                    _emit_metric(
+                        segment,
+                        "headcount",
+                        pending_headcount,
+                        periods,
+                        ticker,
+                        source_doc_id,
+                        1,
+                        Unit.COUNT,
+                    )
+                )
         pending_revenue = None
         pending_costs = None
         pending_oi = None
+        pending_capex = None
+        pending_headcount = None
 
     for row in section[2:]:
         if not isinstance(row, dict) or len(row) != 1:
@@ -420,6 +533,10 @@ def _walk_section(
             pending_costs = values  # type: ignore[assignment]
         elif _is_oi_label(label):
             pending_oi = values  # type: ignore[assignment]
+        elif _is_capex_label(label):
+            pending_capex = values  # type: ignore[assignment]
+        elif _is_headcount_label(label):
+            pending_headcount = values  # type: ignore[assignment]
     flush()
     return facts
 
@@ -471,11 +588,58 @@ def _insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) ->
     return inserted
 
 
+def _junction_tables_present(conn: sqlite3.Connection) -> bool:
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master "
+        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
+    )
+    return len(cur.fetchall()) >= 2
+
+
+def _mirror_facts_to_junction(
+    conn: sqlite3.Connection, facts: list[SegmentFact], source_doc_id: int
+) -> None:
+    """Mirror ACTUAL-unit facts (OI + capex) into segment_periods + segment_dimensions.
+
+    Headcount (Unit.COUNT) is intentionally skipped: the junction's
+    `segment_periods` row carries a single `unit` per (ticker, period_end,
+    fiscal_period_type, source_doc_id) tuple, so a count value can't share a
+    period anchor with a currency-scaled one. Headcount stays in the legacy
+    `segment_facts` table only — which is where the §4 renderer reads it
+    from anyway. Failure-quiet: if migration 0055 hasn't run, the function
+    returns without raising so the legacy path keeps working.
+    """
+    if not _junction_tables_present(conn):
+        return
+    by_period: dict[tuple[str, datetime, FiscalPeriodType], list[SegmentFact]] = {}
+    for f in facts:
+        if f.unit != Unit.ACTUAL:
+            continue
+        by_period.setdefault((f.ticker.upper(), f.period_end, f.fiscal_period_type), []).append(f)
+    for (ticker, period_end, period_type), group in by_period.items():
+        dimensions = [
+            segment_fact_to_dimension(f.segment_name, f.metric, f.value) for f in group
+        ]
+        write_segment_facts_junction(
+            conn,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=period_type,
+            source_doc_id=source_doc_id,
+            currency=group[0].currency,
+            unit=Unit.ACTUAL,
+            dimensions=dimensions,
+        )
+
+
 def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
     """Read 10-K or 10-Q JSON, walk segment-OI sections, write segment_facts. Idempotent.
 
     Auto-detects 10-K vs 10-Q via doc_type; the per-column period resolver
-    handles both annual and quarterly section shapes.
+    handles both annual and quarterly section shapes. Also mirrors the
+    ACTUAL-unit facts (OI + capex) into the junction when migration 0055
+    is applied — keeps the cross-tab tables in sync with the legacy path
+    for any consumer that reads from segment_dimensions.
     """
     cur = conn.cursor()
     cur.execute("SELECT ticker, file_path, doc_type FROM documents WHERE id = ?", (document_id,))
@@ -496,5 +660,6 @@ def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project
 
     facts = extract_segment_oi_from_record(record, source_doc_id=document_id, ticker=ticker)
     inserted = _insert_segment_facts(conn, facts)
+    _mirror_facts_to_junction(conn, facts, source_doc_id=document_id)
     conn.commit()
     return inserted

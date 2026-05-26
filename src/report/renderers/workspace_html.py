@@ -1128,6 +1128,22 @@ def _financials_tab(body: StringIO, fin: FinancialsSection, seg: SegmentsSection
         quarter_labels=seg.quarter_labels,
         segment_definitions=seg.segment_definitions,
     )
+    _segments_yoy_panel_for_metric(
+        body,
+        title="YoY% — capex by segment",
+        rows=seg.capex_by_segment,
+        quarter_labels_full=seg.quarter_labels_full,
+        quarter_labels=seg.quarter_labels,
+        segment_definitions=seg.segment_definitions,
+    )
+    _segments_yoy_panel_for_metric(
+        body,
+        title="YoY% — headcount by segment",
+        rows=seg.headcount_by_segment,
+        quarter_labels_full=seg.quarter_labels_full,
+        quarter_labels=seg.quarter_labels,
+        segment_definitions=seg.segment_definitions,
+    )
 
     # 3c) KPI time-series matrices — analyst-tracked KPIs that aren't on
     # the line-items axis (ARPAC, GMV growth, NIM, etc.).

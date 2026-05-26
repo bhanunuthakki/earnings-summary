@@ -355,7 +355,13 @@ class FinancialsSection(BaseModel):
 
 class SegmentSeries(BaseModel):
     segment_name: str
-    metric: Literal["revenue_by_product", "revenue_by_geography", "operating_income"]
+    metric: Literal[
+        "revenue_by_product",
+        "revenue_by_geography",
+        "operating_income",
+        "capex_by_segment",
+        "headcount_by_segment",
+    ]
     quarters: list[str] = Field(default_factory=list)
     values: list[float | None] = Field(default_factory=list)
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
@@ -389,6 +395,12 @@ class SegmentsSection(BaseModel):
     revenue_by_product: list[SegmentSeries] = Field(default_factory=list)
     revenue_by_geography: list[SegmentSeries] = Field(default_factory=list)
     operating_income: list[SegmentSeries] = Field(default_factory=list)
+    # Capex + headcount by segment land here when the 10-K segment-note
+    # extractor emits the corresponding `capex` / `headcount` metric rows.
+    # Empty list when the filing's segment notes don't break them out (most
+    # service businesses) — surfaces a dedicated bucket only when populated.
+    capex_by_segment: list[SegmentSeries] = Field(default_factory=list)
+    headcount_by_segment: list[SegmentSeries] = Field(default_factory=list)
     segment_definitions: dict[str, str] = Field(default_factory=dict)
     segment_definitions_fiscal_year: int | None = None
     quarter_labels_full: list[str] = Field(default_factory=list)

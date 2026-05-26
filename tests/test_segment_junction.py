@@ -276,9 +276,9 @@ def test_segment_fact_to_dimension_maps_operating_income() -> None:
 
 def test_segment_fact_to_dimension_unknown_metric_falls_back() -> None:
     """Unknown legacy metric → BUSINESS_UNIT + preserves the original metric."""
-    d = segment_fact_to_dimension("Cloud", "capex", Decimal("1"))
+    d = segment_fact_to_dimension("Cloud", "asset_turnover", Decimal("1"))
     assert d.dim_type == SegmentDimType.BUSINESS_UNIT
-    assert d.metric == "capex"
+    assert d.metric == "asset_turnover"
 
 
 # ---------------------------------------------------------------------------

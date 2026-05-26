@@ -179,12 +179,20 @@ _LEGACY_METRIC_TO_DIM_TYPE: dict[str, SegmentDimType] = {
     "revenue_by_product": SegmentDimType.PRODUCT,
     "revenue_by_geography": SegmentDimType.GEOGRAPHY,
     "operating_income": SegmentDimType.BUSINESS_UNIT,
+    # Capex + headcount are emitted by the 10-K segment-note extractor under
+    # the business-unit axis (segment_name = "AWS" / "North America" / etc.).
+    # Keeps the fallback path's dim_type stable for these well-known metrics
+    # rather than letting them slip through as a generic BUSINESS_UNIT default.
+    "capex": SegmentDimType.BUSINESS_UNIT,
+    "headcount": SegmentDimType.BUSINESS_UNIT,
 }
 
 _LEGACY_METRIC_TO_JUNCTION_METRIC: dict[str, str] = {
     "revenue_by_product": "revenue",
     "revenue_by_geography": "revenue",
     "operating_income": "operating_income",
+    "capex": "capex",
+    "headcount": "headcount",
 }
 
 

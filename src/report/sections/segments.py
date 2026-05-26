@@ -15,7 +15,7 @@ import json
 import sqlite3
 from collections import defaultdict
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 from report.models import (
     SectionStatus,
@@ -35,8 +35,31 @@ from report.sections._common import (
     open_repo_db,
 )
 
-MetricKey = Literal["revenue_by_product", "revenue_by_geography", "operating_income"]
-_BUCKETS: tuple[MetricKey, ...] = ("revenue_by_product", "revenue_by_geography", "operating_income")
+MetricKey = Literal[
+    "revenue_by_product",
+    "revenue_by_geography",
+    "operating_income",
+    "capex_by_segment",
+    "headcount_by_segment",
+]
+_BUCKETS: tuple[MetricKey, ...] = (
+    "revenue_by_product",
+    "revenue_by_geography",
+    "operating_income",
+    "capex_by_segment",
+    "headcount_by_segment",
+)
+# Raw `metric` values in segment_facts → SegmentsSection bucket name. The
+# extractor emits `metric='capex'` / `'headcount'` (matching the junction's
+# wire-level convention) but the renderer model uses `_by_segment` suffixes
+# to disambiguate from the cross-tab axes in the junction expansions.
+_METRIC_TO_BUCKET: dict[str, MetricKey] = {
+    "revenue_by_product": "revenue_by_product",
+    "revenue_by_geography": "revenue_by_geography",
+    "operating_income": "operating_income",
+    "capex": "capex_by_segment",
+    "headcount": "headcount_by_segment",
+}
 
 
 def build(ticker: str, repo_root: Path) -> SegmentsSection:
@@ -97,6 +120,8 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
         revenue_by_product=grids["revenue_by_product"],
         revenue_by_geography=grids["revenue_by_geography"],
         operating_income=grids["operating_income"],
+        capex_by_segment=grids["capex_by_segment"],
+        headcount_by_segment=grids["headcount_by_segment"],
         segment_definitions=definitions,
         segment_definitions_fiscal_year=definitions_year,
         quarter_labels_full=quarter_labels_full,
@@ -239,9 +264,9 @@ def _build_grids(
     }
     for r in rows:
         metric = str(r["metric"])
-        if metric not in _BUCKETS:
+        bucket = _METRIC_TO_BUCKET.get(metric)
+        if bucket is None:
             continue
-        bucket: MetricKey = cast(MetricKey, metric)
         seg = str(r["segment_name"])
         by_metric_segment[bucket][seg][calendar_quarter_key(r["period_end"])] = float(r["value"])
 
@@ -249,8 +274,9 @@ def _build_grids(
     display_quarter_count = len(display_labels)
     for bucket in _BUCKETS:
         prepared: list[tuple[SegmentSeries, float | None]] = []
+        bucket_unit = _bucket_display_unit(bucket)
         for segment_name, qmap in by_metric_segment[bucket].items():
-            raw_series = [_optional_millions(qmap.get(q)) for q in quarters_full]
+            raw_series = [_to_display_units(qmap.get(q), bucket) for q in quarters_full]
             cleaned_series = _drop_outliers(raw_series)
             display_values = cleaned_series[-display_quarter_count:]
             latest = _last_non_null(display_values)
@@ -260,11 +286,33 @@ def _build_grids(
                 quarters=display_labels,
                 values=display_values,
                 growth=compute_growth(cleaned_series),
+                unit=bucket_unit,
                 levels_full=cleaned_series,
             )
             prepared.append((series, latest))
         grids[bucket] = _sort_and_rollup(prepared, display_labels, bucket)
     return grids
+
+
+def _bucket_display_unit(bucket: MetricKey) -> str:
+    """SegmentSeries.unit value for a bucket — drives matrix-row tooltips."""
+    if bucket == "headcount_by_segment":
+        return "employees"
+    return "USD millions"
+
+
+def _to_display_units(value: float | None, bucket: MetricKey) -> float | None:
+    """Scale a raw segment_facts value to its bucket's display unit.
+
+    Currency buckets (revenue / OI / capex) are stored in raw dollars by the
+    extractor and shown in millions; headcount is stored as a count and shown
+    verbatim.
+    """
+    if value is None:
+        return None
+    if bucket == "headcount_by_segment":
+        return value
+    return value / 1_000_000.0
 
 
 def _sort_and_rollup(
