@@ -52,6 +52,7 @@ from compute.transcript_ingest import (
 from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
+from timeseries.signal_writer import compute_and_persist_signals
 
 _FACT_EXTRACTOR_DISPATCH: dict[str, Callable[[sqlite3.Connection, int, Path], int]] = {
     "fmp_income_statement": extract_income_statement_facts,
@@ -87,6 +88,7 @@ class StageName(StrEnum):
     DERIVE_FMP_KPIS = "derive_fmp_kpis"
     MATCH_COMMITMENTS = "match_commitments"
     EVALUATE_THESIS = "evaluate_thesis"
+    PERSIST_TIMESERIES_SIGNALS = "persist_timeseries_signals"
     SURFACE_PENDING_LLM = "surface_pending_llm"
 
 
@@ -371,6 +373,46 @@ def _stage_evaluate_thesis(
     )
 
 
+def _stage_persist_timeseries_signals(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    project_root: Path,
+    run_id: str,
+) -> StageResult:
+    """Run the time-series primitives over every metric in scope, persist signals.
+
+    Idempotent via the timeseries_signals unique constraint — each refresh
+    overwrites the prior row per (ticker, metric, signal). Best-effort: a
+    missing table (migration not applied) or any unexpected error degrades
+    to SKIPPED rather than failing the DAG, since signal persistence is a
+    derived view and not load-bearing for the brief.
+    """
+    try:
+        n = compute_and_persist_signals(
+            ticker=ticker, db=conn, repo_root=project_root, run_id=run_id
+        )
+    except sqlite3.OperationalError as e:
+        return StageResult(
+            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.SKIPPED,
+            rows_processed=0, notes=f"table missing — run migration: {e}"[:200],
+        )
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
+        return StageResult(
+            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.FAILED,
+            rows_processed=0, notes=f"{type(e).__name__}: {e}"[:200],
+        )
+    if n == 0:
+        return StageResult(
+            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.SKIPPED,
+            rows_processed=0, notes="no metrics with sufficient data",
+        )
+    return StageResult(
+        name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.OK,
+        rows_processed=n, notes=f"{n} signal rows upserted",
+    )
+
+
 _IR_PDF_DOC_TYPES: tuple[str, ...] = (
     "ir_presentation", "ir_press_release", "ir_supplement", "ir_investor_update",
 )
@@ -475,6 +517,11 @@ def refresh_ticker(
         conn, ticker=ticker, holdings_dir=holdings_dir, run_id=run_id
     )
     stages.append(eval_stage)
+    stages.append(
+        _stage_persist_timeseries_signals(
+            conn, ticker=ticker, project_root=project_root, run_id=run_id
+        )
+    )
     pending_stage, pending_items = _stage_surface_pending_llm(conn, ticker=ticker)
     stages.append(pending_stage)
 

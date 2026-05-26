@@ -33,9 +33,11 @@ from timeseries.primitives import (
     seasonal_decompose,
     yoy_acceleration,
 )
+from timeseries.signal_writer import compute_and_persist_signals
 
 __all__ = [
     "Observation",
+    "compute_and_persist_signals",
     "correlation_matrix",
     "detect_inflection",
     "detect_trend",

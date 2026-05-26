@@ -213,10 +213,14 @@ def _write_holdings(tmp_path: Path, ticker: str, threshold: float = 0) -> None:
     (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_refresh_ticker_runs_six_stages_by_default(
+def test_refresh_ticker_runs_seven_stages_by_default(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """Without --fetch-sec, only the 6 network-free stages execute, in order."""
+    """Without --fetch-sec, only the 7 network-free stages execute, in order.
+
+    persist_timeseries_signals sits between evaluate_thesis (which needs facts
+    settled) and surface_pending_llm (which surfaces follow-ups that may now
+    include signal-driven items)."""
     _seed_thesis_state(conn, "X")
     _seed_quarterly_income(conn, "X")
     _write_holdings(tmp_path, "X", threshold=0)
@@ -231,6 +235,7 @@ def test_refresh_ticker_runs_six_stages_by_default(
         StageName.DERIVE_FMP_KPIS,
         StageName.MATCH_COMMITMENTS,
         StageName.EVALUATE_THESIS,
+        StageName.PERSIST_TIMESERIES_SIGNALS,
         StageName.SURFACE_PENDING_LLM,
     ]
 

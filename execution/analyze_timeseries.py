@@ -50,6 +50,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from timeseries import (  # noqa: E402
     Observation,
+    compute_and_persist_signals,
     correlation_matrix,
     detect_inflection,
     detect_trend,
@@ -192,6 +193,12 @@ def main() -> int:
     parser.add_argument(
         "--pretty", action="store_true", help="Pretty-print the JSON (indent=2)."
     )
+    parser.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="Skip writing signals into the timeseries_signals table "
+        "(default: persist, so ad-hoc CLI runs benefit downstream consumers).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -200,7 +207,28 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    report = build_report(args.ticker.upper(), args.repo_root.resolve())
+    ticker = args.ticker.upper()
+    repo_root = args.repo_root.resolve()
+    report = build_report(ticker, repo_root)
+
+    if not args.no_persist:
+        db_path = repo_root / "data" / "portfolio.db"
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(str(db_path))
+                try:
+                    n = compute_and_persist_signals(
+                        ticker=ticker, db=conn, repo_root=repo_root
+                    )
+                    report["signals_persisted"] = n
+                finally:
+                    conn.close()
+            except sqlite3.OperationalError as exc:
+                # Most commonly: table missing because migration hasn't been
+                # applied. Surface in the report payload — the JSON still
+                # renders for inspection.
+                report["signals_persisted_error"] = str(exc)
+
     indent = 2 if args.pretty else None
     rendered = json.dumps(report, indent=indent, default=str, ensure_ascii=False)
 
