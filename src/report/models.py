@@ -78,6 +78,22 @@ class KpiSnapshotRow(BaseModel):
     status: Literal["green", "yellow", "red", "unknown"] = "unknown"
 
 
+class DecisionBadge(BaseModel):
+    """One row of the decision-history sidebar in §1 Snapshot.
+
+    A renderer-shaped projection of the `decisions` table (migration 0046).
+    `date_short` is the made_at month ("YYYY-MM"); `rationale_short` is the
+    first ~80 chars of `rationale_excerpt` with an ellipsis when truncated;
+    `outcome_label` defaults to "pending" so the renderer always has a class
+    to attach.
+    """
+
+    date_short: str
+    recommendation_kind: str
+    outcome_label: Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"] = "pending"
+    rationale_short: str = ""
+
+
 class SnapshotSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -87,6 +103,10 @@ class SnapshotSection(BaseModel):
     verdict: Literal["intact", "watch", "broken", "pending"] = "pending"
     valuation: ValuationSnapshot
     tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list)
+    # Last 3 LLM recommendations from the decisions audit ledger (migration
+    # 0046). Empty when the table is absent or has no rows for this ticker —
+    # the renderers omit the sidebar entirely in that case.
+    recent_decisions: list[DecisionBadge] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

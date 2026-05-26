@@ -25,6 +25,7 @@ from report.models import (
     BearCaseSection,
     BreakRuleEvaluation,
     CompanyDescriptionSection,
+    DecisionBadge,
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
@@ -301,6 +302,56 @@ table.weighting-table td:nth-child(3) {
   display: block;
   height: 100%;
   background: var(--accent);
+}
+.decision-history {
+  margin: 14px 0 18px;
+  padding: 10px 14px;
+  background: var(--subheader-bg);
+  border-radius: 6px;
+  border-left: 3px solid var(--accent);
+}
+.decision-history h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.decision-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  margin: 3px 0;
+  border-radius: 4px;
+  font-size: 12.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  cursor: default;
+}
+.decision-badge .decision-date {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.decision-badge .decision-kind {
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.decision-badge .decision-outcome {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.decision-badge.outcome-correct .decision-outcome { background: #dcfce7; color: var(--green); }
+.decision-badge.outcome-wrong .decision-outcome { background: #fee2e2; color: var(--red); }
+.decision-badge.outcome-mixed .decision-outcome { background: #fef9c3; color: var(--yellow); }
+.decision-badge.outcome-pending .decision-outcome { background: #f3f4f6; color: var(--gray); }
+.decision-badge.outcome-unfalsifiable .decision-outcome {
+  background: #f3f4f6;
+  color: var(--gray);
+  font-style: italic;
 }
 """
     + CHARTS_V2_CSS
@@ -617,6 +668,35 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
         out.write(
             f'<p class="meta">DCF workbook: <code>{html.escape(s.valuation.model_link)}</code></p>\n'
         )
+    _decision_sidebar(out, s.recent_decisions)
+
+
+def _decision_sidebar(out: StringIO, decisions: list[DecisionBadge]) -> None:
+    """Last 3 LLM recommendations from the decisions ledger.
+
+    Hidden entirely when there are no rows — no placeholder. Each badge shows
+    date · recommendation · outcome chip, with the rationale excerpt attached
+    as a `title` tooltip so hovering reveals the LLM's verdict text.
+    """
+    if not decisions:
+        return
+    out.write('<div class="decision-history">\n')
+    out.write(
+        '<h3>Recent decisions <span class="meta">— last 3 LLM recommendations</span></h3>\n'
+    )
+    for d in decisions:
+        cls = f"decision-badge outcome-{html.escape(d.outcome_label)}"
+        tooltip = f' title="{html.escape(d.rationale_short)}"' if d.rationale_short else ""
+        kind_label = html.escape(d.recommendation_kind.upper())
+        outcome_label = html.escape(d.outcome_label)
+        out.write(
+            f'<div class="{cls}"{tooltip}>'
+            f'<span class="decision-date">{html.escape(d.date_short)}</span>'
+            f' · <span class="decision-kind">{kind_label}</span>'
+            f' · <span class="decision-outcome">{outcome_label}</span>'
+            "</div>\n"
+        )
+    out.write("</div>\n")
 
 
 _TRIGGER_LABEL: dict[str, str] = {

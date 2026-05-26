@@ -13,6 +13,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     CompanyDescriptionSection,
+    DecisionBadge,
     EarningsSection,
     EvaluationSnapshotSection,
     FinancialsSection,
@@ -199,6 +200,24 @@ def _snapshot(out: StringIO, s: SnapshotSection) -> None:
     _valuation_card_md(out, s.valuation)
     if s.valuation.model_link:
         out.write(f"_DCF workbook: `{s.valuation.model_link}`_\n\n")
+    _decision_history_md(out, s.recent_decisions)
+
+
+def _decision_history_md(out: StringIO, decisions: list[DecisionBadge]) -> None:
+    """Last 3 LLM recommendations as a bullet list under #### Recent decisions.
+
+    Omitted entirely when the list is empty — no placeholder. Each bullet:
+    `YYYY-MM · KIND · outcome — rationale_short`. Matches the renderer
+    contract in the HTML/workspace flavors.
+    """
+    if not decisions:
+        return
+    out.write("#### Recent decisions\n\n")
+    for d in decisions:
+        kind = d.recommendation_kind.upper()
+        rationale = f" — {d.rationale_short}" if d.rationale_short else ""
+        out.write(f"- {d.date_short} · **{kind}** · `{d.outcome_label}`{rationale}\n")
+    out.write("\n")
 
 
 _TRIGGER_LABEL_MD: dict[str, str] = {
