@@ -1,0 +1,57 @@
+industry: software_saas
+display_name: "Software / SaaS"
+canonical_kpis:
+  - name: "Net Revenue Retention"
+    aliases: ["NDR", "Net Retention", "Dollar-Based Net Retention", "DBNR", "DBNRR"]
+    unit_kind: pct
+    expected_range: [1.05, 1.50]
+    break_condition: "below 1.10 for 2 consecutive quarters"
+    primary_source: ir_doc
+  - name: "Gross Revenue Retention"
+    aliases: ["GRR", "Gross Retention"]
+    unit_kind: pct
+    expected_range: [0.90, 0.99]
+    break_condition: "below 0.90 for 2 consecutive quarters"
+    primary_source: ir_doc
+  - name: "Magic Number"
+    aliases: ["S&M Magic Number", "Sales Efficiency"]
+    unit_kind: ratio
+    expected_range: [0.5, 1.5]
+    break_condition: "below 0.5 for 2 consecutive quarters"
+    primary_source: derived
+  - name: "CAC Payback Period"
+    aliases: ["Payback Period", "CAC Payback", "Months to Payback"]
+    unit_kind: months
+    expected_range: [12, 36]
+    break_condition: "above 36 months for 2 consecutive quarters"
+    primary_source: derived
+  - name: "Remaining Performance Obligations"
+    aliases: ["RPO", "cRPO", "Current RPO", "Backlog"]
+    unit_kind: usd
+    expected_range: [null, null]
+    break_condition: "RPO YoY growth turns negative"
+    primary_source: 10q
+  - name: "Gross Margin (Non-GAAP)"
+    aliases: ["Non-GAAP Gross Margin", "Adjusted Gross Margin"]
+    unit_kind: pct
+    expected_range: [0.70, 0.90]
+    break_condition: "below 0.70 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Operating Margin (Non-GAAP)"
+    aliases: ["Non-GAAP Operating Margin", "Adjusted Operating Margin"]
+    unit_kind: pct
+    expected_range: [0.10, 0.40]
+    break_condition: "below 0.10 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Free Cash Flow Margin"
+    aliases: ["FCF Margin", "FCF / Revenue"]
+    unit_kind: pct
+    expected_range: [0.15, 0.40]
+    break_condition: "below 0.10 for 2 consecutive quarters"
+    primary_source: derived
+  - name: "Rule of 40"
+    aliases: ["Rule-of-40", "R40"]
+    unit_kind: pct
+    expected_range: [0.40, 0.80]
+    break_condition: "below 0.40 for 2 consecutive quarters"
+    primary_source: derived
