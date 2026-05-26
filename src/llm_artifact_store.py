@@ -27,7 +27,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -247,6 +247,7 @@ def upsert(
             if (req.content_md or content_json_str)
             else None
         )
+        effective_expires_at = req.expires_at or default_expires_at(req.purpose)
         cur = conn.execute(
             """
             INSERT INTO llm_artifacts(
@@ -270,7 +271,7 @@ def upsert(
                 req.model,
                 req.prompt_version,
                 datetime.now(UTC).isoformat(),
-                req.expires_at.isoformat() if req.expires_at else None,
+                effective_expires_at.isoformat() if effective_expires_at else None,
                 json.dumps(req.source_doc_ids) if req.source_doc_ids else None,
                 json.dumps(req.parent_artifact_ids) if req.parent_artifact_ids else None,
                 req.llm_call_id,
@@ -289,6 +290,82 @@ def upsert(
         return (None, False)
     finally:
         conn.close()
+
+
+# Purposes whose output depends on financial_facts / kpi_facts /
+# segment_periods state. When upstream facts change for a ticker (SEC ingest,
+# FMP refresh, manual correction), these artifacts should be marked dirty so
+# the next brief render regenerates them rather than hitting stale cache.
+# Keep in sync with execution/refresh_dirty_artifacts.PURPOSE_TO_REGENERATOR_HINT.
+FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
+    "bear_case",
+    "company_description",
+    "filing_intelligence",
+    "valuation_basis",
+    "saydo_filter",
+    "exec_comp_alignment",
+    "qa_topics",
+)
+
+
+# Default TTL per purpose. The artifact's `expires_at` is set to now+TTL at
+# upsert time when the caller doesn't pass one explicitly, and the drain
+# loop treats `expires_at < now` as a soft dirty signal so cached LLM
+# outputs don't live forever even if no fact change ever flips brief_dirty.
+# Tuned by data sensitivity:
+#   bear_case / company_description: company narrative changes slowly →
+#     30 days
+#   qa_topics / saydo_filter / exec_comp_alignment / valuation_basis:
+#     anchored to the most recent quarter → 14 days
+#   filing_intelligence: anchored to a specific 10-K/10-Q → 60 days
+# A purpose not in this table gets no default TTL (caller must opt in).
+_DEFAULT_TTL_DAYS: dict[str, int] = {
+    "bear_case": 30,
+    "company_description": 30,
+    "qa_topics": 14,
+    "saydo_filter": 14,
+    "exec_comp_alignment": 14,
+    "valuation_basis": 14,
+    "filing_intelligence": 60,
+}
+
+
+def default_expires_at(purpose: str, *, now: datetime | None = None) -> datetime | None:
+    """Compute the canonical expires_at for an artifact of the given purpose.
+
+    Returns None for purposes without a TTL policy — caller may still set
+    expires_at explicitly on the UpsertRequest. now is injectable for tests.
+    """
+    days = _DEFAULT_TTL_DAYS.get(purpose)
+    if days is None:
+        return None
+    now = now if now is not None else datetime.now(UTC)
+    return now + timedelta(days=days)
+
+
+def mark_artifacts_dirty_for_fact_change(
+    *,
+    ticker: str,
+    reason: str,
+    db_path: Path | str | None = None,
+    purposes: tuple[str, ...] | list[str] = FACT_DEPENDENT_PURPOSES,
+) -> int:
+    """Mark every fact-dependent artifact for `ticker` dirty.
+
+    Called from the brief-rebuild path whenever upstream facts may have
+    changed: the daily worker before each rebuild, the SEC silent-staleness
+    detector, and any future "facts restated" trigger. Without this chain
+    the LLM artifact cache stays valid even though the inputs to the prompt
+    have shifted underneath it.
+
+    Returns the count of rows actually flipped from clean→dirty.
+    """
+    return mark_dirty(
+        ticker=ticker,
+        purposes=list(purposes),
+        reason=reason,
+        db_path=db_path,
+    )
 
 
 def mark_dirty(
@@ -331,23 +408,37 @@ def drain_dirty(
     *,
     limit: int = 50,
     db_path: Path | str | None = None,
+    now: datetime | None = None,
 ) -> list[Artifact]:
-    """Return up to `limit` dirty current artifacts. Caller regenerates them
-    via the purpose-specific generator + upsert; dirty=0 is cleared by upsert
-    on the new row."""
+    """Return up to `limit` artifacts that need regeneration.
+
+    An artifact is considered due when:
+      * dirty=1 (an upstream change flipped it), OR
+      * expires_at < now (TTL has elapsed since the row was generated)
+
+    Both paths land in the same drain queue so callers don't have to run
+    two separate sweeps. Caller regenerates them via the purpose-specific
+    generator + upsert; dirty=0 + a fresh expires_at are written on the new
+    row.
+    """
     conn = _open(db_path)
     if conn is None:
         return []
+    now_iso = (now if now is not None else datetime.now(UTC)).isoformat()
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
             SELECT * FROM llm_artifacts
-            WHERE dirty = 1 AND superseded_by_id IS NULL
+            WHERE superseded_by_id IS NULL
+              AND (
+                dirty = 1
+                OR (expires_at IS NOT NULL AND expires_at < ?)
+              )
             ORDER BY generated_at ASC
             LIMIT ?
             """,
-            (int(limit),),
+            (now_iso, int(limit)),
         ).fetchall()
         return [_row_to_artifact(r) for r in rows]
     finally:

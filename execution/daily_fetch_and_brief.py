@@ -55,6 +55,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
 
 DEFAULT_EVAL_CADENCE_DAYS = 7
@@ -417,6 +418,23 @@ def _refresh_one_ticker(
             cwd=repo_root,
         )
     )
+    # Mark fact-dependent LLM artifacts dirty so the build regenerates them
+    # rather than hitting a stale cache. Cheap (one UPDATE per ticker) and
+    # only matters when --enable-llm is set, but harmless otherwise.
+    flipped = mark_artifacts_dirty_for_fact_change(
+        ticker=ticker,
+        reason="brief_rebuild",
+        db_path=db_path,
+    )
+    if flipped:
+        sys.stderr.write(
+            json.dumps({
+                "event": "llm_artifacts_marked_dirty",
+                "ticker": ticker,
+                "count": flipped,
+            }) + "\n"
+        )
+
     build_cmd = [
         sys.executable,
         str(PROJECT_ROOT / "execution" / "build_artifacts.py"),
