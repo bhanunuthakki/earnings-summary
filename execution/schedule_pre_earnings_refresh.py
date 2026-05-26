@@ -6,6 +6,11 @@ watchlist tickers reporting in the next 7 days, and forcibly mark their
 time-sensitive endpoints as "stale" so the cacher's next run pulls them
 ahead of the print, and again the day after.
 
+For watched tickers the FMP universe call doesn't return (rate-limited,
+foreign issuer, OTC), we fall back to a per-ticker `next_earnings_date()`
+lookup that tries the on-disk FMP cache first, then yfinance. This is the
+attach point for the Phase 4f fallback shipped in PR #103.
+
 Mechanism: writes "force-stale" hints to `.tmp/cacher/forced_stale.json`,
 which the cacher merges into its audit. Hint TTL is 14 days (covers pre +
 post window with margin).
@@ -23,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -36,6 +42,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from sources.earnings_calendar import next_earnings_date  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 load_dotenv(PROJECT_ROOT / ".env")
 API_KEY = os.environ.get("FMP_API_KEY")
@@ -105,6 +114,34 @@ def _prune_expired(hints: dict[str, str], now: datetime) -> dict[str, str]:
     }
 
 
+def _fallback_unmatched(unmatched: set[str], start: date, end: date) -> list[dict[str, str]]:
+    """For watched tickers FMP didn't return, try next_earnings_date() per ticker.
+
+    next_earnings_date() internally tries the FMP per-ticker cache first, then
+    yfinance. Returns dicts in the same {symbol, date, source} shape as FMP
+    records so the caller can extend matches uniformly. Dates outside
+    [start, end] are filtered out so we don't write hints for events further
+    in the future than the universe call would've surfaced.
+    """
+    out: list[dict[str, str]] = []
+    for ticker in sorted(unmatched):
+        try:
+            nx = next_earnings_date(PROJECT_ROOT, ticker)
+        except Exception as e:
+            log.warning("next_earnings_date(%s) raised: %s", ticker, _redact(e))
+            continue
+        if nx is None:
+            continue
+        if not (start <= nx.expected_date <= end):
+            continue
+        out.append({
+            "symbol": ticker,
+            "date": nx.expected_date.isoformat(),
+            "source": nx.source_name,
+        })
+    return out
+
+
 def schedule(*, dry_run: bool = False) -> dict[str, object]:
     """Run one polling pass; return summary dict."""
     now = datetime.now()
@@ -115,8 +152,24 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
     if not watched:
         return {"watched": 0, "hints": 0, "matches": []}
 
-    calendar = _fetch_earnings_calendar(today, end)
-    matches = [e for e in calendar if e["symbol"] in watched]
+    try:
+        calendar = _fetch_earnings_calendar(today, end)
+    except RuntimeError as e:
+        log.warning("FMP earnings-calendar fetch failed; falling back to per-ticker lookup: %s", _redact(e))
+        calendar = []
+    matches: list[dict[str, str]] = [
+        {**e, "source": "fmp"} for e in calendar if e["symbol"] in watched
+    ]
+
+    unmatched = watched - {m["symbol"] for m in matches}
+    fallback = _fallback_unmatched(unmatched, today, end)
+    if fallback:
+        log.info(
+            "yfinance/per-ticker fallback added %d match(es): %s",
+            len(fallback),
+            sorted({m["symbol"] for m in fallback}),
+        )
+    matches.extend(fallback)
 
     hints = _prune_expired(_load_hints(), now)
     new_hints: list[dict[str, str]] = []
@@ -132,7 +185,12 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
         existing = hints.get(ticker)
         if existing is None or datetime.fromisoformat(existing) < expires:
             hints[ticker] = expires.isoformat(timespec="seconds")
-            new_hints.append({"ticker": ticker, "earnings_date": m["date"], "hint_expires": hints[ticker]})
+            new_hints.append({
+                "ticker": ticker,
+                "earnings_date": m["date"],
+                "hint_expires": hints[ticker],
+                "source": m.get("source", "fmp"),
+            })
 
     if not dry_run:
         _save_hints(hints)
@@ -142,6 +200,7 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
         "calendar_window": [today.isoformat(), end.isoformat()],
         "calendar_entries": len(calendar),
         "matches": [m for m in matches],
+        "fallback_matches": fallback,
         "new_or_updated_hints": new_hints,
         "active_hints_total": len(hints),
         "dry_run": dry_run,
