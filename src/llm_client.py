@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 
 # NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
 # is `google-genai` with a different API (genai.Client / client.models.generate_content).
@@ -36,7 +37,7 @@ import subprocess
 # users to re-install for the fallback path. See:
 # https://github.com/google-gemini/deprecated-generative-ai-python
 import warnings
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -45,6 +46,11 @@ with warnings.catch_warnings():
     import google.generativeai as genai
 
 from dotenv import load_dotenv
+
+# Phase 0 ledger (migration 0034). Records one row per LLM call with cost +
+# token usage + cache stats. Best-effort: failures here never break the LLM
+# call. Imported lazily inside _call_claude so this module stays importable in
+# environments without the ledger module (e.g. unrelated scratch scripts).
 
 # Load .env at module init so GEMINI_API_KEY is available without callers having to
 # import dotenv themselves. Silent no-op if .env doesn't exist.
@@ -194,6 +200,24 @@ def _verify_setup_once() -> None:
     _setup_verified = True
 
 
+def _gemini_fallback_disabled() -> bool:
+    """Returns True when the operator has explicitly disabled the Gemini
+    fallback via ``LLM_FALLBACK_DISABLED=1`` in the environment.
+
+    Use case: the user has an invalid GEMINI_API_KEY they don't want to
+    delete (so the multi-provider architecture stays documented + revivable)
+    but they don't want the system to waste time / log errors trying it on
+    every Claude failure. Setting LLM_FALLBACK_DISABLED=1 short-circuits the
+    fallback path: a Claude failure propagates as a clean RuntimeError that
+    names the Claude root cause, without a misleading Gemini auth error
+    attached.
+
+    To re-enable: unset the env var (or set it to 0/false), refresh the key.
+    """
+    v = (os.environ.get("LLM_FALLBACK_DISABLED") or "").strip().lower()
+    return v in {"1", "true", "yes", "on"}
+
+
 def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     """
     Last-resort Gemini call invoked when the Claude CLI fails operationally
@@ -201,21 +225,41 @@ def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     (or GOOGLE_API_KEY) from the environment — populated by load_dotenv() at
     module init.
 
-    If no Gemini key is available, re-raises a RuntimeError that wraps the
-    original Claude error and points the user at .env.example. This makes the
-    failure mode explicit: setup an LLM, see the prompt, fix the cause.
+    Three exit paths:
+      1. ``LLM_FALLBACK_DISABLED=1`` — fallback explicitly disabled by operator.
+         Raises a clean RuntimeError naming only the Claude failure (no
+         misleading Gemini error attached). Use this when the Gemini key is
+         known-invalid or fallback is unwanted for any reason.
+      2. No key configured at all — same RuntimeError but with setup hint.
+      3. Key configured + fallback enabled — fire the Gemini call. If Gemini
+         itself errors (bad key, quota, etc.), the exception propagates and
+         the caller's ledger writer records it.
 
     Setup-class Claude errors (``claude`` binary missing) are NOT routed here —
     they propagate from ``_verify_setup_once()`` before the subprocess call
     ever runs.
     """
+    if _gemini_fallback_disabled():
+        log.info(
+            {
+                "event": "claude_cli_failed_fallback_disabled",
+                "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
+                "fallback_state": "disabled_by_env",
+            }
+        )
+        raise RuntimeError(
+            f"Claude CLI failed and Gemini fallback is disabled "
+            f"(LLM_FALLBACK_DISABLED=1).\n"
+            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}"
+        ) from claude_error
+
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError(
             "Claude CLI failed AND no Gemini fallback configured. "
             f"Original Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}\n"
-            "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path. "
-            "See .env.example."
+            "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path "
+            "(or set LLM_FALLBACK_DISABLED=1 to explicitly opt out)."
         ) from claude_error
 
     log.warning(
@@ -238,30 +282,118 @@ def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     return text
 
 
+def _record_to_ledger(
+    *,
+    started_at: datetime,
+    elapsed_ms: int,
+    model: str,
+    prompt_sha: str,
+    prompt_chars: int,
+    purpose: str | None,
+    ticker: str | None,
+    scope: str | None,
+    run_id: str | None,
+    response_text: str | None = None,
+    meta: dict[str, object] | None = None,
+    error: str | None = None,
+    fallback_used: str | None = None,
+) -> None:
+    """Best-effort write of one row into llm_calls. Never raises.
+
+    On Claude success: pass the response_text + parsed CLI meta so usage/cost
+    fields populate. On failure: pass error= and leave response/meta None — the
+    ledger row still records the attempt and its latency. The fallback path
+    records a SECOND row with fallback_used='gemini'.
+    """
+    try:
+        from llm_call_ledger import (
+            LlmCallRecord,
+            record_call,
+            sha256_text,
+            usage_from_json_meta,
+        )
+
+        usage = usage_from_json_meta(meta) if meta else {}
+        record_call(
+            LlmCallRecord(
+                called_at=started_at,
+                model=model,
+                prompt_sha256=prompt_sha,
+                prompt_chars=prompt_chars,
+                elapsed_ms=elapsed_ms,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                response_sha256=sha256_text(response_text) if response_text else None,
+                response_chars=len(response_text) if response_text else None,
+                input_tokens=cast("int | None", usage.get("input_tokens")),
+                cache_creation_input_tokens=cast(
+                    "int | None", usage.get("cache_creation_input_tokens")
+                ),
+                cache_read_input_tokens=cast(
+                    "int | None", usage.get("cache_read_input_tokens")
+                ),
+                output_tokens=cast("int | None", usage.get("output_tokens")),
+                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
+                fallback_used=fallback_used,
+                error=error,
+            )
+        )
+    except Exception as exc:  # ImportError, unexpected attribute errors, …
+        # Best-effort — the ledger module's record_call already swallows DB
+        # errors; this outer guard catches anything more exotic so the LLM call
+        # itself is never blocked by telemetry.
+        log.debug({"event": "llm_call_ledger_record_failed", "error": str(exc)})
+
+
 def _call_claude(
     prompt: str,
     model: str = DEFAULT_MODEL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    *,
+    purpose: str | None = None,
+    ticker: str | None = None,
+    scope: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     """
     Single-shot LLM call. Tries the Claude Code CLI first. On any operational
-    failure — timeout, non-zero exit, empty output, or the binary becoming
-    unavailable mid-run — falls back to Gemini Flash if ``GEMINI_API_KEY`` is
-    available in the environment.
+    failure — timeout, non-zero exit, empty output, malformed JSON envelope,
+    or the binary becoming unavailable mid-run — falls back to Gemini Flash if
+    ``GEMINI_API_KEY`` is available in the environment.
 
     Setup errors (``claude`` binary missing on first call) raise RuntimeError
     directly without invoking the fallback — that needs to be fixed by the
     operator, not papered over.
 
     Prompts are passed via stdin to avoid Windows CreateProcess command-line
-    length limits (32K).
+    length limits (32K). Output is ``--output-format json`` so the wrapper can
+    capture token usage + Anthropic-computed cost for the llm_calls ledger.
+
+    The optional ``purpose``/``ticker``/``scope``/``run_id`` arguments are
+    pass-through metadata for the ledger — they have no effect on the LLM call
+    itself but enable cost-attribution queries downstream.
     """
     _verify_setup_once()  # setup errors propagate; do NOT route to fallback
     assert _claude_cli_path is not None  # set by _verify_setup_once when it returns successfully
-    log.info({"event": "llm_call_start", "model": model, "prompt_chars": len(prompt)})
+    log.info(
+        {
+            "event": "llm_call_start",
+            "model": model,
+            "prompt_chars": len(prompt),
+            "purpose": purpose,
+        }
+    )
+
+    from llm_call_ledger import parse_claude_json_output, sha256_text
+
+    prompt_sha = sha256_text(prompt)
+    started_at = datetime.now(UTC)
+    t0 = time.monotonic()
     try:
         result = subprocess.run(
-            [_claude_cli_path, "-p", "--model", model],
+            [_claude_cli_path, "-p", "--model", model, "--output-format", "json"],
             input=prompt,
             capture_output=True,
             text=True,
@@ -270,17 +402,110 @@ def _call_claude(
             check=True,
             timeout=timeout_seconds,
         )
-        text = result.stdout.strip()
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        # Parse the JSON envelope. ValueError when malformed → caught below
+        # and routed through the Gemini fallback (same as a CLI failure).
+        text, meta = parse_claude_json_output(result.stdout.strip())
+        text = text.strip()
         if not text:
             raise RuntimeError(
-                f"claude -p returned empty stdout. stderr: {result.stderr.strip()[:200]}"
+                f"claude -p returned empty `result`. stderr: {result.stderr.strip()[:200]}"
             )
         log.info({"event": "llm_call_done", "response_chars": len(text)})
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            response_text=text,
+            meta=meta,
+        )
         return text
-    except (subprocess.SubprocessError, OSError, RuntimeError) as claude_error:
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            error=f"{type(claude_error).__name__}: {str(claude_error)[:500]}",
+        )
         # Operational failure — try Gemini fallback. _try_gemini_fallback raises
-        # if no Gemini key is configured, surfacing both errors together.
-        return _try_gemini_fallback(prompt, claude_error)
+        # if no Gemini key is configured, surfacing both errors together. The
+        # fallback writes its own ledger row tagged fallback_used='gemini'.
+        return _try_gemini_fallback_logged(
+            prompt,
+            claude_error,
+            prompt_sha=prompt_sha,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+        )
+
+
+def _try_gemini_fallback_logged(
+    prompt: str,
+    claude_error: Exception,
+    *,
+    prompt_sha: str,
+    purpose: str | None,
+    ticker: str | None,
+    scope: str | None,
+    run_id: str | None,
+) -> str:
+    """Wrap _try_gemini_fallback with its own ledger row.
+
+    Gemini's google-generativeai SDK doesn't surface per-call cost/token
+    counts in a stable shape, so the row records latency + response_chars
+    only; usage/cost stay NULL. That's still enough to track *how often*
+    fallback fires and how much latency it adds.
+    """
+    started_at = datetime.now(UTC)
+    t0 = time.monotonic()
+    try:
+        text = _try_gemini_fallback(prompt, claude_error)
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=GEMINI_FALLBACK_MODEL,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            response_text=text,
+            fallback_used="gemini",
+        )
+        return text
+    except Exception as gemini_err:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=GEMINI_FALLBACK_MODEL,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            error=f"{type(gemini_err).__name__}: {str(gemini_err)[:500]}",
+            fallback_used="gemini",
+        )
+        raise
 
 
 def call_llm(
@@ -289,6 +514,9 @@ def call_llm(
     purpose: str | None = None,
     model: str | None = None,
     timeout_seconds: int | None = None,
+    ticker: str | None = None,
+    scope: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
@@ -307,6 +535,13 @@ def call_llm(
         model: Explicit Claude model id. If neither purpose nor model is set,
             falls back to DEFAULT_MODEL with a warning log.
         timeout_seconds: Per-call timeout. None = DEFAULT_TIMEOUT_SECONDS.
+        ticker: Optional ticker for ledger attribution. Set when the call is
+            scoped to a single name; helps cost queries break out by ticker.
+        scope: Optional analytical scope for the ledger (e.g. 'portfolio',
+            'segment:cloud'). Free-form; aggregated in the spend report.
+        run_id: Optional grouping key — typically a uuid4 hex per logical
+            refresh (one build_artifacts invocation, one daily cron) so the
+            spend report can show "this run cost $X across N calls".
     """
     if model is None:
         if purpose is None:
@@ -320,6 +555,10 @@ def call_llm(
         prompt,
         model=resolved_model,
         timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
     )
 
 
@@ -336,25 +575,46 @@ def call_llm_with_web(
     prompt: str,
     model: str = DEFAULT_MODEL,
     timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
+    *,
+    purpose: str | None = None,
+    ticker: str | None = None,
+    scope: str | None = None,
+    run_id: str | None = None,
 ) -> str:
     """LLM call with Claude WebSearch + WebFetch tools enabled.
 
     Setup invariants are the same as `_call_claude` (subscription billing
-    via the CLI, UTF-8, stdin prompt). On Claude failure, falls through to
-    plain `_call_claude` (which has its own Gemini fallback) so a memo is
-    always produced even when web tools are unavailable.
+    via the CLI, UTF-8, stdin prompt, JSON output for ledger capture). On
+    Claude failure, falls through to plain `_call_claude` (which has its
+    own Gemini fallback) so a memo is always produced even when web tools
+    are unavailable.
 
     Use for memo generation, fact-finding on recent news, anything where
     the upstream context is stale and Claude needs to look something up.
     """
     _verify_setup_once()
     assert _claude_cli_path is not None
-    log.info({"event": "llm_web_call_start", "model": model, "prompt_chars": len(prompt)})
+    log.info(
+        {
+            "event": "llm_web_call_start",
+            "model": model,
+            "prompt_chars": len(prompt),
+            "purpose": purpose,
+        }
+    )
+
+    from llm_call_ledger import parse_claude_json_output, sha256_text
+
+    prompt_sha = sha256_text(prompt)
+    started_at = datetime.now(UTC)
+    t0 = time.monotonic()
     cmd = [
         _claude_cli_path,
         "-p",
         "--model",
         model,
+        "--output-format",
+        "json",
         "--allowedTools",
         *CLAUDE_WEB_TOOLS.split(),
     ]
@@ -369,22 +629,59 @@ def call_llm_with_web(
             check=True,
             timeout=timeout_seconds,
         )
-        text = result.stdout.strip()
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        text, meta = parse_claude_json_output(result.stdout.strip())
+        text = text.strip()
         if not text:
             raise RuntimeError(
-                f"claude -p with web tools returned empty stdout. stderr: {result.stderr.strip()[:200]}"
+                f"claude -p with web tools returned empty `result`. stderr: {result.stderr.strip()[:200]}"
             )
         log.info({"event": "llm_web_call_done", "response_chars": len(text)})
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope or "web",
+            run_id=run_id,
+            response_text=text,
+            meta=meta,
+        )
         return text
-    except (subprocess.SubprocessError, OSError, RuntimeError) as web_err:
+    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as web_err:
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        _record_to_ledger(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope or "web",
+            run_id=run_id,
+            error=f"{type(web_err).__name__}: {str(web_err)[:500]}",
+        )
         log.warning(
             {
                 "event": "llm_web_call_fallback_to_plain",
                 "error": f"{type(web_err).__name__}: {web_err}",
             }
         )
-        # Fall through to non-web path so the caller still gets output.
-        return _call_claude(prompt, model=model, timeout_seconds=timeout_seconds)
+        # Fall through to non-web path so the caller still gets output. The
+        # plain _call_claude path records its own ledger row(s).
+        return _call_claude(
+            prompt,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +849,7 @@ def compose_anchor_block(thesis_anchor: str, bear_anchor: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = ""):
+def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None):
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
 
@@ -610,13 +907,13 @@ def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "
     """
 
     try:
-        return call_llm(prompt, purpose="pairwise_analysis")
+        return call_llm(prompt, purpose="pairwise_analysis", ticker=ticker)
     except Exception as e:
         log.error(f"Error generating pairwise analysis: {e}")
         return f"Could not generate analysis for {prev_q_str} -> {curr_q_str}."
 
 
-def generate_summary(text: str, anchor_block: str = "") -> str:
+def generate_summary(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
     """
     Generates an analyst-grade prose summary of an earnings transcript.
 
@@ -724,13 +1021,13 @@ def generate_summary(text: str, anchor_block: str = "") -> str:
     Transcript:
     """
     try:
-        return call_llm(prompt + text, purpose="transcript_summary")
+        return call_llm(prompt + text, purpose="transcript_summary", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
 
 
-def generate_press_release_summary(text: str) -> str:
+def generate_press_release_summary(text: str, ticker: str | None = None) -> str:
     """
     Generates a structured summary from an earnings press release.
     Press releases are financial-forward — emphasize the numbers table and guidance.
@@ -770,13 +1067,13 @@ This is sourced from the company's IR website, so it is the official financial r
 Press Release:
 """
     try:
-        return call_llm(prompt + text, purpose="press_release_summary")
+        return call_llm(prompt + text, purpose="press_release_summary", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Press release summary generation failed: {e}")
         raise
 
 
-def generate_presentation_brief(text: str) -> str:
+def generate_presentation_brief(text: str, ticker: str | None = None) -> str:
     """
     Generates a strategic brief from an earnings presentation slide deck.
     Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
@@ -809,7 +1106,7 @@ Extract the key strategic narrative — what story is management telling investo
 Presentation Text:
 """
     try:
-        return call_llm(prompt + text, purpose="presentation_brief")
+        return call_llm(prompt + text, purpose="presentation_brief", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Presentation brief generation failed: {e}")
         raise
@@ -1194,7 +1491,7 @@ def generate_thesis_update(
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "A"})
     try:
-        pass_a_output = call_llm(pass_a_prompt, purpose="thesis_pass_a")
+        pass_a_output = call_llm(pass_a_prompt, purpose="thesis_pass_a", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass A failed for {ticker}: {e}")
         raise
@@ -1219,7 +1516,7 @@ def generate_thesis_update(
     )
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "B"})
     try:
-        pass_b_output = call_llm(pass_b_prompt, purpose="thesis_pass_b")
+        pass_b_output = call_llm(pass_b_prompt, purpose="thesis_pass_b", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Thesis Pass B failed for {ticker}: {e}")
         raise
@@ -1243,7 +1540,7 @@ def generate_thesis_update(
     )
 
 
-def generate_strategic_analysis(summaries_list):
+def generate_strategic_analysis(summaries_list, ticker: str | None = None):
     """
     Generates a strategic analysis comparing performance vs expectations across quarters.
     summaries_list: List of dicts {'quarter': 'Q1', 'year': '2024', 'text': '...'}
@@ -1303,7 +1600,7 @@ def generate_strategic_analysis(summaries_list):
     """
 
     try:
-        return call_llm(prompt + context_str, purpose="strategic_analysis")
+        return call_llm(prompt + context_str, purpose="strategic_analysis", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Analysis generation failed: {e}")
         raise
@@ -1339,7 +1636,7 @@ def identify_transcript_metadata(text_snippet):
         return "UNKNOWN"
 
 
-def generate_event_brief(text: str, anchor_block: str = "") -> str:
+def generate_event_brief(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
     """
     Generate a structured brief for a non-quarterly IR event: investor day, AGM,
     capital markets day, conference deck, M&A announcement, ad-hoc strategic update.
@@ -1396,7 +1693,7 @@ or DIFFERENT vs. prior management framing.]
 Event Document Text:
 """
     try:
-        return call_llm(prompt + text, purpose="event_brief")
+        return call_llm(prompt + text, purpose="event_brief", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Event brief generation failed: {e}")
         raise
@@ -1464,7 +1761,7 @@ If no material news found in the window, write `*No material news in the last
 Do not pad with stale or low-signal items just to fill the section.
 """
     try:
-        return call_llm_with_web(prompt)
+        return call_llm_with_web(prompt, purpose="recent_developments", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Recent-developments generation failed for {ticker}: {e}")
         raise
@@ -1575,7 +1872,7 @@ Provide 3 to 5 failure_modes. At least 2 must be non-consensus per the rule
 above. Return strictly the JSON object — nothing else.
 """
     try:
-        raw = call_llm(prompt, purpose="bear_case").strip()
+        raw = call_llm(prompt, purpose="bear_case", ticker=ticker).strip()
         # Strip ``` fences if Claude wraps the JSON despite the instruction.
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
@@ -1627,7 +1924,7 @@ The "id" must echo back the input id verbatim. The "topic" must read cleanly
 on its own — no "asks about" prefix; just the topic itself.
 """
     try:
-        raw = call_llm(prompt, purpose="qa_topics").strip()
+        raw = call_llm(prompt, purpose="qa_topics", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw
@@ -1678,7 +1975,7 @@ delta. The point is to filter for THESIS-relevant signal, not generic
 beats/misses.
 """
     try:
-        raw = call_llm(prompt, purpose="saydo_filter").strip()
+        raw = call_llm(prompt, purpose="saydo_filter", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw
@@ -1832,7 +2129,7 @@ Field-by-field rules:
 Return ONLY the JSON object. No markdown fence, no prose before or after.
 """
     try:
-        raw = call_llm(prompt, purpose="company_description").strip()
+        raw = call_llm(prompt, purpose="company_description", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw
@@ -1925,7 +2222,7 @@ Caption rules:
 Return strictly the JSON object — no prose before or after, no markdown fence around the JSON.
 """
     try:
-        raw = call_llm(prompt, purpose="platform_diagram").strip()
+        raw = call_llm(prompt, purpose="platform_diagram", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw
@@ -2082,7 +2379,7 @@ Return ONLY a JSON object (no markdown fence, no prose):
 }}
 """
     try:
-        raw = call_llm(prompt, purpose="valuation_basis").strip()
+        raw = call_llm(prompt, purpose="valuation_basis", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw
@@ -2141,7 +2438,7 @@ Echo IDs verbatim from input. Do NOT invent IDs. Do NOT include omitted
 bullets.
 """
     try:
-        raw = call_llm(prompt, purpose="saydo_importance").strip()
+        raw = call_llm(prompt, purpose="saydo_importance", ticker=ticker).strip()
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return raw

@@ -1337,4 +1337,158 @@ a.peer:hover { background: var(--paper); }
   .tabs { display: none; }
   .news-strip, .kpi-strip, .l1-identity { break-after: avoid; }
 }
+
+/* ============================================================
+   Phase 5 — Executive Compensation tab
+   ============================================================ */
+.comp-table, .insider-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 12px 0;
+}
+.comp-table th, .comp-table td,
+.insider-table th, .insider-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.comp-table th, .insider-table th {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  background: var(--paper);
+  font-weight: 600;
+}
+.comp-table td.num, .insider-table td.num,
+.comp-table th.num, .insider-table th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.comp-table td.pos, .insider-table td.pos { color: #3a8a3a; }
+.comp-table td.neg, .insider-table td.neg { color: #b04040; }
+.comp-table td.muted, .insider-table td.muted,
+.comp-table .muted, .insider-table .muted { color: var(--muted); }
+.comp-table .table-footer {
+  text-align: center;
+  padding: 8px 12px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+.ceo-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-family: var(--mono);
+  background: var(--accent);
+  color: var(--surface);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  letter-spacing: 0.5px;
+}
+.kpi-match { color: #3a8a3a; font-weight: 500; }
+
+.insider-table tr.tx-buy { background: rgba(58, 138, 58, 0.06); }
+.insider-table tr.tx-sell { background: rgba(176, 64, 64, 0.04); }
+.insider-table td.signal-strong { color: #3a8a3a; font-weight: 600; }
+.insider-table td.signal-medium { color: var(--accent); font-weight: 500; }
+.insider-table td.signal-weak { color: var(--muted); }
+
+ul.flag-list {
+  list-style: none;
+  padding: 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+ul.flag-list li {
+  padding: 8px 12px;
+  border-left: 3px solid;
+  background: var(--paper);
+  font-size: 13px;
+  line-height: 1.5;
+}
+ul.flag-list li.flag-warn { border-left-color: #b88a1f; }
+ul.flag-list li.flag-positive {
+  border-left-color: #3a8a3a;
+  background: rgba(58, 138, 58, 0.06);
+}
+
+/* ============================================================
+   Synthesis tab — lens artifact panels
+   ============================================================ */
+.lens-panel { margin-bottom: 16px; }
+.lens-panel .panel-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+.lens-panel .lens-body { padding: 14px 18px 18px; }
+.lens-panel.lens-collapsed {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.lens-panel.lens-collapsed > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  user-select: none;
+}
+.lens-panel.lens-collapsed > summary::-webkit-details-marker { display: none; }
+.lens-panel.lens-collapsed > summary::before {
+  content: "▸ ";
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.lens-panel.lens-collapsed[open] > summary::before { content: "▾ "; }
+.lens-warn {
+  display: inline-block;
+  font-size: 9px;
+  font-family: var(--mono);
+  background: #b88a1f;
+  color: var(--surface);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+}
+.lens-stale {
+  display: inline-block;
+  font-size: 9px;
+  font-family: var(--mono);
+  background: var(--muted);
+  color: var(--surface);
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  letter-spacing: 0.5px;
+}
+.cli-hint {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 10px 12px;
+  background: var(--paper);
+  border-radius: 4px;
+  color: var(--accent);
+  overflow-x: auto;
+  margin: 8px 0 0;
+}
+.lens-five_min_reread .lens-body h2 {
+  color: var(--accent);
+  font-size: 16px;
+  margin-top: 1em;
+}
+.lens-five_min_reread .lens-body strong { color: var(--fg); }
 """
