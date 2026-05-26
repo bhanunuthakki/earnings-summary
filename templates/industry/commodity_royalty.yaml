@@ -1,0 +1,39 @@
+industry: commodity_royalty
+display_name: "Commodity Royalty / Streaming"
+canonical_kpis:
+  - name: "Realized Prices"
+    aliases: ["Average Realized Price", "Realized Price per Ounce", "Average Sale Price"]
+    unit_kind: usd
+    expected_range: [null, null]
+    break_condition: "realized price falls more than 30% YoY without hedge offset"
+    primary_source: earnings_release
+  - name: "Gold-Equivalent Ounces"
+    aliases: ["GEOs", "Gold Equivalent Ounces Sold", "Attributable GEOs"]
+    unit_kind: count
+    expected_range: [null, null]
+    break_condition: "GEOs decline more than 15% YoY"
+    primary_source: earnings_release
+  - name: "Ore Grade"
+    aliases: ["Average Grade", "Head Grade", "Ore Grade (g/t)"]
+    unit_kind: ratio
+    expected_range: [null, null]
+    break_condition: "head grade declines more than 20% YoY (mine maturation)"
+    primary_source: 10q
+  - name: "All-In Sustaining Cost"
+    aliases: ["AISC", "All In Sustaining Cost per Ounce"]
+    unit_kind: usd
+    expected_range: [null, null]
+    break_condition: "AISC rises above realized price (negative unit economics)"
+    primary_source: earnings_release
+  - name: "Reserve Life"
+    aliases: ["Mine Life", "Reserve Life (years)", "Proven Reserve Life"]
+    unit_kind: years
+    expected_range: [10, 30]
+    break_condition: "reserve life falls below 10 years with no replacement"
+    primary_source: 10k
+  - name: "Stream / Royalty Mix"
+    aliases: ["Royalty Mix", "Stream vs Royalty", "Portfolio Mix"]
+    unit_kind: pct
+    expected_range: [0.0, 1.0]
+    break_condition: "concentration above 0.50 in a single asset"
+    primary_source: 10k

@@ -1,0 +1,27 @@
+industry: hyperscaler
+display_name: "Hyperscaler / Cloud Platform"
+canonical_kpis:
+  - name: "Cloud Revenue Growth"
+    aliases: ["Cloud YoY Growth", "AWS Growth", "Azure Growth", "GCP Growth", "Cloud Revenue YoY"]
+    unit_kind: pct
+    expected_range: [0.15, 0.40]
+    break_condition: "cloud revenue growth below 0.15 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Cloud Operating Income Margin"
+    aliases: ["Cloud OI Margin", "AWS Operating Margin", "Azure Operating Margin", "Segment Operating Margin"]
+    unit_kind: pct
+    expected_range: [0.20, 0.40]
+    break_condition: "cloud OI margin below 0.20 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Capex / Cloud Revenue Ratio"
+    aliases: ["Capex Intensity (Cloud)", "Capex to Cloud Revenue", "Cloud Capex Ratio"]
+    unit_kind: ratio
+    expected_range: [0.30, 0.80]
+    break_condition: "capex/cloud-revenue above 1.00 (capex outrunning monetization)"
+    primary_source: derived
+  - name: "Cloud Backlog Growth"
+    aliases: ["RPO Growth", "Commercial Bookings", "Backlog YoY", "Remaining Performance Obligations Growth"]
+    unit_kind: pct
+    expected_range: [0.15, 0.50]
+    break_condition: "backlog growth below 0.10 for 2 consecutive quarters"
+    primary_source: earnings_release
