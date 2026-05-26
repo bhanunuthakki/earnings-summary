@@ -40,7 +40,7 @@ import json
 import logging
 import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -130,8 +130,18 @@ def _profile_series(series: list[Observation], kind: str) -> dict[str, object]:
     return profile
 
 
-def build_report(ticker: str, repo_root: Path) -> dict[str, object]:
-    """Assemble the full time-series intelligence report for one ticker."""
+def build_report(
+    ticker: str,
+    repo_root: Path,
+    *,
+    as_of_date: date | None = None,
+) -> dict[str, object]:
+    """Assemble the full time-series intelligence report for one ticker.
+
+    `as_of_date`: when set, the loaders exclude rows from documents fetched
+    after that date — the resulting profile is what was knowable on that
+    date. Useful for replaying a historical brief deterministically.
+    """
     db_path = repo_root / "data" / "portfolio.db"
 
     series_block: dict[str, object] = {}
@@ -139,13 +149,23 @@ def build_report(ticker: str, repo_root: Path) -> dict[str, object]:
 
     # Financial line items
     for li in _FINANCIAL_LINE_ITEMS:
-        s = load_financial_series(ticker=ticker, line_item=li, repo_root=repo_root)
+        s = load_financial_series(
+            ticker=ticker,
+            line_item=li,
+            repo_root=repo_root,
+            as_of_date=as_of_date,
+        )
         if s:
             series_block[li] = _profile_series(s, kind="financial")
 
     # Registered KPIs
     for kpi_name in _registered_kpi_names(ticker, db_path):
-        s = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
+        s = load_kpi_series(
+            ticker=ticker,
+            kpi_name=kpi_name,
+            repo_root=repo_root,
+            as_of_date=as_of_date,
+        )
         if s:
             series_block[kpi_name] = _profile_series(s, kind="kpi")
             loaded_kpi_names.append(kpi_name)
@@ -163,16 +183,16 @@ def build_report(ticker: str, repo_root: Path) -> dict[str, object]:
             {"insufficient_data": True, "reason": "fewer_than_two_kpis_with_data"},
         )
 
-    return cast(
-        "dict[str, object]",
-        {
-            "ticker": ticker.upper(),
-            "generated_at": datetime.now(UTC).isoformat(),
-            "n_series_profiled": len(series_block),
-            "series": series_block,
-            "correlations": correlations,
-        },
-    )
+    report: dict[str, object] = {
+        "ticker": ticker.upper(),
+        "generated_at": datetime.now(UTC).isoformat(),
+        "n_series_profiled": len(series_block),
+        "series": series_block,
+        "correlations": correlations,
+    }
+    if as_of_date is not None:
+        report["as_of_date"] = as_of_date.isoformat()
+    return report
 
 
 def main() -> int:
@@ -199,6 +219,16 @@ def main() -> int:
         help="Skip writing signals into the timeseries_signals table "
         "(default: persist, so ad-hoc CLI runs benefit downstream consumers).",
     )
+    parser.add_argument(
+        "--as-of-date",
+        type=lambda s: date.fromisoformat(s),
+        default=None,
+        help=(
+            "Reproduce the report as it would have looked on this date. "
+            "Excludes rows from documents fetched after the date. "
+            "Format: YYYY-MM-DD."
+        ),
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -209,9 +239,12 @@ def main() -> int:
 
     ticker = args.ticker.upper()
     repo_root = args.repo_root.resolve()
-    report = build_report(ticker, repo_root)
+    report = build_report(ticker, repo_root, as_of_date=args.as_of_date)
 
-    if not args.no_persist:
+    # Signal persistence is unconditional unless the caller opts out OR
+    # --as-of-date is set (replaying a historical view shouldn't overwrite
+    # the live signals table with stale results).
+    if not args.no_persist and args.as_of_date is None:
         db_path = repo_root / "data" / "portfolio.db"
         if db_path.exists():
             try:
