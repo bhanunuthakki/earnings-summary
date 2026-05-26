@@ -236,69 +236,12 @@ from llm.fallback import (  # noqa: E402
 )
 
 
-def _record_to_ledger(
-    *,
-    started_at: datetime,
-    elapsed_ms: int,
-    model: str,
-    prompt_sha: str,
-    prompt_chars: int,
-    purpose: str | None,
-    ticker: str | None,
-    scope: str | None,
-    run_id: str | None,
-    response_text: str | None = None,
-    meta: dict[str, object] | None = None,
-    error: str | None = None,
-    fallback_used: str | None = None,
-) -> None:
-    """Best-effort write of one row into llm_calls. Never raises.
-
-    On Claude success: pass the response_text + parsed CLI meta so usage/cost
-    fields populate. On failure: pass error= and leave response/meta None — the
-    ledger row still records the attempt and its latency. The fallback path
-    records a SECOND row with fallback_used='gemini'.
-    """
-    try:
-        from llm_call_ledger import (
-            LlmCallRecord,
-            record_call,
-            sha256_text,
-            usage_from_json_meta,
-        )
-
-        usage = usage_from_json_meta(meta) if meta else {}
-        record_call(
-            LlmCallRecord(
-                called_at=started_at,
-                model=model,
-                prompt_sha256=prompt_sha,
-                prompt_chars=prompt_chars,
-                elapsed_ms=elapsed_ms,
-                purpose=purpose,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                response_sha256=sha256_text(response_text) if response_text else None,
-                response_chars=len(response_text) if response_text else None,
-                input_tokens=cast("int | None", usage.get("input_tokens")),
-                cache_creation_input_tokens=cast(
-                    "int | None", usage.get("cache_creation_input_tokens")
-                ),
-                cache_read_input_tokens=cast(
-                    "int | None", usage.get("cache_read_input_tokens")
-                ),
-                output_tokens=cast("int | None", usage.get("output_tokens")),
-                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
-                fallback_used=fallback_used,
-                error=error,
-            )
-        )
-    except Exception as exc:  # ImportError, unexpected attribute errors, …
-        # Best-effort — the ledger module's record_call already swallows DB
-        # errors; this outer guard catches anything more exotic so the LLM call
-        # itself is never blocked by telemetry.
-        log.debug({"event": "llm_call_ledger_record_failed", "error": str(exc)})
+# Ledger writes moved to src/llm/ledger.py during the llm subpackage split.
+# Re-exported under the original leading-underscore names so internal callers
+# below (_call_claude, _try_gemini_fallback_logged, call_llm_with_web) keep
+# working without changes.
+from llm.ledger import fallback_call_logged as _try_gemini_fallback_logged  # noqa: E402
+from llm.ledger import record_llm_call as _record_to_ledger  # noqa: E402
 
 
 def _enforce_budget_pre_call(
@@ -486,60 +429,6 @@ def _call_claude(
             scope=scope,
             run_id=run_id,
         )
-
-
-def _try_gemini_fallback_logged(
-    prompt: str,
-    claude_error: Exception,
-    *,
-    prompt_sha: str,
-    purpose: str | None,
-    ticker: str | None,
-    scope: str | None,
-    run_id: str | None,
-) -> str:
-    """Wrap _try_gemini_fallback with its own ledger row.
-
-    Gemini's google-generativeai SDK doesn't surface per-call cost/token
-    counts in a stable shape, so the row records latency + response_chars
-    only; usage/cost stay NULL. That's still enough to track *how often*
-    fallback fires and how much latency it adds.
-    """
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-    try:
-        text = _try_gemini_fallback(prompt, claude_error)
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=GEMINI_FALLBACK_MODEL,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            response_text=text,
-            fallback_used="gemini",
-        )
-        return text
-    except Exception as gemini_err:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=GEMINI_FALLBACK_MODEL,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            error=f"{type(gemini_err).__name__}: {str(gemini_err)[:500]}",
-            fallback_used="gemini",
-        )
-        raise
 
 
 def call_llm(
