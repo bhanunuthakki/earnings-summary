@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pipeline.analytical_dashboard import (  # noqa: E402
     AnalyticalDashboard,
+    DecisionsPanel,
     InsiderEventRow,
     LlmBudgetPanel,
     LlmBudgetRow,
@@ -58,6 +59,7 @@ def render_html(dash: AnalyticalDashboard, *, generated_at: datetime) -> str:
         # Top of page: portfolio-wide synthesis when cached
         _portfolio_synthesis_section(dash.portfolio_synthesis_md),
         _per_ticker_reread_section(dash.per_ticker_reread),
+        _decisions_section(dash.decisions),
         _trigger_ladder_section(dash.trigger_ladder),
         _insider_events_section(dash.insider_events),
         _predictions_section(dash.prediction_outcomes),
@@ -65,6 +67,115 @@ def render_html(dash: AnalyticalDashboard, *, generated_at: datetime) -> str:
         _PAGE_FOOT,
     ]
     return "".join(parts)
+
+
+def _decisions_section(panel: DecisionsPanel) -> str:
+    """Recent decisions table + hit-rate strip + calibration strip.
+    Shows even when empty so the operator sees the panel exists."""
+    if not panel.recent and not panel.hit_rate_by_kind:
+        return (
+            '<section class="panel"><h2>Decisions (LLM recommendations · audit ledger)</h2>'
+            '<p class="muted">No decisions recorded yet. Extract from existing rereads via:</p>'
+            '<pre class="cli-hint">python execution/record_decisions.py</pre>'
+            "</section>"
+        )
+
+    out: list[str] = [
+        '<section class="panel"><h2>Decisions (LLM recommendations · audit ledger)</h2>',
+        '<p class="sub">Every five-min-reread recommendation extracted into a durable ledger. '
+        "Outcomes graded against realized price moves; calibration curve below.</p>",
+    ]
+
+    # Hit-rate strip — one card per kind, with correct% when graded
+    if panel.hit_rate_by_kind:
+        out.append('<div class="kpi-strip">')
+        for kind in sorted(panel.hit_rate_by_kind.keys()):
+            c = panel.hit_rate_by_kind[kind]
+            graded = c.get("correct", 0) + c.get("wrong", 0) + c.get("mixed", 0)
+            pending = c.get("pending", 0)
+            total = graded + pending
+            hit_rate = (100 * c.get("correct", 0) / graded) if graded > 0 else None
+            hit_str = f"{hit_rate:.0f}%" if hit_rate is not None else "—"
+            tone = (
+                "tone-good"
+                if hit_rate is not None and hit_rate >= 60
+                else "tone-warn"
+                if hit_rate is not None and hit_rate >= 40
+                else "tone-bad"
+                if hit_rate is not None
+                else "tone-muted"
+            )
+            out.append(
+                f'<div class="kpi-card {tone}">'
+                f'<div class="kpi-label">{escape(kind.upper())}</div>'
+                f'<div class="kpi-value">{hit_str}</div>'
+                f'<div class="kpi-sub">{graded} graded · {pending} pending · {total} total</div>'
+                "</div>"
+            )
+        out.append("</div>")
+
+    # Calibration sparkline — conviction bucket → correct%
+    if panel.calibration_by_conviction:
+        out.append(
+            '<h3 class="panel-h3">Calibration · correct% by stated conviction</h3>'
+        )
+        out.append('<div class="calib-strip">')
+        for conv in ("high", "medium", "low", "unstated"):
+            if conv not in panel.calibration_by_conviction:
+                continue
+            c = panel.calibration_by_conviction[conv]
+            graded = c.get("correct", 0) + c.get("wrong", 0) + c.get("mixed", 0)
+            hit = (100 * c.get("correct", 0) / graded) if graded > 0 else None
+            hit_str = f"{hit:.0f}%" if hit is not None else "—"
+            bar_width = int(hit) if hit is not None else 0
+            out.append(
+                '<div class="calib-row">'
+                f'<div class="calib-label">{escape(conv)}</div>'
+                f'<div class="calib-bar"><div class="calib-fill" style="width:{bar_width}%"></div></div>'
+                f'<div class="calib-value">{hit_str} ({graded})</div>'
+                "</div>"
+            )
+        out.append("</div>")
+
+    # Recent decisions table
+    if panel.recent:
+        out.append(
+            '<h3 class="panel-h3">Recent recommendations</h3>'
+            '<table class="decisions-table"><thead><tr>'
+            "<th>When</th><th>Ticker</th><th>Recommendation</th>"
+            '<th>Conviction</th><th class="num">Outcome %</th>'
+            "<th>Outcome</th></tr></thead><tbody>"
+        )
+        for d in panel.recent:
+            kind_label = d.recommendation_kind.upper()
+            if d.recommendation_value is not None:
+                kind_label = f"{kind_label} {d.recommendation_value:g}%"
+            outcome_tone = (
+                "outcome-correct"
+                if d.outcome_label == "correct"
+                else "outcome-wrong"
+                if d.outcome_label == "wrong"
+                else "outcome-mixed"
+                if d.outcome_label == "mixed"
+                else "outcome-pending"
+            )
+            pct_str = (
+                f"{d.outcome_pct * 100:+.1f}%" if d.outcome_pct is not None else "—"
+            )
+            out.append(
+                "<tr>"
+                f"<td>{escape(d.made_at[:10])}</td>"
+                f'<td><a href="../research/{escape(d.ticker)}/" class="ticker-link">{escape(d.ticker)}</a></td>'
+                f"<td>{escape(kind_label)}</td>"
+                f"<td>{escape(d.conviction or '—')}</td>"
+                f'<td class="num">{pct_str}</td>'
+                f'<td class="{outcome_tone}">{escape(d.outcome_label or "pending")}</td>'
+                "</tr>"
+            )
+        out.append("</tbody></table>")
+
+    out.append("</section>")
+    return "".join(out)
 
 
 def _llm_budget_section(panel: LlmBudgetPanel) -> str:
@@ -444,6 +555,27 @@ _PAGE_HEAD = """<!doctype html>
   .reread-body ul {{ padding-left: 18px; }}
   .reread-body hr {{ border: none; border-top: 1px solid #2a2c30; margin: 10px 0; }}
   .cli-hint {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px 12px; background: #1f2125; border-radius: 4px; color: #4ade80; overflow-x: auto; margin: 6px 0 0; }}
+  /* Decisions panel */
+  .panel-h3 {{ font-size: 14px; margin: 18px 0 8px; font-weight: 600; color: #f5f5f0; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.4px; }}
+  .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 12px; }}
+  .kpi-card {{ background: #1f2125; border: 1px solid #2a2c30; border-radius: 6px; padding: 10px 12px; text-align: center; }}
+  .kpi-card.tone-good {{ border-left: 3px solid #4ade80; }}
+  .kpi-card.tone-warn {{ border-left: 3px solid #fbbf24; }}
+  .kpi-card.tone-bad {{ border-left: 3px solid #f87171; }}
+  .kpi-card.tone-muted {{ border-left: 3px solid #555; }}
+  .kpi-label {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; letter-spacing: 0.5px; }}
+  .kpi-value {{ font-size: 22px; font-weight: 700; margin: 2px 0; color: #f5f5f0; }}
+  .kpi-sub {{ font-size: 10px; color: #777; font-family: 'JetBrains Mono', monospace; }}
+  .calib-strip {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }}
+  .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: 12px; }}
+  .calib-label {{ font-family: 'JetBrains Mono', monospace; color: #aaa; text-transform: uppercase; }}
+  .calib-bar {{ background: #1f2125; border-radius: 3px; height: 14px; overflow: hidden; }}
+  .calib-fill {{ background: linear-gradient(90deg, #f87171 0%, #fbbf24 50%, #4ade80 100%); height: 100%; }}
+  .calib-value {{ font-family: 'JetBrains Mono', monospace; color: #ccc; text-align: right; }}
+  .decisions-table td.outcome-correct {{ color: #4ade80; }}
+  .decisions-table td.outcome-wrong {{ color: #f87171; }}
+  .decisions-table td.outcome-mixed {{ color: #fbbf24; }}
+  .decisions-table td.outcome-pending {{ color: #888; }}
   /* LLM budget panel */
   .budget-table td code {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #f5f5f0; background: transparent; padding: 0; }}
   .burn-cell {{ width: 200px; padding: 6px 10px; }}
@@ -499,6 +631,7 @@ def main() -> int:
     print(
         f"  trigger_ladder={len(dash.trigger_ladder)} insider_events={len(dash.insider_events)} "
         f"prediction_outcomes={len(dash.prediction_outcomes)} "
+        f"decisions={len(dash.decisions.recent)} "
         f"llm_budgets={len(dash.llm_budgets.rows)}"
     )
     return 0
