@@ -55,6 +55,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 # Import the canonical endpoint catalog from save_fmp_data so audit knows
 # what's expected per ticker. save_fmp_data is the source of truth.
 import save_fmp_data as fmp_save  # noqa: E402
+from pipeline import cadence_policy as _cadence_policy  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 CACHE_DIR = PROJECT_ROOT / ".tmp" / "cacher"
@@ -171,12 +172,16 @@ _ENDPOINT_CLASSES: list[tuple[str, str]] = [
 
 # Cadence multipliers per endpoint class. 1.0 = use list_type default freshness;
 # >1.0 = stays fresh longer (e.g. quarterly statements don't need daily refresh).
+# The numeric values mirror src/pipeline/cadence_policy.py — for portfolio +
+# watchlist (base = 24h = 1d), `mult` equals the freshness in days, so
+# statement=14.0 here matches STATEMENT_STALE_DAYS=14 there. Update both
+# when editing the policy.
 _CLASS_CADENCE_MULT: dict[str, float] = {
-    "time_sensitive": 1.0,    # daily on portfolio/watchlist
-    "growth":         3.0,    # 3x base = 3 days for portfolio
-    "segment":        14.0,   # quarterly with earnings
-    "statement":      14.0,   # quarterly with earnings
-    "reference":      30.0,   # rarely changes
+    "time_sensitive": float(_cadence_policy.TIME_SENSITIVE_STALE_DAYS),
+    "growth":         float(_cadence_policy.GROWTH_STALE_DAYS),
+    "segment":        float(_cadence_policy.STATEMENT_STALE_DAYS),
+    "statement":      float(_cadence_policy.STATEMENT_STALE_DAYS),
+    "reference":      float(_cadence_policy.REFERENCE_STALE_DAYS),
 }
 
 _CLASS_PRIORITY_WEIGHT: dict[str, int] = {
