@@ -1,16 +1,21 @@
 """
 src/llm_client.py
 -----------------
-LLM client for the earnings-summary pipeline. Two-tier execution:
+LLM client for the earnings-summary pipeline. Per-purpose prompt-bearing
+generators (generate_summary, generate_thesis_update, generate_bear_case,
+classify_intake_document, …) and the prompt-rendering constants they share.
 
-  PRIMARY: Claude Code CLI (``claude -p``) via subprocess. The CLI honors
-  whichever auth is configured in the environment — ``ANTHROPIC_API_KEY`` for
-  metered API billing, or ``claude auth login`` for a Pro/Max subscription.
+The runtime plumbing — Claude CLI subprocess wiring, Gemini fallback policy,
+ledger writes, anchor block builders — was extracted to the ``src/llm/``
+subpackage during the split. Public names are re-exported below so every
+caller in ``execution/``, ``src/compute/``, ``src/report/sections/``, etc.
+keeps working with the existing ``from llm_client import X`` pattern.
 
-  FALLBACK: Gemini via google-generativeai. Fires automatically when the Claude
-  CLI call fails (timeout, non-zero exit, empty output, binary missing).
-  Per-call cost on Gemini Flash is sub-penny; the fallback prevents single-ticker
-  failures from blocking batch runs.
+Architecture after the split:
+  src/llm/anchors.py  — load_thesis_anchor / load_bear_anchor / compose
+  src/llm/fallback.py — Gemini fallback (try_gemini_fallback) + policy
+  src/llm/cli.py      — Claude CLI subprocess + call_llm + budget enforcement
+  src/llm/ledger.py   — best-effort llm_calls ledger writes
 
 Setup (one-time, user action required):
 1. Install Claude Code CLI: see https://code.claude.com/docs/en/setup
@@ -25,132 +30,116 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import shutil
-import sqlite3
-import subprocess
-import time
 
-# NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
-# is `google-genai` with a different API (genai.Client / client.models.generate_content).
-# Migrate when convenient — the deprecated package still works and avoids forcing
-# users to re-install for the fallback path. See:
-# https://github.com/google-gemini/deprecated-generative-ai-python
-import warnings
-from datetime import UTC, date, datetime
-from pathlib import Path
-from typing import cast
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
-    import google.generativeai as genai
+# `subprocess` is intentionally imported here (and not used directly in this
+# module after the split) because the existing budget integration test
+# monkeypatches `llm_client.subprocess.run`. Removing the import breaks that
+# patch surface; keep the import bound to the module attribute.
+import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from datetime import date
 
 from dotenv import load_dotenv
 
-# Phase 0 ledger (migration 0034). Records one row per LLM call with cost +
-# token usage + cache stats. Best-effort: failures here never break the LLM
-# call. Imported lazily inside _call_claude so this module stays importable in
-# environments without the ledger module (e.g. unrelated scratch scripts).
+# ---------------------------------------------------------------------------
+# Re-exports from the src/llm/ submodules
+# ---------------------------------------------------------------------------
+# Every public name the original src/llm_client.py exposed is re-exported here
+# so all ~30 import sites in execution/, src/compute/, src/report/sections/,
+# src/report/renderers/, src/bear_case_grader, src/decision_extractor,
+# src/intake, src/parser, src/synthesis_lenses, src/table_extractors/* and
+# the test suite continue to work without modification.
+#
+# The `from X import Y as Y` pattern signals intentional re-export so neither
+# ruff nor pyright flags these as unused imports. For the four legacy private
+# names that have been intentionally aliased (the `_gemini_fallback_disabled`,
+# `_try_gemini_fallback`, `_try_gemini_fallback_logged`, `_record_to_ledger`
+# names that pre-split callers may import) the rename forces an explicit
+# unused-import suppression.
+#
+# Note: `_setup_verified` and `_claude_cli_path` are NOT re-exports — they
+# stay defined as live module-level globals below because the existing
+# budget-integration test monkeypatches them via `llm_client.<name>` and the
+# patch must hit the same storage that cli.py's late-import reads.
+from llm.anchors import (
+    ANCHOR_BLOCK_CHAR_CAP as ANCHOR_BLOCK_CHAR_CAP,
+)
+from llm.anchors import (
+    compose_anchor_block as compose_anchor_block,
+)
+from llm.anchors import (
+    load_bear_anchor as load_bear_anchor,
+)
+from llm.anchors import (
+    load_thesis_anchor as load_thesis_anchor,
+)
+from llm.cli import (
+    CLAUDE_WEB_TIMEOUT_SECONDS as CLAUDE_WEB_TIMEOUT_SECONDS,
+)
+from llm.cli import (
+    CLAUDE_WEB_TOOLS as CLAUDE_WEB_TOOLS,
+)
+from llm.cli import (
+    DEFAULT_MODEL as DEFAULT_MODEL,
+)
+from llm.cli import (
+    DEFAULT_TIMEOUT_SECONDS as DEFAULT_TIMEOUT_SECONDS,
+)
+from llm.cli import (
+    FAST_CLASSIFIER_MODEL as FAST_CLASSIFIER_MODEL,
+)
+from llm.cli import (
+    LLM_MODELS as LLM_MODELS,
+)
+from llm.cli import (
+    LLMBudgetExceeded as LLMBudgetExceeded,
+)
+from llm.cli import (
+    _call_claude as _call_claude,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _enforce_budget_pre_call as _enforce_budget_pre_call,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _model_for as _model_for,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _verify_setup_once as _verify_setup_once,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    call_llm as call_llm,
+)
+from llm.cli import (
+    call_llm_with_web as call_llm_with_web,
+)
+from llm.fallback import (
+    GEMINI_FALLBACK_MODEL as GEMINI_FALLBACK_MODEL,
+)
+from llm.fallback import (
+    is_fallback_disabled as _gemini_fallback_disabled,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.fallback import (
+    try_gemini_fallback as _try_gemini_fallback,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.ledger import (
+    fallback_call_logged as _try_gemini_fallback_logged,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.ledger import (
+    record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
-# Load .env at module init so GEMINI_API_KEY is available without callers having to
-# import dotenv themselves. Silent no-op if .env doesn't exist.
+# Load .env at module init so GEMINI_API_KEY is available without callers having
+# to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
+# import path (`from llm_client import ...`) still triggers this, preserving the
+# pre-split behavior where fallback.py / cli.py find env vars populated. Runs
+# AFTER the re-exports above because those don't actually read env vars at
+# import time — env reads happen lazily inside functions.
 load_dotenv()
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS
 # mode (different scorecard columns + conviction cap).
 STALE_CORPUS_THRESHOLD_DAYS = 120
-
-# Default Claude model for prompt calls. Sonnet 4.6 chosen as a balance of
-# quality and speed across the pipeline's tasks. Per-function overrides via
-# the `model` argument on _call_claude or by adding the purpose to LLM_MODELS.
-DEFAULT_MODEL = "claude-sonnet-4-6"
-
-# Fast classifier model — used for short, structured calls (intake doc-type
-# classification, transcript metadata extraction, batch extractors) where
-# Sonnet would be overkill. Haiku 4.5 returns ~5x faster at materially the
-# same quality on narrowly-scoped JSON-output tasks.
-FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
-
-# Per-purpose model selection. Every public generator below should resolve its
-# model via _model_for(purpose) so retuning one section doesn't require touching
-# the call site. Keys are stable strings; values are model identifiers Claude
-# CLI accepts. Adding a new entry here is the only change needed to retune a
-# section's quality/latency tradeoff.
-#
-# Rationale per entry:
-#   sonnet (default): long-context analysis where reasoning matters
-#       (transcript summary, thesis tracker, bear case, strategic compare).
-#   haiku (FAST_CLASSIFIER_MODEL): short, structured, often-batched calls
-#       where latency dominates and the task is narrowly scoped
-#       (intake classification, per-line entity extraction).
-LLM_MODELS: dict[str, str] = {
-    # Long-context analytical writing
-    "transcript_summary": DEFAULT_MODEL,
-    "press_release_summary": DEFAULT_MODEL,
-    "presentation_brief": DEFAULT_MODEL,
-    "pairwise_analysis": DEFAULT_MODEL,
-    "strategic_analysis": DEFAULT_MODEL,
-    "thesis_pass_a": DEFAULT_MODEL,
-    "thesis_pass_b": DEFAULT_MODEL,
-    "bear_case": DEFAULT_MODEL,
-    "event_brief": DEFAULT_MODEL,
-    # Investor-deck extraction: long-context structured-output. Decks run
-    # ~30-60 pages of dense slide content; Sonnet's reasoning is needed to
-    # distinguish forward-looking commitments from historical recap and to
-    # bucket each target into the right `target_kind` enum value. Haiku
-    # under-counted on this task in scratch experimentation.
-    "investor_deck_extraction": DEFAULT_MODEL,
-    # Company description is the analytical spine of the memo — Opus follows
-    # nuanced instruction-following ("don't write Wikipedia-style", "anchor
-    # on thesis pillars") far better than Sonnet on this kind of writeup
-    # where the model has a strong prior toward corporate boilerplate.
-    "company_description": "claude-opus-4-7",
-    # Platform diagram is a narrowly-scoped JSON-output task (one diagram
-    # string + one caption string). Sonnet was taking 6-20 min per call and
-    # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
-    "platform_diagram": FAST_CLASSIFIER_MODEL,
-    "qa_topics": DEFAULT_MODEL,
-    "saydo_filter": DEFAULT_MODEL,
-    # Valuation multiple selection is a sector/business-model judgment that
-    # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
-    # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call
-    # per ticker, cached on disk — cost is bounded.
-    "valuation_basis": "claude-opus-4-7",
-    # SayDo importance ordering — judgmental sort across many commitments,
-    # benefits from Opus's stronger ranking discipline.
-    "saydo_importance": "claude-opus-4-7",
-    # Short, structured, batch — Haiku for latency
-    "intake_classifier": FAST_CLASSIFIER_MODEL,
-    "transcript_metadata": FAST_CLASSIFIER_MODEL,
-    "market_signals": FAST_CLASSIFIER_MODEL,
-    "patent_timeline": FAST_CLASSIFIER_MODEL,
-}
-
-
-def _model_for(purpose: str) -> str:
-    """Resolve a purpose key to a model id. Unknown purposes fall back to
-    DEFAULT_MODEL so a missing entry doesn't crash the pipeline — but the
-    fallback is logged so the gap surfaces in observability."""
-    model = LLM_MODELS.get(purpose)
-    if model is None:
-        log.warning(
-            {
-                "event": "llm_model_purpose_unknown",
-                "purpose": purpose,
-                "fallback": DEFAULT_MODEL,
-            }
-        )
-        return DEFAULT_MODEL
-    return model
-
-
-# Default per-call timeout (seconds). Long-context thesis prompts can take
-# a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
-# leaves headroom for the heaviest cases (4-quarter ticker × dense schema)
-# while still catching CLI hangs in a reasonable wall time.
-DEFAULT_TIMEOUT_SECONDS = 1200
 
 # Schema fields stripped from the LLM prompt — they are audit-trail metadata
 # meant for the human reviewer (why a schema was edited, when it was last
@@ -174,909 +163,21 @@ JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 # Gemini-Flash budget; well under any Claude model's context.
 INTAKE_TEXT_BUDGET = 6000
 
-# Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
-# and light (intake classifier) workloads — quality is good enough for backup
-# duty and per-call cost is sub-penny. Override per-call by passing a custom
-# model to _try_gemini_fallback if needed.
-GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
-
 log = logging.getLogger(__name__)
 
 
-class LLMBudgetExceeded(RuntimeError):
-    """Raised by `_call_claude` when the per-purpose monthly cap is at/over
-    AND the budget row has hard_block=True. Callers can catch this to
-    degrade gracefully (skip the section, write a stub, queue for next
-    month). Soft caps do NOT raise — they log a warning and the call
-    proceeds. See src/llm_budget.py for the enforcement details.
-
-    Attaches the failing BudgetCheck so structured callers can surface
-    spend / cap / headroom without re-running the check.
-    """
-
-    def __init__(self, message: str, *, check: object | None = None) -> None:
-        super().__init__(message)
-        self.check = check
-
-
+# Claude CLI path resolution state. `_setup_verified` / `_claude_cli_path`
+# INTENTIONALLY live on this module so the existing test monkeypatch surface
+# keeps working without test changes:
+#
+#     monkeypatch.setattr(llm_client, "_setup_verified", True)
+#     monkeypatch.setattr(llm_client, "_claude_cli_path", r"C:\fake\claude.cmd")
+#
+# cli.py's _verify_setup_once and _call_claude reach into this module via a
+# late ``import llm_client`` to read/write these globals — that's why the
+# re-exports above name _verify_setup_once but the state stays here.
 _setup_verified: bool = False
 _claude_cli_path: str | None = None
-
-
-def _verify_setup_once() -> None:
-    """Resolve and cache the absolute path to the ``claude`` binary on first call.
-
-    Windows-specific: bare ``"claude"`` fails because the npm-installed binary
-    is ``claude.cmd`` and Python's subprocess doesn't apply PATHEXT to bare
-    names. Cached so repeat calls in a long-running batch are free.
-    """
-    global _setup_verified, _claude_cli_path
-    if _setup_verified:
-        return
-    resolved = shutil.which("claude")
-    if resolved is None:
-        raise RuntimeError(
-            "Claude Code CLI ('claude') not found in PATH. Install it from "
-            "https://code.claude.com/docs/en/setup, then either set "
-            "ANTHROPIC_API_KEY in your shell / .env or run `claude auth login`."
-        )
-    _claude_cli_path = resolved
-    _setup_verified = True
-
-
-def _gemini_fallback_disabled() -> bool:
-    """Returns True when the operator has explicitly disabled the Gemini
-    fallback via ``LLM_FALLBACK_DISABLED=1`` in the environment.
-
-    Use case: the user has an invalid GEMINI_API_KEY they don't want to
-    delete (so the multi-provider architecture stays documented + revivable)
-    but they don't want the system to waste time / log errors trying it on
-    every Claude failure. Setting LLM_FALLBACK_DISABLED=1 short-circuits the
-    fallback path: a Claude failure propagates as a clean RuntimeError that
-    names the Claude root cause, without a misleading Gemini auth error
-    attached.
-
-    To re-enable: unset the env var (or set it to 0/false), refresh the key.
-    """
-    v = (os.environ.get("LLM_FALLBACK_DISABLED") or "").strip().lower()
-    return v in {"1", "true", "yes", "on"}
-
-
-def _try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
-    """
-    Last-resort Gemini call invoked when the Claude CLI fails operationally
-    (timeout, non-zero exit, empty stdout, binary missing). Reads GEMINI_API_KEY
-    (or GOOGLE_API_KEY) from the environment — populated by load_dotenv() at
-    module init.
-
-    Three exit paths:
-      1. ``LLM_FALLBACK_DISABLED=1`` — fallback explicitly disabled by operator.
-         Raises a clean RuntimeError naming only the Claude failure (no
-         misleading Gemini error attached). Use this when the Gemini key is
-         known-invalid or fallback is unwanted for any reason.
-      2. No key configured at all — same RuntimeError but with setup hint.
-      3. Key configured + fallback enabled — fire the Gemini call. If Gemini
-         itself errors (bad key, quota, etc.), the exception propagates and
-         the caller's ledger writer records it.
-
-    Setup-class Claude errors (``claude`` binary missing) are NOT routed here —
-    they propagate from ``_verify_setup_once()`` before the subprocess call
-    ever runs.
-    """
-    if _gemini_fallback_disabled():
-        log.info(
-            {
-                "event": "claude_cli_failed_fallback_disabled",
-                "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
-                "fallback_state": "disabled_by_env",
-            }
-        )
-        raise RuntimeError(
-            f"Claude CLI failed and Gemini fallback is disabled "
-            f"(LLM_FALLBACK_DISABLED=1).\n"
-            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}"
-        ) from claude_error
-
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "Claude CLI failed AND no Gemini fallback configured. "
-            f"Original Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}\n"
-            "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path "
-            "(or set LLM_FALLBACK_DISABLED=1 to explicitly opt out)."
-        ) from claude_error
-
-    log.warning(
-        {
-            "event": "claude_cli_failed_falling_back_to_gemini",
-            "claude_error": f"{type(claude_error).__name__}: {str(claude_error)[:200]}",
-            "gemini_model": GEMINI_FALLBACK_MODEL,
-        }
-    )
-    genai.configure(api_key=api_key)
-    model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
-    response = model_obj.generate_content(prompt)
-    text = (response.text or "").strip() if hasattr(response, "text") else ""
-    if not text:
-        raise RuntimeError(
-            "Both LLMs failed: Claude CLI errored AND Gemini fallback returned empty response.\n"
-            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:200]}"
-        ) from claude_error
-    log.info({"event": "gemini_fallback_done", "response_chars": len(text)})
-    return text
-
-
-def _record_to_ledger(
-    *,
-    started_at: datetime,
-    elapsed_ms: int,
-    model: str,
-    prompt_sha: str,
-    prompt_chars: int,
-    purpose: str | None,
-    ticker: str | None,
-    scope: str | None,
-    run_id: str | None,
-    response_text: str | None = None,
-    meta: dict[str, object] | None = None,
-    error: str | None = None,
-    fallback_used: str | None = None,
-) -> None:
-    """Best-effort write of one row into llm_calls. Never raises.
-
-    On Claude success: pass the response_text + parsed CLI meta so usage/cost
-    fields populate. On failure: pass error= and leave response/meta None — the
-    ledger row still records the attempt and its latency. The fallback path
-    records a SECOND row with fallback_used='gemini'.
-    """
-    try:
-        from llm_call_ledger import (
-            LlmCallRecord,
-            record_call,
-            sha256_text,
-            usage_from_json_meta,
-        )
-
-        usage = usage_from_json_meta(meta) if meta else {}
-        record_call(
-            LlmCallRecord(
-                called_at=started_at,
-                model=model,
-                prompt_sha256=prompt_sha,
-                prompt_chars=prompt_chars,
-                elapsed_ms=elapsed_ms,
-                purpose=purpose,
-                ticker=ticker,
-                scope=scope,
-                run_id=run_id,
-                response_sha256=sha256_text(response_text) if response_text else None,
-                response_chars=len(response_text) if response_text else None,
-                input_tokens=cast("int | None", usage.get("input_tokens")),
-                cache_creation_input_tokens=cast(
-                    "int | None", usage.get("cache_creation_input_tokens")
-                ),
-                cache_read_input_tokens=cast(
-                    "int | None", usage.get("cache_read_input_tokens")
-                ),
-                output_tokens=cast("int | None", usage.get("output_tokens")),
-                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
-                fallback_used=fallback_used,
-                error=error,
-            )
-        )
-    except Exception as exc:  # ImportError, unexpected attribute errors, …
-        # Best-effort — the ledger module's record_call already swallows DB
-        # errors; this outer guard catches anything more exotic so the LLM call
-        # itself is never blocked by telemetry.
-        log.debug({"event": "llm_call_ledger_record_failed", "error": str(exc)})
-
-
-def _enforce_budget_pre_call(
-    purpose: str | None, *, force_budget_bypass: bool
-) -> None:
-    """Pre-call hook: consult llm_budget.check_budget for `purpose` and:
-
-      * raise LLMBudgetExceeded when over a hard-block cap,
-      * log a warning + proceed when over a soft cap,
-      * log a warning + record a one-shot alert at the 80% threshold.
-
-    Best-effort throughout — any unexpected error in the budget module
-    is swallowed (we'd rather over-spend by one call than block the
-    pipeline because of a budget bug). `force_budget_bypass=True` skips
-    the check entirely for CLI tools that need to override.
-    """
-    if force_budget_bypass or purpose is None:
-        return
-    try:
-        from llm_budget import check_budget, record_alert
-
-        check = check_budget(purpose)
-    except Exception as exc:
-        log.debug(
-            {
-                "event": "llm_budget_check_skipped",
-                "purpose": purpose,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-        )
-        return
-    if not check.allowed:
-        if check.hard_block:
-            log.warning(
-                {
-                    "event": "llm_budget_hard_block",
-                    "purpose": purpose,
-                    "spend_usd": str(check.current_spend),
-                    "cap_usd": str(check.cap),
-                    "reason": check.reason,
-                }
-            )
-            raise LLMBudgetExceeded(
-                check.reason or f"{purpose}: monthly cap exceeded", check=check
-            )
-        log.warning(
-            {
-                "event": "llm_budget_soft_cap_exceeded",
-                "purpose": purpose,
-                "spend_usd": str(check.current_spend),
-                "cap_usd": str(check.cap),
-                "reason": check.reason,
-            }
-        )
-        try:
-            record_alert(purpose, 1.0, check.current_spend)
-        except Exception:
-            pass
-    if check.warn:
-        log.warning(
-            {
-                "event": "llm_budget_warn_threshold",
-                "purpose": purpose,
-                "spend_usd": str(check.current_spend),
-                "cap_usd": str(check.cap),
-                "headroom_pct": check.headroom_pct,
-                "reason": check.reason,
-            }
-        )
-        try:
-            record_alert(purpose, 0.80, check.current_spend)
-        except Exception:
-            pass
-
-
-def _call_claude(
-    prompt: str,
-    model: str = DEFAULT_MODEL,
-    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-    *,
-    purpose: str | None = None,
-    ticker: str | None = None,
-    scope: str | None = None,
-    run_id: str | None = None,
-    force_budget_bypass: bool = False,
-) -> str:
-    """
-    Single-shot LLM call. Tries the Claude Code CLI first. On any operational
-    failure — timeout, non-zero exit, empty output, malformed JSON envelope,
-    or the binary becoming unavailable mid-run — falls back to Gemini Flash if
-    ``GEMINI_API_KEY`` is available in the environment.
-
-    Setup errors (``claude`` binary missing on first call) raise RuntimeError
-    directly without invoking the fallback — that needs to be fixed by the
-    operator, not papered over.
-
-    Prompts are passed via stdin to avoid Windows CreateProcess command-line
-    length limits (32K). Output is ``--output-format json`` so the wrapper can
-    capture token usage + Anthropic-computed cost for the llm_calls ledger.
-
-    The optional ``purpose``/``ticker``/``scope``/``run_id`` arguments are
-    pass-through metadata for the ledger — they have no effect on the LLM call
-    itself but enable cost-attribution queries downstream.
-
-    Pre-call budget enforcement: when ``purpose`` is set, consults
-    ``llm_budget.check_budget`` and raises ``LLMBudgetExceeded`` if the
-    per-purpose monthly cap is at/over with hard_block=True. Pass
-    ``force_budget_bypass=True`` to skip the check (CLI escape hatch).
-    """
-    _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
-    _verify_setup_once()  # setup errors propagate; do NOT route to fallback
-    assert _claude_cli_path is not None  # set by _verify_setup_once when it returns successfully
-    log.info(
-        {
-            "event": "llm_call_start",
-            "model": model,
-            "prompt_chars": len(prompt),
-            "purpose": purpose,
-        }
-    )
-
-    from llm_call_ledger import parse_claude_json_output, sha256_text
-
-    prompt_sha = sha256_text(prompt)
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-    try:
-        result = subprocess.run(
-            [_claude_cli_path, "-p", "--model", model, "--output-format", "json"],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
-            errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
-            check=True,
-            timeout=timeout_seconds,
-        )
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        # Parse the JSON envelope. ValueError when malformed → caught below
-        # and routed through the Gemini fallback (same as a CLI failure).
-        text, meta = parse_claude_json_output(result.stdout.strip())
-        text = text.strip()
-        if not text:
-            raise RuntimeError(
-                f"claude -p returned empty `result`. stderr: {result.stderr.strip()[:200]}"
-            )
-        log.info({"event": "llm_call_done", "response_chars": len(text)})
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            response_text=text,
-            meta=meta,
-        )
-        return text
-    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            error=f"{type(claude_error).__name__}: {str(claude_error)[:500]}",
-        )
-        # Operational failure — try Gemini fallback. _try_gemini_fallback raises
-        # if no Gemini key is configured, surfacing both errors together. The
-        # fallback writes its own ledger row tagged fallback_used='gemini'.
-        return _try_gemini_fallback_logged(
-            prompt,
-            claude_error,
-            prompt_sha=prompt_sha,
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-        )
-
-
-def _try_gemini_fallback_logged(
-    prompt: str,
-    claude_error: Exception,
-    *,
-    prompt_sha: str,
-    purpose: str | None,
-    ticker: str | None,
-    scope: str | None,
-    run_id: str | None,
-) -> str:
-    """Wrap _try_gemini_fallback with its own ledger row.
-
-    Gemini's google-generativeai SDK doesn't surface per-call cost/token
-    counts in a stable shape, so the row records latency + response_chars
-    only; usage/cost stay NULL. That's still enough to track *how often*
-    fallback fires and how much latency it adds.
-    """
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-    try:
-        text = _try_gemini_fallback(prompt, claude_error)
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=GEMINI_FALLBACK_MODEL,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            response_text=text,
-            fallback_used="gemini",
-        )
-        return text
-    except Exception as gemini_err:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=GEMINI_FALLBACK_MODEL,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            error=f"{type(gemini_err).__name__}: {str(gemini_err)[:500]}",
-            fallback_used="gemini",
-        )
-        raise
-
-
-def call_llm(
-    prompt: str,
-    *,
-    purpose: str | None = None,
-    model: str | None = None,
-    timeout_seconds: int | None = None,
-    ticker: str | None = None,
-    scope: str | None = None,
-    run_id: str | None = None,
-    force_budget_bypass: bool = False,
-) -> str:
-    """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
-    this repo — including from `execution/` scripts, `src/report/sections/`, and
-    anywhere else that needs a Claude-then-Gemini-fallback round-trip.
-
-    Direct use of `google.generativeai`, the `anthropic` SDK, or any other
-    provider client is forbidden outside this module's fallback wiring; route
-    through call_llm so retunes (model swap, timeout change, billing change,
-    fallback policy) happen in one place.
-
-    Args:
-        prompt: The fully-rendered prompt text.
-        purpose: Logical key for model selection (see LLM_MODELS). Required
-            for new code; the explicit `model` arg overrides it when both
-            are passed (escape hatch for one-off retunes during debugging).
-        model: Explicit Claude model id. If neither purpose nor model is set,
-            falls back to DEFAULT_MODEL with a warning log.
-        timeout_seconds: Per-call timeout. None = DEFAULT_TIMEOUT_SECONDS.
-        ticker: Optional ticker for ledger attribution. Set when the call is
-            scoped to a single name; helps cost queries break out by ticker.
-        scope: Optional analytical scope for the ledger (e.g. 'portfolio',
-            'segment:cloud'). Free-form; aggregated in the spend report.
-        run_id: Optional grouping key — typically a uuid4 hex per logical
-            refresh (one build_artifacts invocation, one daily cron) so the
-            spend report can show "this run cost $X across N calls".
-        force_budget_bypass: When True, skip the per-purpose budget check
-            entirely. Use sparingly — CLI tools that need to force a refresh
-            past a hard cap should pass this. Soft caps log+proceed anyway,
-            so this is only meaningful when the cap is hard-blocked.
-    """
-    if model is None:
-        if purpose is None:
-            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
-            resolved_model = DEFAULT_MODEL
-        else:
-            resolved_model = _model_for(purpose)
-    else:
-        resolved_model = model
-    return _call_claude(
-        prompt,
-        model=resolved_model,
-        timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
-        purpose=purpose,
-        ticker=ticker,
-        scope=scope,
-        run_id=run_id,
-        force_budget_bypass=force_budget_bypass,
-    )
-
-
-# Web-search-enabled call: same subprocess as _call_claude but with the
-# Claude CLI's --allowedTools flag turned on so the model can run WebSearch
-# / WebFetch as part of producing its answer. Used by the memo generator
-# for the "Recent Developments" section so memos cite real news URLs
-# instead of leaning on a stale FMP news pre-pull.
-CLAUDE_WEB_TOOLS = "WebSearch WebFetch"
-CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
-
-
-def call_llm_with_web(
-    prompt: str,
-    model: str = DEFAULT_MODEL,
-    timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
-    *,
-    purpose: str | None = None,
-    ticker: str | None = None,
-    scope: str | None = None,
-    run_id: str | None = None,
-    force_budget_bypass: bool = False,
-) -> str:
-    """LLM call with Claude WebSearch + WebFetch tools enabled.
-
-    Setup invariants are the same as `_call_claude` (subscription billing
-    via the CLI, UTF-8, stdin prompt, JSON output for ledger capture). On
-    Claude failure, falls through to plain `_call_claude` (which has its
-    own Gemini fallback) so a memo is always produced even when web tools
-    are unavailable.
-
-    Use for memo generation, fact-finding on recent news, anything where
-    the upstream context is stale and Claude needs to look something up.
-
-    Same per-purpose budget enforcement as `_call_claude`; pass
-    ``force_budget_bypass=True`` to skip the check.
-    """
-    _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
-    _verify_setup_once()
-    assert _claude_cli_path is not None
-    log.info(
-        {
-            "event": "llm_web_call_start",
-            "model": model,
-            "prompt_chars": len(prompt),
-            "purpose": purpose,
-        }
-    )
-
-    from llm_call_ledger import parse_claude_json_output, sha256_text
-
-    prompt_sha = sha256_text(prompt)
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-    cmd = [
-        _claude_cli_path,
-        "-p",
-        "--model",
-        model,
-        "--output-format",
-        "json",
-        "--allowedTools",
-        *CLAUDE_WEB_TOOLS.split(),
-    ]
-    try:
-        result = subprocess.run(
-            cmd,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=True,
-            timeout=timeout_seconds,
-        )
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        text, meta = parse_claude_json_output(result.stdout.strip())
-        text = text.strip()
-        if not text:
-            raise RuntimeError(
-                f"claude -p with web tools returned empty `result`. stderr: {result.stderr.strip()[:200]}"
-            )
-        log.info({"event": "llm_web_call_done", "response_chars": len(text)})
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope or "web",
-            run_id=run_id,
-            response_text=text,
-            meta=meta,
-        )
-        return text
-    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as web_err:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        _record_to_ledger(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope or "web",
-            run_id=run_id,
-            error=f"{type(web_err).__name__}: {str(web_err)[:500]}",
-        )
-        log.warning(
-            {
-                "event": "llm_web_call_fallback_to_plain",
-                "error": f"{type(web_err).__name__}: {web_err}",
-            }
-        )
-        # Fall through to non-web path so the caller still gets output. The
-        # plain _call_claude path records its own ledger row(s).
-        return _call_claude(
-            prompt,
-            model=model,
-            timeout_seconds=timeout_seconds,
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Thesis / bear-case anchor blocks — shared context for analytical prompts
-# ---------------------------------------------------------------------------
-#
-# Several prompts (per-quarter summary, pairwise SayDo, recent developments,
-# SayDo filter, event brief) promise "thesis-anchored analysis" but currently
-# have no thesis on hand. These helpers pull two small blocks of context that
-# can be appended to those prompts so the LLM has the pillars / KPIs / break
-# rules / non-consensus risks to anchor against. Both helpers are tolerant:
-# missing files → empty string, so watchlist/evaluation tickers (no thesis,
-# no cached bear case) still work and the prompt shape is unchanged.
-
-# Hard cap on the assembled anchor blocks so a verbose holdings JSON cannot
-# blow the prompt budget on any single prompt. Trim is deterministic
-# (truncation at the section boundary), not a smart compressor.
-ANCHOR_BLOCK_CHAR_CAP = 3500
-
-_HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
-_BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
-
-
-def _load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | None:
-    """Read ``micro_thesis/holdings/<TICKER>.json`` defensively. Returns None
-    for any read or parse failure so callers degrade to no-anchor mode."""
-    path = repo_root.joinpath(*_HOLDINGS_DIRNAME) / f"{ticker.upper()}.json"
-    if not path.exists():
-        return None
-    try:
-        return cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _kpi_anchor_lines(payload: dict[str, object]) -> list[str]:
-    """Render `tier_1_kpis` as one-line bullets: name + break condition."""
-    raw = payload.get("tier_1_kpis")
-    if not isinstance(raw, list):
-        return []
-    lines: list[str] = []
-    for entry in cast("list[object]", raw):
-        if not isinstance(entry, dict):
-            continue
-        e = cast("dict[str, object]", entry)
-        name = e.get("name")
-        bc = e.get("break_condition")
-        if not isinstance(name, str) or not name.strip():
-            continue
-        bc_text = bc.strip() if isinstance(bc, str) and bc.strip() else "—"
-        lines.append(f"- **{name.strip()}** — breaks if {bc_text}")
-    return lines
-
-
-def _business_rule_anchor_lines(payload: dict[str, object]) -> list[str]:
-    """Render quantitative `business_model_rules` as scannable bullets."""
-    raw = payload.get("business_model_rules")
-    if not isinstance(raw, list):
-        return []
-    lines: list[str] = []
-    for entry in cast("list[object]", raw):
-        if not isinstance(entry, dict):
-            continue
-        e = cast("dict[str, object]", entry)
-        narrative = e.get("narrative")
-        if isinstance(narrative, str) and narrative.strip():
-            lines.append(f"- {narrative.strip()}")
-    return lines
-
-
-# Canonical financial line items always worth statistically profiling — the
-# Week-1 time-series layer runs detect_trend + detect_inflection on these
-# so the LLM sees the numerical read, not just the raw rows. Stays a small
-# fixed set so the anchor block doesn't balloon; per-ticker tier-1 KPIs
-# are added on top via load_kpi_series when available.
-_STATS_LINE_ITEMS: tuple[str, ...] = (
-    "revenue",
-    "operating_income",
-    "free_cash_flow",
-    "net_income",
-)
-
-
-def _stats_block_from_series(series_label: str, series: list[object]) -> str | None:
-    """One-line markdown summary of a series: direction + slope + (inflection
-    when present). Returns None when the series is too short to analyze."""
-    from timeseries import detect_inflection, detect_trend
-    if len(series) < 4:
-        return None
-    trend = detect_trend(cast("list[object]", series))
-    if trend.get("insufficient_data"):
-        return None
-    direction = str(trend.get("direction") or "?")
-    slope_pct = trend.get("slope_pct_of_mean")
-    slope_str = (
-        f"{float(cast('float', slope_pct)) * 100:+.1f}%/q"
-        if isinstance(slope_pct, (int, float))
-        else "—"
-    )
-    sig = " (sig)" if trend.get("statistical_significance") else ""
-    line = f"- **{series_label}** — {direction} · slope {slope_str}{sig}"
-
-    # Add inflection callout when the series is long enough
-    if len(series) >= 8:
-        infl = detect_inflection(cast("list[object]", series))
-        if infl.get("inflection_period") and float(cast("float", infl.get("magnitude") or 0)) >= 1.0:
-            line += f" · inflection {infl['inflection_period']} (delta={float(cast('float', infl['magnitude'])):.1f}sd)"
-    return line
-
-
-def _statistical_patterns_block(
-    repo_root: Path, ticker: str, payload: dict[str, object]
-) -> list[str]:
-    """Run detect_trend + detect_inflection on the canonical line items and
-    any per-ticker registered KPIs. Returns markdown lines, empty when no
-    series load (missing DB, unknown ticker)."""
-    try:
-        from timeseries import load_financial_series, load_kpi_series
-    except ImportError:
-        return []
-
-    lines: list[str] = []
-    for line_item in _STATS_LINE_ITEMS:
-        try:
-            s = load_financial_series(ticker=ticker, line_item=line_item, repo_root=repo_root)
-        except Exception as exc:  # never block anchor build
-            log.debug({"event": "stats_load_financial_failed", "ticker": ticker, "lineitem": line_item, "error": str(exc)})
-            continue
-        if not s:
-            continue
-        rendered = _stats_block_from_series(line_item.replace("_", " "), cast("list[object]", s))
-        if rendered:
-            lines.append(rendered)
-
-    # Per-ticker registered KPIs (from kpi_definitions). Tier-1 KPIs from the
-    # holdings JSON would be ideal here but holdings names rarely match the
-    # registry verbatim — use the registry as the source of truth.
-    db_path = repo_root / "data" / "portfolio.db"
-    if db_path.exists():
-        try:
-            conn = sqlite3.connect(str(db_path), timeout=5.0)
-            try:
-                rows = conn.execute(
-                    "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
-                    (ticker.upper(),),
-                ).fetchall()
-            finally:
-                conn.close()
-        except sqlite3.Error as exc:
-            log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
-            rows = []
-        for (kpi_name,) in rows:
-            if not isinstance(kpi_name, str) or not kpi_name.strip():
-                continue
-            try:
-                s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
-            except Exception as exc:  # best-effort
-                log.debug({"event": "stats_load_kpi_failed", "ticker": ticker, "kpi": kpi_name, "error": str(exc)})
-                continue
-            if not s_kpi:
-                continue
-            short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
-            rendered = _stats_block_from_series(short_label, cast("list[object]", s_kpi))
-            if rendered:
-                lines.append(rendered)
-
-    # Reference payload so linters know it's intentional (reserved for
-    # future use: cross-check tier-1 KPI names against the registry)
-    _ = payload
-    return lines
-
-
-def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
-    """Compose a compact thesis anchor for prompt injection. Empty string
-    when no holdings JSON exists. Output is markdown, ~300-1500 chars.
-
-    Since the Week-1 time-series layer landed, the anchor also carries a
-    "Recent statistical patterns" subsection — detect_trend + detect_inflection
-    over the canonical financial line items + any per-ticker registered KPIs.
-    The subsection is best-effort: DB / loader failures degrade silently so
-    the original thesis anchor still renders."""
-    payload = _load_holdings_json(repo_root, ticker)
-    if payload is None:
-        return ""
-
-    parts: list[str] = ["## THESIS ANCHOR (analyst's own framing of this name)"]
-
-    thesis = payload.get("thesis")
-    if isinstance(thesis, str) and thesis.strip():
-        parts.append(f"\n**Thesis statement:**\n{thesis.strip()}")
-
-    key_driver = payload.get("key_driver")
-    if isinstance(key_driver, str) and key_driver.strip():
-        parts.append(f"\n**Key driver tracked:** {key_driver.strip()}")
-
-    kpi_lines = _kpi_anchor_lines(payload)
-    if kpi_lines:
-        parts.append("\n**Tier-1 KPIs (with break conditions):**")
-        parts.extend(kpi_lines)
-
-    rule_lines = _business_rule_anchor_lines(payload)
-    if rule_lines:
-        parts.append("\n**Quantitative thesis-breakers:**")
-        parts.extend(rule_lines)
-
-    # Best-effort statistical block. Wrapped in a try/except so any failure
-    # in the timeseries layer (DB missing, scipy import error, etc.) can't
-    # break the anchor for the dozens of prompts that depend on it.
-    try:
-        stats_lines = _statistical_patterns_block(repo_root, ticker, payload)
-    except Exception as exc:  # anchor must keep rendering
-        log.debug({"event": "statistical_patterns_block_failed", "ticker": ticker, "error": str(exc)})
-        stats_lines = []
-    if stats_lines:
-        parts.append("\n**Recent statistical patterns (last 8-16 quarters):**")
-        parts.extend(stats_lines)
-
-    if len(parts) == 1:  # only the header — no usable content
-        return ""
-
-    assembled = "\n".join(parts).strip()
-    if len(assembled) > ANCHOR_BLOCK_CHAR_CAP:
-        assembled = assembled[:ANCHOR_BLOCK_CHAR_CAP].rstrip() + "\n[...truncated]"
-    return assembled
-
-
-def load_bear_anchor(repo_root: Path, ticker: str) -> str:
-    """Compose a compact bear-case anchor from the on-disk cache (written by
-    the bear_case section after a successful LLM run). Returns the
-    `most_underweighted` paragraph plus the top 3 failure-mode hypotheses so
-    the per-quarter summary / news / SayDo can engage with the analyst's
-    existing bear framing without re-running the bear case.
-
-    Returns "" when no cache exists (no prior `--enable-llm` run) so the
-    first-ever build of a ticker still works without circular dependency.
-    """
-    path = repo_root.joinpath(*_BEAR_CASE_CACHE_DIRNAME) / f"{ticker.upper()}.json"
-    if not path.exists():
-        return ""
-    try:
-        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        return ""
-
-    parts: list[str] = ["## BEAR-CASE ANCHOR (from analyst's prior bear review)"]
-
-    underweighted = payload.get("most_underweighted")
-    if isinstance(underweighted, str) and underweighted.strip():
-        parts.append(f"\n**Most underweighted by consensus:**\n{underweighted.strip()}")
-
-    fms = payload.get("failure_modes")
-    if isinstance(fms, list):
-        hyps: list[str] = []
-        for entry in cast("list[object]", fms)[:3]:
-            if not isinstance(entry, dict):
-                continue
-            e = cast("dict[str, object]", entry)
-            h = e.get("hypothesis")
-            if isinstance(h, str) and h.strip():
-                hyps.append(f"- {h.strip()}")
-        if hyps:
-            parts.append("\n**Named failure modes the analyst is tracking:**")
-            parts.extend(hyps)
-
-    if len(parts) == 1:
-        return ""
-
-    assembled = "\n".join(parts).strip()
-    if len(assembled) > ANCHOR_BLOCK_CHAR_CAP:
-        assembled = assembled[:ANCHOR_BLOCK_CHAR_CAP].rstrip() + "\n[...truncated]"
-    return assembled
-
-
-def compose_anchor_block(thesis_anchor: str, bear_anchor: str) -> str:
-    """Join thesis + bear anchors with a separator, omitting empties.
-    Returns "" when both are empty so the caller can conditionally insert."""
-    blocks = [b for b in (thesis_anchor, bear_anchor) if b.strip()]
-    if not blocks:
-        return ""
-    return "\n\n---\n\n".join(blocks) + "\n\n---\n\n"
 
 
 # ---------------------------------------------------------------------------
