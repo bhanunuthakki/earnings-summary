@@ -76,6 +76,6 @@ def extract_income_statement_facts(
         facts = extract_facts_from_record(
             rec, source_doc_id=document_id, period_type_override=period_override
         )
-        inserted += insert_financial_facts(conn, facts)
+        inserted += insert_financial_facts(conn, facts, extracted_by="fmp")
     conn.commit()
     return inserted
