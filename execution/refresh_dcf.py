@@ -1,20 +1,25 @@
-"""Refresh a ticker's DCF: seed/refresh Historicals -> PV calc -> live-price compare -> persist.
+"""Refresh a ticker's DCF: seed/refresh workbook -> PV calc -> live-price -> persist.
 
-The canonical workbook for each ticker lives at `dcf/<TICKER>.xlsx` under the
-repo root. On each run:
+The canonical workbook for each ticker lives at `dcf/<TICKER>.xlsx`. On each run:
 
-  * If the workbook is missing, `dcf.seeder` copies an example template and
-    populates the Historicals sheet from 20 quarters of FMP data. The user
-    must then edit Forecast / Model / Valuation before the next refresh
-    produces a valid PV.
-  * If the workbook exists, `dcf.refresher` rewrites ONLY the Historicals
-    sheet from the latest FMP data. User-owned sheets round-trip unchanged.
+  * Missing workbook -> `dcf.seeder` builds three sheets from scratch:
+      Historicals  (program-owned, 20 quarters of FMP data)
+      Forecast     (INPUTS auto-derived from this ticker's TTM history;
+                    PROJECTED computed from inputs)
+      Valuation    (year headers + FCF row + diluted-shares row, sized
+                    so `workbook_reader` reads exactly what feeds the PV)
 
-After Historicals is up to date, the script reads the Valuation sheet, runs
-the PV calc, compares to live price, and upserts a dcf_runs row.
+  * Existing workbook -> `dcf.refresher`:
+      - rewrites Historicals from latest FMP
+      - preserves the user's Forecast INPUTS edits
+      - recomputes Forecast PROJECTED + Valuation from current INPUTS
+
+The user's iteration loop: open the workbook in Excel, edit any Forecast
+INPUT cell (yellow-filled), save, re-run refresh. The recomputed Valuation
+feeds the PV calc and `dcf_runs` row that briefs read from.
 
 Per-ticker WACC, MoS bar, and terminal multiple come from
-`micro_thesis/holdings/<TICKER>.json` (schema v2). Live price comes from
+`micro_thesis/holdings/<TICKER>.json`. Live price comes from
 `data/historical/fmp/<TICKER>_profile.json`.
 
 Usage:
@@ -43,7 +48,6 @@ from dcf import valuation as valuation_mod  # noqa: E402
 from dcf import workbook_reader  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
-EXAMPLES_DIR_NAME = "examples/dcf"
 FMP_QUARTERLY_DIR = Path("data") / "historical" / "fmp"
 CURRENCY_DEFAULT = "USD"
 
@@ -90,7 +94,7 @@ def _parse_args() -> argparse.Namespace:
         "--workbook",
         type=Path,
         default=None,
-        help="Override workbook path. Default: dcf/<TICKER>.xlsx with examples/dcf/ fallback.",
+        help="Override workbook path. Default: dcf/<TICKER>.xlsx.",
     )
     p.add_argument(
         "--valuation-year",
@@ -157,33 +161,38 @@ def _refresh_one(
     workbook_path = _resolve_workbook(repo_root, ticker, args.workbook)
     fmp_dir = repo_root / FMP_QUARTERLY_DIR
 
-    # Seed-or-refresh the Historicals sheet. Both operations leave user-owned
-    # sheets untouched; the result is what the workbook_reader then parses.
+    # Seed-or-refresh. Missing workbook → seed (derives Forecast INPUTS from
+    # the ticker's TTM history). Existing workbook → refresh (preserves the
+    # user's Forecast INPUTS edits, recomputes PROJECTED + Valuation from
+    # them, refreshes Historicals from FMP).
     seed_refresh: dict[str, object] = {}
     try:
         if workbook_path is None:
             new_path = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
             seeder_mod.seed_workbook(
                 ticker,
-                template_dir=repo_root / EXAMPLES_DIR_NAME,
                 fmp_quarterly_dir=fmp_dir,
                 output_path=new_path,
+                base_year=args.valuation_year,
             )
             workbook_path = new_path
-            seed_refresh = {"historicals": "seeded"}
+            seed_refresh = {"workbook": "seeded"}
         else:
             try:
                 refresh_result = refresher_mod.refresh_historicals(
-                    workbook_path, fmp_dir, ticker=ticker
+                    workbook_path,
+                    fmp_dir,
+                    ticker=ticker,
+                    base_year=args.valuation_year,
                 )
                 seed_refresh = {
-                    "historicals": "refreshed",
-                    "cells_written": refresh_result.cells_written,
+                    "workbook": "refreshed",
+                    "historicals_cells": refresh_result.historicals_cells_written,
+                    "y1_growth": refresh_result.forecast_inputs.y1_growth_pct,
+                    "fcf_margin": refresh_result.forecast_inputs.fcf_margin_pct,
                 }
             except refresher_mod.RefresherError as e:
-                # An older workbook predates the Historicals sheet — keep going
-                # with the PV calc but record the skip in the result.
-                seed_refresh = {"historicals": "skipped", "reason": str(e)}
+                seed_refresh = {"workbook": "refresh_failed", "reason": str(e)}
     except seeder_mod.SeederError as e:
         return {
             "ticker": ticker,

@@ -1,41 +1,50 @@
-"""Seed a DCF workbook for a ticker by copying a template and populating Historicals.
+"""Build a fresh DCF workbook for a ticker from FMP data.
 
-Each named ticker gets a canonical workbook at `dcf/<TICKER>.xlsx` — the user
-hand-edits Forecast / Model / Valuation; the system owns the Historicals sheet.
-The seeder runs once per new ticker: copy a reference template, then write 20
-quarters of standardized FMP financials into a freshly-created `Historicals`
-sheet. Forecast / Model / Valuation are inherited verbatim from the template
-and must be edited by the user before `refresh_dcf.py` can produce a valid run.
+The seeder produces `dcf/<TICKER>.xlsx` with three sheets:
 
-Source data: the standardized FMP statement files
-(`{TICKER}_income_statement_quarterly.json`, `{TICKER}_balance_sheet_quarterly.json`,
-`{TICKER}_cash_flow_quarterly.json`). These have stable camelCase field names
-across all tickers, unlike the `as_reported_*` XBRL-tagged files whose key sets
-diverge per company. The historicals row layout is fixed (~30 lines) and uses
-label-scan lookups so a future schema bump doesn't break the refresher.
+  Historicals — program-owned table of 30 line items x 20 quarters from
+                FMP. Refreshed each cycle by `refresher.refresh_historicals`.
+
+  Forecast    — INPUTS zone (user-editable, auto-derived from this ticker's
+                TTM history at seed time) + PROJECTED zone (program-owned,
+                rewritten each refresh from current INPUTS). See
+                `dcf.forecast` for the math.
+
+  Valuation   — year-header row + FCF row + diluted-shares row. The current
+                year column carries the ticker's TTM FCF; forecast columns
+                carry projected FCFs from the Forecast sheet. This is what
+                `workbook_reader.read_valuation` parses on refresh, what the
+                PV calc consumes, and what feeds `dcf_runs` (and therefore
+                the briefs).
+
+Source data: standardized FMP statements
+(`{TICKER}_income_statement_quarterly.json`,
+`{TICKER}_balance_sheet_quarterly.json`, `{TICKER}_cash_flow_quarterly.json`)
+— stable camelCase fields across all tickers, unlike the per-company XBRL
+`as_reported_*` files.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import cast
 
 import openpyxl
 from openpyxl.styles import Font
-from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from dcf import forecast as forecast_mod
+
 HISTORICALS_SHEET = "Historicals"
+FORECAST_SHEET = "Forecast"
+VALUATION_SHEET = "Valuation"
 DEFAULT_QUARTERS = 20
 MILLIONS = 1_000_000.0
-
-# Fallback chain when no per-ticker `{TICKER}-*.xlsx` example exists. Tried
-# in order; first existing file wins. GOOG leads because it's the densest
-# example workbook and the one most prompts/refresher labels were tuned against.
-_TEMPLATE_FALLBACKS = ("GOOG-Mar-09-2023.xlsx", "META-Feb-02-2026.xlsx", "AMZN-Feb-06-2026.xlsx")
+_FCF_LABEL = "FCF"
+_SHARES_LABEL = "#diluted shares outstanding"
 
 
 class SeederError(Exception):
@@ -44,12 +53,7 @@ class SeederError(Exception):
 
 @dataclass(frozen=True)
 class _Row:
-    """One Historicals line: (label, source-statement, FMP field, scale).
-
-    `scale` is the divisor applied to raw FMP cents to land on the workbook
-    convention. `MILLIONS` is the dominant case; `1.0` is for per-share /
-    ratio fields that don't need rescaling.
-    """
+    """One Historicals line: (label, source-statement, FMP field, scale)."""
 
     label: str
     source: str  # 'income' | 'balance' | 'cashflow'
@@ -57,8 +61,8 @@ class _Row:
     scale: float
 
 
-# Row layout — fixed order so the refresher's label-scan lands on the same
-# cells the seeder wrote. Section dividers are inserted at render time.
+# Historicals row layout — fixed order so the refresher's column writes land
+# on the same rows the seeder wrote.
 _INCOME_ROWS: tuple[_Row, ...] = (
     _Row("Revenue", "income", "revenue", MILLIONS),
     _Row("Cost of Revenue", "income", "costOfRevenue", MILLIONS),
@@ -99,17 +103,24 @@ _CASHFLOW_ROWS: tuple[_Row, ...] = (
 
 def seed_workbook(
     ticker: str,
-    template_dir: Path,
     fmp_quarterly_dir: Path,
     output_path: Path,
     *,
     force: bool = False,
     quarters: int = DEFAULT_QUARTERS,
+    forecast_years: int = forecast_mod.DEFAULT_FORECAST_YEARS,
+    terminal_growth_pct: float = forecast_mod.DEFAULT_TERMINAL_GROWTH,
+    base_year: int | None = None,
 ) -> None:
-    """Copy a template to `output_path` and write a populated Historicals sheet.
+    """Build a fresh DCF workbook for `ticker` at `output_path`.
 
     Raises `SeederError` if `output_path` exists and `force=False`, or if no
-    template / FMP data is available. Never touches user-owned sheets.
+    FMP income data is available. Builds the workbook from scratch (no
+    template copy) — every sheet is program-defined.
+
+    `base_year` defaults to the current calendar year. Forecast columns
+    start at `base_year + 1`. The current-year column on the Valuation
+    sheet carries TTM actuals.
     """
     ticker = ticker.upper()
     if output_path.exists() and not force:
@@ -117,53 +128,160 @@ def seed_workbook(
             f"refusing to overwrite existing workbook: {output_path} (pass force=True)"
         )
 
-    template_path = _resolve_template(template_dir, ticker)
     quarters_data = _load_quarterly_records(ticker, fmp_quarterly_dir, quarters)
+    income_records = _load_records(ticker, fmp_quarterly_dir, "income_statement")
+    cashflow_records = _load_records(ticker, fmp_quarterly_dir, "cash_flow")
+
+    inputs = forecast_mod.derive_initial_inputs(
+        income_records,
+        cashflow_records,
+        terminal_growth_pct=terminal_growth_pct,
+        forecast_years=forecast_years,
+    )
+    resolved_base_year = base_year if base_year is not None else date.today().year
+    projections = forecast_mod.compute_projections(inputs, resolved_base_year)
+    ttm_fcf_M = _ttm_fcf_millions(cashflow_records)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(template_path, output_path)
+    wb = openpyxl.Workbook()
+    default = wb.active
+    assert default is not None
+    wb.remove(default)
 
-    wb = openpyxl.load_workbook(str(output_path))
-    _write_historicals(wb, quarters_data)
+    hist_ws = wb.create_sheet(HISTORICALS_SHEET)
+    _write_historicals(hist_ws, quarters_data)
+
+    forecast_ws = wb.create_sheet(FORECAST_SHEET)
+    forecast_mod.write_inputs_section(forecast_ws, inputs)
+    forecast_mod.write_projections_section(forecast_ws, projections)
+
+    val_ws = wb.create_sheet(VALUATION_SHEET)
+    write_valuation_sheet(val_ws, inputs, projections, resolved_base_year, ttm_fcf_M)
+
     wb.save(str(output_path))
 
 
-def write_historicals_sheet(workbook_path: Path, fmp_quarterly_dir: Path, ticker: str, *, quarters: int = DEFAULT_QUARTERS) -> int:
-    """Open an existing workbook, rewrite ONLY its Historicals sheet, save.
+def write_historicals_sheet(
+    workbook_path: Path,
+    fmp_quarterly_dir: Path,
+    ticker: str,
+    *,
+    quarters: int = DEFAULT_QUARTERS,
+) -> int:
+    """Open `workbook_path`, rewrite ONLY its Historicals sheet, save.
 
-    Returns the count of data cells written. Used by both the refresher and
-    the seeder's `_write_historicals` so the layout stays in one place.
+    Returns the count of numeric cells written. Kept as a thin public
+    helper so the refresher can reuse the layout without going through the
+    full seed path.
     """
-    quarters_data = _load_quarterly_records(ticker.upper(), fmp_quarterly_dir, quarters)
+    quarters_data = _load_quarterly_records(
+        ticker.upper(), fmp_quarterly_dir, quarters
+    )
     wb = openpyxl.load_workbook(str(workbook_path))
-    cells = _write_historicals(wb, quarters_data)
+    if HISTORICALS_SHEET in wb.sheetnames:
+        del wb[HISTORICALS_SHEET]
+    ws = wb.create_sheet(HISTORICALS_SHEET)
+    cells = _write_historicals(ws, quarters_data)
+    # Move Historicals to position 0 if it just got appended at the end.
+    sheets = wb.sheetnames
+    idx = sheets.index(HISTORICALS_SHEET)
+    wb.move_sheet(HISTORICALS_SHEET, offset=-idx)
     wb.save(str(workbook_path))
     return cells
 
 
-def _resolve_template(template_dir: Path, ticker: str) -> Path:
-    # Prefer a ticker-specific example so AMZN/META/etc. inherit their own
-    # Forecast/Model/Valuation rather than GOOG's. Sort and pick the last so
-    # if multiple snapshots exist (AMZN-Feb-06-2026.xlsx vs an older one), the
-    # lexicographically-latest filename wins.
-    ticker_matches = sorted(template_dir.glob(f"{ticker}-*.xlsx"))
-    if ticker_matches:
-        return ticker_matches[-1]
-    for name in _TEMPLATE_FALLBACKS:
-        candidate = template_dir / name
-        if candidate.exists():
-            return candidate
-    raise SeederError(
-        f"no template found in {template_dir} "
-        f"(tried: {ticker}-*.xlsx, then {', '.join(_TEMPLATE_FALLBACKS)})"
+def write_valuation_sheet(
+    ws: Worksheet,
+    inputs: forecast_mod.ForecastInputs,
+    projections: forecast_mod.ForecastProjections,
+    base_year: int,
+    ttm_fcf_M: float | None,
+) -> None:
+    """Write the Valuation sheet in the layout `workbook_reader` expects.
+
+    Column A holds row labels; row 1 holds year headers starting at
+    `base_year` (the current-year actual) and continuing through the
+    forecast horizon. Two data rows:
+
+      FCF — base_year column = TTM FCF (from FMP); forecast columns =
+            `projections.fcf_M`.
+
+      #diluted shares outstanding — flat across all columns, sourced from
+            `inputs.diluted_shares_M`. The workbook_reader uses the base
+            year's shares value as the per-share denominator.
+    """
+    # Wipe whatever was there (refresher reuses this on every cycle).
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.value = None
+
+    bold = Font(bold=True)
+    note = Font(italic=True, color="666666")
+
+    ws.cell(row=1, column=1, value=None)
+    ws.cell(row=1, column=2, value=base_year).font = bold
+    for i, year in enumerate(projections.years):
+        ws.cell(row=1, column=3 + i, value=year).font = bold
+
+    ws.cell(row=2, column=1, value=_FCF_LABEL).font = bold
+    if ttm_fcf_M is not None:
+        c = ws.cell(row=2, column=2, value=ttm_fcf_M)
+        c.number_format = "#,##0"
+    for i, fcf in enumerate(projections.fcf_M):
+        c = ws.cell(row=2, column=3 + i, value=fcf)
+        c.number_format = "#,##0"
+
+    ws.cell(row=3, column=1, value=_SHARES_LABEL).font = bold
+    shares = inputs.diluted_shares_M
+    for col in range(2, 3 + len(projections.years)):
+        c = ws.cell(row=3, column=col, value=shares)
+        c.number_format = "#,##0"
+
+    ws.cell(
+        row=5,
+        column=1,
+        value="Rewritten on every refresh from Forecast sheet inputs. Edit Forecast, not here.",
+    ).font = note
+
+    ws.column_dimensions["A"].width = 32
+    from openpyxl.utils import get_column_letter
+
+    for i in range(1 + len(projections.years)):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 12
+
+
+def _ttm_fcf_millions(cashflow_records: list[dict[str, object]]) -> float | None:
+    total = 0.0
+    seen = 0
+    for r in cashflow_records[:4]:
+        v = r.get("freeCashFlow")
+        if isinstance(v, (int, float)):
+            total += float(v)
+            seen += 1
+    if seen == 0:
+        return None
+    return total / MILLIONS
+
+
+def _load_records(
+    ticker: str, fmp_quarterly_dir: Path, statement: str
+) -> list[dict[str, object]]:
+    return _read_fmp(
+        fmp_quarterly_dir / f"{ticker.upper()}_{statement}_quarterly.json"
     )
+
+
+# ---------------------------------------------------------------------------
+# Historicals helpers — unchanged from the previous seeder, factored to write
+# into a passed-in worksheet so the refresher can reuse the row layout.
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _QuarterRecord:
     """One quarter's data, merged across the 3 statement files."""
 
-    period_label: str  # e.g. "Q1 2026"
+    period_label: str
     income: dict[str, object]
     balance: dict[str, object]
     cashflow: dict[str, object]
@@ -172,15 +290,16 @@ class _QuarterRecord:
 def _load_quarterly_records(
     ticker: str, fmp_quarterly_dir: Path, quarters: int
 ) -> list[_QuarterRecord]:
-    """Build N quarters of merged income+balance+cashflow records, oldest first.
-
-    FMP files are sorted newest-first; we take the first N from each and merge
-    by (fiscalYear, period). Missing records on either side leave gaps — those
-    quarters skip the affected cells but still appear in the period header.
-    """
-    income_raw = _read_fmp(fmp_quarterly_dir / f"{ticker}_income_statement_quarterly.json")
-    balance_raw = _read_fmp(fmp_quarterly_dir / f"{ticker}_balance_sheet_quarterly.json")
-    cashflow_raw = _read_fmp(fmp_quarterly_dir / f"{ticker}_cash_flow_quarterly.json")
+    """Build N quarters of merged income+balance+cashflow records, oldest first."""
+    income_raw = _read_fmp(
+        fmp_quarterly_dir / f"{ticker}_income_statement_quarterly.json"
+    )
+    balance_raw = _read_fmp(
+        fmp_quarterly_dir / f"{ticker}_balance_sheet_quarterly.json"
+    )
+    cashflow_raw = _read_fmp(
+        fmp_quarterly_dir / f"{ticker}_cash_flow_quarterly.json"
+    )
 
     income_by_key = _index_by_period(income_raw)
     balance_by_key = _index_by_period(balance_raw)
@@ -189,23 +308,18 @@ def _load_quarterly_records(
     if not income_by_key:
         raise SeederError(f"no income statement records for {ticker}")
 
-    # Use the income file's chronology as the canonical period ordering — it's
-    # the densest (filed quarterly without fail) of the three.
     sorted_keys = sorted(income_by_key.keys(), reverse=True)[:quarters]
-    sorted_keys.reverse()  # oldest → newest left-to-right
+    sorted_keys.reverse()  # oldest -> newest left-to-right
 
-    records: list[_QuarterRecord] = []
-    for key in sorted_keys:
-        year, period = key
-        records.append(
-            _QuarterRecord(
-                period_label=f"{period} {year}",
-                income=income_by_key.get(key, {}),
-                balance=balance_by_key.get(key, {}),
-                cashflow=cashflow_by_key.get(key, {}),
-            )
+    return [
+        _QuarterRecord(
+            period_label=f"{period} {year}",
+            income=income_by_key.get((year, period), {}),
+            balance=balance_by_key.get((year, period), {}),
+            cashflow=cashflow_by_key.get((year, period), {}),
         )
-    return records
+        for (year, period) in sorted_keys
+    ]
 
 
 def _read_fmp(path: Path) -> list[dict[str, object]]:
@@ -221,9 +335,7 @@ def _read_fmp(path: Path) -> list[dict[str, object]]:
 def _index_by_period(
     records: list[dict[str, object]],
 ) -> dict[tuple[int, str], dict[str, object]]:
-    """Build a (year, period) → record map. `fiscalYear` ships as int OR str
-    across FMP files for the same ticker, so coerce defensively.
-    """
+    """`fiscalYear` ships as int OR str across FMP files; coerce defensively."""
     out: dict[tuple[int, str], dict[str, object]] = {}
     for r in records:
         year_raw = r.get("fiscalYear")
@@ -239,24 +351,13 @@ def _index_by_period(
     return out
 
 
-def _write_historicals(wb: Workbook, quarters: list[_QuarterRecord]) -> int:
-    """Drop and rebuild the Historicals sheet; return data cell count.
-
-    The drop-and-recreate is deliberate: any prior cells left over from a
-    bigger template (more quarters, extra rows) get cleared in one move.
-    """
-    if HISTORICALS_SHEET in wb.sheetnames:
-        del wb[HISTORICALS_SHEET]
-    ws = wb.create_sheet(HISTORICALS_SHEET)
-
+def _write_historicals(ws: Worksheet, quarters: list[_QuarterRecord]) -> int:
     bold = Font(bold=True)
     n_cols = len(quarters)
 
-    # Row 1: period header
     ws.cell(row=1, column=1, value="Line Item").font = bold
     for i, q in enumerate(quarters):
-        c = ws.cell(row=1, column=2 + i, value=q.period_label)
-        c.font = bold
+        ws.cell(row=1, column=2 + i, value=q.period_label).font = bold
 
     row = 2
     data_cells = 0
@@ -277,11 +378,11 @@ def _write_historicals(wb: Workbook, quarters: list[_QuarterRecord]) -> int:
             row += 1
         row += 1  # spacer between sections
 
-    ws.cell(row=row, column=1, value="Units: USD millions except per-share").font = Font(
-        italic=True
-    )
+    ws.cell(
+        row=row, column=1, value="Units: USD millions except per-share"
+    ).font = Font(italic=True)
 
-    _autosize_column_a(ws, n_cols)
+    _autosize_historicals_columns(ws, n_cols)
     return data_cells
 
 
@@ -300,11 +401,9 @@ def _extract_value(q: _QuarterRecord, spec: _Row) -> float | None:
     return float(raw) / spec.scale
 
 
-def _autosize_column_a(ws: Worksheet, n_cols: int) -> None:
-    """Widen the label column and shrink data columns for readability."""
+def _autosize_historicals_columns(ws: Worksheet, n_cols: int) -> None:
     from openpyxl.utils import get_column_letter
 
     ws.column_dimensions["A"].width = 32
     for i in range(n_cols):
-        col_letter = get_column_letter(2 + i)
-        ws.column_dimensions[col_letter].width = 12
+        ws.column_dimensions[get_column_letter(2 + i)].width = 12
