@@ -61,9 +61,31 @@ def main() -> int:
                 time.sleep(_PER_TICKER_DELAY_S)
             try:
                 stats = ingest_for_ticker(conn, ticker=ticker, project_root=PROJECT_ROOT)
-            except (OSError, ValueError, KeyError) as e:
+            except OSError as e:
+                # Transient: network / filesystem. Continue with next ticker.
                 rows.append({
-                    "ticker": ticker, "error": f"{type(e).__name__}: {e}"[:200],
+                    "ticker": ticker,
+                    "error": f"OSError: {e}"[:200],
+                    "class": "transient",
+                })
+                failed += 1
+                continue
+            except (ValueError, KeyError) as e:
+                # Schema drift: the SEC payload didn't parse as expected.
+                # Per GEMINI.md, capture the raw response location so the
+                # operator can inspect it before re-running.
+                raw_path = (
+                    PROJECT_ROOT
+                    / "data"
+                    / "historical"
+                    / "sec"
+                    / f"{ticker}_companyfacts.json"
+                )
+                rows.append({
+                    "ticker": ticker,
+                    "error": f"{type(e).__name__}: {e}"[:200],
+                    "class": "schema_drift",
+                    "raw_response_path": str(raw_path) if raw_path.exists() else None,
                 })
                 failed += 1
                 continue

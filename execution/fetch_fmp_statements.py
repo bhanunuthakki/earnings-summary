@@ -30,11 +30,13 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
 import requests
 from dotenv import load_dotenv
+from pydantic import BaseModel, ValidationError
 
 # ---------------------------------------------------------------------------
 # Config
@@ -46,11 +48,28 @@ FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 ENV_PATH = PROJECT_ROOT / ".env"
 
 from log_redact import redact as _redact  # noqa: E402
+from models.fmp_payloads import (  # noqa: E402
+    FmpBalanceSheetRecord,
+    FmpCashFlowRecord,
+    FmpIncomeStatementRecord,
+)
 
 load_dotenv(ENV_PATH)
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 
 BASE_URL = "https://financialmodelingprep.com/api/v3"
+
+# Endpoint → Pydantic model used to validate the response shape *before*
+# the JSON is persisted to disk. Per GEMINI.md schema-drift defense: on
+# ValidationError we halt the task and dump the raw response to .tmp/ for
+# inspection rather than caching a malformed envelope that breaks downstream
+# extractors silently. key-metrics has no Pydantic model today — skipped.
+_ENDPOINT_VALIDATORS: dict[str, type[BaseModel]] = {
+    "income-statement": FmpIncomeStatementRecord,
+    "balance-sheet-statement": FmpBalanceSheetRecord,
+    "cash-flow-statement": FmpCashFlowRecord,
+}
+_VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
 
 DEFAULT_TICKERS = [
     "CNQ", "WY", "FNV", "RIO", "VALE", "FCX",
@@ -145,6 +164,46 @@ def _fetch_with_retry(task: FetchTask) -> FetchResult:
     return FetchResult(task, False, 0, last_err)
 
 
+def _dump_validation_failure(
+    task: FetchTask, data: object, err: ValidationError
+) -> Path:
+    """Write the malformed response to .tmp/ for inspection. Returns the path."""
+    _VALIDATION_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    out = _VALIDATION_DUMP_DIR / f"{task.ticker}_{task.file_suffix}_{stamp}.json"
+    payload = {
+        "ticker": task.ticker,
+        "endpoint": task.endpoint,
+        "period": task.period,
+        "validation_errors": [
+            {
+                "loc": list(e["loc"]),
+                "msg": e["msg"],
+                "type": e["type"],
+            }
+            for e in err.errors()
+        ],
+        "raw_response": data,
+    }
+    out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return out
+
+
+def _validate_response(task: FetchTask, data: list[object]) -> ValidationError | None:
+    """Validate the first record of `data` against the endpoint's Pydantic
+    model. Returns the ValidationError on schema mismatch or None on success.
+    Empty responses pass — they're a 200-OK no-data signal, not schema drift.
+    """
+    model = _ENDPOINT_VALIDATORS.get(task.endpoint)
+    if model is None or not data:
+        return None
+    try:
+        model.model_validate(data[0])
+    except ValidationError as exc:
+        return exc
+    return None
+
+
 def _fetch_and_save(task: FetchTask) -> FetchResult:
     url = f"{BASE_URL}/{task.endpoint}/{task.ticker}"
     params = {"period": task.period, "limit": task.limit, "apikey": FMP_API_KEY}
@@ -169,6 +228,23 @@ def _fetch_and_save(task: FetchTask) -> FetchResult:
             data = resp.json()
             if not isinstance(data, list):
                 return FetchResult(task, False, 0, f"unexpected response type: {type(data)}")
+            validation_err = _validate_response(task, data)
+            if validation_err is not None:
+                dump_path = _dump_validation_failure(task, data, validation_err)
+                _log(
+                    "schema_drift_halt",
+                    ticker=task.ticker,
+                    endpoint=task.endpoint,
+                    period=task.period,
+                    dump=str(dump_path.relative_to(PROJECT_ROOT)),
+                    errors=[e["msg"] for e in validation_err.errors()[:3]],
+                )
+                return FetchResult(
+                    task,
+                    False,
+                    0,
+                    f"schema drift: {len(validation_err.errors())} validation errors; raw dumped to {dump_path}",
+                )
             task.out_path.parent.mkdir(parents=True, exist_ok=True)
             task.out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
             return FetchResult(task, True, len(data), None)
