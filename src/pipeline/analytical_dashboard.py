@@ -71,12 +71,39 @@ class PortfolioLensRow:
 
 
 @dataclass(slots=True)
+class LlmBudgetRow:
+    """One row of the LLM Spend & Budget panel — per-purpose monthly cap
+    + current burn. Populated from the llm_budgets + llm_calls join.
+    `headroom_pct` is 1.0 at zero spend and goes negative when over cap."""
+
+    purpose: str
+    monthly_cap_usd: float
+    current_spend_usd: float
+    headroom_pct: float
+    warn_threshold_pct: float
+    hard_block: bool
+
+
+@dataclass(slots=True)
+class LlmBudgetPanel:
+    """The dashboard's LLM Spend & Budget section — per-purpose rows plus
+    the month-to-date totals + projected month-end. Returns empty rows + 0
+    totals when the budget tables aren't present (pre-migration repos)."""
+
+    rows: list[LlmBudgetRow] = field(default_factory=list)
+    total_spend_mtd_usd: float = 0.0
+    projected_month_end_usd: float = 0.0
+    month_label: str = ""  # 'YYYY-MM'
+
+
+@dataclass(slots=True)
 class AnalyticalDashboard:
     trigger_ladder: list[TriggerLadderRow] = field(default_factory=list)
     insider_events: list[InsiderEventRow] = field(default_factory=list)
     prediction_outcomes: list[PredictionOutcomeRow] = field(default_factory=list)
     portfolio_synthesis_md: str | None = None  # cross_portfolio_synthesis lens output
     per_ticker_reread: list[PortfolioLensRow] = field(default_factory=list)
+    llm_budgets: LlmBudgetPanel = field(default_factory=lambda: LlmBudgetPanel())
 
 
 def build_analytical_dashboard(
@@ -99,9 +126,91 @@ def build_analytical_dashboard(
             prediction_outcomes=_build_prediction_outcomes(conn, list_types),
             portfolio_synthesis_md=_load_portfolio_synthesis(conn),
             per_ticker_reread=_load_per_ticker_rereads(conn),
+            llm_budgets=_build_llm_budget_panel(conn),
         )
     finally:
         conn.close()
+
+
+def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
+    """Cross-purpose LLM spend vs cap. Empty panel when llm_budgets is missing
+    (pre-migration repo) so the dashboard still renders.
+
+    Projected month-end = spend MTD × (days in month / days elapsed). Linear
+    extrapolation only — good enough to flag "burning too fast" without
+    modeling weekly cadence."""
+    has_budgets = (
+        conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_budgets'"
+        ).fetchone()
+        is not None
+    )
+    if not has_budgets:
+        return LlmBudgetPanel()
+    now = datetime.now(UTC)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    month_label = f"{now.year:04d}-{now.month:02d}"
+    rows = conn.execute(
+        """
+        SELECT b.purpose,
+               b.monthly_cap_usd,
+               b.warn_threshold_pct,
+               b.hard_block,
+               COALESCE(SUM(c.cost_estimate_usd), 0.0) AS spend
+        FROM llm_budgets b
+        LEFT JOIN llm_calls c
+          ON c.purpose = b.purpose AND c.called_at >= ?
+        GROUP BY b.purpose
+        """,
+        (month_start.isoformat(),),
+    ).fetchall()
+    panel_rows: list[LlmBudgetRow] = []
+    total_spend = 0.0
+    for r in rows:
+        cap = float(r["monthly_cap_usd"])
+        spend = float(r["spend"] or 0.0)
+        # Don't count the __default__ row in the totals — it's a fallback
+        # cap for unknown purposes, not a separate spend bucket. Its spend
+        # is always 0.0 (no LLM call sets purpose="__default__"), but be
+        # explicit so future readers don't have to derive it.
+        if r["purpose"] != "__default__":
+            total_spend += spend
+        headroom = 1.0 - (spend / cap) if cap > 0 else 1.0
+        panel_rows.append(
+            LlmBudgetRow(
+                purpose=str(r["purpose"]),
+                monthly_cap_usd=cap,
+                current_spend_usd=spend,
+                headroom_pct=headroom,
+                warn_threshold_pct=float(r["warn_threshold_pct"]),
+                hard_block=bool(r["hard_block"]),
+            )
+        )
+    # Sort over-cap first (most over → least), then warn, then ok.
+    panel_rows.sort(key=lambda r: (r.headroom_pct, r.purpose))
+    # Linear projection. Day 1 (no time elapsed) → projected == spend so
+    # we don't divide by zero or blow up the projection.
+    elapsed_seconds = (now - month_start).total_seconds()
+    if elapsed_seconds < 60:  # < 1 min elapsed in month — projection isn't meaningful
+        projected = total_spend
+    else:
+        # Days in this month
+        if now.month == 12:
+            next_month_start = now.replace(
+                year=now.year + 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            next_month_start = now.replace(
+                month=now.month + 1, day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+        month_total_seconds = (next_month_start - month_start).total_seconds()
+        projected = total_spend * (month_total_seconds / elapsed_seconds)
+    return LlmBudgetPanel(
+        rows=panel_rows,
+        total_spend_mtd_usd=total_spend,
+        projected_month_end_usd=projected,
+        month_label=month_label,
+    )
 
 
 def _load_portfolio_synthesis(conn: sqlite3.Connection) -> str | None:
