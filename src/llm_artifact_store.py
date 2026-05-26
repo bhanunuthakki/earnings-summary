@@ -1,0 +1,420 @@
+"""Read/write API for the llm_artifacts table.
+
+Pattern:
+  - ``read_current(ticker, purpose, fiscal_period=None, scope='ticker')`` →
+    the most recent non-superseded artifact, or None.
+  - ``upsert(...)`` → idempotent insert. When the existing row's input_sha256
+    matches the new one, returns the existing row's id without inserting
+    (cache hit). When it differs, marks the prior superseded and inserts a
+    new row, preserving history. Returns the new row's id.
+  - ``mark_dirty(ticker, purposes, reason)`` → flips dirty=1 on a set of
+    current artifacts. Called from the brief_dirty trigger chain (Phase 1.6).
+  - ``drain_dirty(limit)`` → returns the next batch of artifacts that need
+    regeneration. Used by the daily drain cron (Phase 8).
+
+The module is best-effort against missing DB / missing table — the LLM call
+that produced the row must never fail because the store can't write.
+
+JSON columns (source_doc_ids, parent_artifact_ids) are stored as TEXT
+because SQLite's JSON1 extension isn't guaranteed across environments.
+Helpers serialize / deserialize transparently.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import cast
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class Artifact:
+    """One artifact row as the public API sees it. JSON columns are decoded."""
+
+    id: int
+    ticker: str | None
+    scope: str
+    purpose: str
+    fiscal_period: str | None
+    content_md: str | None
+    content_json: object | None  # decoded from JSON, may be dict/list/None
+    input_sha256: str
+    output_sha256: str | None
+    model: str | None
+    prompt_version: str
+    generated_at: datetime
+    expires_at: datetime | None
+    superseded_by_id: int | None
+    dirty: bool
+    dirty_reason: str | None
+    source_doc_ids: list[int] = field(default_factory=list)
+    parent_artifact_ids: list[int] = field(default_factory=list)
+    llm_call_id: int | None = None
+
+
+@dataclass(slots=True)
+class UpsertRequest:
+    """Inputs to upsert(). Composes deterministically into the input_sha256
+    cache key so any caller can be cache-correct without knowing the hash
+    function. Add inputs here only when they actually affect the output —
+    spurious inputs invalidate the cache unnecessarily."""
+
+    ticker: str | None
+    purpose: str
+    scope: str = "ticker"
+    fiscal_period: str | None = None
+    content_md: str | None = None
+    content_json: object | None = None
+    model: str | None = None
+    prompt_version: str = "v1"
+    # Inputs that determine the cache key, hashed in order:
+    cache_inputs: list[bytes | str] = field(default_factory=list)
+    # Provenance — NOT hashed; these are descriptive metadata for the brief.
+    source_doc_ids: list[int] = field(default_factory=list)
+    parent_artifact_ids: list[int] = field(default_factory=list)
+    expires_at: datetime | None = None
+    llm_call_id: int | None = None
+
+
+def compute_input_sha256(
+    *, prompt_version: str, cache_inputs: list[bytes | str]
+) -> str:
+    """Deterministic cache-key hash. Caller passes the prompt_version explicitly
+    and a list of all inputs that contribute to the output. The hash is order-
+    sensitive so the caller controls reproducibility."""
+    h = hashlib.sha256()
+    h.update(b"v=" + prompt_version.encode("utf-8") + b"\n")
+    for chunk in cache_inputs:
+        b = chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
+        h.update(len(b).to_bytes(8, "big"))
+        h.update(b)
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def _row_to_artifact(row: sqlite3.Row) -> Artifact:
+    raw_src = row["source_doc_ids"]
+    raw_par = row["parent_artifact_ids"]
+    src_ids: list[int] = []
+    par_ids: list[int] = []
+    if raw_src:
+        try:
+            decoded = json.loads(raw_src)
+            if isinstance(decoded, list):
+                src_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    if raw_par:
+        try:
+            decoded = json.loads(raw_par)
+            if isinstance(decoded, list):
+                par_ids = [int(v) for v in decoded if isinstance(v, (int, float))]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    json_blob_raw = row["content_json"]
+    content_json: object | None = None
+    if json_blob_raw:
+        try:
+            content_json = json.loads(json_blob_raw)
+        except json.JSONDecodeError:
+            content_json = None
+
+    return Artifact(
+        id=int(row["id"]),
+        ticker=row["ticker"],
+        scope=row["scope"],
+        purpose=row["purpose"],
+        fiscal_period=row["fiscal_period"],
+        content_md=row["content_md"],
+        content_json=content_json,
+        input_sha256=row["input_sha256"],
+        output_sha256=row["output_sha256"],
+        model=row["model"],
+        prompt_version=row["prompt_version"],
+        generated_at=_parse_dt(row["generated_at"]),
+        expires_at=_parse_dt(row["expires_at"]) if row["expires_at"] else None,
+        superseded_by_id=row["superseded_by_id"],
+        dirty=bool(row["dirty"]),
+        dirty_reason=row["dirty_reason"],
+        source_doc_ids=src_ids,
+        parent_artifact_ids=par_ids,
+        llm_call_id=row["llm_call_id"],
+    )
+
+
+def _parse_dt(v: object) -> datetime:
+    if isinstance(v, datetime):
+        return v
+    return datetime.fromisoformat(str(v))
+
+
+def read_current(
+    *,
+    ticker: str | None,
+    purpose: str,
+    fiscal_period: str | None = None,
+    scope: str = "ticker",
+    db_path: Path | str | None = None,
+) -> Artifact | None:
+    """Read the most recent non-superseded artifact for the scope tuple.
+    Returns None when no artifact exists (e.g. first-run for this ticker)
+    or when DB / table is unavailable."""
+    conn = _open(db_path)
+    if conn is None:
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM llm_artifacts
+            WHERE COALESCE(ticker,'') = COALESCE(?, '')
+              AND scope = ? AND purpose = ?
+              AND COALESCE(fiscal_period, '') = COALESCE(?, '')
+              AND superseded_by_id IS NULL
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """,
+            (ticker, scope, purpose, fiscal_period),
+        ).fetchone()
+        return _row_to_artifact(row) if row else None
+    finally:
+        conn.close()
+
+
+def upsert(
+    req: UpsertRequest,
+    *,
+    db_path: Path | str | None = None,
+) -> tuple[int | None, bool]:
+    """Idempotent upsert.
+
+    Returns (artifact_id, was_cache_hit):
+      - was_cache_hit=True  → existing row's input_sha256 matches; existing id
+                              returned, no new row inserted.
+      - was_cache_hit=False → either no prior row (insert) or prior input_sha256
+                              differs (supersede + insert). New id returned.
+
+    On DB unavailability returns (None, False) — caller must treat as "go
+    ahead, compute the artifact" (the LLM call still produces output, just
+    no persistence).
+    """
+    conn = _open(db_path)
+    if conn is None:
+        return (None, False)
+    try:
+        conn.row_factory = sqlite3.Row
+        input_sha = compute_input_sha256(
+            prompt_version=req.prompt_version, cache_inputs=req.cache_inputs
+        )
+
+        existing = conn.execute(
+            """
+            SELECT id, input_sha256, dirty FROM llm_artifacts
+            WHERE COALESCE(ticker,'') = COALESCE(?, '')
+              AND scope = ? AND purpose = ?
+              AND COALESCE(fiscal_period, '') = COALESCE(?, '')
+              AND superseded_by_id IS NULL
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """,
+            (req.ticker, req.scope, req.purpose, req.fiscal_period),
+        ).fetchone()
+
+        # Cache hit — same input hash AND not marked dirty. The dirty flag wins
+        # over hash equality because a trigger may have flagged the row even
+        # though inputs didn't change (e.g. prompt_version bump applied
+        # retroactively to the table).
+        if existing is not None and existing["input_sha256"] == input_sha and not existing["dirty"]:
+            return (int(existing["id"]), True)
+
+        # Either no existing row, hash drift, or dirty — insert a new row and
+        # supersede any prior current row.
+        content_json_str = (
+            json.dumps(req.content_json, ensure_ascii=False)
+            if req.content_json is not None
+            else None
+        )
+        output_sha = (
+            hashlib.sha256((req.content_md or content_json_str or "").encode("utf-8")).hexdigest()
+            if (req.content_md or content_json_str)
+            else None
+        )
+        cur = conn.execute(
+            """
+            INSERT INTO llm_artifacts(
+              ticker, scope, purpose, fiscal_period,
+              content_md, content_json,
+              input_sha256, output_sha256, model, prompt_version,
+              generated_at, expires_at,
+              superseded_by_id, dirty, dirty_reason,
+              source_doc_ids, parent_artifact_ids, llm_call_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,NULL,?,?,?)
+            """,
+            (
+                req.ticker,
+                req.scope,
+                req.purpose,
+                req.fiscal_period,
+                req.content_md,
+                content_json_str,
+                input_sha,
+                output_sha,
+                req.model,
+                req.prompt_version,
+                datetime.now(UTC).isoformat(),
+                req.expires_at.isoformat() if req.expires_at else None,
+                json.dumps(req.source_doc_ids) if req.source_doc_ids else None,
+                json.dumps(req.parent_artifact_ids) if req.parent_artifact_ids else None,
+                req.llm_call_id,
+            ),
+        )
+        new_id = int(cur.lastrowid or 0)
+        if existing is not None:
+            conn.execute(
+                "UPDATE llm_artifacts SET superseded_by_id = ? WHERE id = ?",
+                (new_id, int(existing["id"])),
+            )
+        conn.commit()
+        return (new_id, False)
+    except sqlite3.Error as exc:
+        log.warning({"event": "artifact_upsert_failed", "error": str(exc)})
+        return (None, False)
+    finally:
+        conn.close()
+
+
+def mark_dirty(
+    *,
+    ticker: str,
+    purposes: list[str],
+    reason: str,
+    db_path: Path | str | None = None,
+) -> int:
+    """Flip dirty=1 on all current artifacts matching (ticker, purpose IN ...).
+    Returns the count of rows updated. Best-effort — returns 0 on DB error."""
+    if not purposes:
+        return 0
+    conn = _open(db_path)
+    if conn is None:
+        return 0
+    try:
+        placeholders = ",".join("?" * len(purposes))
+        cur = conn.execute(
+            f"""
+            UPDATE llm_artifacts
+            SET dirty = 1, dirty_reason = ?
+            WHERE ticker = ?
+              AND purpose IN ({placeholders})
+              AND superseded_by_id IS NULL
+              AND dirty = 0
+            """,
+            (reason, ticker, *purposes),
+        )
+        conn.commit()
+        return cur.rowcount
+    except sqlite3.Error as exc:
+        log.warning({"event": "artifact_mark_dirty_failed", "error": str(exc)})
+        return 0
+    finally:
+        conn.close()
+
+
+def drain_dirty(
+    *,
+    limit: int = 50,
+    db_path: Path | str | None = None,
+) -> list[Artifact]:
+    """Return up to `limit` dirty current artifacts. Caller regenerates them
+    via the purpose-specific generator + upsert; dirty=0 is cleared by upsert
+    on the new row."""
+    conn = _open(db_path)
+    if conn is None:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM llm_artifacts
+            WHERE dirty = 1 AND superseded_by_id IS NULL
+            ORDER BY generated_at ASC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        return [_row_to_artifact(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def history(
+    *,
+    ticker: str,
+    purpose: str,
+    fiscal_period: str | None = None,
+    scope: str = "ticker",
+    limit: int = 20,
+    db_path: Path | str | None = None,
+) -> list[Artifact]:
+    """Return all artifacts for the scope tuple (current + superseded), newest
+    first. Powers "show me the evolution of META's bear case" queries."""
+    conn = _open(db_path)
+    if conn is None:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT * FROM llm_artifacts
+            WHERE COALESCE(ticker,'') = COALESCE(?, '')
+              AND scope = ? AND purpose = ?
+              AND COALESCE(fiscal_period, '') = COALESCE(?, '')
+            ORDER BY generated_at DESC
+            LIMIT ?
+            """,
+            (ticker, scope, purpose, fiscal_period, int(limit)),
+        ).fetchall()
+        return [_row_to_artifact(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+    """Open a connection or return None when the DB or table is unavailable.
+    Best-effort pattern matches llm_call_ledger so the LLM pipeline never
+    fails on telemetry."""
+    try:
+        path = _resolve_db_path(db_path)
+        if path is None or not Path(path).exists():
+            return None
+        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn.execute("PRAGMA busy_timeout = 5000")
+        # Verify table exists — graceful return otherwise
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
+        ).fetchone()
+        if cur is None:
+            conn.close()
+            return None
+        return conn
+    except (sqlite3.Error, OSError) as exc:
+        log.debug({"event": "artifact_store_open_failed", "error": str(exc)})
+        return None
+
+
+def _resolve_db_path(override: Path | str | None) -> Path | None:
+    if override is not None:
+        return Path(override)
+    try:
+        from db import DB_PATH
+
+        return Path(cast("str", DB_PATH))
+    except ImportError:
+        return None

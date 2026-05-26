@@ -708,6 +708,39 @@ class QARosterSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# §14 Synthesis — cross-section LLM lens artifacts
+# ---------------------------------------------------------------------------
+
+
+class SynthesisLensRow(BaseModel):
+    """One cached lens artifact: name + markdown content + provenance.
+
+    Lens names match `synthesis_lenses.LENSES` keys. Renderer dispatches on
+    name to label the panel; the content is rendered as markdown verbatim.
+    """
+
+    name: str
+    content_md: str
+    model: str | None = None
+    generated_at: datetime | None = None
+    is_dirty: bool = False
+    is_stale: bool = False  # informational only; renderer can warn
+
+
+class SynthesisSection(BaseModel):
+    """§14 — the analytical thinking layer surfaced from lens artifacts.
+
+    Renderers show this as a "Synthesis" tab with one collapsible panel per
+    lens. Panels with no cached artifact are simply absent — the user
+    regenerates them via `python execution/run_lens.py --ticker X --all`.
+    """
+
+    status: SectionStatus
+    ticker: str
+    lenses: list[SynthesisLensRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
 
@@ -813,6 +846,69 @@ class ValuationBasisSection(BaseModel):
     notes: str | None = None  # qualitative target band or caveats from Opus
 
 
+# ---------------------------------------------------------------------------
+# §13 Executive Compensation (Phase 5)
+# ---------------------------------------------------------------------------
+
+
+class ExecCompRowModel(BaseModel):
+    """One Named Executive Officer's compensation package."""
+
+    executive_name: str
+    role: str | None = None
+    is_ceo: bool = False
+    fiscal_year: int
+    currency: str = "USD"
+    base_salary: float | None = None
+    cash_bonus_actual: float | None = None
+    cash_bonus_target: float | None = None
+    equity_grant_value: float | None = None
+    total_comp_granted: float | None = None
+    total_comp_realized: float | None = None
+    # realized / granted - 1; None when either side missing or zero
+    realized_vs_granted_pct: float | None = None
+    ceo_pay_ratio: float | None = None
+    # Free-text "metric (weight%)" join — full breakdown lives in the table
+    performance_metrics_summary: str | None = None
+    # True when any thesis tier-1 KPI appears in the comp design — the
+    # quick alignment-check signal
+    metrics_have_thesis_kpi: bool = False
+
+
+class InsiderSignalRowModel(BaseModel):
+    """One scored insider event (post-conviction-scoring)."""
+
+    insider_name: str
+    role: str | None = None
+    transaction_date: str  # ISO date
+    transaction_type: str
+    shares: float
+    transaction_value: float | None = None
+    signal_strength: float  # 0..1
+    rationale: str
+
+
+class ExecCompSectionModel(BaseModel):
+    """§13 — executive compensation + insider activity + alignment narrative.
+
+    Built only when at least one of:
+      - exec_comp_packages has rows for this ticker
+      - insider_transactions has rows for this ticker
+    Otherwise the section is MISSING_DATA with a fix command.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    ticker: str
+    fiscal_year_latest: int | None = None
+    packages: list[ExecCompRowModel] = Field(default_factory=list)
+    insider_signals: list[InsiderSignalRowModel] = Field(default_factory=list)
+    # LLM-driven alignment commentary. None when --no-llm or generation failed
+    # (the section still renders the structured data, just without the memo).
+    alignment_narrative_md: str | None = None
+    anomaly_flags: list[str] = Field(default_factory=list)
+
+
 class ReportSpec(BaseModel):
     """The unified report. One per (ticker, generation_date)."""
 
@@ -846,3 +942,5 @@ class ReportSpec(BaseModel):
     hero_quote: HeroQuoteSection | None = None
     qa_roster: QARosterSection | None = None
     filing_intelligence: FilingIntelligenceSection | None = None
+    exec_compensation: ExecCompSectionModel | None = None
+    synthesis: SynthesisSection | None = None

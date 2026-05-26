@@ -17,6 +17,7 @@ from report.sections import (
     company_description,
     earnings,
     evaluation_snapshot,
+    exec_compensation,
     filing_intelligence,
     financials,
     ir_docs,
@@ -27,6 +28,7 @@ from report.sections import (
     saydo,
     segments,
     snapshot,
+    synthesis,
     thesis,
     valuation,
 )
@@ -102,6 +104,10 @@ def build_report(
         ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
     )
     filing_intelligence_section = filing_intelligence.build(ticker, repo_root)
+    exec_compensation_section = exec_compensation.build(
+        ticker, repo_root, enable_llm=enable_llm
+    )
+    synthesis_section = synthesis.build(ticker, repo_root)
     return ReportSpec(
         ticker=ticker,
         generation_date=date.today(),
@@ -125,4 +131,6 @@ def build_report(
         appendix=appendix_section,
         qa_roster=qa_roster_section,
         filing_intelligence=filing_intelligence_section,
+        exec_compensation=exec_compensation_section,
+        synthesis=synthesis_section,
     )
