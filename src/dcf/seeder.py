@@ -32,7 +32,9 @@ HISTORICALS_SHEET = "Historicals"
 DEFAULT_QUARTERS = 20
 MILLIONS = 1_000_000.0
 
-# Templates tried in order — first existing file wins.
+# Fallback chain when no per-ticker `{TICKER}-*.xlsx` example exists. Tried
+# in order; first existing file wins. GOOG leads because it's the densest
+# example workbook and the one most prompts/refresher labels were tuned against.
 _TEMPLATE_FALLBACKS = ("GOOG-Mar-09-2023.xlsx", "META-Feb-02-2026.xlsx", "AMZN-Feb-06-2026.xlsx")
 
 
@@ -115,7 +117,7 @@ def seed_workbook(
             f"refusing to overwrite existing workbook: {output_path} (pass force=True)"
         )
 
-    template_path = _resolve_template(template_dir)
+    template_path = _resolve_template(template_dir, ticker)
     quarters_data = _load_quarterly_records(ticker, fmp_quarterly_dir, quarters)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -139,13 +141,21 @@ def write_historicals_sheet(workbook_path: Path, fmp_quarterly_dir: Path, ticker
     return cells
 
 
-def _resolve_template(template_dir: Path) -> Path:
+def _resolve_template(template_dir: Path, ticker: str) -> Path:
+    # Prefer a ticker-specific example so AMZN/META/etc. inherit their own
+    # Forecast/Model/Valuation rather than GOOG's. Sort and pick the last so
+    # if multiple snapshots exist (AMZN-Feb-06-2026.xlsx vs an older one), the
+    # lexicographically-latest filename wins.
+    ticker_matches = sorted(template_dir.glob(f"{ticker}-*.xlsx"))
+    if ticker_matches:
+        return ticker_matches[-1]
     for name in _TEMPLATE_FALLBACKS:
         candidate = template_dir / name
         if candidate.exists():
             return candidate
     raise SeederError(
-        f"no template found in {template_dir} (tried: {', '.join(_TEMPLATE_FALLBACKS)})"
+        f"no template found in {template_dir} "
+        f"(tried: {ticker}-*.xlsx, then {', '.join(_TEMPLATE_FALLBACKS)})"
     )
 
 

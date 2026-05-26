@@ -201,6 +201,57 @@ def test_seeder_missing_income_file_raises(
         seeder.seed_workbook("NOPE", template_dir, empty_fmp, tmp_path / "NOPE.xlsx")
 
 
+def test_seeder_prefers_ticker_specific_template(tmp_path: Path) -> None:
+    """When `{TICKER}-*.xlsx` exists alongside the GOOG fallback, the seeder
+    must pick the ticker-specific file. Without this every seeded workbook
+    inherits GOOG's Forecast/Model/Valuation regardless of ticker.
+    """
+    template_dir = tmp_path / "templates"
+    template_dir.mkdir()
+
+    # AMZN template — distinct marker content so the signature differs from GOOG's.
+    amzn_wb = openpyxl.Workbook()
+    amzn_forecast = amzn_wb.active
+    assert amzn_forecast is not None
+    amzn_forecast.title = "Forecast"
+    amzn_forecast["A1"] = "AMZN forecast marker"
+    amzn_forecast["B1"] = 0.20
+    amzn_wb.create_sheet("Model")["A1"] = "AMZN model marker"
+    amzn_wb.create_sheet("Valuation")["A1"] = "AMZN valuation marker"
+    amzn_path = template_dir / "AMZN-Feb-06-2026.xlsx"
+    amzn_wb.save(str(amzn_path))
+
+    # GOOG fallback — present but should NOT be used when ticker is AMZN.
+    goog_wb = openpyxl.Workbook()
+    goog_forecast = goog_wb.active
+    assert goog_forecast is not None
+    goog_forecast.title = "Forecast"
+    goog_forecast["A1"] = "GOOG forecast marker"
+    goog_forecast["B1"] = 0.10
+    goog_wb.create_sheet("Model")["A1"] = "GOOG model marker"
+    goog_wb.create_sheet("Valuation")["A1"] = "GOOG valuation marker"
+    goog_path = template_dir / "GOOG-Mar-09-2023.xlsx"
+    goog_wb.save(str(goog_path))
+
+    # FMP data for AMZN — reuse the TEST fixtures' shape, just renamed.
+    fmp_dir = tmp_path / "fmp"
+    fmp_dir.mkdir()
+    (fmp_dir / "AMZN_income_statement_quarterly.json").write_text(json.dumps(_INCOME_RECORDS))
+    (fmp_dir / "AMZN_balance_sheet_quarterly.json").write_text(json.dumps(_BALANCE_RECORDS))
+    (fmp_dir / "AMZN_cash_flow_quarterly.json").write_text(json.dumps(_CASHFLOW_RECORDS))
+
+    out = tmp_path / "AMZN.xlsx"
+    seeder.seed_workbook("AMZN", template_dir, fmp_dir, out)
+
+    # The seeded workbook's non-Historicals sheets must hash-match the AMZN
+    # template's, not the GOOG fallback's.
+    output_sig = _signature_per_sheet(out, exclude=seeder.HISTORICALS_SHEET)
+    amzn_sig = _signature_per_sheet(amzn_path)
+    goog_sig = _signature_per_sheet(goog_path)
+    assert output_sig == amzn_sig, "AMZN seed must inherit from AMZN-*.xlsx"
+    assert output_sig != goog_sig, "AMZN seed must not inherit from GOOG fallback"
+
+
 # ---------------------------------------------------------------------------
 # Refresher — user-owned sheets must round-trip byte-identical
 # ---------------------------------------------------------------------------
