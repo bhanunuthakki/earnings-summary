@@ -96,6 +96,12 @@ LLM_MODELS: dict[str, str] = {
     "thesis_pass_b": DEFAULT_MODEL,
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
+    # Investor-deck extraction: long-context structured-output. Decks run
+    # ~30-60 pages of dense slide content; Sonnet's reasoning is needed to
+    # distinguish forward-looking commitments from historical recap and to
+    # bucket each target into the right `target_kind` enum value. Haiku
+    # under-counted on this task in scratch experimentation.
+    "investor_deck_extraction": DEFAULT_MODEL,
     # Company description is the analytical spine of the memo — Opus follows
     # nuanced instruction-following ("don't write Wikipedia-style", "anchor
     # on thesis pillars") far better than Sonnet on this kind of writeup
