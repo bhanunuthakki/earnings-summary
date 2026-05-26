@@ -61,7 +61,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             sha256 TEXT NOT NULL,
             fetched_at TIMESTAMP NOT NULL,
             fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL
+            raw_bytes_size INTEGER NOT NULL,
+            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
         );
         CREATE TABLE segment_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -543,21 +544,18 @@ def test_backfill_matches_unique_period_tuples(
 
 
 def test_migration_module_metadata() -> None:
-    """0053_segment_junction declares the expected revision id and merges
-    both pre-existing heads — guards against accidental rename / re-chain."""
+    """0055_segment_junction declares the expected revision id and chains
+    off the single 0054 head — guards against accidental rename / re-chain."""
     import importlib.util
 
     here = Path(__file__).resolve().parent.parent
     spec = importlib.util.spec_from_file_location(
-        "mig_0053",
-        here / "alembic" / "versions" / "0053_segment_junction.py",
+        "mig_0055",
+        here / "alembic" / "versions" / "0055_segment_junction.py",
     )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
-    assert mod.revision == "0053_segment_junction"
-    assert mod.down_revision == (
-        "0047_document_table_extractions",
-        "0051_tracked_processing_tier",
-    )
+    assert mod.revision == "0055_segment_junction"
+    assert mod.down_revision == "0054_audit_columns"

@@ -19,10 +19,13 @@ unchanged so existing loaders / renderers keep working):
                         cross-tab queries.
 
 Idempotent: re-running upgrade is safe; tables only get created if missing.
-Also merges the two parallel heads (0047, 0051) back into a single chain.
+Chains off 0054_audit_columns (which already merged the sibling 0053 heads —
+strategic_targets, thesis_evaluations_soft_rules, timeseries_signals — into
+a single chain). Renamed from 0053_segment_junction to 0055 to avoid the
+revision collision after those siblings landed first.
 
-Revision ID: 0053_segment_junction
-Revises: 0047_document_table_extractions, 0051_tracked_processing_tier
+Revision ID: 0055_segment_junction
+Revises: 0054_audit_columns
 Create Date: 2026-05-25
 """
 
@@ -34,11 +37,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0053_segment_junction"
-down_revision: str | Sequence[str] | None = (
-    "0047_document_table_extractions",
-    "0051_tracked_processing_tier",
-)
+revision: str = "0055_segment_junction"
+down_revision: str | Sequence[str] | None = "0054_audit_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
