@@ -38,6 +38,7 @@ from pipeline.analytical_dashboard import (  # noqa: E402
     TriggerLadderRow,
     build_analytical_dashboard,
 )
+from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
 log = logging.getLogger("build_analytical_dashboard")
 
@@ -51,11 +52,17 @@ _TRIGGER_TONE: dict[str, str] = {
 }
 
 
-def render_html(dash: AnalyticalDashboard, *, generated_at: datetime) -> str:
+def render_html(
+    dash: AnalyticalDashboard,
+    *,
+    generated_at: datetime,
+    tier_coverage: dict[str, dict[str, int]] | None = None,
+) -> str:
     parts: list[str] = [
         _PAGE_HEAD.format(
             generated_at=escape(generated_at.isoformat(timespec="seconds"))
         ),
+        _tier_coverage_strip(tier_coverage or {}),
         # Top of page: portfolio-wide synthesis when cached
         _portfolio_synthesis_section(dash.portfolio_synthesis_md),
         _per_ticker_reread_section(dash.per_ticker_reread),
@@ -248,6 +255,65 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         f'<td class="{block_class}">{block_label}</td>'
         '</tr>'
     )
+
+
+def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
+    """Compact one-line summary of "how stale is each tier right now?".
+
+    Empty-coverage case (no tracked tickers / no DB) renders nothing rather
+    than an empty bar — keeps the dashboard clean for first-run setups.
+    """
+    if not coverage:
+        return ""
+    populated = any(v.get("total", 0) > 0 for v in coverage.values())
+    if not populated:
+        return ""
+
+    parts: list[str] = ['<div class="tier-strip"><span class="tier-strip-label">Tier coverage:</span>']
+    chips: list[str] = []
+    for tier in ("P1", "P2", "P3"):
+        c = coverage.get(tier, {})
+        fresh = int(c.get("fresh", 0))
+        stale = int(c.get("stale", 0))
+        total = int(c.get("total", 0))
+        if total == 0:
+            chips.append(f'<span class="tier-chip tier-empty">{tier}: 0 tracked</span>')
+            continue
+        # Pretty-printer for large counts ("1.8k / 2.3k") on P3.
+        fresh_disp = _fmt_count(fresh)
+        total_disp = _fmt_count(total)
+        if stale == 0:
+            chips.append(
+                f'<span class="tier-chip tier-ok" title="{tier} — all fresh">'
+                f"{tier}: {fresh_disp} / {total_disp} fresh</span>"
+            )
+        else:
+            chips.append(
+                f'<span class="tier-chip tier-stale" title="To force-refresh: '
+                f"python execution/daily_fetch_and_brief.py --ignore-tier "
+                f'(or run the {_tier_cron_hint(tier)} cron)">'
+                f"{tier}: {fresh_disp} / {total_disp} fresh "
+                f'<span class="tier-stale-count">({stale} stale)</span></span>'
+            )
+    parts.append(" · ".join(chips))
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _fmt_count(n: int) -> str:
+    """1843 → '1.8k'; 47 → '47'."""
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def _tier_cron_hint(tier: str) -> str:
+    """Pretty hint for which cron entry forces a stale-tier rebuild."""
+    if tier == "P1":
+        return "daily"
+    if tier == "P2":
+        return "weekly P2 lens"
+    return "monthly P3"
 
 
 def _portfolio_synthesis_section(content_md: str | None) -> str:
@@ -588,6 +654,14 @@ _PAGE_HEAD = """<!doctype html>
   .block-soft {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; }}
   .budget-footer {{ margin-top: 12px; font-size: 13px; color: #ccc; }}
   .budget-footer strong {{ color: #f5f5f0; }}
+  /* Tier coverage strip */
+  .tier-strip {{ background: #16171a; border: 1px solid #2a2c30; border-radius: 6px; padding: 10px 14px; margin-bottom: 22px; font-size: 13px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
+  .tier-strip-label {{ color: #888; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }}
+  .tier-chip {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 2px 6px; border-radius: 3px; cursor: help; }}
+  .tier-ok {{ color: #4ade80; }}
+  .tier-stale {{ color: #fbbf24; }}
+  .tier-stale-count {{ color: #f87171; font-weight: 600; }}
+  .tier-empty {{ color: #666; }}
 </style>
 </head>
 <body>
@@ -619,7 +693,8 @@ def main() -> int:
         insider_window_days=args.insider_window_days,
         insider_top_n=args.insider_top_n,
     )
-    html = render_html(dash, generated_at=datetime.now(UTC))
+    coverage = tier_coverage_summary(args.repo_root)
+    html = render_html(dash, generated_at=datetime.now(UTC), tier_coverage=coverage)
 
     if args.out is None:
         out_dir = args.repo_root / "output" / "dashboard"

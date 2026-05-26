@@ -4,9 +4,14 @@ Runs after the FMP/SEC fetch crons (which write to financial_facts via the
 canonical extractors). The fact-table writes flip
 `tracked_companies.brief_dirty = 1` via the SQL triggers from migration 0026.
 
-For each dirty ticker, this worker first checks two gates (B + C from the
-Phase B+ proposal):
+For each dirty ticker, this worker checks three gates before doing real work:
 
+  A. Tier-cadence gate (this gate is the tier-aware scalability work):
+     processing_tier P1 always runs daily, P2 only if last_built_at > 7d,
+     P3 only if last_built_at > 30d. This filters the daily tick down to a
+     manageable subset of the ~2.4k tracked universe. Bypassed with
+     --ignore-tier (preserves the pre-tier behavior of running on every
+     dirty ticker).
   B. Material-change gate: hash (max financial_facts.period_end + max
      kpi_facts.period_end + transcripts count + commitments count + holdings
      JSON bytes + DCF workbook mtime). Compare to `last_brief_hash`. If they
@@ -14,7 +19,7 @@ Phase B+ proposal):
   C. Evaluation cadence: if list_type='evaluation' AND last_built_at < 7
      days ago → skip rebuild. (Portfolio remains daily.)
 
-If neither gate skips, runs the synthesize → publish chain:
+If no gate skips, runs the synthesize → publish chain:
 
   thesis evaluator    → writes a fresh thesis_evaluations row
   match_commitments   → fills Say-Do outcomes for periods that just landed
@@ -27,10 +32,11 @@ is run as a subprocess so a failure in one ticker doesn't poison the worker's
 Python state.
 
 Usage:
-    python execution/daily_fetch_and_brief.py                   # all dirty tickers
-    python execution/daily_fetch_and_brief.py --ticker META     # force-refresh one (bypasses both gates)
+    python execution/daily_fetch_and_brief.py                   # dirty tickers due per tier cadence
+    python execution/daily_fetch_and_brief.py --ticker META     # force-refresh one (bypasses all gates)
     python execution/daily_fetch_and_brief.py --enable-llm      # populate §8/§9 LLM sections
-    python execution/daily_fetch_and_brief.py --force           # bypass both gates for all queued tickers
+    python execution/daily_fetch_and_brief.py --force           # bypass gates B + C for queued tickers
+    python execution/daily_fetch_and_brief.py --ignore-tier     # bypass tier-cadence gate (run on all dirty)
     python execution/daily_fetch_and_brief.py --eval-cadence-days 14  # tune evaluation cadence
 """
 
@@ -49,6 +55,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
 
 DEFAULT_EVAL_CADENCE_DAYS = 7
 DEFAULT_NO_CHANGE_TTL_DAYS = 7
@@ -64,7 +71,16 @@ def main() -> int:
 
     with sqlite3.connect(str(db_path)) as conn:
         conn.row_factory = sqlite3.Row
-        tickers = _resolve_tickers(conn, args)
+        all_tickers = _resolve_tickers(conn, args)
+
+    tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, args)
+
+    if skipped_by_tier:
+        print(
+            json.dumps(
+                {"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}
+            )
+        )
 
     if not tickers:
         print(json.dumps({"event": "no_dirty_tickers"}))
@@ -77,10 +93,56 @@ def main() -> int:
 
     print(
         json.dumps(
-            {"started_at": datetime.now(timezone.utc).isoformat(), "tickers": results}, indent=2
+            {
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "tickers": results,
+                "skipped_by_tier": skipped_by_tier,
+            },
+            indent=2,
         )
     )
     return 0
+
+
+def _apply_tier_filter(
+    candidate_tickers: list[str], repo_root: Path, args: argparse.Namespace
+) -> tuple[list[str], dict[str, int]]:
+    """Intersect the candidate set with the tickers due per the daily-tier cadence.
+
+    With `--ignore-tier`, `--ticker`, or `--force`: returns every candidate
+    (the tier gate is bypassed). Per-tier skip counts are logged for cron
+    visibility.
+    """
+    # Explicit single-ticker or force flags bypass the tier gate; the user is
+    # asking for an unconditional rebuild.
+    if args.ignore_tier or args.ticker or args.force:
+        return (list(candidate_tickers), {})
+
+    due = set(tickers_due_for_refresh(repo_root, "daily"))
+    accepted: list[str] = []
+    skipped: list[str] = []
+    for t in candidate_tickers:
+        if t.upper() in due:
+            accepted.append(t)
+        else:
+            skipped.append(t)
+
+    # Per-tier breakdown of what we skipped, for cron log readability.
+    skipped_by_tier: dict[str, int] = {}
+    if skipped:
+        db_path = repo_root / "data" / "portfolio.db"
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            placeholders = ",".join("?" * len(skipped))
+            rows = conn.execute(
+                f"SELECT UPPER(ticker) AS ticker, processing_tier "
+                f"FROM tracked_companies WHERE UPPER(ticker) IN ({placeholders})",
+                [s.upper() for s in skipped],
+            ).fetchall()
+            for r in rows:
+                tier = (r["processing_tier"] or "P3").upper()
+                skipped_by_tier[tier] = skipped_by_tier.get(tier, 0) + 1
+    return (accepted, skipped_by_tier)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -113,6 +175,12 @@ def _parse_args() -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Bypass material-change gate (B) and evaluation-cadence gate (C). Rebuilds every queued ticker.",
+    )
+    p.add_argument(
+        "--ignore-tier",
+        action="store_true",
+        help="Bypass tier-cadence gate (A) — run on every dirty ticker regardless of processing_tier. "
+        "Preserves pre-tier behavior; gates B + C still apply.",
     )
     p.add_argument(
         "--eval-cadence-days",
