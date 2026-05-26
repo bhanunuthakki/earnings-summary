@@ -33,10 +33,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from models.facts import FiscalPeriodType, SegmentFact, Unit
-from pipeline.segment_junction_writer import (
-    segment_fact_to_dimension,
-    write_segment_facts_junction,
-)
+from pipeline.segment_junction_writer import write_segment_facts_via_junction
 
 _DOC_TYPES: frozenset[str] = frozenset({"fmp_10k_json", "fmp_10q_json"})
 _NBSP = "\xa0"
@@ -561,85 +558,27 @@ def extract_segment_oi_from_record(
 
 
 def _insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) -> int:
-    insert_sql = (
-        "INSERT OR IGNORE INTO segment_facts "
-        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-        " currency, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    inserted = 0
-    for f in facts:
-        result = conn.execute(
-            insert_sql,
-            (
-                f.ticker,
-                f.period_end,
-                f.fiscal_period_type.value,
-                f.segment_name,
-                f.metric,
-                str(f.value),
-                f.currency.value if f.currency is not None else None,
-                f.unit.value,
-                f.source_doc_id,
-            ),
-        )
-        if result.rowcount > 0:
-            inserted += 1
-    return inserted
+    """Persist the batch through segment_periods + segment_dimensions.
 
-
-def _junction_tables_present(conn: sqlite3.Connection) -> bool:
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master "
-        "WHERE type='table' AND name IN ('segment_periods', 'segment_dimensions')"
-    )
-    return len(cur.fetchall()) >= 2
-
-
-def _mirror_facts_to_junction(
-    conn: sqlite3.Connection, facts: list[SegmentFact], source_doc_id: int
-) -> None:
-    """Mirror ACTUAL-unit facts (OI + capex) into segment_periods + segment_dimensions.
-
-    Headcount (Unit.COUNT) is intentionally skipped: the junction's
-    `segment_periods` row carries a single `unit` per (ticker, period_end,
-    fiscal_period_type, source_doc_id) tuple, so a count value can't share a
-    period anchor with a currency-scaled one. Headcount stays in the legacy
-    `segment_facts` table only — which is where the §4 renderer reads it
-    from anyway. Failure-quiet: if migration 0055 hasn't run, the function
-    returns without raising so the legacy path keeps working.
+    Returns the number of NEW dimension rows inserted — caller treats this
+    as the "facts written" count (a duplicate run inserts zero). Mixed-unit
+    batches (ACTUAL revenue/OI/capex + COUNT headcount) share one period
+    anchor; the writer stores each dim's unit on its row when it differs
+    from the period anchor's unit (per migration 0057).
     """
-    if not _junction_tables_present(conn):
-        return
-    by_period: dict[tuple[str, datetime, FiscalPeriodType], list[SegmentFact]] = {}
-    for f in facts:
-        if f.unit != Unit.ACTUAL:
-            continue
-        by_period.setdefault((f.ticker.upper(), f.period_end, f.fiscal_period_type), []).append(f)
-    for (ticker, period_end, period_type), group in by_period.items():
-        dimensions = [
-            segment_fact_to_dimension(f.segment_name, f.metric, f.value) for f in group
-        ]
-        write_segment_facts_junction(
-            conn,
-            ticker=ticker,
-            period_end=period_end,
-            fiscal_period_type=period_type,
-            source_doc_id=source_doc_id,
-            currency=group[0].currency,
-            unit=Unit.ACTUAL,
-            dimensions=dimensions,
-        )
+    return write_segment_facts_via_junction(conn, facts)
 
 
 def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
-    """Read 10-K or 10-Q JSON, walk segment-OI sections, write segment_facts. Idempotent.
+    """Read 10-K or 10-Q JSON, walk segment-OI sections, write the junction. Idempotent.
 
     Auto-detects 10-K vs 10-Q via doc_type; the per-column period resolver
-    handles both annual and quarterly section shapes. Also mirrors the
-    ACTUAL-unit facts (OI + capex) into the junction when migration 0055
-    is applied — keeps the cross-tab tables in sync with the legacy path
-    for any consumer that reads from segment_dimensions.
+    handles both annual and quarterly section shapes. All fact rows (OI,
+    capex, headcount) flow through `_insert_segment_facts` into
+    segment_periods + segment_dimensions — the legacy `segment_facts` table
+    was retired in migration 0057, and `_mirror_facts_to_junction` was
+    removed since `_insert_segment_facts` is now the single persistence
+    path.
     """
     cur = conn.cursor()
     cur.execute("SELECT ticker, file_path, doc_type FROM documents WHERE id = ?", (document_id,))
@@ -660,6 +599,5 @@ def extract_segment_oi_facts(conn: sqlite3.Connection, document_id: int, project
 
     facts = extract_segment_oi_from_record(record, source_doc_id=document_id, ticker=ticker)
     inserted = _insert_segment_facts(conn, facts)
-    _mirror_facts_to_junction(conn, facts, source_doc_id=document_id)
     conn.commit()
     return inserted

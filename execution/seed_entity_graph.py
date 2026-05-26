@@ -12,10 +12,10 @@ This is the workhorse that fixes the matching problem the user flagged
      parent_entity_id pointing to the segment. Register `product_of`.
   4. For every competitor mentioned, create a competitor-kind entity (or
      reuse the company entity if it's a tracked ticker). Wire `competes_with`.
-  5. Backfill `segment_facts.segment_entity_id` for every existing row by
-     resolving segment_name against entity_aliases (deterministic match).
-  6. For unmapped segment_facts rows, log them as `mapping_proposals` for
-     LLM canonicalization (separate cron).
+  5. Backfill `segment_dimensions.segment_entity_id` for every existing row
+     by resolving dim_name against entity_aliases (deterministic match).
+  6. For unmapped segment_dimensions rows, log them as `mapping_proposals`
+     for LLM canonicalization (separate cron).
 
 Idempotent: re-running applies new aliases but skips existing rows.
 
@@ -213,21 +213,28 @@ def seed_all_portfolio() -> dict[str, int]:
 
 
 def backfill_segment_facts_entity_id(repo_root: Path) -> tuple[int, int]:
-    """For every segment_facts row, look up its segment_name in entity_aliases
-    (scoped to the ticker's segments) and set segment_entity_id. Returns
-    (resolved_count, unresolved_count)."""
+    """For every unmapped segment_dimensions row, resolve dim_name against
+    entity_aliases (scoped to the period's ticker) and set
+    segment_entity_id. Returns (resolved_count, unresolved_count).
+
+    Function name retained for backwards compatibility with the CLI driver
+    and any external scripts referencing it; the underlying table is now
+    segment_dimensions.
+    """
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return (0, 0)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        # Get tickers + their segment entity_ids via the company entity
-        # For each (ticker, segment_name) → look up entity_id of the segment
+        # For each (ticker, dim_name) with NULL segment_entity_id → look up
+        # entity_id of the matching segment.
         rows_to_resolve = conn.execute(
             """
-            SELECT DISTINCT ticker, segment_name FROM segment_facts
-            WHERE segment_entity_id IS NULL
+            SELECT DISTINCT sp.ticker AS ticker, sd.dim_name AS segment_name
+            FROM segment_periods sp
+            JOIN segment_dimensions sd ON sd.period_id = sp.id
+            WHERE sd.segment_entity_id IS NULL
             """
         ).fetchall()
         resolved = 0
@@ -239,16 +246,25 @@ def backfill_segment_facts_entity_id(repo_root: Path) -> tuple[int, int]:
             if not segment_name:
                 unresolved += 1
                 continue
-            # Find segment entity_ids that belong to this ticker
             seg_id = _resolve_segment_for_ticker(conn, ticker, segment_name)
             if seg_id is None:
                 unresolved += 1
                 unresolved_pairs.append((ticker, segment_name))
                 continue
-            # Backfill all rows matching this (ticker, segment_name)
+            # Backfill every dim row matching this (ticker, dim_name).
             cur = conn.execute(
-                "UPDATE segment_facts SET segment_entity_id = ? "
-                "WHERE ticker = ? AND segment_name = ? AND segment_entity_id IS NULL",
+                """
+                UPDATE segment_dimensions
+                SET segment_entity_id = ?
+                WHERE id IN (
+                    SELECT sd.id
+                    FROM segment_dimensions sd
+                    JOIN segment_periods sp ON sp.id = sd.period_id
+                    WHERE sp.ticker = ?
+                      AND sd.dim_name = ?
+                      AND sd.segment_entity_id IS NULL
+                )
+                """,
                 (seg_id, ticker, segment_name),
             )
             resolved += cur.rowcount
@@ -268,8 +284,9 @@ def backfill_segment_facts_entity_id(repo_root: Path) -> tuple[int, int]:
                 proposed_by="seed_backfill",
                 ticker=ticker,
                 source_excerpt=(
-                    f"segment_facts row(s) for ticker={ticker} have segment_name="
-                    f"'{segment_name}' which doesn't match any seeded segment alias."
+                    f"segment_dimensions row(s) for ticker={ticker} have "
+                    f"dim_name='{segment_name}' which doesn't match any "
+                    f"seeded segment alias."
                 ),
             )
         return (resolved, unresolved)
@@ -352,7 +369,7 @@ def main() -> int:
     parser.add_argument(
         "--backfill-only",
         action="store_true",
-        help="Skip the seed step; just rerun segment_facts backfill.",
+        help="Skip the seed step; just rerun segment_dimensions backfill.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -383,10 +400,10 @@ def main() -> int:
         aliases = conn.execute("SELECT COUNT(*) FROM entity_aliases").fetchone()[0]
         rels = conn.execute("SELECT COUNT(*) FROM entity_relationships").fetchone()[0]
         nulled = conn.execute(
-            "SELECT COUNT(*) FROM segment_facts WHERE segment_entity_id IS NULL"
+            "SELECT COUNT(*) FROM segment_dimensions WHERE segment_entity_id IS NULL"
         ).fetchone()[0]
         mapped = conn.execute(
-            "SELECT COUNT(*) FROM segment_facts WHERE segment_entity_id IS NOT NULL"
+            "SELECT COUNT(*) FROM segment_dimensions WHERE segment_entity_id IS NOT NULL"
         ).fetchone()[0]
         proposals = conn.execute(
             "SELECT COUNT(*) FROM mapping_proposals WHERE status = 'pending_review'"
@@ -399,8 +416,8 @@ def main() -> int:
         f"  entities:              {ent}\n"
         f"  aliases:               {aliases}\n"
         f"  relationships:         {rels}\n"
-        f"  segment_facts mapped:  {mapped}\n"
-        f"  segment_facts unmapped:{nulled}\n"
+        f"  segment_dimensions mapped:  {mapped}\n"
+        f"  segment_dimensions unmapped:{nulled}\n"
         f"  pending mapping proposals: {proposals}\n"
     )
     return 0

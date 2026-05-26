@@ -72,17 +72,30 @@ def load_quarterly(ticker: str, n: int = 16):
 
 
 def load_segments(ticker: str, metric: str, n: int = 12):
+    if metric == "revenue_by_product":
+        dim_type, junction_metric = ("product", "revenue")
+    elif metric == "revenue_by_geography":
+        dim_type, junction_metric = ("geography", "revenue")
+    elif metric == "operating_income":
+        dim_type, junction_metric = ("business_unit", "operating_income")
+    else:
+        dim_type, junction_metric = ("business_unit", metric)
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT period_end, segment_name, value
-        FROM segment_facts
-        WHERE ticker = ? AND metric = ?
-          AND fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-        ORDER BY period_end ASC
+        SELECT sp.period_end AS period_end,
+               sd.dim_name AS segment_name,
+               sd.value AS value
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+          AND sp.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
+        ORDER BY sp.period_end ASC
         """,
-        (ticker, metric),
+        (ticker, dim_type, junction_metric),
     ).fetchall()
     conn.close()
     periods, by_seg = [], {}

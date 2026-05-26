@@ -29,6 +29,7 @@ from models.facts import (
     FiscalPeriodType,
     SegmentDimType,
     SegmentDimension,
+    SegmentFact,
     Unit,
 )
 
@@ -98,7 +99,12 @@ def _dimension_exists(
     value: Decimal,
 ) -> bool:
     """A dim row is considered a duplicate when (period_id, dim_type, dim_name,
-    metric, value) all match. Re-running the writer on the same source is a no-op."""
+    metric, value) all match. Re-running the writer on the same source is a no-op.
+
+    The per-dim `unit` column is intentionally NOT part of the dedup key —
+    a metric's unit is determined by the metric itself (capex → actual,
+    headcount → count, etc.), so a unit flip on a re-run would indicate a
+    bug upstream rather than legitimate new data."""
     cur = conn.execute(
         """
         SELECT 1 FROM segment_dimensions
@@ -112,6 +118,20 @@ def _dimension_exists(
         (period_id, dim_type.value, dim_name, metric, str(value)),
     )
     return cur.fetchone() is not None
+
+
+def _segment_dimensions_has_unit_column(conn: sqlite3.Connection) -> bool:
+    """True if migration 0057 has added the per-dim unit column.
+
+    Cached as a single PRAGMA call to keep the writer hot path light; the
+    inspection runs once per `write_segment_facts_junction` invocation. On
+    pre-0057 schemas the writer silently falls back to omitting the column,
+    matching the pre-extension behavior."""
+    try:
+        rows = conn.execute("PRAGMA table_info(segment_dimensions)").fetchall()
+    except sqlite3.Error:
+        return False
+    return any(str(r[1]) == "unit" for r in rows)
 
 
 def write_segment_facts_junction(
@@ -130,6 +150,14 @@ def write_segment_facts_junction(
     Returns (period_inserted, dimensions_inserted). `period_inserted` is 1
     when a fresh period row was created and 0 when it already existed.
     Caller manages the surrounding transaction; this function does not commit.
+
+    Per-dim unit handling: if a `SegmentDimension.unit` is set AND differs
+    from the period's `unit` argument, the per-dim value is stored on the
+    segment_dimensions row. This lets a single period anchor host mixed-unit
+    cells (e.g. ACTUAL revenue + COUNT headcount under the same period).
+    Requires migration 0057 to have added the `unit` column; on pre-0057
+    schemas the writer silently omits the per-dim unit (legacy single-unit
+    behavior).
     """
     period_id, period_inserted = _ensure_period(
         conn,
@@ -140,6 +168,7 @@ def write_segment_facts_junction(
         currency=currency,
         unit=unit,
     )
+    has_unit_column = _segment_dimensions_has_unit_column(conn)
 
     dims_inserted = 0
     for dim in dimensions:
@@ -152,20 +181,44 @@ def write_segment_facts_junction(
             value=dim.value,
         ):
             continue
-        conn.execute(
-            """
-            INSERT INTO segment_dimensions
-              (period_id, dim_type, dim_name, value, metric)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (
-                period_id,
-                dim.dim_type.value,
-                dim.dim_name,
-                str(dim.value),
-                dim.metric,
-            ),
-        )
+        # Store the dim's unit only when (a) the column exists and (b) it
+        # differs from the period's unit — keeps the column NULL when the
+        # dim's unit is just the period's unit, matching the "inherit"
+        # default the reader expects.
+        dim_unit_value: str | None = None
+        if has_unit_column and dim.unit is not None and dim.unit != unit:
+            dim_unit_value = dim.unit.value
+        if has_unit_column:
+            conn.execute(
+                """
+                INSERT INTO segment_dimensions
+                  (period_id, dim_type, dim_name, value, metric, unit)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    period_id,
+                    dim.dim_type.value,
+                    dim.dim_name,
+                    str(dim.value),
+                    dim.metric,
+                    dim_unit_value,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO segment_dimensions
+                  (period_id, dim_type, dim_name, value, metric)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    period_id,
+                    dim.dim_type.value,
+                    dim.dim_name,
+                    str(dim.value),
+                    dim.metric,
+                ),
+            )
         dims_inserted += 1
     return (1 if period_inserted else 0, dims_inserted)
 
@@ -197,13 +250,22 @@ _LEGACY_METRIC_TO_JUNCTION_METRIC: dict[str, str] = {
 
 
 def segment_fact_to_dimension(
-    segment_name: str, legacy_metric: str, value: Decimal
+    segment_name: str,
+    legacy_metric: str,
+    value: Decimal,
+    *,
+    unit: Unit | None = None,
 ) -> SegmentDimension:
     """Translate a legacy `segment_facts` row into a single junction dimension.
 
     Falls back to dim_type=BUSINESS_UNIT for unknown legacy metrics and keeps
     the legacy metric string verbatim — keeps backfill total-loss-free for
     non-standard metrics emitted by future extractors.
+
+    `unit` is optional: when set (and different from the period anchor's unit
+    at write time) it tells the writer to store the dim's unit on the
+    segment_dimensions row, allowing mixed-unit cells under one period
+    anchor — needed for headcount (Unit.COUNT) alongside ACTUAL-unit cells.
     """
     dim_type = _LEGACY_METRIC_TO_DIM_TYPE.get(legacy_metric, SegmentDimType.BUSINESS_UNIT)
     metric = _LEGACY_METRIC_TO_JUNCTION_METRIC.get(legacy_metric, legacy_metric)
@@ -212,4 +274,72 @@ def segment_fact_to_dimension(
         dim_name=segment_name,
         value=value,
         metric=metric,
+        unit=unit,
     )
+
+
+def write_segment_facts_via_junction(
+    conn: sqlite3.Connection, facts: Iterable[SegmentFact]
+) -> int:
+    """Write a batch of legacy-shaped SegmentFact objects through the junction.
+
+    Groups facts on the segment_periods natural key (ticker, period_end,
+    fiscal_period_type, source_doc_id) — currency and unit are NOT part of
+    the group key. Per-fact currency and unit travel onto the SegmentDimension
+    objects; the period anchor's currency/unit come from the first fact in
+    the group (and the writer stores the dim's unit on the dim row whenever
+    it differs from the period's). This lets a single 10-K extraction batch
+    that mixes Unit.ACTUAL (OI / capex) with Unit.COUNT (headcount) share
+    one period anchor instead of fighting the natural-key uniqueness.
+
+    Returns the total number of NEW dimension rows inserted (period rows
+    already in place are not counted, matching the legacy
+    `_insert_segment_facts` semantics).
+
+    Used by both `compute.segment_oi_10k._insert_segment_facts` and
+    `compute.segments_nu._insert_segment_facts` after the segment_facts
+    table was retired. Caller manages the transaction.
+    """
+    grouped: dict[
+        tuple[str, datetime, FiscalPeriodType, int],
+        list[SegmentFact],
+    ] = {}
+    for f in facts:
+        key = (
+            f.ticker.upper(),
+            f.period_end,
+            f.fiscal_period_type,
+            f.source_doc_id,
+        )
+        grouped.setdefault(key, []).append(f)
+
+    total_dims_inserted = 0
+    for (
+        ticker,
+        period_end,
+        period_type,
+        source_doc_id,
+    ), group in grouped.items():
+        # Period anchor's currency/unit come from the first fact. The
+        # remaining facts in the group MAY have a different unit — in that
+        # case `write_segment_facts_junction` stores their unit on the dim
+        # row (via SegmentDimension.unit).
+        anchor = group[0]
+        dimensions = [
+            segment_fact_to_dimension(
+                f.segment_name, f.metric, f.value, unit=f.unit
+            )
+            for f in group
+        ]
+        _, dims_inserted = write_segment_facts_junction(
+            conn,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=period_type,
+            source_doc_id=source_doc_id,
+            currency=anchor.currency,
+            unit=anchor.unit,
+            dimensions=dimensions,
+        )
+        total_dims_inserted += dims_inserted
+    return total_dims_inserted

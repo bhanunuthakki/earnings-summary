@@ -62,25 +62,38 @@ _CACHED_RESULT = {
 
 
 def _create_repo(tmp_path: Path) -> Path:
-    """Build the minimum repo layout the section builder needs."""
+    """Build the minimum repo layout the section builder needs.
+
+    Bootstraps the post-0056 junction shape (segment_periods +
+    segment_dimensions); the section reader looks for segment_dimensions
+    when deciding whether the weighting overlay is renderable.
+    """
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "company_description").mkdir()
     (tmp_path / "data" / "historical" / "fmp").mkdir(parents=True)
-    # Empty DB with segment_facts table — section can still tolerate empty rows.
     conn = sqlite3.connect(str(tmp_path / "data" / "portfolio.db"))
     conn.executescript(
         """
-        CREATE TABLE segment_facts (
+        CREATE TABLE segment_periods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            segment_name TEXT NOT NULL,
-            metric TEXT NOT NULL,
-            value NUMERIC NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
+            ticker VARCHAR(16) NOT NULL,
+            period_end DATETIME NOT NULL,
+            fiscal_period_type VARCHAR(8) NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            currency VARCHAR(8),
+            unit VARCHAR(16) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_segment_periods_provenance UNIQUE
+              (ticker, period_end, fiscal_period_type, source_doc_id)
+        );
+        CREATE TABLE segment_dimensions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+            dim_type VARCHAR(16) NOT NULL,
+            dim_name VARCHAR(128) NOT NULL,
+            value NUMERIC(20, 4) NOT NULL,
+            metric VARCHAR(32) NOT NULL,
+            segment_entity_id INTEGER
         );
         """
     )
@@ -98,14 +111,46 @@ def _write_cache(repo: Path, ticker: str, payload: dict[str, object]) -> None:
 def _seed_segment_rows(
     repo: Path, ticker: str, metric: str, rows: list[tuple[str, str, float]]
 ) -> None:
-    """Each row: (period_end ISO, segment_name, value_usd)."""
+    """Each row: (period_end ISO, segment_name, value_usd).
+
+    Translates the legacy `metric` (`revenue_by_product` / `revenue_by_geography`
+    / `operating_income`) into the junction's (dim_type, junction_metric)
+    pair, then upserts one segment_periods row per period and one
+    segment_dimensions row per fact — the same shape the production writer
+    produces.
+    """
+    if metric == "revenue_by_product":
+        dim_type, junction_metric = ("product", "revenue")
+    elif metric == "revenue_by_geography":
+        dim_type, junction_metric = ("geography", "revenue")
+    elif metric == "operating_income":
+        dim_type, junction_metric = ("business_unit", "operating_income")
+    else:
+        dim_type, junction_metric = ("business_unit", metric)
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
     for period_end, seg, value in rows:
+        cur = conn.execute(
+            "SELECT id FROM segment_periods "
+            "WHERE ticker = ? AND period_end = ? AND fiscal_period_type = 'Q4' "
+            "AND source_doc_id = 1",
+            (ticker, period_end),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur = conn.execute(
+                "INSERT INTO segment_periods "
+                "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+                "VALUES (?, ?, 'Q4', 1, 'USD', 'actual')",
+                (ticker, period_end),
+            )
+            period_id = cur.lastrowid
+        else:
+            period_id = row[0]
         conn.execute(
-            "INSERT INTO segment_facts "
-            "(ticker, period_end, fiscal_period_type, segment_name, metric, value, currency, unit, source_doc_id) "
-            "VALUES (?, ?, 'Q4', ?, ?, ?, 'USD', 'actual', 1)",
-            (ticker, period_end, seg, metric, value),
+            "INSERT INTO segment_dimensions "
+            "(period_id, dim_type, dim_name, metric, value) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (period_id, dim_type, seg, junction_metric, value),
         )
     conn.commit()
     conn.close()

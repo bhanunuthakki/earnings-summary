@@ -2,8 +2,12 @@
 revenue_by_geography, operating_income}.
 
 Sources:
-  - segment_facts table (populated by execution/extract_facts.py from FMP segment
-    JSON and 10-Q/10-K notes).
+  - segment_periods + segment_dimensions tables (populated by
+    execution/extract_facts.py via src/pipeline/segment_junction_writer.py
+    from FMP segment JSON and 10-Q/10-K notes). The reader maps junction
+    (dim_type, metric) tuples back to the legacy "revenue_by_product" /
+    "revenue_by_geography" / "operating_income" string so downstream grid
+    builders keep their existing metric vocabulary.
 
 Per-ticker hygiene rules (segment renames + drops) live in the holdings JSON
 under `data_rules` and are applied via report.rules.TickerRules.canonicalize.
@@ -31,7 +35,6 @@ from report.sections._common import (
     UNDERLYING_QUARTERS,
     calendar_quarter_key,
     compute_growth,
-    has_table,
     missing,
     open_repo_db,
 )
@@ -66,7 +69,7 @@ _METRIC_TO_BUCKET: dict[str, MetricKey] = {
 def build(ticker: str, repo_root: Path) -> SegmentsSection:
     rules = load_rules(ticker, repo_root)
     conn = open_repo_db(repo_root)
-    if conn is None or not has_table(conn, "segment_facts"):
+    if conn is None or not _junction_tables_present(conn):
         if conn is not None:
             conn.close()
         return SegmentsSection(
@@ -86,7 +89,7 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
             missing=missing(
                 stage="COMPUTE(extract_facts)",
                 fix_command=f"python execution/extract_facts.py --ticker {ticker.upper()}",
-                detail="segment_facts has no rows for this ticker",
+                detail="segment_periods has no rows for this ticker",
             ),
         )
 
@@ -147,14 +150,49 @@ def _load_segment_definitions(ticker: str, repo_root: Path) -> tuple[dict[str, s
 
 
 def _load_segment_rows(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
-    """Pull a generous window of quarterly segment rows; we'll dedupe in Python."""
+    """Pull a generous window of quarterly segment rows; we'll dedupe in Python.
+
+    Reads from the segment_periods + segment_dimensions junction. The CASE
+    expression collapses the junction's (dim_type, metric) pair back to the
+    legacy metric vocabulary that `_METRIC_TO_BUCKET` and the grid-building
+    helpers downstream still speak — `revenue_by_product`,
+    `revenue_by_geography`, `operating_income`, `capex`, `headcount`. Dim
+    rows that don't match one of those combos are skipped via the WHERE
+    filter so we don't surface stray cross-tab cells in the primary grids
+    (those land in the secondary-expansion path).
+    """
     placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
     cursor = conn.cursor()
     cursor.execute(
         f"""
-        SELECT period_end, segment_name, metric, value, fiscal_period_type
-        FROM segment_facts
-        WHERE ticker = ? AND fiscal_period_type IN ({placeholders})
+        SELECT
+            sp.period_end AS period_end,
+            sd.dim_name AS segment_name,
+            CASE
+                WHEN sd.dim_type = 'product' AND sd.metric = 'revenue'
+                    THEN 'revenue_by_product'
+                WHEN sd.dim_type = 'geography' AND sd.metric = 'revenue'
+                    THEN 'revenue_by_geography'
+                WHEN sd.dim_type = 'business_unit' AND sd.metric = 'operating_income'
+                    THEN 'operating_income'
+                WHEN sd.dim_type = 'business_unit' AND sd.metric = 'capex'
+                    THEN 'capex'
+                WHEN sd.dim_type = 'business_unit' AND sd.metric = 'headcount'
+                    THEN 'headcount'
+            END AS metric,
+            sd.value AS value,
+            sp.fiscal_period_type AS fiscal_period_type
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sp.fiscal_period_type IN ({placeholders})
+          AND (
+            (sd.dim_type = 'product' AND sd.metric = 'revenue')
+            OR (sd.dim_type = 'geography' AND sd.metric = 'revenue')
+            OR (sd.dim_type = 'business_unit' AND sd.metric IN (
+                'operating_income', 'capex', 'headcount'
+            ))
+          )
         """,
         (ticker.upper(), *QUARTERLY_PERIOD_TYPES),
     )

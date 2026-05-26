@@ -14,6 +14,7 @@ from compute.segments import (
     _passes_reconciliation,
     extract_facts_from_record,
     extract_segment_facts,
+    insert_segment_facts,
 )
 from models.facts import Currency, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpSegmentRecord
@@ -47,6 +48,7 @@ _GEO_SAMPLE = {
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
+    """Bootstrap the post-0056 schema: documents + financial_facts + the junction."""
     conn.executescript(
         """
         CREATE TABLE documents (
@@ -60,20 +62,27 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             fetch_status TEXT NOT NULL,
             raw_bytes_size INTEGER NOT NULL
         );
-        CREATE TABLE segment_facts (
+        CREATE TABLE segment_periods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            segment_name TEXT NOT NULL,
-            metric TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
+            ticker VARCHAR(16) NOT NULL,
+            period_end DATETIME NOT NULL,
+            fiscal_period_type VARCHAR(8) NOT NULL,
+            source_doc_id INTEGER NOT NULL REFERENCES documents(id),
+            currency VARCHAR(8),
+            unit VARCHAR(16) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_segment_periods_provenance UNIQUE
+              (ticker, period_end, fiscal_period_type, source_doc_id)
         );
-        CREATE UNIQUE INDEX uq_segment_facts_provenance
-        ON segment_facts (ticker, period_end, fiscal_period_type, segment_name, metric, source_doc_id);
+        CREATE TABLE segment_dimensions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+            dim_type VARCHAR(16) NOT NULL,
+            dim_name VARCHAR(128) NOT NULL,
+            value NUMERIC(20, 4) NOT NULL,
+            metric VARCHAR(32) NOT NULL,
+            segment_entity_id INTEGER
+        );
         CREATE TABLE financial_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT NOT NULL,
@@ -216,6 +225,42 @@ def test_reconciliation_no_revenue_accepts(conn: sqlite3.Connection) -> None:
     """If income_statement hasn't been ingested yet, can't disprove — accept."""
     record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
     assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
+
+
+def test_insert_segment_facts_writes_to_junction(conn: sqlite3.Connection) -> None:
+    """insert_segment_facts now persists into segment_periods + segment_dimensions.
+
+    Regression for the 0056 cutover — before the rewrite this wrote to a
+    `segment_facts` table that no longer exists. The function still accepts
+    legacy `SegmentFact` objects so callers (e.g. compute.segment_oi_10k) keep
+    their existing pydantic-shaped extractors; the persistence path is what
+    changed.
+    """
+    # Document FK target for the junction's source_doc_id constraint.
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        " fetch_status, raw_bytes_size) "
+        "VALUES (?, 'GOOG', 'fmp', 'fmp_segment_product', 'x.json', "
+        " '0000000000000000000000000000000000000000000000000000000000000000', "
+        " ?, 'ok', 1)",
+        (42, datetime.now()),
+    )
+    conn.commit()
+
+    record = FmpSegmentRecord.model_validate(_PRODUCT_SAMPLE)
+    facts = extract_facts_from_record(record, source_doc_id=42, metric="revenue_by_product")
+    inserted = insert_segment_facts(conn, facts)
+    conn.commit()
+
+    assert inserted == 4  # one dim per segment in the FMP record
+    assert conn.execute("SELECT COUNT(*) FROM segment_periods").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 4
+    # dim_type should reflect the legacy → junction mapping for product revenue
+    dims = conn.execute(
+        "SELECT dim_type, dim_name, metric FROM segment_dimensions ORDER BY dim_name"
+    ).fetchall()
+    assert all(d["dim_type"] == "product" and d["metric"] == "revenue" for d in dims)
 
 
 def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:

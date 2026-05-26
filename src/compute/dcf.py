@@ -260,26 +260,59 @@ def fetch_segment_base_revenues(
     ticker: str,
     metric: str = "revenue_by_product",
 ) -> dict[str, float]:
-    """Latest annual segment revenue per segment_name from segment_facts.
+    """Latest annual segment revenue per segment_name from segment_periods+segment_dimensions.
 
     Picks the most recent FY period_end and returns one entry per segment.
-    Default metric is the FMP product-segmentation endpoint output.
+    `metric` is the legacy `segment_facts` vocabulary
+    (revenue_by_product / revenue_by_geography / operating_income); the function
+    translates that into the junction's (dim_type, metric) pair before querying.
     """
+    dim_type, junction_metric = _legacy_metric_to_junction(metric)
     cur = conn.execute(
-        "SELECT MAX(period_end) FROM segment_facts "
-        "WHERE ticker = ? AND metric = ? AND fiscal_period_type = 'FY'",
-        (ticker.upper(), metric),
+        """
+        SELECT MAX(sp.period_end)
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+          AND sp.fiscal_period_type = 'FY'
+        """,
+        (ticker.upper(), dim_type, junction_metric),
     )
     row = cur.fetchone()
     latest = row[0] if row else None
     if latest is None:
         return {}
     cur = conn.execute(
-        "SELECT segment_name, value FROM segment_facts "
-        "WHERE ticker = ? AND metric = ? AND fiscal_period_type = 'FY' AND period_end = ?",
-        (ticker.upper(), metric, latest),
+        """
+        SELECT sd.dim_name, sd.value
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+          AND sp.fiscal_period_type = 'FY'
+          AND sp.period_end = ?
+        """,
+        (ticker.upper(), dim_type, junction_metric, latest),
     )
     return {r[0]: float(r[1]) for r in cur.fetchall()}
+
+
+def _legacy_metric_to_junction(metric: str) -> tuple[str, str]:
+    """Translate the legacy segment_facts metric vocab to (dim_type, junction_metric).
+
+    Mirrors the canonical mapping in pipeline.segment_junction_writer. Inlined
+    here so dcf.py doesn't need to import the writer module just to read.
+    """
+    if metric == "revenue_by_product":
+        return ("product", "revenue")
+    if metric == "revenue_by_geography":
+        return ("geography", "revenue")
+    if metric == "operating_income":
+        return ("business_unit", "operating_income")
+    return ("business_unit", metric)
 
 
 @dataclass(frozen=True)
@@ -420,11 +453,19 @@ def fetch_segment_quarterly_per_period_base(
 
     Falls back to the latest FY fact / 4 for segments without quarterly data.
     """
+    dim_type, junction_metric = _legacy_metric_to_junction(metric)
     cur = conn.execute(
-        "SELECT segment_name, period_end, value FROM segment_facts "
-        "WHERE ticker = ? AND metric = ? AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-        "ORDER BY segment_name, period_end DESC",
-        (ticker.upper(), metric),
+        """
+        SELECT sd.dim_name, sp.period_end, sd.value
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+          AND sp.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
+        ORDER BY sd.dim_name, sp.period_end DESC
+        """,
+        (ticker.upper(), dim_type, junction_metric),
     )
     by_segment: dict[str, list[float]] = {}
     for r in cur.fetchall():

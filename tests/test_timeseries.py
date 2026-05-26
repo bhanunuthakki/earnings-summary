@@ -87,17 +87,26 @@ def _facts_db(tmp_path: Path) -> Path:
                 unit VARCHAR NOT NULL,
                 source_doc_id INTEGER NOT NULL
             );
-            CREATE TABLE segment_facts (
+            CREATE TABLE segment_periods (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ticker VARCHAR NOT NULL,
+                ticker VARCHAR(16) NOT NULL,
                 period_end DATETIME NOT NULL,
-                fiscal_period_type VARCHAR NOT NULL,
-                segment_name VARCHAR NOT NULL,
-                metric VARCHAR NOT NULL,
-                value NUMERIC(24,6) NOT NULL,
-                currency VARCHAR(3),
-                unit VARCHAR NOT NULL,
-                source_doc_id INTEGER NOT NULL
+                fiscal_period_type VARCHAR(8) NOT NULL,
+                source_doc_id INTEGER NOT NULL,
+                currency VARCHAR(8),
+                unit VARCHAR(16) NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_segment_periods_provenance UNIQUE
+                  (ticker, period_end, fiscal_period_type, source_doc_id)
+            );
+            CREATE TABLE segment_dimensions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+                dim_type VARCHAR(16) NOT NULL,
+                dim_name VARCHAR(128) NOT NULL,
+                value NUMERIC(20, 4) NOT NULL,
+                metric VARCHAR(32) NOT NULL,
+                segment_entity_id INTEGER
             );
             """
         )
@@ -174,16 +183,50 @@ def _insert_segment(
     *,
     start: str = "2020-03-31",
 ) -> None:
+    """Seed a quarterly segment series in the junction model.
+
+    Translates legacy `metric` strings into (dim_type, junction_metric); the
+    test passes `metric="revenue"` directly (the post-junction metric), in
+    which case the legacy table is empty and the fallback (business_unit
+    dim_type, metric verbatim) applies — same path as
+    `pipeline.segment_junction_writer.segment_fact_to_dimension`.
+    """
+    if metric == "revenue_by_product":
+        dim_type, junction_metric = ("product", "revenue")
+    elif metric == "revenue_by_geography":
+        dim_type, junction_metric = ("geography", "revenue")
+    elif metric == "operating_income":
+        dim_type, junction_metric = ("business_unit", "operating_income")
+    else:
+        dim_type, junction_metric = ("business_unit", metric)
     base = datetime.fromisoformat(start)
     conn = sqlite3.connect(str(db))
     try:
         for i, v in enumerate(values):
             period_end = (base + timedelta(days=90 * i)).strftime("%Y-%m-%d %H:%M:%S")
             quarter = f"Q{(i % 4) + 1}"
+            cur = conn.execute(
+                "SELECT id FROM segment_periods "
+                "WHERE ticker = ? AND period_end = ? AND fiscal_period_type = ? "
+                "AND source_doc_id = 1",
+                (ticker, period_end, quarter),
+            )
+            row = cur.fetchone()
+            if row is None:
+                cur = conn.execute(
+                    "INSERT INTO segment_periods "
+                    "(ticker, period_end, fiscal_period_type, source_doc_id, "
+                    " currency, unit) VALUES (?, ?, ?, 1, 'USD', 'actual')",
+                    (ticker, period_end, quarter),
+                )
+                period_id = cur.lastrowid
+            else:
+                period_id = row[0]
             conn.execute(
-                "INSERT INTO segment_facts(ticker, period_end, fiscal_period_type, "
-                "segment_name, metric, value, unit, source_doc_id) VALUES (?,?,?,?,?,?,?,?)",
-                (ticker, period_end, quarter, segment, metric, float(v), "USD", 1),
+                "INSERT INTO segment_dimensions "
+                "(period_id, dim_type, dim_name, metric, value) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (period_id, dim_type, segment, junction_metric, float(v)),
             )
         conn.commit()
     finally:

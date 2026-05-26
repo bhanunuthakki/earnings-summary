@@ -1,11 +1,15 @@
 """DB-aware loaders that materialize a Series for the primitives.
 
-Two public functions, both best-effort (return [] when the DB is missing
+Public functions, all best-effort (return [] when the DB is missing
 or the query returns nothing — never raise):
 
-  load_kpi_series(ticker, kpi_name, ...)        — kpi_facts JOIN kpi_definitions
-  load_financial_series(ticker, line_item, ...) — financial_facts
-  load_segment_series(ticker, segment, metric)  — segment_facts (bonus)
+  load_kpi_series(ticker, kpi_name, ...)             — kpi_facts JOIN kpi_definitions
+  load_financial_series(ticker, line_item, ...)      — financial_facts
+  load_segment_junction_series(ticker, dims, metric) — segment_periods + segment_dimensions (cross-tab)
+  load_segment_series(ticker, segment, metric)       — thin shim that maps the legacy
+                                                       segment_facts metric vocabulary to the
+                                                       junction and delegates to
+                                                       load_segment_junction_series
 
 Dedup: financial_facts often has multiple rows per (ticker, line_item,
 period_end, fiscal_period_type) — one per source_doc_id (FMP base statement,
@@ -519,104 +523,44 @@ def load_segment_series(
 ) -> list[Observation]:
     """Load a segment-level series (e.g. Cloud revenue, Family-of-Apps OI).
 
-    segment_facts is keyed on (ticker, period_end, segment_name, metric)
-    so we filter on all three. Tier-aware dedup + as_of_date as in
-    `load_financial_series`. segment_facts has no `supersedes_id` column
-    (out of scope this PR) — the ranking is purely (tier, id).
-    """
-    resolved = _resolve_db_path(repo_root, db_path)
-    if resolved is None:
-        return []
-    conn = _open(resolved)
-    if conn is None:
-        return []
-    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
-    placeholders = ",".join("?" * len(period_list))
-    as_of_cutoff = _normalize_as_of(as_of_date)
-    try:
-        if not _has_table(conn, "segment_facts"):
-            return []
-        has_documents = _has_table(conn, "documents")
-        if not has_documents:
-            rows = conn.execute(
-                f"""
-                SELECT sf.period_end, sf.value
-                FROM segment_facts sf
-                WHERE sf.ticker = ?
-                  AND sf.segment_name = ?
-                  AND sf.metric = ?
-                  AND sf.fiscal_period_type IN ({placeholders})
-                  AND sf.id = (
-                    SELECT MAX(sf2.id) FROM segment_facts sf2
-                    WHERE sf2.ticker = sf.ticker
-                      AND sf2.segment_name = sf.segment_name
-                      AND sf2.metric = sf.metric
-                      AND sf2.period_end = sf.period_end
-                      AND sf2.fiscal_period_type = sf.fiscal_period_type
-                  )
-                ORDER BY sf.period_end ASC
-                """,
-                (ticker.upper(), segment_name, metric, *period_list),
-            ).fetchall()
-            return _rows_to_series(rows)
+    Thin compatibility shim over `load_segment_junction_series`. Callers still
+    speak the legacy `segment_facts` vocabulary (a single `segment_name` plus
+    one of `revenue_by_product` / `revenue_by_geography` / `operating_income`);
+    this function translates that pair into the junction's
+    (dim_type, dim_name, metric) form via the canonical mapping in
+    `pipeline.segment_junction_writer` and delegates.
 
-        has_tier = _has_column(conn, "documents", "source_quality_tier")
-        rank_expr = (
-            _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
-        )
-        as_of_clause = (
-            "AND d.fetched_at <= ? "
-            if as_of_cutoff is not None
-            else ""
-        )
-        as_of_params: tuple[object, ...] = (
-            (as_of_cutoff,) if as_of_cutoff is not None else ()
-        )
-        rows = conn.execute(
-            f"""
-            SELECT sf.period_end, sf.value
-            FROM segment_facts sf
-            JOIN documents d ON d.id = sf.source_doc_id
-            WHERE sf.ticker = ?
-              AND sf.segment_name = ?
-              AND sf.metric = ?
-              AND sf.fiscal_period_type IN ({placeholders})
-              {as_of_clause}
-              AND sf.id = (
-                SELECT sf2.id
-                FROM segment_facts sf2
-                JOIN documents d2 ON d2.id = sf2.source_doc_id
-                WHERE sf2.ticker = sf.ticker
-                  AND sf2.segment_name = sf.segment_name
-                  AND sf2.metric = sf.metric
-                  AND sf2.period_end = sf.period_end
-                  AND sf2.fiscal_period_type = sf.fiscal_period_type
-                  {as_of_clause.replace("d.", "d2.")}
-                ORDER BY {rank_expr.replace("d.", "d2.")} DESC, sf2.id DESC
-                LIMIT 1
-              )
-            ORDER BY sf.period_end ASC
-            """,
-            (
-                ticker.upper(),
-                segment_name,
-                metric,
-                *period_list,
-                *as_of_params,
-                *as_of_params,
-            ),
-        ).fetchall()
-        return _rows_to_series(rows)
-    except sqlite3.Error as exc:
-        log.warning(
-            {
-                "event": "timeseries_load_segment_failed",
-                "ticker": ticker,
-                "segment": segment_name,
-                "metric": metric,
-                "error": str(exc),
-            }
-        )
-        return []
-    finally:
-        conn.close()
+    `as_of_date` is accepted for API parity with the other loaders but
+    currently has no effect — segment_periods does not yet carry the
+    documents.fetched_at FK chain the financial/kpi loaders use for
+    time-travel. Wire it up when audit-trail coverage extends to segments.
+    """
+    # Local import keeps the loaders module free of a write-side dependency
+    # at import time — the writer module pulls in pydantic models we don't
+    # otherwise need to evaluate just to load a series.
+    from pipeline.segment_junction_writer import (
+        _LEGACY_METRIC_TO_DIM_TYPE,
+        _LEGACY_METRIC_TO_JUNCTION_METRIC,
+    )
+
+    _ = as_of_date  # accepted for API parity; see docstring
+    dim_type_enum = _LEGACY_METRIC_TO_DIM_TYPE.get(metric)
+    if dim_type_enum is None:
+        # Unknown legacy metric: fall through with the original metric
+        # string so the junction loader can still match documents that
+        # carry a non-standard metric verbatim (mirrors
+        # segment_fact_to_dimension's BUSINESS_UNIT fallback).
+        dim_type = "business_unit"
+        junction_metric = metric
+    else:
+        dim_type = dim_type_enum.value
+        junction_metric = _LEGACY_METRIC_TO_JUNCTION_METRIC.get(metric, metric)
+
+    return load_segment_junction_series(
+        ticker,
+        dims=[(dim_type, segment_name)],
+        metric=junction_metric,
+        repo_root=repo_root,
+        db_path=db_path,
+        period_types=period_types,
+    )

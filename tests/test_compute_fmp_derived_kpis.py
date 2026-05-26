@@ -337,40 +337,71 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
 
 
 def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
-    # 1. Create segment_facts table
-    conn.execute(
+    # 1. Create the junction tables — the post-0056 home for segment data.
+    conn.executescript(
         """
-        CREATE TABLE segment_facts (
+        CREATE TABLE segment_periods (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            segment_name TEXT NOT NULL,
-            metric TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
+            ticker VARCHAR(16) NOT NULL,
+            period_end DATETIME NOT NULL,
+            fiscal_period_type VARCHAR(8) NOT NULL,
+            source_doc_id INTEGER NOT NULL,
+            currency VARCHAR(8),
+            unit VARCHAR(16) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_segment_periods_provenance UNIQUE
+              (ticker, period_end, fiscal_period_type, source_doc_id)
+        );
+        CREATE TABLE segment_dimensions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+            dim_type VARCHAR(16) NOT NULL,
+            dim_name VARCHAR(128) NOT NULL,
+            value NUMERIC(20, 4) NOT NULL,
+            metric VARCHAR(32) NOT NULL,
+            segment_entity_id INTEGER
         );
         """
     )
-    
-    # 2. Insert docs
+
     doc_id = _insert_doc(conn, "AMZN", "data/historical/fmp/AMZN_income_statement.json")
-    
-    # 3. Seed segment_facts for AWS Q4 2023 & Q4 2024
+
+    # Seed the junction with AWS + North America cells for Q4 2023 and Q4 2024.
+    # Each (ticker, period_end, fpt, source_doc_id) tuple gets one
+    # segment_periods row; each dim cell is one segment_dimensions row.
+    # The reader's CASE maps (product, revenue) → "revenue_by_product" and
+    # (business_unit, operating_income) → "operating_income".
+    periods = [
+        ("AMZN", datetime(2023, 12, 31), "Q4"),
+        ("AMZN", datetime(2024, 12, 31), "Q4"),
+    ]
+    period_ids: dict[tuple[str, datetime, str], int] = {}
+    for ticker, pe, fpt in periods:
+        cur = conn.execute(
+            "INSERT INTO segment_periods "
+            "(ticker, period_end, fiscal_period_type, source_doc_id, currency, unit) "
+            "VALUES (?, ?, ?, ?, 'USD', 'actual')",
+            (ticker, pe, fpt, doc_id),
+        )
+        assert cur.lastrowid is not None
+        period_ids[(ticker, pe, fpt)] = cur.lastrowid
+
+    dims = [
+        # (period_key, dim_type, dim_name, junction_metric, value)
+        (("AMZN", datetime(2023, 12, 31), "Q4"), "product", "AWS", "revenue", 20_000_000_000),
+        (("AMZN", datetime(2023, 12, 31), "Q4"), "business_unit", "AWS", "operating_income", 5_000_000_000),
+        (("AMZN", datetime(2024, 12, 31), "Q4"), "product", "AWS", "revenue", 30_000_000_000),
+        (("AMZN", datetime(2024, 12, 31), "Q4"), "business_unit", "AWS", "operating_income", 12_000_000_000),
+        (("AMZN", datetime(2024, 12, 31), "Q4"), "product", "North America", "revenue", 100_000_000_000),
+        (("AMZN", datetime(2024, 12, 31), "Q4"), "business_unit", "North America", "operating_income", 5_000_000_000),
+    ]
     conn.executemany(
-        "INSERT INTO segment_facts "
-        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, currency, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'USD', 'actual', ?)",
+        "INSERT INTO segment_dimensions "
+        "(period_id, dim_type, dim_name, metric, value) VALUES (?, ?, ?, ?, ?)",
         [
-            ("AMZN", datetime(2023, 12, 31), "Q4", "AWS", "revenue_by_product", 20_000_000_000, doc_id),
-            ("AMZN", datetime(2023, 12, 31), "Q4", "AWS", "operating_income", 5_000_000_000, doc_id),
-            ("AMZN", datetime(2024, 12, 31), "Q4", "AWS", "revenue_by_product", 30_000_000_000, doc_id),
-            ("AMZN", datetime(2024, 12, 31), "Q4", "AWS", "operating_income", 12_000_000_000, doc_id),
-            ("AMZN", datetime(2024, 12, 31), "Q4", "North America", "revenue_by_product", 100_000_000_000, doc_id),
-            ("AMZN", datetime(2024, 12, 31), "Q4", "North America", "operating_income", 5_000_000_000, doc_id),
-        ]
+            (period_ids[k], dim_type, dim_name, metric, value)
+            for (k, dim_type, dim_name, metric, value) in dims
+        ],
     )
     conn.commit()
 

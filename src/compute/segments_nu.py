@@ -45,6 +45,7 @@ from compute.segment_oi_10k import (
     _resolve_periods,
 )
 from models.facts import Currency, FiscalPeriodType, SegmentFact, Unit
+from pipeline.segment_junction_writer import write_segment_facts_via_junction
 
 _TICKER = "NU"
 _DOC_TYPES: frozenset[str] = frozenset({"fmp_10k_json", "fmp_10q_json"})
@@ -138,31 +139,12 @@ def _walk_nu_section(
 
 
 def _insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) -> int:
-    insert_sql = (
-        "INSERT OR IGNORE INTO segment_facts "
-        "(ticker, period_end, fiscal_period_type, segment_name, metric, value, "
-        " currency, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    inserted = 0
-    for f in facts:
-        result = conn.execute(
-            insert_sql,
-            (
-                f.ticker,
-                f.period_end,
-                f.fiscal_period_type.value,
-                f.segment_name,
-                f.metric,
-                str(f.value),
-                f.currency.value if f.currency is not None else None,
-                f.unit.value,
-                f.source_doc_id,
-            ),
-        )
-        if result.rowcount > 0:
-            inserted += 1
-    return inserted
+    """Persist the batch through segment_periods + segment_dimensions.
+
+    Returns the number of NEW dimension rows inserted — caller treats this
+    as the "facts written" count (a duplicate run inserts zero).
+    """
+    return write_segment_facts_via_junction(conn, facts)
 
 
 def extract_nu_segment_facts(

@@ -9,7 +9,7 @@ Each ticker gets:
 The segment definitions come from the holdings JSON files where available, plus
 hand-curated mappings here for canonical names that vary across reporting
 periods. The deterministic resolver in `entity_resolver.py` then uses these
-aliases to backfill `segment_facts.segment_entity_id` for the historical
+aliases to backfill `segment_dimensions.segment_entity_id` for the historical
 rows.
 
 Why a Python module and not YAML/JSON: the lookup table is referenced from
@@ -31,8 +31,8 @@ class SegmentSeed:
     """One segment of one company.
 
     canonical_name is the display name; aliases lists every other surface
-    form seen in segment_facts / 10-Ks / transcripts. The resolver picks
-    canonical_name as the primary lookup key.
+    form seen in segment_dimensions / 10-Ks / transcripts. The resolver
+    picks canonical_name as the primary lookup key.
     """
 
     canonical_name: str

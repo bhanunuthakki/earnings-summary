@@ -251,13 +251,30 @@ def _load_profile(repo_root: Path, ticker: str) -> dict[str, object] | None:
 
 
 def _segment_names_from_db(conn: sqlite3.Connection, ticker: str, metric: str) -> list[str]:
+    """Return distinct segment names for the (legacy) metric, reading the junction.
+
+    Callers still pass `revenue_by_product` / `revenue_by_geography`; this
+    translates to the junction's (dim_type, metric) shape before querying.
+    """
+    if metric == "revenue_by_product":
+        dim_type, junction_metric = ("product", "revenue")
+    elif metric == "revenue_by_geography":
+        dim_type, junction_metric = ("geography", "revenue")
+    elif metric == "operating_income":
+        dim_type, junction_metric = ("business_unit", "operating_income")
+    else:
+        dim_type, junction_metric = ("business_unit", metric)
     cur = conn.execute(
         """
-        SELECT DISTINCT segment_name FROM segment_facts
-        WHERE ticker = ? AND metric = ?
-        ORDER BY segment_name
+        SELECT DISTINCT sd.dim_name AS segment_name
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND sd.dim_type = ?
+          AND sd.metric = ?
+        ORDER BY sd.dim_name
         """,
-        (ticker, metric),
+        (ticker, dim_type, junction_metric),
     )
     return [str(r["segment_name"]) for r in cur.fetchall() if r["segment_name"]]
 

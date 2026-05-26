@@ -4,8 +4,9 @@ Per-ticker pipeline:
   1. Locate latest `data/historical/fmp/{TICKER}_form_10k_{YEAR}.json`.
   2. Find sections whose key matches segment / geographic / description keywords.
   3. Flatten the nested arrays into a single text blob.
-  4. Pull the actual segment names rendered in §4 from `segment_facts` so we ask
-     Claude only for definitions of segments we display.
+  4. Pull the actual segment names rendered in §4 from `segment_dimensions`
+     (joined to `segment_periods`) so we ask Claude only for definitions of
+     segments we display.
   5. Single Haiku call with a strict-JSON contract returning {name: definition}.
   6. Cache to `data/segment_definitions/{ticker}.json` keyed by source sha256.
 
@@ -81,7 +82,7 @@ def extract_for_ticker(
             fiscal_year=year,
             source_path=str(source_path),
             source_sha256=sha256,
-            skipped_reason="segment_facts has no rows for this ticker — nothing to define",
+            skipped_reason="segment_dimensions has no rows for this ticker — nothing to define",
         )
         _write_cache(cache_path, result)
         return result
@@ -164,12 +165,24 @@ def _locate_form_10k(
 
 
 def _segment_names_from_db(conn: sqlite3.Connection, ticker: str) -> list[str]:
+    """Return the distinct segment names shown in the primary §4 grids.
+
+    Matches the (dim_type, metric) combinations that the segments-section
+    reader surfaces — product/geography under metric='revenue' and
+    business_unit under metric='operating_income'. Keeps the LLM's prompt
+    constrained to names the user actually sees in the brief.
+    """
     cur = conn.execute(
         """
-        SELECT DISTINCT segment_name FROM segment_facts
-        WHERE ticker = ?
-          AND metric IN ('revenue_by_product', 'revenue_by_geography', 'operating_income')
-        ORDER BY segment_name
+        SELECT DISTINCT sd.dim_name AS segment_name
+        FROM segment_periods sp
+        JOIN segment_dimensions sd ON sd.period_id = sp.id
+        WHERE sp.ticker = ?
+          AND (
+            (sd.dim_type IN ('product', 'geography') AND sd.metric = 'revenue')
+            OR (sd.dim_type = 'business_unit' AND sd.metric = 'operating_income')
+          )
+        ORDER BY sd.dim_name
         """,
         (ticker,),
     )
