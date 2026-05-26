@@ -1,0 +1,33 @@
+industry: pharma
+display_name: "Pharmaceuticals / Biotech"
+canonical_kpis:
+  - name: "Pipeline NPV (Top 5 Assets)"
+    aliases: ["Risk-Adjusted Pipeline Value", "Pipeline rNPV"]
+    unit_kind: usd
+    expected_range: [null, null]
+    break_condition: "Top-5 pipeline rNPV falls more than 25% YoY"
+    primary_source: ir_doc
+  - name: "Patent Cliff Timeline"
+    aliases: ["LOE Timeline", "Loss of Exclusivity", "Patent Expiry"]
+    unit_kind: years
+    expected_range: [3, 15]
+    break_condition: "less than 3 years to LOE on top-3 drug with no successor approved"
+    primary_source: 10k
+  - name: "R&D as % of Revenue"
+    aliases: ["R&D Intensity", "R&D / Revenue", "Research & Development %"]
+    unit_kind: pct
+    expected_range: [0.12, 0.25]
+    break_condition: "R&D mix falls below 0.10 (innovation starvation)"
+    primary_source: earnings_release
+  - name: "R&D Productivity"
+    aliases: ["Approvals per Billion R&D", "NPV per R&D Dollar", "R&D ROI"]
+    unit_kind: ratio
+    expected_range: [0.3, 2.0]
+    break_condition: "trailing-5-year R&D productivity below 0.3"
+    primary_source: derived
+  - name: "Gross Margin"
+    aliases: ["Gross Margin %", "Product Gross Margin"]
+    unit_kind: pct
+    expected_range: [0.65, 0.90]
+    break_condition: "gross margin below 0.60 for 2 consecutive quarters"
+    primary_source: earnings_release

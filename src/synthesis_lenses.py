@@ -1586,3 +1586,432 @@ def list_lenses_for_ticker() -> list[str]:
 def list_portfolio_lenses() -> list[str]:
     """Lenses that operate on the whole portfolio."""
     return sorted(name for name, lens in LENSES.items() if lens.scope == "portfolio")
+
+
+# ===========================================================================
+# Macro scenario lenses — week-3 fresh-review additions.
+#
+# These differ from the 9 above in that they take an extra runtime parameter
+# (the scenario id), so they're driven via dedicated `run_macro_scenario_lens` /
+# `run_portfolio_macro_stress_lens` entry points rather than the generic
+# run_lens() runner. Caching follows the same llm_artifacts pattern; the
+# scenario id is folded into both the purpose key and the cache inputs so two
+# different scenarios on the same ticker get separate cache rows.
+# ===========================================================================
+
+
+_PROMPT_MACRO_SCENARIO = """You are writing a macro-scenario read-through memo for {ticker}.
+The analyst is asking: "if scenario X plays out, what does it mean for THIS name?"
+
+**Scenario:**
+- Name: {scenario_title}
+- Description: {scenario_description}
+- Historical analog: {scenario_analog}
+- Shocks:
+{scenario_shocks_block}
+
+**Thesis anchor:**
+{thesis_block}
+
+**DCF snapshot (current valuation context):**
+{dcf_summary}
+
+**Macro sensitivities (per-series beta of {ticker}'s weekly returns):**
+{sensitivities_block}
+
+**Latest earnings summary (recent management posture):**
+{latest_summary}
+
+Produce a 350-500 word memo with these four sections:
+
+## 1. Mechanical first-order impact
+Walk through the implied first-order price move using the betas above.
+Be explicit about which shock × which beta you're applying. Cite the
+direction (up/down) and rough magnitude (in %). NO false precision — round
+to 5pp / 10% buckets. If a key shock has no beta data (n/a), say so.
+
+## 2. Second-order effects on the thesis
+For each shock, name the SPECIFIC line of the thesis that should move:
+revenue mix, cost line, customer demand, capital allocation, FX
+translation. Tie back to the tier-1 KPIs by name. NOT macro hand-waving.
+
+## 3. What the DCF would look like under this scenario
+Pick the 1-2 DCF inputs that would shift (revenue growth, FCF margin,
+WACC, terminal growth) and re-anchor the over/under. Direction + size
+only — don't re-run the model in your head; just NAME the move.
+
+## 4. What I'd watch in the next 1-2 quarters
+2-3 specific data points / disclosures that would confirm or refute the
+scenario read-through. Concrete (not "watch margins" — "watch AWS
+operating margin guide for FY '26").
+
+Voice: senior portfolio manager. Quantitative-where-possible, opinion-
+bearing on whether the scenario would or wouldn't break the thesis. No
+hedging without a specific reason cited.
+"""
+
+
+_PROMPT_PORTFOLIO_MACRO_STRESS = """You are writing the portfolio-wide stress digest for scenario
+"{scenario_title}". The analyst owns 11 portfolio names plus tracks a
+watchlist; your job is to surface the cross-name read-throughs.
+
+**Scenario:**
+- Description: {scenario_description}
+- Historical analog: {scenario_analog}
+- Shocks:
+{scenario_shocks_block}
+
+**Per-holding sensitivity grid (beta × shock = implied weekly-return move):**
+{stress_grid}
+
+**Portfolio composition (thesis + DCF over/under per holding):**
+{portfolio_summary}
+
+Produce a 500-700 word digest with these sections:
+
+## 1. Most-exposed names — in size order
+List the 3-5 holdings with the largest mechanical impact (positive OR
+negative). For each, ONE sentence on direction + magnitude AND ONE
+sentence on whether the impact aligns with the thesis (i.e. is this
+exposure intentional or accidental?).
+
+## 2. Hedge / offset clusters
+Are there names whose exposures cancel? Name the clusters. Are there
+unhedged concentrations (3+ names exposed the same direction)? Call them
+out.
+
+## 3. Thesis-breaking exposures
+For each of the top 3 most-exposed names, name the SPECIFIC tier-1 KPI
+that the scenario would press on. Is the bear-case failure mode for that
+name engaged by this scenario?
+
+## 4. Capital allocation actions
+1-3 specific position-size changes the scenario suggests. "TRIM 1% from
+X to reduce concentration in commodity exposure" / "ADD 0.5% to Y — the
+scenario, if it plays out, refutes the bear-case failure mode #2."
+Concrete %s and named names.
+
+## 5. What I'd want to monitor
+1-2 leading indicators that would tell me the scenario is starting to
+play out (before it shows in prices).
+
+Voice: portfolio manager talking to themselves. Terse, opinion-bearing,
+linking macro shocks to capital allocation. No "should consider monitoring"
+filler — either commit to a view or say "no action — exposure is in line
+with the thesis." That's also a view.
+"""
+
+
+def _format_shocks(scenario_obj: object) -> str:
+    """Format the scenario's shocks list as a markdown bullet block. Expects
+    a Scenario from src/macro_scenarios.py — duck-typed so synthesis_lenses
+    doesn't import from a sibling module at import-time."""
+    shocks = getattr(scenario_obj, "shocks", ())
+    if not shocks:
+        return "(no shocks defined)"
+    lines: list[str] = []
+    for s in shocks:
+        sid = getattr(s, "series_id", "?")
+        unit = getattr(s, "unit", "pct")
+        magnitude = getattr(s, "magnitude", 0.0)
+        direction = getattr(s, "direction", "up")
+        sign = "+" if direction == "up" else "-"
+        if unit == "bps":
+            lines.append(f"  - **{sid}** · {sign}{abs(magnitude):.0f} bps")
+        elif unit == "pct":
+            lines.append(f"  - **{sid}** · {sign}{abs(magnitude):.1f}%")
+        elif unit == "absolute":
+            lines.append(f"  - **{sid}** · to {magnitude:.2f}")
+        else:
+            lines.append(f"  - **{sid}** · {sign}{magnitude} ({unit})")
+    return "\n".join(lines)
+
+
+def _format_sensitivities(sens_rows: list[dict[str, object]]) -> str:
+    if not sens_rows:
+        return "(no sensitivities computed — run `python execution/compute_macro_sensitivities.py --ticker <T>` first)"
+    lines: list[str] = []
+    for r in sens_rows:
+        sid = r.get("series_id", "?")
+        beta = r.get("beta")
+        r_sq = r.get("r_squared")
+        lb = r.get("lookback_window_days")
+        beta_s = f"{cast('float', beta):+.3f}" if beta is not None else "?"
+        rsq_s = f"{cast('float', r_sq):.2f}" if r_sq is not None else "?"
+        lines.append(f"- **{sid}** · β={beta_s} · R²={rsq_s} · lookback={lb}d")
+    return "\n".join(lines)
+
+
+def _ctx_macro_scenario(
+    *,
+    scenario_obj: object,
+    ticker: str,
+    repo_root: Path,
+) -> LensContext | None:
+    """Context loader for macro_scenario. Requires scenario_obj, ticker, repo_root."""
+    ticker = ticker.upper()
+    # Late import — keep macro_store optional at import time so the existing
+    # lens runner doesn't acquire a hard dep on the new module.
+    try:
+        from macro_store import fetch_sensitivities  # noqa: PLC0415
+    except ImportError:
+        return None
+    sens_objs = fetch_sensitivities(
+        ticker=ticker, db_path=repo_root / "data" / "portfolio.db"
+    )
+    sens_rows: list[dict[str, object]] = [
+        {
+            "series_id": s.series_id,
+            "beta": s.beta,
+            "r_squared": s.r_squared,
+            "lookback_window_days": s.lookback_window_days,
+        }
+        for s in sens_objs
+    ]
+    dcf = _load_dcf(ticker, repo_root)
+    if dcf:
+        ou_raw = cast("float | None", dcf.get("over_under_pct"))
+        npv_raw = cast("float | None", dcf.get("npv_per_share"))
+        live_raw = cast("float | None", dcf.get("live_price"))
+        ou = (ou_raw or 0.0) * 100
+        dcf_summary = (
+            f"NPV/share: ${npv_raw or 0:.0f} · "
+            f"Live: ${live_raw or 0:.0f} · "
+            f"Over/Under: {ou:+.1f}%"
+        )
+    else:
+        dcf_summary = "(no DCF run for this ticker)"
+    summaries = _load_recent_summaries(ticker, repo_root, n=1)
+    latest = summaries[0][1][:2500] if summaries else "(no recent earnings summary)"
+    scenario_id = str(getattr(scenario_obj, "id", "scenario"))
+    return LensContext(
+        ticker=ticker,
+        template_kwargs={
+            "ticker": ticker,
+            "scenario_title": str(getattr(scenario_obj, "title", scenario_id)),
+            "scenario_description": str(getattr(scenario_obj, "description", "")),
+            "scenario_analog": str(getattr(scenario_obj, "historical_analog", "—")),
+            "scenario_shocks_block": _format_shocks(scenario_obj),
+            "thesis_block": _thesis_block(ticker, repo_root),
+            "dcf_summary": dcf_summary,
+            "sensitivities_block": _format_sensitivities(sens_rows),
+            "latest_summary": latest,
+        },
+        cache_inputs=[
+            ticker,
+            scenario_id,
+            _sha8(_format_shocks(scenario_obj)),
+            _sha8(_format_sensitivities(sens_rows)),
+            _sha8(dcf_summary),
+            _sha8(latest),
+        ],
+        source_doc_ids=[],
+        parent_artifact_ids=[],
+    )
+
+
+def _ctx_portfolio_macro_stress(
+    *, scenario_obj: object, repo_root: Path
+) -> LensContext | None:
+    db = repo_root / "data" / "portfolio.db"
+    if not db.exists():
+        return None
+    try:
+        from macro_store import fetch_sensitivities  # noqa: PLC0415
+    except ImportError:
+        return None
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.row_factory = sqlite3.Row
+        tickers = [
+            r[0]
+            for r in conn.execute(
+                "SELECT ticker FROM tracked_companies WHERE archived_at IS NULL AND list_type = 'portfolio' ORDER BY ticker"
+            )
+        ]
+        port_lines: list[str] = []
+        grid_lines: list[str] = []
+        for t in tickers:
+            dcf = conn.execute(
+                "SELECT npv_per_share, live_price, over_under_pct FROM dcf_runs "
+                "WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
+                "ORDER BY valuation_date DESC LIMIT 1",
+                (t,),
+            ).fetchone()
+            dcf_ou = cast("float | None", dcf[2]) if dcf is not None else None
+            ou_str = f"{(dcf_ou or 0.0) * 100:+.1f}%" if dcf_ou is not None else "-"
+            h = _read_holdings_json(t, repo_root)
+            thesis = str(h.get("thesis") or "")[:200]
+            port_lines.append(f"### {t}\n- Thesis: {thesis}\n- DCF over/under: {ou_str}")
+            sens = fetch_sensitivities(ticker=t, db_path=db)
+            beta_by_series = {s.series_id: s.beta for s in sens}
+            stress_pieces: list[str] = []
+            for shock in getattr(scenario_obj, "shocks", ()):
+                sid = getattr(shock, "series_id", None)
+                if sid is None:
+                    continue
+                beta = beta_by_series.get(sid)
+                if beta is None:
+                    stress_pieces.append(f"{sid}: β n/a")
+                    continue
+                # Implied return contribution = beta × shock_return.
+                # `magnitude` is in pct or bps depending on unit; normalize to
+                # a return-style decimal for a rough mechanical estimate.
+                unit = getattr(shock, "unit", "pct")
+                mag = float(getattr(shock, "magnitude", 0.0))
+                direction = getattr(shock, "direction", "up")
+                sign = 1.0 if direction == "up" else -1.0
+                if unit == "pct":
+                    shock_ret = sign * (mag / 100.0)
+                elif unit == "bps":
+                    shock_ret = sign * (mag / 10000.0)
+                elif unit == "absolute":
+                    shock_ret = sign * mag
+                else:
+                    shock_ret = sign * mag
+                impact = beta * shock_ret * 100  # in %
+                stress_pieces.append(f"{sid}: β={beta:+.2f}→{impact:+.1f}%")
+            grid_lines.append(f"- **{t}** · " + " · ".join(stress_pieces))
+    finally:
+        conn.close()
+
+    scenario_id = str(getattr(scenario_obj, "id", "scenario"))
+    portfolio_summary = "\n\n".join(port_lines) if port_lines else "(no portfolio holdings)"
+    stress_grid = "\n".join(grid_lines) if grid_lines else "(no sensitivities computed for any holding)"
+    return LensContext(
+        ticker=None,
+        template_kwargs={
+            "scenario_title": str(getattr(scenario_obj, "title", scenario_id)),
+            "scenario_description": str(getattr(scenario_obj, "description", "")),
+            "scenario_analog": str(getattr(scenario_obj, "historical_analog", "—")),
+            "scenario_shocks_block": _format_shocks(scenario_obj),
+            "portfolio_summary": portfolio_summary,
+            "stress_grid": stress_grid,
+        },
+        cache_inputs=[
+            scenario_id,
+            _sha8(_format_shocks(scenario_obj)),
+            _sha8(portfolio_summary),
+            _sha8(stress_grid),
+        ],
+        source_doc_ids=[],
+        parent_artifact_ids=[],
+    )
+
+
+def run_macro_scenario_lens(
+    *,
+    scenario_obj: object,
+    ticker: str,
+    repo_root: Path,
+    force: bool = False,
+) -> Artifact | None:
+    """Public entry point — single-ticker macro scenario read-through."""
+    scenario_id = str(getattr(scenario_obj, "id", "scenario"))
+    purpose = f"lens:macro_scenario:{scenario_id}"
+    model = "claude-sonnet-4-6"
+    db_path = repo_root / "data" / "portfolio.db"
+
+    ctx = _ctx_macro_scenario(scenario_obj=scenario_obj, ticker=ticker, repo_root=repo_root)
+    if ctx is None:
+        log.debug({"event": "macro_scenario_context_empty", "ticker": ticker, "scenario": scenario_id})
+        return None
+    if not force:
+        existing = read_current(
+            ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path
+        )
+        if existing is not None and not existing.dirty:
+            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=ctx.cache_inputs)
+            if new_sha == existing.input_sha256:
+                log.info(
+                    {"event": "macro_scenario_cache_hit", "ticker": ticker, "scenario": scenario_id}
+                )
+                return existing
+    try:
+        prompt = _PROMPT_MACRO_SCENARIO.format(**ctx.template_kwargs)
+    except KeyError as exc:
+        log.warning({"event": "macro_scenario_template_key", "key": str(exc)})
+        return None
+    try:
+        content = call_llm(
+            prompt, purpose=purpose, ticker=ctx.ticker, scope="ticker", model=model
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning({"event": "macro_scenario_llm_failed", "error": str(exc)})
+        return None
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker=ctx.ticker,
+            purpose=purpose,
+            scope="ticker",
+            content_md=content,
+            cache_inputs=ctx.cache_inputs,
+            model=model,
+            source_doc_ids=ctx.source_doc_ids,
+            parent_artifact_ids=ctx.parent_artifact_ids,
+        ),
+        db_path=db_path,
+    )
+    if artifact_id is None:
+        return None
+    return read_current(ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path)
+
+
+def run_portfolio_macro_stress_lens(
+    *,
+    scenario_obj: object,
+    repo_root: Path,
+    force: bool = False,
+) -> Artifact | None:
+    """Public entry point — portfolio-wide macro stress digest."""
+    scenario_id = str(getattr(scenario_obj, "id", "scenario"))
+    purpose = f"lens:portfolio_macro_stress:{scenario_id}"
+    model = "claude-opus-4-7"
+    db_path = repo_root / "data" / "portfolio.db"
+
+    ctx = _ctx_portfolio_macro_stress(scenario_obj=scenario_obj, repo_root=repo_root)
+    if ctx is None:
+        log.debug({"event": "portfolio_macro_stress_context_empty", "scenario": scenario_id})
+        return None
+    if not force:
+        existing = read_current(
+            ticker=None, purpose=purpose, scope="portfolio", db_path=db_path
+        )
+        if existing is not None and not existing.dirty:
+            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=ctx.cache_inputs)
+            if new_sha == existing.input_sha256:
+                log.info(
+                    {"event": "portfolio_macro_stress_cache_hit", "scenario": scenario_id}
+                )
+                return existing
+    try:
+        prompt = _PROMPT_PORTFOLIO_MACRO_STRESS.format(**ctx.template_kwargs)
+    except KeyError as exc:
+        log.warning({"event": "portfolio_macro_stress_template_key", "key": str(exc)})
+        return None
+    try:
+        content = call_llm(
+            prompt, purpose=purpose, ticker=None, scope="portfolio", model=model
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning({"event": "portfolio_macro_stress_llm_failed", "error": str(exc)})
+        return None
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker=None,
+            purpose=purpose,
+            scope="portfolio",
+            content_md=content,
+            cache_inputs=ctx.cache_inputs,
+            model=model,
+            source_doc_ids=ctx.source_doc_ids,
+            parent_artifact_ids=ctx.parent_artifact_ids,
+        ),
+        db_path=db_path,
+    )
+    if artifact_id is None:
+        return None
+    return read_current(ticker=None, purpose=purpose, scope="portfolio", db_path=db_path)
+
+
+MACRO_LENS_NAMES: tuple[str, ...] = ("macro_scenario", "portfolio_macro_stress")

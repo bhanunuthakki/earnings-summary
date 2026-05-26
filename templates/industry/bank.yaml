@@ -1,0 +1,51 @@
+industry: bank
+display_name: "Bank / Lender"
+canonical_kpis:
+  - name: "Net Interest Margin"
+    aliases: ["NIM", "Net Interest Margin (annualized)"]
+    unit_kind: pct
+    expected_range: [0.020, 0.060]
+    break_condition: "NIM compresses below 0.020 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Non-Performing Loan Ratio"
+    aliases: ["NPL", "NPL Ratio", "Non-Performing Loans"]
+    unit_kind: pct
+    expected_range: [0.005, 0.040]
+    break_condition: "above 0.040 for 2 consecutive quarters"
+    primary_source: 10q
+  - name: "Efficiency Ratio"
+    aliases: ["Cost-to-Income Ratio", "Cost/Income"]
+    unit_kind: pct
+    expected_range: [0.40, 0.70]
+    break_condition: "above 0.70 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "CET1 Ratio"
+    aliases: ["Common Equity Tier 1 Ratio", "CET1 Capital Ratio"]
+    unit_kind: pct
+    expected_range: [0.10, 0.18]
+    break_condition: "below regulatory minimum + 100bp buffer"
+    primary_source: earnings_release
+  - name: "Return on Tangible Common Equity"
+    aliases: ["ROTCE", "Return on Tangible Equity", "RoTE"]
+    unit_kind: pct
+    expected_range: [0.12, 0.25]
+    break_condition: "below 0.10 for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Deposit Growth"
+    aliases: ["Total Deposits Growth", "Deposit YoY"]
+    unit_kind: pct
+    expected_range: [0.0, 0.30]
+    break_condition: "deposit declines for 2 consecutive quarters"
+    primary_source: earnings_release
+  - name: "Loan-to-Deposit Ratio"
+    aliases: ["LDR", "L/D Ratio"]
+    unit_kind: pct
+    expected_range: [0.60, 0.95]
+    break_condition: "above 1.00 (asset-liability mismatch)"
+    primary_source: 10q
+  - name: "Fee Revenue Mix"
+    aliases: ["Non-Interest Income Ratio", "Fee Income %"]
+    unit_kind: pct
+    expected_range: [0.20, 0.50]
+    break_condition: "fee mix collapses below 0.15 (concentration risk)"
+    primary_source: earnings_release

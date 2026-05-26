@@ -23,8 +23,12 @@ Idempotency lives in the recorder, not the schema — re-running the
 extractor on the same artifact is a no-op.
 
 Revision ID: 0046_decisions
-Revises: 0043_self_update_triggers
+Revises: 0044_tracked_companies_processing_tier, 0045_macro_overlay, 0052_llm_budgets
 Create Date: 2026-05-25
+
+Note: chains off all three sibling heads from Weeks 2-3 (tier, macro, budget)
+so this migration ALSO serves as the merge point. After this lands, `alembic
+upgrade head` resolves to a single head again.
 """
 
 from __future__ import annotations
@@ -36,7 +40,11 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0046_decisions"
-down_revision: str | Sequence[str] | None = "0043_self_update_triggers"
+down_revision: str | Sequence[str] | None = (
+    "0044_tracked_companies_processing_tier",
+    "0045_macro_overlay",
+    "0052_llm_budgets",
+)
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

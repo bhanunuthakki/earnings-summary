@@ -31,6 +31,8 @@ from pipeline.analytical_dashboard import (  # noqa: E402
     AnalyticalDashboard,
     DecisionsPanel,
     InsiderEventRow,
+    LlmBudgetPanel,
+    LlmBudgetRow,
     PortfolioLensRow,
     PredictionOutcomeRow,
     TriggerLadderRow,
@@ -61,6 +63,7 @@ def render_html(dash: AnalyticalDashboard, *, generated_at: datetime) -> str:
         _trigger_ladder_section(dash.trigger_ladder),
         _insider_events_section(dash.insider_events),
         _predictions_section(dash.prediction_outcomes),
+        _llm_budget_section(dash.llm_budgets),
         _PAGE_FOOT,
     ]
     return "".join(parts)
@@ -173,6 +176,78 @@ def _decisions_section(panel: DecisionsPanel) -> str:
 
     out.append("</section>")
     return "".join(out)
+
+
+def _llm_budget_section(panel: LlmBudgetPanel) -> str:
+    """LLM Spend & Budget panel — per-purpose progress bars + MTD totals.
+
+    Empty-state hint when the budget tables haven't been migrated yet so
+    the dashboard works on older repos without a hard failure."""
+    if not panel.rows:
+        return (
+            '<section class="panel"><h2>LLM spend & budget</h2>'
+            '<p class="muted">No budget data. Run <code>python -m alembic upgrade head</code> '
+            'to install migration 0052, then revisit.</p>'
+            "</section>"
+        )
+    out: list[str] = [
+        '<section class="panel"><h2>LLM spend & budget</h2>',
+        f'<p class="sub">Per-purpose monthly caps · {escape(panel.month_label)} · '
+        f'edit via <code>python execution/manage_llm_budget.py --set &lt;purpose&gt; --cap &lt;usd&gt;</code></p>',
+        '<table class="budget-table"><thead><tr>',
+        '<th>Purpose</th><th class="num">Spend</th><th class="num">Cap</th>',
+        '<th>Burn</th><th class="num">Headroom</th><th>Block</th>',
+        '</tr></thead><tbody>',
+    ]
+    for r in panel.rows:
+        out.append(_budget_row_html(r))
+    out.append('</tbody></table>')
+    pct = (
+        100.0 * panel.total_spend_mtd_usd / panel.projected_month_end_usd
+        if panel.projected_month_end_usd > 0
+        else 0.0
+    )
+    out.append(
+        '<p class="budget-footer">'
+        f'<strong>MTD total:</strong> ${panel.total_spend_mtd_usd:,.2f} · '
+        f'<strong>Projected month-end:</strong> ${panel.projected_month_end_usd:,.2f} '
+        f'<span class="muted">(MTD = {pct:.0f}% of projection)</span>'
+        '</p></section>'
+    )
+    return "".join(out)
+
+
+def _budget_row_html(r: LlmBudgetRow) -> str:
+    """One progress-bar row. Colour bands:
+      OVER (red)     — headroom_pct <= 0
+      WARN (amber)   — headroom_pct < (1 - warn_threshold_pct)
+      OK (green)     — otherwise
+    """
+    burn_pct = max(0.0, min(1.0, 1.0 - r.headroom_pct))
+    if r.headroom_pct <= 0:
+        bar_tone = "burn-over"
+    elif r.headroom_pct < (1.0 - r.warn_threshold_pct):
+        bar_tone = "burn-warn"
+    else:
+        bar_tone = "burn-ok"
+    block_label = "HARD" if r.hard_block else "soft"
+    block_class = "block-hard" if r.hard_block else "block-soft"
+    bar_width_pct = int(burn_pct * 100)
+    # Render >100% as a full bar with the "over" tone — visual cap, the
+    # number column still shows the real headroom_pct so the over-spend
+    # is auditable.
+    return (
+        f'<tr>'
+        f'<td><code>{escape(r.purpose)}</code></td>'
+        f'<td class="num">${r.current_spend_usd:,.2f}</td>'
+        f'<td class="num">${r.monthly_cap_usd:,.2f}</td>'
+        f'<td class="burn-cell"><div class="burn-bar">'
+        f'<div class="burn-fill {bar_tone}" style="width: {min(100, bar_width_pct)}%"></div>'
+        f'</div></td>'
+        f'<td class="num">{r.headroom_pct * 100:+.0f}%</td>'
+        f'<td class="{block_class}">{block_label}</td>'
+        '</tr>'
+    )
 
 
 def _portfolio_synthesis_section(content_md: str | None) -> str:
@@ -501,6 +576,18 @@ _PAGE_HEAD = """<!doctype html>
   .decisions-table td.outcome-wrong {{ color: #f87171; }}
   .decisions-table td.outcome-mixed {{ color: #fbbf24; }}
   .decisions-table td.outcome-pending {{ color: #888; }}
+  /* LLM budget panel */
+  .budget-table td code {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #f5f5f0; background: transparent; padding: 0; }}
+  .burn-cell {{ width: 200px; padding: 6px 10px; }}
+  .burn-bar {{ width: 100%; height: 8px; background: #1f2125; border-radius: 4px; overflow: hidden; }}
+  .burn-fill {{ height: 100%; transition: width 0.2s; }}
+  .burn-ok {{ background: #4ade80; }}
+  .burn-warn {{ background: #fbbf24; }}
+  .burn-over {{ background: #f87171; }}
+  .block-hard {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #f87171; font-weight: 600; }}
+  .block-soft {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; }}
+  .budget-footer {{ margin-top: 12px; font-size: 13px; color: #ccc; }}
+  .budget-footer strong {{ color: #f5f5f0; }}
 </style>
 </head>
 <body>
@@ -544,7 +631,8 @@ def main() -> int:
     print(
         f"  trigger_ladder={len(dash.trigger_ladder)} insider_events={len(dash.insider_events)} "
         f"prediction_outcomes={len(dash.prediction_outcomes)} "
-        f"decisions={len(dash.decisions.recent)}"
+        f"decisions={len(dash.decisions.recent)} "
+        f"llm_budgets={len(dash.llm_budgets.rows)}"
     )
     return 0
 
