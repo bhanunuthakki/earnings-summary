@@ -327,6 +327,12 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     "exec_comp_alignment": 14,
     "valuation_basis": 14,
     "filing_intelligence": 60,
+    # SayDo pairs are anchored to a specific (prev_q, curr_q) tuple so they
+    # don't age in the usual sense. The TTL is a safety net so that a stale
+    # cached pair gets re-attempted if the operator hasn't touched the
+    # ticker for a while. anchor_sha + summary_sha already drive the
+    # primary invalidation via cache_inputs.
+    "saydo_pair": 60,
 }
 
 

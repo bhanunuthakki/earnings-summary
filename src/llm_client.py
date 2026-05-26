@@ -38,6 +38,7 @@ import re
 # patch surface; keep the import bound to the module attribute.
 import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from datetime import date
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -185,20 +186,20 @@ _claude_cli_path: str | None = None
 # ---------------------------------------------------------------------------
 
 
-def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None):
-    """
-    Generates a specific "Say-Do" analysis comparing two sequential quarters.
+def _build_pairwise_analysis_prompt(
+    prev_summary, curr_summary, anchor_block: str = ""
+) -> str:
+    """Compose the SayDo pairwise prompt without issuing the LLM call.
 
-    ``anchor_block`` is an optional pre-formatted markdown block (typically
-    from ``compose_anchor_block(load_thesis_anchor(...), load_bear_anchor(...))``)
-    that anchors the §5 Thesis Impact section against the analyst's actual
-    tier-1 KPIs and named bear-case failure modes. Empty string → no anchor
-    block injected (back-compat for watchlist tickers).
+    Extracted so the synchronous (`generate_pairwise_analysis`) and batch
+    (`src/llm/batch.py`) paths can share the same prompt body. Two paths
+    must produce byte-identical prompts for the batched output to be
+    drop-in compatible with the synchronous .tmp file format.
     """
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
 
-    prompt = f"""
+    return f"""
     You are a Strategic Management Consultant and Senior Equity Analyst.
     **Task:** Perform a strict "Say-Do" analysis comparing the **Outlook/Guidance** from the Previous Quarter ({prev_q_str}) against the **Actual Results** reported in the Current Quarter ({curr_q_str}).
 
@@ -242,6 +243,22 @@ def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "
     *   **Bear-case engagement:** [If a BEAR-CASE ANCHOR was provided above, explicitly state which named failure mode this print confirms, refutes, or leaves unchanged. Cite the failure-mode hypothesis verbatim from the anchor so the reader can map the connection. If no bear anchor, write "no prior bear-case anchor on file" and skip — do not fabricate.]
     """
 
+
+def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None):
+    """
+    Generates a specific "Say-Do" analysis comparing two sequential quarters.
+
+    ``anchor_block`` is an optional pre-formatted markdown block (typically
+    from ``compose_anchor_block(load_thesis_anchor(...), load_bear_anchor(...))``)
+    that anchors the §5 Thesis Impact section against the analyst's actual
+    tier-1 KPIs and named bear-case failure modes. Empty string → no anchor
+    block injected (back-compat for watchlist tickers).
+    """
+    prompt = _build_pairwise_analysis_prompt(
+        prev_summary, curr_summary, anchor_block=anchor_block
+    )
+    prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
+    curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
     try:
         return call_llm(prompt, purpose="pairwise_analysis", ticker=ticker)
     except Exception as e:
@@ -972,6 +989,36 @@ def identify_transcript_metadata(text_snippet):
         return "UNKNOWN"
 
 
+# Cap on the raw event-document text shipped to the model. Investor day decks
+# routinely run 30-40 pages of dense PDF text (50KB+) — most of which is logo
+# carousels, footnotes, and disclaimer boilerplate that doesn't shape the
+# multi-year framework. 20KB ≈ 5-7 pages of dense management narrative, which
+# is plenty for the headline messages + targets + segment deep-dives the
+# event_brief schema needs.
+_MAX_EVENT_TEXT_CHARS: int = 20_000
+
+
+def _truncate_event_text(text: str, max_chars: int = _MAX_EVENT_TEXT_CHARS) -> str:
+    """Trim event text to max_chars, marking the truncation explicitly so the
+    model knows the input was bounded rather than missing content.
+
+    Truncation strategy: take the first N-200 chars (introductory narrative
+    + headline targets usually live early), then a 200-char snippet from the
+    tail (which often carries Q&A or risk recap). The marker tells the model
+    what was elided so it doesn't fabricate.
+    """
+    if len(text) <= max_chars:
+        return text
+    head_budget = max_chars - 250
+    head = text[:head_budget].rstrip()
+    tail = text[-200:].lstrip()
+    return (
+        f"{head}\n\n[…document truncated for prompt-size budget — "
+        f"{len(text) - max_chars} characters elided between this point and "
+        f"the closing 200 chars below…]\n\n{tail}"
+    )
+
+
 def generate_event_brief(text: str, anchor_block: str = "", ticker: str | None = None) -> str:
     """
     Generate a structured brief for a non-quarterly IR event: investor day, AGM,
@@ -985,7 +1032,14 @@ def generate_event_brief(text: str, anchor_block: str = "", ticker: str | None =
     ``anchor_block`` (optional) injects the thesis + tier-1 KPIs so §7 (Thesis
     Read-Through) can name specific pillars rather than write generic
     "strengthens / weakens / neutral" prose.
+
+    The raw event text is truncated to _MAX_EVENT_TEXT_CHARS before injection.
+    Investor day decks can hit 30-40 pages (50KB+); most of that is layout
+    chrome, disclaimers, and logo carousels rather than the multi-year
+    framework the schema needs. Truncation marker tells the model the input
+    was bounded rather than missing content.
     """
+    bounded_text = _truncate_event_text(text)
     prompt = f"""You are a senior equity analyst summarizing an IR event document.
 
 Events differ from quarterly artifacts: they are usually long-horizon strategy
@@ -1029,14 +1083,22 @@ or DIFFERENT vs. prior management framing.]
 Event Document Text:
 """
     try:
-        return call_llm(prompt + text, purpose="event_brief", ticker=ticker)
+        return call_llm(prompt + bounded_text, purpose="event_brief", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Event brief generation failed: {e}")
         raise
 
 
+_MAX_WEB_RESULTS_PER_NEWS_CALL: int = 7
+_MAX_EXCERPT_CHARS_PER_NEWS_ITEM: int = 400
+
+
 def generate_recent_developments(
-    ticker: str, news_days: int = 7, anchor_block: str = ""
+    ticker: str,
+    news_days: int = 7,
+    anchor_block: str = "",
+    max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
+    max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
 ) -> str:
     """Recent-developments brief sourced via Claude WebSearch + WebFetch.
 
@@ -1052,6 +1114,13 @@ def generate_recent_developments(
     "rank by thesis impact" rule and the per-item implication clauses can
     actually reference the analyst's tier-1 KPIs and named bear failures
     rather than guessing.
+
+    ``max_web_results`` / ``max_excerpt_chars`` cap the model's web budget
+    explicitly: prior versions instructed "3-7 items" but never bounded
+    the number of web_fetch calls or per-article quote length, so latency
+    and cost varied wildly (6-50KB prompts depending on article density).
+    The defaults match the audit's "max 7 results, 500-char excerpt"
+    guidance — tighten via the kwargs when calling for very tight contexts.
     """
     prompt = f"""You are a senior equity analyst preparing a recent-developments
 brief for {ticker} for an analyst-grade research memo. Bar: every item
@@ -1062,6 +1131,16 @@ recap earns an automatic rewrite.
 Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog
 spam, opinion pieces with no new information, recapitulation of older news,
 and analyst initiation reports unless they include a non-obvious data point.
+
+WEB BUDGET (HARD CAPS — do not exceed):
+- Issue AT MOST 2 web_search queries total.
+- Open AT MOST {max_web_results} URLs via web_fetch across the entire call.
+- For each fetched article, quote AT MOST {max_excerpt_chars} characters
+  inline. Paraphrase the rest. Long verbatim quotes do not improve the
+  memo and burn input tokens with no marginal value.
+- If the search returns more candidates than {max_web_results}, pick the
+  highest-thesis-impact subset (see ranking rules below) and discard the
+  rest before fetching. Don't fetch URLs you won't cite.
 
 RANKING + filtering rules:
 - Order each section by THESIS IMPACT (highest first), NOT chronologically.
@@ -1123,16 +1202,46 @@ def generate_bear_case(
     segments_table_md: str,
     kpi_status_md: str,
     ticker_specific_md: str = "",
+    repo_root: Path | None = None,
 ) -> str:
     """
     Generate a structured bear case as a JSON string the caller parses.
 
     Schema: {failure_modes: list[FailureMode], most_underweighted: str,
     out_of_scope_flags: list[str]}.
+
+    `repo_root`, when set, lets the prompt pre-aggregate the 12Q financial
+    + segment series into a "Recent statistical patterns" block (trend
+    direction + slope significance + inflection callouts). Without it the
+    model has to eyeball raw tables; with it we save ~2-3K input tokens
+    per call and the failure-mode hypotheses become more specific because
+    the model isn't burning attention on trend detection it can read off
+    the precis. Best-effort — the table block still ships unchanged so a
+    DB / loader failure can't degrade the prompt.
     """
     transcripts_block = "\n\n".join(
         f"### Quarter {i + 1} (oldest first)\n{s[:6000]}"
         for i, s in enumerate(last_quarter_summaries)
+    )
+
+    stats_lines: list[str] = []
+    if repo_root is not None:
+        try:
+            from llm.anchors import _statistical_patterns_block
+
+            stats_lines = _statistical_patterns_block(repo_root, ticker, {})
+        except Exception as exc:  # never block the bear-case build
+            log.debug(
+                f"bear_case stats block skipped for {ticker}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            stats_lines = []
+    stats_block = (
+        "\nRECENT STATISTICAL PATTERNS (computed; trust over the raw table):\n"
+        + "\n".join(stats_lines)
+        + "\n"
+        if stats_lines
+        else ""
     )
 
     prompt = f"""You are a senior fundamental equity analyst writing the bear
@@ -1185,7 +1294,7 @@ SEGMENT TRENDS (12Q):
 
 KPI STATUS:
 {kpi_status_md}
-{_ticker_specific_block(ticker_specific_md)}
+{stats_block}{_ticker_specific_block(ticker_specific_md)}
 ---
 
 Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
