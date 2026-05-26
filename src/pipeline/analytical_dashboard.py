@@ -71,12 +71,37 @@ class PortfolioLensRow:
 
 
 @dataclass(slots=True)
+class DecisionRow:
+    """One recent recommendation from the decisions ledger."""
+
+    id: int
+    ticker: str
+    recommendation_kind: str
+    recommendation_value: float | None
+    conviction: str | None
+    made_at: str
+    outcome_label: str | None
+    outcome_pct: float | None
+    rationale_excerpt: str | None
+
+
+@dataclass(slots=True)
+class DecisionsPanel:
+    """Aggregated decisions view for the dashboard."""
+
+    recent: list[DecisionRow] = field(default_factory=list)
+    hit_rate_by_kind: dict[str, dict[str, int]] = field(default_factory=dict)
+    calibration_by_conviction: dict[str, dict[str, int]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class AnalyticalDashboard:
     trigger_ladder: list[TriggerLadderRow] = field(default_factory=list)
     insider_events: list[InsiderEventRow] = field(default_factory=list)
     prediction_outcomes: list[PredictionOutcomeRow] = field(default_factory=list)
     portfolio_synthesis_md: str | None = None  # cross_portfolio_synthesis lens output
     per_ticker_reread: list[PortfolioLensRow] = field(default_factory=list)
+    decisions: DecisionsPanel = field(default_factory=DecisionsPanel)
 
 
 def build_analytical_dashboard(
@@ -99,9 +124,78 @@ def build_analytical_dashboard(
             prediction_outcomes=_build_prediction_outcomes(conn, list_types),
             portfolio_synthesis_md=_load_portfolio_synthesis(conn),
             per_ticker_reread=_load_per_ticker_rereads(conn),
+            decisions=_build_decisions_panel(conn),
         )
     finally:
         conn.close()
+
+
+def _build_decisions_panel(conn: sqlite3.Connection, *, recent_limit: int = 30) -> DecisionsPanel:
+    """Recent decisions table + hit-rate aggregates + calibration distribution.
+    Returns an empty panel when the decisions table is absent (pre-migration)."""
+    has_decisions = (
+        conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='decisions'"
+        ).fetchone()
+        is not None
+    )
+    if not has_decisions:
+        return DecisionsPanel()
+    recent_rows = conn.execute(
+        """
+        SELECT id, ticker, recommendation_kind, recommendation_value, conviction,
+               made_at, outcome_label, outcome_pct, rationale_excerpt
+        FROM decisions
+        ORDER BY made_at DESC
+        LIMIT ?
+        """,
+        (recent_limit,),
+    ).fetchall()
+    recent = [
+        DecisionRow(
+            id=int(r["id"]),
+            ticker=str(r["ticker"]),
+            recommendation_kind=str(r["recommendation_kind"]),
+            recommendation_value=_f(r["recommendation_value"]),
+            conviction=r["conviction"],
+            made_at=str(r["made_at"])[:19],
+            outcome_label=r["outcome_label"],
+            outcome_pct=_f(r["outcome_pct"]),
+            rationale_excerpt=r["rationale_excerpt"],
+        )
+        for r in recent_rows
+    ]
+    kind_rows = conn.execute(
+        """
+        SELECT recommendation_kind,
+               COALESCE(outcome_label, 'pending') AS outcome_label,
+               COUNT(*) AS n
+        FROM decisions
+        WHERE made_at >= date('now', '-365 days')
+        GROUP BY recommendation_kind, outcome_label
+        """
+    ).fetchall()
+    hit_rate: dict[str, dict[str, int]] = {}
+    for r in kind_rows:
+        hit_rate.setdefault(str(r["recommendation_kind"]), {})[str(r["outcome_label"])] = int(r["n"])
+    conv_rows = conn.execute(
+        """
+        SELECT COALESCE(conviction, 'unstated') AS conv,
+               COALESCE(outcome_label, 'pending') AS outcome_label,
+               COUNT(*) AS n
+        FROM decisions
+        WHERE made_at >= date('now', '-180 days')
+        GROUP BY conv, outcome_label
+        """
+    ).fetchall()
+    calibration: dict[str, dict[str, int]] = {}
+    for r in conv_rows:
+        calibration.setdefault(str(r["conv"]), {})[str(r["outcome_label"])] = int(r["n"])
+    return DecisionsPanel(
+        recent=recent,
+        hit_rate_by_kind=hit_rate,
+        calibration_by_conviction=calibration,
+    )
 
 
 def _load_portfolio_synthesis(conn: sqlite3.Connection) -> str | None:
