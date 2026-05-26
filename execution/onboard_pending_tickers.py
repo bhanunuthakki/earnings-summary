@@ -19,7 +19,7 @@ AND ANY of:
 
 Per-ticker work depends on pending_reason:
   - no_instrument_type / no_financial_facts / no_dcf_run:
-      onboard_ticker -> run_thesis_evaluator -> batch_dcf
+      onboard_ticker -> run_thesis_evaluator -> refresh_dcf
       -> extract_commitments_from_transcript --auto
   - no_commitments:
       extract_commitments_from_transcript --auto only
@@ -27,7 +27,9 @@ Per-ticker work depends on pending_reason:
 Idempotent at every layer:
   - save_fmp_data --skip-existing on the FMP fetch
   - run_thesis_evaluator always recomputes from current facts
-  - batch_dcf returns 'skipped' when a current-quarter DCF already exists
+  - refresh_dcf seeds dcf/<TICKER>.xlsx if missing then re-runs the PV calc;
+    skips with status='skipped' for tickers whose holdings JSON lacks WACC,
+    leaving the dcf_runs row absent for those (no perpetual write churn).
   - extract_commitments --auto skips transcripts that already have at least
     one commitments row
 
@@ -184,7 +186,7 @@ def onboard_one(
     if is_commitment_only:
         stages.append(_skipped("onboard_ticker", "ticker already onboarded"))
         stages.append(_skipped("run_thesis_evaluator", "ticker already evaluated"))
-        stages.append(_skipped("batch_dcf", "ticker already has DCF"))
+        stages.append(_skipped("refresh_dcf", "ticker already has DCF"))
     else:
         onboard_cmd = [sys.executable, "execution/onboard_ticker.py", "--ticker", ticker]
         if skip_fmp:
@@ -196,8 +198,10 @@ def onboard_one(
         eval_cmd = [sys.executable, "execution/run_thesis_evaluator.py", "--ticker", ticker]
         stages.append(_run_subprocess(eval_cmd, "run_thesis_evaluator", log_path))
 
-        dcf_cmd = [sys.executable, "execution/batch_dcf.py", "--ticker", ticker]
-        stages.append(_run_subprocess(dcf_cmd, "batch_dcf", log_path))
+        # refresh_dcf replaces the old batch_dcf path: seeds dcf/<TICKER>.xlsx
+        # if missing, refreshes its Historicals, then re-runs the PV calc.
+        dcf_cmd = [sys.executable, "execution/refresh_dcf.py", "--ticker", ticker]
+        stages.append(_run_subprocess(dcf_cmd, "refresh_dcf", log_path))
 
     if skip_commitments:
         stages.append(_skipped("extract_commitments", "--skip-commitments flag"))

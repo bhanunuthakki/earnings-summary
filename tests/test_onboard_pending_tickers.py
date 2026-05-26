@@ -253,7 +253,7 @@ def test_fully_onboarded_with_commitments_is_not_pending(db: Path) -> None:
 def test_onboard_one_skips_heavy_stages_for_no_commitments(
     tmp_path: Path,
 ) -> None:
-    """When pending_reason='no_commitments', onboard_ticker / eval / batch_dcf
+    """When pending_reason='no_commitments', onboard_ticker / eval / refresh_dcf
     should be SKIPPED (the ticker is already fully onboarded), and only the
     extract_commitments stage should run.
 
@@ -284,7 +284,7 @@ def test_onboard_one_skips_heavy_stages_for_no_commitments(
     assert [s.stage for s in result.stages[:3]] == [
         "onboard_ticker",
         "run_thesis_evaluator",
-        "batch_dcf",
+        "refresh_dcf",
     ]
     assert all(s.outcome is mod.StageOutcome.SKIPPED for s in result.stages[:3])
 
@@ -312,7 +312,7 @@ def test_onboard_one_runs_full_chain_for_data_pending(tmp_path: Path) -> None:
     assert invoked == [
         "onboard_ticker",
         "run_thesis_evaluator",
-        "batch_dcf",
+        "refresh_dcf",
         "extract_commitments",
     ]
 
@@ -337,6 +337,6 @@ def test_onboard_one_skip_commitments_flag(tmp_path: Path) -> None:
         skip_commitments=True,
         log_path=log_path,
     )
-    assert invoked == ["onboard_ticker", "run_thesis_evaluator", "batch_dcf"]
+    assert invoked == ["onboard_ticker", "run_thesis_evaluator", "refresh_dcf"]
     assert result_full.stages[3].stage == "extract_commitments"
     assert result_full.stages[3].outcome is mod.StageOutcome.SKIPPED
