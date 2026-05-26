@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from pipeline.restatement_detector import insert_with_restatement_detection
 
 
 class FmpStatementRecordLike(Protocol):
@@ -78,31 +79,40 @@ def extract_facts_with_spec(
     return facts
 
 
-def insert_financial_facts(conn: sqlite3.Connection, facts: list[FinancialFact]) -> int:
-    """Bulk-insert facts via INSERT OR IGNORE (UNIQUE index dedupes). Returns rowcount."""
-    insert_sql = (
-        "INSERT OR IGNORE INTO financial_facts "
-        "(ticker, period_end, fiscal_period_type, line_item, value, "
-        " currency, unit, source_doc_id, confidence) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
+def insert_financial_facts(
+    conn: sqlite3.Connection,
+    facts: list[FinancialFact],
+    *,
+    extracted_by: str,
+) -> int:
+    """Bulk-insert facts. Returns rowcount actually inserted.
+
+    Each row is written via `insert_with_restatement_detection` so that when a
+    later filing (e.g. 10-K restating a Q1 value previously sourced from a
+    10-Q) lands on an existing logical key, the new row links back to the
+    incumbent via `supersedes_id`. The UNIQUE index on
+    (ticker, period_end, fiscal_period_type, line_item, source_doc_id) still
+    dedupes same-document replays.
+
+    `extracted_by` is required — the audit-trail column is meaningless if
+    callers leave it NULL.
+    """
     inserted = 0
     for f in facts:
-        result = conn.execute(
-            insert_sql,
-            (
-                f.ticker,
-                f.period_end,
-                f.fiscal_period_type.value,
-                f.line_item,
-                str(f.value),
-                f.currency.value if f.currency is not None else None,
-                f.unit.value,
-                f.source_doc_id,
-                f.confidence,
-            ),
+        new_id, _ = insert_with_restatement_detection(
+            conn,
+            ticker=f.ticker,
+            period_end=f.period_end,
+            fiscal_period_type=f.fiscal_period_type.value,
+            line_item=f.line_item,
+            value=f.value,
+            currency=f.currency.value if f.currency is not None else None,
+            unit=f.unit.value,
+            source_doc_id=f.source_doc_id,
+            confidence=f.confidence,
+            extracted_by=extracted_by,
         )
-        if result.rowcount > 0:
+        if new_id is not None:
             inserted += 1
     return inserted
 

@@ -81,6 +81,6 @@ def extract_cashflow_facts(conn: sqlite3.Connection, document_id: int, project_r
         facts = extract_facts_from_record(
             rec, source_doc_id=document_id, period_type_override=period_override
         )
-        inserted += insert_financial_facts(conn, facts)
+        inserted += insert_financial_facts(conn, facts, extracted_by="fmp")
     conn.commit()
     return inserted

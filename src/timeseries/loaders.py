@@ -426,9 +426,16 @@ def load_segment_junction_series(
     needed for cross-tab queries like ``[("product","AWS"), ("geography","US")]``.
 
     The numeric value is taken from the FIRST dim filter (i.e. the leading
-    axis of the requested cross-tab). When the same period has multiple
-    matching rows for that filter, the most recently ingested row wins
-    (max(id) per period — same convention as the other loaders).
+    axis of the requested cross-tab). Across multiple segment_periods rows
+    for the same (ticker, period_end, fiscal_period_type) — which happens
+    when an SEC-extracted period and an FMP-extracted period both target the
+    same quarter — the loader prefers the period whose source document has
+    the higher source_quality_tier (sec_official > fmp_normalized > ...).
+    Ties broken by max(sp.id) so the most recently ingested period wins.
+    Within the chosen period, max(sd.id) wins for the dim row.
+
+    On synthetic test fixtures missing documents.source_quality_tier (or
+    documents entirely), the loader falls back to max(sp.id) only.
     """
     if not dims:
         return []
@@ -466,34 +473,80 @@ def load_segment_junction_series(
             extra_dim_params.extend([dt, dn, metric])
         joins = "\n".join(extra_dim_joins)
 
-        sql = f"""
-            SELECT sp.period_end, sd1.value
-            FROM segment_periods sp
-            JOIN segment_dimensions sd1
-              ON sd1.period_id = sp.id
-              AND sd1.dim_type = ?
-              AND sd1.dim_name = ?
-              AND sd1.metric = ?
-            {joins}
-            WHERE sp.ticker = ?
-              AND sp.fiscal_period_type IN ({period_placeholders})
-              AND sd1.id = (
-                SELECT MAX(sd1b.id) FROM segment_dimensions sd1b
-                WHERE sd1b.period_id = sp.id
-                  AND sd1b.dim_type = sd1.dim_type
-                  AND sd1b.dim_name = sd1.dim_name
-                  AND sd1b.metric = sd1.metric
-              )
-            ORDER BY sp.period_end ASC
-        """
-        params: list[object] = [
-            head_dim_type,
-            head_dim_name,
-            metric,
-            *extra_dim_params,
-            ticker.upper(),
-            *period_list,
-        ]
+        tier_aware = _has_table(conn, "documents") and _has_column(
+            conn, "documents", "source_quality_tier"
+        )
+        if tier_aware:
+            tier_case = _tier_rank_case_sql("d.source_quality_tier")
+            sql = f"""
+                WITH ranked_periods AS (
+                    SELECT
+                        sp_inner.id AS id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY sp_inner.ticker, sp_inner.period_end,
+                                         sp_inner.fiscal_period_type
+                            ORDER BY {tier_case} DESC, sp_inner.id DESC
+                        ) AS rn
+                    FROM segment_periods sp_inner
+                    LEFT JOIN documents d ON d.id = sp_inner.source_doc_id
+                    WHERE sp_inner.ticker = ?
+                      AND sp_inner.fiscal_period_type IN ({period_placeholders})
+                )
+                SELECT sp.period_end, sd1.value
+                FROM segment_periods sp
+                JOIN ranked_periods rp ON rp.id = sp.id AND rp.rn = 1
+                JOIN segment_dimensions sd1
+                  ON sd1.period_id = sp.id
+                  AND sd1.dim_type = ?
+                  AND sd1.dim_name = ?
+                  AND sd1.metric = ?
+                {joins}
+                WHERE sd1.id = (
+                    SELECT MAX(sd1b.id) FROM segment_dimensions sd1b
+                    WHERE sd1b.period_id = sp.id
+                      AND sd1b.dim_type = sd1.dim_type
+                      AND sd1b.dim_name = sd1.dim_name
+                      AND sd1b.metric = sd1.metric
+                )
+                ORDER BY sp.period_end ASC
+            """
+            params: list[object] = [
+                ticker.upper(),
+                *period_list,
+                head_dim_type,
+                head_dim_name,
+                metric,
+                *extra_dim_params,
+            ]
+        else:
+            sql = f"""
+                SELECT sp.period_end, sd1.value
+                FROM segment_periods sp
+                JOIN segment_dimensions sd1
+                  ON sd1.period_id = sp.id
+                  AND sd1.dim_type = ?
+                  AND sd1.dim_name = ?
+                  AND sd1.metric = ?
+                {joins}
+                WHERE sp.ticker = ?
+                  AND sp.fiscal_period_type IN ({period_placeholders})
+                  AND sd1.id = (
+                    SELECT MAX(sd1b.id) FROM segment_dimensions sd1b
+                    WHERE sd1b.period_id = sp.id
+                      AND sd1b.dim_type = sd1.dim_type
+                      AND sd1b.dim_name = sd1.dim_name
+                      AND sd1b.metric = sd1.metric
+                  )
+                ORDER BY sp.period_end ASC
+            """
+            params = [
+                head_dim_type,
+                head_dim_name,
+                metric,
+                *extra_dim_params,
+                ticker.upper(),
+                *period_list,
+            ]
         rows = conn.execute(sql, params).fetchall()
         return _rows_to_series(rows)
     except sqlite3.Error as exc:

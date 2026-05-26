@@ -31,8 +31,17 @@ from pathlib import Path
 
 import requests
 
-from models.documents import DocType, FetchStatus, SourceType
+from models.documents import (
+    DocType,
+    FetchStatus,
+    SourceType,
+    tier_for_source_type,
+)
 from models.facts import FiscalPeriodType, Unit
+from pipeline.restatement_detector import (
+    _table_has_column,
+    insert_with_restatement_detection,
+)
 
 # Reverse-lookup CIK from `https://www.sec.gov/files/company_tickers.json` (verified 2026-05).
 # Update by re-querying that endpoint when adding tickers.
@@ -172,23 +181,39 @@ def upsert_accession_documents(
             accession_to_doc_id[accn] = int(row["id"])
             continue
         rel_path = f"data/historical/sec/{ticker.upper()}_companyfacts.json#accn={accn}"
-        cur = conn.execute(
-            "INSERT INTO documents "
-            "(ticker, source_type, doc_type, period_start, period_end, file_path, "
-            " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
-            " parent_document_id) "
-            "VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?, NULL)",
-            (
-                ticker.upper(),
-                SourceType.SEC_XBRL.value,
-                doc_type.value,
-                rel_path,
-                sha256,
-                datetime.now(),
-                FetchStatus.OK.value,
-                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type={record.form}&dateb=&owner=include&count=40",
-            ),
+        source_url = (
+            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+            f"&CIK={ticker}&type={record.form}&dateb=&owner=include&count=40"
         )
+        tier = tier_for_source_type(SourceType.SEC_XBRL).value
+        common_args = (
+            ticker.upper(),
+            SourceType.SEC_XBRL.value,
+            doc_type.value,
+            rel_path,
+            sha256,
+            datetime.now(),
+            FetchStatus.OK.value,
+            source_url,
+        )
+        if _table_has_column(conn, "documents", "source_quality_tier"):
+            cur = conn.execute(
+                "INSERT INTO documents "
+                "(ticker, source_type, doc_type, period_start, period_end, file_path, "
+                " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
+                " parent_document_id, source_quality_tier) "
+                "VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?, NULL, ?)",
+                (*common_args, tier),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT INTO documents "
+                "(ticker, source_type, doc_type, period_start, period_end, file_path, "
+                " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
+                " parent_document_id) "
+                "VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?, NULL)",
+                common_args,
+            )
         accession_to_doc_id[accn] = int(cur.lastrowid) if cur.lastrowid is not None else 0
     conn.commit()
     return accession_to_doc_id
@@ -318,18 +343,20 @@ def insert_facts_from_companyfacts(
                     if fpt is None:
                         continue  # YTD/6M/9M aggregations skipped
                     period_end = datetime.fromisoformat(end)
-                    cur = conn.execute(
-                        "INSERT OR IGNORE INTO financial_facts "
-                        "(ticker, period_end, fiscal_period_type, line_item, value, "
-                        " currency, unit, source_doc_id, confidence) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1.0)",
-                        (
-                            ticker.upper(), period_end, fpt.value, line_item,
-                            str(Decimal(str(val))), currency, Unit.ACTUAL.value,
-                            accession_to_doc_id[accn],
-                        ),
+                    new_id, _ = insert_with_restatement_detection(
+                        conn,
+                        ticker=ticker,
+                        period_end=period_end,
+                        fiscal_period_type=fpt.value,
+                        line_item=line_item,
+                        value=Decimal(str(val)),
+                        currency=currency,
+                        unit=Unit.ACTUAL.value,
+                        source_doc_id=accession_to_doc_id[accn],
+                        confidence=1.0,
+                        extracted_by="sec_xbrl",
                     )
-                    if cur.rowcount > 0:
+                    if new_id is not None:
                         inserted += 1
     conn.commit()
     return inserted

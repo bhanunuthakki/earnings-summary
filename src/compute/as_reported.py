@@ -117,6 +117,6 @@ def extract_as_reported_facts(
     for rec_data in records:
         rec = FmpAsReportedRecord.model_validate(rec_data)
         facts = extract_facts_from_record(rec, source_doc_id=document_id)
-        inserted += insert_financial_facts(conn, facts)
+        inserted += insert_financial_facts(conn, facts, extracted_by="fmp_as_reported")
     conn.commit()
     return inserted

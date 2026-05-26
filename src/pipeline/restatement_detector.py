@@ -89,6 +89,21 @@ def _parse_dt(raw: object) -> datetime | None:
     return None
 
 
+def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """True iff PRAGMA reports `column` on `table`. Used to fall back to the
+    pre-0054 INSERT shape on synthetic test fixtures that don't carry the
+    extracted_by + supersedes_id columns."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return False
+    for r in rows:
+        name = r["name"] if hasattr(r, "keys") else r[1]
+        if str(name) == column:
+            return True
+    return False
+
+
 def is_later_filing(
     conn: sqlite3.Connection,
     *,
@@ -225,26 +240,51 @@ def insert_with_restatement_detection(
             ):
                 supersedes_id = incumbent_id
 
+    has_audit_cols = _table_has_column(
+        conn, "financial_facts", "supersedes_id"
+    ) and _table_has_column(conn, "financial_facts", "extracted_by")
     try:
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO financial_facts "
-            "(ticker, period_end, fiscal_period_type, line_item, value, "
-            " currency, unit, source_doc_id, confidence, extracted_by, supersedes_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                ticker.upper(),
-                period_end,
-                fiscal_period_type,
-                line_item,
-                str(value),
-                currency,
-                unit,
-                source_doc_id,
-                confidence,
-                extracted_by,
-                supersedes_id,
-            ),
-        )
+        if has_audit_cols:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO financial_facts "
+                "(ticker, period_end, fiscal_period_type, line_item, value, "
+                " currency, unit, source_doc_id, confidence, extracted_by, supersedes_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    line_item,
+                    str(value),
+                    currency,
+                    unit,
+                    source_doc_id,
+                    confidence,
+                    extracted_by,
+                    supersedes_id,
+                ),
+            )
+        else:
+            # Pre-0054 schema (synthetic test fixtures): drop the audit columns.
+            # supersedes_id is None anyway in this branch since the column is
+            # missing; extracted_by is silently lost — acceptable for tests.
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO financial_facts "
+                "(ticker, period_end, fiscal_period_type, line_item, value, "
+                " currency, unit, source_doc_id, confidence) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    line_item,
+                    str(value),
+                    currency,
+                    unit,
+                    source_doc_id,
+                    confidence,
+                ),
+            )
     except sqlite3.Error as exc:
         log.warning(
             {

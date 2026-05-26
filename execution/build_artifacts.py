@@ -304,6 +304,36 @@ def _build_one(
     render_workbook(spec, xlsx_path)
     _emit("wrote_workbook", {"ticker": ticker, "path": str(xlsx_path)})
 
+    sections_status = {
+        "snapshot": spec.snapshot.status.value,
+        "company_description": spec.company_description.status.value,
+        "thesis": spec.thesis.status.value,
+        "financials": spec.financials.status.value,
+        "segments": spec.segments.status.value,
+        "earnings": spec.earnings.status.value,
+        "saydo": spec.saydo.status.value,
+        "ir_docs": spec.ir_docs.status.value,
+        "recent_developments": spec.recent_developments.status.value,
+        "bear_case": spec.bear_case.status.value,
+        "provenance": spec.provenance.status.value,
+    }
+    # Pick the canonical artifact path: prefer workspace when rendered,
+    # otherwise fall back to the long-form HTML. Provenance rows always point
+    # at a real file so audit consumers can deep-link.
+    canonical_artifact = (
+        workspace_html_path
+        if renderer in ("workspace", "both")
+        else html_path
+    )
+    _log_brief_provenance(
+        repo_root=repo_root,
+        ticker=ticker,
+        generation_date=today,
+        sections_status=sections_status,
+        trigger=trigger,
+        artifact_path=canonical_artifact,
+    )
+
     return {
         "ticker": ticker,
         "report_html": str(html_path) if renderer in ("default", "both") else None,
@@ -311,20 +341,69 @@ def _build_one(
         "report_md": str(md_path),
         "sections_json": str(json_path),
         "dcf_xlsx": str(xlsx_path),
-        "section_status": {
-            "snapshot": spec.snapshot.status.value,
-            "company_description": spec.company_description.status.value,
-            "thesis": spec.thesis.status.value,
-            "financials": spec.financials.status.value,
-            "segments": spec.segments.status.value,
-            "earnings": spec.earnings.status.value,
-            "saydo": spec.saydo.status.value,
-            "ir_docs": spec.ir_docs.status.value,
-            "recent_developments": spec.recent_developments.status.value,
-            "bear_case": spec.bear_case.status.value,
-            "provenance": spec.provenance.status.value,
-        },
+        "section_status": sections_status,
     }
+
+
+def _log_brief_provenance(
+    *,
+    repo_root: Path,
+    ticker: str,
+    generation_date: str,
+    sections_status: dict[str, str],
+    trigger: str,
+    artifact_path: Path,
+) -> None:
+    """Append a `brief_provenance_log` row for the render.
+
+    `sources_used` snapshots the section-level provenance: which sources fed
+    each section at render time. Today we only capture the per-section status
+    (LIVE / STUB / etc.); per-line-item source tiering (e.g. revenue was
+    fmp_normalized, OI was sec_official) lands in a follow-on once the
+    loaders expose their tier picks. Silently skips when the table is missing
+    (synthetic environments without migrations applied).
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return
+    conn = sqlite3.connect(str(db_path))
+    try:
+        table_present = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='brief_provenance_log' LIMIT 1"
+        ).fetchone()
+        if table_present is None:
+            return
+        try:
+            rel_artifact = str(artifact_path.relative_to(repo_root))
+        except ValueError:
+            rel_artifact = str(artifact_path)
+        conn.execute(
+            "INSERT INTO brief_provenance_log "
+            "(ticker, generation_date, sources_used, sections_status, "
+            " trigger, artifact_path) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                ticker.upper(),
+                generation_date,
+                json.dumps({"sections": sections_status}, sort_keys=True),
+                json.dumps(sections_status, sort_keys=True),
+                trigger,
+                rel_artifact,
+            ),
+        )
+        conn.commit()
+        _emit(
+            "wrote_provenance_log",
+            {"ticker": ticker, "generation_date": generation_date, "trigger": trigger},
+        )
+    except sqlite3.Error as exc:
+        _emit(
+            "provenance_log_failed",
+            {"ticker": ticker, "error": f"{type(exc).__name__}: {exc}"},
+        )
+    finally:
+        conn.close()
 
 
 def _emit(event: str, payload: dict[str, object]) -> None:

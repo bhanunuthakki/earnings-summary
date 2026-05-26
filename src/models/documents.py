@@ -31,6 +31,41 @@ class SourceType(StrEnum):
     LLM_EXTRACTED = "llm_extracted"
 
 
+class SourceQualityTier(StrEnum):
+    """Provenance tier — the read-side loader prefers higher tiers.
+
+    Mirrors migration 0054's _BACKFILL_TIER_BY_SOURCE_TYPE mapping and the
+    loaders' SOURCE_QUALITY_TIER_RANK. Keep both in sync when adding a tier.
+    """
+
+    SEC_OFFICIAL = "sec_official"
+    FMP_NORMALIZED = "fmp_normalized"
+    LLM_EXTRACTED = "llm_extracted"
+    YFINANCE_FALLBACK = "yfinance_fallback"
+
+
+_SOURCE_TYPE_TO_TIER: dict[SourceType, SourceQualityTier] = {
+    SourceType.SEC_XBRL: SourceQualityTier.SEC_OFFICIAL,
+    SourceType.FMP: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.IR_DOC: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.TRANSCRIPT_AUDIO: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.MANUAL_CSV: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.MANUAL_ENTRY: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.LLM_EXTRACTED: SourceQualityTier.LLM_EXTRACTED,
+}
+
+
+def tier_for_source_type(source_type: SourceType) -> SourceQualityTier:
+    """Return the canonical SourceQualityTier for a SourceType.
+
+    The mapping is closed over the SourceType enum — adding a new source
+    type without updating _SOURCE_TYPE_TO_TIER raises KeyError loudly, which
+    is the desired behavior: every source must declare its tier, no silent
+    fallback to the default that lets a malformed insert pass through.
+    """
+    return _SOURCE_TYPE_TO_TIER[source_type]
+
+
 class DocType(StrEnum):
     """Concrete artifact kinds. Add values when introducing a new endpoint or doc class."""
 

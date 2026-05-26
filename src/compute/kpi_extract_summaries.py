@@ -41,13 +41,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
-from models.documents import SourceType
+from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     persist_manifest,
 )
+from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import start_run
 
 # Per-source filename matchers + the documents.doc_type label written for each.
@@ -287,25 +288,38 @@ def _ensure_summary_document_row(
     ).fetchone()
     if existing is not None:
         return int(existing["id"])
-    cur = conn.execute(
-        """
-        INSERT INTO documents
-          (ticker, source_type, doc_type, period_end, file_path, sha256,
-           fetched_at, fetch_status, raw_bytes_size)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            ticker,
-            SourceType.LLM_EXTRACTED.value,
-            doc_type,
-            period_end,
-            str(path).replace("\\", "/"),
-            sha,
-            datetime.now(timezone.utc),
-            "ok",
-            len(raw),
-        ),
+    common_args = (
+        ticker,
+        SourceType.LLM_EXTRACTED.value,
+        doc_type,
+        period_end,
+        str(path).replace("\\", "/"),
+        sha,
+        datetime.now(timezone.utc),
+        "ok",
+        len(raw),
     )
+    if _table_has_column(conn, "documents", "source_quality_tier"):
+        tier = tier_for_source_type(SourceType.LLM_EXTRACTED).value
+        cur = conn.execute(
+            """
+            INSERT INTO documents
+              (ticker, source_type, doc_type, period_end, file_path, sha256,
+               fetched_at, fetch_status, raw_bytes_size, source_quality_tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (*common_args, tier),
+        )
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO documents
+              (ticker, source_type, doc_type, period_end, file_path, sha256,
+               fetched_at, fetch_status, raw_bytes_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            common_args,
+        )
     conn.commit()
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
