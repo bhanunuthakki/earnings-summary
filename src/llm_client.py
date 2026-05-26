@@ -28,6 +28,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import time
 
@@ -860,9 +861,117 @@ def _business_rule_anchor_lines(payload: dict[str, object]) -> list[str]:
     return lines
 
 
+# Canonical financial line items always worth statistically profiling — the
+# Week-1 time-series layer runs detect_trend + detect_inflection on these
+# so the LLM sees the numerical read, not just the raw rows. Stays a small
+# fixed set so the anchor block doesn't balloon; per-ticker tier-1 KPIs
+# are added on top via load_kpi_series when available.
+_STATS_LINE_ITEMS: tuple[str, ...] = (
+    "revenue",
+    "operating_income",
+    "free_cash_flow",
+    "net_income",
+)
+
+
+def _stats_block_from_series(series_label: str, series: list[object]) -> str | None:
+    """One-line markdown summary of a series: direction + slope + (inflection
+    when present). Returns None when the series is too short to analyze."""
+    from timeseries import detect_inflection, detect_trend
+    if len(series) < 4:
+        return None
+    trend = detect_trend(cast("list[object]", series))
+    if trend.get("insufficient_data"):
+        return None
+    direction = str(trend.get("direction") or "?")
+    slope_pct = trend.get("slope_pct_of_mean")
+    slope_str = (
+        f"{float(cast('float', slope_pct)) * 100:+.1f}%/q"
+        if isinstance(slope_pct, (int, float))
+        else "—"
+    )
+    sig = " (sig)" if trend.get("statistical_significance") else ""
+    line = f"- **{series_label}** — {direction} · slope {slope_str}{sig}"
+
+    # Add inflection callout when the series is long enough
+    if len(series) >= 8:
+        infl = detect_inflection(cast("list[object]", series))
+        if infl.get("inflection_period") and float(cast("float", infl.get("magnitude") or 0)) >= 1.0:
+            line += f" · inflection {infl['inflection_period']} (delta={float(cast('float', infl['magnitude'])):.1f}sd)"
+    return line
+
+
+def _statistical_patterns_block(
+    repo_root: Path, ticker: str, payload: dict[str, object]
+) -> list[str]:
+    """Run detect_trend + detect_inflection on the canonical line items and
+    any per-ticker registered KPIs. Returns markdown lines, empty when no
+    series load (missing DB, unknown ticker)."""
+    try:
+        from timeseries import load_financial_series, load_kpi_series
+    except ImportError:
+        return []
+
+    lines: list[str] = []
+    for line_item in _STATS_LINE_ITEMS:
+        try:
+            s = load_financial_series(ticker=ticker, line_item=line_item, repo_root=repo_root)
+        except Exception as exc:  # never block anchor build
+            log.debug({"event": "stats_load_financial_failed", "ticker": ticker, "lineitem": line_item, "error": str(exc)})
+            continue
+        if not s:
+            continue
+        rendered = _stats_block_from_series(line_item.replace("_", " "), cast("list[object]", s))
+        if rendered:
+            lines.append(rendered)
+
+    # Per-ticker registered KPIs (from kpi_definitions). Tier-1 KPIs from the
+    # holdings JSON would be ideal here but holdings names rarely match the
+    # registry verbatim — use the registry as the source of truth.
+    db_path = repo_root / "data" / "portfolio.db"
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            try:
+                rows = conn.execute(
+                    "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
+                    (ticker.upper(),),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            log.debug({"event": "stats_kpi_def_lookup_failed", "error": str(exc)})
+            rows = []
+        for (kpi_name,) in rows:
+            if not isinstance(kpi_name, str) or not kpi_name.strip():
+                continue
+            try:
+                s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
+            except Exception as exc:  # best-effort
+                log.debug({"event": "stats_load_kpi_failed", "ticker": ticker, "kpi": kpi_name, "error": str(exc)})
+                continue
+            if not s_kpi:
+                continue
+            short_label = kpi_name if len(kpi_name) <= 60 else kpi_name[:57] + "…"
+            rendered = _stats_block_from_series(short_label, cast("list[object]", s_kpi))
+            if rendered:
+                lines.append(rendered)
+
+    # Reference payload so linters know it's intentional (reserved for
+    # future use: cross-check tier-1 KPI names against the registry)
+    _ = payload
+    return lines
+
+
 def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     """Compose a compact thesis anchor for prompt injection. Empty string
-    when no holdings JSON exists. Output is markdown, ~300-1500 chars."""
+    when no holdings JSON exists. Output is markdown, ~300-1500 chars.
+
+    Since the Week-1 time-series layer landed, the anchor also carries a
+    "Recent statistical patterns" subsection — detect_trend + detect_inflection
+    over the canonical financial line items + any per-ticker registered KPIs.
+    The subsection is best-effort: DB / loader failures degrade silently so
+    the original thesis anchor still renders."""
     payload = _load_holdings_json(repo_root, ticker)
     if payload is None:
         return ""
@@ -886,6 +995,18 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     if rule_lines:
         parts.append("\n**Quantitative thesis-breakers:**")
         parts.extend(rule_lines)
+
+    # Best-effort statistical block. Wrapped in a try/except so any failure
+    # in the timeseries layer (DB missing, scipy import error, etc.) can't
+    # break the anchor for the dozens of prompts that depend on it.
+    try:
+        stats_lines = _statistical_patterns_block(repo_root, ticker, payload)
+    except Exception as exc:  # anchor must keep rendering
+        log.debug({"event": "statistical_patterns_block_failed", "ticker": ticker, "error": str(exc)})
+        stats_lines = []
+    if stats_lines:
+        parts.append("\n**Recent statistical patterns (last 8-16 quarters):**")
+        parts.extend(stats_lines)
 
     if len(parts) == 1:  # only the header — no usable content
         return ""
