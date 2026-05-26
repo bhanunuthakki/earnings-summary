@@ -29,8 +29,13 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import hashlib  # noqa: E402
+
 import db  # noqa: E402
+from llm.batch import BatchRequest, saydo_custom_id, write_jsonl  # noqa: E402
+from llm_artifact_store import UpsertRequest, upsert  # noqa: E402
 from llm_client import (  # noqa: E402
+    _build_pairwise_analysis_prompt,
     compose_anchor_block,
     generate_pairwise_analysis,
     load_bear_anchor,
@@ -50,6 +55,9 @@ def main() -> int:
         print("[]")
         return 0
 
+    if args.prepare_batch:
+        return _prepare_batch_mode(tickers, repo_root, refresh=args.refresh)
+
     summary: list[dict[str, object]] = []
     for ticker in tickers:
         result = _process_ticker(ticker, repo_root, refresh=args.refresh)
@@ -67,6 +75,83 @@ def main() -> int:
     return 0
 
 
+def _prepare_batch_mode(
+    tickers: list[str], repo_root: Path, *, refresh: bool
+) -> int:
+    """Collect every pending SayDo pair across `tickers` into a single
+    Anthropic message-batches JSONL file. Does NOT submit — operator pipes
+    the file into the SDK's batches API on the overnight cron path.
+
+    Outputs:
+      .tmp/saydo_batch/saydo_batch_<TIMESTAMP>.jsonl
+      .tmp/saydo_batch/saydo_batch_<TIMESTAMP>.manifest.json (audit trail)
+    """
+    tmp = repo_root / ".tmp"
+    batch_dir = tmp / "saydo_batch"
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    jsonl_path = batch_dir / f"saydo_batch_{stamp}.jsonl"
+    manifest_path = batch_dir / f"saydo_batch_{stamp}.manifest.json"
+
+    requests: list[BatchRequest] = []
+    manifest_entries: list[dict[str, object]] = []
+    for ticker in tickers:
+        summaries = _list_summaries(tmp, ticker)
+        anchor_block = compose_anchor_block(
+            load_thesis_anchor(repo_root, ticker),
+            load_bear_anchor(repo_root, ticker),
+        )
+        for i in range(1, len(summaries)):
+            prev = summaries[i - 1]
+            curr = summaries[i]
+            custom_id = saydo_custom_id(
+                ticker=ticker,
+                prev_quarter=str(prev["quarter"]),
+                prev_year=int(prev["year"]),
+                curr_quarter=str(curr["quarter"]),
+                curr_year=int(curr["year"]),
+            )
+            out_path = tmp / f"{custom_id}.txt"
+            if out_path.exists() and not refresh:
+                continue
+            prompt = _build_pairwise_analysis_prompt(
+                prev, curr, anchor_block=anchor_block
+            )
+            requests.append(BatchRequest(custom_id=custom_id, prompt=prompt))
+            manifest_entries.append({
+                "custom_id": custom_id,
+                "ticker": ticker,
+                "expected_output": str(out_path.relative_to(repo_root)),
+            })
+
+    written = write_jsonl(requests, jsonl_path)
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "stamp": stamp,
+                "tickers": tickers,
+                "requests": manifest_entries,
+                "jsonl": str(jsonl_path.relative_to(repo_root)),
+                "submit_hint": (
+                    "Submit via: python -c \"from anthropic import Anthropic; "
+                    "c = Anthropic(); "
+                    "import json; reqs = [json.loads(line) for line in open(JSONL_PATH)]; "
+                    "batch = c.messages.batches.create(requests=reqs); print(batch.id)\""
+                ),
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    print(json.dumps({
+        "mode": "prepare_batch",
+        "requests_written": written,
+        "jsonl": str(jsonl_path.relative_to(repo_root)),
+        "manifest": str(manifest_path.relative_to(repo_root)),
+    }, indent=2))
+    return 0
+
+
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = p.add_mutually_exclusive_group(required=True)
@@ -74,6 +159,15 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
     p.add_argument("--refresh", action="store_true", help="Re-generate even if SayDo file already exists")
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    p.add_argument(
+        "--prepare-batch",
+        action="store_true",
+        help="Write a JSONL of Anthropic messages.batches.create requests to "
+             ".tmp/saydo_batch/ instead of issuing synchronous LLM calls. "
+             "Overnight cron submits the batch via the SDK; result drops back "
+             "into .tmp/SayDo_*.txt with the same filenames the synchronous "
+             "path would have written.",
+    )
     return p.parse_args()
 
 
@@ -109,6 +203,9 @@ def _process_ticker(
         load_bear_anchor(repo_root, ticker),
     )
 
+    anchor_sha = hashlib.sha256(anchor_block.encode("utf-8")).hexdigest()
+    db_path = repo_root / "data" / "portfolio.db"
+
     for i in range(1, len(summaries)):
         prev = summaries[i - 1]
         curr = summaries[i]
@@ -131,6 +228,32 @@ def _process_ticker(
             break
         out_path.write_text(text, encoding="utf-8")
         pairs_written += 1
+        # Also upsert into llm_artifact_store so the artifact dirty chain
+        # picks up SayDo invalidations when thesis text changes. cache_inputs
+        # carry anchor_sha + the two summary contents so a thesis edit
+        # produces a new input_sha256 -> the prior artifact is superseded
+        # automatically instead of living on under the old filename.
+        if db_path.exists():
+            fiscal_period = f"{prev['quarter']}_{prev['year']}_to_{curr['quarter']}_{curr['year']}"
+            try:
+                upsert(
+                    UpsertRequest(
+                        ticker=ticker,
+                        purpose="saydo_pair",
+                        fiscal_period=fiscal_period,
+                        content_md=text,
+                        cache_inputs=[
+                            f"anchor_sha={anchor_sha}",
+                            f"prev_summary_sha={hashlib.sha256(str(prev['text']).encode('utf-8')).hexdigest()}",
+                            f"curr_summary_sha={hashlib.sha256(str(curr['text']).encode('utf-8')).hexdigest()}",
+                            f"period={fiscal_period}",
+                        ],
+                        prompt_version="v1",
+                    ),
+                    db_path=db_path,
+                )
+            except Exception:  # never fail the SayDo write on artifact store
+                pass
 
     return {
         "ticker": ticker,
