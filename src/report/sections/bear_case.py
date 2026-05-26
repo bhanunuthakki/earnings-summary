@@ -15,7 +15,9 @@ The on-disk cache existed pre-Phase-A as a sidecar for cross-section anchoring
 from __future__ import annotations
 
 import json
+import logging
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
@@ -32,6 +34,8 @@ from report.models import (
     ThesisSection,
 )
 from report.sections._common import missing
+
+log = logging.getLogger(__name__)
 
 DEFAULT_CACHE_TTL_DAYS = 7
 
@@ -142,30 +146,120 @@ def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> No
 
 
 def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
-    """Concatenate any per-ticker enhancement JSONs into prompt-ready markdown.
+    """Concatenate any per-ticker enhancement JSONs + investor-deck targets
+    into prompt-ready markdown.
 
-    Convention (Phase 5): per-ticker research scripts (e.g.
-    `extract_nvo_patent_timeline.py`) write JSON to
-    `data/ticker_specific/<TICKER>/<feature>.json`. The bear case section
-    loads every file in that directory and inlines them as markdown code
-    blocks so the LLM can ground its failure-mode analysis in concrete
-    ticker-specific evidence (patent expiry dates for NVO, drug pipeline
-    milestones, regulatory readouts, etc.).
+    Two sources, both optional:
 
-    Returns an empty string when the ticker has no enhancements — leaves
-    the prompt unchanged from the universal shape.
+      1. Per-ticker research JSONs at `data/ticker_specific/<TICKER>/*.json`
+         (extract_nvo_patent_timeline.py and friends). Inlined verbatim as
+         JSON code blocks. Used for evidence the LLM should ground on (patent
+         expiries, drug pipeline milestones, regulatory readouts).
+
+      2. Strategic targets the LLM extracted from investor decks
+         (`strategic_targets` table). Rendered as a bulleted "## Strategic
+         Targets" block so the bear case's failure-mode analysis can refute
+         management's on-record commitments, not just project an LLM prior.
+
+    Returns an empty string when neither source has content.
     """
+    parts: list[str] = []
+
+    targets_block = _strategic_targets_md(ticker, repo_root)
+    if targets_block:
+        parts.append(targets_block)
+
     base = repo_root / "data" / "ticker_specific" / ticker.upper()
-    if not base.exists():
+    if base.exists():
+        for path in sorted(base.glob("*.json")):
+            try:
+                body = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            parts.append(f"### {path.stem}\n\n```json\n{body}\n```")
+
+    return "\n\n".join(parts)
+
+
+def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
+    """Render strategic_targets rows for `ticker` as a markdown block.
+
+    Returns '' when the table is missing (fresh repo / migration not run),
+    when the ticker has no rows, or on any read error — the section degrades
+    gracefully so a missing DB doesn't break the report.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
         return ""
-    chunks: list[str] = []
-    for path in sorted(base.glob("*.json")):
+    try:
+        conn = sqlite3.connect(str(db_path))
         try:
-            body = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        chunks.append(f"### {path.stem}\n\n```json\n{body}\n```")
-    return "\n\n".join(chunks)
+            present = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='strategic_targets'"
+            ).fetchone()
+            if present is None:
+                return ""
+            rows = conn.execute(
+                """
+                SELECT target_kind, target_value, target_unit, target_period,
+                       target_currency, narrative_excerpt
+                FROM strategic_targets
+                WHERE ticker = ?
+                ORDER BY target_period, target_kind, id
+                """,
+                (ticker.upper(),),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.debug(
+            {
+                "event": "strategic_targets_read_failed",
+                "ticker": ticker,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return ""
+    if not rows:
+        return ""
+
+    lines: list[str] = [
+        "## Strategic Targets",
+        "",
+        "Management's on-record multi-year commitments (extracted from investor decks):",
+        "",
+    ]
+    for kind, value, unit, period, currency, excerpt in rows:
+        value_str = _format_target_value(value, unit, currency)
+        excerpt_short = (excerpt or "").strip()
+        if len(excerpt_short) > 160:
+            excerpt_short = excerpt_short[:157] + "..."
+        if value_str:
+            lines.append(
+                f"- **{kind}** — {value_str} by {period} — \"{excerpt_short}\""
+            )
+        else:
+            lines.append(f"- **{kind}** — {period} — \"{excerpt_short}\"")
+    return "\n".join(lines)
+
+
+def _format_target_value(
+    value: object, unit: object, currency: object
+) -> str:
+    """Compose '50000 USD_M', '30%', etc. Returns '' for qualitative rows."""
+    if value is None:
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ""
+    unit_str = str(unit) if isinstance(unit, str) else ""
+    if unit_str == "%":
+        return f"{v:g}%"
+    # Drop trailing .0 on whole numbers (50000.0 → 50000) for readability.
+    formatted = f"{v:g}"
+    suffix = unit_str if unit_str and unit_str != "qualitative" else ""
+    return f"{formatted} {suffix}".strip()
 
 
 def _parse_response(text: str) -> BearCaseSection:
