@@ -1,16 +1,21 @@
 """
 src/llm_client.py
 -----------------
-LLM client for the earnings-summary pipeline. Two-tier execution:
+LLM client for the earnings-summary pipeline. Per-purpose prompt-bearing
+generators (generate_summary, generate_thesis_update, generate_bear_case,
+classify_intake_document, …) and the prompt-rendering constants they share.
 
-  PRIMARY: Claude Code CLI (``claude -p``) via subprocess. The CLI honors
-  whichever auth is configured in the environment — ``ANTHROPIC_API_KEY`` for
-  metered API billing, or ``claude auth login`` for a Pro/Max subscription.
+The runtime plumbing — Claude CLI subprocess wiring, Gemini fallback policy,
+ledger writes, anchor block builders — was extracted to the ``src/llm/``
+subpackage during the split. Public names are re-exported below so every
+caller in ``execution/``, ``src/compute/``, ``src/report/sections/``, etc.
+keeps working with the existing ``from llm_client import X`` pattern.
 
-  FALLBACK: Gemini via google-generativeai. Fires automatically when the Claude
-  CLI call fails (timeout, non-zero exit, empty output, binary missing).
-  Per-call cost on Gemini Flash is sub-penny; the fallback prevents single-ticker
-  failures from blocking batch runs.
+Architecture after the split:
+  src/llm/anchors.py  — load_thesis_anchor / load_bear_anchor / compose
+  src/llm/fallback.py — Gemini fallback (try_gemini_fallback) + policy
+  src/llm/cli.py      — Claude CLI subprocess + call_llm + budget enforcement
+  src/llm/ledger.py   — best-effort llm_calls ledger writes
 
 Setup (one-time, user action required):
 1. Install Claude Code CLI: see https://code.claude.com/docs/en/setup
@@ -25,64 +30,116 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import shutil
-import sqlite3
-import subprocess
-import time
 
-# NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
-# is `google-genai` with a different API (genai.Client / client.models.generate_content).
-# Migrate when convenient — the deprecated package still works and avoids forcing
-# users to re-install for the fallback path. See:
-# https://github.com/google-gemini/deprecated-generative-ai-python
-import warnings
-from datetime import UTC, date, datetime
-from pathlib import Path
-from typing import cast
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
-    import google.generativeai as genai
+# `subprocess` is intentionally imported here (and not used directly in this
+# module after the split) because the existing budget integration test
+# monkeypatches `llm_client.subprocess.run`. Removing the import breaks that
+# patch surface; keep the import bound to the module attribute.
+import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from datetime import date
 
 from dotenv import load_dotenv
 
-# Phase 0 ledger (migration 0034). Records one row per LLM call with cost +
-# token usage + cache stats. Best-effort: failures here never break the LLM
-# call. Imported lazily inside _call_claude so this module stays importable in
-# environments without the ledger module (e.g. unrelated scratch scripts).
+# ---------------------------------------------------------------------------
+# Re-exports from the src/llm/ submodules
+# ---------------------------------------------------------------------------
+# Every public name the original src/llm_client.py exposed is re-exported here
+# so all ~30 import sites in execution/, src/compute/, src/report/sections/,
+# src/report/renderers/, src/bear_case_grader, src/decision_extractor,
+# src/intake, src/parser, src/synthesis_lenses, src/table_extractors/* and
+# the test suite continue to work without modification.
+#
+# The `from X import Y as Y` pattern signals intentional re-export so neither
+# ruff nor pyright flags these as unused imports. For the four legacy private
+# names that have been intentionally aliased (the `_gemini_fallback_disabled`,
+# `_try_gemini_fallback`, `_try_gemini_fallback_logged`, `_record_to_ledger`
+# names that pre-split callers may import) the rename forces an explicit
+# unused-import suppression.
+#
+# Note: `_setup_verified` and `_claude_cli_path` are NOT re-exports — they
+# stay defined as live module-level globals below because the existing
+# budget-integration test monkeypatches them via `llm_client.<name>` and the
+# patch must hit the same storage that cli.py's late-import reads.
+from llm.anchors import (
+    ANCHOR_BLOCK_CHAR_CAP as ANCHOR_BLOCK_CHAR_CAP,
+)
+from llm.anchors import (
+    compose_anchor_block as compose_anchor_block,
+)
+from llm.anchors import (
+    load_bear_anchor as load_bear_anchor,
+)
+from llm.anchors import (
+    load_thesis_anchor as load_thesis_anchor,
+)
+from llm.cli import (
+    CLAUDE_WEB_TIMEOUT_SECONDS as CLAUDE_WEB_TIMEOUT_SECONDS,
+)
+from llm.cli import (
+    CLAUDE_WEB_TOOLS as CLAUDE_WEB_TOOLS,
+)
+from llm.cli import (
+    DEFAULT_MODEL as DEFAULT_MODEL,
+)
+from llm.cli import (
+    DEFAULT_TIMEOUT_SECONDS as DEFAULT_TIMEOUT_SECONDS,
+)
+from llm.cli import (
+    FAST_CLASSIFIER_MODEL as FAST_CLASSIFIER_MODEL,
+)
+from llm.cli import (
+    LLM_MODELS as LLM_MODELS,
+)
+from llm.cli import (
+    LLMBudgetExceeded as LLMBudgetExceeded,
+)
+from llm.cli import (
+    _call_claude as _call_claude,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _enforce_budget_pre_call as _enforce_budget_pre_call,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _model_for as _model_for,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    _verify_setup_once as _verify_setup_once,  # pyright: ignore[reportPrivateUsage]
+)
+from llm.cli import (
+    call_llm as call_llm,
+)
+from llm.cli import (
+    call_llm_with_web as call_llm_with_web,
+)
+from llm.fallback import (
+    GEMINI_FALLBACK_MODEL as GEMINI_FALLBACK_MODEL,
+)
+from llm.fallback import (
+    is_fallback_disabled as _gemini_fallback_disabled,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.fallback import (
+    try_gemini_fallback as _try_gemini_fallback,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.ledger import (
+    fallback_call_logged as _try_gemini_fallback_logged,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
+from llm.ledger import (
+    record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
+)
 
-# Load .env at module init so GEMINI_API_KEY is available without callers having to
-# import dotenv themselves. Silent no-op if .env doesn't exist.
+# Load .env at module init so GEMINI_API_KEY is available without callers having
+# to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
+# import path (`from llm_client import ...`) still triggers this, preserving the
+# pre-split behavior where fallback.py / cli.py find env vars populated. Runs
+# AFTER the re-exports above because those don't actually read env vars at
+# import time — env reads happen lazily inside functions.
 load_dotenv()
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS
 # mode (different scorecard columns + conviction cap).
 STALE_CORPUS_THRESHOLD_DAYS = 120
-
-# Per-purpose model selection table + the public call_llm / call_llm_with_web
-# entry points + budget enforcement moved to src/llm/cli.py during the llm
-# subpackage split. Re-exported here so existing callers (execution/*,
-# src/compute/*, src/report/sections/*, tests) keep their existing imports
-# from `llm_client` working. The investor_deck_extraction entry from main
-# (PR #132/#135) was rolled into cli.py's LLM_MODELS during the rebase.
-from llm.cli import (  # noqa: E402
-    CLAUDE_WEB_TIMEOUT_SECONDS,
-    CLAUDE_WEB_TOOLS,
-    DEFAULT_MODEL,
-    DEFAULT_TIMEOUT_SECONDS,
-    FAST_CLASSIFIER_MODEL,
-    LLM_MODELS,
-    LLMBudgetExceeded,
-    _call_claude,
-    _enforce_budget_pre_call,
-    _model_for,
-    _verify_setup_once,
-    call_llm,
-    call_llm_with_web,
-)
 
 # Schema fields stripped from the LLM prompt — they are audit-trail metadata
 # meant for the human reviewer (why a schema was edited, when it was last
@@ -106,64 +163,21 @@ JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 # Gemini-Flash budget; well under any Claude model's context.
 INTAKE_TEXT_BUDGET = 6000
 
-# GEMINI_FALLBACK_MODEL moved to src/llm/fallback.py during the llm subpackage
-# split. Re-exported so internal _try_gemini_fallback_logged (still below) and
-# any external `from llm_client import GEMINI_FALLBACK_MODEL` keep working.
-from llm.fallback import GEMINI_FALLBACK_MODEL  # noqa: E402
-
 log = logging.getLogger(__name__)
 
 
-# LLMBudgetExceeded + _verify_setup_once moved to src/llm/cli.py (re-exported
-# above). The Claude CLI path resolution state — `_setup_verified` and
-# `_claude_cli_path` — INTENTIONALLY stays on this module so the existing
-# test monkeypatch surface keeps working:
+# Claude CLI path resolution state. `_setup_verified` / `_claude_cli_path`
+# INTENTIONALLY live on this module so the existing test monkeypatch surface
+# keeps working without test changes:
 #
 #     monkeypatch.setattr(llm_client, "_setup_verified", True)
 #     monkeypatch.setattr(llm_client, "_claude_cli_path", r"C:\fake\claude.cmd")
 #
 # cli.py's _verify_setup_once and _call_claude reach into this module via a
-# late ``import llm_client`` to read/write these globals.
+# late ``import llm_client`` to read/write these globals — that's why the
+# re-exports above name _verify_setup_once but the state stays here.
 _setup_verified: bool = False
 _claude_cli_path: str | None = None
-
-
-# Gemini fallback policy + routing moved to src/llm/fallback.py during the
-# llm subpackage split. Internal callers below (_try_gemini_fallback_logged,
-# _call_claude) keep using the leading-underscore names; re-export at module
-# level so external monkey-patches and `from llm_client import _try_gemini_fallback`
-# (if any) keep working.
-from llm.fallback import (  # noqa: E402
-    is_fallback_disabled as _gemini_fallback_disabled,
-)
-from llm.fallback import (  # noqa: E402
-    try_gemini_fallback as _try_gemini_fallback,
-)
-
-
-# Ledger writes moved to src/llm/ledger.py during the llm subpackage split.
-# Re-exported under the original leading-underscore names so internal callers
-# below (_call_claude, _try_gemini_fallback_logged, call_llm_with_web) keep
-# working without changes.
-from llm.ledger import fallback_call_logged as _try_gemini_fallback_logged  # noqa: E402
-from llm.ledger import record_llm_call as _record_to_ledger  # noqa: E402
-
-
-# ---------------------------------------------------------------------------
-# Thesis / bear-case anchor blocks
-# ---------------------------------------------------------------------------
-#
-# The anchor builders were extracted to src/llm/anchors.py during the llm
-# subpackage split. Re-exported here so existing callers (execution/*,
-# src/report/sections/*, src/report/renderers/*) keep working without
-# import changes.
-
-from llm.anchors import (  # noqa: E402
-    ANCHOR_BLOCK_CHAR_CAP,
-    compose_anchor_block,
-    load_bear_anchor,
-    load_thesis_anchor,
-)
 
 
 # ---------------------------------------------------------------------------

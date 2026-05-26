@@ -1,3 +1,10 @@
+# pyright: reportPrivateUsage=false
+#
+# This module intentionally reads + writes `_setup_verified` and
+# `_claude_cli_path` on the llm_client module via late `import llm_client`
+# (see the docstring below + commit history for why). Pyright flags every
+# such access as cross-module private-usage; the module-level directive
+# above silences only that rule, preserving every other strict check.
 """
 src/llm/cli.py
 --------------
