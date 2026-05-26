@@ -64,6 +64,9 @@ _DEFAULT_BUDGETS: list[tuple[str, float]] = [
     ("lens:footnote_anomaly", 10.00),
     ("transcript_summary", 80.00),
     ("pairwise_analysis", 30.00),
+    # Phase 2c §5 themes split — cross-quarter 4-transcript prompt;
+    # sized in line with pairwise_analysis given comparable input shape.
+    ("earnings_themes_split", 30.00),
     ("company_description", 20.00),
     ("valuation_basis", 15.00),
     ("exec_comp_alignment", 15.00),

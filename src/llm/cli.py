@@ -103,6 +103,11 @@ LLM_MODELS: dict[str, str] = {
     "platform_diagram": FAST_CLASSIFIER_MODEL,
     "qa_topics": DEFAULT_MODEL,
     "saydo_filter": DEFAULT_MODEL,
+    # Cross-quarter theme rollup over 4 transcripts, split into prepared /
+    # Q&A buckets. Long-context analytical writing → Sonnet matches
+    # transcript_summary and pairwise_analysis (the other prompts that
+    # ingest several transcripts at once).
+    "earnings_themes_split": DEFAULT_MODEL,
     # Valuation multiple selection is a sector/business-model judgment that
     # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
     # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call

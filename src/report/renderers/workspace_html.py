@@ -499,6 +499,11 @@ def _earnings_tab(
     if section.surprise_scorecard is not None:
         _beat_rate_scorecard_panel(body, section.surprise_scorecard)
 
+    # 4Q cross-quarter theme rollup — what management said vs what analysts
+    # pressed on. Only renders when --enable-llm produced theme data; offline
+    # builds skip silently.
+    _earnings_themes_panel(body, section)
+
     # Per-quarter blocks — show one at a time; the quarter selector swaps
     # which is visible. Each block carries: the FMP financial-highlights
     # table for the quarter, the LLM-summarized prepared remarks / press
@@ -570,6 +575,79 @@ def _surprise_tone(v: float | None) -> str:
     if v < -0.5:
         return " neg"
     return ""
+
+
+def _earnings_themes_panel(body: StringIO, section: EarningsSection) -> None:
+    """4Q rolling theme rollup, split prepared vs Q&A.
+
+    Skips when both sides are empty AND no themes_note exists (offline
+    builds). When a side has no source material across the window, the
+    builder leaves its list empty and sets themes_note so we surface the
+    explanation rather than silently hiding the half.
+    """
+    has_any = bool(section.prepared_remarks_themes) or bool(section.qa_themes)
+    if not has_any and not section.themes_note:
+        return
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        '<span class="panel-title">Cross-quarter themes</span>'
+        '<span class="panel-sub">last 4 quarters · what management said vs what analysts pressed on</span>'
+        "</div>"
+    )
+    if section.themes_note:
+        body.write(f'<p class="muted theme-note">{_esc(section.themes_note)}</p>')
+    if section.prepared_remarks_themes:
+        body.write('<div class="theme-bucket"><h4 class="theme-bucket-title">Prepared remarks themes</h4>')
+        _theme_list(body, section.prepared_remarks_themes)
+        body.write("</div>")
+    if section.qa_themes:
+        body.write('<div class="theme-bucket"><h4 class="theme-bucket-title">Q&amp;A themes</h4>')
+        _theme_list(body, section.qa_themes)
+        body.write("</div>")
+    body.write("</div>")
+
+
+def _theme_list(body: StringIO, themes) -> None:
+    body.write('<ul class="theme-rollup-list">')
+    for theme in themes:
+        body.write('<li class="theme-row">')
+        body.write(
+            f'<div class="theme-head"><strong>{_esc(theme.theme_name)}</strong>'
+            f' <span class="muted">({theme.last_4q_count} mentions)</span></div>'
+        )
+        if theme.mentions_per_quarter:
+            ordered = sorted(
+                theme.mentions_per_quarter.items(),
+                key=lambda kv: _ws_period_sort_key(kv[0]),
+            )
+            body.write('<div class="theme-spark">')
+            for q, n in ordered:
+                body.write(
+                    f'<span class="theme-spark-cell">{_esc(q)}<span class="theme-spark-n">{n}</span></span>'
+                )
+            body.write("</div>")
+        if theme.evidence:
+            body.write('<ul class="theme-evidence">')
+            for ev in theme.evidence:
+                speaker = f"{_esc(ev.speaker)} · " if ev.speaker else ""
+                body.write(
+                    f'<li><em>&ldquo;{_esc(ev.text)}&rdquo;</em>'
+                    f' <span class="muted">— {speaker}{_esc(ev.period)}</span></li>'
+                )
+            body.write("</ul>")
+        body.write("</li>")
+    body.write("</ul>")
+
+
+def _ws_period_sort_key(period: str) -> tuple[int, int]:
+    """Chronological sort key for 'Qx YYYY' (or 'YYYY Qx') period labels."""
+    import re as _re
+
+    y_match = _re.search(r"(20\d{2})", period)
+    q_match = _re.search(r"Q([1-4])", period)
+    if y_match and q_match:
+        return (int(y_match.group(1)), int(q_match.group(1)))
+    return (9999, 9)
 
 
 def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> None:

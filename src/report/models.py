@@ -445,6 +445,35 @@ class SurpriseScorecardCard(BaseModel):
     revenue_latest_surprise_pct: float | None = None
 
 
+class QuoteSnippet(BaseModel):
+    """One verbatim quote pulled from a transcript supporting a theme.
+
+    `period` is the source quarter label, e.g. "Q1 2026". `speaker` is the
+    name as it appears in the transcript when extractable; the LLM passes
+    it through when the segment carries an attribution, otherwise empty.
+    """
+
+    period: str
+    text: str
+    speaker: str | None = None
+
+
+class ThemeRollup(BaseModel):
+    """One topical theme rolled up across the last 4 transcripts.
+
+    `mentions_per_quarter` keys are period labels ("Q1 2026", "Q4 2025"…)
+    and values are integer mention counts. `last_4q_count` is a convenience
+    rollup the renderer uses for the headline chip; it equals
+    sum(mentions_per_quarter.values()). `evidence` carries 1-2 verbatim
+    quote snippets that anchor the theme to source.
+    """
+
+    theme_name: str
+    last_4q_count: int
+    mentions_per_quarter: dict[str, int] = Field(default_factory=dict)
+    evidence: list[QuoteSnippet] = Field(default_factory=list)
+
+
 class EarningsSection(BaseModel):
     """§6 — LLM summaries only, newest first.
 
@@ -454,6 +483,18 @@ class EarningsSection(BaseModel):
     When `surprise_scorecard` is populated, it renders as a header table
     before the per-quarter cards: a 2-row beat-rate summary for EPS and
     Revenue over the lookback window.
+
+    `prepared_remarks_themes` and `qa_themes` are the 4Q-rolling theme
+    rollups split by transcript section — what management chose to say vs.
+    what analysts pressed on. Populated by the earnings_themes_split LLM
+    extractor when `--enable-llm` is passed AND at least one transcript
+    in the 4Q window carries a parseable section. Either list is empty
+    when the corresponding section was absent across the whole window
+    (e.g. Q&A-only aggregator transcripts produce no prepared-remarks
+    themes); the renderer shows a fallback note in that case.
+    `themes_note` carries any one-line fallback / status message the
+    renderer should surface above the theme blocks (e.g. "No Q&A sections
+    available in transcripts").
     """
 
     status: SectionStatus
@@ -461,6 +502,9 @@ class EarningsSection(BaseModel):
     surprise_scorecard: SurpriseScorecardCard | None = None
     full_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
     digest_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
+    prepared_remarks_themes: list[ThemeRollup] = Field(default_factory=list)
+    qa_themes: list[ThemeRollup] = Field(default_factory=list)
+    themes_note: str | None = None
 
 
 class SayDoCard(BaseModel):

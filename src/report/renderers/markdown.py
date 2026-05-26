@@ -568,6 +568,7 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
     # drive the MISSING_DATA status. A ticker can have a fully-populated
     # beat-rate scorecard while still waiting on process_ir_documents.
     _surprise_scorecard_block(out, s.surprise_scorecard)
+    _themes_block(out, s)
     if _missing_block(out, s.status, s.missing):
         return
     cards = list(s.full_quarters) + list(s.digest_quarters)
@@ -577,6 +578,62 @@ def _earnings(out: StringIO, s: EarningsSection) -> None:
             _full_card(out, q)
         else:
             _digest_card(out, q)
+
+
+def _themes_block(out: StringIO, s: EarningsSection) -> None:
+    """Render the prepared-remarks / Q&A 4Q theme rollup, when populated.
+
+    Skips entirely when both sides are empty AND no themes_note is set
+    (i.e. the section was built without --enable-llm). Renders the note +
+    only the populated side(s) when one bucket has content.
+    """
+    has_any_themes = bool(s.prepared_remarks_themes) or bool(s.qa_themes)
+    if not has_any_themes and not s.themes_note:
+        return
+    out.write("### Cross-quarter themes (last 4Q)\n\n")
+    if s.themes_note:
+        out.write(f"_{s.themes_note}_\n\n")
+    if s.prepared_remarks_themes:
+        out.write("#### Prepared remarks themes\n\n")
+        for theme in s.prepared_remarks_themes:
+            _theme_block(out, theme)
+    if s.qa_themes:
+        out.write("#### Q&A themes\n\n")
+        for theme in s.qa_themes:
+            _theme_block(out, theme)
+
+
+def _theme_block(out: StringIO, theme) -> None:
+    sparkline = ""
+    if theme.mentions_per_quarter:
+        # Oldest → newest for the sparkline so the most recent quarter is
+        # on the right (matches the rest of the report's time direction).
+        ordered = sorted(
+            theme.mentions_per_quarter.items(),
+            key=lambda kv: _period_sort_key(kv[0]),
+        )
+        sparkline = " · " + " ".join(f"{q}:{n}" for q, n in ordered)
+    out.write(f"- **{theme.theme_name}** ({theme.last_4q_count} mentions{sparkline})\n")
+    for ev in theme.evidence:
+        speaker = f"{ev.speaker} · " if ev.speaker else ""
+        out.write(f"  - > _\"{ev.text}\"_ — {speaker}{ev.period}\n")
+    out.write("\n")
+
+
+def _period_sort_key(period: str) -> tuple[int, int]:
+    """Parse a 'Qx YYYY' label into a chronological sort key.
+
+    Tolerant of variant forms ('YYYY Qx', 'Qx YYYY') by extracting the year
+    and quarter tokens by regex. Unparseable labels sort last with key
+    (9999, 9).
+    """
+    import re as _re
+
+    y_match = _re.search(r"(20\d{2})", period)
+    q_match = _re.search(r"Q([1-4])", period)
+    if y_match and q_match:
+        return (int(y_match.group(1)), int(q_match.group(1)))
+    return (9999, 9)
 
 
 def _surprise_scorecard_block(out: StringIO, c: SurpriseScorecardCard | None) -> None:
