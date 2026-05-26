@@ -25,6 +25,7 @@ from report.models import (
 )
 from report.rules import TickerRules, load_rules
 from report.sections._common import (
+    ANNUAL_PERIOD_TYPES,
     DISPLAY_QUARTERS,
     QUARTERLY_PERIOD_TYPES,
     UNDERLYING_QUARTERS,
@@ -430,13 +431,18 @@ def _build_secondary_expansions(
     """
     if not _junction_tables_present(conn):
         return []
-    placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
     # Pull every revenue-flavored dim cell — anything whose metric is 'revenue'
     # itself OR carries a 'revenue' / 'sales' / 'gmv' affix (e.g. AWS_revenue,
     # cloud_revenue) so cross-tab expansions for specific lines surface here.
+    # Both quarterly and annual rows participate — a FY row maps to (year, 4)
+    # via calendar_quarter_key, and when a true Qx row exists at the same key
+    # we prefer the quarterly one (see iteration order below).
+    period_types: tuple[str, ...] = QUARTERLY_PERIOD_TYPES + ANNUAL_PERIOD_TYPES
+    placeholders = ",".join("?" * len(period_types))
     rows = conn.execute(
         f"""
-        SELECT sp.period_end, sd.dim_type, sd.dim_name, sd.value, sd.metric
+        SELECT sp.period_end, sp.fiscal_period_type, sd.dim_type, sd.dim_name,
+               sd.value, sd.metric
         FROM segment_periods sp
         JOIN segment_dimensions sd ON sd.period_id = sp.id
         WHERE sp.ticker = ?
@@ -448,10 +454,20 @@ def _build_secondary_expansions(
             OR sd.metric LIKE '%gmv%'
           )
         """,
-        (ticker.upper(), *QUARTERLY_PERIOD_TYPES),
+        (ticker.upper(), *period_types),
     ).fetchall()
     if not rows:
         return []
+    # Sort so annual rows are processed FIRST and quarterly rows LAST. The
+    # dict assignment ``by_axis[...][qkey] = v`` is last-write-wins, so this
+    # ordering means a quarterly cell overwrites an annual cell at the same
+    # qkey — i.e. preference flows quarterly > annual for tickers that
+    # disclose both. For tickers with only annual data (the common 10-K
+    # case), the annual rows survive unmodified.
+    annual_set = set(ANNUAL_PERIOD_TYPES)
+    sorted_rows = sorted(
+        rows, key=lambda r: 0 if str(r["fiscal_period_type"]) in annual_set else 1
+    )
 
     # Group by (dim_type, metric) so AWS_revenue-by-geography is its own
     # expansion, distinct from the global revenue-by-geography table that
@@ -459,7 +475,7 @@ def _build_secondary_expansions(
     by_axis: dict[tuple[str, str], dict[str, dict[tuple[int, int], float]]] = (
         defaultdict(lambda: defaultdict(dict))
     )
-    for r in rows:
+    for r in sorted_rows:
         dim_type = str(r["dim_type"])
         metric_str = str(r["metric"])
         dim_name = str(r["dim_name"])
