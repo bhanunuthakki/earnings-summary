@@ -12,6 +12,7 @@ from io import StringIO
 from report.models import (
     AppendixSection,
     BearCaseSection,
+    BreakRuleEvaluation,
     CompanyDescriptionSection,
     EarningsSection,
     EvaluationSnapshotSection,
@@ -30,6 +31,7 @@ from report.models import (
     SegmentsSection,
     SegmentWeighting,
     SnapshotSection,
+    SoftRuleEvaluation,
     SurpriseScorecardCard,
     ThesisSection,
     TranscriptEntry,
@@ -409,7 +411,7 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
         else ""
     )
     out.write(f"**Overall:** `{s.overall_breach_status}`{eval_when}\n\n")
-    if not s.break_rule_evaluations:
+    if not s.break_rule_evaluations and not s.soft_rule_evaluations:
         return
     universal = [ev for ev in s.break_rule_evaluations if ev.tier == "universal"]
     business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
@@ -425,6 +427,19 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
             "_Per-ticker rules calibrated to this business's unit economics._\n\n"
         )
         _break_rule_table_md(out, business)
+    if s.soft_rule_evaluations:
+        out.write("#### Soft signals\n\n")
+        out.write(
+            "_Predicate-style watch signals — never escalate past YELLOW._\n\n"
+        )
+        _soft_rule_table_md(out, s.soft_rule_evaluations)
+
+
+def _soft_rule_table_md(out: StringIO, evaluations: list[SoftRuleEvaluation]) -> None:
+    out.write("| Status | Rule | Evidence |\n|---|---|---|\n")
+    for ev in evaluations:
+        out.write(f"| `{ev.status}` | **{ev.rule_name}** | {ev.evidence} |\n")
+    out.write("\n")
 
 
 def _break_rule_table_md(out: StringIO, evaluations: list[BreakRuleEvaluation]) -> None:

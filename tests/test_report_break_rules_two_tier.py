@@ -17,6 +17,7 @@ from io import StringIO
 from report.models import (
     BreakRuleEvaluation,
     BreakRuleObservation,
+    SoftRuleEvaluation,
     ThesisSection,
 )
 from report.renderers.html import _break_rules_block as _html_break_rules
@@ -168,3 +169,64 @@ def test_markdown_suppresses_empty_business_model_section() -> None:
     md = out.getvalue()
     assert "#### Catastrophic tripwires" in md
     assert "Thesis breakers" not in md
+
+
+# ---------------------------------------------------------------------------
+# Soft signals — predicate-style YELLOW signals rendered inline with hard rules.
+# ---------------------------------------------------------------------------
+
+
+def _section_with_soft(soft: list[SoftRuleEvaluation]) -> ThesisSection:
+    return ThesisSection(
+        status="ok",  # type: ignore[arg-type]
+        thesis_full="t",
+        overall_breach_status="warn",
+        break_rule_evaluations=[],
+        soft_rule_evaluations=soft,
+        last_evaluated_at=datetime(2026, 5, 25, 12, 0, 0),
+    )
+
+
+def test_html_renders_soft_signals_block_when_rules_present() -> None:
+    """Soft rule fires -> 'Soft signals' heading + the evidence string."""
+    soft = [
+        SoftRuleEvaluation(
+            rule_name="growth_decel_2q",
+            status="yellow",
+            evidence="Revenue YoY decel 1000→460 bps",
+            details={},
+        )
+    ]
+    out = StringIO()
+    _html_break_rules(out, _section_with_soft(soft), "VEEV")
+    html_out = out.getvalue()
+    assert "Soft signals" in html_out
+    assert "growth_decel_2q" in html_out
+    assert "Revenue YoY decel" in html_out
+    # Yellow signal gets the 'partial' badge class (the warn palette).
+    assert "status-partial" in html_out
+
+
+def test_html_suppresses_soft_signals_block_when_empty() -> None:
+    """No soft rules -> no 'Soft signals' heading. Backwards-compatible."""
+    out = StringIO()
+    _html_break_rules(out, _section_with_soft([]), "VEEV")
+    assert "Soft signals" not in out.getvalue()
+
+
+def test_markdown_renders_soft_signals_table() -> None:
+    """Markdown mirrors the HTML soft-signals section as a #### block + table."""
+    soft = [
+        SoftRuleEvaluation(
+            rule_name="fcf_margin_below_15",
+            status="yellow",
+            evidence="FCF margin 10.0% (threshold 15.0%)",
+            details={},
+        )
+    ]
+    out = StringIO()
+    _md_break_rules(out, _section_with_soft(soft))
+    md = out.getvalue()
+    assert "#### Soft signals" in md
+    assert "fcf_margin_below_15" in md
+    assert "FCF margin 10.0%" in md

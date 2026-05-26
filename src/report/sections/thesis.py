@@ -19,6 +19,7 @@ from report.models import (
     BreakRuleObservation,
     KpiLedgerRow,
     SectionStatus,
+    SoftRuleEvaluation,
     ThesisSection,
 )
 from report.sections._common import has_table, missing, open_repo_db
@@ -37,7 +38,9 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
     with open(holdings_path, encoding="utf-8") as f:
         holdings = json.load(f)
 
-    overall, evaluations, evaluated_at = _load_break_rule_state(ticker, repo_root)
+    overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(
+        ticker, repo_root
+    )
     ledger = _build_ledger(ticker, repo_root, holdings, evaluations)
     thesis_text, stub_warning = _split_stub_warning(holdings)
 
@@ -52,6 +55,7 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         kpi_ledger=ledger,
         overall_breach_status=overall,
         break_rule_evaluations=evaluations,
+        soft_rule_evaluations=soft_evaluations,
         last_evaluated_at=evaluated_at,
     )
 
@@ -201,22 +205,36 @@ _BreachStatusLiteral = Literal["ok", "warn", "breach", "unknown"]
 
 def _load_break_rule_state(
     ticker: str, repo_root: Path
-) -> tuple[_BreachStatusLiteral, list[BreakRuleEvaluation], datetime | None]:
+) -> tuple[
+    _BreachStatusLiteral,
+    list[BreakRuleEvaluation],
+    list[SoftRuleEvaluation],
+    datetime | None,
+]:
     """Pull the most recent thesis_evaluations row for `ticker` and parse it.
 
-    Returns ('unknown', [], None) when the evaluator has never run for this
+    Returns ('unknown', [], [], None) when the evaluator has never run for this
     ticker — the report still renders, the section just shows the missing-data
     callout for break-rules.
+
+    `soft_rule_results_json` was added in migration 0053. On a DB that predates
+    the migration the column is absent; we detect that and treat soft results
+    as empty so the §2 renderer continues to work.
     """
     conn = open_repo_db(repo_root)
     if conn is None or not has_table(conn, "thesis_evaluations"):
         if conn is not None:
             conn.close()
-        return ("unknown", [], None)
+        return ("unknown", [], [], None)
     cursor = conn.cursor()
+    has_soft_col = any(
+        c["name"] == "soft_rule_results_json"
+        for c in cursor.execute("PRAGMA table_info(thesis_evaluations)").fetchall()
+    )
+    soft_select = ", soft_rule_results_json" if has_soft_col else ""
     cursor.execute(
-        """
-        SELECT evaluated_at, overall_status, rule_evaluations_json
+        f"""
+        SELECT evaluated_at, overall_status, rule_evaluations_json{soft_select}
         FROM thesis_evaluations
         WHERE ticker = ?
         ORDER BY evaluated_at DESC
@@ -227,12 +245,44 @@ def _load_break_rule_state(
     row = cursor.fetchone()
     conn.close()
     if row is None:
-        return ("unknown", [], None)
+        return ("unknown", [], [], None)
     overall = _coerce_status(str(row["overall_status"]))
     evaluated_at = _parse_datetime(row["evaluated_at"])
     payload = json.loads(row["rule_evaluations_json"])
     evaluations = [_parse_evaluation(item) for item in payload]
-    return (overall, evaluations, evaluated_at)
+    soft_evaluations: list[SoftRuleEvaluation] = []
+    if has_soft_col:
+        soft_raw = row["soft_rule_results_json"]
+        if soft_raw:
+            try:
+                soft_payload = json.loads(soft_raw)
+            except (TypeError, ValueError):
+                soft_payload = []
+            soft_evaluations = [
+                _parse_soft_evaluation(item)
+                for item in soft_payload
+                if isinstance(item, dict)
+            ]
+    return (overall, evaluations, soft_evaluations, evaluated_at)
+
+
+def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
+    """Parse one persisted soft-rule result row. Status defaults to green for
+    forward-compatibility: any unknown status string is treated as 'not fired'
+    so a brief generated against a newer schema never silently shows a YELLOW
+    banner without explicit opt-in."""
+    status_raw = str(raw.get("status", "green")).lower()
+    status: Literal["green", "yellow"] = "yellow" if status_raw == "yellow" else "green"
+    details_raw = raw.get("details")
+    details: dict[str, object] = (
+        details_raw if isinstance(details_raw, dict) else {}
+    )
+    return SoftRuleEvaluation(
+        rule_name=str(raw.get("rule_name", "")),
+        status=status,
+        evidence=str(raw.get("evidence", "")),
+        details=details,
+    )
 
 
 def _coerce_status(s: str) -> _BreachStatusLiteral:
