@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import subprocess
 import sys
 from datetime import date
 from pathlib import Path
@@ -43,6 +44,65 @@ from report.renderers.sections_json import render as render_sections_json  # noq
 from report.renderers.workbook import render as render_workbook  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
+
+
+# Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
+# Each entry maps a ticker to a list of (script_name, extra_args) pairs.
+# The dispatcher runs them subprocess-isolated before build_report so the
+# per-ticker enhancement JSON is fresh when the bear-case prompt reads it
+# via _ticker_specific_md. Idempotent: each extractor is responsible for
+# skipping when its own freshness check passes.
+_TICKER_SPECIFIC_EXTRACTORS: dict[str, list[tuple[str, list[str]]]] = {
+    "NVO": [("extract_nvo_patent_timeline.py", [])],
+    # Add per-ticker entries here. Keep the script idempotent — the dispatcher
+    # will fire on every build for the ticker; cost discipline lives in the
+    # script's own freshness check, not here.
+}
+
+
+def _run_ticker_specific_extractors(ticker: str, repo_root: Path) -> None:
+    """Subprocess-isolate per-ticker enhancement extractors.
+
+    Failures don't abort the build — they emit a diagnostic event so the
+    bear-case prompt falls back to its universal shape without the
+    per-ticker context for that ticker. Skipped silently for tickers
+    not in _TICKER_SPECIFIC_EXTRACTORS.
+    """
+    entries = _TICKER_SPECIFIC_EXTRACTORS.get(ticker.upper())
+    if not entries:
+        return
+    for script_name, extra_args in entries:
+        cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "execution" / script_name),
+            *extra_args,
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            _emit(
+                "ticker_specific_extractor",
+                {
+                    "ticker": ticker,
+                    "script": script_name,
+                    "exit_code": proc.returncode,
+                    "stderr_tail": (proc.stderr or "")[-300:],
+                },
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            _emit(
+                "ticker_specific_extractor_failed",
+                {
+                    "ticker": ticker,
+                    "script": script_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
 
 
 def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
@@ -272,6 +332,12 @@ def _build_one(
     # 📖 mark never appears (renderer correctly drops the mark when no
     # definition is loaded).
     _ensure_segment_definitions(ticker, repo_root)
+
+    # Per-ticker enhancement extractors (e.g. extract_nvo_patent_timeline.py).
+    # Auto-populates data/ticker_specific/<T>/ so the bear-case prompt's
+    # ticker_specific block is fresh. Subprocess-isolated; failures land
+    # in stderr but don't abort the build.
+    _run_ticker_specific_extractors(ticker, repo_root)
 
     spec = build_report(
         ticker=ticker,
