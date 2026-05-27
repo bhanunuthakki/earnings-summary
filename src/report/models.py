@@ -285,6 +285,13 @@ class ThesisSection(BaseModel):
     break_rule_evaluations: list[BreakRuleEvaluation] = Field(default_factory=list)
     soft_rule_evaluations: list[SoftRuleEvaluation] = Field(default_factory=list)
     last_evaluated_at: datetime | None = None
+    # Pre-rendered markdown block of persisted time-series signals over
+    # this ticker's tier-1 KPIs + revenue / OI / FCF. Empty string when
+    # the signals table is absent (migration 0053 not run) or the writer
+    # hasn't profiled this ticker. Renderers surface it directly so the
+    # thesis statement reads alongside the current trend / inflection /
+    # anomaly state.
+    ts_context_md: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -409,6 +416,11 @@ class SegmentsSection(BaseModel):
     # collapsible subtables below the primary segments grid. Empty list when
     # the junction tables are empty or unavailable.
     secondary_expansions: list[SegmentSecondaryExpansion] = Field(default_factory=list)
+    # Pre-rendered markdown block of persisted segment-level signals
+    # (metric_kind='segment' rows in timeseries_signals). Empty string
+    # when the signals table is absent or the writer hasn't produced
+    # segment signals for this ticker.
+    ts_context_md: str = ""
 
 
 # ---------------------------------------------------------------------------

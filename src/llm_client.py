@@ -1193,6 +1193,22 @@ def _ticker_specific_block(md: str) -> str:
     return f"\nTICKER-SPECIFIC CONTEXT (per-ticker research enhancements):\n{md}\n"
 
 
+def _ts_signals_prompt_block(md: str) -> str:
+    """Wrap a pre-formatted time-series signals markdown block for inclusion
+    in an analytical prompt.
+
+    The caller (a section builder) is expected to have already invoked
+    ``report.sections._ts_signals.format_signals_as_prompt_block`` to
+    obtain ``md`` — the body already carries its own ``## <heading>`` line.
+    This wrapper only handles the prefix newline + empty-case guard so the
+    surrounding prompt template doesn't sprout a dangling blank line when
+    a ticker has no persisted signals.
+    """
+    if not md.strip():
+        return ""
+    return f"\n{md}\n"
+
+
 def generate_bear_case(
     ticker: str,
     thesis: str,
@@ -1202,6 +1218,7 @@ def generate_bear_case(
     segments_table_md: str,
     kpi_status_md: str,
     ticker_specific_md: str = "",
+    ts_signals_md: str = "",
     repo_root: Path | None = None,
 ) -> str:
     """
@@ -1218,6 +1235,15 @@ def generate_bear_case(
     the model isn't burning attention on trend detection it can read off
     the precis. Best-effort — the table block still ships unchanged so a
     DB / loader failure can't degrade the prompt.
+
+    `ts_signals_md` is a markdown block (typically built via
+    ``_ts_signals.format_signals_as_prompt_block`` over the union of every
+    signal computed for the ticker) that surfaces persisted time-series
+    primitives the writer flagged. The bear case wants the broadest
+    coverage of disconfirming patterns, so the caller passes ALL signals
+    and the model treats each line as a disconfirmation candidate to
+    engage with in the failure_modes / out_of_scope_flags arrays. Empty
+    string when the writer hasn't run or this ticker has no signals.
     """
     transcripts_block = "\n\n".join(
         f"### Quarter {i + 1} (oldest first)\n{s[:6000]}"
@@ -1294,7 +1320,7 @@ SEGMENT TRENDS (12Q):
 
 KPI STATUS:
 {kpi_status_md}
-{stats_block}{_ticker_specific_block(ticker_specific_md)}
+{stats_block}{_ticker_specific_block(ticker_specific_md)}{_ts_signals_prompt_block(ts_signals_md)}
 ---
 
 Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
@@ -1906,6 +1932,7 @@ _THEMES_SECTION_CHAR_CAP = 22000
 def extract_qa_vs_prepared_themes(
     ticker: str,
     transcripts: list[dict[str, object]],
+    ts_signals_md: str = "",
 ) -> str:
     """Roll up recurring themes across 4 quarters, split prepared vs Q&A.
 
@@ -1914,6 +1941,14 @@ def extract_qa_vs_prepared_themes(
     dicts. ``prepared`` / ``qa`` are the raw text segments for that quarter;
     either may be None when the source transcript didn't carry that
     section (e.g. Q&A-only aggregator pulls have prepared=None).
+
+    ``ts_signals_md`` is a markdown block of pre-computed time-series
+    signals (revenue / OI / EPS / FCF / margins + tier-1 KPI trends,
+    inflections, anomalies). Surfaced to both rollups so that what the
+    LLM considers "noteworthy" in prepared vs Q&A is interpretable
+    against the trailing pattern (e.g. a Q&A question about margin
+    compression matches a yellow-severity OI-margin anomaly signal).
+    Empty string is fine — caller-side gate, prompt shape unchanged.
 
     Returns the raw JSON string the caller parses. Schema:
 
@@ -1979,7 +2014,7 @@ narrative successfully; a topic that recurs in Q&A but is absent from
 prepared remarks means the street has a concern management isn't addressing.
 
 PERIODS in chronological order (oldest → newest): {periods_csv}
-
+{_ts_signals_prompt_block(ts_signals_md)}
 === PREPARED REMARKS BLOCKS ===
 {prepared_block}
 

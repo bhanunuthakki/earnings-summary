@@ -314,7 +314,11 @@ def test_build_themes_mixed_qa_flags_populates_both_sides(monkeypatch: pytest.Mo
 
     called_with: dict[str, Any] = {}
 
-    def fake_extractor(ticker_arg: str, transcripts_arg: list[dict[str, Any]]) -> str:
+    def fake_extractor(
+        ticker_arg: str,
+        transcripts_arg: list[dict[str, Any]],
+        ts_signals_md: str = "",
+    ) -> str:
         called_with["ticker"] = ticker_arg
         called_with["transcripts"] = transcripts_arg
         return _mock_themes_response(
@@ -390,7 +394,11 @@ def test_build_themes_no_qa_falls_back_to_prepared_only_with_note(monkeypatch: p
         ],
     )
 
-    def fake_extractor(ticker_arg: str, transcripts_arg: list[dict[str, Any]]) -> str:
+    def fake_extractor(
+        ticker_arg: str,
+        transcripts_arg: list[dict[str, Any]],
+        ts_signals_md: str = "",
+    ) -> str:
         # Verify the extractor sees prepared on every entry, qa nowhere
         assert all(t["prepared"] for t in transcripts_arg)
         assert all(t["qa"] is None for t in transcripts_arg)
@@ -427,7 +435,9 @@ def test_build_themes_defensively_drops_qa_themes_when_no_source_qa(monkeypatch:
     _seed_transcripts_dir(repo, ticker, [(1, 2026, "Operator: welcome. CEO: Q1 was good.")])
     _seed_transcripts_db(repo, ticker, [(1, 2026, False)])
 
-    def fake_extractor(_t: str, _x: list[dict[str, Any]]) -> str:
+    def fake_extractor(
+        _t: str, _x: list[dict[str, Any]], ts_signals_md: str = ""
+    ) -> str:
         return _mock_themes_response(
             prepared=[
                 {"theme_name": "P", "mentions_per_quarter": {"Q1 2026": 1}, "evidence": []}
@@ -468,7 +478,9 @@ def test_build_themes_uses_cache_on_second_call(monkeypatch: pytest.MonkeyPatch,
 
     call_count = {"n": 0}
 
-    def fake_extractor(_t: str, _x: list[dict[str, Any]]) -> str:
+    def fake_extractor(
+        _t: str, _x: list[dict[str, Any]], ts_signals_md: str = ""
+    ) -> str:
         call_count["n"] += 1
         return _mock_themes_response(
             prepared=[],
