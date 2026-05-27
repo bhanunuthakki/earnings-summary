@@ -43,6 +43,8 @@ from report.models import (
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
+    SignalRow,
+    SignalsSection,
     SnapshotSection,
     SoftRuleEvaluation,
     SurpriseScorecardCard,
@@ -67,7 +69,7 @@ _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
 
 def render(spec: ReportSpec) -> str:
     body = StringIO()
-    _nav(body)
+    _nav(body, spec)
     _header(body, spec)
     if spec.portfolio_position is not None:
         _portfolio_position(body, spec)
@@ -78,6 +80,8 @@ def render(spec: ReportSpec) -> str:
     _company_description(body, spec.company_description)
     _thesis(body, spec.thesis, spec.ticker)
     _financials(body, spec.financials)
+    if spec.signals is not None:
+        _signals(body, spec.signals)
     _segments(body, spec.segments)
     _earnings(body, spec.earnings)
     _saydo(body, spec.saydo)
@@ -355,6 +359,65 @@ table.weighting-table td:nth-child(3) {
   color: var(--gray);
   font-style: italic;
 }
+.signals-fires {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+  margin: 10px 0 14px;
+}
+.signal-card {
+  border-left: 4px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fcfcfd;
+  font-size: 12.5px;
+}
+.signal-card.severity-red {
+  border-left-color: var(--red);
+  background: #fef2f2;
+}
+.signal-card.severity-yellow {
+  border-left-color: var(--yellow);
+  background: #fefce8;
+}
+.signal-card.severity-green {
+  border-left-color: var(--green);
+  background: #f0fdf4;
+}
+.signal-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+.signal-card-metric {
+  font-weight: 600;
+}
+.signal-card-type {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--muted);
+}
+.signal-card-narrative {
+  color: var(--fg);
+  line-height: 1.45;
+  margin: 4px 0 6px;
+}
+.signal-card-stat {
+  font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+table.signals-table th.sev-col, table.signals-table td.sev-col {
+  width: 8ch;
+  text-align: center;
+}
+table.signals-table .sev-red { color: var(--red); font-weight: 600; }
+table.signals-table .sev-yellow { color: var(--yellow); font-weight: 600; }
+table.signals-table .sev-green { color: var(--green); font-weight: 600; }
 """
     + CHARTS_V2_CSS
     + """
@@ -403,12 +466,20 @@ pre.transcript {
 )
 
 
-def _nav(out: StringIO) -> None:
+def _nav(out: StringIO, spec: ReportSpec) -> None:
     sections = [
         ("snapshot", "§1 Snapshot"),
         ("company-description", "§2 Company"),
         ("thesis", "§3 Thesis"),
         ("financials", "§4 Financials"),
+    ]
+    # Only link to §3.5 when the section actually renders content — otherwise
+    # the anchor scrolls to nothing.
+    if spec.signals is not None and (
+        spec.signals.red_signals or spec.signals.yellow_signals or spec.signals.green_signals
+    ):
+        sections.append(("signals", "§3.5 Signals"))
+    sections.extend([
         ("segments", "§5 Segments"),
         ("earnings", "§6 Earnings"),
         ("saydo", "§7 Say-Do"),
@@ -417,7 +488,7 @@ def _nav(out: StringIO) -> None:
         ("bear-case", "§10 Bear case"),
         ("provenance", "§11 Provenance"),
         ("appendix", "§12 Transcripts"),
-    ]
+    ])
     out.write('<nav class="toc">')
     for anchor, label in sections:
         out.write(f'<a href="#{anchor}">{label}</a>')
@@ -1156,6 +1227,88 @@ def _financials(out: StringIO, s: FinancialsSection) -> None:
         out.write(f"<details><summary>Annual reference (last {len(s.annual_years)} FY)</summary>\n")
         _annual_table(out, s.annual_years, s.annual_line_items)
         out.write("</details>\n")
+
+
+# ---------------------------------------------------------------------------
+# §3.5 Signals
+# ---------------------------------------------------------------------------
+
+
+def _signals(out: StringIO, s: SignalsSection) -> None:
+    """§3.5 — render the time-series signals tier-by-tier.
+
+    Layout: red+yellow cards visible at top, then a `<details>` collapsible
+    listing every signal as a table. The section is omitted entirely when
+    no signal of any tier exists for this ticker.
+    """
+    if not (s.red_signals or s.yellow_signals or s.green_signals):
+        return
+    out.write(
+        '<h2 id="signals">§3.5 Signals'
+        f'<span class="status-badge status-{s.status.value}">'
+        f'{s.status.value.replace("_", " ")}</span></h2>\n'
+    )
+    if _missing_callout(out, s.status, s.missing):
+        return
+
+    fires = list(s.red_signals) + list(s.yellow_signals)
+    if fires:
+        out.write(
+            '<p class="meta">Time-series primitives over financial / KPI / '
+            'segment series. Red / yellow cards highlight material moves '
+            'in the latest refresh; the rest sit in the collapsible.</p>\n'
+        )
+        out.write('<div class="signals-fires">\n')
+        for r in fires:
+            _signal_card(out, r)
+        out.write("</div>\n")
+
+    total = len(s.red_signals) + len(s.yellow_signals) + len(s.green_signals)
+    out.write(
+        f"<details><summary>All signals ({total})</summary>\n"
+    )
+    all_rows = list(s.red_signals) + list(s.yellow_signals) + list(s.green_signals)
+    _signals_table(out, all_rows)
+    out.write("</details>\n")
+
+
+def _signal_card(out: StringIO, r: SignalRow) -> None:
+    sev_class = f"signal-card severity-{r.severity}"
+    type_label = r.signal_type.replace("_", " ")
+    out.write(f'<div class="{sev_class}">\n')
+    out.write('<div class="signal-card-head">')
+    out.write(f'<span class="signal-card-metric">{html.escape(r.metric_name)}</span>')
+    out.write(f'<span class="signal-card-type">{html.escape(type_label)}</span>')
+    out.write("</div>\n")
+    if r.narrative:
+        out.write(f'<div class="signal-card-narrative">{html.escape(r.narrative)}</div>\n')
+    if r.value_summary:
+        out.write(f'<div class="signal-card-stat">{html.escape(r.value_summary)}</div>\n')
+    out.write("</div>\n")
+
+
+def _signals_table(out: StringIO, rows: list[SignalRow]) -> None:
+    out.write('<div class="table-wrap"><table class="signals-table">\n')
+    out.write(
+        "<thead><tr>"
+        '<th class="sev-col">Sev</th>'
+        "<th>Metric</th><th>Kind</th><th>Signal</th>"
+        "<th>Narrative</th><th>Stat</th>"
+        "</tr></thead>\n<tbody>"
+    )
+    for r in rows:
+        sev_cls = f"sev-{r.severity}"
+        narrative = html.escape(r.narrative) if r.narrative else "—"
+        stat = html.escape(r.value_summary) if r.value_summary else "—"
+        out.write(
+            f'<tr><td class="sev-col {sev_cls}">{html.escape(r.severity)}</td>'
+            f"<td><strong>{html.escape(r.metric_name)}</strong></td>"
+            f"<td>{html.escape(r.metric_kind)}</td>"
+            f"<td>{html.escape(r.signal_type.replace('_', ' '))}</td>"
+            f"<td>{narrative}</td>"
+            f'<td class="mono">{stat}</td></tr>\n'
+        )
+    out.write("</tbody></table></div>\n")
 
 
 _QUARTER_LABEL_RX = re.compile(r"^(\d{4}) Q(\d)$")

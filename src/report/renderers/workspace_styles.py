@@ -506,6 +506,20 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   display: flex; gap: 10px; align-items: flex-start; line-height: 1.5;
 }
 .flag { color: var(--warn); font-size: 14px; }
+.signals-fires {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+  padding: 14px var(--panel-pad-x);
+}
+.signals-all { padding: 0 var(--panel-pad-x) 14px; }
+.signals-all > summary {
+  cursor: pointer; font-size: 12.5px; color: var(--muted);
+  padding: 8px 0; list-style: none;
+}
+.signals-all > summary::-webkit-details-marker { display: none; }
+.signals-all > summary::before { content: '▸ '; }
+.signals-all[open] > summary::before { content: '▾ '; }
 .prose-pad {
   padding: 16px var(--panel-pad-x) 18px;
   font-size: 13.5px; line-height: 1.6; color: var(--fg-soft);

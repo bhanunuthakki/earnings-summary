@@ -58,6 +58,8 @@ from report.models import (
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
+    SignalRow,
+    SignalsSection,
     SnapshotSection,
     SoftRuleEvaluation,
     SurpriseScorecardCard,
@@ -397,7 +399,7 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
             "financials",
             "Financials",
             len(spec.financials.quarter_labels),
-            lambda b: _financials_tab(b, spec.financials, spec.segments),
+            lambda b: _financials_tab(b, spec.financials, spec.segments, spec.signals),
         ),
         (
             "valuation",
@@ -1083,13 +1085,19 @@ def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric
 # ---------------------------------------------------------------------------
 
 
-def _financials_tab(body: StringIO, fin: FinancialsSection, seg: SegmentsSection) -> None:
+def _financials_tab(
+    body: StringIO,
+    fin: FinancialsSection,
+    seg: SegmentsSection,
+    signals: SignalsSection | None = None,
+) -> None:
     """Financials tab — YoY% heatmap (line items first, then per-segment) with
     a validation badge showing whether segment revenue sums tie to the
     consolidated revenue line (catches dropped segments and unit mismatches).
     The per-line-item 12-quarter level table is also rendered with a
     click-to-expand drill-down showing the underlying segment breakdown for
-    revenue rows."""
+    revenue rows. The §3.5 signals panel renders above the validation row
+    when the time-series writer has materialized any current signals."""
     body.write('<div class="tab-body">')
     body.write(
         f'<div class="eyebrow">Financials · {len(fin.quarter_labels)} quarters · USD millions</div>'
@@ -1099,6 +1107,11 @@ def _financials_tab(body: StringIO, fin: FinancialsSection, seg: SegmentsSection
         _missing_panel(body, fin.status, fin.missing)
         body.write("</div>")
         return
+
+    # 0) Time-series signals — surfaced first so red/yellow fires read before
+    # the heatmaps. Silently skipped when the section is absent or empty.
+    if signals is not None:
+        _signals_panel(body, signals)
 
     # 1) Validation: segments tie to total revenue?
     _validation_panel(body, fin, seg)
@@ -1360,6 +1373,112 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
         body.write(f'<td class="num">{(total or 0) / 1000:.2f}B</td>')
         body.write(f'<td class="num">{seg_sum / 1000:.2f}B</td>')
         body.write(f'<td class="{cls}">{d:+.2f}%</td></tr>')
+    body.write("</tbody></table></div></div>")
+
+
+def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
+    """§3.5 Signals — tier-bucketed cards + collapsible 'All signals' table.
+
+    Silently omitted when no signal of any tier surfaced for this ticker —
+    a §3.5 with nothing to say is worse than no §3.5 at all.
+    """
+    if not (signals.red_signals or signals.yellow_signals or signals.green_signals):
+        return
+    total = (
+        len(signals.red_signals) + len(signals.yellow_signals) + len(signals.green_signals)
+    )
+    fires = list(signals.red_signals) + list(signals.yellow_signals)
+    body.write('<div class="panel"><div class="panel-head">')
+    body.write('<span class="panel-title">§3.5 Signals</span>')
+    body.write(
+        f'<span class="panel-sub">{len(signals.red_signals)} red · '
+        f'{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green</span>'
+    )
+    body.write("</div>")
+    if fires:
+        body.write('<div class="signals-fires">')
+        for r in fires:
+            _signal_card_workspace(body, r)
+        body.write("</div>")
+    body.write(
+        '<details class="signals-all"><summary>'
+        f"All signals ({total})</summary>"
+    )
+    all_rows = (
+        list(signals.red_signals) + list(signals.yellow_signals) + list(signals.green_signals)
+    )
+    _signals_table_workspace(body, all_rows)
+    body.write("</details>")
+    body.write("</div>")
+
+
+_SIGNALS_CARD_BG: dict[str, str] = {
+    "red": "rgba(185,28,28,0.10)",
+    "yellow": "rgba(185,124,0,0.10)",
+    "green": "rgba(29,78,216,0.10)",
+}
+_SIGNALS_CARD_BORDER: dict[str, str] = {
+    "red": "var(--bad)",
+    "yellow": "var(--warn)",
+    "green": "var(--ok)",
+}
+
+
+def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
+    bg = _SIGNALS_CARD_BG.get(r.severity, "transparent")
+    border = _SIGNALS_CARD_BORDER.get(r.severity, "var(--hairline)")
+    style = (
+        "border:1px solid var(--hairline);"
+        f"border-left:3px solid {border};"
+        f"background:{bg};"
+        "border-radius:6px;padding:10px 12px;font-size:12.5px;"
+    )
+    type_label = r.signal_type.replace("_", " ")
+    body.write(f'<div style="{style}">')
+    body.write(
+        '<div style="display:flex;justify-content:space-between;'
+        'gap:8px;align-items:baseline;margin-bottom:4px;">'
+    )
+    body.write(
+        f'<span style="font-weight:600;">{_esc(r.metric_name)}</span>'
+        f'<span style="font-size:10.5px;text-transform:uppercase;'
+        f'letter-spacing:0.4px;color:var(--muted);">{_esc(type_label)}</span>'
+    )
+    body.write("</div>")
+    if r.narrative:
+        body.write(
+            '<div style="line-height:1.45;margin:4px 0 6px;">'
+            f"{_esc(r.narrative)}</div>"
+        )
+    if r.value_summary:
+        body.write(
+            '<div style="font-family:\'JetBrains Mono\',Consolas,monospace;'
+            f'font-size:11.5px;color:var(--muted);">{_esc(r.value_summary)}</div>'
+        )
+    body.write("</div>")
+
+
+def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
+    body.write('<div class="prose-pad"><div class="table-scroll">')
+    body.write('<table class="metrics-table"><thead><tr>')
+    body.write(
+        "<th>Sev</th><th>Metric</th><th>Kind</th>"
+        "<th>Signal</th><th>Narrative</th><th>Stat</th>"
+    )
+    body.write("</tr></thead><tbody>")
+    sev_color = {"red": "var(--bad)", "yellow": "var(--warn)", "green": "var(--ok)"}
+    for r in rows:
+        color = sev_color.get(r.severity, "var(--muted)")
+        narrative = _esc(r.narrative) if r.narrative else "—"
+        stat = _esc(r.value_summary) if r.value_summary else "—"
+        body.write(
+            f'<tr><td style="color:{color};font-weight:600;">{_esc(r.severity)}</td>'
+            f"<td><strong>{_esc(r.metric_name)}</strong></td>"
+            f"<td>{_esc(r.metric_kind)}</td>"
+            f"<td>{_esc(r.signal_type.replace('_', ' '))}</td>"
+            f"<td>{narrative}</td>"
+            f'<td class="mono">{stat}</td></tr>'
+        )
     body.write("</tbody></table></div></div>")
 
 
