@@ -37,6 +37,7 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
+from timeseries.loaders import load_financial_fact_provenance
 
 # (metrics-view column, display name, unit, display digits)
 _LINE_ITEM_SPECS: list[tuple[str, str, str, int]] = [
@@ -367,3 +368,42 @@ def _missing(detail: str, fix: str, extra: str | None = None) -> FinancialsSecti
         status=SectionStatus.MISSING_DATA,
         missing=missing(stage="COMPUTE(extract_facts)", fix_command=fix, detail=full_detail),
     )
+
+
+# Map metrics-view column names to the financial_facts.line_item string they
+# came from. The `capex` column aliases `capital_expenditure` in the view —
+# every other column shares its line_item name. Used by build_per_metric to
+# look up provenance via the tier-aware loader.
+_LINE_ITEM_TO_FACT_KEY: dict[str, str] = {
+    "revenue": "revenue",
+    "gross_profit": "gross_profit",
+    "operating_income": "operating_income",
+    "net_income": "net_income",
+    "eps_diluted": "eps_diluted",
+    "operating_cash_flow": "operating_cash_flow",
+    "free_cash_flow": "free_cash_flow",
+    "capex": "capital_expenditure",
+}
+
+
+def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+    """Per-line-item provenance for the §3 quarterly facts.
+
+    For each line item the financials table renders, look up the tier-
+    winning row for the latest quarter via `load_financial_fact_provenance`
+    and surface its (source, fact_id, fetched_at) for the brief audit
+    log. Keys are suffixed with `_q_latest` so a future extension to
+    annual / per-period provenance can sit alongside without colliding.
+
+    Returns {} when no facts are present (synthetic env, fresh ticker,
+    missing migrations) — caller writes a sparse per_metric dict.
+    """
+    out: dict[str, dict[str, object]] = {}
+    for view_col, fact_key in _LINE_ITEM_TO_FACT_KEY.items():
+        prov = load_financial_fact_provenance(
+            ticker.upper(), fact_key, repo_root=repo_root
+        )
+        if prov is None:
+            continue
+        out[f"{view_col}_q_latest"] = prov
+    return out

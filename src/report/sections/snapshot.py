@@ -354,3 +354,49 @@ def _tier_1_strip(holdings: dict[str, object] | None) -> list[KpiSnapshotRow]:
             )
         )
     return rows
+
+
+def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
+    """Per-metric provenance for the §1 snapshot.
+
+    Today the snapshot's only auditable fact-like value is the DCF row
+    that drives the valuation card. We surface it as a single entry so
+    the audit drawer can trace `consolidated_npv_per_share` /
+    `current_price` back to the dcf_runs row that produced them. The
+    shape mirrors the financial_facts provenance shape (source, fact_id,
+    fetched_at) so a downstream reader doesn't branch on metric type:
+
+        {"valuation": {"source": "dcf_run",
+                        "fact_id": 12,
+                        "fetched_at": "2025-12-31",
+                        "valuation_date": "2025-12-31"}}
+
+    Returns {} when no DCF row exists for the ticker.
+    """
+    conn = open_repo_db(repo_root)
+    if conn is None:
+        return {}
+    try:
+        if not has_table(conn, "dcf_runs"):
+            return {}
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, valuation_date, created_at, live_price_at "
+            "FROM dcf_runs WHERE ticker = ? "
+            "ORDER BY valuation_date DESC, id DESC LIMIT 1",
+            (ticker.upper(),),
+        )
+        row = cursor.fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return {}
+    fetched_at = row["live_price_at"] or row["created_at"] or row["valuation_date"]
+    return {
+        "valuation": {
+            "source": "dcf_run",
+            "fact_id": int(row["id"]),
+            "fetched_at": str(fetched_at) if fetched_at is not None else None,
+            "valuation_date": str(row["valuation_date"]),
+        }
+    }
