@@ -27,6 +27,7 @@ from report.sections import (
     recent_developments,
     saydo,
     segments,
+    signals,
     snapshot,
     synthesis,
     thesis,
@@ -74,6 +75,7 @@ def build_report(
     company_description_section = company_description.build(ticker, repo_root)
     thesis_section = thesis.build(ticker, repo_root)
     financials_section = financials.build(ticker, repo_root)
+    signals_section = signals.build(ticker, repo_root)
     segments_section = segments.build(ticker, repo_root)
     earnings_section = earnings.build(ticker, repo_root, enable_llm=enable_llm)
     saydo_section = saydo.build(ticker, repo_root)
@@ -121,6 +123,7 @@ def build_report(
         company_description=company_description_section,
         thesis=thesis_section,
         financials=financials_section,
+        signals=signals_section,
         segments=segments_section,
         earnings=earnings_section,
         saydo=saydo_section,

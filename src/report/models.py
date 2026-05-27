@@ -412,6 +412,52 @@ class SegmentsSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# §3.5 Time-series signals — renderer-shaped projection of timeseries_signals
+# ---------------------------------------------------------------------------
+
+
+class SignalRow(BaseModel):
+    """One persisted timeseries_signals row, renderer-shaped.
+
+    `severity_magnitude` is the within-tier sort key: |zscore| for anomaly,
+    |slope_pct_of_mean| for trend, |magnitude| for inflection, |delta| for
+    yoy_acceleration, seasonal_strength for seasonal. None when the payload
+    didn't carry a usable magnitude scalar — the accessor pushes it to the
+    end of its tier.
+    """
+
+    metric_name: str
+    metric_kind: Literal["financial", "kpi", "segment"]
+    signal_type: Literal[
+        "trend", "inflection", "anomaly", "yoy_acceleration", "seasonal", "correlation"
+    ]
+    severity: Literal["green", "yellow", "red"]
+    narrative: str | None = None
+    value_summary: str | None = None  # short numeric hint, e.g. "z=2.8", "slope=-12%/yr"
+    severity_magnitude: float | None = None
+
+
+class SignalsSection(BaseModel):
+    """§3.5 — current time-series signals for one ticker.
+
+    Three lists, pre-bucketed by severity so the renderer can show the
+    red/yellow "Fires" block above the green "All signals" expander. Within
+    each tier rows are ordered by `severity_magnitude` descending so the
+    most extreme signal shows first.
+
+    `red_signals + yellow_signals + green_signals` is the full current row
+    set — one row per (metric, signal_type). Empty lists when the
+    `timeseries_signals` table is empty or absent.
+    """
+
+    status: SectionStatus
+    missing: MissingReason | None = None
+    red_signals: list[SignalRow] = Field(default_factory=list)
+    yellow_signals: list[SignalRow] = Field(default_factory=list)
+    green_signals: list[SignalRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # §6 Earnings analysis
 # ---------------------------------------------------------------------------
 
@@ -1042,6 +1088,7 @@ class ReportSpec(BaseModel):
     company_description: CompanyDescriptionSection
     thesis: ThesisSection
     financials: FinancialsSection
+    signals: SignalsSection | None = None
     segments: SegmentsSection
     earnings: EarningsSection
     saydo: SayDoSection

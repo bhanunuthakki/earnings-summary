@@ -31,6 +31,8 @@ from report.models import (
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
+    SignalRow,
+    SignalsSection,
     SnapshotSection,
     SoftRuleEvaluation,
     SurpriseScorecardCard,
@@ -52,6 +54,8 @@ def render(spec: ReportSpec) -> str:
     _company_description(out, spec.company_description)
     _thesis(out, spec.thesis)
     _financials(out, spec.financials)
+    if spec.signals is not None:
+        _signals(out, spec.signals)
     _segments(out, spec.segments)
     _earnings(out, spec.earnings)
     _saydo(out, spec.saydo)
@@ -517,6 +521,50 @@ def _quarterly_table(out: StringIO, quarters: list[str], rows: list[QuarterlyLin
         )
         out.write("| " + " | ".join(cells) + " |\n")
     out.write("\n")
+
+
+_SEVERITY_BULLET: dict[str, str] = {
+    "red": "[RED]",
+    "yellow": "[YELLOW]",
+    "green": "[GREEN]",
+}
+
+
+def _signals(out: StringIO, s: SignalsSection) -> None:
+    """§3.5 Signals — fires bullet list above an `<details>` of all rows.
+
+    Section omitted entirely when no signals of any tier surfaced — the
+    renderer's empty-state for this section is "no §3.5 header at all".
+    """
+    if not (s.red_signals or s.yellow_signals or s.green_signals):
+        return
+    out.write("## §3.5 Signals\n\n")
+    out.write(f"_Status: `{s.status.value}`_\n\n")
+    fires = list(s.red_signals) + list(s.yellow_signals)
+    if fires:
+        out.write("### Fires\n\n")
+        for r in fires:
+            tag = _SEVERITY_BULLET.get(r.severity, "")
+            type_s = r.signal_type.replace("_", " ")
+            narrative = r.narrative or "(no narrative)"
+            stat = f" ({r.value_summary})" if r.value_summary else ""
+            out.write(
+                f"- {tag} **{r.metric_name}** · _{type_s}_ — {narrative}{stat}\n"
+            )
+        out.write("\n")
+    total = len(s.red_signals) + len(s.yellow_signals) + len(s.green_signals)
+    out.write(f"<details><summary>All signals ({total})</summary>\n\n")
+    out.write("| Sev | Metric | Kind | Signal | Narrative | Stat |\n")
+    out.write("|---|---|---|---|---|---|\n")
+    all_rows = list(s.red_signals) + list(s.yellow_signals) + list(s.green_signals)
+    for r in all_rows:
+        narrative = r.narrative or "—"
+        stat = r.value_summary or "—"
+        out.write(
+            f"| {r.severity} | {r.metric_name} | {r.metric_kind} | "
+            f"{r.signal_type.replace('_', ' ')} | {narrative} | {stat} |\n"
+        )
+    out.write("\n</details>\n\n")
 
 
 def _segments(out: StringIO, s: SegmentsSection) -> None:
