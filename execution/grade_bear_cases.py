@@ -27,8 +27,29 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from bear_case_grader import grade_due_predictions, materialize_predictions  # noqa: E402
+from llm.calibration import CalibrationScore, record_score  # noqa: E402
 
 log = logging.getLogger("grade_bear_cases")
+
+
+def _aggregate_to_calibration_score(outcomes: dict[str, int]) -> float | None:
+    """Translate met/missed/mixed/unfalsifiable counts into a 0..1 prompt-quality score.
+
+    Convention: a bear-case prediction that 'met' is the prompt being right
+    about a failure mode; 'mixed' is half-credit; 'unfalsifiable' is dropped
+    (not a signal). Returns None when no falsifiable predictions landed.
+    """
+    counted = (
+        outcomes.get("met", 0)
+        + outcomes.get("missed", 0)
+        + outcomes.get("mixed", 0)
+    )
+    if counted == 0:
+        return None
+    score = (
+        outcomes.get("met", 0) + 0.5 * outcomes.get("mixed", 0)
+    ) / counted
+    return float(score)
 
 
 def _portfolio_tickers(repo_root: Path) -> list[str]:
@@ -83,6 +104,7 @@ def main() -> int:
 
     total_inserted = 0
     total_graded: dict[str, int] = {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 0}
+    db_path = args.repo_root / "data" / "portfolio.db"
     for ticker in tickers:
         if not args.skip_materialize:
             inserted = materialize_predictions(ticker=ticker, repo_root=args.repo_root)
@@ -98,6 +120,27 @@ def main() -> int:
         )
         for k, v in outcomes.items():
             total_graded[k] = total_graded.get(k, 0) + v
+        # Calibration hook: durable-log this ticker's quality score so
+        # summarize_by_prompt_version can answer "is the bear_case prompt
+        # producing better failure modes after the v3 refactor?". Best-effort —
+        # missing table or zero falsifiable predictions silently skips.
+        per_ticker_score = _aggregate_to_calibration_score(outcomes)
+        if per_ticker_score is not None:
+            record_score(
+                CalibrationScore(
+                    purpose="bear_case",
+                    prompt_version="v1",
+                    ticker=ticker,
+                    score=per_ticker_score,
+                    reason=(
+                        f"met={outcomes.get('met', 0)} "
+                        f"missed={outcomes.get('missed', 0)} "
+                        f"mixed={outcomes.get('mixed', 0)}"
+                    ),
+                    scored_by="auto:grade_bear_cases",
+                ),
+                db_path=db_path,
+            )
 
     print(
         f"\nGrading complete · {total_inserted} predictions materialized · "

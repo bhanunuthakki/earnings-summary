@@ -46,8 +46,26 @@ def _sync_db_path(repo_root: Path) -> None:
 
 
 from decision_extractor import OutcomeLabel, pending_for_grading, record_outcome  # noqa: E402
+from llm.calibration import CalibrationScore, record_score  # noqa: E402
 
 log = logging.getLogger("grade_decisions")
+
+
+def _decisions_calibration_score(tally: dict[str, int]) -> float | None:
+    """Translate correct/wrong/mixed counts into a 0..1 prompt-quality score.
+
+    'correct' = full credit, 'mixed' = half-credit, 'wrong' = zero,
+    'unfalsifiable' = dropped. Returns None when no falsifiable
+    decisions landed.
+    """
+    counted = (
+        tally.get("correct", 0)
+        + tally.get("wrong", 0)
+        + tally.get("mixed", 0)
+    )
+    if counted == 0:
+        return None
+    return (tally.get("correct", 0) + 0.5 * tally.get("mixed", 0)) / counted
 
 
 def _load_price_series(repo_root: Path, ticker: str) -> list[tuple[str, float]] | None:
@@ -209,6 +227,27 @@ def main() -> int:
         if ok:
             tally["graded"] += 1
             tally[label] = tally.get(label, 0) + 1
+
+    # Calibration hook: aggregate run-level quality so the dashboard can
+    # answer "how is the decision recommendation prompt performing this
+    # month?". Recorded once per run (not per decision) because the score
+    # is meaningful as a population-level ratio.
+    calibration_score = _decisions_calibration_score(tally)
+    if calibration_score is not None:
+        record_score(
+            CalibrationScore(
+                purpose="decision_audit",
+                prompt_version="v1",
+                score=calibration_score,
+                reason=(
+                    f"correct={tally['correct']} "
+                    f"wrong={tally['wrong']} "
+                    f"mixed={tally['mixed']}"
+                ),
+                scored_by="auto:grade_decisions",
+            ),
+            db_path=db_path,
+        )
 
     # Show summary line even when zero — the user runs this to confirm the
     # pipeline works against fresh artifacts.
