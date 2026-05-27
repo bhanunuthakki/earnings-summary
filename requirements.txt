@@ -15,6 +15,12 @@ mcp
 # Claude CLI call fails (timeout, non-zero exit, empty output, binary missing). Reads
 # GEMINI_API_KEY (or GOOGLE_API_KEY) from .env via python-dotenv. See .env.example.
 google-generativeai
+# Anthropic Python SDK — used ONLY by execution/submit_saydo_batch.py for the
+# message-batches API (which the Claude CLI doesn't expose). Reads
+# ANTHROPIC_API_KEY from .env (metered API billing — already the project default;
+# see feedback_anthropic_api_key.md). The synchronous LLM path still goes through
+# the CLI; this is the off-hours bulk-submission lane only.
+anthropic
 openpyxl
 pydantic
 yt-dlp
