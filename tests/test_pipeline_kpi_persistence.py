@@ -32,12 +32,13 @@ _KPI_FACTS_PROVENANCE_UNIQUE = (
 )
 
 
-def _create_schema(conn: sqlite3.Connection, *, legacy_unique: bool = False) -> None:
+def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = False) -> None:
     """Build the kpi_* + validation_issues tables.
 
-    `legacy_unique=True` recreates the pre-0030 wider unique index (kept for the
-    purge test, which needs to set up duplicate rows that the post-0030 schema
-    would reject outright)."""
+    Default mirrors post-0059 prod (wider `uq_kpi_facts_provenance` + the
+    audit columns from 0054). `legacy_logical_unique=True` rebuilds the
+    short-lived post-0030 / pre-0059 narrow constraint to exercise the
+    detector's schema-tolerance fallback path."""
     conn.executescript(
         """
         CREATE TABLE kpi_definitions (
@@ -62,7 +63,10 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_unique: bool = False) -> 
             kpi_definition_id INTEGER NOT NULL,
             value NUMERIC(24, 6) NOT NULL,
             unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
+            source_doc_id INTEGER NOT NULL,
+            confidence FLOAT NOT NULL DEFAULT 1.0,
+            extracted_by TEXT,
+            supersedes_id INTEGER
         );
         CREATE TABLE validation_issues (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,7 +82,7 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_unique: bool = False) -> 
         );
         """
     )
-    conn.execute(_KPI_FACTS_PROVENANCE_UNIQUE if legacy_unique else _KPI_FACTS_LOGICAL_UNIQUE)
+    conn.execute(_KPI_FACTS_LOGICAL_UNIQUE if legacy_logical_unique else _KPI_FACTS_PROVENANCE_UNIQUE)
     conn.commit()
 
 
@@ -92,11 +96,12 @@ def conn() -> sqlite3.Connection:
 
 @pytest.fixture
 def legacy_conn() -> sqlite3.Connection:
-    """Pre-0030 schema: the wider unique index allows different source_doc_id
-    rows for the same logical KPI period (the very state the purge cleans up)."""
+    """Pre-0059 schema: the narrow logical-only unique forbids multi-row
+    per logical key. Used to validate that the purge backfill still works
+    (and to exercise the detector's schema-tolerance fallback)."""
     c = sqlite3.connect(":memory:")
     c.row_factory = sqlite3.Row
-    _create_schema(c, legacy_unique=True)
+    _create_schema(c, legacy_logical_unique=True)
     return c
 
 
@@ -210,13 +215,15 @@ def test_kpi_value_rejects_empty_name() -> None:
         KpiValue(name="", value=Decimal("1"), unit=Unit.PERCENT)
 
 
-def test_persist_manifest_overwrites_with_newer_source_doc_id(
+def test_persist_manifest_keeps_both_rows_with_different_source_doc_id(
     conn: sqlite3.Connection,
 ) -> None:
-    """A second run with a strictly newer source_doc_id overwrites value /
-    unit / source_doc_id in place — latest extracted document wins. Mirrors
-    the RBRK Revenue YoY case (source_doc_id 9676 displaced by 9705): one
-    row remains, carrying the 9705 provenance."""
+    """Post-0059: different source_doc_ids for the same logical key both
+    survive in kpi_facts under `uq_kpi_facts_provenance`. The newer-id
+    row is the loader's canonical pick (tier+id DESC dedup), while the
+    older row stays for `--as-of-date` time-travel. Mirrors the RBRK
+    Revenue YoY case (source_doc_id 9676 → 9705): both rows now persist,
+    replacing the pre-0059 in-place-overwrite semantic."""
     first = KpiExtractionManifest(
         ticker="RBRK",
         period_end=datetime(2026, 1, 31),
@@ -233,28 +240,29 @@ def test_persist_manifest_overwrites_with_newer_source_doc_id(
         }
     )
 
-    persist_manifest(conn, run_id="run-a", manifest=first)
-    result = persist_manifest(conn, run_id="run-b", manifest=later)
+    first_result = persist_manifest(conn, run_id="run-a", manifest=first)
+    second_result = persist_manifest(conn, run_id="run-b", manifest=later)
 
-    # ON CONFLICT DO UPDATE fired ⇒ rowcount=1 ⇒ counted as `inserted`.
-    assert result.inserted == 1
-    assert result.skipped_existing == 0
+    assert first_result.inserted == 1
+    assert second_result.inserted == 1
+    assert second_result.skipped_existing == 0
 
     rows = conn.execute(
-        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
+        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK' "
+        "ORDER BY source_doc_id ASC"
     ).fetchall()
-    assert len(rows) == 1
-    row = dict(rows[0])
-    assert Decimal(str(row["value"])) == Decimal("47.10")
-    assert row["source_doc_id"] == 9705
+    assert len(rows) == 2
+    values = [(Decimal(str(dict(r)["value"])), dict(r)["source_doc_id"]) for r in rows]
+    assert values == [(Decimal("46.33"), 9676), (Decimal("47.10"), 9705)]
 
 
-def test_persist_manifest_no_op_when_older_source_doc_id(
+def test_persist_manifest_keeps_both_rows_when_older_source_doc_id_replayed(
     conn: sqlite3.Connection,
 ) -> None:
-    """Replaying an older extractor run after a newer one already landed is a
-    true no-op: the WHERE guard `excluded.source_doc_id > kpi_facts.source_doc_id`
-    blocks the update, and the existing row keeps its newer-source value."""
+    """Post-0059: replaying an OLDER source_doc_id after a newer one already
+    landed still inserts a new row — the writer doesn't gatekeep on
+    document recency. The loader's tier+id DESC dedup is what guarantees
+    the newer row stays canonical; the older replay never displaces it."""
     newer = KpiExtractionManifest(
         ticker="RBRK",
         period_end=datetime(2026, 1, 31),
@@ -274,25 +282,33 @@ def test_persist_manifest_no_op_when_older_source_doc_id(
     persist_manifest(conn, run_id="run-a", manifest=newer)
     result = persist_manifest(conn, run_id="run-b", manifest=older)
 
-    assert result.inserted == 0
-    assert result.skipped_existing == 1
+    # Different source_doc_id → no UNIQUE conflict → new row written.
+    assert result.inserted == 1
+    assert result.skipped_existing == 0
 
     rows = conn.execute(
-        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK'"
+        "SELECT value, source_doc_id FROM kpi_facts WHERE ticker = 'RBRK' "
+        "ORDER BY source_doc_id ASC"
     ).fetchall()
-    assert len(rows) == 1
-    row = dict(rows[0])
-    assert Decimal(str(row["value"])) == Decimal("47.10")
-    assert row["source_doc_id"] == 9705
+    assert len(rows) == 2
+    # max(source_doc_id) row carries the newer value — the loader's natural pick.
+    assert dict(rows[-1])["source_doc_id"] == 9705
+    assert Decimal(str(dict(rows[-1])["value"])) == Decimal("47.10")
 
 
-def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(legacy_conn: sqlite3.Connection) -> None:
+def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(conn: sqlite3.Connection) -> None:
     """Backfill purge keeps exactly one row per (ticker, period_end,
     fiscal_period_type, kpi_definition_id) — the one with the highest
     source_doc_id (most-recently-ingested document). Mirrors the prod
-    RBRK Revenue YoY case (source_doc_id 9676 vs 9705 → keep 9705)."""
+    RBRK Revenue YoY case (source_doc_id 9676 vs 9705 → keep 9705).
+
+    The purge is now mostly dead code — post-0059 the wide
+    `uq_kpi_facts_provenance` constraint allows duplicates and the
+    loader's tier+id DESC dedup handles collapsing them at read time —
+    but the helper is kept as a defensive utility and this test
+    documents the contract."""
     kpi_def_id = find_or_create_kpi_definition(
-        legacy_conn, ticker="RBRK", name="Revenue YoY Growth (USD)",
+        conn, ticker="RBRK", name="Revenue YoY Growth (USD)",
         unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
     )
 
@@ -307,20 +323,20 @@ def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(legacy_conn: sqlite3.
         # A row that should be left alone (no duplicates)
         ("RBRK", datetime(2025, 7, 31), "Q2", kpi_def_id, "51.19", "percent", 9705),
     ]
-    legacy_conn.executemany(
+    conn.executemany(
         "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
-    legacy_conn.commit()
-    assert legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 6
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 6
 
-    deleted = purge_duplicate_kpi_facts(legacy_conn)
-    legacy_conn.commit()
+    deleted = purge_duplicate_kpi_facts(conn)
+    conn.commit()
     assert deleted == 3  # 1 from the Q4 pair + 2 from the Q3 triple
 
-    survivors = legacy_conn.execute(
+    survivors = conn.execute(
         "SELECT period_end, source_doc_id FROM kpi_facts ORDER BY period_end DESC"
     ).fetchall()
     assert [(str(dict(r)["period_end"]), dict(r)["source_doc_id"]) for r in survivors] == [
@@ -330,19 +346,52 @@ def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(legacy_conn: sqlite3.
     ]
 
 
-def test_purge_duplicate_kpi_facts_is_idempotent(legacy_conn: sqlite3.Connection) -> None:
+def test_purge_duplicate_kpi_facts_is_idempotent(conn: sqlite3.Connection) -> None:
     """Calling purge on an already-clean table is a no-op (returns 0)."""
     kpi_def_id = find_or_create_kpi_definition(
-        legacy_conn, ticker="MELI", name="Revenue Growth (FXN)",
+        conn, ticker="MELI", name="Revenue Growth (FXN)",
         unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
     )
-    legacy_conn.execute(
+    conn.execute(
         "INSERT INTO kpi_facts "
         "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         ("MELI", datetime(2025, 12, 31), "Q4", kpi_def_id, "96.0", "percent", 100),
     )
-    legacy_conn.commit()
+    conn.commit()
 
-    assert purge_duplicate_kpi_facts(legacy_conn) == 0
-    assert legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+    assert purge_duplicate_kpi_facts(conn) == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+
+
+def test_persist_manifest_falls_back_on_legacy_logical_unique(
+    legacy_conn: sqlite3.Connection,
+) -> None:
+    """Schema-tolerance regression: against a pre-0059 fixture that still
+    has the narrow `uq_kpi_facts_logical`, the detector's INSERT OR
+    IGNORE collapses a different-source replay (the legacy semantic).
+    Two manifests for the same logical key but different source_doc_ids
+    yield one row, not two — the wider provenance constraint isn't
+    active so the unique conflict fires on the logical tuple alone."""
+    first = KpiExtractionManifest(
+        ticker="RBRK",
+        period_end=datetime(2026, 1, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=9676,
+        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)],
+    )
+    later = first.model_copy(update={"source_doc_id": 9705})
+
+    persist_manifest(legacy_conn, run_id="run-a", manifest=first)
+    result = persist_manifest(legacy_conn, run_id="run-b", manifest=later)
+
+    # Under narrow logical unique, different source_doc_id same logical key
+    # → conflict on (ticker, period_end, fiscal_period_type, kpi_def_id)
+    # → INSERT OR IGNORE = 0 rows written.
+    assert result.inserted == 0
+    assert result.skipped_existing == 1
+
+    rows = legacy_conn.execute(
+        "SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'RBRK'"
+    ).fetchone()
+    assert rows[0] == 1

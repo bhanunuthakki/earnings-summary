@@ -17,15 +17,21 @@ incumbent is left untouched — both rows survive, and the loaders (via the
 tier+id ordering in `src/timeseries/loaders.py`) will pick up the newer
 value by default while still allowing time-travel.
 
-Scope of this PR
-----------------
-Only financial_facts has the multi-row-per-logical-key shape today
-(uq_financial_facts_provenance is keyed on source_doc_id too, so two
-different documents = two rows). kpi_facts has `uq_kpi_facts_logical`
-(added in 0030) which forbids multiple rows for the same logical key.
-The `mark_supersedes_chain` helper here works for any fact table, but
-the call from inside the kpi persistence path is gated behind a future
-relaxation of that unique constraint — see migration 0053's docstring.
+Scope
+-----
+Both `financial_facts` and `kpi_facts` are covered. The
+`uq_financial_facts_provenance` index has always been keyed on
+source_doc_id so two different documents = two rows; the parallel
+`uq_kpi_facts_provenance` for kpi_facts was rebuilt by migration 0059
+after PR #152 wired the financial_facts side (migration 0030 had
+previously narrowed it to a logical-key-only unique to fix a renderer
+double-counting bug — now handled at the loader layer via tier-aware
+dedup, so the constraint can safely widen again).
+
+`insert_with_restatement_detection` writes to financial_facts;
+`insert_kpi_with_restatement_detection` is its kpi_facts twin. Both
+share `find_incumbent` (via the `table` parameter) and `is_later_filing`
+so the chain-link decision is uniform.
 """
 
 from __future__ import annotations
@@ -139,10 +145,13 @@ def find_incumbent(
     ticker: str,
     period_end: datetime,
     fiscal_period_type: str,
-    line_item: str,
+    line_item: str | int,
     table: str = "financial_facts",
 ) -> int | None:
     """Return id of the highest-id existing row for the logical key, or None.
+
+    `line_item` is the per-table key-column value: a `line_item` string for
+    financial_facts, a `kpi_definition_id` int for kpi_facts.
 
     The "highest id" choice means: when restatements have already been
     chained (A <- B <- C), `find_incumbent` returns C — the head of the
@@ -300,6 +309,128 @@ def insert_with_restatement_detection(
         # UNIQUE conflict on (ticker, period_end, fiscal_period_type,
         # line_item, source_doc_id) — same document re-ingested, no row
         # written. supersedes_id is irrelevant in that case.
+        return (None, None)
+    return (
+        int(cur.lastrowid) if cur.lastrowid is not None else None,
+        supersedes_id,
+    )
+
+
+def insert_kpi_with_restatement_detection(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    kpi_definition_id: int,
+    value: Decimal,
+    unit: str,
+    source_doc_id: int,
+    confidence: float = 1.0,
+    extracted_by: str | None = None,
+) -> tuple[int | None, int | None]:
+    """kpi_facts twin of `insert_with_restatement_detection`.
+
+    Returns `(new_row_id, superseded_row_id)`:
+      - `new_row_id` is the id of the inserted row, or None when the insert
+        was a true no-op (UNIQUE conflict on the same source_doc_id under
+        post-0059 `uq_kpi_facts_provenance`, or on the logical key under
+        legacy `uq_kpi_facts_logical`).
+      - `superseded_row_id` is the id of the predecessor in the chain when
+        the new document is strictly later than the incumbent's; None
+        otherwise (first row for the logical key, or older-than-incumbent
+        replay).
+
+    Schema tolerance: when `kpi_facts` lacks the audit columns
+    (`supersedes_id`, `extracted_by`, `confidence` — all added in 0054),
+    falls back to the pre-0054 INSERT shape. supersedes_id is silently
+    dropped in that branch since the column is missing; extracted_by and
+    confidence are also dropped. This keeps synthetic test fixtures
+    (e.g. `tests/test_compute_say_do.py`) working without forcing them
+    to carry the full prod schema.
+    """
+    incumbent_id = find_incumbent(
+        conn,
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        line_item=kpi_definition_id,
+        table="kpi_facts",
+    )
+    supersedes_id: int | None = None
+    if incumbent_id is not None:
+        incumbent_row = conn.execute(
+            "SELECT source_doc_id FROM kpi_facts WHERE id = ?",
+            (incumbent_id,),
+        ).fetchone()
+        if incumbent_row is not None:
+            incumbent_doc_id = int(
+                incumbent_row["source_doc_id"]
+                if hasattr(incumbent_row, "keys")
+                else incumbent_row[0]
+            )
+            if incumbent_doc_id != source_doc_id and is_later_filing(
+                conn,
+                new_source_doc_id=source_doc_id,
+                incumbent_source_doc_id=incumbent_doc_id,
+            ):
+                supersedes_id = incumbent_id
+
+    has_audit_cols = (
+        _table_has_column(conn, "kpi_facts", "supersedes_id")
+        and _table_has_column(conn, "kpi_facts", "extracted_by")
+        and _table_has_column(conn, "kpi_facts", "confidence")
+    )
+    try:
+        if has_audit_cols:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO kpi_facts "
+                "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
+                " value, unit, source_doc_id, confidence, extracted_by, supersedes_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    kpi_definition_id,
+                    str(value),
+                    unit,
+                    source_doc_id,
+                    confidence,
+                    extracted_by,
+                    supersedes_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO kpi_facts "
+                "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
+                " value, unit, source_doc_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    kpi_definition_id,
+                    str(value),
+                    unit,
+                    source_doc_id,
+                ),
+            )
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "restatement_kpi_insert_failed",
+                "ticker": ticker,
+                "kpi_definition_id": kpi_definition_id,
+                "error": str(exc),
+            }
+        )
+        return (None, supersedes_id)
+
+    if cur.rowcount == 0:
+        # Conflict on UNIQUE (same source_doc_id under provenance; same
+        # logical key under legacy logical-only). No row written.
         return (None, None)
     return (
         int(cur.lastrowid) if cur.lastrowid is not None else None,

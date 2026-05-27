@@ -30,6 +30,7 @@ from pathlib import Path
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
 from pipeline.kpi_persistence import find_or_create_kpi_definition
+from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
 # Canonical KPI names registered with kpi_definitions on first emission.
 KPI_OPERATING_MARGIN_GAAP = "Operating Margin (GAAP)"
@@ -483,7 +484,14 @@ def persist_derived_kpis(
     ticker: str,
     rows: list[DerivedKpiRow],
 ) -> int:
-    """Insert kpi_facts rows for the derived metrics. Returns count actually inserted."""
+    """Insert kpi_facts rows for the derived metrics. Returns count actually inserted.
+
+    Routes through `insert_kpi_with_restatement_detection` so that when a
+    later filing restates an earlier quarter's value, the new derived KPI
+    row links back to the incumbent via `supersedes_id`. `extracted_by` is
+    tagged `'fmp_derived'` so the audit trail distinguishes derivation
+    from direct FMP ingestion.
+    """
     inserted = 0
     for row in rows:
         kpi_def_id = find_or_create_kpi_definition(
@@ -493,22 +501,18 @@ def persist_derived_kpis(
             unit=row.unit,
             primary_source=SourceType.FMP,
         )
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO kpi_facts "
-            "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
-            " value, unit, source_doc_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                ticker.upper(),
-                row.period_end,
-                row.fiscal_period_type.value,
-                kpi_def_id,
-                str(row.value),
-                row.unit.value,
-                row.source_doc_id,
-            ),
+        new_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker=ticker,
+            period_end=row.period_end,
+            fiscal_period_type=row.fiscal_period_type.value,
+            kpi_definition_id=kpi_def_id,
+            value=row.value,
+            unit=row.unit.value,
+            source_doc_id=row.source_doc_id,
+            extracted_by="fmp_derived",
         )
-        if cur.rowcount > 0:
+        if new_id is not None:
             inserted += 1
     conn.commit()
     return inserted

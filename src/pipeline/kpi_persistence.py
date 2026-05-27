@@ -23,6 +23,7 @@ from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
 from models.kpis import ThesisTier
 from models.validation import Severity, ValidationRule
+from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
 
 class KpiValue(BaseModel):
@@ -39,6 +40,11 @@ class KpiExtractionManifest(BaseModel):
 
     `source_doc_id` is the documents.id of the IR PDF the LLM read; provenance
     chains every emitted kpi_facts row back to that document.
+
+    `model_name` is the LLM model id used for extraction (e.g.
+    `'claude-haiku-4-5-20251001'`); persisted into kpi_facts.extracted_by
+    as `'llm:<model_name>'` so audit queries can group by extractor.
+    Optional — when None, persist_manifest tags rows as plain `'llm'`.
     """
 
     ticker: str
@@ -46,6 +52,7 @@ class KpiExtractionManifest(BaseModel):
     fiscal_period_type: FiscalPeriodType
     source_doc_id: int
     primary_source: SourceType = SourceType.IR_DOC
+    model_name: str | None = None
     values: list[KpiValue]
 
 
@@ -114,39 +121,35 @@ def _insert_kpi_fact(
     value: Decimal,
     unit: Unit,
     source_doc_id: int,
+    confidence: float = 1.0,
+    extracted_by: str | None = None,
 ) -> bool:
-    """Upsert one kpi_facts row keyed on the post-0030 logical tuple
-    (ticker, period_end, fiscal_period_type, kpi_definition_id).
+    """Insert one kpi_facts row, routed through the restatement detector.
 
-    When a row already exists for that tuple, ON CONFLICT DO UPDATE
-    overwrites value/unit/source_doc_id only if the incoming row carries a
-    strictly newer source_doc_id — latest extracted document wins, but a
-    same-doc replay is a true no-op (rowcount stays at 0) and an older-doc
-    replay never clobbers fresher data. Returns True iff a write happened
-    (insert or in-place update); False on the no-op path.
+    Returns True iff a row was actually written. Returns False on the
+    no-op path: same source_doc_id replay under the post-0059
+    `uq_kpi_facts_provenance` (or same logical key under the legacy
+    `uq_kpi_facts_logical`).
+
+    When a different source_doc_id targets an existing logical key AND the
+    new document is strictly later than the incumbent's, the detector
+    writes the new row with `supersedes_id` pointing at the incumbent so
+    the tier+id-aware loader picks the restated value while the original
+    survives for time-travel queries.
     """
-    cur = conn.execute(
-        "INSERT INTO kpi_facts "
-        "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
-        " value, unit, source_doc_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(ticker, period_end, fiscal_period_type, kpi_definition_id) "
-        "DO UPDATE SET "
-        "    value = excluded.value, "
-        "    unit = excluded.unit, "
-        "    source_doc_id = excluded.source_doc_id "
-        "WHERE excluded.source_doc_id > kpi_facts.source_doc_id",
-        (
-            ticker.upper(),
-            period_end,
-            fiscal_period_type.value,
-            kpi_definition_id,
-            str(value),
-            unit.value,
-            source_doc_id,
-        ),
+    new_id, _ = insert_kpi_with_restatement_detection(
+        conn,
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type.value,
+        kpi_definition_id=kpi_definition_id,
+        value=value,
+        unit=unit.value,
+        source_doc_id=source_doc_id,
+        confidence=confidence,
+        extracted_by=extracted_by,
     )
-    return cur.rowcount > 0
+    return new_id is not None
 
 
 def purge_duplicate_kpi_facts(conn: sqlite3.Connection) -> int:
@@ -233,6 +236,9 @@ def persist_manifest(
     inserted = 0
     skipped = 0
     issues = 0
+    extracted_by = (
+        f"llm:{manifest.model_name}" if manifest.model_name else "llm"
+    )
 
     for kpi in manifest.values:
         ok, reason = _validate_value_range(kpi.value, kpi.unit)
@@ -266,6 +272,8 @@ def persist_manifest(
             value=kpi.value,
             unit=kpi.unit,
             source_doc_id=manifest.source_doc_id,
+            confidence=kpi.confidence,
+            extracted_by=extracted_by,
         )
         if was_inserted:
             inserted += 1
