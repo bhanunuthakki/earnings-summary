@@ -20,6 +20,7 @@ loaders return [] when the DB is missing or the query returns nothing.
 from __future__ import annotations
 
 from timeseries.loaders import (
+    load_financial_fact_provenance,
     load_financial_series,
     load_kpi_series,
     load_segment_series,
@@ -41,6 +42,7 @@ __all__ = [
     "correlation_matrix",
     "detect_inflection",
     "detect_trend",
+    "load_financial_fact_provenance",
     "load_financial_series",
     "load_kpi_series",
     "load_segment_series",

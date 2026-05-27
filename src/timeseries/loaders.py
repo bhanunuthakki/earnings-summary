@@ -297,6 +297,168 @@ def load_financial_series(
         conn.close()
 
 
+def load_financial_fact_provenance(
+    ticker: str,
+    line_item: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+    as_of_date: date | datetime | str | None = None,
+) -> dict[str, object] | None:
+    """Return tier-aware provenance for the latest-period row of `ticker.line_item`.
+
+    Mirrors `load_financial_series`'s row-picking — same tier+id ordering
+    (sec_official > fmp_normalized > llm_extracted > yfinance_fallback;
+    ties broken by max(id)) — but instead of materializing a Series of
+    values returns the chosen row's provenance metadata for the LATEST
+    period_end. Shape:
+
+        {"source": "sec_official",
+         "fact_id": 12345,
+         "source_doc_id": 67,
+         "fetched_at": "2026-05-26 14:00:00",
+         "period_end": "2025-03-31",
+         "fiscal_period_type": "Q1",
+         "value": 1234567.0}
+
+    Returns None when the DB is missing, the financial_facts table
+    doesn't exist, or no rows match. On legacy schemas (no documents
+    table or no source_quality_tier column), `source` falls back to
+    documents.source_type when available or "unknown" otherwise — the
+    chosen row id is still meaningful via the max(id) fallback.
+
+    Intended for the brief_provenance_log per-metric audit trail; not on
+    the hot path of `detect_trend` / `yoy_acceleration` etc.
+    """
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return None
+    conn = _open(resolved)
+    if conn is None:
+        return None
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    placeholders = ",".join("?" * len(period_list))
+    as_of_cutoff = _normalize_as_of(as_of_date)
+    try:
+        if not _has_table(conn, "financial_facts"):
+            return None
+        has_documents = _has_table(conn, "documents")
+        if not has_documents:
+            row = conn.execute(
+                f"""
+                SELECT ff.id AS fact_id,
+                       ff.source_doc_id,
+                       ff.period_end,
+                       ff.fiscal_period_type,
+                       ff.value
+                FROM financial_facts ff
+                WHERE ff.ticker = ?
+                  AND ff.line_item = ?
+                  AND ff.fiscal_period_type IN ({placeholders})
+                  AND ff.id = (
+                    SELECT MAX(ff2.id) FROM financial_facts ff2
+                    WHERE ff2.ticker = ff.ticker
+                      AND ff2.line_item = ff.line_item
+                      AND ff2.period_end = ff.period_end
+                      AND ff2.fiscal_period_type = ff.fiscal_period_type
+                  )
+                ORDER BY ff.period_end DESC
+                LIMIT 1
+                """,
+                (ticker.upper(), line_item, *period_list),
+            ).fetchone()
+            if row is None:
+                return None
+            return {
+                "source": "unknown",
+                "fact_id": int(row["fact_id"]),
+                "source_doc_id": int(row["source_doc_id"]),
+                "fetched_at": None,
+                "period_end": str(row["period_end"])[:10],
+                "fiscal_period_type": str(row["fiscal_period_type"]),
+                "value": float(row["value"]),
+            }
+
+        has_tier = _has_column(conn, "documents", "source_quality_tier")
+        rank_expr = (
+            _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        )
+        as_of_clause = (
+            "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
+        )
+        as_of_params: tuple[object, ...] = (
+            (as_of_cutoff,) if as_of_cutoff is not None else ()
+        )
+        tier_select = (
+            "d.source_quality_tier AS source"
+            if has_tier
+            else "COALESCE(d.source_type, 'unknown') AS source"
+        )
+        row = conn.execute(
+            f"""
+            SELECT ff.id AS fact_id,
+                   ff.source_doc_id,
+                   ff.period_end,
+                   ff.fiscal_period_type,
+                   ff.value,
+                   d.fetched_at,
+                   {tier_select}
+            FROM financial_facts ff
+            JOIN documents d ON d.id = ff.source_doc_id
+            WHERE ff.ticker = ?
+              AND ff.line_item = ?
+              AND ff.fiscal_period_type IN ({placeholders})
+              {as_of_clause}
+              AND ff.id = (
+                SELECT ff2.id
+                FROM financial_facts ff2
+                JOIN documents d2 ON d2.id = ff2.source_doc_id
+                WHERE ff2.ticker = ff.ticker
+                  AND ff2.line_item = ff.line_item
+                  AND ff2.period_end = ff.period_end
+                  AND ff2.fiscal_period_type = ff.fiscal_period_type
+                  {as_of_clause.replace("d.", "d2.")}
+                ORDER BY {rank_expr.replace("d.", "d2.")} DESC, ff2.id DESC
+                LIMIT 1
+              )
+            ORDER BY ff.period_end DESC
+            LIMIT 1
+            """,
+            (
+                ticker.upper(),
+                line_item,
+                *period_list,
+                *as_of_params,
+                *as_of_params,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        fetched_at_raw = row["fetched_at"]
+        return {
+            "source": str(row["source"]) if row["source"] is not None else "unknown",
+            "fact_id": int(row["fact_id"]),
+            "source_doc_id": int(row["source_doc_id"]),
+            "fetched_at": str(fetched_at_raw) if fetched_at_raw is not None else None,
+            "period_end": str(row["period_end"])[:10],
+            "fiscal_period_type": str(row["fiscal_period_type"]),
+            "value": float(row["value"]),
+        }
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_financial_provenance_failed",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        return None
+    finally:
+        conn.close()
+
+
 def load_kpi_series(
     ticker: str,
     kpi_name: str,

@@ -43,8 +43,9 @@ from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
 from report.renderers.workbook import render as render_workbook  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
+from report.sections import financials as financials_section_mod  # noqa: E402
+from report.sections import snapshot as snapshot_section_mod  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
-
 
 # Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
 # Each entry maps a ticker to a list of (script_name, extra_args) pairs.
@@ -391,11 +392,13 @@ def _build_one(
         if renderer in ("workspace", "both")
         else html_path
     )
+    per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root)
     _log_brief_provenance(
         repo_root=repo_root,
         ticker=ticker,
         generation_date=today,
         sections_status=sections_status,
+        per_metric=per_metric_provenance,
         trigger=trigger,
         artifact_path=canonical_artifact,
     )
@@ -411,6 +414,23 @@ def _build_one(
     }
 
 
+def _collect_per_metric_provenance(
+    ticker: str, repo_root: Path
+) -> dict[str, dict[str, object]]:
+    """Collate per-line-item provenance across the sections wired for it.
+
+    Today: snapshot (DCF valuation) + financials (8 quarterly line items).
+    Other sections are expansion territory — sparse merge keeps the dict
+    shape stable. Each section's builder returns {} when it has no facts
+    to surface, so the unioned dict is naturally sparse for new tickers
+    or synthetic test environments.
+    """
+    merged: dict[str, dict[str, object]] = {}
+    merged.update(snapshot_section_mod.build_per_metric(ticker, repo_root))
+    merged.update(financials_section_mod.build_per_metric(ticker, repo_root))
+    return merged
+
+
 def _log_brief_provenance(
     *,
     repo_root: Path,
@@ -419,15 +439,24 @@ def _log_brief_provenance(
     sections_status: dict[str, str],
     trigger: str,
     artifact_path: Path,
+    per_metric: dict[str, dict[str, object]] | None = None,
 ) -> None:
     """Append a `brief_provenance_log` row for the render.
 
-    `sources_used` snapshots the section-level provenance: which sources fed
-    each section at render time. Today we only capture the per-section status
-    (LIVE / STUB / etc.); per-line-item source tiering (e.g. revenue was
-    fmp_normalized, OI was sec_official) lands in a follow-on once the
-    loaders expose their tier picks. Silently skips when the table is missing
-    (synthetic environments without migrations applied).
+    `sources_used` is a JSON envelope with two keys:
+
+      * `sections` — section-level status snapshot (LIVE / STUB / etc.),
+        unchanged from the original §section-level audit.
+      * `per_metric` — per-line-item provenance: which fact row drove
+        each rendered metric. Sparse: only metrics whose section opted
+        into provenance reporting (snapshot + financials today) appear.
+        Each value is `{"source": <tier>, "fact_id": <id>,
+        "fetched_at": <iso>, ...}` — see
+        `load_financial_fact_provenance` / `snapshot.build_per_metric`
+        for the exact shape per source.
+
+    Silently skips when the table is missing (synthetic environments
+    without migrations applied).
     """
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
@@ -444,6 +473,9 @@ def _log_brief_provenance(
             rel_artifact = str(artifact_path.relative_to(repo_root))
         except ValueError:
             rel_artifact = str(artifact_path)
+        sources_used: dict[str, object] = {"sections": sections_status}
+        if per_metric:
+            sources_used["per_metric"] = per_metric
         conn.execute(
             "INSERT INTO brief_provenance_log "
             "(ticker, generation_date, sources_used, sections_status, "
@@ -452,7 +484,7 @@ def _log_brief_provenance(
             (
                 ticker.upper(),
                 generation_date,
-                json.dumps({"sections": sections_status}, sort_keys=True),
+                json.dumps(sources_used, sort_keys=True),
                 json.dumps(sections_status, sort_keys=True),
                 trigger,
                 rel_artifact,
@@ -461,7 +493,12 @@ def _log_brief_provenance(
         conn.commit()
         _emit(
             "wrote_provenance_log",
-            {"ticker": ticker, "generation_date": generation_date, "trigger": trigger},
+            {
+                "ticker": ticker,
+                "generation_date": generation_date,
+                "trigger": trigger,
+                "per_metric_count": len(per_metric or {}),
+            },
         )
     except sqlite3.Error as exc:
         _emit(
