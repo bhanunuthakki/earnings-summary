@@ -6,6 +6,8 @@ Public surface:
                       (Trigger, Cadence, TriggerCandidate, AlertDraft,
                        QueuedActionDraft, UserStateContext, ThesisAnchor)
     kpi_inflection  — KpiInflectionTrigger (stub; real impl in follow-on PR)
+    earnings_tone   — EarningsToneTrigger (skeleton; LLM diff pass lands
+                      in PR-N8)
 
 The morning driver (also a follow-on PR) instantiates each registered
 trigger class and walks the lifecycle ``scan → should_fire →
@@ -24,11 +26,13 @@ from triggers.base import (
     TriggerCandidate,
     UserStateContext,
 )
+from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 
 __all__ = [
     "AlertDraft",
     "Cadence",
+    "EarningsToneTrigger",
     "KpiInflectionTrigger",
     "QueuedActionDraft",
     "ThesisAnchor",

@@ -1,0 +1,56 @@
+You are analyzing a quarterly earnings transcript for tone shifts relative to the prior 4 quarters of the same company.
+
+# Context
+Ticker: {{ ticker }}
+Current period: {{ fiscal_period_type }} {{ fiscal_period }}
+Prior 4 periods: {{ prior_periods | join(', ') }}
+
+# Thesis anchor (what to weight)
+{{ thesis_anchor_block }}
+
+# Current transcript (this quarter)
+## Prepared remarks
+{{ current_prepared_remarks }}
+
+## Q&A
+{{ current_qa }}
+
+# Prior transcripts (sectioned per quarter, oldest first)
+{% for prior in prior_transcripts %}
+## {{ prior.fiscal_period_type }} {{ prior.fiscal_period }}
+### Prepared remarks
+{{ prior.prepared_remarks }}
+### Q&A
+{{ prior.qa }}
+{% endfor %}
+
+# Your task
+Detect material tone shifts. A "material" shift is one where:
+- A new theme appears (or an old theme disappears) that touches a registered Tier-1 KPI from the thesis anchor
+- The hedging/confidence language around any registered KPI shifts measurably (e.g., "we're confident" → "we'll see", or vice versa)
+- A specific quantitative claim is repeated or reversed (e.g., guidance reiterated vs. softened)
+
+Return JSON with the following shape (NO commentary outside the JSON):
+{
+  "summary": "1-3 sentence summary of the most material tone shift, plain text",
+  "shifts": [
+    {
+      "topic": "free text — what shifted",
+      "direction": "softer" | "firmer" | "new_topic" | "dropped_topic",
+      "confidence": 0.0-1.0,
+      "citations": [
+        {"kind": "transcript_line", "period": "Q1-2026", "line_number": 47, "excerpt": "we'll see how it plays out"},
+        {"kind": "transcript_line", "period": "Q4-2025", "line_number": 52, "excerpt": "we're confident this trend continues"}
+      ],
+      "related_thesis_kpi": "key_driver_or_kpi_name from anchor, or null"
+    }
+  ],
+  "no_material_shifts_detected": true | false  // if true, "shifts" must be empty
+}
+
+If no material shifts are detected, return:
+{
+  "summary": "No material tone shifts detected this quarter.",
+  "shifts": [],
+  "no_material_shifts_detected": true
+}
