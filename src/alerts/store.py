@@ -406,6 +406,30 @@ def list_pending_actions(
         conn.close()
 
 
+def get_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
+    """Fetch one queued_action row by primary key.
+
+    Raises ``LookupError`` if no row exists. The dashboard's approve CLI
+    needs this before mutating: it has to read ``action_kind`` and
+    ``payload`` to dispatch the downstream user-state write (ledger vs
+    sizing-intent) BEFORE flipping the action to 'applied'.
+    """
+    conn = _open(db_path)
+    try:
+        return _fetch_action(conn, action_id)
+    finally:
+        conn.close()
+
+
+def get_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
+    """Fetch one alert row by primary key. Raises ``LookupError`` if missing."""
+    conn = _open(db_path)
+    try:
+        return _fetch_alert(conn, alert_id)
+    finally:
+        conn.close()
+
+
 def apply_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
     """Transition pending → applied. Stamps ``applied_at`` to now().
 
