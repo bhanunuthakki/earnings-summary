@@ -530,10 +530,100 @@ def quarter_short(label: str) -> str:
     return label
 
 
+# ---------------------------------------------------------------------------
+# P3 panel bundle (P4-A1)
+# ---------------------------------------------------------------------------
+#
+# The P3 accessors in src/report/sections/p3_data.py return typed rows for
+# six "captured but not surfaced" subsystems. The workspace renderer needs
+# them spread across multiple tabs (Thesis / Company / Decisions / SayDo /
+# Eval) so the cleanest wiring is: load every panel's rows up-front, hand
+# the bundle to the tab dispatcher, let each tab pull what it needs.
+#
+# Why dataclass not Pydantic: same convention as ``KpiStripTile`` / ``NewsTile``
+# in this module — render-side shaping, not a section boundary. Pydantic
+# at the section boundary (ReportSpec); dataclasses for renderer-internal
+# data movement.
+
+
+from report.sections.p3_data import (  # noqa: E402  (kept near use site)
+    CustomerConcentrationRow,
+    DecisionHistorySummary,
+    LeaseLadderRow,
+    MacroSensitivityRow,
+    PeerCompRow,
+    SayDoVerdictRow,
+    StrategicTargetRow,
+    load_customer_concentrations,
+    load_decision_history,
+    load_lease_ladder,
+    load_macro_sensitivities,
+    load_peer_comp,
+    load_saydo_verdicts,
+    load_strategic_targets,
+)
+
+
+@dataclass(frozen=True)
+class WorkspaceP3Panels:
+    """All P3 accessor rows for one (ticker, repo) render, pre-loaded.
+
+    Empty lists / zero-row summary when the source tables are absent or the
+    ticker has no rows — the renderer's panel functions render an empty-state
+    callout in that case so the workspace stays visually complete.
+    """
+
+    macro_sensitivities: list[MacroSensitivityRow]
+    strategic_targets: list[StrategicTargetRow]
+    customer_concentrations: list[CustomerConcentrationRow]
+    lease_ladder: list[LeaseLadderRow]
+    decision_history: DecisionHistorySummary
+    saydo_verdicts: list[SayDoVerdictRow]
+    peer_comp: list[PeerCompRow]
+
+    @classmethod
+    def empty(cls) -> WorkspaceP3Panels:
+        return cls(
+            macro_sensitivities=[],
+            strategic_targets=[],
+            customer_concentrations=[],
+            lease_ladder=[],
+            decision_history=DecisionHistorySummary(
+                total=0,
+                by_kind={},
+                by_conviction={},
+                win_rate_overall=None,
+                rows=[],
+            ),
+            saydo_verdicts=[],
+            peer_comp=[],
+        )
+
+
+def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
+    """Call every P3 accessor once and return the bundle.
+
+    Best-effort: missing portfolio.db / missing tables / cold ticker all
+    funnel through the accessors' empty-list contract.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    return WorkspaceP3Panels(
+        macro_sensitivities=load_macro_sensitivities(ticker, db_path=db_path),
+        strategic_targets=load_strategic_targets(ticker, db_path=db_path),
+        customer_concentrations=load_customer_concentrations(ticker, db_path=db_path),
+        lease_ladder=load_lease_ladder(ticker, db_path=db_path),
+        decision_history=load_decision_history(ticker, db_path=db_path),
+        saydo_verdicts=load_saydo_verdicts(ticker, db_path=db_path),
+        peer_comp=load_peer_comp(ticker, repo_root=repo_root),
+    )
+
+
 __all__ = [
     "KpiStripTile",
     "NewsTile",
     "PrintVsGuideRow",
+    "WorkspaceP3Panels",
+    "load_workspace_p3_panels",
     "parse_print_vs_guide",
     "quarter_short",
     "select_kpi_strip",

@@ -30,18 +30,17 @@ from report.models import (
     CompanyDescriptionSection,
     DecisionBadge,
     EarningsSection,
+    EvaluationSnapshotSection,
     ExecCompRowModel,
     ExecCompSectionModel,
-    FilingIntelligenceSection,
-    EvaluationSnapshotSection,
     FailureMode,
+    FilingIntelligenceSection,
     FinancialsSection,
     InsiderSignalRowModel,
     IrDocsSection,
     KpiLedgerRow,
     MissingReason,
     PortfolioPositionSection,
-    ValuationBasisSection,
     ProvenanceSection,
     QAEntry,
     QARosterQuarter,
@@ -66,26 +65,38 @@ from report.models import (
     SynthesisLensRow,
     SynthesisSection,
     ThesisSection,
+    ValuationBasisSection,
 )
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
 from report.renderers.workspace_charts import sparkline, verdict_bar
+from report.renderers.workspace_chat import CSS as CHAT_CSS
+from report.renderers.workspace_chat import JS as CHAT_JS
+from report.renderers.workspace_comments import CSS as COMMENTS_CSS
+from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import (
     KpiStripTile,
     NewsTile,
     PrintVsGuideRow,
+    WorkspaceP3Panels,
     filter_important_print_vs_guide,
+    load_workspace_p3_panels,
     parse_print_vs_guide,
     quarter_short,
     select_kpi_strip,
     structure_news_by_section,
 )
-from report.renderers.workspace_chat import CSS as CHAT_CSS
-from report.renderers.workspace_chat import JS as CHAT_JS
-from report.renderers.workspace_comments import CSS as COMMENTS_CSS
-from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_script import JS
 from report.renderers.workspace_styles import CSS
+from report.sections.p3_data import (
+    CustomerConcentrationRow,
+    DecisionHistorySummary,
+    LeaseLadderRow,
+    MacroSensitivityRow,
+    PeerCompRow,
+    SayDoVerdictRow,
+    StrategicTargetRow,
+)
 
 # A tab tuple: (id, label, optional badge count, render-function-into-body).
 TabRenderFn: TypeAlias = Callable[[StringIO], None]
@@ -116,8 +127,13 @@ def render(spec: ReportSpec) -> str:
     _thesis_strip(body, spec.snapshot, spec.thesis)
     _kpi_strip(body, spec.thesis.kpi_ledger)
 
+    # P3 panel data (macro sensitivities, strategic targets, customer
+    # concentrations, lease ladder, decision history, say-do verdicts,
+    # peer comp) — pre-loaded once and threaded into the tab definitions.
+    p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+
     body.write('<div class="l1-tabs-wrap">')
-    tabs = _tab_defs(spec)
+    tabs = _tab_defs(spec, p3)
     _tabs(body, tabs)
     for tid, label, _count, render_fn in tabs:
         _ = label
@@ -352,7 +368,7 @@ def _news_tile(body: StringIO, t: NewsTile) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _tab_defs(spec: ReportSpec) -> list[TabDef]:
+def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     """Return [(tab_id, label, count_or_None, render_fn), ...]."""
     pos = spec.portfolio_position  # narrow for the closure
     eval_snap = spec.evaluation_snapshot
@@ -363,7 +379,7 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
                 "eval",
                 "Eval Screen",
                 len(eval_snap.rows),
-                lambda b: _eval_tab(b, eval_snap),
+                lambda b: _eval_tab(b, eval_snap, p3.peer_comp),
             )
         )
     # Tab order: portfolio/watchlist puts thesis first as the analytical
@@ -375,7 +391,9 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
             "thesis",
             "Thesis",
             len(spec.thesis.kpi_ledger),
-            lambda b: _thesis_tab(b, spec.snapshot, spec.thesis, spec.bear_case),
+            lambda b: _thesis_tab(
+                b, spec.snapshot, spec.thesis, spec.bear_case, p3.macro_sensitivities
+            ),
         ),
         (
             "earnings",
@@ -393,13 +411,19 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
             "saydo",
             "Say · Do",
             len(spec.saydo.cards),
-            lambda b: _saydo_tab(b, spec.saydo, spec),
+            lambda b: _saydo_tab(b, spec.saydo, spec, p3.saydo_verdicts),
         ),
         (
             "financials",
             "Financials",
             len(spec.financials.quarter_labels),
             lambda b: _financials_tab(b, spec.financials, spec.segments, spec.signals),
+        ),
+        (
+            "decisions",
+            "Decisions",
+            p3.decision_history.total or None,
+            lambda b: _decisions_tab(b, p3.decision_history),
         ),
         (
             "valuation",
@@ -417,7 +441,15 @@ def _tab_defs(spec: ReportSpec) -> list[TabDef]:
             "company",
             "Company",
             None,
-            lambda b: _company_tab(b, spec.company_description, spec.ir_docs, spec.filing_intelligence),
+            lambda b: _company_tab(
+                b,
+                spec.company_description,
+                spec.ir_docs,
+                spec.filing_intelligence,
+                p3.strategic_targets,
+                p3.customer_concentrations,
+                p3.lease_ladder,
+            ),
         ),
         (
             "exec_comp",
@@ -864,11 +896,19 @@ def _quarter_selector(body: StringIO, labels: list[str], group: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _saydo_tab(body: StringIO, section: SayDoSection, spec: ReportSpec) -> None:
+def _saydo_tab(
+    body: StringIO,
+    section: SayDoSection,
+    spec: ReportSpec,
+    verdicts: list[SayDoVerdictRow] | None = None,
+) -> None:
     cards = section.cards
     body.write('<div class="tab-body">')
     if not cards:
         _missing_panel(body, section.status, section.missing)
+        # Even on a stub SayDo, if verdicts exist they're worth surfacing.
+        if verdicts:
+            _saydo_verdicts_panel(body, verdicts)
         body.write("</div>")
         return
     card = cards[0]
@@ -954,7 +994,74 @@ def _saydo_tab(body: StringIO, section: SayDoSection, spec: ReportSpec) -> None:
         f'<span class="panel-sub">{_esc(card.current_quarter)} {card.current_year}</span></div>'
     )
     body.write(f'<div class="prose-pad">{_render_markdown(card.saydo_md)}</div></div>')
+
+    # P3-21 grading overlay — management commitments + outcome ledger.
+    # Always renders (empty-state if cold) so the analyst sees the grading
+    # slot alongside the narrative.
+    _saydo_verdicts_panel(body, verdicts or [])
+
     body.write("</div>")
+
+
+def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
+    """P3-21 management-commitments verdict ledger.
+
+    Lays the audit-trail outcomes alongside the narrative. Rows arrive
+    newest-first from ``load_saydo_verdicts``; we render them in that order.
+    Empty-state when the table has no rows for this ticker.
+    """
+    body.write(
+        '<div class="panel saydo-verdicts-panel"><div class="panel-head">'
+        '<span class="panel-title">Say·Do verdict ledger</span>'
+    )
+    if rows:
+        graded = sum(1 for r in rows if r.outcome is not None)
+        body.write(
+            f'<span class="panel-sub">{len(rows)} commitment'
+            f'{"s" if len(rows) != 1 else ""} · {graded} graded</span></div>'
+        )
+    else:
+        body.write('<span class="panel-sub">no commitments extracted</span></div>')
+        body.write(
+            '<div class="stub"><span class="stub-label">cold ticker</span>'
+            "No management_commitments rows yet for this ticker. Run the "
+            "Say·Do commitment extractor (alembic 0017) against the recent "
+            "earnings transcripts to populate.</div></div>"
+        )
+        return
+    body.write(
+        '<table class="saydo-table"><thead><tr>'
+        "<th>Made</th>"
+        "<th>Target period</th>"
+        "<th>KPI</th>"
+        "<th>Promised</th>"
+        "<th>Realized</th>"
+        "<th>Verdict</th>"
+        "</tr></thead><tbody>"
+    )
+    comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
+    for r in rows:
+        promise = f"{comp_map.get(r.comparator.lower(), r.comparator)} {r.target_value:g} {r.unit}"
+        if r.realized_value is not None:
+            realized = f"{r.realized_value:g} {r.unit}"
+        else:
+            realized = '<span class="muted">—</span>'
+        outcome = r.outcome if r.outcome else "no_data"
+        body.write("<tr>")
+        body.write(f'<td class="mono xsmall">{_esc(_fmt_made_period(r.period_made))}</td>')
+        body.write(f'<td class="mono xsmall">{_esc(_fmt_made_period(r.period_target))}</td>')
+        body.write(f'<td class="saydo-metric">{_esc(r.kpi_name)}</td>')
+        body.write(f'<td class="saydo-guide">{_esc(promise)}</td>')
+        body.write(f'<td class="saydo-actual"><strong>{realized}</strong></td>')
+        body.write(f"<td>{_outcome_pill(outcome)}</td>")
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
+
+
+def _fmt_made_period(dt: datetime) -> str:
+    """Quarter-style label for a datetime: ``Q3 '25``."""
+    quarter = (dt.month - 1) // 3 + 1
+    return f"Q{quarter} {chr(0x2019)}{str(dt.year)[2:]}"
 
 
 def _saydo_summary_table(body: StringIO, cards: list[SayDoCard]) -> None:
@@ -1754,6 +1861,7 @@ def _thesis_tab(
     snap: SnapshotSection,
     thesis: ThesisSection,
     bear: BearCaseSection,
+    macro_sensitivities: list[MacroSensitivityRow] | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     eyebrow_bits = ["Thesis", "Valuation", "Break conditions"]
@@ -1776,6 +1884,11 @@ def _thesis_tab(
     # ticker. Reads `snap.recent_decisions` (last 3 LLM recommendations).
     _decision_history_panel(body, snap.recent_decisions)
 
+    # Macro factor sensitivity (P3-18) — β and R² for each tracked series.
+    # Empty-state callout when the table has no rows so the panel stays
+    # visible even on a cold ticker.
+    _macro_sensitivity_panel(body, macro_sensitivities or [])
+
     # Thesis hygiene: break conditions (narrative thresholds), qualitative
     # breakers (soft thesis-breakers), competitive watchlist (who to track),
     # full tier-2/3 KPI ledger (collapsible). Each panel skips itself when
@@ -1786,6 +1899,172 @@ def _thesis_tab(
     # it's promoted to a first-class tab. Arg kept here for back-compat
     # with anything that still passes the section through.
     _ = bear
+
+
+def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
+    """P3-17 decision-history tab — full audit ledger + conviction × outcome.
+
+    Aggregates from the `decisions` table (alembic 0046) loaded by
+    ``load_decision_history``. Always renders an empty-state callout when
+    the table has no rows so the tab stays visible on cold tickers and the
+    analyst can see whether the ledger ran.
+    """
+    body.write('<div class="tab-body">')
+    body.write('<div class="row-split"><div>')
+    body.write(
+        f'<div class="eyebrow">Decision audit · recommendations {_TIMES} outcomes</div>'
+    )
+    title = (
+        f"{history.total} decision{'s' if history.total != 1 else ''} tracked"
+        if history.total
+        else "No decisions recorded for this ticker yet"
+    )
+    body.write(f'<h2 class="section-title">{_esc(title)}</h2>')
+    body.write("</div></div>")
+
+    if history.total == 0:
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Decision ledger</span>'
+            '<span class="panel-sub">empty</span></div>'
+            '<div class="stub"><span class="stub-label">cold ticker</span>'
+            "No decisions audit rows for this ticker. The decision-recorder "
+            "(alembic 0046) writes a row each time an LLM lens emits an "
+            "ADD/TRIM/HOLD/SELL recommendation — it will fill in on the "
+            "next pipeline run.</div></div>"
+        )
+        body.write("</div>")
+        return
+
+    # Headline counters: total · win-rate · by-kind chips.
+    body.write('<div class="panel decision-history-panel"><div class="panel-head">')
+    body.write('<span class="panel-title">Summary</span>')
+    if history.win_rate_overall is not None:
+        body.write(
+            f'<span class="panel-sub">{history.win_rate_overall * 100:.0f}% '
+            "win rate on graded decisions</span>"
+        )
+    else:
+        body.write('<span class="panel-sub">no graded outcomes yet</span>')
+    body.write("</div>")
+    body.write('<div class="decision-chips">')
+    for kind, n in sorted(history.by_kind.items(), key=lambda kv: -kv[1]):
+        body.write(
+            f'<span class="decision-chip"><span class="decision-chip-label">{_esc(kind.upper())}</span>'
+            f'<span class="decision-chip-n">{n}</span></span>'
+        )
+    body.write("</div>")
+    if history.by_conviction:
+        body.write('<div class="decision-chips decision-chips-sub">')
+        for conv, n in sorted(history.by_conviction.items(), key=lambda kv: -kv[1]):
+            body.write(
+                f'<span class="decision-chip decision-chip-muted">'
+                f'<span class="decision-chip-label">{_esc(conv)}</span>'
+                f'<span class="decision-chip-n">{n}</span></span>'
+            )
+        body.write("</div>")
+    body.write("</div>")
+
+    # Conviction x outcome breakdown table.
+    _decision_conviction_outcome_panel(body, history)
+
+    # Full ledger.
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        '<span class="panel-title">Decision ledger</span>'
+        f'<span class="panel-sub">{len(history.rows)} row'
+        f'{"s" if len(history.rows) != 1 else ""} · newest first</span></div>'
+        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        "<th>Made</th>"
+        "<th>Kind</th>"
+        "<th>Conviction</th>"
+        '<th class="num">Outcome %</th>'
+        "<th>Rationale</th>"
+        "</tr></thead><tbody>"
+    )
+    for r in history.rows:
+        if r.outcome_pct is not None:
+            cls = (
+                "num pos"
+                if (
+                    (r.recommendation_kind.upper() in ("TRIM", "SELL") and r.outcome_pct < 0)
+                    or (
+                        r.recommendation_kind.upper() not in ("TRIM", "SELL")
+                        and r.outcome_pct > 0
+                    )
+                )
+                else "num neg"
+            )
+            outcome_cell = f'<td class="{cls}">{r.outcome_pct * 100:+.1f}%</td>'
+        else:
+            outcome_cell = '<td class="num muted">—</td>'
+        rationale = r.rationale_excerpt or "—"
+        body.write("<tr>")
+        body.write(f'<td class="mono xsmall">{_esc(r.made_at.strftime("%Y-%m-%d"))}</td>')
+        body.write(f"<td><strong>{_esc(r.recommendation_kind.upper())}</strong></td>")
+        body.write(f"<td>{_esc(r.conviction or '—')}</td>")
+        body.write(outcome_cell)
+        body.write(f'<td class="seg-desc">{_esc(rationale)}</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div></div>")
+    body.write("</div>")
+
+
+def _decision_conviction_outcome_panel(
+    body: StringIO, history: DecisionHistorySummary
+) -> None:
+    """Cross-tab of conviction × outcome bucket — surfaces whether "high"
+    convictions actually grade out better than "medium" or "low" ones.
+
+    Skipped silently when there are no rows with both conviction and a
+    graded outcome (still leaves the summary chips and full ledger in
+    place above).
+    """
+    buckets: dict[tuple[str, str], int] = {}
+    convictions: set[str] = set()
+    outcomes: set[str] = set()
+    for r in history.rows:
+        if r.conviction is None or r.outcome_pct is None:
+            continue
+        # ADD/HOLD: positive return = win; TRIM/SELL: negative return = win.
+        is_inverse = r.recommendation_kind.upper() in ("TRIM", "SELL")
+        won = (r.outcome_pct < 0) if is_inverse else (r.outcome_pct > 0)
+        outcome_label = "correct" if won else "wrong"
+        key = (r.conviction, outcome_label)
+        buckets[key] = buckets.get(key, 0) + 1
+        convictions.add(r.conviction)
+        outcomes.add(outcome_label)
+    if not buckets:
+        return
+    conv_order = sorted(convictions, key=lambda c: {"high": 0, "medium": 1, "low": 2}.get(c, 9))
+    outcome_order = ["correct", "wrong"]
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        f'<span class="panel-title">Conviction {_TIMES} outcome</span>'
+        '<span class="panel-sub">graded decisions only</span></div>'
+        '<table class="metrics-table"><thead><tr>'
+        "<th>Conviction</th>"
+    )
+    for out in outcome_order:
+        body.write(f'<th class="num">{_esc(out.title())}</th>')
+    body.write('<th class="num">Hit rate</th>')
+    body.write("</tr></thead><tbody>")
+    for conv in conv_order:
+        body.write(f"<tr><td><strong>{_esc(conv)}</strong></td>")
+        n_correct = buckets.get((conv, "correct"), 0)
+        n_wrong = buckets.get((conv, "wrong"), 0)
+        total = n_correct + n_wrong
+        for out in outcome_order:
+            n = buckets.get((conv, out), 0)
+            body.write(f'<td class="num">{n}</td>')
+        rate = (n_correct / total) if total else None
+        if rate is not None:
+            tone = "pos" if rate >= 0.5 else "neg"
+            body.write(f'<td class="num {tone}">{rate * 100:.0f}%</td>')
+        else:
+            body.write('<td class="num muted">—</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
 
 
 def _bear_tab(body: StringIO, bear: BearCaseSection) -> None:
@@ -2096,6 +2375,83 @@ def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> N
     body.write("</div></div>")
 
 
+def _macro_sensitivity_panel(body: StringIO, rows: list[MacroSensitivityRow]) -> None:
+    """P3-18 macro factor sensitivity table — β / R² / lookback per series.
+
+    Renders an empty-state callout instead of hiding so analysts notice when
+    the macro_sensitivities table has no rows for this ticker. Rows are
+    pre-sorted by ``|beta|`` descending by ``load_macro_sensitivities``.
+    """
+    body.write(
+        '<div class="panel macro-sens-panel"><div class="panel-head">'
+        '<span class="panel-title">Macro factor sensitivity</span>'
+    )
+    if rows:
+        body.write(
+            f'<span class="panel-sub">{len(rows)} factor'
+            f'{"s" if len(rows) != 1 else ""} '
+            f'· lookback {rows[0].lookback_window_days}d</span>'
+        )
+    else:
+        body.write('<span class="panel-sub">no factors tracked</span>')
+    body.write("</div>")
+    if not rows:
+        body.write(
+            '<div class="stub"><span class="stub-label">cold ticker</span>'
+            "No macro_sensitivities rows for this ticker. Run the macro β "
+            "backfill (alembic 0045 must be applied) to populate.</div></div>"
+        )
+        return
+    body.write(
+        '<table class="metrics-table"><thead><tr>'
+        "<th>Macro factor</th>"
+        '<th class="num">β</th>'
+        '<th class="num">R²</th>'
+        '<th class="num">Lookback</th>'
+        "<th>Computed</th>"
+        "</tr></thead><tbody>"
+    )
+    for r in rows:
+        body.write("<tr>")
+        body.write(f"<td>{_esc(_macro_series_label(r.series_id))}</td>")
+        body.write(f'<td class="num {_macro_beta_tone(r.beta)}">{r.beta:+.2f}</td>')
+        r2 = (
+            f"{r.r_squared:.2f}".lstrip("0")
+            if r.r_squared is not None
+            else '<span class="muted">—</span>'
+        )
+        body.write(f'<td class="num">{r2}</td>')
+        body.write(f'<td class="num">{r.lookback_window_days}d</td>')
+        body.write(f'<td class="mono xsmall">{_esc(r.computed_at.strftime("%Y-%m-%d"))}</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
+
+
+def _macro_series_label(series_id: str) -> str:
+    """Friendly label for a macro series id (``10y_treasury`` -> ``10Y Treasury``)."""
+    mapping = {
+        "fed_funds_rate": "Fed funds rate",
+        "10y_treasury": "10Y Treasury",
+        "2y_treasury": "2Y Treasury",
+        "usd_index": "USD index (DXY)",
+        "wti_crude": "WTI crude",
+        "vix": "VIX",
+        "cpi_yoy": "CPI YoY",
+        "unemployment_rate": "Unemployment rate",
+    }
+    return mapping.get(series_id, series_id.replace("_", " ").title())
+
+
+def _macro_beta_tone(beta: float) -> str:
+    """Color magnitude: strong |β|>0.5 stays accented, weak |β|<0.2 mutes."""
+    abs_b = abs(beta)
+    if abs_b >= 0.5:
+        return "neg" if beta < 0 else "pos"
+    if abs_b < 0.2:
+        return "muted"
+    return ""
+
+
 def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
     body.write(
         '<div class="panel"><div class="panel-head">'
@@ -2139,13 +2495,20 @@ def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _eval_tab(body: StringIO, eval_snap: EvaluationSnapshotSection) -> None:
+def _eval_tab(
+    body: StringIO,
+    eval_snap: EvaluationSnapshotSection,
+    peer_comp: list[PeerCompRow] | None = None,
+) -> None:
     """Render the 3y quick-categorization data table for new-name screening.
 
     Only added to the tab list when ``spec.flavor == ReportFlavor.EVALUATION``
     and the evaluation snapshot is populated. Mirrors what the legacy renderer
     surfaces in §1 for the evaluation flavor — abs / margin / ratio metrics
     across LFY-2 / LFY-1 / LFY / TTM with a 3y CAGR column for absolute series.
+
+    Followed by a peer-comp table when ``peer_comp`` is non-empty — gives
+    the screen "premium to peers" context the legacy snapshot lacks.
     """
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -2165,6 +2528,7 @@ def _eval_tab(body: StringIO, eval_snap: EvaluationSnapshotSection) -> None:
 
     if eval_snap.status != SectionStatus.OK and not eval_snap.rows:
         _missing_panel(body, eval_snap.status, eval_snap.missing)
+        _peer_comp_panel(body, peer_comp or [])
         body.write("</div>")
         return
 
@@ -2198,7 +2562,73 @@ def _eval_tab(body: StringIO, eval_snap: EvaluationSnapshotSection) -> None:
             body.write('<td class="num muted">—</td>')
         body.write("</tr>")
     body.write("</tbody></table></div></div>")
+
+    _peer_comp_panel(body, peer_comp or [])
+
     body.write("</div>")
+
+
+def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
+    """Peer comparison table for the Eval Screen — market cap, revenue,
+    net margin, ROIC. Source: cached FMP peers + per-peer key-metrics-ttm
+    JSONs under ``data/historical/fmp/``.
+
+    Empty-state callout when the peers JSON isn't on disk yet so a cold
+    evaluation run still shows the slot.
+    """
+    body.write(
+        '<div class="panel peer-comp-panel"><div class="panel-head">'
+        '<span class="panel-title">Peer comparison</span>'
+    )
+    if rows:
+        body.write(
+            f'<span class="panel-sub">{len(rows)} peer'
+            f'{"s" if len(rows) != 1 else ""} · TTM key metrics from FMP</span></div>'
+        )
+    else:
+        body.write('<span class="panel-sub">peers cache cold</span></div>')
+        body.write(
+            '<div class="stub"><span class="stub-label">no peers on disk</span>'
+            "No <code>{TICKER}_peers.json</code> in <code>data/historical/fmp/</code>. "
+            "Run the FMP peers fetch to populate, then re-render.</div></div>"
+        )
+        return
+    body.write(
+        '<table class="fin-table"><thead><tr>'
+        "<th>Ticker</th>"
+        "<th>Name</th>"
+        '<th class="num">Market cap</th>'
+        '<th class="num">Revenue TTM</th>'
+        '<th class="num">Net margin TTM</th>'
+        '<th class="num">ROIC TTM</th>'
+        "</tr></thead><tbody>"
+    )
+    for r in rows:
+        body.write("<tr>")
+        body.write(f'<td><strong class="mono">{_esc(r.peer_ticker)}</strong></td>')
+        body.write(f'<td>{_esc(r.peer_name or "—")}</td>')
+        body.write(
+            f'<td class="num">{_fmt_usd_compact(r.market_cap_usd)}</td>'
+            if r.market_cap_usd is not None
+            else '<td class="num muted">—</td>'
+        )
+        body.write(
+            f'<td class="num">{_fmt_usd_compact(r.revenue_ttm_usd)}</td>'
+            if r.revenue_ttm_usd is not None
+            else '<td class="num muted">—</td>'
+        )
+        body.write(
+            f'<td class="num">{r.net_margin_ttm * 100:.1f}%</td>'
+            if r.net_margin_ttm is not None
+            else '<td class="num muted">—</td>'
+        )
+        body.write(
+            f'<td class="num">{r.roic_ttm * 100:.1f}%</td>'
+            if r.roic_ttm is not None
+            else '<td class="num muted">—</td>'
+        )
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
 
 
 def _eval_cell(v: float | None, unit: str, digits: int) -> str:
@@ -2233,6 +2663,9 @@ def _company_tab(
     cd: CompanyDescriptionSection,
     ir: IrDocsSection,
     filing: FilingIntelligenceSection | None = None,
+    strategic_targets: list[StrategicTargetRow] | None = None,
+    customer_concentrations: list[CustomerConcentrationRow] | None = None,
+    lease_ladder: list[LeaseLadderRow] | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -2274,6 +2707,13 @@ def _company_tab(
         _segment_breakdown_panel(body, "Segment breakdown", cd.segment_breakdown)
     if cd.geographic_breakdown:
         _segment_breakdown_panel(body, "Geographic breakdown", cd.geographic_breakdown)
+
+    # P3 panels (strategic targets / customer concentrations / lease ladder)
+    # always render — empty state when no rows so the analyst sees the slot
+    # rather than wondering whether the extractor ran.
+    _strategic_targets_panel(body, strategic_targets or [])
+    _customer_concentration_panel(body, customer_concentrations or [])
+    _lease_ladder_panel(body, lease_ladder or [])
 
     if ir.cards:
         body.write(
@@ -2397,6 +2837,183 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             body.write(f'<td class="saydo-guide">{_esc(sig.description)}</td>')
             body.write("</tr>")
         body.write("</tbody></table></div>")
+
+
+def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> None:
+    """P3-20 strategic targets table — long-term mgmt commitments from decks.
+
+    Empty-state callout when the extractor hasn't seen any decks for this
+    ticker so the slot stays visible.
+    """
+    body.write(
+        '<div class="panel strategic-targets-panel"><div class="panel-head">'
+        '<span class="panel-title">Strategic targets</span>'
+    )
+    if rows:
+        body.write(
+            f'<span class="panel-sub">{len(rows)} long-term '
+            f'commitment{"s" if len(rows) != 1 else ""} · from investor decks</span></div>'
+        )
+    else:
+        body.write('<span class="panel-sub">no decks extracted</span></div>')
+        body.write(
+            '<div class="stub"><span class="stub-label">cold ticker</span>'
+            "No strategic_targets rows for this ticker. The investor-deck "
+            "extractor (alembic 0053) hasn't populated long-term commitments "
+            "yet — run it against the latest investor presentation.</div></div>"
+        )
+        return
+    body.write(
+        '<table class="metrics-table"><thead><tr>'
+        "<th>Target</th>"
+        '<th class="num">Value</th>'
+        "<th>Period</th>"
+        '<th class="num">Conf.</th>'
+        "<th>Source excerpt</th>"
+        "</tr></thead><tbody>"
+    )
+    for r in rows:
+        body.write("<tr>")
+        body.write(f"<td><strong>{_esc(r.target_kind)}</strong></td>")
+        if r.target_value is not None:
+            cur = f"{r.target_currency} " if r.target_currency else ""
+            body.write(
+                f'<td class="num">{_esc(cur)}{r.target_value:,.1f} '
+                f'<span class="muted xsmall">{_esc(r.target_unit)}</span></td>'
+            )
+        else:
+            body.write(f'<td class="num muted">{_esc(r.target_unit)}</td>')
+        body.write(f"<td>{_esc(r.target_period)}</td>")
+        body.write(f'<td class="num">{r.confidence * 100:.0f}%</td>')
+        body.write(
+            f'<td class="seg-desc"><em>&ldquo;{_esc(r.narrative_excerpt)}&rdquo;</em></td>'
+        )
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
+
+
+def _customer_concentration_panel(
+    body: StringIO, rows: list[CustomerConcentrationRow]
+) -> None:
+    """P3-19a customer concentration table — named customers ≥ 5% of revenue.
+
+    Empty-state when none reported (most large-cap diversified businesses).
+    Accessor filters out sub-5% rows so this is "material concentration only".
+    """
+    body.write(
+        '<div class="panel customer-concentration-panel"><div class="panel-head">'
+        '<span class="panel-title">Customer concentration</span>'
+    )
+    if rows:
+        body.write(
+            f'<span class="panel-sub">{len(rows)} customer'
+            f'{"s" if len(rows) != 1 else ""} ≥ 5% of revenue</span></div>'
+        )
+    else:
+        body.write('<span class="panel-sub">none ≥ 5% reported</span></div>')
+        body.write(
+            '<div class="stub"><span class="stub-label">no material concentration</span>'
+            "No named customer represents ≥ 5% of revenue in disclosure. "
+            "(Either truly diversified, or the customer-concentration extractor "
+            "hasn't run for this ticker yet — alembic 0040.)</div></div>"
+        )
+        return
+    body.write(
+        '<table class="metrics-table"><thead><tr>'
+        "<th>Period</th>"
+        "<th>Customer</th>"
+        '<th class="num">% of revenue</th>'
+        '<th class="num">Revenue</th>'
+        "</tr></thead><tbody>"
+    )
+    for r in rows:
+        period = f"{r.fiscal_period} {r.fiscal_period_type}"
+        share_pct = r.pct_of_revenue * 100
+        # Bar width visualizes the share so a 35% concentration is visually
+        # distinct from 6%. Cap to keep cells from blowing out the column.
+        bar_w = min(100.0, max(2.0, share_pct * 2.0))
+        if r.revenue_amount is not None and r.revenue_currency:
+            rev_cell = f"{r.revenue_currency} {r.revenue_amount:,.0f}"
+        else:
+            rev_cell = '<span class="muted">—</span>'
+        body.write("<tr>")
+        body.write(f'<td class="mono xsmall">{_esc(period)}</td>')
+        body.write(f"<td><strong>{_esc(r.customer_label)}</strong></td>")
+        body.write(
+            f'<td class="num">{share_pct:.1f}%'
+            f' <span class="seg-bar" style="width:{bar_w:.1f}px"></span></td>'
+        )
+        body.write(f'<td class="num">{rev_cell}</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
+
+
+def _lease_ladder_panel(body: StringIO, rows: list[LeaseLadderRow]) -> None:
+    """P3-19b lease maturity ladder — Y1..Y5..Thereafter for the latest FY.
+
+    Accessor pre-orders rows Y1..Thereafter then total/imputed/liability.
+    Empty-state when no rows exist for the ticker.
+    """
+    body.write(
+        '<div class="panel lease-ladder-panel"><div class="panel-head">'
+        '<span class="panel-title">Operating lease maturity ladder</span>'
+    )
+    if rows:
+        fy = rows[0].fiscal_year
+        unit = rows[0].unit
+        curr = rows[0].currency
+        body.write(
+            f'<span class="panel-sub">FY{fy} · as of '
+            f"{rows[0].as_of_date.isoformat()} · {_esc(curr)} {_esc(unit)}</span></div>"
+        )
+    else:
+        body.write('<span class="panel-sub">no ladder on file</span></div>')
+        body.write(
+            '<div class="stub"><span class="stub-label">cold ticker</span>'
+            "No lease_commitments rows for this ticker. The 10-K lease-ladder "
+            "extractor (alembic 0047) hasn't populated yet — run it against "
+            "the latest annual filing.</div></div>"
+        )
+        return
+    body.write(
+        '<table class="metrics-table"><thead><tr>'
+        "<th>Bucket</th>"
+        '<th class="num">Amount</th>'
+        "<th>Calendar year</th>"
+        "</tr></thead><tbody>"
+    )
+    # Subtotal rows (TotalPayments / ImputedInterest / LeaseLiability) get
+    # the `emph` row class so they read as summary lines.
+    summary_buckets = {"TotalPayments", "ImputedInterest", "LeaseLiability"}
+    for r in rows:
+        tr_cls = ' class="emph"' if r.ladder_year in summary_buckets else ""
+        cal = (
+            str(r.ladder_calendar_year)
+            if r.ladder_calendar_year is not None
+            else '<span class="muted">—</span>'
+        )
+        body.write(f"<tr{tr_cls}>")
+        body.write(f"<td><strong>{_esc(_lease_bucket_label(r.ladder_year))}</strong></td>")
+        body.write(f'<td class="num">{r.amount:,.0f}</td>')
+        body.write(f'<td class="mono xsmall">{cal}</td>')
+        body.write("</tr>")
+    body.write("</tbody></table></div>")
+
+
+def _lease_bucket_label(bucket: str) -> str:
+    """Friendlier display labels for the ladder buckets."""
+    mapping = {
+        "Y1": "Year 1",
+        "Y2": "Year 2",
+        "Y3": "Year 3",
+        "Y4": "Year 4",
+        "Y5": "Year 5",
+        "Thereafter": "Thereafter",
+        "TotalPayments": "Total payments",
+        "ImputedInterest": "Less: imputed interest",
+        "LeaseLiability": "Lease liability",
+    }
+    return mapping.get(bucket, bucket)
 
 
 def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeighting]) -> None:
@@ -2681,7 +3298,8 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
         is_first = idx == 0
         age_str = ""
         if lens.generated_at:
-            from datetime import UTC as _UTC, datetime as _dt
+            from datetime import UTC as _UTC
+            from datetime import datetime as _dt
             age = _dt.now(_UTC) - lens.generated_at
             if age.days >= 1:
                 age_str = f" · {age.days}d ago"
