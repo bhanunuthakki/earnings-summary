@@ -1609,4 +1609,60 @@ ul.flag-list li.flag-positive {
   font-size: 12px;
   margin: 0 0 8px;
 }
+
+/* ============================================================
+   P3 panels (P4-A1) — macro sensitivities, strategic targets,
+   customer concentrations, lease ladder, decision history full
+   ledger, say-do verdicts, peer comp. Most reuse .metrics-table /
+   .fin-table; the styles below are for the Decisions tab's
+   summary-chip ribbon + small layout tweaks.
+   ============================================================ */
+.macro-sens-panel,
+.strategic-targets-panel,
+.customer-concentration-panel,
+.lease-ladder-panel,
+.saydo-verdicts-panel,
+.peer-comp-panel {
+  margin-top: var(--gap);
+}
+.decision-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px var(--panel-pad-x) 4px;
+}
+.decision-chips-sub {
+  padding-top: 0;
+  padding-bottom: 12px;
+}
+.decision-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  font-size: 11.5px;
+}
+.decision-chip-label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--fg);
+}
+.decision-chip-n {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+.decision-chip.decision-chip-muted .decision-chip-label {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.decision-chip.decision-chip-muted .decision-chip-n {
+  color: var(--fg-soft);
+}
 """
