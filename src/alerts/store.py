@@ -1,0 +1,587 @@
+"""Read/write API for ``alerts`` (0063) + ``queued_actions`` (0064).
+
+Tight pair: every fired alert in ``alerts`` can fan out into one or more
+draft actions in ``queued_actions`` (hard FK). The trigger framework (PR-N2
+stub, PR-N8+ real implementations) calls ``fire_alert`` and ``queue_action``
+once it has produced evidence and drafted payloads; the dashboard (PR-N4)
+calls the list/transition functions to render the feed and act on it.
+
+State machines:
+    alerts.status         : pending → {approved, dismissed, expired}
+    queued_actions.status : pending → {applied, cancelled}
+
+Transitions are explicit: ``approve_alert`` / ``dismiss_alert`` /
+``apply_action`` / ``cancel_action`` each raise rather than silently no-op
+when the row is already in a non-pending state — the caller has a stale
+view of the world and the safer default is to surface the conflict.
+
+``compute_signature_sha`` lives here too (the dedup contract belongs with
+the alerts table, even though sensors are the actual callers). The hash
+is deterministic across dict ordering — see the test file for guarantees.
+
+This module fails loudly on missing DB / missing tables. It is not
+telemetry; primary-write semantics demand the caller hears about
+substrate-not-installed errors rather than dropping the writes silently.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import cast
+
+ALERT_STATUS_PENDING = "pending"
+ALERT_STATUS_APPROVED = "approved"
+ALERT_STATUS_DISMISSED = "dismissed"
+ALERT_STATUS_EXPIRED = "expired"
+
+ACTION_STATUS_PENDING = "pending"
+ACTION_STATUS_APPLIED = "applied"
+ACTION_STATUS_CANCELLED = "cancelled"
+
+
+@dataclass(slots=True)
+class AlertRow:
+    """One row of the ``alerts`` table — every column round-tripped to a
+    typed Python value. ``evidence_json`` stays as the serialized string the
+    sensor wrote; the per-trigger consumer decodes it (shape is owned per
+    ``trigger_kind``)."""
+
+    id: int
+    user_id: str
+    ticker: str
+    trigger_kind: str
+    fired_at: datetime
+    status: str
+    memo_artifact_id: int | None
+    evidence_json: str
+    signature_sha: str
+    dismissed_at: datetime | None
+    approved_at: datetime | None
+
+
+@dataclass(slots=True)
+class QueuedActionRow:
+    """One row of the ``queued_actions`` table. ``payload`` is the decoded
+    JSON payload (typically a dict; the schema is owned per ``action_kind``).
+    The original storage column ``payload_json`` is not re-exposed because
+    the dataclass already carries the decoded form."""
+
+    id: int
+    alert_id: int
+    action_kind: str
+    payload: dict[str, object]
+    status: str
+    created_at: datetime
+    applied_at: datetime | None
+    cancelled_at: datetime | None
+
+
+# ----------------------------------------------------------------------------
+# Signature hash
+# ----------------------------------------------------------------------------
+
+
+def compute_signature_sha(
+    trigger_kind: str,
+    ticker: str,
+    key_evidence: Mapping[str, object],
+) -> str:
+    """Stable content hash used by sensors to dedup re-fires.
+
+    Deterministic on ``key_evidence`` insertion order: ``json.dumps`` uses
+    ``sort_keys=True`` and ``default=str`` so that datetimes / Decimals /
+    custom objects produce a consistent representation.
+
+    Convention: the sensor's ``key_evidence`` contains only the fields that
+    uniquely identify *this firing event* (e.g. ``{"kpi": "...", "period":
+    "..."}``); transient context (raw_value, computed deltas) should NOT
+    enter the hash or the same KPI breach refiring with a slightly-different
+    raw value would dodge dedup.
+    """
+    payload = f"{trigger_kind}|{ticker}|" + json.dumps(
+        dict(key_evidence), sort_keys=True, default=str
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# ----------------------------------------------------------------------------
+# Alerts
+# ----------------------------------------------------------------------------
+
+
+def fire_alert(
+    *,
+    user_id: str = "bhanu",
+    ticker: str,
+    trigger_kind: str,
+    fired_at: datetime,
+    evidence_json: str,
+    signature_sha: str,
+    memo_artifact_id: int | None = None,
+    db_path: Path | str | None = None,
+) -> AlertRow:
+    """Insert one alert row. ``status`` lands as 'pending' (the column default).
+
+    Does NOT perform dedup itself — sensors call ``find_by_signature`` first
+    and skip the insert when a non-expired prior alert with the same
+    signature already exists. Keeping dedup in the sensor lets the sensor
+    decide whether a slightly-different evidence shape merits a fresh fire.
+    """
+    conn = _open(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO alerts(
+                user_id, ticker, trigger_kind, fired_at, status,
+                memo_artifact_id, evidence_json, signature_sha
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                ticker,
+                trigger_kind,
+                fired_at.isoformat(),
+                ALERT_STATUS_PENDING,
+                memo_artifact_id,
+                evidence_json,
+                signature_sha,
+            ),
+        )
+        row_id = int(cur.lastrowid or 0)
+        conn.commit()
+        return _fetch_alert(conn, row_id)
+    finally:
+        conn.close()
+
+
+def find_by_signature(
+    *,
+    user_id: str = "bhanu",
+    signature_sha: str,
+    db_path: Path | str | None = None,
+) -> AlertRow | None:
+    """Most recent non-expired alert with ``signature_sha``, or None.
+
+    Used by sensors for re-fire dedup: if a prior alert with this signature
+    is still pending/approved/dismissed (anything but 'expired'), the
+    sensor suppresses the duplicate. Once the prior alert expires, the
+    next fire can re-create.
+    """
+    conn = _open(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT * FROM alerts
+            WHERE user_id = ? AND signature_sha = ? AND status != ?
+            ORDER BY fired_at DESC, id DESC
+            LIMIT 1
+            """,
+            (user_id, signature_sha, ALERT_STATUS_EXPIRED),
+        ).fetchone()
+        return None if row is None else _row_to_alert(row)
+    finally:
+        conn.close()
+
+
+def list_pending_alerts(
+    *,
+    user_id: str = "bhanu",
+    ticker: str | None = None,
+    since: datetime | None = None,
+    db_path: Path | str | None = None,
+) -> list[AlertRow]:
+    """Pending alerts (newest first), optionally scoped to a ticker / time window."""
+    return list_alerts(
+        user_id=user_id,
+        ticker=ticker,
+        status=ALERT_STATUS_PENDING,
+        since=since,
+        db_path=db_path,
+    )
+
+
+def list_alerts(
+    *,
+    user_id: str = "bhanu",
+    ticker: str | None = None,
+    status: str | None = None,
+    since: datetime | None = None,
+    limit: int = 200,
+    db_path: Path | str | None = None,
+) -> list[AlertRow]:
+    """General-purpose alerts list — newest first. Drives the dashboard feed.
+
+    Filters compose with AND. ``status=None`` returns rows in any state;
+    ``ticker=None`` returns across the user's whole portfolio.
+    """
+    where: list[str] = ["user_id = ?"]
+    params: list[object] = [user_id]
+    if ticker is not None:
+        where.append("ticker = ?")
+        params.append(ticker)
+    if status is not None:
+        where.append("status = ?")
+        params.append(status)
+    if since is not None:
+        where.append("fired_at >= ?")
+        params.append(since.isoformat())
+    where_sql = " AND ".join(where)
+    params.append(int(limit))
+
+    conn = _open(db_path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM alerts
+            WHERE {where_sql}
+            ORDER BY fired_at DESC, id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [_row_to_alert(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def approve_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
+    """Transition pending → approved. Stamps ``approved_at`` to now().
+
+    Raises ``LookupError`` if no alert with ``alert_id`` exists, or
+    ``ValueError`` if the alert is in any state other than 'pending' (the
+    caller's view is stale and the safer default is to surface the
+    conflict, not silently re-stamp).
+    """
+    return _transition_alert(
+        alert_id=alert_id,
+        target_status=ALERT_STATUS_APPROVED,
+        stamp_column="approved_at",
+        db_path=db_path,
+    )
+
+
+def dismiss_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
+    """Transition pending → dismissed. Stamps ``dismissed_at`` to now().
+
+    See ``approve_alert`` for the exception semantics — symmetric.
+    """
+    return _transition_alert(
+        alert_id=alert_id,
+        target_status=ALERT_STATUS_DISMISSED,
+        stamp_column="dismissed_at",
+        db_path=db_path,
+    )
+
+
+def _transition_alert(
+    *,
+    alert_id: int,
+    target_status: str,
+    stamp_column: str,
+    db_path: Path | str | None,
+) -> AlertRow:
+    """Shared pending → terminal-status transition.
+
+    ``stamp_column`` is one of ``approved_at`` / ``dismissed_at`` — hard-coded
+    to the matching column for the target status (no SQL injection surface;
+    callers come from this module only).
+    """
+    if stamp_column not in {"approved_at", "dismissed_at"}:
+        raise ValueError(f"unsupported stamp column: {stamp_column!r}")
+    conn = _open(db_path)
+    try:
+        now = _now_iso()
+        cur = conn.execute(
+            f"""
+            UPDATE alerts
+            SET status = ?, {stamp_column} = ?
+            WHERE id = ? AND status = ?
+            """,
+            (target_status, now, alert_id, ALERT_STATUS_PENDING),
+        )
+        if cur.rowcount == 0:
+            _raise_transition_conflict(conn, "alerts", alert_id, ALERT_STATUS_PENDING)
+        conn.commit()
+        return _fetch_alert(conn, alert_id)
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------------------
+# Queued actions
+# ----------------------------------------------------------------------------
+
+
+def queue_action(
+    *,
+    alert_id: int,
+    action_kind: str,
+    payload: Mapping[str, object],
+    db_path: Path | str | None = None,
+) -> QueuedActionRow:
+    """Insert one queued action linked to ``alert_id``.
+
+    The FK ``queued_actions.alert_id → alerts.id`` is enforced (the
+    ``_open`` helper turns on ``PRAGMA foreign_keys = ON``), so a nonexistent
+    ``alert_id`` raises sqlite3.IntegrityError. ``payload`` is serialized
+    to JSON for storage and decoded back into ``QueuedActionRow.payload``
+    on the return.
+    """
+    payload_json = json.dumps(dict(payload), default=str)
+    conn = _open(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO queued_actions(
+                alert_id, action_kind, payload_json, status, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                alert_id,
+                action_kind,
+                payload_json,
+                ACTION_STATUS_PENDING,
+                _now_iso(),
+            ),
+        )
+        row_id = int(cur.lastrowid or 0)
+        conn.commit()
+        return _fetch_action(conn, row_id)
+    finally:
+        conn.close()
+
+
+def list_queued_actions_for_alert(
+    alert_id: int, db_path: Path | str | None = None
+) -> list[QueuedActionRow]:
+    """All queued actions for one alert, oldest first (the natural draft order)."""
+    conn = _open(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM queued_actions
+            WHERE alert_id = ?
+            ORDER BY created_at ASC, id ASC
+            """,
+            (alert_id,),
+        ).fetchall()
+        return [_row_to_action(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_pending_actions(
+    *,
+    user_id: str = "bhanu",
+    limit: int = 200,
+    db_path: Path | str | None = None,
+) -> list[QueuedActionRow]:
+    """Pending queued actions across the user's alerts, newest first.
+
+    Joins ``queued_actions`` → ``alerts`` to filter by ``user_id`` (the
+    queued_actions table itself doesn't carry user_id; ownership flows
+    through the parent alert).
+    """
+    conn = _open(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT qa.*
+            FROM queued_actions qa
+            JOIN alerts a ON a.id = qa.alert_id
+            WHERE qa.status = ? AND a.user_id = ?
+            ORDER BY qa.created_at DESC, qa.id DESC
+            LIMIT ?
+            """,
+            (ACTION_STATUS_PENDING, user_id, int(limit)),
+        ).fetchall()
+        return [_row_to_action(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def apply_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
+    """Transition pending → applied. Stamps ``applied_at`` to now().
+
+    Raises ``LookupError`` if no action exists with ``action_id``, or
+    ``ValueError`` if the action is in any state other than 'pending'.
+    The applier (a future PR) is expected to run the downstream write to
+    the destination table BEFORE calling this — this row stamps the
+    "downstream write succeeded" fact.
+    """
+    return _transition_action(
+        action_id=action_id,
+        target_status=ACTION_STATUS_APPLIED,
+        stamp_column="applied_at",
+        db_path=db_path,
+    )
+
+
+def cancel_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
+    """Transition pending → cancelled. Stamps ``cancelled_at`` to now().
+
+    See ``apply_action`` for the exception semantics — symmetric.
+    """
+    return _transition_action(
+        action_id=action_id,
+        target_status=ACTION_STATUS_CANCELLED,
+        stamp_column="cancelled_at",
+        db_path=db_path,
+    )
+
+
+def _transition_action(
+    *,
+    action_id: int,
+    target_status: str,
+    stamp_column: str,
+    db_path: Path | str | None,
+) -> QueuedActionRow:
+    if stamp_column not in {"applied_at", "cancelled_at"}:
+        raise ValueError(f"unsupported stamp column: {stamp_column!r}")
+    conn = _open(db_path)
+    try:
+        now = _now_iso()
+        cur = conn.execute(
+            f"""
+            UPDATE queued_actions
+            SET status = ?, {stamp_column} = ?
+            WHERE id = ? AND status = ?
+            """,
+            (target_status, now, action_id, ACTION_STATUS_PENDING),
+        )
+        if cur.rowcount == 0:
+            _raise_transition_conflict(conn, "queued_actions", action_id, ACTION_STATUS_PENDING)
+        conn.commit()
+        return _fetch_action(conn, action_id)
+    finally:
+        conn.close()
+
+
+# ----------------------------------------------------------------------------
+# Internals
+# ----------------------------------------------------------------------------
+
+
+def _open(db_path: Path | str | None) -> sqlite3.Connection:
+    """Open a connection with FK enforcement on. Fails loudly when DB or
+    table is missing — these are primary writes, not telemetry."""
+    path = _resolve_db_path(db_path)
+    if path is None:
+        raise RuntimeError(
+            "DB path not configured: pass db_path explicitly or ensure db.DB_PATH "
+            "is importable from src/."
+        )
+    if not path.exists():
+        raise FileNotFoundError(f"SQLite DB does not exist: {path}")
+    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _resolve_db_path(override: Path | str | None) -> Path | None:
+    if override is not None:
+        return Path(override)
+    try:
+        from db import DB_PATH
+
+        return Path(DB_PATH)
+    except ImportError:
+        return None
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _parse_dt(raw: object) -> datetime:
+    if isinstance(raw, datetime):
+        return raw
+    return datetime.fromisoformat(str(raw))
+
+
+def _parse_dt_opt(raw: object) -> datetime | None:
+    if raw is None or raw == "":
+        return None
+    return _parse_dt(raw)
+
+
+def _fetch_alert(conn: sqlite3.Connection, alert_id: int) -> AlertRow:
+    row = conn.execute("SELECT * FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+    if row is None:
+        raise LookupError(f"alerts id={alert_id} not found")
+    return _row_to_alert(row)
+
+
+def _fetch_action(conn: sqlite3.Connection, action_id: int) -> QueuedActionRow:
+    row = conn.execute("SELECT * FROM queued_actions WHERE id = ?", (action_id,)).fetchone()
+    if row is None:
+        raise LookupError(f"queued_actions id={action_id} not found")
+    return _row_to_action(row)
+
+
+def _row_to_alert(row: sqlite3.Row) -> AlertRow:
+    raw_memo = row["memo_artifact_id"]
+    return AlertRow(
+        id=int(row["id"]),
+        user_id=str(row["user_id"]),
+        ticker=str(row["ticker"]),
+        trigger_kind=str(row["trigger_kind"]),
+        fired_at=_parse_dt(row["fired_at"]),
+        status=str(row["status"]),
+        memo_artifact_id=(None if raw_memo is None else int(raw_memo)),
+        evidence_json=str(row["evidence_json"]),
+        signature_sha=str(row["signature_sha"]),
+        dismissed_at=_parse_dt_opt(row["dismissed_at"]),
+        approved_at=_parse_dt_opt(row["approved_at"]),
+    )
+
+
+def _row_to_action(row: sqlite3.Row) -> QueuedActionRow:
+    payload_raw = row["payload_json"]
+    if payload_raw is None:
+        payload: dict[str, object] = {}
+    else:
+        loaded = json.loads(str(payload_raw))
+        if not isinstance(loaded, dict):
+            raise ValueError(
+                f"queued_actions id={int(row['id'])} payload_json is not a JSON object"
+            )
+        # JSON-boundary cast: isinstance(..., dict) just confirmed the runtime
+        # shape; the cast tells pyright we've validated dict[str, object] and
+        # can use it without further narrowing.
+        payload = cast("dict[str, object]", loaded)
+    return QueuedActionRow(
+        id=int(row["id"]),
+        alert_id=int(row["alert_id"]),
+        action_kind=str(row["action_kind"]),
+        payload=payload,
+        status=str(row["status"]),
+        created_at=_parse_dt(row["created_at"]),
+        applied_at=_parse_dt_opt(row["applied_at"]),
+        cancelled_at=_parse_dt_opt(row["cancelled_at"]),
+    )
+
+
+def _raise_transition_conflict(
+    conn: sqlite3.Connection, table: str, row_id: int, required_status: str
+) -> None:
+    """Helper for the two transition functions: figure out *why* the UPDATE
+    matched 0 rows and raise an informative exception. Either the row
+    doesn't exist (LookupError) or its status is not the required one
+    (ValueError)."""
+    row = conn.execute(f"SELECT status FROM {table} WHERE id = ?", (row_id,)).fetchone()
+    if row is None:
+        raise LookupError(f"{table} id={row_id} not found")
+    raise ValueError(
+        f"{table} id={row_id} status is {str(row['status'])!r}, "
+        f"cannot transition (expected {required_status!r})"
+    )
