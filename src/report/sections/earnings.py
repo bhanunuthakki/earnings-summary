@@ -42,6 +42,10 @@ from report.models import (
     ThemeRollup,
 )
 from report.sections._common import missing, open_repo_db
+from report.sections._ts_signals import (
+    format_signals_as_prompt_block,
+    load_signals_for_metrics,
+)
 
 # The compute module lives in src/compute/, accessible because src/ is on the
 # sys.path (per pyproject.toml `pythonpath = ["src"]`).
@@ -337,8 +341,9 @@ def _build_themes(
     if not payload:
         return [], [], None
 
+    ts_block = _ts_signals_md(ticker, repo_root)
     cache_path = _themes_cache_path(repo_root, ticker)
-    cache_key = _themes_cache_key(payload)
+    cache_key = _themes_cache_key(payload, ts_block)
     cached = _read_themes_cache(cache_path, cache_key)
     if cached is None:
         try:
@@ -347,7 +352,9 @@ def _build_themes(
             log.warning({"event": "earnings_themes_split_import_failed", "error": str(exc)})
             return [], [], None
         try:
-            response = extract_qa_vs_prepared_themes(ticker, payload)
+            response = extract_qa_vs_prepared_themes(
+                ticker, payload, ts_signals_md=ts_block
+            )
         except Exception as exc:  # surface but don't break the rest of §5
             log.error({"event": "earnings_themes_split_failed", "ticker": ticker, "error": str(exc)})
             return [], [], None
@@ -518,13 +525,70 @@ def _themes_cache_path(repo_root: Path, ticker: str) -> Path:
     return repo_root / "data" / "earnings_themes" / f"{ticker.upper()}.json"
 
 
-def _themes_cache_key(payload: list[dict[str, object]]) -> str:
+def _earnings_metric_names(ticker: str, repo_root: Path) -> list[str]:
+    """Compose the metric-name list the earnings TS block should load.
+
+    Headline P&L + cash + the per-ticker tier_1 KPIs from the holdings
+    JSON. Tier-1 KPIs anchor the quarter against thesis-critical series;
+    revenue / OI / EPS / FCF / margins are the universal headline cuts
+    every print is read against.
+    """
+    names: list[str] = [
+        "revenue",
+        "operating_income",
+        "free_cash_flow",
+        "net_income",
+        "gross_profit",
+    ]
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not holdings_path.exists():
+        return names
+    try:
+        holdings = cast("dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return names
+    raw_kpis = holdings.get("tier_1_kpis")
+    if not isinstance(raw_kpis, list):
+        return names
+    seen: set[str] = set(names)
+    for k in cast("list[object]", raw_kpis):
+        if not isinstance(k, dict):
+            continue
+        name = cast("dict[str, object]", k).get("name")
+        if isinstance(name, str) and name.strip() and name not in seen:
+            names.append(name.strip())
+            seen.add(name)
+    return names
+
+
+def _ts_signals_md(ticker: str, repo_root: Path) -> str:
+    """Render the headline-P&L + tier-1 KPI signals as a markdown block.
+
+    Surfaced to the prepared-vs-Q&A themes prompt so the LLM can
+    interpret what management chose to lead with (and what analysts
+    pressed on) against the trailing trend / inflection / anomaly state.
+    Empty string when no signals exist for any requested metric.
+    """
+    grouped = load_signals_for_metrics(
+        ticker, _earnings_metric_names(ticker, repo_root), repo_root=repo_root
+    )
+    flat = [s for metric in grouped.values() for s in metric]
+    return format_signals_as_prompt_block(
+        flat, heading="Time-Series Context for Quarterly Interpretation"
+    )
+
+
+def _themes_cache_key(payload: list[dict[str, object]], ts_signals_md: str = "") -> str:
     """Hash of the LLM input — invalidates cache on any source change.
 
     Sums periods + prepared/qa boolean availability + the first 64 chars
     of each side. Keeping it light keeps the hash stable against
     re-extraction noise while still flipping when a new quarter lands or
     a transcript gets re-fetched.
+
+    ``ts_signals_md`` is folded in as the full block text so a refresh of
+    the timeseries_signals table (different narratives / severities)
+    forces a re-extraction even when transcripts are unchanged.
     """
     h = hashlib.sha256()
     for entry in payload:
@@ -543,6 +607,8 @@ def _themes_cache_key(payload: list[dict[str, object]]) -> str:
         if isinstance(qa, str):
             h.update(qa[:64].encode("utf-8", errors="ignore"))
         h.update(b"\xff")
+    h.update(b"|TS|")
+    h.update(ts_signals_md.encode("utf-8", errors="ignore"))
     return h.hexdigest()
 
 

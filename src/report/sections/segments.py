@@ -38,6 +38,10 @@ from report.sections._common import (
     missing,
     open_repo_db,
 )
+from report.sections._ts_signals import (
+    format_signals_as_prompt_block,
+    load_segment_signals,
+)
 
 MetricKey = Literal[
     "revenue_by_product",
@@ -130,6 +134,10 @@ def build(ticker: str, repo_root: Path) -> SegmentsSection:
         segment_definitions_fiscal_year=definitions_year,
         quarter_labels_full=quarter_labels_full,
         secondary_expansions=secondary_expansions,
+        ts_context_md=format_signals_as_prompt_block(
+            load_segment_signals(ticker, repo_root=repo_root),
+            heading="Segment Time-Series Context",
+        ),
     )
 
 

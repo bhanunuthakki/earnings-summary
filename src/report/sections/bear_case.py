@@ -34,6 +34,10 @@ from report.models import (
     ThesisSection,
 )
 from report.sections._common import missing
+from report.sections._ts_signals import (
+    format_signals_as_prompt_block,
+    load_all_signals,
+)
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +95,7 @@ def build(
         segments_table_md=_segments_md(segments),
         kpi_status_md=_kpi_status_md(thesis),
         ticker_specific_md=_ticker_specific_md(ticker, repo_root),
+        ts_signals_md=_ts_signals_md(ticker, repo_root),
         repo_root=repo_root,
     )
     # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
@@ -144,6 +149,22 @@ def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> No
         out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     except OSError:
         return
+
+
+def _ts_signals_md(ticker: str, repo_root: Path) -> str:
+    """Render every persisted time-series signal for the ticker as a
+    Disconfirmation-candidates block.
+
+    Bear case wants the broadest coverage — any decelerating trend,
+    anomaly, or sustained inflection is a potential thesis-disconfirming
+    pattern worth engaging with — so we pull ALL signals (financial + KPI
+    + segment) rather than enumerate a metric list. Empty string when no
+    rows exist for the ticker so the prompt stays clean.
+    """
+    signals = load_all_signals(ticker, repo_root=repo_root)
+    return format_signals_as_prompt_block(
+        signals, heading="Time-Series Disconfirmation Candidates"
+    )
 
 
 def _ticker_specific_md(ticker: str, repo_root: Path) -> str:

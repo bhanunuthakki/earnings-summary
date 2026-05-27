@@ -12,7 +12,7 @@ import json
 import re
 from datetime import date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from report.models import (
     BreakRuleEvaluation,
@@ -23,6 +23,10 @@ from report.models import (
     ThesisSection,
 )
 from report.sections._common import has_table, missing, open_repo_db
+from report.sections._ts_signals import (
+    format_signals_as_prompt_block,
+    load_signals_for_metrics,
+)
 
 
 def build(ticker: str, repo_root: Path) -> ThesisSection:
@@ -57,6 +61,35 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
         break_rule_evaluations=evaluations,
         soft_rule_evaluations=soft_evaluations,
         last_evaluated_at=evaluated_at,
+        ts_context_md=_ts_context_md(ticker, repo_root, holdings),
+    )
+
+
+def _ts_context_md(
+    ticker: str, repo_root: Path, holdings: dict[str, object]
+) -> str:
+    """Render persisted signals for tier-1 KPIs + headline P&L lines.
+
+    The block is the high-leverage TS surface for §2: the thesis
+    statement should respect the current trend state of every Tier-1 KPI
+    and the universal revenue / OI / FCF cuts. Empty string when no
+    signals have been computed for any of the requested metrics.
+    """
+    names: list[str] = ["revenue", "operating_income", "free_cash_flow"]
+    seen: set[str] = set(names)
+    raw_kpis = holdings.get("tier_1_kpis")
+    if isinstance(raw_kpis, list):
+        for k in cast("list[object]", raw_kpis):
+            if not isinstance(k, dict):
+                continue
+            name = cast("dict[str, object]", k).get("name")
+            if isinstance(name, str) and name.strip() and name not in seen:
+                names.append(name.strip())
+                seen.add(name)
+    grouped = load_signals_for_metrics(ticker, names, repo_root=repo_root)
+    flat = [s for metric in grouped.values() for s in metric]
+    return format_signals_as_prompt_block(
+        flat, heading="Time-Series Context (last computed)"
     )
 
 
