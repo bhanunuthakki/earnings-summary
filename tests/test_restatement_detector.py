@@ -18,11 +18,13 @@ import pytest
 
 from pipeline.restatement_detector import (
     find_incumbent,
+    insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
     is_later_filing,
     latest_in_chain,
 )
 from timeseries import load_financial_series
+from timeseries.loaders import load_kpi_series
 
 # ---------------------------------------------------------------------------
 # Fixture
@@ -99,6 +101,8 @@ def _make_schema(db_path: Path) -> None:
                 extracted_by TEXT,
                 supersedes_id INTEGER
             );
+            CREATE UNIQUE INDEX uq_kpi_facts_provenance
+              ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
             """
         )
         conn.commit()
@@ -657,3 +661,276 @@ def test_same_document_replay_is_noop(fixture_db: Path) -> None:
         assert rows[0] == 1
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# insert_kpi_with_restatement_detection — kpi_facts side (post-0059)
+# ---------------------------------------------------------------------------
+
+
+def _seed_kpi_definition(
+    conn: sqlite3.Connection, *, ticker: str, name: str
+) -> int:
+    """Insert one kpi_definitions row; returns id."""
+    cur = conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES (?, ?, 'percent', 'ir_doc')",
+        (ticker.upper(), name),
+    )
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def test_kpi_restatement_chain_two_rows_with_supersedes_link(
+    fixture_db: Path,
+) -> None:
+    """kpi_facts twin of test_restatement_chain_two_rows_with_supersedes_link.
+    A KPI value first lands from a Q-period IR doc; the FY IR doc later
+    restates it. Both rows survive under uq_kpi_facts_provenance, and the
+    FY row's supersedes_id links back to the Q row's id."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        q_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2023-03-31 00:00:00",
+            fetched_at="2023-05-01 12:00:00",
+            sha256="a" * 64,
+        )
+        fy_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2023-12-31 00:00:00",
+            fetched_at="2024-02-15 12:00:00",
+            sha256="b" * 64,
+        )
+        kpi_def_id = _seed_kpi_definition(
+            conn, ticker="MELI", name="Revenue Growth (FXN)"
+        )
+        conn.commit()
+
+        # First write: Q-filing value.
+        q_row_id, superseded_q = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2023-03-31"),
+            fiscal_period_type="Q1",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("90"),
+            unit="percent",
+            source_doc_id=q_doc,
+            extracted_by="llm:claude-haiku-4-5-20251001",
+        )
+        conn.commit()
+        assert q_row_id is not None
+        assert superseded_q is None
+
+        # Restatement: FY-filing for Q1 with adjusted value.
+        fy_row_id, superseded_fy = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2023-03-31"),
+            fiscal_period_type="Q1",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("92"),
+            unit="percent",
+            source_doc_id=fy_doc,
+            extracted_by="llm:claude-haiku-4-5-20251001",
+        )
+        conn.commit()
+        assert fy_row_id is not None
+        assert superseded_fy == q_row_id
+
+        rows = conn.execute(
+            "SELECT id, value, supersedes_id, extracted_by FROM kpi_facts "
+            "WHERE ticker = ? AND kpi_definition_id = ? "
+            "ORDER BY id ASC",
+            ("MELI", kpi_def_id),
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["supersedes_id"] is None
+        assert int(rows[1]["supersedes_id"]) == q_row_id
+        assert float(rows[1]["value"]) == 92.0
+        assert rows[1]["extracted_by"] == "llm:claude-haiku-4-5-20251001"
+    finally:
+        conn.close()
+
+
+def test_kpi_same_document_replay_is_noop(fixture_db: Path) -> None:
+    """Re-running an extractor against the same source_doc_id yields a
+    UNIQUE conflict on (ticker, period_end, fiscal_period_type,
+    kpi_definition_id, source_doc_id) — no row written, no chain link."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="RBRK",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2026-01-31 00:00:00",
+            fetched_at="2026-02-25 12:00:00",
+            sha256="a" * 64,
+        )
+        kpi_def_id = _seed_kpi_definition(
+            conn, ticker="RBRK", name="Revenue YoY Growth (USD)"
+        )
+        conn.commit()
+
+        first_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="RBRK",
+            period_end=datetime.fromisoformat("2026-01-31"),
+            fiscal_period_type="Q4",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("46.33"),
+            unit="percent",
+            source_doc_id=doc,
+        )
+        replay_id, replay_supersedes = insert_kpi_with_restatement_detection(
+            conn,
+            ticker="RBRK",
+            period_end=datetime.fromisoformat("2026-01-31"),
+            fiscal_period_type="Q4",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("46.33"),
+            unit="percent",
+            source_doc_id=doc,
+        )
+        conn.commit()
+
+        assert first_id is not None
+        assert replay_id is None
+        assert replay_supersedes is None
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM kpi_facts WHERE ticker = ?",
+            ("RBRK",),
+        ).fetchone()
+        assert rows[0] == 1
+    finally:
+        conn.close()
+
+
+def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
+    """After the restatement chain is built, load_kpi_series should return
+    the restated (newer-tier/newer-id) value. Mirrors the financial-facts
+    loader behavior for kpi_facts."""
+    conn = sqlite3.connect(str(fixture_db))
+    try:
+        q_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2023-03-31 00:00:00",
+            fetched_at="2023-05-01 12:00:00",
+            sha256="a" * 64,
+            tier="llm_extracted",
+        )
+        fy_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2023-12-31 00:00:00",
+            fetched_at="2024-02-15 12:00:00",
+            sha256="b" * 64,
+            tier="llm_extracted",
+        )
+        kpi_def_id = _seed_kpi_definition(
+            conn, ticker="MELI", name="Revenue Growth (FXN)"
+        )
+        conn.commit()
+        insert_kpi_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2023-03-31"),
+            fiscal_period_type="Q1",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("90"),
+            unit="percent",
+            source_doc_id=q_doc,
+        )
+        insert_kpi_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2023-03-31"),
+            fiscal_period_type="Q1",
+            kpi_definition_id=kpi_def_id,
+            value=Decimal("92"),
+            unit="percent",
+            source_doc_id=fy_doc,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    obs = load_kpi_series(
+        ticker="MELI", kpi_name="Revenue Growth (FXN)", db_path=fixture_db
+    )
+    assert len(obs) == 1
+    assert obs[0].value == pytest.approx(92.0)
+
+
+def test_kpi_loader_prefers_sec_official_over_llm_extracted(
+    fixture_db: Path,
+) -> None:
+    """When the same logical KPI key has both an IR-doc-derived row (tier
+    llm_extracted) and an FMP-derived row (tier fmp_normalized), the
+    higher-tier FMP row wins regardless of insertion order. Validates
+    that the relaxed constraint + tier-aware loader composes correctly
+    for KPIs."""
+    conn = sqlite3.connect(str(fixture_db))
+    try:
+        # IR doc lands FIRST (lower id, lower tier).
+        ir_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="ir_doc",
+            doc_type="ir_press_release",
+            period_end="2023-03-31 00:00:00",
+            fetched_at="2023-05-01 12:00:00",
+            sha256="a" * 64,
+            tier="llm_extracted",
+        )
+        # FMP doc lands SECOND (higher id, higher tier).
+        fmp_doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="fmp",
+            doc_type="fmp_income_statement",
+            period_end="2023-03-31 00:00:00",
+            fetched_at="2023-05-02 12:00:00",
+            sha256="b" * 64,
+            tier="fmp_normalized",
+        )
+        kpi_def_id = _seed_kpi_definition(
+            conn, ticker="MELI", name="Operating Margin (GAAP)"
+        )
+        for doc, val in [(ir_doc, Decimal("13.0")), (fmp_doc, Decimal("13.5"))]:
+            insert_kpi_with_restatement_detection(
+                conn,
+                ticker="MELI",
+                period_end=datetime.fromisoformat("2023-03-31"),
+                fiscal_period_type="Q1",
+                kpi_definition_id=kpi_def_id,
+                value=val,
+                unit="percent",
+                source_doc_id=doc,
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    obs = load_kpi_series(
+        ticker="MELI",
+        kpi_name="Operating Margin (GAAP)",
+        db_path=fixture_db,
+    )
+    assert len(obs) == 1
+    # FMP (fmp_normalized) beats IR doc (llm_extracted) regardless of id order.
+    assert obs[0].value == pytest.approx(13.5)

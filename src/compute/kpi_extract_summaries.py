@@ -404,6 +404,7 @@ def _build_manifest(
         fiscal_period_type=fpt,
         source_doc_id=doc_id,
         primary_source=SourceType.LLM_EXTRACTED,
+        model_name=FAST_CLASSIFIER_MODEL,
         values=values,
     )
 
