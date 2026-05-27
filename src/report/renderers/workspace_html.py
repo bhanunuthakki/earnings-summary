@@ -18,11 +18,16 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import TypeAlias
 
+from llm.calibration import (
+    VersionSummary,
+    daily_avg_scores,
+    summarize_by_prompt_version,
+)
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -36,7 +41,6 @@ from report.models import (
     FailureMode,
     FilingIntelligenceSection,
     FinancialsSection,
-    InsiderSignalRowModel,
     IrDocsSection,
     KpiLedgerRow,
     MissingReason,
@@ -62,7 +66,6 @@ from report.models import (
     SnapshotSection,
     SoftRuleEvaluation,
     SurpriseScorecardCard,
-    SynthesisLensRow,
     SynthesisSection,
     ThesisSection,
     ValuationBasisSection,
@@ -484,7 +487,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "sources",
             "Sources",
             len(spec.appendix.transcripts) if spec.appendix else None,
-            lambda b: _sources_tab(b, spec.provenance, spec.appendix),
+            lambda b: _sources_tab(b, spec.provenance, spec.appendix, spec.repo_root),
         )
     )
     return tabs
@@ -3502,7 +3505,12 @@ def _position_stat(body: StringIO, label: str, value: str, *, tone: str = "") ->
 # ---------------------------------------------------------------------------
 
 
-def _sources_tab(body: StringIO, prov: ProvenanceSection, app: AppendixSection) -> None:
+def _sources_tab(
+    body: StringIO,
+    prov: ProvenanceSection,
+    app: AppendixSection,
+    repo_root: str,
+) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Provenance &amp; sources</div>')
@@ -3606,7 +3614,75 @@ def _sources_tab(body: StringIO, prov: ProvenanceSection, app: AppendixSection) 
             )
         body.write("</tbody></table></div></div>")
 
+    _prompt_quality_panel(body, Path(repo_root) / "data" / "portfolio.db")
     body.write("</div>")
+
+
+def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
+    """Surface the prompt_calibration_scores table — grouped by (purpose,
+    prompt_version) so the analyst can see whether each prompt version is
+    improving over time without spelunking the per-call ledger.
+
+    The graders (grade_bear_cases, grade_decisions) write the rows; this
+    panel is the consumer side. Best-effort: missing DB / empty table
+    degrades to a small "no data yet" stub rather than breaking the page.
+    """
+    window_days = 30
+    # Stored scored_at is naive UTC ISO; compare with a naive cutoff so the
+    # SQL string comparison is well-defined.
+    since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=window_days)
+    summaries: list[VersionSummary] = summarize_by_prompt_version(
+        db_path=db_path, since=since
+    )
+
+    body.write(
+        '<div class="panel"><div class="panel-head">'
+        '<span class="panel-title">Prompt quality</span>'
+        f'<span class="panel-sub">last {window_days} days · '
+        "grader-scored, grouped by prompt version</span></div>"
+    )
+
+    if not summaries:
+        body.write(
+            '<div class="muted" style="padding:8px 12px">'
+            "No calibration data yet — run "
+            "<code>python execution/grade_bear_cases.py</code> or "
+            "<code>python execution/grade_decisions.py</code> to populate."
+            "</div></div>"
+        )
+        return
+
+    daily = daily_avg_scores(db_path=db_path, since=since)
+    body.write(
+        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        "<th>Purpose</th><th>Version</th>"
+        '<th class="num">n</th>'
+        '<th class="num">avg</th>'
+        '<th class="num">p25</th>'
+        '<th class="num">p50</th>'
+        '<th class="num">p75</th>'
+        "<th>Last scored</th>"
+        "<th>30d trend</th>"
+        "</tr></thead><tbody>"
+    )
+    for s in summaries:
+        spark_vals = [v for _, v in daily.get((s.purpose, s.prompt_version), [])]
+        spark = sparkline(spark_vals, width=120, height=24) if spark_vals else "—"
+        last = (s.last_scored_at or "—")[:19].replace("T", " ")
+        body.write(
+            "<tr>"
+            f"<td>{_esc(s.purpose)}</td>"
+            f"<td>{_esc(s.prompt_version)}</td>"
+            f'<td class="num">{s.score_count}</td>'
+            f'<td class="num">{s.avg_score:.3f}</td>'
+            f'<td class="num">{s.p25:.3f}</td>'
+            f'<td class="num">{s.p50:.3f}</td>'
+            f'<td class="num">{s.p75:.3f}</td>'
+            f"<td>{_esc(last)}</td>"
+            f"<td>{spark}</td>"
+            "</tr>"
+        )
+    body.write("</tbody></table></div></div>")
 
 
 # ---------------------------------------------------------------------------
