@@ -1,24 +1,34 @@
 """
 src/llm/anchors.py
 ------------------
-Thesis & bear-case anchor block builders — shared context for analytical prompts.
+Anchor block builders — shared context for analytical prompts. Three flavors:
 
-Several prompts (per-quarter summary, pairwise SayDo, recent developments,
-SayDo filter, event brief) promise "thesis-anchored analysis" but currently
-have no thesis on hand. These helpers pull two small blocks of context that
-can be appended to those prompts so the LLM has the pillars / KPIs / break
-rules / non-consensus risks to anchor against. Both helpers are tolerant:
-missing files → empty string, so watchlist/evaluation tickers (no thesis,
-no cached bear case) still work and the prompt shape is unchanged.
+  - THESIS anchor:  analyst's own framing from `micro_thesis/holdings/<T>.json`
+                    (thesis statement, tier-1 KPIs, business-model break rules,
+                    statistical patterns over the canonical financial series).
+  - BEAR anchor:    analyst's prior bear review from `data/bear_case/<T>.json`
+                    (most-underweighted thesis risks + named failure modes).
+  - IR anchor:      company-provided IR-deck narrative from
+                    `data/ir_narrative/<T>/` — what management says about
+                    itself. Prefixed with a bias-framing header so the LLM
+                    treats it as company spin rather than ground truth.
+
+The three anchors compose into a single block via `compose_anchor_block`. The
+prompts that promise "thesis-anchored analysis" (per-quarter summary, pairwise
+SayDo, recent developments, SayDo filter, event brief, company description,
+bear case) now ground in all three.
+
+All loaders are tolerant: missing files → empty string, so watchlist /
+evaluation / recently-IPO'd tickers still build without anchor sections.
 
 Public API:
     load_thesis_anchor(repo_root, ticker) -> str
     load_bear_anchor(repo_root, ticker) -> str
-    compose_anchor_block(thesis_anchor, bear_anchor) -> str
-    ANCHOR_BLOCK_CHAR_CAP — hard cap on the assembled anchor blocks.
-
-Extracted from src/llm_client.py during the llm subpackage split (PURE
-refactor — zero behavior change).
+    load_ir_anchor(repo_root, ticker, char_cap=IR_ANCHOR_CHAR_CAP) -> str
+    compose_anchor_block(thesis_anchor, bear_anchor, ir_anchor="") -> str
+    ANCHOR_BLOCK_CHAR_CAP    — hard cap on thesis / bear blocks (3500).
+    IR_ANCHOR_CHAR_CAP        — hard cap on IR block (2000, deliberately
+                                downweighted vs analyst-authored anchors).
 """
 
 from __future__ import annotations
@@ -36,8 +46,37 @@ log = logging.getLogger(__name__)
 # (truncation at the section boundary), not a smart compressor.
 ANCHOR_BLOCK_CHAR_CAP = 3500
 
+# IR-narrative anchor is deliberately tighter (~2K vs 3.5K). The content is
+# company-biased framing, so we want it present in the context but downweighted
+# relative to the analyst's own thesis + bear blocks.
+IR_ANCHOR_CHAR_CAP = 2000
+
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
 _BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
+_IR_NARRATIVE_DIRNAME = ("data", "ir_narrative")
+
+# Loader walks these doctypes in priority order — the first one with cached
+# narrative for the ticker wins. Maps the user-facing taxonomy
+# (deck > investor day > fact sheet > ESG) onto the on-disk doctype names
+# emitted by `src/intake.py` and cached by `src/compute/ir_narrative.py`.
+_IR_DOCTYPE_PRIORITY: tuple[str, ...] = (
+    "ir_presentation",
+    "ir_event",
+    "ir_investor_update",
+)
+
+# Fixed disambiguation header — prepended to every IR-anchor return so each
+# consumer sees the same skepticism frame. Keep this prose tight; every char
+# counts against IR_ANCHOR_CHAR_CAP.
+_IR_BIAS_HEADER = """## IR ANCHOR (company-provided framing — USE WITH SKEPTICISM)
+
+The following is taken from investor-relations materials authored by management.
+It reflects how the company chooses to present itself — TAM claims tend to be
+top-of-market sized, strategic priorities are aspirational, competitive
+positioning is self-favorable, and risk language is softened. Use this to
+understand *what the company says* and *how they frame it*, not as ground
+truth. Form your own POV; cross-check claims against the 10-K, third-party
+data, and historical execution."""
 
 
 def _load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | None:
@@ -104,6 +143,7 @@ def _stats_block_from_series(series_label: str, series: list[object]) -> str | N
     """One-line markdown summary of a series: direction + slope + (inflection
     when present). Returns None when the series is too short to analyze."""
     from timeseries import detect_inflection, detect_trend
+
     if len(series) < 4:
         return None
     trend = detect_trend(cast("list[object]", series))
@@ -122,7 +162,10 @@ def _stats_block_from_series(series_label: str, series: list[object]) -> str | N
     # Add inflection callout when the series is long enough
     if len(series) >= 8:
         infl = detect_inflection(cast("list[object]", series))
-        if infl.get("inflection_period") and float(cast("float", infl.get("magnitude") or 0)) >= 1.0:
+        if (
+            infl.get("inflection_period")
+            and float(cast("float", infl.get("magnitude") or 0)) >= 1.0
+        ):
             line += f" · inflection {infl['inflection_period']} (delta={float(cast('float', infl['magnitude'])):.1f}sd)"
     return line
 
@@ -143,7 +186,14 @@ def _statistical_patterns_block(
         try:
             s = load_financial_series(ticker=ticker, line_item=line_item, repo_root=repo_root)
         except Exception as exc:  # never block anchor build
-            log.debug({"event": "stats_load_financial_failed", "ticker": ticker, "lineitem": line_item, "error": str(exc)})
+            log.debug(
+                {
+                    "event": "stats_load_financial_failed",
+                    "ticker": ticker,
+                    "lineitem": line_item,
+                    "error": str(exc),
+                }
+            )
             continue
         if not s:
             continue
@@ -174,7 +224,14 @@ def _statistical_patterns_block(
             try:
                 s_kpi = load_kpi_series(ticker=ticker, kpi_name=kpi_name, repo_root=repo_root)
             except Exception as exc:  # best-effort
-                log.debug({"event": "stats_load_kpi_failed", "ticker": ticker, "kpi": kpi_name, "error": str(exc)})
+                log.debug(
+                    {
+                        "event": "stats_load_kpi_failed",
+                        "ticker": ticker,
+                        "kpi": kpi_name,
+                        "error": str(exc),
+                    }
+                )
                 continue
             if not s_kpi:
                 continue
@@ -244,7 +301,9 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     try:
         stats_lines = _statistical_patterns_block(repo_root, ticker, payload)
     except Exception as exc:  # anchor must keep rendering
-        log.debug({"event": "statistical_patterns_block_failed", "ticker": ticker, "error": str(exc)})
+        log.debug(
+            {"event": "statistical_patterns_block_failed", "ticker": ticker, "error": str(exc)}
+        )
         stats_lines = []
     if stats_lines:
         parts.append("\n**Recent statistical patterns (last 8-16 quarters):**")
@@ -306,10 +365,86 @@ def load_bear_anchor(repo_root: Path, ticker: str) -> str:
     return assembled
 
 
-def compose_anchor_block(thesis_anchor: str, bear_anchor: str) -> str:
-    """Join thesis + bear anchors with a separator, omitting empties.
-    Returns "" when both are empty so the caller can conditionally insert."""
-    blocks = [b for b in (thesis_anchor, bear_anchor) if b.strip()]
+def load_ir_anchor(repo_root: Path, ticker: str, char_cap: int = IR_ANCHOR_CHAR_CAP) -> str:
+    """Compose an IR-narrative anchor for prompt injection.
+
+    Reads from `data/ir_narrative/<TICKER>/` (written by
+    `src/compute/ir_narrative.py`). Picks the most-recent narrative for the
+    ticker, walking doctypes in priority order:
+    ``ir_presentation > ir_event > ir_investor_update``. Within a doctype, the
+    lexicographically-largest filename wins — period strings are ISO dates
+    (YYYY-MM-DD), so lex order is also chronological order.
+
+    The output has the bias-framing header prepended so every consumer treats
+    the content as company spin rather than ground truth.
+
+    Returns "" when no cache exists for the ticker — recently-IPO'd names
+    typically rely on the S-1 anchor instead (see project-recently-ipod-anchor
+    memory). The S-1 path is intentionally separate so the IR loader stays
+    focused on a single source.
+    """
+    base = repo_root.joinpath(*_IR_NARRATIVE_DIRNAME) / ticker.upper()
+    if not base.is_dir():
+        return ""
+
+    by_doctype: dict[str, list[Path]] = {dt: [] for dt in _IR_DOCTYPE_PRIORITY}
+    try:
+        entries = list(base.iterdir())
+    except OSError:
+        return ""
+    for path in entries:
+        if not path.is_file() or path.suffix != ".txt":
+            continue
+        for doctype in _IR_DOCTYPE_PRIORITY:
+            if path.name.startswith(f"{doctype}__"):
+                by_doctype[doctype].append(path)
+                break
+
+    selected: Path | None = None
+    for doctype in _IR_DOCTYPE_PRIORITY:
+        candidates = by_doctype.get(doctype, [])
+        if not candidates:
+            continue
+        selected = sorted(candidates)[-1]
+        break
+
+    if selected is None:
+        return ""
+
+    try:
+        body = selected.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    if not body:
+        return ""
+
+    # Reserve room for the header + a one-line source tag so the LLM can cite
+    # which deck the framing came from. The minimum body budget (~200 chars)
+    # keeps the section meaningful even if the caller passes a tight cap.
+    tag_line = f"\n_Source: {selected.stem}_\n\n"
+    header_overhead = len(_IR_BIAS_HEADER) + len(tag_line) + 4  # newlines
+    body_budget = max(char_cap - header_overhead, 200)
+    if len(body) > body_budget:
+        body = body[:body_budget].rstrip() + "\n[...truncated]"
+
+    return f"{_IR_BIAS_HEADER}\n{tag_line}{body}"
+
+
+def compose_anchor_block(thesis_anchor: str, bear_anchor: str, ir_anchor: str = "") -> str:
+    """Join thesis + bear + IR anchors with separators, omitting empties.
+    Returns "" when all three are empty so the caller can conditionally insert.
+
+    `ir_anchor` is a keyword-defaulted positional arg so the legacy 2-arg call
+    sites that pre-date the IR layer keep working unchanged. New callers should
+    pass all three; the conventional builder pattern is
+
+        compose_anchor_block(
+            load_thesis_anchor(repo_root, ticker),
+            load_bear_anchor(repo_root, ticker),
+            load_ir_anchor(repo_root, ticker),
+        )
+    """
+    blocks = [b for b in (thesis_anchor, bear_anchor, ir_anchor) if b.strip()]
     if not blocks:
         return ""
     return "\n\n---\n\n".join(blocks) + "\n\n---\n\n"

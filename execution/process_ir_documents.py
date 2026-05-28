@@ -40,6 +40,7 @@ from llm_client import (
     generate_presentation_brief,
     generate_event_brief,
     load_bear_anchor,
+    load_ir_anchor,
     load_thesis_anchor,
 )
 from alias_manager import resolve_ticker
@@ -176,6 +177,7 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
             anchor_block = compose_anchor_block(
                 load_thesis_anchor(PROJECT_ROOT, doc["ticker"]),
                 load_bear_anchor(PROJECT_ROOT, doc["ticker"]),
+                load_ir_anchor(PROJECT_ROOT, doc["ticker"]),
             )
             result_text = config["llm_fn"](text, anchor_block=anchor_block)
         else:

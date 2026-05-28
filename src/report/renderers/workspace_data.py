@@ -32,6 +32,7 @@ from llm_client import (
     compose_anchor_block,
     generate_saydo_filter,
     load_bear_anchor,
+    load_ir_anchor,
     load_thesis_anchor,
 )
 from report.models import (
@@ -148,11 +149,12 @@ def filter_important_print_vs_guide(
         }
         for i, r in enumerate(rows)
     ]
-    # Anchor block must be in the cache key so a fresh thesis edit or new
-    # bear case invalidates stale filter decisions.
+    # Anchor block must be in the cache key so a fresh thesis edit, new bear
+    # case, or new IR-deck cache invalidates stale filter decisions.
     anchor_block = compose_anchor_block(
         load_thesis_anchor(repo_root, ticker),
         load_bear_anchor(repo_root, ticker),
+        load_ir_anchor(repo_root, ticker),
     )
     cache_key = _saydo_filter_cache_key(card, payload, anchor_block)
     cached = _load_saydo_filter_cache(repo_root, ticker, cache_key)

@@ -66,10 +66,16 @@ from llm.anchors import (
     ANCHOR_BLOCK_CHAR_CAP as ANCHOR_BLOCK_CHAR_CAP,
 )
 from llm.anchors import (
+    IR_ANCHOR_CHAR_CAP as IR_ANCHOR_CHAR_CAP,
+)
+from llm.anchors import (
     compose_anchor_block as compose_anchor_block,
 )
 from llm.anchors import (
     load_bear_anchor as load_bear_anchor,
+)
+from llm.anchors import (
+    load_ir_anchor as load_ir_anchor,
 )
 from llm.anchors import (
     load_thesis_anchor as load_thesis_anchor,
@@ -1211,6 +1217,21 @@ def _ticker_specific_block(md: str) -> str:
     return f"\nTICKER-SPECIFIC CONTEXT (per-ticker research enhancements):\n{md}\n"
 
 
+def _ir_anchor_prompt_block(md: str) -> str:
+    """Wrap the IR-narrative anchor (with its baked-in bias-framing header)
+    for inclusion in an analytical prompt.
+
+    The caller is expected to have already invoked ``load_ir_anchor`` — the
+    body already carries its own ``## IR ANCHOR (... USE WITH SKEPTICISM)``
+    heading. This wrapper only handles the prefix newline + empty-case guard
+    so the surrounding prompt template doesn't sprout a dangling blank line
+    when the ticker has no IR-deck cache.
+    """
+    if not md.strip():
+        return ""
+    return f"\n{md}\n"
+
+
 def _ts_signals_prompt_block(md: str) -> str:
     """Wrap a pre-formatted time-series signals markdown block for inclusion
     in an analytical prompt.
@@ -1237,6 +1258,7 @@ def generate_bear_case(
     kpi_status_md: str,
     ticker_specific_md: str = "",
     ts_signals_md: str = "",
+    ir_anchor_md: str = "",
     repo_root: Path | None = None,
 ) -> str:
     """
@@ -1340,7 +1362,15 @@ SEGMENT TRENDS (12Q):
 
 KPI STATUS:
 {kpi_status_md}
-{stats_block}{_ticker_specific_block(ticker_specific_md)}{_ts_signals_prompt_block(ts_signals_md)}
+{stats_block}{_ticker_specific_block(ticker_specific_md)}{_ts_signals_prompt_block(ts_signals_md)}{_ir_anchor_prompt_block(ir_anchor_md)}
+When the IR ANCHOR block is present above, use it to identify management's
+ON-RECORD framing of the business (the TAM, growth runway, strategic
+priorities, competitive positioning they choose to highlight). Failure
+modes are STRONGER when they explicitly engage with this framing — point
+out where management's positioning OVERSTATES, OMITS, or MISFRAMES a
+reality the data suggests. The bias-framing header in the IR ANCHOR is
+not decorative; treat the content with skepticism.
+
 ---
 
 Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
@@ -1487,14 +1517,23 @@ def generate_company_description(
     thesis_text: str = "",
     recent_earnings_md: str = "",
     recent_ir_md: str = "",
+    ir_anchor_md: str = "",
 ) -> str:
     """Synthesize the §2 Company description as an analyst-grade business writeup.
 
     Inputs go beyond the 10-K — the prompt is fed the user's own thesis
-    statement, the most recent earnings narrative(s), and recent IR document
-    summaries. The intent is to elicit a *thesis-anchored* take on the
-    business (what makes it interesting as an INVESTMENT, where the moat
-    actually is, what consensus underweights) rather than a 10-K paraphrase.
+    statement, the most recent earnings narrative(s), recent IR document
+    condensers (`recent_ir_md`), and the raw IR-deck narrative with
+    bias-framing (`ir_anchor_md`). The intent is to elicit a *thesis-anchored*
+    take on the business (what makes it interesting as an INVESTMENT, where
+    the moat actually is, what consensus underweights) rather than a 10-K
+    paraphrase — and to force the writeup to engage skeptically with
+    management's own positioning rather than parroting it.
+
+    `recent_ir_md` and `ir_anchor_md` are deliberately distinct: the former is
+    a factual condenser of recent IR events (what was disclosed); the latter
+    is raw slide-deck narrative carrying its own bias-framing header so the
+    LLM treats it as company spin, not ground truth.
 
     Returns a JSON string the caller parses. Schema:
       {
@@ -1528,6 +1567,11 @@ def generate_company_description(
         if recent_ir_md.strip()
         else ""
     )
+    # IR anchor carries its own ## IR ANCHOR (USE WITH SKEPTICISM) heading from
+    # load_ir_anchor; pass it through verbatim so the bias frame stays intact.
+    ir_anchor_block = (
+        f"{ir_anchor_md.strip()}\n" if ir_anchor_md.strip() else ""
+    )
     prompt = f"""You are writing the "Company" section of an analyst-grade
 investment memo on {ticker}. Voice: a senior buy-side analyst's working
 note. Not Wikipedia. Not a 10-K paraphrase.
@@ -1536,7 +1580,15 @@ ANCHOR YOUR WRITEUP ON THE ANALYST'S THESIS (below). Every paragraph
 should advance one of the thesis pillars (value driver, moat, pressure
 point, optionality) with specific numbers and named competitors.
 
-{thesis_block}{recent_earnings_block}{recent_ir_block}
+When the IR ANCHOR block is present below, treat it as COMPANY-PROVIDED
+FRAMING — material useful for understanding *how management positions the
+business* but NOT as ground truth. Cite specific framing where it's
+revealing ("the company describes its TAM as $X, which compares to..."),
+push back where the positioning diverges from what the 10-K, segment
+numbers, or competitive dynamics support, and form your own analytical
+POV rather than paraphrasing the deck.
+
+{thesis_block}{recent_earnings_block}{recent_ir_block}{ir_anchor_block}
 SEGMENTS this report displays (use these EXACT names):
 {segments_block}
 

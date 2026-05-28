@@ -21,6 +21,7 @@ from llm_client import (
     compose_anchor_block,
     generate_recent_developments,
     load_bear_anchor,
+    load_ir_anchor,
     load_thesis_anchor,
 )
 from report.models import (
@@ -69,6 +70,7 @@ def build(
     anchor_block = compose_anchor_block(
         load_thesis_anchor(repo_root, ticker),
         load_bear_anchor(repo_root, ticker),
+        load_ir_anchor(repo_root, ticker),
     )
     content_md = generate_recent_developments(
         ticker, news_days=news_days, anchor_block=anchor_block
