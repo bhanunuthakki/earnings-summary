@@ -65,12 +65,16 @@ def refresh_historicals(
     ticker: str | None = None,
     *,
     base_year: int | None = None,
+    db_path: Path | None = None,
 ) -> RefreshResult:
     """Refresh Historicals + recompute Forecast.PROJECTED + Valuation.
 
     `ticker` defaults to the workbook's filename stem. `base_year` defaults
     to the current calendar year — forecast years run from `base_year + 1`
     through `base_year + inputs.forecast_years`.
+
+    `db_path` enables the financial_facts fallback when refreshing Historicals
+    for a ticker with no FMP quarterly files (see `seeder.write_historicals_sheet`).
 
     The function name is kept for backward compatibility with PR #142 — it
     now does more than just Historicals.
@@ -97,7 +101,7 @@ def refresh_historicals(
     # stays single-sourced.
     try:
         cells = write_historicals_sheet(
-            workbook_path, fmp_quarterly_dir, resolved_ticker
+            workbook_path, fmp_quarterly_dir, resolved_ticker, db_path=db_path
         )
     except SeederError as e:
         raise RefresherError(str(e)) from e

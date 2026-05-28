@@ -131,40 +131,22 @@ def _refresh_one(
     ticker: str, repo_root: Path, db_path: Path, args: argparse.Namespace
 ) -> dict[str, object]:
     """Run the full refresh chain for one ticker. Returns a structured result."""
+    from typing import cast
+
     holdings = _load_holdings(repo_root, ticker)
     if holdings is None:
         return {"ticker": ticker, "status": "skipped", "reason": "no holdings JSON"}
 
-    wacc = holdings.get("wacc")
-    if not isinstance(wacc, (int, float)):
-        return {
-            "ticker": ticker,
-            "status": "skipped",
-            "reason": "wacc not populated in holdings JSON",
-        }
-    from typing import cast
-
-    dcf_defaults_raw = holdings.get("dcf_defaults")
-    dcf_defaults: dict[str, object] = {}
-    if isinstance(dcf_defaults_raw, dict):
-        dcf_defaults = cast("dict[str, object]", dcf_defaults_raw)
-    terminal_multiple = dcf_defaults.get("terminal_multiple")
-    if not isinstance(terminal_multiple, (int, float)):
-        return {
-            "ticker": ticker,
-            "status": "skipped",
-            "reason": "dcf_defaults.terminal_multiple not populated",
-        }
-    mos_bar = holdings.get("mos_bar")
-    mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
-
     workbook_path = _resolve_workbook(repo_root, ticker, args.workbook)
     fmp_dir = repo_root / FMP_QUARTERLY_DIR
 
-    # Seed-or-refresh. Missing workbook → seed (derives Forecast INPUTS from
-    # the ticker's TTM history). Existing workbook → refresh (preserves the
-    # user's Forecast INPUTS edits, recomputes PROJECTED + Valuation from
-    # them, refreshes Historicals from FMP).
+    # Seed-or-refresh BEFORE the WACC / terminal-multiple gates, so an un-WACC'd
+    # ticker still gets a workbook for the user to author a WACC against. For a
+    # recently-IPO'd, S-1-anchored name with no FMP quarterly files, Historicals
+    # are seeded from financial_facts (db_path enables that fallback).
+    # Missing workbook → seed (derives Forecast INPUTS from the ticker's TTM
+    # history). Existing workbook → refresh (preserves the user's Forecast INPUTS
+    # edits, recomputes PROJECTED + Valuation from them, refreshes Historicals).
     seed_refresh: dict[str, object] = {}
     try:
         if workbook_path is None:
@@ -174,6 +156,7 @@ def _refresh_one(
                 fmp_quarterly_dir=fmp_dir,
                 output_path=new_path,
                 base_year=args.valuation_year,
+                db_path=db_path,
             )
             workbook_path = new_path
             seed_refresh = {"workbook": "seeded"}
@@ -184,6 +167,7 @@ def _refresh_one(
                     fmp_dir,
                     ticker=ticker,
                     base_year=args.valuation_year,
+                    db_path=db_path,
                 )
                 seed_refresh = {
                     "workbook": "refreshed",
@@ -204,6 +188,34 @@ def _refresh_one(
             "reason": f"seed: {e}",
             "workbook": str(workbook_path) if workbook_path else None,
         }
+
+    # WACC gate — after seeding. The workbook now exists; the user authors WACC
+    # into the holdings JSON next, then re-runs to get a valuation.
+    wacc = holdings.get("wacc")
+    if not isinstance(wacc, (int, float)):
+        return {
+            "ticker": ticker,
+            "status": "skipped",
+            "reason": "wacc not populated in holdings JSON",
+            "workbook_path": str(workbook_path),
+            **seed_refresh,
+        }
+
+    dcf_defaults_raw = holdings.get("dcf_defaults")
+    dcf_defaults: dict[str, object] = {}
+    if isinstance(dcf_defaults_raw, dict):
+        dcf_defaults = cast("dict[str, object]", dcf_defaults_raw)
+    terminal_multiple = dcf_defaults.get("terminal_multiple")
+    if not isinstance(terminal_multiple, (int, float)):
+        return {
+            "ticker": ticker,
+            "status": "skipped",
+            "reason": "dcf_defaults.terminal_multiple not populated",
+            "workbook_path": str(workbook_path),
+            **seed_refresh,
+        }
+    mos_bar = holdings.get("mos_bar")
+    mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 
     try:
         snapshot = workbook_reader.read_valuation(workbook_path, args.valuation_year)
