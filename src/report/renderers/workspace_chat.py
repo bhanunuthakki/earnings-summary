@@ -20,32 +20,11 @@ JS = r"""
     var TICKER = boot.ticker;
     var REPORT_DATE = boot.report_date;
 
-    // ----- DOM scaffold -----
-    var drawer = document.createElement('aside');
-    drawer.className = 'chat-drawer';
-    drawer.innerHTML = ''
-      + '<button class="chat-toggle" type="button" aria-label="Open chat">'
-      + '  <span class="chat-toggle-icon">⌘</span><span class="chat-toggle-label">Chat</span>'
-      + '</button>'
-      + '<div class="chat-panel" aria-hidden="true">'
-      + '  <header class="chat-head">'
-      + '    <div>'
-      + '      <div class="chat-title">Ask Claude about ' + TICKER + '</div>'
-      + '      <div class="chat-sub">' + REPORT_DATE + ' · streams from comments_server</div>'
-      + '    </div>'
-      + '    <button class="chat-close" type="button" aria-label="close">×</button>'
-      + '  </header>'
-      + '  <div class="chat-thread" id="chat-thread"></div>'
-      + '  <form class="chat-form" id="chat-form">'
-      + '    <textarea name="message" placeholder="Ask about a KPI, propose an edit, look up a quote in the transcript…" rows="3" required></textarea>'
-      + '    <div class="chat-form-row">'
-      + '      <span class="chat-hint" id="chat-hint">Cmd+Enter to send</span>'
-      + '      <button type="submit">Send</button>'
-      + '    </div>'
-      + '  </form>'
-      + '</div>';
-    document.body.appendChild(drawer);
-
+    // Drawer shell is emitted statically by the Python template — see
+    // _chat_drawer_shell in workspace_html.py. Keeps the body's flex
+    // layout (.l1-root | .cmt-sidebar) explicit in markup.
+    var drawer = document.getElementById('chat-drawer');
+    if (!drawer) return;
     var toggle = drawer.querySelector('.chat-toggle');
     var panel = drawer.querySelector('.chat-panel');
     var threadEl = drawer.querySelector('#chat-thread');

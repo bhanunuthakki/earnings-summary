@@ -76,59 +76,35 @@ JS = r"""
   }
 
   // ---------------------------------------------------------------
-  // Sidebar — opens when a pin is clicked, lists comments for that
-  // anchor + a "new comment" form.
+  // Sidebar — static shell rendered by the Python template. Opens
+  // when a pin / mark / floater-button is activated; lists comments
+  // for that anchor + a "new comment" form. Dismiss via the × button
+  // or Escape — no outside-click listener (it raced with mousedown-
+  // triggered opens from the selection floater and closed the
+  // sidebar on the same gesture that opened it).
   // ---------------------------------------------------------------
-  var sidebar = null;
+  var sidebar = document.getElementById('cmt-sidebar');
   var currentAnchor = null;
-
-  function ensureSidebar() {
-    if (sidebar) return sidebar;
-    sidebar = document.createElement('aside');
-    sidebar.className = 'cmt-sidebar';
-    sidebar.setAttribute('aria-hidden', 'true');
-    sidebar.innerHTML = ''
-      + '<header class="cmt-sidebar-head">'
-      + '  <div>'
-      + '    <div class="cmt-sidebar-title">Comments</div>'
-      + '    <div class="cmt-sidebar-sub" id="cmt-anchor-label"></div>'
-      + '  </div>'
-      + '  <button class="cmt-close" type="button" aria-label="close">×</button>'
-      + '</header>'
-      + '<div class="cmt-list" id="cmt-list"></div>'
-      + '<form class="cmt-form" id="cmt-form">'
-      + '  <textarea name="comment" placeholder="Write a comment… (tip: prefix with /kpi /thesis /q /ask /fix /update /rewrite to skip auto-classify)" rows="3" required></textarea>'
-      + '  <div class="cmt-form-row">'
-      + '    <select name="intent" title="What should the processor do?">'
-      + '      <option value="">Auto-classify</option>'
-      + '      <option value="drop_kpi">Drop this KPI</option>'
-      + '      <option value="edit_thesis">Edit thesis</option>'
-      + '      <option value="ask_question">Ask question</option>'
-      + '      <option value="fix_data">Flag data issue</option>'
-      + '      <option value="rewrite_section">Rewrite this section</option>'
-      + '    </select>'
-      + '    <button type="submit">Post</button>'
-      + '  </div>'
-      + '  <div class="cmt-form-hint" id="cmt-form-hint"></div>'
-      + '</form>';
-    document.body.appendChild(sidebar);
+  if (sidebar) {
     sidebar.querySelector('.cmt-close').addEventListener('click', closeSidebar);
     sidebar.querySelector('#cmt-form').addEventListener('submit', onSubmit);
-    return sidebar;
   }
 
-  function openSidebar(type, key, anchorNode) {
-    ensureSidebar();
-    currentAnchor = {type: type, key: key, tab: anchorNode.getAttribute('data-anchor-tab')};
+  // Single entry point — pins call with a humanAnchor label, floater /
+  // marks supply their own free-text label.
+  function openWithAnchor(anchor, label) {
+    if (!sidebar) return;
+    currentAnchor = anchor;
     sidebar.setAttribute('aria-hidden', 'false');
     sidebar.classList.add('open');
     document.documentElement.style.setProperty('--sidebar-open-width', '380px');
-    document.getElementById('cmt-anchor-label').textContent = humanAnchor(currentAnchor);
+    document.getElementById('cmt-anchor-label').textContent = label;
     renderList();
-    // Defer so this open-click doesn't immediately re-close via the listener.
-    setTimeout(function() {
-      document.addEventListener('click', _onDocClick, true);
-    }, 0);
+  }
+
+  function openSidebar(type, key, anchorNode) {
+    var anchor = {type: type, key: key, tab: anchorNode.getAttribute('data-anchor-tab')};
+    openWithAnchor(anchor, humanAnchor(anchor));
   }
 
   function closeSidebar() {
@@ -137,12 +113,6 @@ JS = r"""
     sidebar.classList.remove('open');
     document.documentElement.style.removeProperty('--sidebar-open-width');
     currentAnchor = null;
-    document.removeEventListener('click', _onDocClick, true);
-  }
-
-  function _onDocClick(ev) {
-    if (!sidebar || !sidebar.classList.contains('open')) return;
-    if (!sidebar.contains(ev.target)) closeSidebar();
   }
 
   function humanAnchor(a) {
@@ -358,20 +328,11 @@ JS = r"""
   }
 
   function openSidebarForAnchor(anchor) {
-    ensureSidebar();
-    currentAnchor = anchor;
-    sidebar.setAttribute('aria-hidden', 'false');
-    sidebar.classList.add('open');
-    document.documentElement.style.setProperty('--sidebar-open-width', '380px');
     var label = anchor.type === 'free_text'
       ? ((anchor.parent_landmark || 'document') + ' · "' +
          anchor.key.substring(0, 60) + (anchor.key.length > 60 ? '…' : '') + '"')
       : humanAnchor(anchor);
-    document.getElementById('cmt-anchor-label').textContent = label;
-    renderList();
-    setTimeout(function() {
-      document.addEventListener('click', _onDocClick, true);
-    }, 0);
+    openWithAnchor(anchor, label);
   }
 
   function renderFreeTextHighlights() {
