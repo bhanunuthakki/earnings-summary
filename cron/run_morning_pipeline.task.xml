@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Daily 04:00 — fan registered Personal CIO triggers across the user's portfolio. Persists fresh alerts + drafted actions; cost-capped at $10 per run.</Description>
-    <URI>\earnings-summary\run_triggers</URI>
+    <Description>Daily 04:00 — Personal CIO morning pipeline. Chains run_triggers (fire + persist alerts, cost-capped $10) -> build_morning_digest -> build_alert_feed in one run so the morning digest/feed HTML is fresh, not stale. Never aborts early: a trigger failure still rebuilds the read-only digest + feed. Supersedes the standalone run_triggers cron (PR #172).</Description>
+    <URI>\earnings-summary\run_morning_pipeline</URI>
   </RegistrationInfo>
   <Triggers>
     <CalendarTrigger>
@@ -44,7 +44,7 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_triggers.bat</Command>
+      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_morning_pipeline.bat</Command>
     </Exec>
   </Actions>
 </Task>
