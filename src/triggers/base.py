@@ -29,6 +29,7 @@ exist yet, which is why this module deliberately speaks only in
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -199,6 +200,28 @@ class Trigger(Protocol):
         candidate: TriggerCandidate,
         user_state: UserStateContext,
     ) -> bool: ...
+
+    def signature_key_evidence(
+        self, candidate: TriggerCandidate
+    ) -> Mapping[str, object]:
+        """Return the subset of ``candidate.evidence`` that keys the
+        re-fire dedup hash.
+
+        The morning driver computes ``compute_signature_sha(kind, ticker,
+        signature_key_evidence(candidate))`` BEFORE running ``build_alert``
+        so it can short-circuit when a prior alert with the same signature
+        already exists — saving the LLM call on duplicates. The value
+        returned here MUST match the key_evidence the sensor's own
+        ``build_alert`` will pass to ``compute_signature_sha`` when it
+        constructs the AlertDraft; otherwise the driver's dedup index
+        and the persisted ``alerts.signature_sha`` will diverge.
+
+        Convention: each sensor picks the *smallest* subset of evidence
+        that uniquely identifies a firing event — e.g. ``earnings_tone``
+        keys on ``{"transcript_id": <id>}`` alone, ignoring fiscal-period
+        labels that derive from the same transcript.
+        """
+        ...
 
     def build_alert(
         self,

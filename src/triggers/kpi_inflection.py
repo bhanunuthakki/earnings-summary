@@ -12,6 +12,7 @@ in a follow-on PR.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Mapping
 from typing import ClassVar
 
 from triggers.base import (
@@ -43,6 +44,16 @@ class KpiInflectionTrigger:
     ) -> bool:
         _ = candidate, user_state
         return False
+
+    def signature_key_evidence(
+        self, candidate: TriggerCandidate
+    ) -> Mapping[str, object]:
+        """Placeholder: the real implementation will key on
+        ``(kpi_name, inflection_period)``. Until scan returns real
+        candidates this branch is unreachable; returning the full
+        ``candidate.evidence`` is a safe stub that still produces a
+        deterministic hash if a test ever exercises it."""
+        return dict(candidate.evidence)
 
     def build_alert(
         self,
