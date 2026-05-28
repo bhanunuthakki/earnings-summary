@@ -8,6 +8,8 @@ Prior 4 periods: {{ prior_periods | join(', ') }}
 # Thesis anchor (what to weight)
 {{ thesis_anchor_block }}
 
+{{ number_formatting_block }}
+
 # Current transcript (this quarter)
 ## Prepared remarks
 {{ current_prepared_remarks }}

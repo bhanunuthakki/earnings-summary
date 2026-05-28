@@ -50,6 +50,7 @@ import jinja2
 
 from alerts.store import compute_signature_sha
 from llm.anchors import load_thesis_anchor
+from llm.style import NUMBER_FORMATTING_BLOCK
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -379,6 +380,7 @@ def _render_prompt(
         fiscal_period=fiscal_period,
         prior_periods=prior_periods,
         thesis_anchor_block=thesis_anchor_block or "(no thesis anchor on file)",
+        number_formatting_block=NUMBER_FORMATTING_BLOCK,
         current_prepared_remarks=current_prepared_remarks,
         current_qa=current_qa,
         prior_transcripts=prior_transcripts,
