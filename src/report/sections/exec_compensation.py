@@ -405,6 +405,11 @@ def _alignment_prompt(
     insider_signals: list[InsiderSignalRowModel],
     thesis_kpis: list[str],
 ) -> str:
+    # Late import to match the lazy-load pattern of _generate_alignment_narrative —
+    # this module is loaded with src/ on sys.path but the explicit late binding
+    # keeps any future src-path reordering from breaking import.
+    from llm.style import NUMBER_FORMATTING_BLOCK  # type: ignore[import-not-found]
+
     pkg_lines: list[str] = []
     for r in rows:
         pkg_lines.append(
@@ -456,6 +461,8 @@ NO restating the data verbatim. NO bullet-padded vague observations. Take a
 position; cite the specific number that drives it. Use the prose voice of a
 senior buy-side analyst writing to themselves: opinion-bearing, terse,
 non-consensus where the data supports it.
+
+{NUMBER_FORMATTING_BLOCK}
 
 Return ONLY the memo markdown — no preamble, no JSON wrapper."""
 

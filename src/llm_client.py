@@ -128,6 +128,9 @@ from llm.ledger import (
 from llm.ledger import (
     record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
+from llm.style import (
+    NUMBER_FORMATTING_BLOCK as NUMBER_FORMATTING_BLOCK,
+)
 
 # Load .env at module init so GEMINI_API_KEY is available without callers having
 # to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
@@ -209,6 +212,7 @@ def _build_pairwise_analysis_prompt(
     - The Attribution call (Execution vs. Exogenous) is a judgment, so it MUST go through the adversarial loop below — no shortcut to a verdict.
     - **Bullet ordering:** Within EVERY section that has bullets (Say, Do, Gap Analysis), order bullets by THESIS IMPACT — most thesis-relevant first, immaterial line items (FX, share count, depreciation timing, tax rate) last. Bullets tied to a TIER-1 KPI from the THESIS ANCHOR (when provided) rank above all others, regardless of magnitude. If you would include a bullet that isn't thesis-relevant AT ALL, drop it instead of relegating it to the bottom.
 
+    {NUMBER_FORMATTING_BLOCK}
     {anchor_block}**Input Data:**
     1.  **Previous Quarter ({prev_q_str}) Summary:**
         {prev_summary["text"]}
@@ -313,6 +317,8 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
       something (management dodge, surprising disclosure, contentious
       pushback)
 
+    {NUMBER_FORMATTING_BLOCK}
+
     OUTPUT FORMAT (markdown, no front-matter, no title page):
 
     Open with a 1-paragraph **analytical takeaway** (NOT a recap): what is
@@ -385,11 +391,13 @@ def generate_press_release_summary(text: str, ticker: str | None = None) -> str:
     Generates a structured summary from an earnings press release.
     Press releases are financial-forward — emphasize the numbers table and guidance.
     """
-    prompt = """
+    prompt = f"""
 You are an expert financial analyst. Summarize the following earnings press release.
 This is sourced from the company's IR website, so it is the official financial release — be precise.
 
 **STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
+
+{NUMBER_FORMATTING_BLOCK}
 
 **Output Format (Strict Markdown):**
 
@@ -431,11 +439,13 @@ def generate_presentation_brief(text: str, ticker: str | None = None) -> str:
     Generates a strategic brief from an earnings presentation slide deck.
     Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
     """
-    prompt = """
+    prompt = f"""
 You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
 Extract the key strategic narrative — what story is management telling investors?
 
 **STRICT CONSTRAINT:** Do not provide conversational filler. Start your response immediately with the Report Title.
+
+{NUMBER_FORMATTING_BLOCK}
 
 **Output Format (Strict Markdown):**
 
@@ -623,6 +633,7 @@ def _build_pass_a_prompt(
 {staleness_directive}
 
 {_HARD_RULES_BLOCK}
+{NUMBER_FORMATTING_BLOCK}
 {_PRINCIPLES_BLOCK}
 **Output Format (Strict Markdown — start directly at `## Schema Hygiene`, no preamble, no title):**
 
@@ -691,6 +702,7 @@ def _build_pass_b_prompt(
 {staleness_directive}
 
 {_HARD_RULES_BLOCK}
+{NUMBER_FORMATTING_BLOCK}
 {_PRINCIPLES_BLOCK}
 {_ADVERSARIAL_LOOP_FORMAT_BLOCK}
 **Output Format (Strict Markdown — start directly at `## Thesis Status:`, no preamble, no title):**
@@ -902,7 +914,7 @@ def generate_strategic_analysis(summaries_list, ticker: str | None = None):
     for item in summaries_list:
         context_str += f"\n--- {item['quarter']} {item['year']} SUMMARY ---\n{item['text']}\n"
 
-    prompt = """
+    prompt = f"""
     You are a Strategic Management Consultant for this company.
 
     **Goal:** Analyze the provided chronological earnings summaries to track the "Say-Do" ratio of management.
@@ -912,6 +924,8 @@ def generate_strategic_analysis(summaries_list, ticker: str | None = None):
     - The summaries below are the source of truth. Every number, date, and quote must be traceable to them. Use `[not disclosed]` if a figure is absent — do not invent or back-fill from prior knowledge.
     - Quotes belong in quotation marks with a source tag like `[Source: Q3 2025 prepared remarks]`.
     - Each per-pair Verdict (Hit / Mixed / Miss) MUST go through the adversarial loop on attribution. The Executive Outlook Assessment at the top MUST be a synthesis of the per-pair loops, not an asserted opinion.
+
+    {NUMBER_FORMATTING_BLOCK}
 
     **Input:** A sequence of earnings call summaries.
 
@@ -1049,6 +1063,8 @@ they materially shape the multi-year framework.
 
 {anchor_block}**STRICT CONSTRAINT:** Start immediately with the title. No conversational filler.
 
+{NUMBER_FORMATTING_BLOCK}
+
 **Output Format (Strict Markdown):**
 
 # Event Brief: [Ticker] [Event Name] [Date]
@@ -1158,6 +1174,8 @@ RANKING + filtering rules:
 - Skip items that are purely stock-price commentary, sell-side rating
   changes without a new data point, or pure recapitulation of prior news.
 - Skip ANY item that's older than {news_days} days. Don't pad.
+
+{NUMBER_FORMATTING_BLOCK}
 
 **Output Format (Strict Markdown):**
 
@@ -1302,6 +1320,8 @@ BAR + framing rules:
 - Grounded ONLY in the data below. Don't fabricate. If a real risk is
   real but not derivable from these inputs, put it under
   `out_of_scope_flags` with a 1-line explanation of why it's parked.
+
+{NUMBER_FORMATTING_BLOCK}
 
 THESIS:
 {thesis}
@@ -1839,6 +1859,8 @@ Selection guidance:
 - FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.
 - If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.
 - Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.
+
+{NUMBER_FORMATTING_BLOCK}
 
 Return ONLY a JSON object (no markdown fence, no prose):
 

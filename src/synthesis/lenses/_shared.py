@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Callable, cast
 
+from llm.style import compose_brief_prompt, style_block_cache_token
 from llm_artifact_store import (
     Artifact,
     UpsertRequest,
@@ -94,6 +95,11 @@ def run_lens(
         )
         return None
 
+    # Include the style-block hash in cache_inputs so editing the global
+    # NUMBER_FORMATTING_BLOCK auto-invalidates every cached lens artifact
+    # on the next run — no per-lens prompt_version bump required.
+    effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
+
     # Cache hit check — bypass on force=True
     if not force:
         existing = read_current(
@@ -104,7 +110,7 @@ def run_lens(
         )
         if existing is not None and not existing.dirty:
             new_sha = compute_input_sha256(
-                prompt_version="v1", cache_inputs=ctx.cache_inputs
+                prompt_version="v1", cache_inputs=effective_cache_inputs
             )
             if new_sha == existing.input_sha256:
                 log.info({"event": "lens_cache_hit", "lens": lens.name, "ticker": ticker, "artifact_id": existing.id})
@@ -120,7 +126,7 @@ def run_lens(
 
     try:
         content = call_llm(
-            prompt,
+            compose_brief_prompt(prompt),
             purpose=purpose,
             ticker=ctx.ticker,
             scope=lens.scope,
@@ -138,7 +144,7 @@ def run_lens(
             purpose=purpose,
             scope=lens.scope,
             content_md=content,
-            cache_inputs=ctx.cache_inputs,
+            cache_inputs=effective_cache_inputs,
             model=lens.model,
             source_doc_ids=ctx.source_doc_ids,
             parent_artifact_ids=ctx.parent_artifact_ids,

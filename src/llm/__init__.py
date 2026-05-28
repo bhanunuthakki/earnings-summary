@@ -47,6 +47,11 @@ from llm.ledger import (
     fallback_call_logged,
     record_llm_call,
 )
+from llm.style import (
+    NUMBER_FORMATTING_BLOCK,
+    compose_brief_prompt,
+    style_block_cache_token,
+)
 
 __all__ = [
     "ANCHOR_BLOCK_CHAR_CAP",
@@ -58,13 +63,16 @@ __all__ = [
     "GEMINI_FALLBACK_MODEL",
     "LLMBudgetExceeded",
     "LLM_MODELS",
+    "NUMBER_FORMATTING_BLOCK",
     "call_llm",
     "call_llm_with_web",
     "compose_anchor_block",
+    "compose_brief_prompt",
     "fallback_call_logged",
     "is_fallback_disabled",
     "load_bear_anchor",
     "load_thesis_anchor",
     "record_llm_call",
+    "style_block_cache_token",
     "try_gemini_fallback",
 ]

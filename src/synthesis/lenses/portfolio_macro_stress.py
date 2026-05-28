@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from llm.style import compose_brief_prompt, style_block_cache_token
 from llm_artifact_store import (
     Artifact,
     UpsertRequest,
@@ -190,12 +191,13 @@ def run_portfolio_macro_stress_lens(
     if ctx is None:
         log.debug({"event": "portfolio_macro_stress_context_empty", "scenario": scenario_id})
         return None
+    effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
     if not force:
         existing = read_current(
             ticker=None, purpose=purpose, scope="portfolio", db_path=db_path
         )
         if existing is not None and not existing.dirty:
-            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=ctx.cache_inputs)
+            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
             if new_sha == existing.input_sha256:
                 log.info(
                     {"event": "portfolio_macro_stress_cache_hit", "scenario": scenario_id}
@@ -208,7 +210,7 @@ def run_portfolio_macro_stress_lens(
         return None
     try:
         content = call_llm(
-            prompt, purpose=purpose, ticker=None, scope="portfolio", model=model
+            compose_brief_prompt(prompt), purpose=purpose, ticker=None, scope="portfolio", model=model
         )
     except Exception as exc:  # noqa: BLE001
         log.warning({"event": "portfolio_macro_stress_llm_failed", "error": str(exc)})
@@ -219,7 +221,7 @@ def run_portfolio_macro_stress_lens(
             purpose=purpose,
             scope="portfolio",
             content_md=content,
-            cache_inputs=ctx.cache_inputs,
+            cache_inputs=effective_cache_inputs,
             model=model,
             source_doc_ids=ctx.source_doc_ids,
             parent_artifact_ids=ctx.parent_artifact_ids,
