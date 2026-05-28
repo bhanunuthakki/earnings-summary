@@ -63,6 +63,7 @@ from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     index_fmp_files_for_ticker,
     set_fiscal_year_end_from_fmp,
+    set_instrument_type_from_fmp,
 )
 from pipeline.quarterly_refresh import (  # noqa: E402
     StageStatus as RefreshStageStatus,
@@ -464,6 +465,13 @@ def main() -> int:
         print(f"[onboard] {ticker} stage=set_fiscal_year_end", flush=True)
         fye = set_fiscal_year_end_from_fmp(conn, ticker, PROJECT_ROOT)
         print(f"[onboard] {ticker} fiscal_year_end={fye!s}", flush=True)
+
+        # Classify instrument_type from the FMP profile (only when NULL) so
+        # direct/raw-SQL onboards don't sit at NULL forever and trip the
+        # 'no_instrument_type' pending reason. See set_instrument_type_from_fmp.
+        print(f"[onboard] {ticker} stage=set_instrument_type", flush=True)
+        instrument = set_instrument_type_from_fmp(conn, ticker, PROJECT_ROOT)
+        print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
         run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])

@@ -32,7 +32,7 @@ AND ANY of:
 
 | Reason code | Signal | Meaning |
 |---|---|---|
-| `no_instrument_type` | `instrument_type IS NULL` | `track_company` would have set this; missing → bypassed the hook |
+| `no_instrument_type` | `instrument_type IS NULL` | `onboard_ticker` classifies this from the FMP profile (`set_instrument_type_from_fmp`); NULL means the onboard chain never ran for this ticker |
 | `no_financial_facts` | 0 `financial_facts` rows | parse stage never ran |
 | `no_dcf_run` | 0 `dcf_runs` rows | analysis stage never ran |
 | `no_commitments` | has ≥1 `transcripts` row but 0 `management_commitments` | LLM extractor never ran for this ticker's transcripts |
@@ -98,6 +98,35 @@ fetches ~30 endpoints per ticker, so the script can comfortably onboard ~25
 fresh tickers per hour without hitting the daily cap. The hourly cron
 self-paces by definition — it walks pending tickers serially and exits when
 done.
+
+## Recently-IPO'd backoff (daily cadence)
+
+A ticker flagged `recently_ipod: true` in `micro_thesis/holdings/<T>.json` has
+almost no FMP coverage until its first 10-Q is ingested — often months after
+IPO. The pending SQL flags it `no_financial_facts` every run, so left unguarded
+the hourly cron would re-run the full ~60-endpoint onboard for it hourly,
+burning ~720 FMP calls/day against the 750/day cap for a ticker that has no new
+data to fetch.
+
+`apply_ipo_backoff` (in `onboard_pending_tickers.py`) defers such tickers to a
+**daily** cadence instead of skipping them:
+
+- A recently-IPO'd ticker with a heavy-chain reason is deferred only if its most
+  recent FMP fetch (`MAX(fmp_endpoint_status.last_pulled)`) was **< 24 h** ago.
+- A ticker that was **never** fetched (no `fmp_endpoint_status` rows) is NOT
+  deferred — its first onboard always runs.
+- Once FMP ingests the company's first filings, the next daily re-check onboards
+  it normally. The cadence is lowered, never eliminated.
+- Non-IPO tickers and the `no_commitments` reason (cheap, FMP-free) are never
+  deferred — the rest of the universe keeps its hourly cadence.
+
+Deferred tickers are surfaced under the report's `deferred` array (also in
+`--dry-run` output) so they're visible, not silently dropped.
+
+This pairs with the `save_fmp_data` fix that records an accessible-but-empty
+`/stable` endpoint (HTTP 200 + `[]`) as `empty` rather than `forbidden` — the
+two together make "has FMP started covering this IPO yet?" answerable from
+`fmp_endpoint_status`.
 
 ## Failure-mode policy
 

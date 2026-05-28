@@ -33,6 +33,21 @@ Idempotent at every layer:
   - extract_commitments --auto skips transcripts that already have at least
     one commitments row
 
+Recently-IPO'd backoff (apply_ipo_backoff):
+  A ticker flagged `recently_ipod: true` in micro_thesis/holdings/<T>.json has
+  almost no FMP coverage until its first 10-Q is ingested (often months post
+  IPO), so the pending SQL would flag it `no_financial_facts` every hour and
+  re-run the full ~60-endpoint onboard — ~720 FMP calls/day against the 750/day
+  cap. We DEFER such tickers to a daily cadence (keyed off the most recent
+  fmp_endpoint_status.last_pulled) rather than skipping them: the first onboard
+  still runs (no prior fetch row), and once FMP has data the next daily
+  re-check onboards it. This is the chosen fix among the three options weighed
+  (vs. a save_fmp_data skip-window or hard skip) because it kills both the
+  hourly subprocess churn AND the FMP-call waste in one place while preserving
+  "auto-onboard the moment data arrives". The Issue-3 fix (recording accessible-
+  but-empty endpoints as `empty` not `forbidden`) is the complementary signal
+  that makes "is this IPO covered yet?" answerable.
+
 Designed to be invoked hourly by Windows Task Scheduler. See:
   - directives/onboard_pending_tickers.md
   - cron/onboard_pending_tickers.task.xml
@@ -50,12 +65,14 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -68,6 +85,7 @@ from pipeline.cadence_policy import (  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
+_HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _LOG_DIR = PROJECT_ROOT / ".tmp" / "cron_logs"
 
 # When pending_reason is 'no_commitments', only the commitment-extract stage
@@ -138,6 +156,97 @@ def find_pending_tickers(db_path: Path) -> list[tuple[str, str]]:
     try:
         cur = conn.execute(_PENDING_SQL)
         return [(row["ticker"], row["pending_reason"]) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+# Recently-IPO'd tickers (flagged in their holdings JSON) have near-zero FMP
+# coverage until their first 10-Q is ingested — often months after IPO. The
+# pending SQL flags them `no_financial_facts` every run, so without a guard the
+# hourly cron re-runs the full ~60-endpoint onboard for them, burning ~720
+# FMP calls/day against the 750/day cap. We back them off to a DAILY cadence
+# rather than skipping outright, so the moment FMP ingests data the next daily
+# re-check picks it up (see _is_recently_ipod / apply_ipo_backoff).
+_RECENTLY_IPOD_RETRY_HOURS = 24
+
+
+def _is_recently_ipod(ticker: str, holdings_dir: Path) -> bool:
+    """True iff micro_thesis/holdings/<TICKER>.json sets recently_ipod: true."""
+    path = holdings_dir / f"{ticker.upper()}.json"
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    return bool(cast("dict[str, object]", data).get("recently_ipod"))
+
+
+def _last_fmp_attempt(conn: sqlite3.Connection, ticker: str) -> datetime | None:
+    """MAX(last_pulled) across this ticker's fmp_endpoint_status rows, parsed to
+    a naive-local datetime (matching save_fmp_data's writer). Returns None when
+    the ticker was never fetched or the table/value is absent or unparseable —
+    callers treat None as 'never attempted' (do NOT defer)."""
+    try:
+        cur = conn.execute(
+            "SELECT MAX(last_pulled) AS m FROM fmp_endpoint_status "
+            "WHERE UPPER(ticker) = UPPER(?)",
+            (ticker,),
+        )
+        row = cur.fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    raw = row["m"] if isinstance(row, sqlite3.Row) else row[0]
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def apply_ipo_backoff(
+    pending: list[tuple[str, str]],
+    db_path: Path,
+    holdings_dir: Path,
+    *,
+    now: datetime | None = None,
+    retry_hours: int = _RECENTLY_IPOD_RETRY_HOURS,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Split `pending` into (to_process, deferred).
+
+    A ticker is deferred when ALL of:
+      - its pending_reason needs the heavy onboard chain (not no_commitments —
+        that stage is cheap and FMP-free), AND
+      - its holdings JSON has recently_ipod: true, AND
+      - its most recent FMP fetch (fmp_endpoint_status.last_pulled) was less
+        than `retry_hours` ago.
+
+    Never-fetched recently-IPO'd tickers (no fmp_endpoint_status rows) are NOT
+    deferred — the first onboard must run, and the daily re-check thereafter
+    picks up coverage the moment FMP ingests it. Non-IPO tickers are never
+    deferred (preserves the hourly cadence for the rest of the universe).
+    """
+    now = now or datetime.now()
+    cutoff = timedelta(hours=retry_hours)
+    conn = open_db(db_path)
+    try:
+        to_process: list[tuple[str, str]] = []
+        deferred: list[tuple[str, str]] = []
+        for ticker, reason in pending:
+            if reason != _COMMITMENT_ONLY_REASON and _is_recently_ipod(
+                ticker, holdings_dir
+            ):
+                last = _last_fmp_attempt(conn, ticker)
+                if last is not None and (now - last) < cutoff:
+                    deferred.append((ticker, reason))
+                    continue
+            to_process.append((ticker, reason))
+        return to_process, deferred
     finally:
         conn.close()
 
@@ -294,9 +403,30 @@ def main() -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     log_path = _LOG_DIR / f"onboard_pending_{stamp}.log"
 
-    pending = find_pending_tickers(Path(args.db))
+    pending_all = find_pending_tickers(Path(args.db))
+    # Back recently-IPO'd, near-zero-coverage tickers off to a daily cadence so
+    # they don't re-run the full onboard hourly. Deferred tickers are surfaced
+    # in the report (not silently dropped) and still re-checked once a day.
+    pending, deferred = apply_ipo_backoff(pending_all, Path(args.db), _HOLDINGS_DIR)
+    deferred_payload = [
+        {"ticker": t, "reason": r, "deferred": "recently_ipod_daily_cadence"}
+        for t, r in deferred
+    ]
+    if deferred:
+        log.info(
+            "deferred %d recently-IPO'd ticker(s) to daily cadence: %s",
+            len(deferred),
+            ", ".join(t for t, _ in deferred),
+        )
+
     if not pending:
-        report = {"run_id": stamp, "pending_count": 0, "results": [], "log": str(log_path)}
+        report = {
+            "run_id": stamp,
+            "pending_count": 0,
+            "deferred": deferred_payload,
+            "results": [],
+            "log": str(log_path),
+        }
         print(json.dumps(report, indent=2))
         return 0
 
@@ -309,6 +439,7 @@ def main() -> int:
                 "run_id": stamp,
                 "pending_count": len(pending),
                 "tickers": [{"ticker": t, "reason": r} for t, r in pending],
+                "deferred": deferred_payload,
             },
             indent=2,
         ))
@@ -365,6 +496,7 @@ def main() -> int:
     report = {
         "run_id": stamp,
         "pending_count": len(pending),
+        "deferred": deferred_payload,
         "log": str(log_path),
         "results": [_result_to_dict(r) for r in results],
     }
