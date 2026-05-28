@@ -57,7 +57,7 @@ ignore = [
 [tool.pyright]
 include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
-extraPaths = ["src"]
+extraPaths = ["src", "scratch"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -66,7 +66,7 @@ reportUnknownMemberType = false
 [tool.basedpyright]
 include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
-extraPaths = ["src"]
+extraPaths = ["src", "scratch"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
 reportMissingTypeStubs = false
@@ -76,4 +76,4 @@ reportAny = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-pythonpath = ["src"]
+pythonpath = ["src", "scratch"]
