@@ -6,13 +6,13 @@ Public surface:
                       (Trigger, Cadence, TriggerCandidate, AlertDraft,
                        QueuedActionDraft, UserStateContext, ThesisAnchor)
     kpi_inflection  — KpiInflectionTrigger (stub; real impl in follow-on PR)
-    earnings_tone   — EarningsToneTrigger (skeleton; LLM diff pass lands
-                      in PR-N8)
+    earnings_tone   — EarningsToneTrigger (full impl as of PR-N8)
+    registry        — ENABLED_TRIGGERS / ALL_TRIGGERS lists consumed by
+                      the morning driver (PR-N9)
 
-The morning driver (also a follow-on PR) instantiates each registered
-trigger class and walks the lifecycle ``scan → should_fire →
-build_alert → draft_actions``. The CRUD layer (separate PR) persists
-the produced drafts.
+The morning driver walks ``ENABLED_TRIGGERS``, instantiating each class
+and running the lifecycle ``scan → should_fire → build_alert →
+draft_actions``. The CRUD layer in ``alerts.store`` persists the drafts.
 """
 
 from __future__ import annotations
@@ -28,8 +28,11 @@ from triggers.base import (
 )
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
+from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS
 
 __all__ = [
+    "ALL_TRIGGERS",
+    "ENABLED_TRIGGERS",
     "AlertDraft",
     "Cadence",
     "EarningsToneTrigger",

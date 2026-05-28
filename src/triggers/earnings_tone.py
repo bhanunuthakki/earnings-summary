@@ -41,7 +41,7 @@ import json
 import logging
 import re
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar, cast
@@ -722,6 +722,19 @@ class EarningsToneTrigger:
         _ = user_state
         return _FEATURE_ENABLED and bool(candidate)
 
+    def signature_key_evidence(
+        self, candidate: TriggerCandidate
+    ) -> Mapping[str, object]:
+        """Key the dedup hash on the transcript id alone.
+
+        Two scans for the same ticker against the same transcript MUST
+        produce identical signatures; fiscal-period labels and the
+        ``fetched_at`` timestamp derive from the same transcript and would
+        only inflate the hash surface. ``build_alert`` keys on the exact
+        same dict — see :meth:`build_alert`.
+        """
+        return {"transcript_id": candidate.evidence["transcript_id"]}
+
     def build_alert(
         self,
         candidate: TriggerCandidate,
@@ -804,7 +817,7 @@ class EarningsToneTrigger:
             evidence_obj, sort_keys=True, ensure_ascii=False, default=str
         )
         signature_sha = compute_signature_sha(
-            self.kind, ticker, {"transcript_id": current_transcript_id}
+            self.kind, ticker, self.signature_key_evidence(candidate)
         )
         memo_text = cast("str", parsed["summary"])
 
