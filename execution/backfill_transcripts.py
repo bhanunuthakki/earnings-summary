@@ -30,6 +30,9 @@ Designed to run unattended:
   - Hooked into `execution/onboard_ticker.py` (final stage; fire-and-forget)
   - Cron entry point at `cron/backfill_transcripts.task.xml` (daily 04:30,
     before the earnings-calendar fetcher at 05:45).
+  - `--repo-root` is honored by both subprocess phases (ingest + extract):
+    they invoke the resolved root's copy of the script with `cwd=<repo_root>`
+    so worktree-based runs land on the main repo's DB and transcripts dir.
 
 Usage:
     python execution/backfill_transcripts.py                       # all active tickers
@@ -207,29 +210,38 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
     return out
 
 
-def _run_ingest(dry_run: bool) -> int:
-    """Run execution/ingest_transcripts.py to pick up newly-fetched files."""
+def _run_ingest(repo_root: Path, dry_run: bool) -> int:
+    """Run execution/ingest_transcripts.py to pick up newly-fetched files.
+
+    Invokes `repo_root`'s copy of the script (not this script's own dir) so the
+    subprocess's `Path(__file__).resolve().parents[1]` lands at the resolved
+    repo root — otherwise a worktree-based run would target the worktree's
+    stub data dir instead of the main repo's real DB and transcripts.
+    """
     if dry_run:
         print("  [dry-run] would invoke ingest_transcripts.py", file=sys.stderr)
         return 0
-    cmd = [sys.executable, str(PROJECT_ROOT / "execution" / "ingest_transcripts.py")]
-    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    cmd = [sys.executable, str(repo_root / "execution" / "ingest_transcripts.py")]
+    proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
 
-def _run_extract(ticker: str, dry_run: bool) -> int:
-    """Run extract_commitments_from_transcript.py --auto --ticker X for one ticker."""
+def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
+    """Run extract_commitments_from_transcript.py --auto --ticker X for one ticker.
+
+    Same repo_root rationale as `_run_ingest`.
+    """
     if dry_run:
         print(f"  [dry-run] would invoke extract_commitments --auto --ticker {ticker}",
               file=sys.stderr)
         return 0
     cmd = [
         sys.executable,
-        str(PROJECT_ROOT / "execution" / "extract_commitments_from_transcript.py"),
+        str(repo_root / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
         "--ticker", ticker,
     ]
-    proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
 
 
@@ -274,8 +286,9 @@ def main() -> int:
     )
     args = p.parse_args()
 
-    if args.repo_root.resolve() != PROJECT_ROOT:
-        _retarget_paths(args.repo_root.resolve())
+    repo_root = args.repo_root.resolve()
+    if repo_root != PROJECT_ROOT:
+        _retarget_paths(repo_root)
 
     today = date.today()
     tickers = _resolve_tickers(args.ticker)
@@ -303,7 +316,7 @@ def main() -> int:
     ingest_rc: int | None = None
     if any_fetched and not args.skip_ingest:
         print("[backfill_transcripts] running ingest_transcripts.py", file=sys.stderr)
-        ingest_rc = _run_ingest(args.dry_run)
+        ingest_rc = _run_ingest(repo_root, args.dry_run)
     elif args.skip_ingest:
         print("[backfill_transcripts] --skip-ingest set; skipping ingest", file=sys.stderr)
     else:
@@ -317,7 +330,7 @@ def main() -> int:
                 continue
             print(f"[backfill_transcripts] extracting commitments for {ticker}",
                   file=sys.stderr)
-            rc = _run_extract(ticker, args.dry_run)
+            rc = _run_extract(repo_root, ticker, args.dry_run)
             extract_results.append({"ticker": ticker, "rc": rc})
     elif args.skip_extract:
         print("[backfill_transcripts] --skip-extract set; skipping commitments",
