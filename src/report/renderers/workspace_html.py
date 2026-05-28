@@ -147,6 +147,14 @@ def render(spec: ReportSpec) -> str:
 
     _footer(body, spec)
     body.write("</div>")  # /l1-root
+
+    # Sidebar + chat-drawer shells are emitted at render time so the
+    # `<body>` flex layout (.l1-root | .cmt-sidebar) is explicit in the
+    # markup rather than assembled at runtime via appendChild. The JS
+    # modules just toggle classes + populate the per-anchor list.
+    _comment_sidebar_shell(body)
+    _chat_drawer_shell(body, spec.ticker, spec.generation_date.isoformat())
+
     return _document(spec, body.getvalue())
 
 
@@ -3725,6 +3733,86 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
         '<script id="workspace-comments" type="application/json">'
         f"{_json.dumps(payload)}"
         "</script>"
+    )
+
+
+def _comment_sidebar_shell(body: StringIO) -> None:
+    """Static sidebar shell — flex sibling of .l1-root.
+
+    The push-sidebar layout requires this `<aside>` to be a direct child
+    of `<body>` (which is `display: flex; flex-direction: row`). Emitting
+    it at render time makes that relationship explicit in the markup;
+    the JS only toggles `.open` and writes into `#cmt-list` /
+    `#cmt-anchor-label`. No outside-click dismissal — close via the ×
+    button or Escape.
+    """
+    body.write(
+        '<aside class="cmt-sidebar" id="cmt-sidebar" aria-hidden="true">'
+        '<header class="cmt-sidebar-head">'
+        "<div>"
+        '<div class="cmt-sidebar-title">Comments</div>'
+        '<div class="cmt-sidebar-sub" id="cmt-anchor-label"></div>'
+        "</div>"
+        '<button class="cmt-close" type="button" aria-label="close">&times;</button>'
+        "</header>"
+        '<div class="cmt-list" id="cmt-list"></div>'
+        '<form class="cmt-form" id="cmt-form">'
+        '<textarea name="comment" rows="3" required '
+        'placeholder="Write a comment&hellip; '
+        "(tip: prefix with /kpi /thesis /q /ask /fix /update /rewrite "
+        'to skip auto-classify)"></textarea>'
+        '<div class="cmt-form-row">'
+        '<select name="intent" title="What should the processor do?">'
+        '<option value="">Auto-classify</option>'
+        '<option value="drop_kpi">Drop this KPI</option>'
+        '<option value="edit_thesis">Edit thesis</option>'
+        '<option value="ask_question">Ask question</option>'
+        '<option value="fix_data">Flag data issue</option>'
+        '<option value="rewrite_section">Rewrite this section</option>'
+        "</select>"
+        '<button type="submit">Post</button>'
+        "</div>"
+        '<div class="cmt-form-hint" id="cmt-form-hint"></div>'
+        "</form>"
+        "</aside>"
+    )
+
+
+def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
+    """Static chat drawer shell — position:fixed, not in flex flow.
+
+    Same template-time-vs-runtime rationale as `_comment_sidebar_shell`:
+    keeping the markup static avoids ordering surprises with the
+    sidebar's flex layout. The chat JS wires the toggle/close buttons
+    and streams from `comments_server.py`.
+    """
+    body.write(
+        '<aside class="chat-drawer" id="chat-drawer">'
+        '<button class="chat-toggle" type="button" aria-label="Open chat">'
+        '<span class="chat-toggle-icon">&#8984;</span>'
+        '<span class="chat-toggle-label">Chat</span>'
+        "</button>"
+        '<div class="chat-panel" aria-hidden="true">'
+        '<header class="chat-head">'
+        "<div>"
+        f'<div class="chat-title">Ask Claude about {_esc(ticker)}</div>'
+        f'<div class="chat-sub">{_esc(report_date)} '
+        "&middot; streams from comments_server</div>"
+        "</div>"
+        '<button class="chat-close" type="button" aria-label="close">&times;</button>'
+        "</header>"
+        '<div class="chat-thread" id="chat-thread"></div>'
+        '<form class="chat-form" id="chat-form">'
+        '<textarea name="message" rows="3" required '
+        'placeholder="Ask about a KPI, propose an edit, '
+        'look up a quote in the transcript&hellip;"></textarea>'
+        '<div class="chat-form-row">'
+        '<span class="chat-hint" id="chat-hint">Cmd+Enter to send</span>'
+        '<button type="submit">Send</button>'
+        "</div>"
+        "</form>"
+        "</div>"
+        "</aside>"
     )
 
 
