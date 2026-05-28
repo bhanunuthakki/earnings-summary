@@ -12,7 +12,8 @@ Verifies the eight scenarios described in PR-N9:
   * dry-run     — driver runs cleanly but persists nothing
   * isolation   — an LLM exception on ticker A doesn't block ticker B
   * cost cap    — patched cost query returning above-cap halts the loop
-  * stub skip   — KpiInflectionTrigger's NotImplementedError is swallowed
+  * idle trigger — kpi_inflection finds no registered KPIs here, so scan→[]
+                   and it contributes nothing alongside an active earnings_tone
   * no scan hit — no transcripts in window → no_candidates, no alert
   * empty list  — --tickers '' → exits 0 with zero processed
 """
@@ -541,18 +542,17 @@ def test_cost_cap_halts_cleanly(
 
 
 # ---------------------------------------------------------------------------
-# 6. Stub trigger skipped
+# 6. Idle trigger doesn't interfere with an active one
 # ---------------------------------------------------------------------------
 
 
-def test_stub_trigger_skipped_gracefully(
+def test_idle_trigger_does_not_block_active_one(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """KpiInflectionTrigger has scan→[] (and would raise from build_alert).
-
-    The driver must tolerate this: no crash, earnings_tone for the same
-    ticker still processes normally. ``--triggers earnings_tone,kpi_inflection``
-    forces the stub onto the run.
+    """kpi_inflection finds no registered KPIs in this fixture, so scan→[] and
+    it contributes nothing. The driver must tolerate an idle trigger: no crash,
+    earnings_tone for the same ticker still fires normally.
+    ``--triggers earnings_tone,kpi_inflection`` forces both onto the run.
     """
     conn = sqlite3.connect(str(db_path))
     try:
@@ -589,7 +589,10 @@ def test_stub_trigger_skipped_gracefully(
 def test_no_candidates_exits_cleanly(
     db_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A ticker with only stale transcripts → scan returns []; driver moves on."""
+    """A ticker with only stale transcripts → both default triggers scan to
+    []; driver moves on. earnings_tone finds no fresh transcript and
+    kpi_inflection finds no registered KPIs, so each records a no-candidate
+    skip (two total for the one ticker)."""
     now = datetime.now(UTC).replace(tzinfo=None)
     conn = sqlite3.connect(str(db_path))
     try:
@@ -618,7 +621,8 @@ def test_no_candidates_exits_cleanly(
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["alerts_fired"] == 0
-    assert summary["no_candidate_skips"] == 1
+    # Both default triggers (earnings_tone + kpi_inflection) no-candidate on MELI.
+    assert summary["no_candidate_skips"] == 2
     assert summary["tickers_processed"] == 1
 
 

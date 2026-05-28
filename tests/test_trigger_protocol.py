@@ -4,8 +4,11 @@ Locks down the contract the downstream PRs (real trigger impls + the
 CRUD layer that persists drafts) build against:
 
   * Protocol importable without circular import
-  * Concrete stub satisfies runtime_checkable Protocol
-  * Stub methods honor their documented placeholders
+  * KpiInflectionTrigger (fully implemented as of PR-N11) satisfies the
+    runtime_checkable Protocol and exposes the right kind/cadence
+  * Its lifecycle methods degrade gracefully on degenerate input — an
+    unbacked connection / empty evidence — and fail loud where evidence is
+    required (build_alert)
   * Dataclass field shapes match the documented contract
   * Drafts are immutable (frozen) so a sensor can't accidentally
     mutate one between build_alert and the CRUD INSERT
@@ -44,17 +47,19 @@ def test_protocol_importable_without_circular_imports() -> None:
     assert ThesisAnchor is not None
 
 
-def test_stub_satisfies_runtime_checkable_protocol() -> None:
+def test_kpi_inflection_satisfies_runtime_checkable_protocol() -> None:
     instance = KpiInflectionTrigger()
     assert isinstance(instance, Trigger)
 
 
-def test_stub_class_attributes_match_contract() -> None:
+def test_kpi_inflection_class_attributes_match_contract() -> None:
     assert KpiInflectionTrigger.kind == "kpi_inflection"
     assert KpiInflectionTrigger.cadence is Cadence.DAILY
 
 
-def test_stub_scan_returns_empty_list() -> None:
+def test_scan_returns_empty_for_unbacked_connection() -> None:
+    # An in-memory connection has no resolvable file path, so scan can't reach
+    # the registry / loaders and degrades to [] rather than raising.
     conn = sqlite3.connect(":memory:")
     try:
         out = KpiInflectionTrigger().scan("AAPL", conn)
@@ -63,7 +68,7 @@ def test_stub_scan_returns_empty_list() -> None:
     assert out == []
 
 
-def test_stub_should_fire_returns_false() -> None:
+def test_should_fire_false_for_empty_evidence() -> None:
     candidate = TriggerCandidate(
         ticker="AAPL",
         kind="kpi_inflection",
@@ -79,7 +84,10 @@ def test_stub_should_fire_returns_false() -> None:
     assert KpiInflectionTrigger().should_fire(candidate, user_state) is False
 
 
-def test_stub_build_alert_raises_not_implemented() -> None:
+def test_build_alert_requires_populated_evidence() -> None:
+    # build_alert is no longer a stub; it is only ever called on scan() output,
+    # so it trusts the evidence is populated and fails loud (KeyError) on the
+    # degenerate empty-evidence candidate rather than silently emitting junk.
     candidate = TriggerCandidate(
         ticker="AAPL",
         kind="kpi_inflection",
@@ -87,11 +95,11 @@ def test_stub_build_alert_raises_not_implemented() -> None:
         evidence={},
         computed_at=datetime(2026, 5, 27),
     )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(KeyError):
         _ = KpiInflectionTrigger().build_alert(candidate, None)
 
 
-def test_stub_draft_actions_returns_empty_list() -> None:
+def test_draft_actions_empty_for_empty_evidence() -> None:
     candidate = TriggerCandidate(
         ticker="AAPL",
         kind="kpi_inflection",

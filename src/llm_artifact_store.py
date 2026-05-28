@@ -313,6 +313,11 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # mark-dirty chain so a restatement that touches financial_facts
     # (which the comparison anchor reads) invalidates the cached diff.
     "earnings_tone_diff",
+    # KPI-inflection context: the optional "why it matters" line attached to a
+    # kpi_inflection alert. Keyed by (kpi_name, period_end, factual core,
+    # thesis anchor). A fact-side restatement that moves the KPI series should
+    # invalidate the cached prose, so it joins the mark-dirty chain here.
+    "kpi_inflection_context",
 )
 
 
@@ -346,6 +351,10 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     # cached diff is re-attempted even if the trigger never re-fires;
     # the transcript-id key drives the primary invalidation.
     "earnings_tone_diff": 30,
+    # KPI-inflection context is anchored to a (kpi_name, period_end) tuple.
+    # The TTL is a safety net; the input_sha256 (factual core + anchor) drives
+    # the primary invalidation when the underlying numbers move.
+    "kpi_inflection_context": 30,
 }
 
 

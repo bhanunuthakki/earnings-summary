@@ -5,7 +5,7 @@ Public surface:
     base            — Protocol contract + draft dataclasses
                       (Trigger, Cadence, TriggerCandidate, AlertDraft,
                        QueuedActionDraft, UserStateContext, ThesisAnchor)
-    kpi_inflection  — KpiInflectionTrigger (stub; real impl in follow-on PR)
+    kpi_inflection  — KpiInflectionTrigger (full impl as of PR-N11)
     earnings_tone   — EarningsToneTrigger (full impl as of PR-N8)
     registry        — ENABLED_TRIGGERS / ALL_TRIGGERS lists consumed by
                       the morning driver (PR-N9)
