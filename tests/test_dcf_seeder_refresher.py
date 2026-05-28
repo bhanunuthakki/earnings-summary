@@ -12,6 +12,7 @@ checking that the refreshed Valuation reflects the new assumption.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import openpyxl
@@ -139,6 +140,76 @@ def fmp_dir(tmp_path: Path) -> Path:
     return d
 
 
+def _facts_db_fy(
+    tmp_path: Path,
+    ticker: str,
+    line_items_by_year: dict[str, dict[int, float]],
+    *,
+    tier: str = "s1_provisional",
+) -> Path:
+    """Build a portfolio.db with documents + annual (FY) financial_facts rows.
+
+    Mirrors the shape the S-1 extractor writes: all facts point at one
+    `s1_provisional`-tier document (the lowest precedence). `line_items_by_year`
+    maps a canonical line_item to {fiscal_year: value}; each value lands on a
+    Dec-31 FY period. Exercises the no-FMP fallback the loader reads from.
+    """
+    p = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(p))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_quality_tier VARCHAR,
+                fetched_at DATETIME
+            );
+            CREATE TABLE financial_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker VARCHAR NOT NULL,
+                period_end DATETIME NOT NULL,
+                fiscal_period_type VARCHAR NOT NULL,
+                line_item VARCHAR NOT NULL,
+                value NUMERIC(24,6) NOT NULL,
+                currency VARCHAR(3),
+                unit VARCHAR NOT NULL,
+                source_doc_id INTEGER NOT NULL,
+                confidence FLOAT NOT NULL DEFAULT 1.0
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO documents(id, source_quality_tier, fetched_at) VALUES (1, ?, ?)",
+            (tier, "2026-05-01 00:00:00"),
+        )
+        for line_item, by_year in line_items_by_year.items():
+            for year, value in by_year.items():
+                conn.execute(
+                    "INSERT INTO financial_facts(ticker, period_end, fiscal_period_type, "
+                    "line_item, value, unit, source_doc_id) VALUES (?,?,?,?,?,?,1)",
+                    (ticker, f"{year}-12-31 00:00:00", "FY", line_item, float(value), "actual"),
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return p
+
+
+# Two fiscal years of S-1-shaped annuals (actual dollars; EPS per-share; shares
+# as a raw count) — modeled on FRVO's S-1 figures.
+_S1_FACTS: dict[str, dict[int, float]] = {
+    "revenue": {2024: 199_000.0, 2025: 138_000.0},
+    "operating_income": {2024: -41_838_000.0, 2025: -48_806_000.0},
+    "net_income": {2024: -41_110_000.0, 2025: -57_788_000.0},
+    "eps_diluted": {2024: -3.31, 2025: -5.66},
+    "weighted_avg_shares_diluted": {2024: 12_438_000.0, 2025: 12_462_000.0},
+    "total_assets": {2024: 531_299_000.0, 2025: 1_365_168_000.0},
+    "long_term_debt": {2024: 39_019_000.0, 2025: 172_837_000.0},
+    "capital_expenditure": {2024: -178_693_000.0, 2025: -465_659_000.0},
+    "free_cash_flow": {2024: -233_441_000.0, 2025: -497_416_000.0},
+}
+
+
 # ---------------------------------------------------------------------------
 # Forecast module — derivation + projection math
 # ---------------------------------------------------------------------------
@@ -192,14 +263,10 @@ def test_compute_projections_linear_decay() -> None:
     assert proj.revenue_M[-1] / proj.revenue_M[-2] == pytest.approx(1.04, abs=1e-3)
     # Op margin ramps linearly from 0.10 → 0.20 across 5 years
     # → [0.10, 0.125, 0.15, 0.175, 0.20]
-    assert proj.operating_margin_pct == pytest.approx(
-        [0.10, 0.125, 0.15, 0.175, 0.20]
-    )
+    assert proj.operating_margin_pct == pytest.approx([0.10, 0.125, 0.15, 0.175, 0.20])
     # Capex intensity ramps linearly from 0.08 → 0.04
     # → [0.08, 0.07, 0.06, 0.05, 0.04]
-    assert proj.capex_intensity_pct == pytest.approx(
-        [0.08, 0.07, 0.06, 0.05, 0.04]
-    )
+    assert proj.capex_intensity_pct == pytest.approx([0.08, 0.07, 0.06, 0.05, 0.04])
     # Year 1 FCF = 1200 * 0.10 * 0.75 - 1200 * 0.08 = 90 - 96 = -6
     assert proj.fcf_M[0] == pytest.approx(-6.0)
     # Year 5 FCF margin = 0.20 * 0.75 - 0.04 = 0.11 — positive terminal year
@@ -236,9 +303,7 @@ def test_amzn_style_negative_y1_fcf_normalizes_to_positive_y5() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_seeder_builds_three_sheets_from_scratch(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_seeder_builds_three_sheets_from_scratch(tmp_path: Path, fmp_dir: Path) -> None:
     out = tmp_path / "TEST.xlsx"
     seeder.seed_workbook("TEST", fmp_dir, out, base_year=2026)
 
@@ -250,9 +315,7 @@ def test_seeder_builds_three_sheets_from_scratch(
     ]
 
 
-def test_seeder_derives_forecast_inputs_from_history(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_seeder_derives_forecast_inputs_from_history(tmp_path: Path, fmp_dir: Path) -> None:
     out = tmp_path / "TEST.xlsx"
     seeder.seed_workbook("TEST", fmp_dir, out, base_year=2026)
 
@@ -269,9 +332,7 @@ def test_seeder_derives_forecast_inputs_from_history(
     assert inputs.tax_rate_pct == pytest.approx(0.2495, abs=0.001)
 
 
-def test_seeded_workbook_parses_via_workbook_reader(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_seeded_workbook_parses_via_workbook_reader(tmp_path: Path, fmp_dir: Path) -> None:
     """The whole point: workbook_reader must read what the seeder writes,
     so the PV calc + dcf_runs persist + briefs chain stays unbroken."""
     out = tmp_path / "TEST.xlsx"
@@ -287,9 +348,7 @@ def test_seeded_workbook_parses_via_workbook_reader(
     assert snap.shares_by_year[2026] == pytest.approx(100.0)
 
 
-def test_seeder_refuses_to_overwrite_without_force(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_seeder_refuses_to_overwrite_without_force(tmp_path: Path, fmp_dir: Path) -> None:
     out = tmp_path / "TEST.xlsx"
     out.write_text("existing")
     with pytest.raises(seeder.SeederError, match="refusing to overwrite"):
@@ -311,13 +370,127 @@ def test_seeder_missing_fmp_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Seeder — financial_facts fallback (recently-IPO'd / S-1-anchored tickers)
+# ---------------------------------------------------------------------------
+
+
+def test_seeder_falls_back_to_financial_facts_when_fmp_absent(
+    tmp_path: Path,
+) -> None:
+    """No FMP quarterly files → seed Historicals from annual financial_facts.
+
+    One column per fiscal year; values scaled to $M (EPS unscaled, shares in
+    millions). This is the S-1-anchored path the whole change exists for."""
+    db = _facts_db_fy(tmp_path, "S1CO", _S1_FACTS)
+    empty_fmp = tmp_path / "fmp"
+    empty_fmp.mkdir()
+    out = tmp_path / "S1CO.xlsx"
+
+    seeder.seed_workbook("S1CO", empty_fmp, out, base_year=2026, db_path=db)
+
+    wb = openpyxl.load_workbook(str(out), data_only=True)
+    assert wb.sheetnames == [
+        seeder.HISTORICALS_SHEET,
+        seeder.FORECAST_SHEET,
+        seeder.VALUATION_SHEET,
+    ]
+    hist = wb[seeder.HISTORICALS_SHEET]
+    headers = [hist.cell(row=1, column=c).value for c in range(2, hist.max_column + 1)]
+    assert headers == ["FY2024", "FY2025"]  # one column per fiscal year, oldest first
+
+    rev_row = _find_label_row(hist, "Revenue")
+    assert hist.cell(row=rev_row, column=2).value == pytest.approx(0.199)  # 199k → $M
+    assert hist.cell(row=rev_row, column=3).value == pytest.approx(0.138)
+    fcf_row = _find_label_row(hist, "Free Cash Flow")
+    assert hist.cell(row=fcf_row, column=3).value == pytest.approx(-497.416)
+    eps_row = _find_label_row(hist, "Diluted EPS")
+    assert hist.cell(row=eps_row, column=3).value == pytest.approx(-5.66)  # per-share, unscaled
+    shares_row = _find_label_row(hist, "Diluted Shares (M)")
+    assert hist.cell(row=shares_row, column=3).value == pytest.approx(12.462)  # count → M
+
+
+def test_seeder_fallback_derives_forecast_inputs_from_annuals(
+    tmp_path: Path,
+) -> None:
+    """Forecast INPUTS come off the annuals: base revenue + shares from the
+    latest FY, Y1 growth from the YoY of the two fiscal years (via the TTM-window
+    padding)."""
+    db = _facts_db_fy(tmp_path, "S1CO", _S1_FACTS)
+    empty_fmp = tmp_path / "fmp"
+    empty_fmp.mkdir()
+    out = tmp_path / "S1CO.xlsx"
+
+    seeder.seed_workbook("S1CO", empty_fmp, out, base_year=2026, db_path=db)
+
+    wb = openpyxl.load_workbook(str(out), data_only=True)
+    inputs = forecast.read_inputs_from_sheet(wb[seeder.FORECAST_SHEET])
+    assert inputs.base_revenue_M == pytest.approx(0.14, abs=0.005)  # latest FY 138k
+    assert inputs.diluted_shares_M == pytest.approx(12.46, abs=0.01)  # latest FY
+    # Y1 growth = YoY of the two fiscal years: 138k / 199k - 1.
+    assert inputs.y1_growth_pct == pytest.approx(138_000.0 / 199_000.0 - 1, abs=0.001)
+
+
+def test_seeder_prefers_fmp_when_both_fmp_and_facts_present(tmp_path: Path, fmp_dir: Path) -> None:
+    """FMP quarterly files are the primary source — facts are only a fallback.
+    When both exist, the seeder uses FMP (quarterly columns, not FY)."""
+    db = _facts_db_fy(tmp_path, "TEST", {"revenue": {2024: 1.0, 2025: 2.0}})
+    out = tmp_path / "TEST.xlsx"
+
+    seeder.seed_workbook("TEST", fmp_dir, out, base_year=2026, db_path=db)
+
+    wb = openpyxl.load_workbook(str(out), data_only=True)
+    hist = wb[seeder.HISTORICALS_SHEET]
+    headers = [hist.cell(row=1, column=c).value for c in range(2, hist.max_column + 1)]
+    assert "Q4 2025" in headers  # FMP quarterly path
+    assert "FY2025" not in headers
+
+
+def test_seeder_raises_when_db_has_no_rows_for_ticker(tmp_path: Path) -> None:
+    """db_path given but no FY facts for THIS ticker → still raises (no silent
+    empty workbook)."""
+    db = _facts_db_fy(tmp_path, "OTHER", {"revenue": {2025: 1.0}})
+    empty_fmp = tmp_path / "fmp"
+    empty_fmp.mkdir()
+    with pytest.raises(seeder.SeederError, match="no income statement records"):
+        seeder.seed_workbook("MISSING", empty_fmp, tmp_path / "MISSING.xlsx", db_path=db)
+
+
+def test_refresh_uses_financial_facts_fallback(tmp_path: Path) -> None:
+    """The refresh path also falls back to facts: re-running on an existing
+    S-1-seeded workbook (no FMP) re-writes Historicals and preserves INPUTS."""
+    db = _facts_db_fy(tmp_path, "S1CO", _S1_FACTS)
+    empty_fmp = tmp_path / "fmp"
+    empty_fmp.mkdir()
+    out = tmp_path / "S1CO.xlsx"
+    seeder.seed_workbook("S1CO", empty_fmp, out, base_year=2026, db_path=db)
+
+    # Simulate a user edit, then refresh via the facts fallback.
+    wb = openpyxl.load_workbook(str(out))
+    fws = wb[seeder.FORECAST_SHEET]
+    for r in range(1, 25):
+        if fws.cell(row=r, column=1).value == "Y1 Revenue Growth %":
+            fws.cell(row=r, column=2, value=0.5)
+            break
+    wb.save(str(out))
+
+    result = refresher.refresh_historicals(
+        out, empty_fmp, ticker="S1CO", base_year=2026, db_path=db
+    )
+    assert result.historicals_cells_written > 0
+    assert result.forecast_inputs.y1_growth_pct == pytest.approx(0.5)  # edit preserved
+
+    wb2 = openpyxl.load_workbook(str(out), data_only=True)
+    hist = wb2[seeder.HISTORICALS_SHEET]
+    headers = [hist.cell(row=1, column=c).value for c in range(2, hist.max_column + 1)]
+    assert headers == ["FY2024", "FY2025"]
+
+
+# ---------------------------------------------------------------------------
 # Refresher — INPUTS preservation contract
 # ---------------------------------------------------------------------------
 
 
-def test_refresh_preserves_user_edited_inputs(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_refresh_preserves_user_edited_inputs(tmp_path: Path, fmp_dir: Path) -> None:
     """The core user-edit contract: open the workbook in Excel, change Forecast
     INPUT cells, save. Re-running the refresher must read those edited values
     back and use them (not re-derive from FMP). We edit one legacy field
@@ -383,9 +556,7 @@ def test_refresh_updates_valuation_fcf(tmp_path: Path, fmp_dir: Path) -> None:
     assert fcf_after > fcf_before * 1.5
 
 
-def test_refresh_recomputes_historicals_from_latest_fmp(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_refresh_recomputes_historicals_from_latest_fmp(tmp_path: Path, fmp_dir: Path) -> None:
     """Historicals reflects current FMP, even if FMP changed between seed
     and refresh. Forecast INPUTS are NOT re-derived (preserve user edits)."""
     out = tmp_path / "TEST.xlsx"
@@ -417,9 +588,7 @@ def test_refresh_recomputes_historicals_from_latest_fmp(
     assert inputs.base_revenue_M == pytest.approx(4100.0, rel=1e-3)
 
 
-def test_refresh_is_idempotent_when_inputs_unchanged(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_refresh_is_idempotent_when_inputs_unchanged(tmp_path: Path, fmp_dir: Path) -> None:
     out = tmp_path / "TEST.xlsx"
     seeder.seed_workbook("TEST", fmp_dir, out, base_year=2026)
 
@@ -435,9 +604,7 @@ def test_refresh_is_idempotent_when_inputs_unchanged(
     assert fcf_first == fcf_second
 
 
-def test_refresher_rejects_workbook_missing_forecast_sheet(
-    tmp_path: Path, fmp_dir: Path
-) -> None:
+def test_refresher_rejects_workbook_missing_forecast_sheet(tmp_path: Path, fmp_dir: Path) -> None:
     dest = tmp_path / "TEST.xlsx"
     wb = openpyxl.Workbook()
     sheet = wb.active
