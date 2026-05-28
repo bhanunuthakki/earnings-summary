@@ -289,6 +289,139 @@ def fetch_latest_def14a_text(
     )
 
 
+# --- S-1 named-section extraction -------------------------------------------
+# An S-1 prospectus uses NAMED section headers ("RISK FACTORS",
+# "Management's Discussion and Analysis ...", and the audited "F-pages") rather
+# than the 10-K "Item 1A / 7 / 8" numbering. The _ITEM_*_RX patterns above
+# therefore never match a real S-1, so section extraction silently returned
+# None for recently-IPO'd issuers (e.g. extract_risk_factors logged
+# "no_item_1a" and wrote zero risk factors). These patterns match the S-1
+# named headers, keeping the Item-style patterns as a fallback for filings that
+# do use them. Headers are matched per-line (MULTILINE) so a body header
+# matches but a mid-sentence mention does not; table-of-contents lines (dotted
+# page leaders) and long prose lines are skipped in _find_bare_header.
+
+_S1_RISK_START_RXS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[ \t]*risk factors[ \t]*$", re.IGNORECASE | re.MULTILINE),
+    _ITEM_1A_RX,
+)
+_S1_RISK_END_RXS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[ \t]*use of proceeds[ \t]*$", re.IGNORECASE | re.MULTILINE),
+    _ITEM_1B_RX,
+    _ITEM_2_RX,
+)
+_S1_MDNA_START_RXS: tuple[re.Pattern[str], ...] = (
+    # The S-1 body header is often ALL CAPS and wraps across lines (e.g.
+    # "... AND RESULTS OF" then "OPERATIONS"), so allow the canonical title to
+    # be truncated at any trailing word — but still anchor the line end, which
+    # excludes prose mentions that continue ("... in this prospectus").
+    re.compile(
+        r"^[ \t]*management.s discussion and analysis"
+        r"(?: of financial condition(?: and results(?: of(?: operations?)?)?)?)?[ \t.]*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    _ITEM_7_RX,
+)
+_S1_MDNA_END_RXS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[ \t]*business[ \t]*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"^[ \t]*quantitative and qualitative disclosures",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    _ITEM_7A_RX,
+    _ITEM_8_RX,
+)
+_S1_FIN_START_RXS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"^[ \t]*report of independent registered public accounting firm[ \t]*$",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    _ITEM_8_RX,
+)
+_S1_FIN_END_RXS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^[ \t]*part\s+ii\b", re.IGNORECASE | re.MULTILINE),
+    re.compile(
+        r"^[ \t]*information not required in (the )?prospectus",
+        re.IGNORECASE | re.MULTILINE,
+    ),
+    _ITEM_9_RX,
+)
+
+_TOC_LEADER = ".."  # dotted page-number leader: marks a table-of-contents line
+_MAX_HEADER_LINE_LEN = 140  # a real section header sits on a short line
+
+
+def _find_bare_header(
+    text: str, patterns: tuple[re.Pattern[str], ...], *, after: int = 0
+) -> tuple[int, int] | None:
+    """Earliest (line_start, line_end) at/after `after` where a line matches any
+    pattern as a *bare* header. TOC dotted-leader lines and long prose lines
+    that merely mention the phrase are skipped. None when nothing matches."""
+    best: tuple[int, int] | None = None
+    for rx in patterns:
+        for m in rx.finditer(text):
+            if m.start() < after:
+                continue
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            line_end = text.find("\n", m.start())
+            if line_end == -1:
+                line_end = len(text)
+            line = text[line_start:line_end]
+            if _TOC_LEADER in line or len(line.strip()) > _MAX_HEADER_LINE_LEN:
+                continue
+            if best is None or line_start < best[0]:
+                best = (line_start, line_end)
+            break  # first acceptable match for this pattern is enough
+    return best
+
+
+def _slice_named_section(
+    text: str,
+    start_rxs: tuple[re.Pattern[str], ...],
+    end_rxs: tuple[re.Pattern[str], ...],
+    *,
+    cap: int = 500_000,
+) -> str | None:
+    """Text between a section's bare start header and the earliest bare end
+    header after it (or `cap` chars when no end header is found). None when the
+    start header is absent."""
+    start = _find_bare_header(text, start_rxs)
+    if start is None:
+        return None
+    body_start = start[1]
+    end = _find_bare_header(text, end_rxs, after=body_start)
+    body = text[body_start : end[0]] if end is not None else text[body_start : body_start + cap]
+    return body.strip() or None
+
+
+def _extract_s1_sections(
+    text: str, *, ticker: str = ""
+) -> tuple[str | None, str | None, str | None]:
+    """Extract (risk factors, MD&A, financial statements) from S-1 prospectus
+    text, returned in the same slots as a 10-K's (item_1a, item_7, item_8).
+
+    Logs which sections were located so a silent miss is observable to operators
+    rather than surfacing only as empty downstream output.
+    """
+    item_1a = _slice_named_section(text, _S1_RISK_START_RXS, _S1_RISK_END_RXS)
+    item_7 = _slice_named_section(text, _S1_MDNA_START_RXS, _S1_MDNA_END_RXS)
+    item_8 = _slice_named_section(text, _S1_FIN_START_RXS, _S1_FIN_END_RXS)
+    found = [
+        name
+        for name, value in (("risk_factors", item_1a), ("mdna", item_7), ("financials", item_8))
+        if value
+    ]
+    log.info(
+        {
+            "event": "s1_sections_extracted",
+            "ticker": ticker,
+            "found": found,
+            "missing": [n for n in ("risk_factors", "mdna", "financials") if n not in found],
+        }
+    )
+    return item_1a, item_7, item_8
+
+
 def fetch_latest_s1_text(
     *,
     ticker: str,
@@ -380,10 +513,11 @@ def fetch_latest_s1_text(
             except OSError as exc:
                 log.debug({"event": "s1_cache_write_failed", "error": str(exc)})
 
-    # S-1s have the same Item 1A "Risk Factors" structure as 10-Ks.
-    item_1a = _extract_between(text, _ITEM_1A_RX, _ITEM_1B_RX) or _extract_between(
-        text, _ITEM_1A_RX, _ITEM_2_RX
-    )
+    # S-1s use NAMED section headers ("RISK FACTORS", "Management's Discussion
+    # and Analysis ...", the audited F-pages), not the 10-K "Item 1A/7/8"
+    # numbering — extract via the S-1-aware locators (Item-style kept as a
+    # fallback for filings that do use them).
+    item_1a, item_7, item_8 = _extract_s1_sections(text, ticker=ticker)
 
     log.info(
         {
@@ -403,6 +537,8 @@ def fetch_latest_s1_text(
         primary_doc_url=primary_url,
         text=text,
         item_1a_text=item_1a,
+        item_7_text=item_7,
+        item_8_text=item_8,
     )
 
 
@@ -591,9 +727,7 @@ def load_canonical_narrative(
                     log.debug({"event": "s1_cache_read_failed", "ticker": ticker, "path": str(cache_path), "error": str(exc)})
                     text = ""
                 if text.strip():
-                    item_1a = _extract_between(text, _ITEM_1A_RX, _ITEM_1B_RX) or _extract_between(
-                        text, _ITEM_1A_RX, _ITEM_2_RX
-                    )
+                    item_1a, item_7, item_8 = _extract_s1_sections(text, ticker=ticker)
                     # Parse FY from the cache filename (e.g. ``FRVO_s1_2026.txt``)
                     m = re.search(r"_s1_(\d{4})\.txt$", cache_path.name)
                     fy_int = int(m.group(1)) if m else 0
@@ -605,6 +739,8 @@ def load_canonical_narrative(
                         primary_doc_url=str(cache_path),
                         text=text,
                         item_1a_text=item_1a,
+                        item_7_text=item_7,
+                        item_8_text=item_8,
                     )
         # Cache miss — fall through to the SEC fetcher (which also caches).
         return fetch_latest_s1_text(
