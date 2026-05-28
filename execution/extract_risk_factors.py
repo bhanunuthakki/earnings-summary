@@ -38,6 +38,7 @@ import db  # noqa: E402
 
 from filing_text_fetcher import (  # noqa: E402
     fetch_latest_10k_text,
+    load_canonical_narrative,
     split_risk_factors,
 )
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
@@ -190,9 +191,21 @@ def extract_for_ticker(
 ) -> dict[str, object]:
     """Extract risk factors for one ticker, classify, diff, write to DB."""
     cache_dir = repo_root / "data" / "sec_text"
-    result = fetch_latest_10k_text(
-        ticker=ticker, user_agent=user_agent, cache_dir=cache_dir, fiscal_year=fiscal_year
-    )
+    # When the ticker is flagged data_anchor=="s1", load_canonical_narrative
+    # returns the S-1 (which has its own Item 1A "Risk Factors" section).
+    # Otherwise it dispatches to fetch_latest_10k_text. fiscal_year is honored
+    # only on the 10-K path — S-1s aren't keyed by fiscal year.
+    if fiscal_year is None:
+        result = load_canonical_narrative(
+            ticker=ticker, repo_root=repo_root, user_agent=user_agent
+        )
+    else:
+        result = fetch_latest_10k_text(
+            ticker=ticker,
+            user_agent=user_agent,
+            cache_dir=cache_dir,
+            fiscal_year=fiscal_year,
+        )
     if result is None or not result.item_1a_text:
         return {"ticker": ticker, "status": "no_item_1a", "n": 0}
 

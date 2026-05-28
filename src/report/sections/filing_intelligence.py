@@ -25,9 +25,43 @@ from report.models import (
 from report.sections._common import missing
 
 
+def _data_anchor(ticker: str, repo_root: Path) -> str:
+    """Read `data_anchor` from holdings JSON; defaults to "10k"."""
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return "10k"
+    try:
+        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return "10k"
+    raw = payload.get("data_anchor")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return "10k"
+
+
 def build(ticker: str, repo_root: Path) -> FilingIntelligenceSection:
     ticker = ticker.upper()
     cache_path = repo_root / "data" / "filing_intelligence" / f"{ticker}.json"
+
+    # Recently-IPO'd issuers anchor on the S-1 and have no 10-K to extract
+    # segment / metric / exec-comp signals from. Mark NOT_APPLICABLE so the
+    # renderer doesn't surface a broken fix-command pointing at a script that
+    # won't find any 10-K JSON.
+    if _data_anchor(ticker, repo_root) == "s1":
+        return FilingIntelligenceSection(
+            status=SectionStatus.NOT_APPLICABLE,
+            ticker=ticker,
+            missing=missing(
+                stage="SYNTHESIZE(analyze_filing_intelligence)",
+                fix_command=f"# wait for first 10-K filing for {ticker}",
+                detail=(
+                    "Recently-IPO'd issuer — narrative is anchored on the S-1. "
+                    "Filing-intelligence extraction (segment shifts, metric redefinitions, "
+                    "exec-comp alignment, tail risks) requires a 10-K and a prior-year baseline."
+                ),
+            ),
+        )
 
     if not cache_path.exists():
         return FilingIntelligenceSection(

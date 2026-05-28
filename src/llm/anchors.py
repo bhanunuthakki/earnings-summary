@@ -204,6 +204,22 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
 
     parts: list[str] = ["## THESIS ANCHOR (analyst's own framing of this name)"]
 
+    # Recently-IPO'd issuers: tell the LLM the narrative source is the S-1,
+    # not the 10-K — so it stops phrasing claims as "the company's most-recent
+    # 10-K disclosed..." which would be factually wrong.
+    data_anchor = payload.get("data_anchor")
+    if isinstance(data_anchor, str) and data_anchor.strip().lower() == "s1":
+        ipo_date = payload.get("ipo_date")
+        ipo_suffix = (
+            f" (IPO {ipo_date.strip()})"
+            if isinstance(ipo_date, str) and ipo_date.strip()
+            else ""
+        )
+        parts.append(
+            f"\n**Narrative source:** S-1 / 424B prospectus{ipo_suffix} — "
+            f"no 10-K filed yet. Phrase historical claims accordingly."
+        )
+
     thesis = payload.get("thesis")
     if isinstance(thesis, str) and thesis.strip():
         parts.append(f"\n**Thesis statement:**\n{thesis.strip()}")

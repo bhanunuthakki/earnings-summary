@@ -6,8 +6,10 @@ management is signaling with the additions / removals / rewordings.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 from ._shared import (
     Lens,
@@ -15,6 +17,21 @@ from ._shared import (
     sha8,
     thesis_block,
 )
+
+
+def _data_anchor(ticker: str, repo_root: Path) -> str:
+    """Read `data_anchor` from the holdings JSON; defaults to "10k"."""
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return "10k"
+    try:
+        payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return "10k"
+    raw = payload.get("data_anchor")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    return "10k"
 
 _PROMPT_FILING_DIFF = """You are narrating the year-over-year 10-K Item 1A risk-factor changes for
 {ticker}. The schema's `risk_factors` table has new/removed/reworded
@@ -59,6 +76,11 @@ def _ctx_filing_diff(ticker: str | None, repo_root: Path) -> LensContext | None:
     if not ticker:
         return None
     ticker = ticker.upper()
+    # Recently-IPO'd issuers don't have a prior 10-K to diff against — short
+    # circuit before any DB work to avoid logging the empty result as a stage
+    # failure. The lens silently drops out of the synthesis bundle.
+    if _data_anchor(ticker, repo_root) == "s1":
+        return None
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
