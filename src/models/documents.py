@@ -24,6 +24,9 @@ class SourceType(StrEnum):
 
     FMP = "fmp"
     SEC_XBRL = "sec_xbrl"
+    # Audited statements parsed out of an S-1 prospectus — a provisional anchor
+    # for recently-IPO'd issuers with no 10-K and empty FMP statement endpoints.
+    SEC_S1 = "sec_s1"
     IR_DOC = "ir_doc"
     TRANSCRIPT_AUDIO = "transcript_audio"
     MANUAL_CSV = "manual_csv"
@@ -42,11 +45,17 @@ class SourceQualityTier(StrEnum):
     FMP_NORMALIZED = "fmp_normalized"
     LLM_EXTRACTED = "llm_extracted"
     YFINANCE_FALLBACK = "yfinance_fallback"
+    # Lowest tier: audited figures lifted from an S-1 before the issuer has filed
+    # any 10-Q/10-K. The same numbers will be re-reported (and possibly recast)
+    # in real filings, so any FMP/SEC row for the period must win. Maps to rank 0
+    # in loaders.SOURCE_QUALITY_TIER_RANK (below yfinance_fallback).
+    S1_PROVISIONAL = "s1_provisional"
 
 
 _SOURCE_TYPE_TO_TIER: dict[SourceType, SourceQualityTier] = {
     SourceType.SEC_XBRL: SourceQualityTier.SEC_OFFICIAL,
     SourceType.FMP: SourceQualityTier.FMP_NORMALIZED,
+    SourceType.SEC_S1: SourceQualityTier.S1_PROVISIONAL,
     SourceType.IR_DOC: SourceQualityTier.FMP_NORMALIZED,
     SourceType.TRANSCRIPT_AUDIO: SourceQualityTier.FMP_NORMALIZED,
     SourceType.MANUAL_CSV: SourceQualityTier.FMP_NORMALIZED,
@@ -105,6 +114,7 @@ class DocType(StrEnum):
     ETF_COUNTRY_WEIGHTING = "etf_country_weighting"
     SEC_10K = "sec_10k"
     SEC_10Q = "sec_10q"
+    SEC_S1 = "sec_s1"
     SEC_20F = "sec_20f"
     SEC_40F = "sec_40f"
     SEC_8K = "sec_8k"
