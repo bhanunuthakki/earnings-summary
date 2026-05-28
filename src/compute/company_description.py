@@ -27,6 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict, cast
 
+from filing_text_fetcher import load_canonical_narrative
 from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, generate_company_description
 
 
@@ -98,7 +99,21 @@ def extract_for_ticker(
     sector = _profile_str(profile, "sector")
     industry = _profile_str(profile, "industry")
 
-    if source_path is None and not profile_description:
+    # Recently-IPO'd issuers (holdings JSON `data_anchor: "s1"`) don't have an
+    # FMP 10-K JSON yet. The canonical narrative comes from the cached S-1
+    # text. Skip the helper when we already have FMP JSON — that's the
+    # cheaper / richer source for mature issuers.
+    s1_text = ""
+    s1_fy: int | None = None
+    s1_source_str: str | None = None
+    if source_path is None:
+        s1_result = load_canonical_narrative(ticker=ticker, repo_root=repo_root)
+        if s1_result is not None and s1_result.text.strip():
+            s1_text = s1_result.text
+            s1_fy = s1_result.fiscal_year or None
+            s1_source_str = s1_result.primary_doc_url or None
+
+    if source_path is None and not profile_description and not s1_text:
         return CompanyDescriptionResult(
             ticker=ticker,
             fiscal_year=None,
@@ -107,8 +122,8 @@ def extract_for_ticker(
             sector=sector,
             industry=industry,
             skipped_reason=(
-                f"no _form_10k_*.json AND no profile.json description for {ticker} — "
-                f"nothing to ground the LLM in"
+                f"no _form_10k_*.json AND no profile.json description AND no S-1 cache "
+                f"for {ticker} — nothing to ground the LLM in"
             ),
         )
 
@@ -117,6 +132,12 @@ def extract_for_ticker(
         sha256 = hashlib.sha256(raw_bytes).hexdigest()
         payload = cast("dict[str, object]", json.loads(raw_bytes.decode("utf-8")))
         relevant_text = _extract_relevant_text(payload)
+    elif s1_text:
+        # S-1 narrative path (recently-IPO'd). Hash the S-1 text so refresh
+        # triggers when the analyst re-fetches the prospectus.
+        sha256 = hashlib.sha256(s1_text.encode("utf-8")).hexdigest()
+        relevant_text = _slice_s1_for_llm(s1_text)
+        year = s1_fy
     else:
         # Profile-only fallback: hash the description so refresh-on-change works.
         sha256 = hashlib.sha256(profile_description.encode("utf-8")).hexdigest()
@@ -164,7 +185,11 @@ def extract_for_ticker(
     result = CompanyDescriptionResult(
         ticker=ticker,
         fiscal_year=year,
-        source_path=str(source_path) if source_path is not None else None,
+        source_path=(
+            str(source_path)
+            if source_path is not None
+            else (s1_source_str if s1_source_str else None)
+        ),
         source_sha256=composite_sha,
         extracted_at_start=start_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
         extracted_at_end=end_dt.isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -277,6 +302,39 @@ def _segment_names_from_db(conn: sqlite3.Connection, ticker: str, metric: str) -
         (ticker, dim_type, junction_metric),
     )
     return [str(r["segment_name"]) for r in cur.fetchall() if r["segment_name"]]
+
+
+_S1_SECTION_HEADERS = (
+    "prospectus summary",
+    "our company",
+    "the company",
+    "business",
+    "industry",
+    "industry overview",
+    "summary of the offering",
+)
+
+
+def _slice_s1_for_llm(s1_text: str) -> str:
+    """Slice the S-1 plain text down to the budget the LLM expects.
+
+    S-1s are organized roughly like a 10-K but headers are inline plain-text
+    ("Prospectus Summary", "Our Company", "Business") rather than the
+    section-keyed dicts the FMP JSON uses. We find the first occurrence of a
+    business-description header and keep everything from there up to the
+    budget. When no header matches (rare — S-1 boilerplate is highly
+    consistent), fall back to skipping the first 5KB (cover/legal) and
+    grabbing the next ``_MAX_TEXT_BUDGET`` chars.
+    """
+    lower = s1_text.lower()
+    best_start = -1
+    for header in _S1_SECTION_HEADERS:
+        idx = lower.find(header)
+        if idx >= 0 and (best_start < 0 or idx < best_start):
+            best_start = idx
+    if best_start < 0:
+        best_start = min(5_000, max(0, len(s1_text) - _MAX_TEXT_BUDGET))
+    return s1_text[best_start : best_start + _MAX_TEXT_BUDGET]
 
 
 def _extract_relevant_text(payload: dict[str, object]) -> str:

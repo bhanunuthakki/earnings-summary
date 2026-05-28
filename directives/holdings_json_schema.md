@@ -38,9 +38,42 @@ mean. When a field's semantics change, edit here in the same PR.
   "dcf_defaults": {"forecast_years": 5, "terminal_multiple": 22.0},
   "segments": [...],
   "operational_kpis": [...],
-  "valuation_multiple_override": "P/E (NTM)"  // optional
+  "valuation_multiple_override": "P/E (NTM)",   // optional
+
+  // Recently-IPO'd issuer fields (all optional; omit for mature names)
+  "recently_ipod": true,                        // true within ~12mo of IPO
+  "ipo_date": "2026-05-13",                     // first trading day
+  "data_anchor": "s1",                          // "s1" | "10k" (default 10k)
+  "s1_accession": "0001234567-26-000123",       // SEC accession, no slashes
+  "s1_url": "https://www.sec.gov/Archives/...html",
+  "s1_filing_date": "2026-05-11",
+  "s1_cache_path": "data/sec_text/FRVO_s1_2026.txt"
 }
 ```
+
+## Recently-IPO'd issuer fields
+
+For tickers added inside their first ~12 months of public-company status, the
+10-K narrative source-of-truth doesn't exist yet — there's only the S-1 (and
+its amendments) and possibly a single 10-Q. Setting `recently_ipod: true` plus
+`data_anchor: "s1"` tells the consumers that anchor on 10-K narrative
+(`src/compute/company_description.py`, the bear-case anchor, TAM/risk
+extractors) to fall back to `data/sec_text/<TICKER>_s1_<FY>.txt`.
+
+Authoring workflow for a fresh IPO:
+
+1. Add the ticker to `tracked_companies` with `list_type='evaluation'`.
+2. Author `micro_thesis/holdings/<TICKER>.json` with the IPO fields set.
+3. Run `python execution/fetch_sec_s1.py --ticker <TICKER>` to populate the
+   `data/sec_text/<TICKER>_s1_<FY>.txt` cache.
+4. Onboard normally: `python execution/onboard_ticker.py --ticker <TICKER>`.
+   FMP fundamental coverage will be sparse but the script tolerates it; the
+   narrative layer reads from the S-1 cache instead via
+   `filing_text_fetcher.load_canonical_narrative`.
+
+The flag is informational — it doesn't change rule evaluation or DCF math.
+It only switches the narrative source. Once a 10-K is filed, flip
+`data_anchor` to `"10k"` (or drop both fields).
 
 ## Hard break rules — `break_rules` and `business_model_rules`
 

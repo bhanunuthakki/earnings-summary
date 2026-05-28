@@ -7,6 +7,15 @@ at `src/document_table_extractor.py` dispatches to these modules.
 See `directives/document_tables_design.md` for the full table-kind
 taxonomy, schema proposals, and extraction pipeline architecture.
 
+**10-K only.** All extractors in this package consume FMP's parsed-table
+JSON at `data/historical/fmp/{TICKER}_form_10k_{YEAR}.json`. Recently-IPO'd
+issuers (holdings JSON `data_anchor: "s1"`) have no FMP 10-K JSON on file —
+the orchestrator at `src/document_table_extractor.py` skips them with a
+"no source filing" status; the per-kind extractors are never invoked. S-1
+table extraction would need a different code path (PDF/HTML table parsing
+on the prospectus); intentionally out of scope until the volume justifies
+it.
+
 MVP-shipped extractors:
     customer_concentration  — LLM (Haiku) over narrative; populates
                               `customer_concentrations` (created in 0040).

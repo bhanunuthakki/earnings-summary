@@ -19,10 +19,12 @@ read from disk rather than re-fetching.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from insider_transactions import (  # type: ignore[import-not-found]
     SEC_USER_AGENT_DEFAULT,
@@ -287,6 +289,123 @@ def fetch_latest_def14a_text(
     )
 
 
+def fetch_latest_s1_text(
+    *,
+    ticker: str,
+    user_agent: str | None = None,
+    cache_dir: Path | None = None,
+) -> FilingTextResult | None:
+    """Fetch the most-recent S-1 / S-1/A registration statement for `ticker`.
+
+    For recently-IPO'd companies that don't have a 10-K yet, the S-1 (and its
+    amendments S-1/A, plus the final 424B prospectus) carries the same
+    narrative content the per-ticker prompts otherwise pull from Item 1 /
+    Item 1A / Item 7: business description, TAM, risk factors, MD&A, and
+    audited historical financials. Form-type preference order:
+
+      1. ``S-1/A``  — most recent amendment (final pre-IPO version)
+      2. ``S-1``    — original filing
+      3. ``424B4`` / ``424B3`` / ``424B1`` — final prospectus filed post-IPO
+
+    Cached at ``data/sec_text/<TICKER>_s1_<FY>.txt`` (FY = filing-year fallback
+    when there's no reportDate, which is the common case for S-1s).
+    """
+    ua = user_agent or SEC_USER_AGENT_DEFAULT
+    cik = _lookup_cik_for_ticker(ticker, user_agent=ua)
+    if cik is None:
+        log.warning({"event": "s1_no_cik", "ticker": ticker})
+        return None
+    if cache_dir is not None:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cik_padded = cik.zfill(10)
+    try:
+        payload = _http_get_json(
+            f"https://data.sec.gov/submissions/CIK{cik_padded}.json", user_agent=ua
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning({"event": "s1_submissions_failed", "ticker": ticker, "error": str(exc)})
+        return None
+
+    recent = (payload.get("filings") or {}).get("recent") or {}
+    forms = recent.get("form") or []
+    accessions = recent.get("accessionNumber") or []
+    dates = recent.get("filingDate") or []
+    primary_docs = recent.get("primaryDocument") or []
+    report_dates = recent.get("reportDate") or []
+
+    # Preference order: S-1/A (final amendment) wins over S-1 (original) wins
+    # over 424B (post-effectiveness prospectus). Within each tier, most recent.
+    preference = ("S-1/A", "S-1", "424B4", "424B3", "424B1")
+    best_by_form: dict[str, tuple[str, str, str, str]] = {}
+    for form, acc, fdate, pdoc, rdate in zip(
+        forms, accessions, dates, primary_docs, report_dates, strict=False
+    ):
+        if form in preference and form not in best_by_form:
+            best_by_form[form] = (acc, fdate, pdoc, rdate)
+
+    target_form: str | None = None
+    for tier in preference:
+        if tier in best_by_form:
+            target_form = tier
+            break
+    if target_form is None:
+        log.info({"event": "s1_not_found", "ticker": ticker})
+        return None
+    target_accession, target_date, target_doc, target_report = best_by_form[target_form]
+
+    acc_clean = target_accession.replace("-", "")
+    primary_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/{target_doc}"
+    fy_int = _parse_fy(target_report) or _parse_fy(target_date) or 0
+    cache_path = (
+        cache_dir / f"{ticker}_s1_{fy_int}.txt" if cache_dir is not None else None
+    )
+
+    text: str | None = None
+    if cache_path is not None and cache_path.exists():
+        try:
+            text = cache_path.read_text(encoding="utf-8")
+        except OSError:
+            text = None
+    if text is None:
+        try:
+            html = _http_get_text(primary_url, user_agent=ua, timeout=120.0)
+        except Exception as exc:  # noqa: BLE001
+            log.warning({"event": "s1_fetch_failed", "ticker": ticker, "error": str(exc)})
+            return None
+        text = _strip_html(html)
+        if cache_path is not None:
+            try:
+                cache_path.write_text(text, encoding="utf-8")
+            except OSError as exc:
+                log.debug({"event": "s1_cache_write_failed", "error": str(exc)})
+
+    # S-1s have the same Item 1A "Risk Factors" structure as 10-Ks.
+    item_1a = _extract_between(text, _ITEM_1A_RX, _ITEM_1B_RX) or _extract_between(
+        text, _ITEM_1A_RX, _ITEM_2_RX
+    )
+
+    log.info(
+        {
+            "event": "s1_fetched",
+            "ticker": ticker,
+            "form_type": target_form,
+            "accession": target_accession,
+            "filing_date": target_date,
+            "chars": len(text),
+        },
+    )
+    return FilingTextResult(
+        ticker=ticker,
+        accession_number=target_accession,
+        fiscal_year=fy_int,
+        filing_date=target_date or "",
+        primary_doc_url=primary_url,
+        text=text,
+        item_1a_text=item_1a,
+    )
+
+
 def split_risk_factors(item_1a_text: str) -> list[tuple[str, str]]:
     """Split Item 1A into individual risk factors.
 
@@ -416,3 +535,82 @@ def _parse_fy(report_date: str) -> int | None:
         return int(report_date[:4])
     except ValueError:
         return None
+
+
+def load_canonical_narrative(
+    *,
+    ticker: str,
+    repo_root: Path,
+    user_agent: str | None = None,
+) -> FilingTextResult | None:
+    """Return the canonical narrative filing text for ``ticker``.
+
+    Reads ``micro_thesis/holdings/<TICKER>.json``; if ``data_anchor == "s1"``
+    (recently-IPO'd issuers — no 10-K yet), loads the S-1 cache (preferring
+    ``s1_cache_path`` when set and present on disk, else falling back to
+    ``fetch_latest_s1_text`` which itself caches at
+    ``data/sec_text/<TICKER>_s1_<FY>.txt``). Otherwise — the default case for
+    every mature issuer — dispatches to ``fetch_latest_10k_text``.
+
+    Returns ``None`` when neither source is available. Callers must tolerate
+    None; the downstream consumers fall back to "no narrative" mode (skipped
+    extraction, MISSING_DATA section status, etc.).
+
+    The helper is the single entry point so consumers don't need to repeat the
+    holdings-JSON anchor check — extend this function when more anchor modes
+    appear (e.g. ``data_anchor == "10q"`` for issuers ~6mo past IPO with one
+    10-Q on file but no 10-K).
+    """
+    ticker = ticker.upper()
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
+    data_anchor = "10k"
+    s1_cache_rel: str | None = None
+    if holdings_path.exists():
+        try:
+            payload = cast("dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8")))
+            raw_anchor = payload.get("data_anchor")
+            if isinstance(raw_anchor, str) and raw_anchor.strip():
+                data_anchor = raw_anchor.strip().lower()
+            raw_cache = payload.get("s1_cache_path")
+            if isinstance(raw_cache, str) and raw_cache.strip():
+                s1_cache_rel = raw_cache.strip()
+        except (OSError, json.JSONDecodeError) as exc:
+            log.debug({"event": "canonical_narrative_holdings_read_failed", "ticker": ticker, "error": str(exc)})
+
+    cache_dir = repo_root / "data" / "sec_text"
+
+    if data_anchor == "s1":
+        # Fast path: the holdings file points at a known cache file. Avoid the
+        # SEC round-trip when the analyst has already populated the cache.
+        if s1_cache_rel:
+            cache_path = repo_root / s1_cache_rel
+            if cache_path.exists():
+                try:
+                    text = cache_path.read_text(encoding="utf-8")
+                except OSError as exc:
+                    log.debug({"event": "s1_cache_read_failed", "ticker": ticker, "path": str(cache_path), "error": str(exc)})
+                    text = ""
+                if text.strip():
+                    item_1a = _extract_between(text, _ITEM_1A_RX, _ITEM_1B_RX) or _extract_between(
+                        text, _ITEM_1A_RX, _ITEM_2_RX
+                    )
+                    # Parse FY from the cache filename (e.g. ``FRVO_s1_2026.txt``)
+                    m = re.search(r"_s1_(\d{4})\.txt$", cache_path.name)
+                    fy_int = int(m.group(1)) if m else 0
+                    return FilingTextResult(
+                        ticker=ticker,
+                        accession_number="",
+                        fiscal_year=fy_int,
+                        filing_date="",
+                        primary_doc_url=str(cache_path),
+                        text=text,
+                        item_1a_text=item_1a,
+                    )
+        # Cache miss — fall through to the SEC fetcher (which also caches).
+        return fetch_latest_s1_text(
+            ticker=ticker, user_agent=user_agent, cache_dir=cache_dir
+        )
+
+    return fetch_latest_10k_text(
+        ticker=ticker, user_agent=user_agent, cache_dir=cache_dir
+    )

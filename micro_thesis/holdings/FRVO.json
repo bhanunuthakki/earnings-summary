@@ -1,0 +1,74 @@
+{
+  "ticker": "FRVO",
+  "name": "Fervo Energy",
+  "last_updated": "2026-05-28",
+  "thesis": "Fervo Energy — next-gen enhanced geothermal systems (EGS) using horizontal drilling + multistage fracturing borrowed from shale to produce baseload zero-carbon electricity. IPO'd 2026-05-13 at $27/share on Nasdaq. STUB: needs user-authored thesis. Default key driver: contracted MWh under PPAs + capacity ramp at Cape Station + project IRRs. Anchor narrative on the S-1 (cached at data/sec_text/FRVO_s1_*.txt) until the first 10-K is filed.",
+  "verdict": "Pending",
+  "verdict_color": "gray",
+  "key_driver": "Contracted MWh under long-term PPAs + capacity ramp at Cape Station",
+  "_status": "stub_for_recurring_onboard",
+  "recently_ipod": true,
+  "ipo_date": "2026-05-13",
+  "data_anchor": "s1",
+  "s1_accession": "0001628280-26-033127",
+  "s1_url": "https://www.sec.gov/Archives/edgar/data/1853868/000162828026033127/fervoenergy-sx1a3.htm",
+  "s1_filing_date": "2026-05-11",
+  "s1_cache_path": "data/sec_text/FRVO_s1_2026.txt",
+  "tier_1_kpis": [
+    {
+      "name": "Contracted MWh (PPA-backed)",
+      "current": "TBV from S-1 / first 10-Q",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Net new PPA signings flat-to-negative for 2 consecutive Qs (placeholder)",
+      "source": "S-1 / press releases"
+    },
+    {
+      "name": "Operating capacity (MW)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Ramp schedule slips >12 months vs S-1 timeline (placeholder)",
+      "source": "S-1 / earnings release"
+    },
+    {
+      "name": "Capex / Revenue",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Capex intensity exceeds S-1 plan by >25% (placeholder — high capex expected pre-scale)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Cash & Cash Equivalents (USD)",
+      "current": "TBV",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Cash runway <18 months at current burn (placeholder)",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [],
+  "tier_3_kpis": [],
+  "break_rules": [],
+  "business_model_rules": [],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 10,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "RECENTLY_IPOD",
+    "DCF_PARAMS_PENDING",
+    "S1_ANCHOR"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
+}

@@ -152,6 +152,18 @@ def _extract_relevant_text(payload: dict[str, object]) -> str:
     return "\n\n".join(parts)
 
 
+def _is_s1_anchored(ticker: str, repo_root: Path) -> bool:
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    raw = payload.get("data_anchor") if isinstance(payload, dict) else None
+    return isinstance(raw, str) and raw.strip().lower() == "s1"
+
+
 def analyze_for_ticker(
     ticker: str,
     repo_root: Path,
@@ -162,6 +174,23 @@ def analyze_for_ticker(
     out_dir = repo_root / "data" / "filing_intelligence"
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_path = out_dir / f"{ticker}.json"
+
+    # Recently-IPO'd issuers anchor on the S-1; filing-intelligence
+    # extraction (segment shifts vs PY, metric redefinitions, exec-comp
+    # alignment) fundamentally requires a 10-K + prior-year baseline. Skip
+    # cleanly with a descriptive reason rather than crashing on missing
+    # FMP JSON.
+    if _is_s1_anchored(ticker, repo_root):
+        return FilingIntelligenceResult(
+            ticker=ticker,
+            fiscal_year=None,
+            source_path=None,
+            source_sha256=None,
+            skipped_reason=(
+                f"{ticker} is anchored on S-1 (recently IPO'd) — filing-intelligence "
+                f"extraction requires a 10-K with a prior-year baseline"
+            ),
+        )
 
     source_path, year = _locate_form_10k(repo_root, ticker, fiscal_year)
     if source_path is None:
