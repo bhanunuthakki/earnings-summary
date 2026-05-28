@@ -1,18 +1,20 @@
-"""Skeleton tests for the earnings-tone trigger (PR-N8a).
+"""Skeleton tests for the earnings-tone trigger.
 
-Locks down the slice landing in this PR:
+Locks down the half of the trigger that doesn't depend on the LLM
+plumbing:
 
   * Concrete class satisfies the runtime_checkable Trigger Protocol
   * Class attributes match the persistence-stable contract
   * ``scan()`` joins transcripts → documents and only flags transcripts
     whose ``documents.fetched_at`` falls in the last 24h
   * Missing ``transcripts`` table → ``[]`` rather than raise
-  * ``should_fire()`` is feature-flagged off
-  * ``build_alert`` / ``draft_actions`` raise NotImplementedError with
-    the documented PR-N8 marker so future-us can find the wiring site
+  * ``should_fire()`` is feature-flag aware (PR-N8 flipped the flag on,
+    so a real candidate now fires through this gate)
   * The prompt template file exists and parses as valid Jinja2
 
-The LLM diff pass and the real alert/action shapes land in PR-N8.
+PR-N8 wired the LLM diff pass; end-to-end ``build_alert`` /
+``draft_actions`` coverage lives in ``test_trigger_earnings_tone.py``
+where the LLM call is mocked.
 """
 
 from __future__ import annotations
@@ -26,11 +28,9 @@ import jinja2
 import pytest
 
 from triggers import (
-    AlertDraft,
     Cadence,
     EarningsToneTrigger,
     Trigger,
-    TriggerCandidate,
     UserStateContext,
 )
 
@@ -192,7 +192,13 @@ def test_scan_filters_by_ticker(db: sqlite3.Connection) -> None:
     assert EarningsToneTrigger().scan("MELI", db) == []
 
 
-def test_should_fire_returns_false_for_any_input(db: sqlite3.Connection) -> None:
+def test_should_fire_returns_true_for_real_candidate_after_flag_flip(
+    db: sqlite3.Connection,
+) -> None:
+    """PR-N8 flipped ``_FEATURE_ENABLED`` on; a real scan candidate now
+    passes the gate. The morning driver in PR-N9 layers signature_sha
+    dedup + dismissal-set membership on top — those are out of scope
+    for this unit test."""
     now = datetime.now(UTC).replace(tzinfo=None)
     _ = _insert_transcript(
         db,
@@ -208,41 +214,7 @@ def test_should_fire_returns_false_for_any_input(db: sqlite3.Connection) -> None
         sizing_intents=[],
         recent_dismissed_signatures=set(),
     )
-    assert EarningsToneTrigger().should_fire(candidates[0], user_state) is False
-
-
-def test_build_alert_raises_with_pr_n8_marker() -> None:
-    candidate = TriggerCandidate(
-        ticker="MELI",
-        kind="earnings_tone",
-        key="MELI:Q1:2026",
-        evidence={},
-        computed_at=datetime(2026, 5, 27),
-    )
-    with pytest.raises(NotImplementedError) as exc:
-        _ = EarningsToneTrigger().build_alert(candidate, None)
-    assert "PR-N8" in str(exc.value)
-
-
-def test_draft_actions_raises_with_pr_n8_marker() -> None:
-    candidate = TriggerCandidate(
-        ticker="MELI",
-        kind="earnings_tone",
-        key="MELI:Q1:2026",
-        evidence={},
-        computed_at=datetime(2026, 5, 27),
-    )
-    draft = AlertDraft(
-        trigger_kind="earnings_tone",
-        ticker="MELI",
-        fired_at=datetime(2026, 5, 27),
-        evidence_json="{}",
-        signature_sha="x",
-        memo_text=None,
-    )
-    with pytest.raises(NotImplementedError) as exc:
-        _ = EarningsToneTrigger().draft_actions(draft, candidate)
-    assert "PR-N8" in str(exc.value)
+    assert EarningsToneTrigger().should_fire(candidates[0], user_state) is True
 
 
 def test_prompt_template_exists_and_parses_as_jinja2() -> None:

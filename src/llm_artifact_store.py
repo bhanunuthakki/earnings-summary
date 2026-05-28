@@ -305,6 +305,14 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     "saydo_filter",
     "exec_comp_alignment",
     "qa_topics",
+    # Earnings-tone diff caches the LLM comparison of a new transcript
+    # against the prior 4 quarters' transcripts. Keyed by transcript ids,
+    # so a fact-side restatement of the *same* transcript doesn't move
+    # the key — but the trigger framework re-runs on every transcript
+    # arrival anyway. Inclusion here participates in the existing
+    # mark-dirty chain so a restatement that touches financial_facts
+    # (which the comparison anchor reads) invalidates the cached diff.
+    "earnings_tone_diff",
 )
 
 
@@ -333,6 +341,11 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     # ticker for a while. anchor_sha + summary_sha already drive the
     # primary invalidation via cache_inputs.
     "saydo_pair": 60,
+    # Earnings-tone diff is anchored to a specific transcript-id tuple
+    # (current + prior 4). The TTL acts as a safety net so a months-old
+    # cached diff is re-attempted even if the trigger never re-fires;
+    # the transcript-id key drives the primary invalidation.
+    "earnings_tone_diff": 30,
 }
 
 
