@@ -39,6 +39,7 @@ from llm_client import (  # noqa: E402
     compose_anchor_block,
     generate_pairwise_analysis,
     load_bear_anchor,
+    load_ir_anchor,
     load_thesis_anchor,
 )
 
@@ -100,6 +101,7 @@ def _prepare_batch_mode(
         anchor_block = compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
+            load_ir_anchor(repo_root, ticker),
         )
         for i in range(1, len(summaries)):
             prev = summaries[i - 1]
@@ -201,6 +203,7 @@ def _process_ticker(
     anchor_block = compose_anchor_block(
         load_thesis_anchor(repo_root, ticker),
         load_bear_anchor(repo_root, ticker),
+        load_ir_anchor(repo_root, ticker),
     )
 
     anchor_sha = hashlib.sha256(anchor_block.encode("utf-8")).hexdigest()

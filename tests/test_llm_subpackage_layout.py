@@ -28,13 +28,16 @@ def test_anchors_module_exposes_expected_names() -> None:
 
     for name in (
         "ANCHOR_BLOCK_CHAR_CAP",
+        "IR_ANCHOR_CHAR_CAP",
         "compose_anchor_block",
         "load_bear_anchor",
+        "load_ir_anchor",
         "load_thesis_anchor",
     ):
         assert hasattr(anchors, name), f"llm.anchors missing {name!r}"
     assert inspect.isfunction(anchors.load_thesis_anchor)
     assert inspect.isfunction(anchors.load_bear_anchor)
+    assert inspect.isfunction(anchors.load_ir_anchor)
     assert inspect.isfunction(anchors.compose_anchor_block)
 
 
@@ -93,6 +96,7 @@ def test_llm_package_init_reexports_match_submodules() -> None:
     pairs = [
         (llm.load_thesis_anchor, anchors.load_thesis_anchor),
         (llm.load_bear_anchor, anchors.load_bear_anchor),
+        (llm.load_ir_anchor, anchors.load_ir_anchor),
         (llm.compose_anchor_block, anchors.compose_anchor_block),
         (llm.call_llm, cli.call_llm),
         (llm.call_llm_with_web, cli.call_llm_with_web),
@@ -116,8 +120,10 @@ def test_llm_client_reexports_preserve_caller_imports() -> None:
     expected_names = [
         # Public anchor builders
         "ANCHOR_BLOCK_CHAR_CAP",
+        "IR_ANCHOR_CHAR_CAP",
         "compose_anchor_block",
         "load_bear_anchor",
+        "load_ir_anchor",
         "load_thesis_anchor",
         # Public CLI entry points + budget
         "DEFAULT_MODEL",

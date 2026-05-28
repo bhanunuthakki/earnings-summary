@@ -92,6 +92,7 @@ from llm_client import (  # noqa: E402
     JSON_FENCE_RE,
     call_llm,
     load_bear_anchor,
+    load_ir_anchor,
     load_thesis_anchor,
 )
 
@@ -1248,10 +1249,11 @@ markdown fence, no prose.
 def _route_ask_question(
     repo_root: Path, ticker: str, report_date: date, c: Comment
 ) -> dict[str, object]:
-    """Answer the analyst's question using thesis + bear anchors as context."""
+    """Answer the analyst's question using thesis + bear + IR anchors as context."""
     anchor = load_thesis_anchor(repo_root, ticker)
     bear = load_bear_anchor(repo_root, ticker)
-    context = "\n\n---\n\n".join([b for b in (anchor, bear) if b]) or "(no thesis on file)"
+    ir = load_ir_anchor(repo_root, ticker)
+    context = "\n\n---\n\n".join([b for b in (anchor, bear, ir) if b]) or "(no thesis on file)"
     prompt = f"""You are an analyst assistant for {ticker} answering a
 specific question the analyst left as a comment on the workspace report.
 

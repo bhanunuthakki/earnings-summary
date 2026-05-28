@@ -23,7 +23,7 @@ from io import StringIO
 from pathlib import Path
 from typing import cast
 
-from llm_client import generate_bear_case
+from llm_client import generate_bear_case, load_ir_anchor
 from report.models import (
     BearCaseSection,
     EarningsSection,
@@ -96,6 +96,7 @@ def build(
         kpi_status_md=_kpi_status_md(thesis),
         ticker_specific_md=_ticker_specific_md(ticker, repo_root),
         ts_signals_md=_ts_signals_md(ticker, repo_root),
+        ir_anchor_md=load_ir_anchor(repo_root, ticker),
         repo_root=repo_root,
     )
     # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
