@@ -273,7 +273,9 @@ def fmp_call(
     extra: dict | None = None,
 ) -> tuple[int, object | None, str | None, str | None]:
     """Try all URL variants. First 200 with non-empty body wins.
-    On only-403 results, returns 403 (true tier restriction).
+    A 200 with an empty array stops the ladder and returns (200, None,
+    "empty-list", kind) — the endpoint is accessible, FMP just has no rows
+    yet. On only-403 results, returns 403 (true tier restriction).
     Returns (http_code, body_or_None, error_or_None, url_kind_used).
     """
     extra = extra or {}
@@ -285,8 +287,13 @@ def fmp_call(
         last_code, last_err = code, err
         if code == 200 and body is not None:
             if isinstance(body, list) and len(body) == 0:
-                last_err = "empty-list"
-                continue
+                # Accessible endpoint, but FMP has no rows yet — the common
+                # case for freshly-IPO'd tickers (e.g. /stable/income-statement
+                # returns 200 []). This is NOT a tier restriction, so stop the
+                # ladder and report it as empty. Falling through to the v3/v4
+                # fallbacks would 403 and mis-record the endpoint as forbidden
+                # (and burn 2 extra calls per empty endpoint).
+                return (200, None, "empty-list", kind)
             return (code, body, None, kind)
         if code == 403:
             saw_403 = True
