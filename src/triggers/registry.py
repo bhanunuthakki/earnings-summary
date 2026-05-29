@@ -18,7 +18,16 @@ from __future__ import annotations
 from triggers.base import Trigger
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
+from triggers.saydo_due import SayDoDueTrigger
 
-ENABLED_TRIGGERS: list[type[Trigger]] = [EarningsToneTrigger, KpiInflectionTrigger]
+ENABLED_TRIGGERS: list[type[Trigger]] = [
+    EarningsToneTrigger,
+    KpiInflectionTrigger,
+    SayDoDueTrigger,
+]
 
-ALL_TRIGGERS: list[type[Trigger]] = [EarningsToneTrigger, KpiInflectionTrigger]
+ALL_TRIGGERS: list[type[Trigger]] = [
+    EarningsToneTrigger,
+    KpiInflectionTrigger,
+    SayDoDueTrigger,
+]

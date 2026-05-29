@@ -589,10 +589,11 @@ def test_idle_trigger_does_not_block_active_one(
 def test_no_candidates_exits_cleanly(
     db_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A ticker with only stale transcripts → both default triggers scan to
-    []; driver moves on. earnings_tone finds no fresh transcript and
-    kpi_inflection finds no registered KPIs, so each records a no-candidate
-    skip (two total for the one ticker)."""
+    """A ticker with only stale transcripts → every default trigger scans to
+    []; driver moves on. earnings_tone finds no fresh transcript,
+    kpi_inflection finds no registered KPIs, and saydo_due finds no due
+    commitments, so each records a no-candidate skip (three total for the one
+    ticker)."""
     now = datetime.now(UTC).replace(tzinfo=None)
     conn = sqlite3.connect(str(db_path))
     try:
@@ -621,8 +622,9 @@ def test_no_candidates_exits_cleanly(
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["alerts_fired"] == 0
-    # Both default triggers (earnings_tone + kpi_inflection) no-candidate on MELI.
-    assert summary["no_candidate_skips"] == 2
+    # All default triggers (earnings_tone + kpi_inflection + saydo_due)
+    # no-candidate on MELI.
+    assert summary["no_candidate_skips"] == 3
     assert summary["tickers_processed"] == 1
 
 

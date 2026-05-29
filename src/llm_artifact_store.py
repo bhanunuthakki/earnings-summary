@@ -318,6 +318,11 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # thesis anchor). A fact-side restatement that moves the KPI series should
     # invalidate the cached prose, so it joins the mark-dirty chain here.
     "kpi_inflection_context",
+    # SayDo-due context: the optional "what it means for the thesis" line
+    # attached to a saydo_due alert. Keyed by (kpi_name, period_target, factual
+    # core, thesis anchor). A fact-side restatement that moves the realized
+    # value should invalidate the cached prose, so it joins the chain here.
+    "saydo_due_context",
 )
 
 
@@ -355,6 +360,10 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     # The TTL is a safety net; the input_sha256 (factual core + anchor) drives
     # the primary invalidation when the underlying numbers move.
     "kpi_inflection_context": 30,
+    # SayDo-due context is anchored to a (kpi_name, period_target) tuple. The
+    # TTL is a safety net; the input_sha256 (factual core + anchor) drives the
+    # primary invalidation when the realized value moves.
+    "saydo_due_context": 30,
 }
 
 
