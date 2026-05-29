@@ -7,6 +7,7 @@ Public surface:
                        QueuedActionDraft, UserStateContext, ThesisAnchor)
     kpi_inflection  — KpiInflectionTrigger (full impl as of PR-N11)
     earnings_tone   — EarningsToneTrigger (full impl as of PR-N8)
+    saydo_due       — SayDoDueTrigger (full impl as of PR-N12)
     registry        — ENABLED_TRIGGERS / ALL_TRIGGERS lists consumed by
                       the morning driver (PR-N9)
 
@@ -29,6 +30,7 @@ from triggers.base import (
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS
+from triggers.saydo_due import SayDoDueTrigger
 
 __all__ = [
     "ALL_TRIGGERS",
@@ -38,6 +40,7 @@ __all__ = [
     "EarningsToneTrigger",
     "KpiInflectionTrigger",
     "QueuedActionDraft",
+    "SayDoDueTrigger",
     "ThesisAnchor",
     "Trigger",
     "TriggerCandidate",
