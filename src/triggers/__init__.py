@@ -8,6 +8,7 @@ Public surface:
     kpi_inflection  — KpiInflectionTrigger (full impl as of PR-N11)
     earnings_tone   — EarningsToneTrigger (full impl as of PR-N8)
     saydo_due       — SayDoDueTrigger (full impl as of PR-N12)
+    material_news   — MaterialNewsTrigger (full impl as of PR-N15)
     registry        — ENABLED_TRIGGERS / ALL_TRIGGERS lists consumed by
                       the morning driver (PR-N9)
 
@@ -29,6 +30,7 @@ from triggers.base import (
 )
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
+from triggers.material_news import MaterialNewsTrigger
 from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS
 from triggers.saydo_due import SayDoDueTrigger
 
@@ -39,6 +41,7 @@ __all__ = [
     "Cadence",
     "EarningsToneTrigger",
     "KpiInflectionTrigger",
+    "MaterialNewsTrigger",
     "QueuedActionDraft",
     "SayDoDueTrigger",
     "ThesisAnchor",

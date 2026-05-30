@@ -591,9 +591,9 @@ def test_no_candidates_exits_cleanly(
 ) -> None:
     """A ticker with only stale transcripts → every default trigger scans to
     []; driver moves on. earnings_tone finds no fresh transcript,
-    kpi_inflection finds no registered KPIs, and saydo_due finds no due
-    commitments, so each records a no-candidate skip (three total for the one
-    ticker)."""
+    kpi_inflection finds no registered KPIs, saydo_due finds no due
+    commitments, and material_news finds no news table, so each records a
+    no-candidate skip (four total for the one ticker)."""
     now = datetime.now(UTC).replace(tzinfo=None)
     conn = sqlite3.connect(str(db_path))
     try:
@@ -622,9 +622,9 @@ def test_no_candidates_exits_cleanly(
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["alerts_fired"] == 0
-    # All default triggers (earnings_tone + kpi_inflection + saydo_due)
-    # no-candidate on MELI.
-    assert summary["no_candidate_skips"] == 3
+    # All default triggers (earnings_tone + kpi_inflection + saydo_due +
+    # material_news) no-candidate on MELI.
+    assert summary["no_candidate_skips"] == 4
     assert summary["tickers_processed"] == 1
 
 
