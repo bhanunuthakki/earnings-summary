@@ -17,14 +17,28 @@ from models.validation import Severity, ValidationIssue, ValidationRule
 
 
 def test_source_type_enum_complete() -> None:
-    """The seven source types defined in directives/data_provenance.md exist."""
-    assert len(set(SourceType)) == 7
+    """The eight source types in directives/data_provenance.md §1 exist.
+
+    Tripwire: adding/removing a SourceType without reconciling the directive's
+    taxonomy table fails here. Bump both together (the count mirrors the table).
+    """
+    assert len(set(SourceType)) == 8
 
 
 def test_doc_type_distinct_from_source() -> None:
-    """DocType and SourceType values are independent — never substring-match between them."""
+    """DocType and SourceType share no value — except the sanctioned `sec_s1`.
+
+    The two enums occupy separate columns (documents.source_type vs .doc_type),
+    and every comparison in the codebase is exact-equality against one specific
+    enum's `.value`. The directive's "never substring-match" rule targets
+    `if "fmp" in path`-style source detection, not value identity (note `fmp` is
+    already a substring of every `fmp_*` doc_type, harmlessly). `sec_s1` is the
+    one deliberate overlap: an S-1 prospectus is simultaneously the provenance
+    origin (SourceType.SEC_S1, mapped to the s1_provisional tier) and the
+    concrete artifact (DocType.SEC_S1). Any OTHER shared value is an accident.
+    """
     overlap = {m.value for m in DocType} & {m.value for m in SourceType}
-    assert overlap == set()
+    assert overlap == {"sec_s1"}
 
 
 def test_stage_status_partitions_cleanly() -> None:

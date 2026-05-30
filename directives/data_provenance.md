@@ -12,6 +12,7 @@ Defined in `src/models/documents.py::SourceType`. Never substring-match. Never s
 |---|---|
 | `fmp` | Financial Modeling Prep API endpoint response (JSON) |
 | `sec_xbrl` | SEC EDGAR XBRL filing (10-K, 10-Q, 20-F, 40-F, 8-K, 6-K) — primary issuer source |
+| `sec_s1` | Audited statements parsed from an S-1 registration statement (prospectus). **Provisional** anchor for recently-IPO'd issuers with no 10-K yet and still-empty FMP statement endpoints. Lowest precedence (tier `s1_provisional`); superseded by `sec_xbrl`/`fmp` once real filings report the same period. |
 | `ir_doc` | Investor-relations document downloaded from the company's IR site (press release, supplement, presentation, investor update PDF) |
 | `transcript_audio` | Earnings-call audio file ingested locally (YouTube via yt-dlp, S3, etc.) |
 | `manual_csv` | User-supplied CSV upload |
@@ -37,6 +38,8 @@ Order of trust for the same `(ticker, period_end, line_item)`:
 5. `llm_extracted` (always quarantined first)
 6. `manual_csv` / `manual_entry` (user override; logged with reason)
 
+`sec_s1` sits below all of the above for any `(ticker, period_end, line_item)` it shares: it is a provisional pre-IPO snapshot (tier `s1_provisional`, the lowest rank) and is superseded the moment a real `sec_xbrl` or `fmp` filing reports the same period.
+
 If trust order #1 and #2 disagree by more than 0.5%, write a `validation_issues` row with `severity=warn`, `rule=source_disagreement`, and prefer #1.
 
 Manual override always wins over automated sources, but it must include a reason string in `validation_issues.raw_value`.
@@ -55,6 +58,12 @@ Manual override always wins over automated sources, but it must include a reason
 - Currency from XBRL context; halt if absent.
 - Idempotence key: SEC accession number.
 - Filing regime branches by `companies.filing_regime`: 10-K/10-Q for US issuers, 20-F/6-K for foreign private issuers, 40-F for Canadian issuers.
+
+### `sec_s1`
+- `doc_type` is `SEC_S1`. The audited "F-pages" of the cached S-1 text (`data/sec_text/{TICKER}_s1_{FY}.txt`) are parsed by `src/compute/s1_financials.py`; facts are written with `extracted_by='s1'`.
+- Source-quality tier is `s1_provisional` — the lowest rank. Any `fmp`/`sec_xbrl` row for the same `(ticker, period_end, line_item)` supersedes it.
+- Provisional by design: used only for recently-IPO'd issuers (`recently_ipod` / `data_anchor=s1`) until their first 10-Q/10-K lands. Optional — tickers without an S-1 anchor proceed normally.
+- `source_type` and `doc_type` both take the value `sec_s1` (the prospectus is at once the provenance origin and the artifact). They live in separate columns and are only ever compared by exact equality, so the identity is safe — never substring-match one against the other.
 
 ### `ir_doc`
 - `doc_type` ∈ `{IR_PRESS_RELEASE, IR_PRESENTATION, IR_TRANSCRIPT, IR_SUPPLEMENT, IR_INVESTOR_UPDATE}`. Files land in `ir_documents/{TICKER}/{period_end_iso}/`.
