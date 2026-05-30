@@ -273,11 +273,31 @@ def _registered_threshold(
     return None, None
 
 
+def _is_thesis_breaker_cross(evidence: Mapping[str, object]) -> bool:
+    """True when a registered thesis-breaker KPI has actually crossed its
+    registered threshold this period — the predicate that gates slice-4
+    escalation in both ``build_alert`` and ``draft_actions``.
+
+    A thesis-breaker threshold is assumed registered in the *adverse*
+    direction: crossing it is thesis-negative by construction, so the
+    seeder/user is responsible for registering breaker thresholds
+    accordingly. Escalation therefore requires a real cross — a breaker-
+    flagged KPI that inflects without breaching its registered level reads
+    as a routine inflection, not a thesis-breaker event.
+    """
+    return (
+        evidence.get("is_thesis_breaker") is True
+        and evidence.get("threshold_crossed") is True
+    )
+
+
 def _factual_memo(ticker: str, evidence: dict[str, object]) -> str:
     """Deterministic one-line memo built entirely from numeric evidence.
 
     This is the contract: it is composed with no LLM involvement so the alert
-    has a body even when the enrichment call fails.
+    has a body even when the enrichment call fails. Used for every non-
+    breaker alert (and breaker KPIs that did not cross); thesis-breaker
+    crosses use the escalated ``_escalated_memo`` instead.
     """
     kpi_name = str(evidence["kpi_name"])
     direction = str(evidence["inflection_direction"])
@@ -298,6 +318,56 @@ def _factual_memo(ticker: str, evidence: dict[str, object]) -> str:
         if isinstance(td, str) and isinstance(tv, (int, float)) and not isinstance(tv, bool):
             memo += f" Crossed your registered '{td} {float(tv):g}' threshold."
     return memo
+
+
+def _escalated_memo(ticker: str, evidence: dict[str, object]) -> str:
+    """Escalated deterministic memo for a thesis-breaker cross.
+
+    Composed with no LLM involvement — the same contract as ``_factual_memo``
+    — so a breaker cross still reads as urgent when the enrichment call is
+    down. Leads with a plain-text ``THESIS-BREAKER CROSSED`` tag (no glyphs,
+    per project convention) and ends with a reconsider call-to-action naming
+    the ticker.
+    """
+    kpi_name = str(evidence["kpi_name"])
+    direction = str(evidence["inflection_direction"])
+    unit = evidence.get("unit")
+    unit_str = unit if isinstance(unit, str) else None
+    prev_str = _format_value(_as_float(evidence["prev_value"]), unit_str)
+    curr_str = _format_value(_as_float(evidence["curr_value"]), unit_str)
+
+    memo = (
+        f"THESIS-BREAKER CROSSED - {ticker} {kpi_name} inflected {direction} "
+        f"from {prev_str} to {curr_str}"
+    )
+    z = evidence.get("zscore")
+    if isinstance(z, (int, float)) and not isinstance(z, bool):
+        memo += f" (z-score {float(z):.1f})"
+    td = evidence.get("registered_threshold_direction")
+    tv = evidence.get("registered_threshold_value")
+    if isinstance(td, str) and isinstance(tv, (int, float)) and not isinstance(tv, bool):
+        memo += (
+            f", crossing the '{td} {float(tv):g}' level you registered "
+            "as thesis-breaking"
+        )
+    memo += f". Reconsider your thesis on {ticker}."
+    return memo
+
+
+def _reconsider_thesis_body(evidence: dict[str, object], memo_text: str) -> str:
+    """Reconsider-framed body for a thesis-breaker cross's ``thesis_update``
+    action. Mirrors the escalated memo's urgency for the downstream thesis-
+    note consumer; ``memo_text`` carries the full alert context (the escalated
+    memo plus any best-effort LLM line)."""
+    kpi_name = str(evidence["kpi_name"])
+    unit = evidence.get("unit")
+    unit_str = unit if isinstance(unit, str) else None
+    curr_str = _format_value(_as_float(evidence["curr_value"]), unit_str)
+    return (
+        f"RECONSIDER THESIS - {kpi_name} crossed your registered "
+        f"thesis-breaker level ({_threshold_label(evidence)}); "
+        f"current {curr_str}. {memo_text}"
+    )
 
 
 def _build_context_prompt(factual_core: str, anchor_block: str) -> str:
@@ -544,22 +614,34 @@ class KpiInflectionTrigger:
         candidate: TriggerCandidate,
         anchor: ThesisAnchor | None,
     ) -> AlertDraft:
-        """Assemble the alert. The deterministic factual memo is built first
-        and is the contract; the optional LLM context line is appended only
-        when the best-effort enrichment succeeds. Never raises on LLM failure.
+        """Assemble the alert. The deterministic memo is built first and is the
+        contract; the optional LLM context line is appended only when the best-
+        effort enrichment succeeds. Never raises on LLM failure.
+
+        A thesis-breaker cross (``_is_thesis_breaker_cross``) swaps the factual
+        memo for the escalated ``THESIS-BREAKER CROSSED ... Reconsider`` memo.
+        Escalation is a presentation concern only — it is deterministic, fires
+        even when the LLM is down, and does NOT touch the cache key or
+        ``signature_sha`` (the dedup identity stays ``signature_key_evidence``).
         """
         _ = anchor  # driver passes None; the markdown anchor is loaded from disk
         ticker = candidate.ticker
         evidence = candidate.evidence
 
-        factual_memo = _factual_memo(ticker, evidence)
-        llm_context = self._maybe_llm_context(
-            ticker=ticker, evidence=evidence, factual_core=factual_memo
+        breaker_cross = _is_thesis_breaker_cross(evidence)
+        base_memo = (
+            _escalated_memo(ticker, evidence)
+            if breaker_cross
+            else _factual_memo(ticker, evidence)
         )
-        memo_text = factual_memo if llm_context is None else f"{factual_memo} {llm_context}"
+        llm_context = self._maybe_llm_context(
+            ticker=ticker, evidence=evidence, factual_core=base_memo
+        )
+        memo_text = base_memo if llm_context is None else f"{base_memo} {llm_context}"
 
         evidence_obj = dict(evidence)
         evidence_obj["llm_context_available"] = llm_context is not None
+        evidence_obj["is_thesis_breaker_cross"] = breaker_cross
         evidence_json = json.dumps(
             evidence_obj, sort_keys=True, ensure_ascii=False, default=str
         )
@@ -586,9 +668,13 @@ class KpiInflectionTrigger:
 
         Always an ``earnings_prep_append`` (revisit the KPI next quarter). When
         a registered threshold was crossed, add a ``thesis_update``; when the
-        crossed KPI is also a thesis-breaker, add a ``sizing_update`` (an
-        adverse move on a breaker warrants a sizing review). Reads the
-        threshold / breaker flags carried in candidate.evidence by scan().
+        crossed KPI is also a thesis-breaker (``_is_thesis_breaker_cross``) the
+        ``thesis_update`` body is reconsider-framed and carries
+        ``payload["thesis_breaker"] = True``, and a ``sizing_update`` is added
+        (an adverse move on a breaker warrants a sizing review). A non-breaker
+        cross keeps the existing factual body verbatim and carries
+        ``payload["thesis_breaker"] = False``. Reads the threshold / breaker
+        flags carried in candidate.evidence by scan().
         """
         evidence = candidate.evidence
         kpi_name = evidence.get("kpi_name")
@@ -597,7 +683,6 @@ class KpiInflectionTrigger:
             return []
 
         threshold_crossed = bool(evidence.get("threshold_crossed"))
-        is_breaker = bool(evidence.get("is_thesis_breaker"))
         memo_text = alert.memo_text or ""
 
         actions: list[QueuedActionDraft] = [
@@ -614,26 +699,36 @@ class KpiInflectionTrigger:
         ]
 
         if threshold_crossed:
+            breaker_cross = _is_thesis_breaker_cross(evidence)
+            thesis_body = (
+                _reconsider_thesis_body(evidence, memo_text)
+                if breaker_cross
+                else (
+                    f"{kpi_name} crossed your "
+                    f"{_threshold_label(evidence)} threshold: {memo_text}"
+                )
+            )
             actions.append(
                 QueuedActionDraft(
                     action_kind=_ACTION_THESIS_UPDATE,
                     payload={
-                        "body": (
-                            f"{kpi_name} crossed your "
-                            f"{_threshold_label(evidence)} threshold: {memo_text}"
-                        ),
+                        "body": thesis_body,
                         "kpi_name": kpi_name,
+                        "thesis_breaker": breaker_cross,
                     },
                 )
             )
-            if is_breaker:
+            if breaker_cross:
+                # Adverse-direction assumption (see _is_thesis_breaker_cross): a
+                # breaker threshold is registered so that crossing it is thesis-
+                # negative, so this adverse move warrants a sizing review.
                 actions.append(
                     QueuedActionDraft(
                         action_kind=_ACTION_SIZING_UPDATE,
                         payload={
                             "body": (
-                                f"Adverse move on thesis-breaker {kpi_name}; "
-                                "consider a sizing review."
+                                f"THESIS-BREAKER CROSSED on {kpi_name} - "
+                                "reconsider the thesis and review position sizing."
                             ),
                             "kpi_name": kpi_name,
                             "intent_kind": "sizing_note",
