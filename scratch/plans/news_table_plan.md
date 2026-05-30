@@ -348,11 +348,20 @@ Mirrors `fetch_fmp_statements.py` for fetch/retry/validate, but maps to `NewsRow
   margin over the 24h recency window); `--limit` (per-ticker cap, default ~50; the trigger reads only the
   latest `_MAX_STORIES_PER_SCAN=15`, [material_news.py:91](src/triggers/material_news.py)).
 - **Fetch:** `FMP_API_KEY` via `load_dotenv` ([fetch_fmp_statements.py:57-58](execution/fetch_fmp_statements.py));
-  `GET https://financialmodelingprep.com/api/v3/stock_news?tickers={T}&from=&to=&limit=&apikey=`; the
-  `_fetch_with_retry` helper verbatim (RETRY_LIMIT=3, RETRY_BACKOFF=2.0, fail-fast 401/403, retry 429/5xx,
-  [:130-164](execution/fetch_fmp_statements.py)); `ThreadPoolExecutor(max_workers=16)`.
+  **use the `stable` base, NOT `api/v3`** — FMP deprecated all `/api/v3/*` endpoints on **2025-08-31** and
+  now returns `403 "Legacy Endpoint : ... only available for legacy users who have valid subscriptions prior
+  August 31, 2025"` to any non-legacy (incl. free) account (confirmed, see Risk R6). The repo already uses the
+  `stable` base for other fetchers ([fetch_fmp_earnings_calendar.py:50](execution/fetch_fmp_earnings_calendar.py),
+  [fetch_fmp_10q_json.py:45](execution/fetch_fmp_10q_json.py)). Per-ticker request:
+  `GET https://financialmodelingprep.com/stable/news/stock?symbols={T}&from=&to=&limit=&page=0&apikey=`
+  (note `symbols=` plural, `stable/news/stock`). Use the `_fetch_with_retry` helper verbatim (RETRY_LIMIT=3,
+  RETRY_BACKOFF=2.0, fail-fast on auth, retry 429/5xx, [:130-164](execution/fetch_fmp_statements.py));
+  `ThreadPoolExecutor(max_workers=16)`.
 - **Validate:** `FmpStockNewsRecord.model_validate(data[0])` before mapping; on `ValidationError`,
   `schema_drift_halt` dump to `.tmp/fmp_validation_failures/` ([:167-204](execution/fetch_fmp_statements.py)).
+  The `stable` shape returns the same core fields as the old v3 `stock_news` plus a `publisher` field;
+  `extra="ignore"` tolerates additions, and the gate halts loudly if a *required* field drifts — confirm the
+  exact shape with the one-shot build-time probe (Risk R2/R3).
 
   ```python
   class FmpStockNewsRecord(BaseModel):   # in src/models/fmp_payloads.py, house style
@@ -360,9 +369,10 @@ Mirrors `fetch_fmp_statements.py` for fetch/retry/validate, but maps to `NewsRow
       symbol: str
       publishedDate: str       # 'YYYY-MM-DD HH:MM:SS', US/Eastern at source (Risk R1)
       title: str               # -> headline
-      url: str                 # -> url   (confirm vs 'link' — Risk R2; the gate halts on drift)
+      url: str                 # -> url   (confirm field name via probe — Risk R2; gate halts on drift)
       text: str | None = None  # -> snippet
       site: str | None = None  # -> source
+      publisher: str | None = None  # stable adds this; unused but documents the shape
       image: str | None = None
   ```
 - **Map -> NewsRow:** `headline=title`, `url=url`, `snippet=text or None`, `source=site`,
@@ -410,12 +420,38 @@ The single entrypoint the pipeline calls. `--source {fmp,websearch,auto}` (defau
 
 - `fmp` — run only the FMP feed.
 - `websearch` — run only the WebSearch+Opus feed (the setting once FMP is fully limited).
-- `auto` (default) — run FMP first; for any ticker where FMP returned an **auth/quota failure (401/403/429)**
-  or **zero rows**, run the WebSearch+Opus feed for that ticker. This degrades gracefully as FMP tightens:
-  while FMP works, the Opus path almost never runs (near-zero LLM cost); as FMP starts refusing, the fallback
-  transparently picks up the slack.
+- `auto` (default) — run FMP first; for any ticker where FMP **refused or returned nothing**, run the
+  WebSearch+Opus feed for that ticker. Degrades gracefully as FMP tightens: while FMP works the Opus path
+  almost never runs (near-zero LLM cost); as FMP starts refusing, the fallback transparently picks up the
+  slack — and if free-tier FMP refuses news for *every* ticker, the fallback silently becomes the de-facto
+  primary, with no code change.
 - Both feeds open one shared connection and write through `upsert_news_rows`; `(ticker, url)` dedup means a
   story seen by both feeds is stored once.
+
+**The refusal predicate (the R3 resolution).** FMP signals "no data for you" in several ways, and — the key
+gotcha — *not always with a 4xx status*. The dispatcher treats a per-ticker FMP result as **refused** (=>
+fall back) when ANY of:
+
+```python
+def _fmp_refused(status: int, body: object) -> bool:
+    # 401 bad key · 402 Payment Required · 403 legacy/plan-gated · 429 quota/rate · 5xx after retries
+    if status in (401, 402, 403, 429) or status >= 500:
+        return True
+    # The silent gotcha: HTTP 200 but the body is NOT the expected JSON array —
+    # FMP delivers quota/plan messages as a 200 with {"Error Message": "..."} (a dict),
+    # or an empty/None body. The statement fetcher already guards this exact shape
+    # (`if not isinstance(data, list)`, fetch_fmp_statements.py:152-153, 229-230).
+    if not isinstance(body, list):
+        return True
+    return False
+```
+
+A 200 with an **empty list** `[]` is *not* a refusal — it is a genuine "no news in window" and must NOT
+trigger the (costly) fallback. The distinction: `[]` (empty array) = no news; `{"Error Message": ...}` or
+non-list = refused. This predicate is **source-policy-agnostic**: it does not matter whether FMP withholds
+news by plan-gating, quota, or legacy-deprecation — every refusal mode lands in one of the branches above and
+routes to the fallback. That is why the design does not need to know FMP's exact free-tier news policy in
+advance (see Risk R3 for the one-shot probe that sets the *default* `--news-source`).
 
 ---
 
@@ -472,9 +508,11 @@ fetcher test conventions).
 6. **WebSearch+Opus feed.** Mock `call_llm_with_web` to return a JSON array -> rows persisted with
    `source_feed='websearch_opus'`. An item with **no date is dropped** (not stored with `now()`). Malformed
    JSON -> retry-then-`[]`. Cache hit on a second same-day run makes no second `call_llm_with_web` call.
-7. **Dispatcher `auto`.** FMP returns 429/empty for a ticker -> the WebSearch+Opus feed runs for that ticker;
-   FMP healthy -> the fallback does not run. `--source websearch` never calls FMP; `--source fmp` never calls
-   Opus.
+7. **Dispatcher `auto` + the `_fmp_refused` predicate.** Table-driven: `403` (legacy), `402`, `429`, `500`,
+   and a **`200` with a `{"Error Message": ...}` (non-array) body** all -> `refused=True` -> the WebSearch+Opus
+   feed runs for that ticker; a **`200` with `[]`** (genuine no-news) -> `refused=False` -> the fallback does
+   NOT run (guards against burning Opus on quiet tickers); a `200` with a populated array -> FMP rows
+   persisted, no fallback. `--source websearch` never calls FMP; `--source fmp` never calls Opus.
 8. **Model registration / plumbing.** `_model_for("material_news_classification")` and
    `_model_for("news_structuring")` both return `"claude-opus-4-7"`; if the `call_llm_with_web` resolution
    enhancement is taken, a purpose with an Opus pin resolves to Opus when `model` is omitted.
@@ -493,14 +531,23 @@ fetcher test conventions).
   **Mitigation:** ET->UTC at ingestion (§4.2) + the `NewsRow` validator + the §6.5 test. **Verify at build
   time:** fetch one article with a known real publish time and confirm the offset empirically — FMP docs are
   inconsistent across endpoints.
-- **R2 — FMP field name `url` vs `link`.** Stock-news returns `url` per the v3 docs/task spec, but other FMP
-  news endpoints use `link`. The Pydantic gate (`url: str` required) halts with a drift dump if wrong;
-  confirm against a live sample before merge.
-- **R3 — FMP quota change (the reason for the fallback).** When FMP drops to free/limited, the `auto`
-  dispatcher must actually detect refusal. 401/403/429 are clear, but a free tier might instead return
-  truncated results or a 200 with an error body. **Open question:** confirm FMP's limited-tier failure mode
-  and make `auto` treat "suspiciously empty / error-body 200" as a fallback trigger, not as "no news." Until
-  confirmed, the operator can force `--news-source websearch`.
+- **R2 — `stable/news/stock` exact field names.** The `stable` shape returns the v3 core fields plus
+  `publisher` (`symbol, publishedDate, title, text, url, site, publisher, image`), but the field set could
+  not be confirmed from a fetchable source (FMP's docs 403 to automated fetch). **Mitigation:** the Pydantic
+  gate (`url`/`title`/`publishedDate`/`symbol` required, `extra="ignore"`) halts with a drift dump if a
+  required field is renamed, so a wrong assumption fails loud, not silent. Resolve definitively with the R3
+  probe.
+- **R3 — FMP refusal detection (RESOLVED in design; one probe remains).** The reason the fallback exists.
+  Detection is handled generically by the `_fmp_refused` predicate (§4.4): 401/402/403/429/5xx **and** the
+  HTTP-200-with-non-array-body gotcha (FMP delivers quota/plan messages as a 200 `{"Error Message": ...}`),
+  while a genuine empty array `[]` is NOT treated as refusal. This is source-policy-agnostic, so the design
+  does not depend on knowing FMP's free-tier news policy ahead of time. **One build-time action remains** (not
+  a blocker, sets a default): with the *actual free-tier key*, issue one
+  `GET /stable/news/stock?symbols=AAPL&apikey=…` and record (status, body) to learn (a) whether news is
+  included on free FMP or returns 402/403, and (b) the precise error-body shape. If news is plan-gated on
+  free, set the pipeline default to `--news-source websearch` (skip the wasted FMP round-trip); if it is
+  free-but-quota-limited, keep `--news-source auto`. Either way the trigger keeps eating; this only tunes
+  cost.
 - **R4 — Fallback Opus cost + web reliability.** The WebSearch+Opus path costs an Opus web call per fallback
   ticker. Bounded by the `auto` gating (runs only on FMP miss), the `llm_artifacts` same-day cache, and an
   optional `llm_budgets` cap. Web extraction quality varies; the "drop items without a confident date" rule
@@ -509,11 +556,15 @@ fetcher test conventions).
   both feeds. Near-duplicate syndications with different URLs still produce separate rows; the trigger's
   `news_id` signature dedup ([material_news.py:561-569](src/triggers/material_news.py)) still prevents the
   same row firing twice. Fuzzy title/near-time dedup is a deferred enhancement.
-- **R6 — `v3` vs `stable` base URL.** v3 `stock_news` matches the documented shape; FMP also exposes
-  `/stable/stock-news` (`symbols=` param), and other repo fetchers use the `stable` base
+- **R6 — v3 is dead; use `stable` (RESOLVED).** FMP deprecated all `/api/v3/*` endpoints on **2025-08-31**;
+  they now return `403 "Legacy Endpoint : ... only available for legacy users who have valid subscriptions
+  prior August 31, 2025"` to non-legacy accounts (confirmed via a third-party report of `/api/v3/sec_filings`
+  returning exactly this). Since the account is moving to a *fresh free* tier (not a pre-Aug-2025 legacy
+  subscription), v3 `stock_news` would 403 for every call. **Decision:** use the `stable` per-ticker endpoint
+  `GET /stable/news/stock?symbols={T}` — consistent with the repo's other `stable` fetchers
   ([fetch_fmp_earnings_calendar.py:50](execution/fetch_fmp_earnings_calendar.py),
-  [fetch_fmp_10q_json.py:45](execution/fetch_fmp_10q_json.py)). Start on v3; the Pydantic gate validates
-  whichever is chosen.
+  [fetch_fmp_10q_json.py:45](execution/fetch_fmp_10q_json.py)). (Note: legacy v3 deprecation is *also* why the
+  cli.py "stale FMP news pre-pull" comment is historical — any old v3 news wiring would now 403.)
 - **R7 — `call_llm_with_web` model resolution.** It doesn't resolve model from purpose today (§3.3). The
   recommended enhancement is backward-compatible but touches a shared function; the explicit-`model`-arg
   option avoids that if a tighter blast radius is preferred.
@@ -536,13 +587,16 @@ fetcher test conventions).
    enhancement + `recent_developments` pinned to `DEFAULT_MODEL` (§3.3) + tests §6.8. Tiny and independent;
    lands early so the trigger and both feeds use Opus from day one. (An unused `news_structuring` entry until
    PR 5 is harmless.)
-4. **PR 4 — Primary FMP feed.** `FmpStockNewsRecord` (fmp_payloads.py) + `execution/fetch_fmp_news.py` ->
-   `NewsRow` -> store, with per-ticker result reporting for the dispatcher + tests §6.5. After this PR,
-   running it manually populates `news` and the trigger fires on the next driver run.
+4. **PR 4 — Primary FMP feed.** First, the **one-shot probe** (Risk R3): hit
+   `GET /stable/news/stock?symbols=AAPL&apikey=…` with the actual free-tier key, record (status, body), and
+   set the pipeline default `--news-source` accordingly. Then `FmpStockNewsRecord` (fmp_payloads.py) +
+   `execution/fetch_fmp_news.py` against the **`stable`** endpoint (NOT v3 — R6) -> `NewsRow` -> store,
+   returning the per-ticker (status, body) so the dispatcher's `_fmp_refused` can decide + tests §6.5. After
+   this PR, running it manually populates `news` (or cleanly reports FMP refusal) and the trigger fires.
 5. **PR 5 — Fallback feed + dispatcher.** `structure_recent_news_json` (llm_client.py, Opus/web, JSON +
    date-drop + `llm_artifacts` cache), `execution/fetch_news_websearch.py` -> `NewsRow` -> store, and
-   `execution/fetch_news.py --source {fmp,websearch,auto}` + tests §6.6-§6.7. After this PR the trigger keeps
-   eating even when FMP refuses.
+   `execution/fetch_news.py --source {fmp,websearch,auto}` with the `_fmp_refused` predicate (§4.4) + tests
+   §6.6-§6.7. After this PR the trigger keeps eating even when FMP refuses every call.
 6. **PR 6 — Pipeline wiring.** Stage 0 (`fetch_news.py --source auto`) before triggers in
    `run_morning_pipeline.py`, `--news-source` flag, `--skip-news` + `--skip-triggers`-implies-skip-news, and
    the resilience guarantee + tests §6.10. After this PR the daily pipeline auto-populates news -> classifies
