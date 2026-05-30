@@ -323,6 +323,11 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # core, thesis anchor). A fact-side restatement that moves the realized
     # value should invalidate the cached prose, so it joins the chain here.
     "saydo_due_context",
+    # Material-news classification: the batched LLM materiality scoring of a
+    # ticker's recent headlines against its thesis anchor. Keyed by (ticker,
+    # sorted news ids, anchor sha). A fact-side restatement that moves the
+    # thesis anchor should invalidate the cached scoring, so it joins the chain.
+    "material_news_classification",
 )
 
 
@@ -364,6 +369,11 @@ _DEFAULT_TTL_DAYS: dict[str, int] = {
     # TTL is a safety net; the input_sha256 (factual core + anchor) drives the
     # primary invalidation when the realized value moves.
     "saydo_due_context": 30,
+    # Material-news classification is anchored to a (ticker, news-id-set,
+    # anchor) tuple via input_sha256. The TTL is a safety net so a stale cached
+    # scoring is re-attempted even if the same news batch lingers; the news-id
+    # set drives the primary invalidation when new stories land.
+    "material_news_classification": 30,
 }
 
 
