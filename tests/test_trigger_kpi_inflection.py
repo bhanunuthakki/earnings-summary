@@ -507,6 +507,131 @@ def test_build_alert_empty_llm_response_degrades_to_factual(
 
 
 # ---------------------------------------------------------------------------
+# build_alert — thesis-breaker cross escalation (slice 4 / PR-N14)
+# ---------------------------------------------------------------------------
+
+
+def _breaker_cross_candidate() -> TriggerCandidate:
+    """A NIM 'below 17' breaker that crossed: is_thesis_breaker AND
+    threshold_crossed both True → the escalation predicate fires."""
+    return _make_candidate(
+        threshold_crossed=True,
+        registered_threshold_direction="below",
+        registered_threshold_value=17.0,
+        is_thesis_breaker=True,
+    )
+
+
+def test_build_alert_breaker_cross_escalates(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A thesis-breaker cross swaps the factual memo for the escalated
+    'THESIS-BREAKER CROSSED ... Reconsider your thesis' memo and sets
+    is_thesis_breaker_cross in the serialized evidence. LLM up → the optional
+    context line still appends after the escalated core."""
+    context_line = "Funding-cost pressure threatens the deposit-franchise thesis."
+    monkeypatch.setattr("triggers.kpi_inflection.call_llm", _StatefulLLM([context_line]))
+    alert = KpiInflectionTrigger().build_alert(_breaker_cross_candidate(), None)
+
+    assert alert.memo_text is not None
+    assert "THESIS-BREAKER CROSSED" in alert.memo_text
+    assert "Reconsider your thesis" in alert.memo_text
+    assert "NIM" in alert.memo_text and "16.4" in alert.memo_text
+    assert context_line in alert.memo_text
+
+    import json
+
+    ev = json.loads(alert.evidence_json)
+    assert ev["is_thesis_breaker_cross"] is True
+    assert ev["llm_context_available"] is True
+
+
+def test_build_alert_non_breaker_cross_stays_factual(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REGRESSION GUARD: a non-breaker threshold cross keeps the existing
+    factual memo verbatim — no escalation tag — and is_thesis_breaker_cross is
+    False. Proves the non-breaker framing is unchanged by slice 4."""
+    monkeypatch.setattr("triggers.kpi_inflection.call_llm", _raise_llm)
+    candidate = _make_candidate(
+        threshold_crossed=True,
+        registered_threshold_direction="below",
+        registered_threshold_value=17.0,
+        is_thesis_breaker=False,
+    )
+    alert = KpiInflectionTrigger().build_alert(candidate, None)
+
+    assert alert.memo_text is not None
+    assert "THESIS-BREAKER CROSSED" not in alert.memo_text
+    assert "Reconsider your thesis" not in alert.memo_text
+    # Existing factual form: names the KPI, the move, and the crossed threshold.
+    assert alert.memo_text.startswith("NU NIM inflected down")
+    assert "Crossed your registered 'below 17' threshold." in alert.memo_text
+
+    import json
+
+    ev = json.loads(alert.evidence_json)
+    assert ev["is_thesis_breaker_cross"] is False
+    assert ev["llm_context_available"] is False
+
+
+def test_build_alert_breaker_cross_fires_when_llm_down(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CONTRACT for breakers: the escalated memo is deterministic, so a
+    thesis-breaker cross still fires the full escalation when the LLM raises;
+    llm_context_available is False and the dedup signature is unchanged
+    (escalation is presentation only)."""
+    monkeypatch.setattr("triggers.kpi_inflection.call_llm", _raise_llm)
+    alert = KpiInflectionTrigger().build_alert(_breaker_cross_candidate(), None)
+
+    assert alert.memo_text is not None
+    assert "THESIS-BREAKER CROSSED" in alert.memo_text
+    assert "Reconsider your thesis" in alert.memo_text
+
+    import json
+
+    ev = json.loads(alert.evidence_json)
+    assert ev["llm_context_available"] is False
+    assert ev["is_thesis_breaker_cross"] is True
+    expected_sig = compute_signature_sha(
+        "kpi_inflection", "NU", {"kpi_name": "NIM", "period_end": "2026-03-31"}
+    )
+    assert alert.signature_sha == expected_sig
+
+
+def test_build_alert_breaker_without_cross_not_escalated(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Escalation requires an ACTUAL cross, not merely a breaker-flagged KPI: a
+    breaker KPI that inflected without breaching its threshold reads as a normal
+    inflection (no escalation tag, flag False) and drafts no thesis/sizing
+    action."""
+    monkeypatch.setattr("triggers.kpi_inflection.call_llm", _raise_llm)
+    candidate = _make_candidate(
+        curr_value=17.5,  # 17.5 does not breach 'below 17'
+        threshold_crossed=False,
+        registered_threshold_direction="below",
+        registered_threshold_value=17.0,
+        is_thesis_breaker=True,
+    )
+    trigger = KpiInflectionTrigger()
+    alert = trigger.build_alert(candidate, None)
+
+    assert alert.memo_text is not None
+    assert "THESIS-BREAKER CROSSED" not in alert.memo_text
+
+    import json
+
+    ev = json.loads(alert.evidence_json)
+    assert ev["is_thesis_breaker_cross"] is False
+
+    # Treated as a normal inflection — only the earnings-prep action.
+    actions = trigger.draft_actions(alert, candidate)
+    assert [a.action_kind for a in actions] == ["earnings_prep_append"]
+
+
+# ---------------------------------------------------------------------------
 # draft_actions
 # ---------------------------------------------------------------------------
 
@@ -551,6 +676,50 @@ def test_draft_actions_mild_inflection_only_earnings_prep() -> None:
     actions = KpiInflectionTrigger().draft_actions(alert, candidate)
     assert [a.action_kind for a in actions] == ["earnings_prep_append"]
     assert actions[0].payload["kpi_name"] == "GMV"
+
+
+def test_draft_actions_breaker_cross_reconsider_framed() -> None:
+    """A thesis-breaker cross → reconsider-framed thesis_update carrying
+    thesis_breaker=True, plus the sizing_update and earnings_prep."""
+    candidate = _make_candidate(
+        threshold_crossed=True,
+        registered_threshold_direction="below",
+        registered_threshold_value=17.0,
+        is_thesis_breaker=True,
+    )
+    alert = _make_alert(
+        memo_text="THESIS-BREAKER CROSSED - NU NIM inflected down ... Reconsider your thesis on NU."
+    )
+    actions = KpiInflectionTrigger().draft_actions(alert, candidate)
+
+    kinds = sorted(a.action_kind for a in actions)
+    assert kinds == ["earnings_prep_append", "sizing_update", "thesis_update"]
+    by_kind = {a.action_kind: a.payload for a in actions}
+    assert "RECONSIDER THESIS" in by_kind["thesis_update"]["body"]
+    assert by_kind["thesis_update"]["thesis_breaker"] is True
+    assert by_kind["thesis_update"]["kpi_name"] == "NIM"
+    assert by_kind["sizing_update"]["intent_kind"] == "sizing_note"
+
+
+def test_draft_actions_non_breaker_cross_not_reconsider() -> None:
+    """REGRESSION GUARD: a non-breaker threshold cross keeps the existing
+    factual thesis_update body (no 'RECONSIDER'), flags thesis_breaker=False,
+    and adds no sizing_update."""
+    candidate = _make_candidate(
+        threshold_crossed=True,
+        registered_threshold_direction="below",
+        registered_threshold_value=17.0,
+        is_thesis_breaker=False,
+    )
+    alert = _make_alert(memo_text="NU NIM inflected down from 18% to 16.4%.")
+    actions = KpiInflectionTrigger().draft_actions(alert, candidate)
+
+    kinds = sorted(a.action_kind for a in actions)
+    assert kinds == ["earnings_prep_append", "thesis_update"]
+    by_kind = {a.action_kind: a.payload for a in actions}
+    assert "RECONSIDER" not in by_kind["thesis_update"]["body"]
+    assert "crossed your" in by_kind["thesis_update"]["body"]
+    assert by_kind["thesis_update"]["thesis_breaker"] is False
 
 
 # ---------------------------------------------------------------------------
