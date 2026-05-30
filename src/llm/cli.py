@@ -116,6 +116,17 @@ LLM_MODELS: dict[str, str] = {
     # SayDo importance ordering — judgmental sort across many commitments,
     # benefits from Opus's stronger ranking discipline.
     "saydo_importance": "claude-opus-4-7",
+    # Auto KPI-registry seeding — proposes which KPIs load-bear the thesis,
+    # their polarity, and grounded breaker thresholds with NO human review
+    # gate (scratch/seed_kpi_registry.py --auto). The registry decides which
+    # alerts fire, so this is a sector/business-model judgment where Opus's
+    # wider knowledge and instruction-following materially reduce the two
+    # catastrophic failure modes (wrong polarity, ungrounded breaker). One
+    # call per ticker, run rarely — cost is bounded. A distinct purpose key
+    # also gives portfolio-wide auto-seeding its own budget attribution. The
+    # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
+    # Sonnet, so the two modes diverge cleanly.
+    "kpi_registry_auto_proposal": "claude-opus-4-7",
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,

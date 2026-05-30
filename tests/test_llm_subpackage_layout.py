@@ -77,6 +77,22 @@ def test_cli_module_exposes_expected_names() -> None:
     assert "bear_case" in cli.LLM_MODELS  # spot-check a known purpose
 
 
+def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
+    """The auto KPI-registry seeder's purpose resolves to Opus via the
+    LLM_MODELS table, while the manual --propose purpose stays unregistered
+    (Sonnet default) — the two modes diverge cleanly."""
+    from llm import cli
+
+    assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-7"
+    # _model_for is module-private; tests reaching into it use the repo's
+    # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
+    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"
+    # The manual seeder purpose is deliberately NOT registered -> Sonnet.
+    assert "kpi_registry_proposal" not in cli.LLM_MODELS
+    assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
+
+
 def test_ledger_module_exposes_expected_names() -> None:
     from llm import ledger
 
