@@ -188,6 +188,15 @@ def create_app(
         command-center shell — builds only that panel's section. ``?ticker=``
         scopes the dropdown-driven panels (prereads, insiders) to one name.
         404 for an unknown panel."""
+        if name == "portfolio":
+            # The Portfolio tab is enriched with live positions / % of book /
+            # taxable breakdown from the companion tracker, layered on top of the
+            # cached cross-portfolio synthesis memo. Degrades when the tracker is
+            # offline (the synthesis still renders).
+            from pipeline.portfolio_panel import render_portfolio_panel
+
+            return Response(render_portfolio_panel(db_path), mimetype="text/html")
+
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,
             render_panel_fragment,

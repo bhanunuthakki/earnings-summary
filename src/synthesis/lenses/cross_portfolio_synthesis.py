@@ -57,6 +57,32 @@ without a specific reason.
 """
 
 
+def _live_position_sizing(tickers: list[str]) -> dict[str, str]:
+    """Per-ticker live position sizing from the companion tracker, keyed by upper
+    ticker → "X% of portfolio · $Y · held in <treatments>". Empty dict when the
+    tracker is unreachable, so the synthesis stays grounded when it's up and
+    degrades silently when it isn't (lens runs from cron, tracker may be down)."""
+    try:
+        from integrations.portfolio_tracker_client import fetch_live_portfolio
+
+        live = fetch_live_portfolio()
+    except Exception:  # pragma: no cover - any import/transport failure → skip
+        return {}
+    if not live.available:
+        return {}
+    out: dict[str, str] = {}
+    for p in live.positions:
+        if not p.ticker:
+            continue
+        treatments = sorted({lot.tax_treatment for lot in p.accounts})
+        pct = f"{p.percent_of_portfolio:.1f}%" if p.percent_of_portfolio is not None else "?"
+        mv = f"${p.market_value:,.0f}" if p.market_value is not None else "?"
+        out[p.ticker.upper()] = (
+            f"{pct} of portfolio · {mv} · held in {', '.join(treatments) or 'unknown'}"
+        )
+    return out
+
+
 def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | None:
     # ticker is None for portfolio scope; load all portfolio holdings
     db = repo_root / "data" / "portfolio.db"
@@ -72,6 +98,7 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
             )
         ]
         # Per-ticker snapshot: thesis, dcf, latest bear case head, recent insider count
+        live_by_ticker = _live_position_sizing(tickers)
         port_lines: list[str] = []
         for t in tickers:
             dcf = conn.execute(
@@ -95,15 +122,16 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
             ).fetchone()
             h = read_holdings_json(t, repo_root)
             thesis = str(h.get("thesis") or "")[:200]
-            ou_str = (
-                f"{float(dcf[2]) * 100:+.1f}%" if dcf and dcf[2] is not None else "-"
-            )
+            ou_str = f"{float(dcf[2]) * 100:+.1f}%" if dcf and dcf[2] is not None else "-"
             bear_head = (
                 str(bear[0] or "")[:300].replace("\n", " ") if bear else "(no bear case cached)"
             )
+            live = live_by_ticker.get(t.upper())
+            live_line = f"- Live position: {live}\n" if live else ""
             port_lines.append(
                 f"### {t}\n"
                 f"- Thesis: {thesis}\n"
+                f"{live_line}"
                 f"- DCF over/under: {ou_str}\n"
                 f"- Discretionary insider trades last 30d: {int(insiders[0]) if insiders else 0}\n"
                 f"- Latest bear case head: {bear_head}\n"
@@ -123,11 +151,14 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
             LIMIT 30
             """
         ).fetchall()
-        insider_summary = "\n".join(
-            f"- {r[0]} · {str(r[1])[:10]} · {r[2]} ({r[3] or '?'}) · "
-            f"{r[4].replace('_', ' ')} · ${float(r[5] or 0) / 1e6:.1f}M"
-            for r in insider_rows
-        ) or "(no discretionary insider activity)"
+        insider_summary = (
+            "\n".join(
+                f"- {r[0]} · {str(r[1])[:10]} · {r[2]} ({r[3] or '?'}) · "
+                f"{r[4].replace('_', ' ')} · ${float(r[5] or 0) / 1e6:.1f}M"
+                for r in insider_rows
+            )
+            or "(no discretionary insider activity)"
+        )
         if (
             conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='predictions'"
@@ -143,9 +174,10 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
                 GROUP BY p.ticker, p.source_kind, p.outcome
                 """
             ).fetchall()
-            predictions_summary = "\n".join(
-                f"- {r[0]} · {r[1]} · {r[2]} × {r[3]}" for r in pred_rows
-            ) or "(no graded predictions in last 90d)"
+            predictions_summary = (
+                "\n".join(f"- {r[0]} · {r[1]} · {r[2]} x {r[3]}" for r in pred_rows)
+                or "(no graded predictions in last 90d)"
+            )
         else:
             predictions_summary = "(predictions table not yet populated)"
     finally:
