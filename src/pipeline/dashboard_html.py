@@ -86,7 +86,7 @@ def _render_row(row: DashboardRow) -> str:
     )
     return (
         "<tr>"
-        f"<td class='ticker'>{escape(row.ticker)}</td>"
+        f"<td class='ticker'><a href='/ticker/{escape(row.ticker)}'>{escape(row.ticker)}</a></td>"
         f"<td>{fmp_cell}</td>"
         f"<td>{transcript_cell}</td>"
         f"<td>{build_cell}</td>"
@@ -216,6 +216,8 @@ th {{
 tbody tr:last-child td {{ border-bottom: none; }}
 tbody tr:hover {{ background: var(--row-hover); }}
 td.ticker {{ font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-weight: 600; }}
+td.ticker a {{ color: var(--link); text-decoration: none; }}
+td.ticker a:hover {{ text-decoration: underline; }}
 .muted {{ color: var(--fg-muted); }}
 .qa-yes, .qa-no {{
   font-size: 10px;

@@ -45,21 +45,19 @@ def test_render_includes_both_sections():
     )
     assert "Portfolio" in html
     assert "Evaluation" in html
-    assert "<td class='ticker'>NU</td>" in html
-    assert "<td class='ticker'>MELI</td>" in html
+    assert "<td class='ticker'><a href='/ticker/NU'>NU</a></td>" in html
+    assert "<td class='ticker'><a href='/ticker/MELI'>MELI</a></td>" in html
 
 
 def test_render_shows_section_counts():
     rows = {"portfolio": [_row("NU"), _row("GOOG")], "evaluation": [_row("MELI", "evaluation")]}
     html = render_dashboard_html(rows, generated_at=_FIXED_NOW)
-    assert "Portfolio <span class=\"count\">(2)</span>" in html
-    assert "Evaluation <span class=\"count\">(1)</span>" in html
+    assert 'Portfolio <span class="count">(2)</span>' in html
+    assert 'Evaluation <span class="count">(1)</span>' in html
 
 
 def test_render_empty_sections_show_friendly_message():
-    html = render_dashboard_html(
-        {"portfolio": [], "evaluation": []}, generated_at=_FIXED_NOW
-    )
+    html = render_dashboard_html({"portfolio": [], "evaluation": []}, generated_at=_FIXED_NOW)
     assert "No portfolio tickers." in html
     assert "No evaluation tickers." in html
 
@@ -168,5 +166,6 @@ def test_render_escapes_ticker_in_links():
     row = _row("BRK-B")
     html = render_dashboard_html({"portfolio": [row], "evaluation": []}, generated_at=_FIXED_NOW)
     assert "BRK-B" in html
-    # No unescaped angle brackets in cell contents
-    assert "<td class='ticker'>BRK-B</td>" in html
+    # Ticker cell now links to the drill-down; the ticker is escaped into both
+    # the href and the label (BRK-B has no HTML-special chars, so it's identity).
+    assert "<td class='ticker'><a href='/ticker/BRK-B'>BRK-B</a></td>" in html
