@@ -75,7 +75,10 @@ def test_fire_alert_round_trip(db_path: Path) -> None:
     assert row.user_id == "bhanu"
     assert row.ticker == "GOOG"
     assert row.trigger_kind == "kpi_inflection"
-    assert row.fired_at == fired
+    # fired_at round-trips to naive-UTC: the store strips any offset on read
+    # (and triggers write naive to begin with). See store._parse_dt / _now_iso.
+    assert row.fired_at == fired.replace(tzinfo=None)
+    assert row.fired_at.tzinfo is None
     assert row.status == store.ALERT_STATUS_PENDING
     assert row.evidence_json == '{"kpi":"cloud_op_margin","value":0.18}'
     assert row.signature_sha == "sig-abc-123"
@@ -449,3 +452,47 @@ def test_compute_signature_sha_changes_with_inputs() -> None:
         {"kpi": "y"},
     )
     assert len({base, different_trigger, different_ticker, different_evidence}) == 4
+
+
+# ----------------------------------------------------------------------------
+# Legacy aware rows normalize to naive on read
+# ----------------------------------------------------------------------------
+
+
+def test_legacy_aware_rows_normalize_to_naive(db_path: Path) -> None:
+    """Rows carrying an aware ``+00:00`` offset — legacy rows written before
+    the naive-UTC convention was enforced (the pre-#222 ``_now_iso`` stamped
+    every ``queued_actions.created_at`` aware; 17 such rows sit in prod) —
+    must be folded to naive-UTC on read, so the store never hands back a mix
+    of aware (legacy) and naive (new) datetimes. ``_now_iso`` going naive
+    only fixes *new* writes; this is the read-side complement.
+
+    Inserts an aware-offset alert + queued action via raw SQL (bypassing the
+    store's writers) and asserts both read back naive at the same instant.
+    """
+    aware = datetime(2026, 6, 1, 17, 14, 2, tzinfo=UTC)  # stored as +00:00
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        cur = conn.execute(
+            "INSERT INTO alerts (user_id, ticker, trigger_kind, fired_at, "
+            "evidence_json, signature_sha) VALUES (?,?,?,?,?,?)",
+            ("bhanu", "NU", "earnings_tone", aware.isoformat(), "{}", "sig-legacy-aware"),
+        )
+        alert_id = int(cur.lastrowid or 0)
+        conn.execute(
+            "INSERT INTO queued_actions (alert_id, action_kind, payload_json, "
+            "created_at) VALUES (?,?,?,?)",
+            (alert_id, "thesis_update", '{"body":"x"}', aware.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    row = store.get_alert(alert_id, db_path=db_path)
+    assert row.fired_at.tzinfo is None
+    assert row.fired_at == aware.replace(tzinfo=None)
+
+    qa = store.list_queued_actions_for_alert(alert_id, db_path=db_path)[0]
+    assert qa.created_at.tzinfo is None
+    assert qa.created_at == aware.replace(tzinfo=None)
