@@ -523,7 +523,11 @@ def _resolve_db_path(override: Path | str | None) -> Path | None:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    # Naive-UTC, matching ``alerts.fired_at`` (written by triggers as
+    # ``datetime.now(UTC).replace(tzinfo=None)``) and the repo-wide
+    # convention. An aware offset here is the landmine that crashes any
+    # consumer comparing a store stamp against a naive datetime.
+    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 
 def _parse_dt(raw: object) -> datetime:
