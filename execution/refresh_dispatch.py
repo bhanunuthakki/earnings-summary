@@ -50,6 +50,48 @@ from pipeline.cadence_policy import STATEMENT_STALE_DAYS  # noqa: E402
 
 Mode = Literal["full", "stale"]
 
+# Every step the dispatcher knows how to run, in canonical execution order.
+# `build_report` stays last so it picks up whatever the earlier steps produced.
+STEP_NAMES: tuple[str, ...] = (
+    "fmp",
+    "transcripts",
+    "process_ir_docs",
+    "news",
+    "extract_kpis",
+    "saydo",
+    "dcf",
+    "thesis_eval",
+    "build_report",
+)
+# Default chain when no explicit --steps is given (the full_refresh.bat six).
+# news / dcf / thesis_eval are opt-in via --steps so a routine refresh isn't
+# silently made heavier / more expensive.
+DEFAULT_STEPS: tuple[str, ...] = (
+    "fmp",
+    "transcripts",
+    "process_ir_docs",
+    "extract_kpis",
+    "saydo",
+    "build_report",
+)
+
+
+def resolve_steps(steps: list[str] | None = None, skip: list[str] | None = None) -> list[str]:
+    """Resolve which steps to run, in canonical order.
+
+    `steps` selects an explicit subset (unknown names are dropped); when falsy,
+    the default chain runs. `skip` removes names from whatever was selected.
+    """
+    if steps:
+        wanted = {s.strip() for s in steps if s.strip()}
+        selected = [s for s in STEP_NAMES if s in wanted]
+    else:
+        selected = list(DEFAULT_STEPS)
+    if skip:
+        skipset = {s.strip() for s in skip if s.strip()}
+        selected = [s for s in selected if s not in skipset]
+    return selected
+
 
 # ---------------------------------------------------------------------------
 # Plan: pure decision logic about what to run / skip
@@ -63,6 +105,8 @@ class Plan:
     skip_fmp: bool
     skip_fmp_reason: str | None  # e.g. "fresh last_pulled=2026-05-11T01:02:14"
     force_budget_bypass: bool = False  # pass --force-budget-bypass to build_artifacts
+    steps: tuple[str, ...] = ()  # resolved steps to run, in canonical order
+    force: bool = False  # run FMP even if fresh (override the stale-skip)
 
 
 def build_plan(
@@ -73,18 +117,26 @@ def build_plan(
     stale_fmp_days: int = STATEMENT_STALE_DAYS,
     now: datetime | None = None,
     force_budget_bypass: bool = False,
+    force: bool = False,
+    steps: list[str] | None = None,
+    skip_steps: list[str] | None = None,
 ) -> Plan:
-    """Pure decision: given DB state, return what to skip.
+    """Pure decision: given DB state, return what to run / skip.
 
-    `now` is injectable for deterministic testing.
+    `now` is injectable for deterministic testing. `force` overrides the
+    stale-skip so the FMP step runs regardless of freshness. `steps` /
+    `skip_steps` narrow the chain (see `resolve_steps`).
     """
-    if mode == "full":
+    resolved = tuple(resolve_steps(steps, skip_steps))
+    if mode == "full" or force:
         return Plan(
             ticker=ticker,
             mode=mode,
             skip_fmp=False,
             skip_fmp_reason=None,
             force_budget_bypass=force_budget_bypass,
+            steps=resolved,
+            force=force,
         )
 
     now = now or datetime.now(UTC)
@@ -97,6 +149,8 @@ def build_plan(
         skip_fmp=last_pulled is not None,
         skip_fmp_reason=reason,
         force_budget_bypass=force_budget_bypass,
+        steps=resolved,
+        force=force,
     )
 
 
@@ -115,8 +169,7 @@ def _check_fmp_freshness(
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
-            "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status "
-            "WHERE ticker = ?",
+            "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status WHERE ticker = ?",
             (ticker.upper(),),
         ).fetchone()
     finally:
@@ -157,29 +210,31 @@ def execute(
     matches `subprocess.run`: receives argv list, returns object with `.returncode`.
     """
     runner = runner or _default_runner
-    _emit(out, f"[dispatch] ticker={plan.ticker} mode={plan.mode}")
+    steps = plan.steps or DEFAULT_STEPS
+    _emit(out, f"[dispatch] ticker={plan.ticker} mode={plan.mode} steps={','.join(steps)}")
+
+    # argv per step name — built once; only the selected ones run.
+    builders = {
+        "fmp": _argv_fmp(project_root, plan.ticker),
+        "transcripts": _argv_transcripts(project_root, plan.ticker),
+        "process_ir_docs": _argv_process_ir(project_root, plan.ticker),
+        "news": _argv_news(project_root, plan.ticker),
+        "extract_kpis": _argv_extract_kpis(project_root, plan.ticker),
+        "saydo": _argv_saydo(project_root, plan.ticker),
+        "dcf": _argv_dcf(project_root, plan.ticker),
+        "thesis_eval": _argv_thesis_eval(project_root, plan.ticker),
+        "build_report": _argv_build(
+            project_root, plan.ticker, force_budget_bypass=plan.force_budget_bypass
+        ),
+    }
 
     rc_total = 0
-    steps = [
-        ("fmp", _argv_fmp(project_root, plan.ticker), plan.skip_fmp, plan.skip_fmp_reason),
-        ("transcripts", _argv_transcripts(project_root, plan.ticker), False, None),
-        ("process_ir_docs", _argv_process_ir(project_root, plan.ticker), False, None),
-        ("extract_kpis", _argv_extract_kpis(project_root, plan.ticker), False, None),
-        ("saydo", _argv_saydo(project_root, plan.ticker), False, None),
-        (
-            "build_report",
-            _argv_build(project_root, plan.ticker, force_budget_bypass=plan.force_budget_bypass),
-            False,
-            None,
-        ),
-    ]
-
-    for name, argv, skip, skip_reason in steps:
-        if skip:
-            _emit(out, f"[dispatch] step={name} action=skip reason={skip_reason}")
+    for name in steps:
+        if name == "fmp" and plan.skip_fmp:
+            _emit(out, f"[dispatch] step=fmp action=skip reason={plan.skip_fmp_reason}")
             continue
         _emit(out, f"[dispatch] step={name} action=start")
-        result = runner(argv, out=out)
+        result = runner(builders[name], out=out)
         rc = getattr(result, "returncode", 1)
         _emit(out, f"[dispatch] step={name} action=end rc={rc}")
         if rc != 0:
@@ -212,7 +267,10 @@ def _argv_fmp(project_root: Path, ticker: str) -> list[str]:
     return [
         sys.executable,
         str(project_root / "execution" / "fetch_fmp_historical_data.py"),
-        "--ticker", ticker, "--limit", "12",
+        "--ticker",
+        ticker,
+        "--limit",
+        "12",
     ]
 
 
@@ -220,7 +278,8 @@ def _argv_transcripts(project_root: Path, ticker: str) -> list[str]:
     return [
         sys.executable,
         str(project_root / "execution" / "backfill_transcripts.py"),
-        "--ticker", ticker,
+        "--ticker",
+        ticker,
     ]
 
 
@@ -228,7 +287,8 @@ def _argv_process_ir(project_root: Path, ticker: str) -> list[str]:
     return [
         sys.executable,
         str(project_root / "execution" / "process_ir_documents.py"),
-        "--ticker", ticker,
+        "--ticker",
+        ticker,
     ]
 
 
@@ -236,9 +296,12 @@ def _argv_extract_kpis(project_root: Path, ticker: str) -> list[str]:
     return [
         sys.executable,
         str(project_root / "execution" / "extract_kpis_from_summaries.py"),
-        "--ticker", ticker,
-        "--source", "earnings",
-        "--repo-root", str(project_root),
+        "--ticker",
+        ticker,
+        "--source",
+        "earnings",
+        "--repo-root",
+        str(project_root),
     ]
 
 
@@ -246,25 +309,56 @@ def _argv_saydo(project_root: Path, ticker: str) -> list[str]:
     return [
         sys.executable,
         str(project_root / "execution" / "build_saydo_pairs.py"),
-        "--ticker", ticker,
-        "--repo-root", str(project_root),
+        "--ticker",
+        ticker,
+        "--repo-root",
+        str(project_root),
     ]
 
 
-def _argv_build(
-    project_root: Path, ticker: str, *, force_budget_bypass: bool = False
-) -> list[str]:
+def _argv_build(project_root: Path, ticker: str, *, force_budget_bypass: bool = False) -> list[str]:
     argv = [
         sys.executable,
         str(project_root / "execution" / "build_artifacts.py"),
-        "--ticker", ticker,
-        "--renderer", "workspace",
+        "--ticker",
+        ticker,
+        "--renderer",
+        "workspace",
         "--enable-llm",
-        "--repo-root", str(project_root),
+        "--repo-root",
+        str(project_root),
     ]
     if force_budget_bypass:
         argv.append("--force-budget-bypass")
     return argv
+
+
+def _argv_news(project_root: Path, ticker: str) -> list[str]:
+    # Default source=auto (FMP, WebSearch+Opus fallback per ticker on refusal).
+    return [
+        sys.executable,
+        str(project_root / "execution" / "fetch_news.py"),
+        "--tickers",
+        ticker,
+    ]
+
+
+def _argv_dcf(project_root: Path, ticker: str) -> list[str]:
+    return [
+        sys.executable,
+        str(project_root / "execution" / "refresh_dcf.py"),
+        "--ticker",
+        ticker,
+    ]
+
+
+def _argv_thesis_eval(project_root: Path, ticker: str) -> list[str]:
+    return [
+        sys.executable,
+        str(project_root / "execution" / "run_thesis_evaluator.py"),
+        "--ticker",
+        ticker,
+    ]
 
 
 def _emit(out, line: str) -> None:
@@ -278,10 +372,29 @@ def _emit(out, line: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--mode", choices=("full", "stale"), default="stale")
     parser.add_argument("--stale-fmp-days", type=int, default=7)
+    parser.add_argument(
+        "--steps",
+        help="Comma-separated subset of steps to run (default: the standard chain). "
+        "Available: " + ",".join(STEP_NAMES),
+    )
+    parser.add_argument(
+        "--skip-step",
+        action="append",
+        default=[],
+        metavar="STEP",
+        help="A step to skip; repeatable.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run the FMP step even if data is fresh (override the stale-skip).",
+    )
     parser.add_argument("--plan-only", action="store_true", help="Print the plan as JSON and exit.")
     parser.add_argument(
         "--force-budget-bypass",
@@ -296,12 +409,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    steps = [s for s in args.steps.split(",")] if args.steps else None
     plan = build_plan(
         ticker=args.ticker.upper(),
         mode=args.mode,
         db_path=args.db,
         stale_fmp_days=args.stale_fmp_days,
         force_budget_bypass=args.force_budget_bypass,
+        force=args.force,
+        steps=steps,
+        skip_steps=args.skip_step or None,
     )
 
     if args.plan_only:

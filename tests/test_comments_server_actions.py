@@ -187,3 +187,42 @@ def test_post_refresh_ir_missing_ticker_400(client):
 def test_post_refresh_ir_rejects_non_int_quarters(client):
     resp = client.post("/actions/refresh-ir", json={"ticker": "NU", "quarters": "lots"})
     assert resp.status_code == 400
+
+
+# ----- PR C: per-step selection + --force (budget-bypass is owned by #215) -----
+
+
+def _refresh_argv(client, **body) -> list[str]:
+    resp = client.post("/actions/refresh", json=body)
+    assert resp.status_code == 201, resp.get_data(as_text=True)
+    reg: Registry = client.application.config["DISPATCH_REGISTRY"]
+    job = reg.get(resp.get_json()["job_id"])
+    assert job is not None
+    return job.argv
+
+
+def test_post_refresh_threads_force_flag(client):
+    assert "--force" in _refresh_argv(client, ticker="NU", mode="full", force=True)
+
+
+def test_post_refresh_threads_steps_as_csv(client):
+    argv = _refresh_argv(client, ticker="NU", steps=["dcf", "fmp"])
+    assert "--steps" in argv
+    assert argv[argv.index("--steps") + 1] == "dcf,fmp"
+
+
+def test_post_refresh_omits_step_flags_by_default(client):
+    argv = _refresh_argv(client, ticker="NU", mode="stale")
+    assert "--steps" not in argv
+    assert "--force" not in argv
+
+
+def test_post_refresh_rejects_unknown_step(client):
+    resp = client.post("/actions/refresh", json={"ticker": "NU", "steps": ["bogus"]})
+    assert resp.status_code == 400
+    assert "unknown step" in resp.get_json()["error"]
+
+
+def test_post_refresh_rejects_non_list_steps(client):
+    resp = client.post("/actions/refresh", json={"ticker": "NU", "steps": "dcf"})
+    assert resp.status_code == 400
