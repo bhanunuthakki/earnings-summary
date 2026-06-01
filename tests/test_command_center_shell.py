@@ -43,6 +43,7 @@ def test_render_shell_structure() -> None:
         "overview",
         "portfolio",
         "holdings",
+        "holding",
         "prereads",
         "insiders",
         "predictions",
@@ -61,9 +62,10 @@ def test_render_shell_lazy_endpoints_and_pickers() -> None:
     assert 'data-endpoint="/api/panel/holdings"' in html
     assert 'data-endpoint="/api/panel/budget"' in html
     assert 'data-loaded="0"' in html
-    # Pre-reads + Insiders are dropdown-driven; the others are not.
+    # Holding + Pre-reads + Insiders are dropdown-driven; the others are not.
     picker_count = html.count('class="cc-picker"')
-    assert picker_count == 2  # prereads + insiders
+    assert picker_count == 3  # holding + prereads + insiders
+    assert 'data-endpoint="/api/panel/holding"' in html
     # The shell JS + CSS are inlined.
     assert SHELL_JS[:30] in html
     assert SHELL_CSS[:30] in html

@@ -23,6 +23,8 @@ from pipeline.analysis_log import build_analysis_log  # noqa: E402
 from pipeline.artifact_inventory import build_artifact_inventory  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
+    render_holding_fragment,
+    render_ticker_fragment,
     render_ticker_html,
 )
 
@@ -173,6 +175,68 @@ def test_render_has_all_panels(repo: Path) -> None:
     for marker in ("Analyses run", "Artifacts", "Thesis", "Position", "Recent decisions"):
         assert marker in html
     assert "Open in Portfolio Tracker" in html  # deep link present
+
+
+# ----- Holding tab (PR 8): report_date + head/foot-less fragments + embed -----
+
+
+def test_report_date_derived_from_workspace_artifact(repo: Path) -> None:
+    """report_date is parsed from the latest <DATE>_workspace.html filename — the
+    (ticker, report_date) key the comment store + chat thread use."""
+    tcc = build_ticker_command_center(repo, "NU")
+    assert tcc.report_date == "2026-05-18"
+    assert tcc.to_dict()["report_date"] == "2026-05-18"
+
+
+def test_report_date_none_without_brief(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir()
+    _seed_db(tmp_path / "data" / "portfolio.db")  # DB but no output/research brief
+    tcc = build_ticker_command_center(tmp_path, "NU")
+    assert tcc.report_date is None
+
+
+def test_render_ticker_fragment_is_headless(repo: Path) -> None:
+    tcc = build_ticker_command_center(repo, "NU")
+    frag = render_ticker_fragment(tcc)
+    assert "<!doctype" not in frag.lower()
+    assert "<html" not in frag.lower()
+    # Command-center sections + the report/DCF links in the compact header.
+    for marker in ("Analyses run", "Artifacts", "Thesis", "Position"):
+        assert marker in frag
+    assert 'href="/reports/NU"' in frag
+    assert 'href="/dcf/NU"' in frag
+
+
+def test_render_holding_fragment_embeds_report(repo: Path) -> None:
+    frag = render_holding_fragment(repo, "NU")
+    # The full pipeline is carried by an iframe of the workspace report.
+    assert 'src="/reports/NU"' in frag
+    assert "cc-report-frame" in frag
+    # Command-center sections + the reread section header are present.
+    assert "Position" in frag
+    assert "Per-holding 5-min rereads" in frag
+
+
+def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir()
+    _seed_db(tmp_path / "data" / "portfolio.db")  # no brief built
+    frag = render_holding_fragment(tmp_path, "NU")
+    assert "No workspace brief built yet" in frag
+    assert "<iframe" not in frag  # nothing to embed
+
+
+def test_holding_panel_endpoint(client) -> None:
+    # No ticker → a pick-a-holding prompt, not a 404.
+    empty = client.get("/api/panel/holding")
+    assert empty.status_code == 200
+    assert "Pick a holding" in empty.get_data(as_text=True)
+    # With a ticker → head/foot-less fragment embedding the report.
+    resp = client.get("/api/panel/holding?ticker=NU")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()
+    assert 'src="/reports/NU"' in body
+    assert "Thesis" in body
 
 
 # ----- live endpoints -----
