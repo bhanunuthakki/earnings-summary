@@ -127,6 +127,21 @@ LLM_MODELS: dict[str, str] = {
     # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
     # Sonnet, so the two modes diverge cleanly.
     "kpi_registry_auto_proposal": "claude-opus-4-7",
+    # Material-news materiality classification (src/triggers/material_news.py)
+    # and the WebSearch->rows news-structuring extractor (the FMP-independent
+    # fallback news ingester). Both are judgmental: "is THIS development material
+    # to the thesis?" and "what are the real structured facts in this story?" —
+    # where Opus's instruction-following and wider knowledge materially cut the
+    # failure modes (false-material noise; mis-parsed / hallucinated rows). Cost
+    # is bounded: one batched call per ticker per day, cached in llm_artifacts.
+    "material_news_classification": "claude-opus-4-7",
+    "news_structuring": "claude-opus-4-7",
+    # Recent-developments brief (generate_recent_developments) stays on Sonnet —
+    # long-form web-sourced markdown, not structured extraction. Pinned here
+    # explicitly so call_llm_with_web's purpose->model resolution keeps it on
+    # DEFAULT_MODEL (and silences the unknown-purpose warning) now that the web
+    # path resolves model from purpose when no explicit model is passed.
+    "recent_developments": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
@@ -458,7 +473,7 @@ def call_llm(
 
 def call_llm_with_web(
     prompt: str,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
     *,
     purpose: str | None = None,
@@ -478,9 +493,22 @@ def call_llm_with_web(
     Use for memo generation, fact-finding on recent news, anything where
     the upstream context is stale and Claude needs to look something up.
 
+    Model resolution mirrors `call_llm`: when ``model`` is None (the default)
+    it resolves from ``purpose`` via ``LLM_MODELS`` (``_model_for``), so web
+    callers honor the same per-purpose model policy as plain calls — e.g. the
+    news-structuring fallback resolves to Opus without threading a model id
+    through. An explicit ``model`` still overrides (escape hatch); both None
+    falls back to DEFAULT_MODEL with a warning, as `call_llm` does.
+
     Same per-purpose budget enforcement as `_call_claude`; pass
     ``force_budget_bypass=True`` to skip the check.
     """
+    if model is None:
+        if purpose is None:
+            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
+            model = DEFAULT_MODEL
+        else:
+            model = _model_for(purpose)
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()
     import llm_client  # late import — state lives on llm_client for test compat
