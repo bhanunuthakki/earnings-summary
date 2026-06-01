@@ -127,6 +127,24 @@ LLM_MODELS: dict[str, str] = {
     # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
     # Sonnet, so the two modes diverge cleanly.
     "kpi_registry_auto_proposal": "claude-opus-4-7",
+    # News LLM modules — both on Opus per the news-table plan's explicit
+    # instruction. material_news_classification is the material-news trigger's
+    # per-headline materiality veto (src/triggers/material_news.py): it was
+    # ABSENT here and so silently fell back to Sonnet; pinning it to Opus gives
+    # the noise-filtering judgment the wider knowledge and instruction-following
+    # it needs (one batched call per ticker per run, cached — cost bounded).
+    # news_structuring is the WebSearch->structured-rows fallback extractor
+    # (turning free-text news into news-table rows); registered now so it runs
+    # on Opus the moment that feed lands. Both use claude-opus-4-7 to match the
+    # repo's existing Opus pins (no one-off newer id).
+    "material_news_classification": "claude-opus-4-7",
+    "news_structuring": "claude-opus-4-7",
+    # Recent-developments web brief (generate_recent_developments, via
+    # call_llm_with_web). Stays on Sonnet — long-context news synthesis, not a
+    # structured-judgment task. Pinned explicitly to DEFAULT_MODEL because
+    # call_llm_with_web now resolves its model from purpose: registering this
+    # keeps the brief on Sonnet AND silences the unknown-purpose warning.
+    "recent_developments": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
@@ -458,7 +476,7 @@ def call_llm(
 
 def call_llm_with_web(
     prompt: str,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     timeout_seconds: int = CLAUDE_WEB_TIMEOUT_SECONDS,
     *,
     purpose: str | None = None,
@@ -480,7 +498,23 @@ def call_llm_with_web(
 
     Same per-purpose budget enforcement as `_call_claude`; pass
     ``force_budget_bypass=True`` to skip the check.
+
+    Model selection mirrors ``call_llm``: pass an explicit ``model`` to force
+    one, or leave it ``None`` (the default) to resolve from ``purpose`` via
+    ``LLM_MODELS`` / ``_model_for``; with neither set it falls back to
+    ``DEFAULT_MODEL`` with a warning. This historically hard-defaulted to
+    ``DEFAULT_MODEL`` and ignored ``purpose`` — resolving from purpose lets
+    web-enabled callers (e.g. the news structurer) be retuned centrally in
+    ``LLM_MODELS``. Callers passing an explicit ``model`` are unaffected.
     """
+    if model is None:
+        if purpose is None:
+            log.warning({"event": "llm_web_call_no_purpose", "fallback": DEFAULT_MODEL})
+            resolved_model = DEFAULT_MODEL
+        else:
+            resolved_model = _model_for(purpose)
+    else:
+        resolved_model = model
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()
     import llm_client  # late import — state lives on llm_client for test compat
@@ -488,7 +522,7 @@ def call_llm_with_web(
     log.info(
         {
             "event": "llm_web_call_start",
-            "model": model,
+            "model": resolved_model,
             "prompt_chars": len(prompt),
             "purpose": purpose,
         }
@@ -503,7 +537,7 @@ def call_llm_with_web(
         llm_client._claude_cli_path,
         "-p",
         "--model",
-        model,
+        resolved_model,
         "--output-format",
         "json",
         "--allowedTools",
@@ -531,7 +565,7 @@ def call_llm_with_web(
         record_llm_call(
             started_at=started_at,
             elapsed_ms=elapsed_ms,
-            model=model,
+            model=resolved_model,
             prompt_sha=prompt_sha,
             prompt_chars=len(prompt),
             purpose=purpose,
@@ -547,7 +581,7 @@ def call_llm_with_web(
         record_llm_call(
             started_at=started_at,
             elapsed_ms=elapsed_ms,
-            model=model,
+            model=resolved_model,
             prompt_sha=prompt_sha,
             prompt_chars=len(prompt),
             purpose=purpose,
@@ -566,7 +600,7 @@ def call_llm_with_web(
         # plain _call_claude path records its own ledger row(s).
         return _call_claude(
             prompt,
-            model=model,
+            model=resolved_model,
             timeout_seconds=timeout_seconds,
             purpose=purpose,
             ticker=ticker,
