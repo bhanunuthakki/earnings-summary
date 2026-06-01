@@ -95,27 +95,28 @@ _TURN_BOUNDARY_RX = re.compile(
     """,
 )
 
-# A speaker block: single capital letter (the first-initial marker), then a
-# name whose first word begins with that same letter, then 1-2 more
-# capitalized words, plus an optional lowercase-particle tail ("do Lago",
-# "van Beurden") for Latin/Dutch surnames — without it, NU's CFO "Guilherme
-# Marques do Lago" isn't recognized and his answers merge into the analyst's
-# question paragraph. The particle list is case-sensitive (lowercase only) so a
-# sentence-initial "Do/De" can't trigger it. The backreference ``(?P=initial)``
-# enforces the initial==first-letter-of-name constraint, which keeps the regex
-# from matching mid-sentence patterns like ". I Think this is...". The leading
-# anchor accepts either start-of-text or a sentence-terminator + whitespace.
+# A speaker block starts with a single capital letter (the first-initial
+# marker), then a name whose first word begins with that same letter. The
+# backreference ``(?P=initial)`` enforces the initial==first-letter-of-name
+# constraint, which keeps the regex from matching mid-sentence patterns like
+# ". I Think this is...". The leading anchor accepts either start-of-text or a
+# sentence-terminator + whitespace.
+#
+# The regex deliberately matches ONLY through the first name and stops (via a
+# zero-width lookahead requiring a following capitalized word — the surname).
+# How many of the following capitalized words belong to the NAME vs. to the
+# SPOKEN TEXT is decided in Python by ``_split_name_tail``: a pure-regex name
+# capture can't tell a 3rd name word ("Ryan James Merkel") or a middle-initial
+# surname ("Matthew J. Tobolski") apart from a capitalized sentence opener
+# ("How are you") — a non-greedy quantifier leaks the surname into the body, a
+# greedy one eats the first spoken word. The token walk resolves this with a
+# speech-opener guard.
 _SPEAKER_BLOCK_START_RX = re.compile(
     r"""(?x)
     (?:(?<=[.!?])\s+|\A\s*)
     (?P<initial>[A-Z])\s+
-    (?P<name>
-        (?P=initial)[a-z]+
-        (?:\s+[A-Z][\w'.\-]+){1,2}?
-        (?:\s+(?:do|de|da|dos|das|del|von|van|der)\s+[A-Z][\w'.\-]+)?
-    )
-    \s+
-    (?=[A-Z])
+    (?P<first>(?P=initial)[a-z]+)
+    (?=\s+[A-Z])
     """,
 )
 
@@ -339,9 +340,11 @@ def _parse_turn(analyst_name: str, firm: str, body: str) -> QAEntry | None:
 def _split_speaker_paragraphs(body: str) -> list[tuple[str, str]]:
     """Scan a turn body for ``<X> <Name>`` speaker blocks; return [(name, text)].
 
-    Uses ``_SPEAKER_BLOCK_START_RX`` to find each block's header; the body of
-    each block runs from the header's end to the next header's start (or end
-    of the turn).
+    ``_SPEAKER_BLOCK_START_RX`` finds each block's header through the speaker's
+    first name; ``_split_name_tail`` then peels the remaining name words
+    (surname, middle initial, particle) off the front of the block body so they
+    don't leak into the spoken text. The body of each block runs from the
+    header's end to the next header's start (or end of the turn).
     """
     headers = list(_SPEAKER_BLOCK_START_RX.finditer(body))
     if not headers:
@@ -352,8 +355,9 @@ def _split_speaker_paragraphs(body: str) -> list[tuple[str, str]]:
     for i, m in enumerate(headers):
         body_start = m.end()
         body_end = headers[i + 1].start() if i + 1 < len(headers) else len(body)
-        name = m.group("name").strip()
-        text = _normalize_whitespace(body[body_start:body_end])
+        first = m.group("first")
+        name_tail, text = _split_name_tail(_normalize_whitespace(body[body_start:body_end]))
+        name = f"{first} {name_tail}".strip()
         # Trim trailing operator "stub" markers like " . " or " O " that the
         # aggregator inserts between paragraphs.
         text = text.strip(" .").strip()
@@ -417,6 +421,153 @@ def _strip_title_prefix(seg: str) -> str:
         else:
             break  # lowercase non-connector word — speech starts here
     return " ".join(tokens[i:])
+
+
+# ---------------------------------------------------------------------------
+# Initial-marker name/speech split (used by _split_speaker_paragraphs)
+# ---------------------------------------------------------------------------
+# _SPEAKER_BLOCK_START_RX matches only through the first name; these helpers
+# decide how many of the following capitalized words are still the NAME
+# (surname, middle initials, particle) vs. where the SPOKEN TEXT begins.
+
+# Lowercase Latin/Dutch surname particles ("do Lago", "van Beurden"). Matched
+# case-sensitively (lowercase only) so a sentence-initial "Do/De" can't trigger
+# a spurious surname join.
+_NAME_PARTICLES = frozenset(
+    {"do", "de", "da", "dos", "das", "del", "von", "van", "der", "di", "la", "le"}
+)
+
+# A bare middle initial ("J.", "F.") always pulls in the following surname.
+_MIDDLE_INITIAL_RX = re.compile(r"[A-Z]\.")
+
+# Curly quote characters the aggregators emit, built with chr() so the source
+# stays ASCII (ruff RUF001 flags ambiguous-quote literals).
+_SMART_SINGLE = chr(0x2018) + chr(0x2019)  # left/right single quotation marks
+_SMART_QUOTES = _SMART_SINGLE + chr(0x201C) + chr(0x201D)  # + double quotes
+_EDGE_PUNCT = ",.;:!?\"'()" + _SMART_QUOTES
+
+# A plausible name token (letters plus an inner apostrophe/hyphen/period, e.g.
+# "O'Brien", "Smith-Jones", "St."); the apostrophe class covers the curly
+# variants so a smart-quoted surname still parses.
+_NAME_TOKEN_RX = re.compile(rf"[A-Za-z][\w'{_SMART_SINGLE}.\-]*")
+
+# A contraction ("It's", "I'll", "We've", "That's") — speech, never a name word.
+_CONTRACTION_RX = re.compile(rf"['{_SMART_SINGLE}](?:s|ll|m|ve|re|d|t|em)$", re.IGNORECASE)
+
+# Trailing punctuation that ends the name region: a comma/colon flags a direct
+# address ("Adam,") and a sentence terminator flags an interjection the
+# aggregator runs into the next speaker's text ("Trevor.", "Pardon?").
+_NAME_STOP_PUNCT = frozenset(".,;:!?")
+
+# Names have at most four words after the first ("Roger J. M. Dassen", "First
+# Marques do Lago"); cap the walk so a body opening with capitalized words can't
+# run away.
+_MAX_NAME_TAIL = 4
+
+# Words that OPEN spoken text — reuses the full-name title-stripper's openers
+# (greetings/discourse) and adds the pronouns, question/aux verbs, and fillers
+# the name-tail walk also needs. A capitalized token whose lowercase form is in
+# this set marks the START OF SPEECH, not a surname. Surname-likely words ("may",
+# "will", "young", "given") are deliberately absent so a real name isn't cut.
+_EXTRA_OPENER_WORDS = (
+    "got guess think mean wonder wondering curious you they it this that these"
+    " those a an if as in on at with from about during since while before after"
+    " how what when where why who whom whose which would should do does did is"
+    " are was were am be been being have has had two three couple first second"
+    " secondly also again all anyway anyways obviously clearly honestly frankly"
+    " basically essentially overall regarding fair definitely welcome congrats"
+    " congratulations appreciate appreciated apologies sorry awesome fantastic"
+    " wonderful terrific alright nope yup listen his her their"
+)
+_NAME_SPLIT_OPENERS = _SPEECH_OPENERS | frozenset(_EXTRA_OPENER_WORDS.split())
+
+
+def _split_name_tail(after: str) -> tuple[str, str]:
+    """Split a block body into (trailing name words, spoken text).
+
+    ``after`` is the whitespace-normalized text immediately following a
+    speaker's first name — for the common two-word case it begins with the
+    surname. Returns ``(name_tail, speech)`` where ``name_tail`` may be "".
+    """
+    tokens = after.split()
+    k = _name_tail_len(tokens)
+    return " ".join(tokens[:k]), " ".join(tokens[k:])
+
+
+def _name_tail_len(tokens: list[str]) -> int:
+    """Count the leading ``tokens`` that belong to the speaker's name.
+
+    A leading run of middle initials ("J.", "J. M.") is followed by the
+    surname, which is always taken. A further full word (a middle name + a
+    second surname word, or a particle surname) is taken only on strong
+    evidence: a clean token (no trailing punctuation) that is clearly the LAST
+    name word — followed by the start of speech (a capitalized opener) or
+    nothing. That separates a true three-word name ("Ryan James Merkel Hey")
+    from a direct address ("...McDonnell Adam, I'll..."), a vocative
+    ("...Chesky Eli do you..." — next token lowercase), and an interjection the
+    aggregator runs together ("...Sinatra Gotcha. Thank...").
+    """
+    n = len(tokens)
+    k = 0
+    # A run of middle initials ("J.", "J. M.") directly after the first name.
+    while k < n and k < _MAX_NAME_TAIL and _MIDDLE_INITIAL_RX.fullmatch(tokens[k]):
+        k += 1
+    if k > 0:
+        # Initials are always followed by the surname — take it unconditionally
+        # (it may carry a particle: "von Beurden").
+        if k < n and tokens[k] in _NAME_PARTICLES and k + 1 < n and _is_name_word(tokens[k + 1]):
+            k += 2
+        elif k < n and _is_name_word(tokens[k]):
+            k += 1
+    elif tokens and tokens[0] in _NAME_PARTICLES and n > 1 and _is_name_word(tokens[1]):
+        k = 2  # particle surname with no preceding word ("da Silva ...")
+    elif tokens and _is_name_word(tokens[0]) and tokens[0][-1] not in _NAME_STOP_PUNCT:
+        k = 1  # the surname
+    else:
+        return 0  # one-word name (e.g. "Operator") — the body starts here
+    # Further name words (a full middle name + surname, or a particle surname),
+    # accepted only on strong evidence: a clean token (no trailing punctuation)
+    # that is clearly the LAST name word — followed by the start of speech.
+    while k < n and k < _MAX_NAME_TAIL:
+        tok = tokens[k]
+        if tok in _NAME_PARTICLES and k + 1 < n and _is_name_word(tokens[k + 1]):
+            k += 2  # particle surname ("Marques do Lago")
+            continue
+        if not _is_name_word(tok) or tok[-1] in _NAME_STOP_PUNCT:
+            break  # opener / contraction / address ("Adam,", "Trevor.", "Pardon?")
+        nxt = tokens[k + 1] if k + 1 < n else None
+        if nxt is None or _is_capitalized_opener(nxt):
+            k += 1
+            continue
+        break
+    return k
+
+
+def _is_name_word(tok: str) -> bool:
+    """True if ``tok`` looks like a name word rather than the start of speech."""
+    core = tok.strip(_EDGE_PUNCT)
+    if not core or not core[0].isupper():
+        return False
+    if _CONTRACTION_RX.search(tok):
+        return False
+    if any(ch.isdigit() for ch in core):
+        return False
+    if core.isupper() and len(core) > 1:
+        # All-caps token (EBITDA, GAAP, AI) — an acronym, not a surname.
+        return False
+    if core.lower() in _NAME_SPLIT_OPENERS:
+        return False
+    return _NAME_TOKEN_RX.fullmatch(core) is not None
+
+
+def _is_capitalized_opener(tok: str) -> bool:
+    """True if ``tok`` is a capitalized word (or contraction) that begins speech."""
+    core = tok.strip(_EDGE_PUNCT)
+    if not core or not core[0].isupper():
+        return False
+    if _CONTRACTION_RX.search(tok):
+        return True
+    return core.lower() in _NAME_SPLIT_OPENERS
 
 
 def _normalize_whitespace(text: str) -> str:

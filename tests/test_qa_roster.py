@@ -282,3 +282,93 @@ def test_unparseable_transcript_reports_partial() -> None:
     section = qa_roster.build(_appendix("=== Q&A SEGMENT ===\nNo structured turns here at all.\n"))
     assert section.status == SectionStatus.PARTIAL
     assert section.missing is not None
+
+
+# ---------------------------------------------------------------------------
+# Three-word names and "First M. Last" names (initial-marker speaker blocks)
+# ---------------------------------------------------------------------------
+
+# Real aggregator output: a 3-word name ("Ryan James Merkel"), a "First M. Last"
+# name ("Matthew J. Tobolski"), and a double-initial name ("Roger J. M.
+# Dassen"). The speaker-block splitter must keep the full name on the label and
+# NOT leak the surname into the spoken text — the pre-existing bug where the
+# non-greedy name regex stopped after two words, leaving the real surname at the
+# head of the question/answer and truncating the answer speaker to "Matthew J.".
+THREE_WORD_NAMES = """=== Q&A SEGMENT ===
+O Operator And your first question comes from the line of Ryan James Merkel with William Blair.
+
+R Ryan James Merkel Hey, everyone. Can we start on the gross margin in the quarter?
+
+M Matthew J. Tobolski Yes. And good morning, Ryan. The biggest driver was Tulsa volumes.
+
+O Operator Your next question comes from the line of Michael Edward Genovese with Rosenblatt.
+
+M Michael Edward Genovese Got it. How should we think about the data center ramp?
+
+R Roger J. M. Dassen Well, I think it is a positive for the order intake outlook.
+"""
+
+# The conservative token-walk must NOT swallow the first spoken word when the
+# speaker opens by addressing someone by name ("Adam,") or uses a contraction
+# ("It's") — the over-reach regression the speech-opener guard prevents.
+NAME_NO_OVERREACH = """=== Q&A SEGMENT ===
+O Operator Your first question comes from the line of Adam Jonas with Morgan Stanley.
+
+A Adam Jonas Thanks. Can you frame the capital allocation priorities for the year?
+
+P Padraig McDonnell Adam, I'll give this one to you. We are leaning into the buyback.
+
+E Elinor Mertz It's Elinor. We have the financial flexibility to fund both.
+"""
+
+
+def test_three_word_and_middle_initial_names() -> None:
+    entries = _entries(THREE_WORD_NAMES)
+    assert len(entries) == 2
+
+    # Three-word analyst name kept whole; question must not start with the
+    # leaked surname.
+    assert entries[0].analysts == "Ryan James Merkel (William Blair)"
+    assert entries[0].question.startswith("Hey, everyone.")
+    assert "Merkel" not in entries[0].question
+    # "First M. Last" answer speaker — must NOT truncate to "Matthew J.".
+    assert entries[0].answers[0][0] == "Matthew J. Tobolski"
+    assert entries[0].answers[0][1].startswith("Yes.")
+    assert "Tobolski" not in entries[0].answers[0][1]
+
+    # Three-word analyst again, plus a double-initial answer name.
+    assert entries[1].analysts == "Michael Edward Genovese (Rosenblatt)"
+    assert entries[1].question.startswith("Got it.")
+    assert "Genovese" not in entries[1].question
+    assert entries[1].answers[0][0] == "Roger J. M. Dassen"
+    assert entries[1].answers[0][1].startswith("Well,")
+
+
+def test_name_split_does_not_overreach() -> None:
+    entries = _entries(NAME_NO_OVERREACH)
+    assert len(entries) == 1
+    assert entries[0].analysts == "Adam Jonas (Morgan Stanley)"
+    answers = dict(entries[0].answers)
+    # The answerer opens by addressing the analyst — the address word stays in
+    # the spoken text, not appended to the speaker's name.
+    assert "Padraig McDonnell" in answers
+    assert answers["Padraig McDonnell"].startswith("Adam,")
+    # A contraction ("It's") must not be read as a trailing surname token.
+    assert "Elinor Mertz" in answers
+    assert answers["Elinor Mertz"].startswith("It's")
+
+
+def test_speaker_block_split_real_aggregator_strings() -> None:
+    # The literal strings from the bug report (AAON Q4 2025), fed straight to the
+    # block splitter so the fix is locked in independent of turn-boundary parsing.
+    body = (
+        "R Ryan James Merkel Hey, everyone. Can we start on gross margin? "
+        "M Matthew J. Tobolski Yes. And good morning, Ryan. Tulsa was the driver."
+    )
+    paras = qa_roster._split_speaker_paragraphs(body)
+    assert paras[0][0] == "Ryan James Merkel"
+    assert paras[0][1].startswith("Hey, everyone.")
+    assert "Merkel" not in paras[0][1]
+    assert paras[1][0] == "Matthew J. Tobolski"
+    assert paras[1][1].startswith("Yes.")
+    assert "Tobolski" not in paras[1][1]
