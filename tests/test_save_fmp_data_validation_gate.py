@@ -3,7 +3,7 @@
 # _dump_validation_failure, _STABLE_VALIDATORS) by design.
 """Tests for the ported pre-write validation gate in execution/save_fmp_data.py.
 
-The gate (ported from the retired execution/fetch_fmp_statements.py) Pydantic-
+The gate (ported from a now-retired v3-only statements fetcher) Pydantic-
 validates the first record of a STABLE statement response *before* the JSON is
 cached. On schema drift it dumps the raw body to .tmp/fmp_validation_failures/
 and skips the write, recording the endpoint as an error rather than overwriting

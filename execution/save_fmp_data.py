@@ -315,7 +315,7 @@ def fmp_call(
 # Pre-write validation gate (stable rungs only)
 # ---------------------------------------------------------------------------
 #
-# Ported from the retired execution/fetch_fmp_statements.py: Pydantic-validate
+# Ported from a now-retired v3-only statements fetcher: Pydantic-validate
 # the first record of a statement response *before* persisting it, so a drifted
 # stable envelope can't silently overwrite good cached JSON and break the
 # downstream compute/* extractors. On drift we dump the raw body to .tmp/ and
