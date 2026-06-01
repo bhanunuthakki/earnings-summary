@@ -24,6 +24,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     BreakRuleEvaluation,
+    BudgetSkip,
     CompanyDescriptionSection,
     DecisionBadge,
     EarningsSection,
@@ -501,6 +502,21 @@ def _header(out: StringIO, spec: ReportSpec) -> None:
         f'<p class="meta">Generated {html.escape(spec.generation_date.isoformat())} · '
         f"repo <code>{html.escape(spec.repo_root)}</code></p>\n"
     )
+    _forgone_callout(out, spec.forgone_due_to_budget)
+
+
+def _forgone_callout(out: StringIO, forgone: list[BudgetSkip]) -> None:
+    """Brief-level banner listing the analyses forgone to stay under budget."""
+    if not forgone:
+        return
+    n = len(forgone)
+    word = "analysis" if n == 1 else "analyses"
+    names = html.escape(", ".join(f.section for f in forgone))
+    out.write(
+        '<div class="callout" style="border-left:4px solid #d97706;background:#fffbeb;">'
+        f"<strong>⏭ {n} {word} forgone to stay under budget:</strong> {names}. "
+        "Raise the cap or override, then rebuild.</div>\n"
+    )
 
 
 def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
@@ -702,6 +718,16 @@ def _missing_callout(out: StringIO, status: SectionStatus, missing: object) -> b
     stage = html.escape(str(getattr(missing, "stage", "unknown")))
     fix = html.escape(str(getattr(missing, "fix_command", "")))
     detail = getattr(missing, "detail", None)
+    if status == SectionStatus.BUDGET_SKIPPED:
+        # Distinct amber banner — deliberately forgone to stay under a monthly
+        # budget cap (not a pipeline gap).
+        detail_html = html.escape(str(detail)) if detail else ""
+        out.write(
+            '<div class="callout" style="border-left:4px solid #d97706;background:#fffbeb;">'
+            f"<strong>⏭ Forgone to stay under budget.</strong> {detail_html}<br>"
+            f"<strong>Override:</strong> <code>{fix}</code></div>\n"
+        )
+        return True
     out.write(f'<div class="callout"><strong>Pending stage:</strong> <code>{stage}</code><br>')
     out.write(f"<strong>Fix:</strong> <code>{fix}</code>")
     if detail:

@@ -13,6 +13,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     BreakRuleEvaluation,
+    BudgetSkip,
     CompanyDescriptionSection,
     DecisionBadge,
     EarningsSection,
@@ -76,7 +77,21 @@ def _header(out: StringIO, spec: ReportSpec) -> None:
     out.write(f"# {spec.ticker} — research report\n\n")
     out.write(f"_Generated: {spec.generation_date.isoformat()}_\n\n")
     out.write(f"_Repo root: `{spec.repo_root}`_\n\n")
+    _forgone_rollup(out, spec.forgone_due_to_budget)
     out.write("---\n\n")
+
+
+def _forgone_rollup(out: StringIO, forgone: list[BudgetSkip]) -> None:
+    """Brief-level banner listing the analyses forgone to stay under budget."""
+    if not forgone:
+        return
+    n = len(forgone)
+    word = "analysis" if n == 1 else "analyses"
+    names = ", ".join(f.section for f in forgone)
+    out.write(
+        f"> ⏭ **{n} {word} forgone to stay under budget:** {names}. "
+        "Raise the cap or override, then rebuild.\n\n"
+    )
 
 
 def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
@@ -174,6 +189,13 @@ def _missing_block(out: StringIO, status: SectionStatus, missing: object) -> boo
     stage = getattr(missing, "stage", "unknown")
     fix = getattr(missing, "fix_command", "")
     detail = getattr(missing, "detail", None)
+    if status == SectionStatus.BUDGET_SKIPPED:
+        # Distinct, loud banner — this analysis was deliberately forgone to stay
+        # under a monthly budget cap (not a pipeline gap). Re-run after raising
+        # the cap or overriding.
+        out.write(f"> ⏭ **Forgone to stay under budget.** {detail or ''}\n>\n")
+        out.write(f"> **Override:** `{fix}`\n\n")
+        return True
     out.write(f"> **Pending stage:** `{stage}`\n>\n")
     out.write(f"> **Fix:** `{fix}`\n")
     if detail:
