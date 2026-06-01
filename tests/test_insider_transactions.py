@@ -232,6 +232,11 @@ def test_upsert_distinct_share_counts_are_separate_rows(db: Path) -> None:
 
 
 def test_conviction_signal_ranks_ceo_buy_highest(db: Path) -> None:
+    # Dates are relative to "now" so the fixtures always land inside the
+    # conviction window (conviction_signals cuts off at now - window_days).
+    # Distinct days keep each trade out of a same-day cluster, so ranking
+    # is decided purely by role x size.
+    now = datetime.now(UTC)
     # CEO open-market buy ($300k)
     upsert(
         [
@@ -240,8 +245,8 @@ def test_conviction_signal_ranks_ceo_buy_highest(db: Path) -> None:
                 insider_name="CEO Person",
                 insider_title="Chief Executive Officer",
                 insider_relation="officer",
-                transaction_date=datetime(2026, 5, 1, tzinfo=UTC),
-                filing_date=datetime(2026, 5, 3, tzinfo=UTC),
+                transaction_date=now - timedelta(days=10),
+                filing_date=now - timedelta(days=8),
                 transaction_type="open_market_buy",
                 shares=2000,
                 price_per_share=150,
@@ -253,8 +258,8 @@ def test_conviction_signal_ranks_ceo_buy_highest(db: Path) -> None:
                 insider_name="Director X",
                 insider_title="Director",
                 insider_relation="director",
-                transaction_date=datetime(2026, 5, 2, tzinfo=UTC),
-                filing_date=datetime(2026, 5, 4, tzinfo=UTC),
+                transaction_date=now - timedelta(days=9),
+                filing_date=now - timedelta(days=7),
                 transaction_type="open_market_buy",
                 shares=50,
                 price_per_share=150,
@@ -266,8 +271,8 @@ def test_conviction_signal_ranks_ceo_buy_highest(db: Path) -> None:
                 insider_name="CFO Person",
                 insider_title="Chief Financial Officer",
                 insider_relation="officer",
-                transaction_date=datetime(2026, 5, 5, tzinfo=UTC),
-                filing_date=datetime(2026, 5, 5, tzinfo=UTC),
+                transaction_date=now - timedelta(days=8),
+                filing_date=now - timedelta(days=8),
                 transaction_type="open_market_sell",
                 shares=5000,
                 price_per_share=150,
@@ -286,8 +291,9 @@ def test_conviction_signal_ranks_ceo_buy_highest(db: Path) -> None:
 
 
 def test_conviction_signal_detects_cluster_event(db: Path) -> None:
-    # 3 insiders buy on the same day → cluster bonus
-    same_day = datetime(2026, 5, 1, tzinfo=UTC)
+    # 3 insiders buy on the same day → cluster bonus. Relative to "now" so the
+    # trades stay inside the conviction window as the calendar advances.
+    same_day = datetime.now(UTC) - timedelta(days=5)
     upsert(
         [
             InsiderTransaction(
