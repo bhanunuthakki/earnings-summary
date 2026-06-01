@@ -59,6 +59,10 @@ from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E4
 from pipeline.analytical_dashboard_html import render_html as render_analytical_html  # noqa: E402
 from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
+from pipeline.ticker_command_center import (  # noqa: E402
+    build_ticker_command_center,
+    render_ticker_html,
+)
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
 
@@ -157,6 +161,23 @@ def create_app(
         dash = build_analytical_dashboard(db_path)
         coverage = tier_coverage_summary(repo_root)
         html = render_analytical_html(dash, generated_at=datetime.now(UTC), tier_coverage=coverage)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/ticker/<ticker>", methods=["GET"])
+    def ticker_api(ticker: str):
+        """Full per-ticker command-center state as JSON: identity/freshness,
+        artifacts on disk, analyses run, recent decisions, read-only thesis,
+        and the live position (from the companion portfolio-tracker, if
+        reachable)."""
+        tcc = build_ticker_command_center(repo_root, ticker)
+        return tcc.to_dict()
+
+    @app.route("/ticker/<ticker>", methods=["GET"])
+    def ticker_page(ticker: str):
+        """Per-ticker drill-down — the command-center detail view (artifacts,
+        analyses, decisions, thesis, position) for one name."""
+        tcc = build_ticker_command_center(repo_root, ticker)
+        html = render_ticker_html(tcc, generated_at=datetime.now(UTC))
         return Response(html, mimetype="text/html")
 
     @app.route("/reports/<ticker>", methods=["GET"])
