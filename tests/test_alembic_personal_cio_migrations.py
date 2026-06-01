@@ -34,6 +34,9 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
+# This suite covers the 0060-0064 batch specifically, so it upgrades to this
+# explicit revision rather than the global "head"; later migrations (e.g.
+# 0065_news) must not retro-break the batch's head/downgrade-count assertions.
 PERSONAL_CIO_HEAD = "0064_queued_actions"
 PERSONAL_CIO_TABLES: tuple[str, ...] = (
     "user_kpi_registry",
@@ -56,9 +59,7 @@ def _build_config(db_path: Path) -> Config:
 def _table_names(db_path: Path) -> set[str]:
     conn = sqlite3.connect(str(db_path))
     try:
-        rows = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     finally:
         conn.close()
     return {str(r[0]) for r in rows}
@@ -91,7 +92,7 @@ def db_path(tmp_path: Path) -> Path:
 
 def test_upgrade_creates_all_five_tables(db_path: Path) -> None:
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
 
     tables = _table_names(db_path)
     for name in PERSONAL_CIO_TABLES:
@@ -101,7 +102,7 @@ def test_upgrade_creates_all_five_tables(db_path: Path) -> None:
 
 def test_downgrade_five_steps_drops_only_the_new_tables(db_path: Path) -> None:
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     tables_at_head = _table_names(db_path)
 
     command.downgrade(cfg, "-5")
@@ -126,7 +127,7 @@ def test_upgrade_then_downgrade_then_upgrade_is_idempotent(db_path: Path) -> Non
     column sets so a forgotten Column() in a future downgrade()'s
     recreate path would fail this test."""
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     snapshot_after_first_upgrade = _columns_per_personal_cio_table(db_path)
 
     command.downgrade(cfg, "-5")
@@ -134,7 +135,7 @@ def test_upgrade_then_downgrade_then_upgrade_is_idempotent(db_path: Path) -> Non
     for name in PERSONAL_CIO_TABLES:
         assert name not in after_downgrade
 
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     snapshot_after_second_upgrade = _columns_per_personal_cio_table(db_path)
 
     assert snapshot_after_first_upgrade == snapshot_after_second_upgrade
@@ -187,7 +188,7 @@ def test_user_kpi_registry_unique_natural_key(db_path: Path) -> None:
     """`(user_id, ticker, kpi_name)` is unique — second insert with the
     same tuple must raise IntegrityError."""
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     conn = sqlite3.connect(str(db_path))
     try:
         _ = conn.execute(_INSERT_USER_KPI, (1,))
@@ -205,7 +206,7 @@ def test_user_id_defaults_to_bhanu_on_insert_without_column(db_path: Path) -> No
     the single-user inserts rely on; verifies the DEFAULT clause survived
     SQLite's CREATE TABLE rendering."""
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     conn = sqlite3.connect(str(db_path))
     try:
         _ = conn.execute(_INSERT_SIZING_INTENT)
@@ -221,7 +222,7 @@ def test_user_id_defaults_to_bhanu_on_insert_without_column(db_path: Path) -> No
 
 def test_alerts_status_defaults_to_pending(db_path: Path) -> None:
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     conn = sqlite3.connect(str(db_path))
     try:
         _ = conn.execute(_INSERT_ALERT)
@@ -238,7 +239,7 @@ def test_queued_action_fk_to_alerts(db_path: Path) -> None:
     SQLite only enforces FKs when `PRAGMA foreign_keys = ON` is set, so
     the test enables it and verifies the constraint fires."""
     cfg = _build_config(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, PERSONAL_CIO_HEAD)
     conn = sqlite3.connect(str(db_path))
     try:
         _ = conn.execute("PRAGMA foreign_keys = ON")
