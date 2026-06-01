@@ -54,6 +54,7 @@ import sqlite3  # noqa: E402
 
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
+import ticker_settings  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
@@ -217,6 +218,25 @@ def create_app(
         if not applied:
             return ({"error": f"no budget row for purpose {purpose!r}"}, 404)
         return {"purpose": purpose, "ok": True}
+
+    @app.route("/api/ticker-settings/<ticker>", methods=["GET", "POST", "OPTIONS"])
+    def ticker_settings_api(ticker: str):
+        """Per-ticker dashboard settings. Today: `bypass_budget` — the persistent
+        "always ignore LLM budget caps for this ticker" flag. GET returns it;
+        POST {"bypass_budget": bool} upserts it (the #215 track's persistent
+        override; build_artifacts ORs it with the one-shot --force-budget-bypass)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        t = ticker.upper()
+        if request.method == "GET":
+            return {"ticker": t, "bypass_budget": ticker_settings.get_bypass_budget(t, db_path=db_path)}
+        body = request.get_json(silent=True) or {}
+        if "bypass_budget" not in body:
+            return ({"error": "bypass_budget required"}, 400)
+        value = bool(body["bypass_budget"])
+        if not ticker_settings.set_bypass_budget(t, value, db_path=db_path):
+            return ({"error": "could not persist (ticker_settings table missing?)"}, 500)
+        return {"ticker": t, "bypass_budget": value}
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):

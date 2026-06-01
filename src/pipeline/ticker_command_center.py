@@ -397,6 +397,25 @@ document.querySelectorAll('.tcc-refresh').forEach(function (b) {
     }).catch(function () { msg.textContent = 'network error'; });
   });
 });
+var _t = document.querySelector('.tcc-bypass-toggle');
+if (_t) {
+  var _tk = _t.getAttribute('data-ticker');
+  var _tm = document.querySelector('.tcc-bypass-msg');
+  fetch('/api/ticker-settings/' + encodeURIComponent(_tk))
+    .then(function (r) { return r.json(); })
+    .then(function (s) { _t.checked = !!s.bypass_budget; })
+    .catch(function () {});
+  _t.addEventListener('change', function () {
+    _tm.textContent = 'saving\\u2026';
+    fetch('/api/ticker-settings/' + encodeURIComponent(_tk), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bypass_budget: _t.checked })
+    }).then(function (r) { return r.json(); }).then(function (s) {
+      _tm.textContent = ('bypass_budget' in s) ? 'saved \\u2713' : ('error: ' + (s.error || 'failed'));
+    }).catch(function () { _tm.textContent = 'network error'; });
+  });
+}
 </script>"""
 
 
@@ -413,6 +432,10 @@ def _refresh_section(ticker: str) -> str:
         f'<button type="button" class="tcc-refresh" data-ticker="{t}" data-bypass="1">'
         "Run anyway (ignore caps)</button> "
         '<span class="tcc-refresh-msg muted"></span>'
+        '<p style="margin-top:8px">'
+        f'<label><input type="checkbox" class="tcc-bypass-toggle" data-ticker="{t}"> '
+        "Always ignore budget caps for this ticker (persistent)</label> "
+        '<span class="tcc-bypass-msg muted"></span></p>'
         + _REFRESH_SCRIPT
         + "</section>"
     )
