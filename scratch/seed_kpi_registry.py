@@ -233,6 +233,33 @@ def _portfolio_tickers(db_path: Path) -> list[str]:
     return [str(r[0]) for r in rows if r[0] is not None]
 
 
+def _user_kpi_registry_table_exists(db_path: Path) -> bool:
+    """Return whether the ``user_kpi_registry`` table exists in ``db_path``.
+
+    A precondition for ``--auto``: ``auto_seed_ticker`` reads the registry
+    (``registry.list_kpis``) only AFTER spending an Opus call, so an unmigrated
+    DB (alembic rev < 0060) would otherwise abort the whole ``--all`` batch with
+    a raw ``sqlite3.OperationalError`` on the first ticker. Mirrors the
+    best-effort open pattern (a missing / unreadable DB counts as absent); the
+    caller treats a ``False`` return as a HARD, clearly-reported error rather
+    than a silent skip — a writer that no-ops on a missing table reads as
+    success when nothing happened.
+    """
+    if not db_path.exists():
+        return False
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='user_kpi_registry'"
+        ).fetchone()
+    except sqlite3.Error as exc:
+        log.warning({"event": "registry_table_check_failed", "error": str(exc)})
+        return False
+    finally:
+        conn.close()
+    return row is not None
+
+
 def _recent_kpi_observations(
     db_path: Path,
     ticker: str,
@@ -1609,16 +1636,30 @@ def _run_auto(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if not args.all_tickers and not args.ticker:
+        print("error: --auto requires --ticker or --all", file=sys.stderr)
+        return 2
+
+    # Precondition: the registry table must exist before we touch any ticker.
+    # auto_seed_ticker reads the registry (registry.list_kpis) only AFTER
+    # spending an Opus call, so against an unmigrated DB (alembic rev < 0060)
+    # the raw sqlite3.OperationalError would abort the whole --all batch on the
+    # first ticker, wasting that call. Fail loud with an actionable message.
+    if not _user_kpi_registry_table_exists(db_path):
+        print(
+            f"error: user_kpi_registry table not found in {db_path}; "
+            "run `alembic upgrade head` first",
+            file=sys.stderr,
+        )
+        return 1
+
     if args.all_tickers:
         tickers = _portfolio_tickers(db_path)
         if not tickers:
             log.warning({"event": "auto_seed_all_no_tickers", "db_path": str(db_path)})
             return 0
-    elif args.ticker:
-        tickers = [cast("str", args.ticker)]
     else:
-        print("error: --auto requires --ticker or --all", file=sys.stderr)
-        return 2
+        tickers = [cast("str", args.ticker)]
 
     total = AutoSeedSummary()
     had_error = False
@@ -1636,7 +1677,10 @@ def _run_auto(args: argparse.Namespace) -> int:
                 dry_run=dry_run,
                 model=model,
             )
-        except SeederLLMError as exc:
+        except (SeederLLMError, sqlite3.Error) as exc:
+            # One ticker's LLM or DB error must not abort the batch — log and
+            # continue (had_error -> non-zero exit). The upfront precondition
+            # already rules out the common missing-registry-table case.
             had_error = True
             log.error({"event": "auto_seed_failed", "ticker": t, "error": str(exc)})
             continue
