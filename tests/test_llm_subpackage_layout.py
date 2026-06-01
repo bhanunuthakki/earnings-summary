@@ -93,6 +93,52 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
 
 
+def test_news_purposes_route_to_opus() -> None:
+    """The two news LLM modules resolve to Opus via LLM_MODELS, per the
+    news-table plan's explicit Opus instruction:
+      * material_news_classification — the material-news trigger's per-headline
+        materiality veto (was absent -> silently Sonnet; now pinned to Opus).
+      * news_structuring — the WebSearch->rows fallback extractor (registered
+        now, consumed once that feed lands).
+    The recent-developments web brief stays on Sonnet (DEFAULT_MODEL), pinned
+    explicitly so call_llm_with_web's purpose resolution keeps it there."""
+    from llm import cli
+
+    # _model_for is module-private; tests reaching into it use the repo's
+    # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
+    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-7"
+    assert cli.LLM_MODELS["news_structuring"] == "claude-opus-4-7"
+    assert resolve("material_news_classification") == "claude-opus-4-7"
+    assert resolve("news_structuring") == "claude-opus-4-7"
+    # Recent-developments is pinned to Sonnet, not Opus.
+    assert cli.LLM_MODELS["recent_developments"] == cli.DEFAULT_MODEL
+    assert resolve("recent_developments") == cli.DEFAULT_MODEL
+
+
+def test_news_pins_do_not_disturb_existing_purposes() -> None:
+    """Registering the news purposes must not flip any other prompt's model.
+    Spot-check one purpose per tier plus the manual KPI seeder (deliberately
+    unregistered -> Sonnet)."""
+    from llm import cli
+
+    resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
+    # Sonnet (default) analytical writing — unchanged.
+    assert resolve("bear_case") == cli.DEFAULT_MODEL
+    assert resolve("transcript_summary") == cli.DEFAULT_MODEL
+    # Pre-existing Opus pins — unchanged.
+    assert resolve("company_description") == "claude-opus-4-7"
+    assert resolve("valuation_basis") == "claude-opus-4-7"
+    assert resolve("saydo_importance") == "claude-opus-4-7"
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"
+    # Haiku fast-classifier pins — unchanged.
+    assert resolve("intake_classifier") == cli.FAST_CLASSIFIER_MODEL
+    assert resolve("transcript_metadata") == cli.FAST_CLASSIFIER_MODEL
+    # The manual KPI-proposal purpose stays unregistered -> Sonnet.
+    assert "kpi_registry_proposal" not in cli.LLM_MODELS
+    assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
+
+
 def test_ledger_module_exposes_expected_names() -> None:
     from llm import ledger
 
