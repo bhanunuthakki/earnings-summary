@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 from dispatch_registry import Registry  # noqa: E402
-from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
+from pipeline.dashboard_html import render_status_overview  # noqa: E402
 
 
 class _NonSpawningRegistry(Registry):
@@ -73,7 +73,7 @@ def test_unknown_action_rejected(client) -> None:
 
 
 def test_dashboard_renders_maintenance_panel() -> None:
-    html = render_dashboard_html({"portfolio": [], "evaluation": []})
+    html = render_status_overview({"portfolio": [], "evaluation": []})
     assert "Maintenance" in html
     assert 'data-action="seed_kpis"' in html
     assert "/actions/maintenance" in html
