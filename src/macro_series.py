@@ -16,11 +16,14 @@ Provider config shape:
       "source":       label persisted in macro_series.source (default "FMP")
     }
 
-The actual FMP endpoint shapes vary slightly across `/stable`, `/v3`, and
-`/v4` — and a few series live behind premium tiers. The fetcher's job is
-to take the first one that parses; the registry's job is to enumerate the
-candidates in priority order. Add a new fallback by extending the list; do
-NOT special-case in fetch_macro_series.py.
+All providers are on FMP `/stable` (the legacy `/api/v3` `historical-price-full`
+fallbacks were retired in the v3->stable migration — they 403 as "Legacy
+Endpoint" for non-legacy accounts). A few symbols still live behind premium
+tiers (see the ^SOX note below); when a series' provider 402/403s it is logged
++ skipped, fail-soft. The fetcher takes the first provider that parses; the
+registry enumerates candidates in priority order. Add a new fallback by
+extending the list (stable paths only); do NOT special-case in
+fetch_macro_series.py.
 """
 
 from __future__ import annotations
@@ -72,7 +75,11 @@ class SeriesSpec:
 #     stable commodities feed. Premium-only on some accounts; the
 #     index-quote endpoint can serve as a free fallback.
 #   - Indices: ^SOX (Philadelphia Semi) and ^VIX trade via FMP's historical
-#     stock price endpoint — symbols carry the caret prefix.
+#     stock price endpoint — symbols carry the caret prefix. NOTE (2026-06-01
+#     stable probe): ^VIX resolves on /stable, but ^SOX returns 402 "Premium
+#     Query Parameter" on /stable AND its /api/v3 feed is a dead Legacy Endpoint
+#     (403), so the `sox` series has no working FMP source on the current
+#     subscription and fail-softs (logged + skipped) until the tier includes it.
 
 
 REGISTRY: dict[str, SeriesSpec] = {
@@ -121,12 +128,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="historical-price-eod/full",
                 params={"symbol": "^VIX"},
             ),
-            ProviderSpec(
-                kind="fmp_historical",
-                path="historical-price-full/^VIX",
-                params={},
-                row_field="historical",
-            ),
         ),
     ),
     "usd_brl": SeriesSpec(
@@ -139,12 +140,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 kind="fmp_fx",
                 path="historical-price-eod/full",
                 params={"symbol": "USDBRL"},
-            ),
-            ProviderSpec(
-                kind="fmp_fx",
-                path="historical-price-full/USDBRL",
-                params={},
-                row_field="historical",
             ),
         ),
     ),
@@ -159,12 +154,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="historical-price-eod/full",
                 params={"symbol": "USDINR"},
             ),
-            ProviderSpec(
-                kind="fmp_fx",
-                path="historical-price-full/USDINR",
-                params={},
-                row_field="historical",
-            ),
         ),
     ),
     "usd_eur": SeriesSpec(
@@ -177,12 +166,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 kind="fmp_fx",
                 path="historical-price-eod/full",
                 params={"symbol": "USDEUR"},
-            ),
-            ProviderSpec(
-                kind="fmp_fx",
-                path="historical-price-full/USDEUR",
-                params={},
-                row_field="historical",
             ),
         ),
     ),
@@ -197,12 +180,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="historical-price-eod/full",
                 params={"symbol": "USDCAD"},
             ),
-            ProviderSpec(
-                kind="fmp_fx",
-                path="historical-price-full/USDCAD",
-                params={},
-                row_field="historical",
-            ),
         ),
     ),
     "usd_twd": SeriesSpec(
@@ -215,12 +192,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 kind="fmp_fx",
                 path="historical-price-eod/full",
                 params={"symbol": "USDTWD"},
-            ),
-            ProviderSpec(
-                kind="fmp_fx",
-                path="historical-price-full/USDTWD",
-                params={},
-                row_field="historical",
             ),
         ),
     ),
@@ -235,12 +206,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="historical-price-eod/full",
                 params={"symbol": "BZUSD"},
             ),
-            ProviderSpec(
-                kind="fmp_historical",
-                path="historical-price-full/BZUSD",
-                params={},
-                row_field="historical",
-            ),
         ),
     ),
     "copper": SeriesSpec(
@@ -253,12 +218,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 kind="fmp_historical",
                 path="historical-price-eod/full",
                 params={"symbol": "HGUSD"},
-            ),
-            ProviderSpec(
-                kind="fmp_historical",
-                path="historical-price-full/HGUSD",
-                params={},
-                row_field="historical",
             ),
         ),
     ),
@@ -273,12 +232,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 path="historical-price-eod/full",
                 params={"symbol": "GCUSD"},
             ),
-            ProviderSpec(
-                kind="fmp_historical",
-                path="historical-price-full/GCUSD",
-                params={},
-                row_field="historical",
-            ),
         ),
     ),
     "sox": SeriesSpec(
@@ -291,12 +244,6 @@ REGISTRY: dict[str, SeriesSpec] = {
                 kind="fmp_historical",
                 path="historical-price-eod/full",
                 params={"symbol": "^SOX"},
-            ),
-            ProviderSpec(
-                kind="fmp_historical",
-                path="historical-price-full/^SOX",
-                params={},
-                row_field="historical",
             ),
         ),
     ),
