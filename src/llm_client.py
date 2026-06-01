@@ -103,6 +103,9 @@ from llm.cli import (
     LLMBudgetExceeded as LLMBudgetExceeded,
 )
 from llm.cli import (
+    LLMSetupError as LLMSetupError,
+)
+from llm.cli import (
     _call_claude as _call_claude,  # pyright: ignore[reportPrivateUsage]
 )
 from llm.cli import (
@@ -119,6 +122,9 @@ from llm.cli import (
 )
 from llm.cli import (
     call_llm_with_web as call_llm_with_web,
+)
+from llm.cli import (
+    is_hard_stop as is_hard_stop,
 )
 from llm.fallback import (
     GEMINI_FALLBACK_MODEL as GEMINI_FALLBACK_MODEL,
