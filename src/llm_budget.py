@@ -55,6 +55,12 @@ class BudgetCheck:
     `warn=True` → 80% threshold crossed, caller logs + records alert.
     `reason` is a short human-readable string for log messages — None when
     the call is fully allowed with no warning.
+
+    `on_exceed` is the per-purpose cap-exceeded MODE (migration 0066) and is the
+    authoritative behavior knob: `'block'` → `hard_block=True` (raise / propagate),
+    `'skip'` → forgo the call and mark the section forgone-due-to-budget (handled
+    pre-flight via `should_skip_for_budget`), `'warn'` → proceed past the cap.
+    `hard_block` is derived from it (`on_exceed == 'block'`) for back-compat.
     """
 
     allowed: bool
@@ -63,6 +69,7 @@ class BudgetCheck:
     cap: Decimal
     headroom_pct: float  # 1.0 = no spend, 0.0 = at cap, negative = over cap
     hard_block: bool
+    on_exceed: str = "warn"
     reason: str | None = None
 
 
@@ -138,6 +145,30 @@ class _BudgetRow:
     cap: Decimal
     warn_threshold_pct: float
     hard_block: bool
+    on_exceed: str  # 'skip' | 'block' | 'warn' (authoritative; migration 0066)
+
+
+def _has_on_exceed(conn: sqlite3.Connection) -> bool:
+    """True when llm_budgets carries the `on_exceed` column (migration 0066).
+
+    Pre-0066 DBs (and the hand-rolled test fixtures) lack it; callers derive the
+    mode from the legacy `hard_block` bool instead so enforcement is unchanged.
+    """
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(llm_budgets)").fetchall()}
+    except sqlite3.Error:
+        return False
+    return "on_exceed" in cols
+
+
+def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:
+    """Read `on_exceed` from a budget row, deriving from `hard_block` when the
+    column is absent (pre-0066) or carries an unexpected value."""
+    if has_mode:
+        val = row["on_exceed"]
+        if isinstance(val, str) and val in ("skip", "block", "warn"):
+            return val
+    return "block" if hard_block else "warn"
 
 
 def _load_budget(
@@ -153,21 +184,20 @@ def _load_budget(
         conn = sqlite3.connect(str(path), timeout=5.0)
         try:
             conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                """
-                SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block
-                FROM llm_budgets WHERE purpose = ?
-                """,
-                (purpose,),
-            ).fetchone()
+            has_mode = _has_on_exceed(conn)
+            if has_mode:
+                sql = (
+                    "SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block, on_exceed "
+                    "FROM llm_budgets WHERE purpose = ?"
+                )
+            else:
+                sql = (
+                    "SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block "
+                    "FROM llm_budgets WHERE purpose = ?"
+                )
+            row = conn.execute(sql, (purpose,)).fetchone()
             if row is None:
-                row = conn.execute(
-                    """
-                    SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block
-                    FROM llm_budgets WHERE purpose = ?
-                    """,
-                    (DEFAULT_BUDGET_KEY,),
-                ).fetchone()
+                row = conn.execute(sql, (DEFAULT_BUDGET_KEY,)).fetchone()
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -181,11 +211,13 @@ def _load_budget(
         return None
     if row is None:
         return None
+    hard_block = bool(row["hard_block"])
     return _BudgetRow(
         purpose=str(row["purpose"]),
         cap=Decimal(str(row["monthly_cap_usd"])).quantize(_DECIMAL_QUANT),
         warn_threshold_pct=float(row["warn_threshold_pct"]),
-        hard_block=bool(row["hard_block"]),
+        hard_block=hard_block,
+        on_exceed=_row_on_exceed(row, has_mode=has_mode, hard_block=hard_block),
     )
 
 
@@ -224,6 +256,7 @@ def check_budget(
             cap=Decimal("0"),
             headroom_pct=1.0,
             hard_block=False,
+            on_exceed="warn",
             reason=None,
         )
     budget = _load_budget(purpose, db_path=db_path)
@@ -235,10 +268,14 @@ def check_budget(
             cap=Decimal("0"),
             headroom_pct=1.0,
             hard_block=False,
+            on_exceed="warn",
             reason=None,
         )
     spend = current_month_spend(purpose, db_path=db_path, now=now)
     headroom = _headroom_pct(spend, budget.cap)
+    # `on_exceed` is authoritative (migration 0066); `hard_block` is derived so
+    # the pre-call gate (which raises on it) propagates iff the mode is 'block'.
+    hard_block = budget.on_exceed == "block"
     if headroom <= 0:
         # At or over cap.
         return BudgetCheck(
@@ -247,10 +284,11 @@ def check_budget(
             current_spend=spend,
             cap=budget.cap,
             headroom_pct=headroom,
-            hard_block=budget.hard_block,
+            hard_block=hard_block,
+            on_exceed=budget.on_exceed,
             reason=(
                 f"{purpose}: monthly spend ${spend} >= cap ${budget.cap}"
-                f" (hard_block={budget.hard_block})"
+                f" (on_exceed={budget.on_exceed})"
             ),
         )
     warn_at = Decimal(str(budget.warn_threshold_pct)) * budget.cap
@@ -261,7 +299,8 @@ def check_budget(
             current_spend=spend,
             cap=budget.cap,
             headroom_pct=headroom,
-            hard_block=budget.hard_block,
+            hard_block=hard_block,
+            on_exceed=budget.on_exceed,
             reason=(
                 f"{purpose}: spend ${spend} >= warn threshold"
                 f" {budget.warn_threshold_pct:.0%} of ${budget.cap}"
@@ -273,9 +312,58 @@ def check_budget(
         current_spend=spend,
         cap=budget.cap,
         headroom_pct=headroom,
-        hard_block=budget.hard_block,
+        hard_block=hard_block,
+        on_exceed=budget.on_exceed,
         reason=None,
     )
+
+
+_VALID_MODES: frozenset[str] = frozenset({"skip", "block", "warn"})
+
+
+def budget_mode(purpose: str, *, db_path: Path | str | None = None) -> str:
+    """Cap-exceeded MODE for `purpose` ('skip' | 'block' | 'warn').
+
+    Falls back to '__default__' then to 'warn' (non-enforcing) when no row
+    exists. Authoritative source is the `on_exceed` column (migration 0066),
+    derived from the legacy `hard_block` bool on pre-0066 DBs.
+    """
+    budget = _load_budget(purpose, db_path=db_path)
+    return budget.on_exceed if budget is not None else "warn"
+
+
+def should_skip_for_budget(
+    purpose: str,
+    *,
+    db_path: Path | str | None = None,
+    now: datetime | None = None,
+    bypass: bool = False,
+) -> BudgetCheck | None:
+    """Pre-flight gate for the `skip` mode — the heart of "forgone due to budget".
+
+    Returns the failing BudgetCheck (carrying cap / spend / headroom) when
+    `purpose` is configured `on_exceed='skip'` AND is at/over its monthly cap —
+    i.e. the section should FORGO the LLM call (no spend) and render a
+    forgone-due-to-budget banner. Returns None to PROCEED: under cap, or a
+    non-skip mode ('block' raises at the call gate, 'warn' overspends), or
+    `bypass=True` (per-run override). Best-effort — never raises.
+    """
+    if bypass:
+        return None
+    try:
+        check = check_budget(purpose, db_path=db_path, now=now)
+    except Exception as exc:  # the budget gate must never break the build
+        log.debug(
+            {
+                "event": "should_skip_for_budget_failed_open",
+                "purpose": purpose,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return None
+    if check.on_exceed == "skip" and not check.allowed:
+        return check
+    return None
 
 
 def record_alert(
@@ -348,14 +436,25 @@ def list_budgets(
         conn = sqlite3.connect(str(path), timeout=5.0)
         try:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block,
-                       created_at, updated_at, notes
-                FROM llm_budgets
-                ORDER BY purpose
-                """
-            ).fetchall()
+            has_mode = _has_on_exceed(conn)
+            if has_mode:
+                rows = conn.execute(
+                    """
+                    SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block,
+                           on_exceed, created_at, updated_at, notes
+                    FROM llm_budgets
+                    ORDER BY purpose
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT purpose, monthly_cap_usd, warn_threshold_pct, hard_block,
+                           created_at, updated_at, notes
+                    FROM llm_budgets
+                    ORDER BY purpose
+                    """
+                ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -371,12 +470,14 @@ def list_budgets(
         purpose = str(r["purpose"])
         cap = Decimal(str(r["monthly_cap_usd"])).quantize(_DECIMAL_QUANT)
         spend = current_month_spend(purpose, db_path=db_path, now=now)
+        hard_block = bool(r["hard_block"])
         out.append(
             {
                 "purpose": purpose,
                 "monthly_cap_usd": cap,
                 "warn_threshold_pct": float(r["warn_threshold_pct"]),
-                "hard_block": bool(r["hard_block"]),
+                "hard_block": hard_block,
+                "on_exceed": _row_on_exceed(r, has_mode=has_mode, hard_block=hard_block),
                 "current_spend_usd": spend,
                 "headroom_pct": _headroom_pct(spend, cap),
                 "created_at": str(r["created_at"]),
@@ -421,6 +522,51 @@ def set_cap(
         log.warning(
             {
                 "event": "set_cap_write_failed",
+                "purpose": purpose,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return False
+
+
+def set_mode(
+    purpose: str,
+    mode: str,
+    *,
+    db_path: Path | str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Set the cap-exceeded `on_exceed` mode for `purpose` ('skip'|'block'|'warn').
+
+    Also syncs the legacy `hard_block` bool (= mode == 'block') so back-compat
+    readers (list_budgets, month_report) stay consistent. Returns True on
+    update, False if the row didn't exist / DB unavailable. Raises ValueError on
+    an invalid mode. Used by the manage_llm_budget CLI + the dashboard panel.
+    """
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"invalid on_exceed mode {mode!r}; expected one of {sorted(_VALID_MODES)}"
+        )
+    path = _resolve_db_path(db_path)
+    if path is None or not Path(path).exists():
+        return False
+    updated_at = (now or datetime.now(UTC)).isoformat()
+    try:
+        conn = sqlite3.connect(str(path), timeout=5.0)
+        try:
+            cur = conn.execute(
+                "UPDATE llm_budgets SET on_exceed = ?, hard_block = ?, updated_at = ? "
+                "WHERE purpose = ?",
+                (mode, 1 if mode == "block" else 0, updated_at, purpose),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "set_mode_write_failed",
                 "purpose": purpose,
                 "error": f"{type(exc).__name__}: {exc}",
             }

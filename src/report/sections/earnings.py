@@ -42,7 +42,7 @@ from report.models import (
     SurpriseScorecardCard,
     ThemeRollup,
 )
-from report.sections._common import missing, open_repo_db
+from report.sections._common import budget_gate, missing, open_repo_db
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_signals_for_metrics,
@@ -136,14 +136,30 @@ def build(ticker: str, repo_root: Path, enable_llm: bool = False) -> EarningsSec
         c.is_recent = True
 
     has_any_llm = any(c.summary_md for c in cards_old_to_new)
-    prepared_themes, qa_themes, themes_note = _build_themes(
-        ticker=ticker,
-        repo_root=repo_root,
-        transcripts=transcripts,
-        enable_llm=enable_llm,
+    # Budget gate for the (optional) cross-quarter themes LLM. On skip the §6
+    # cards still render from the deterministic data — only the themes rollup is
+    # forgone, surfaced via budget_skip + a note.
+    themes_skip = (
+        budget_gate("earnings_themes_split", "Cross-quarter themes (§6)", repo_root)
+        if enable_llm and transcripts
+        else None
     )
+    prepared_themes: list[ThemeRollup]
+    qa_themes: list[ThemeRollup]
+    themes_note: str | None
+    if themes_skip is not None:
+        prepared_themes, qa_themes = [], []
+        themes_note = "Cross-quarter themes forgone to stay under budget — override to run."
+    else:
+        prepared_themes, qa_themes, themes_note = _build_themes(
+            ticker=ticker,
+            repo_root=repo_root,
+            transcripts=transcripts,
+            enable_llm=enable_llm,
+        )
     return EarningsSection(
         status=SectionStatus.OK if has_any_llm else SectionStatus.PARTIAL,
+        budget_skip=themes_skip,
         surprise_scorecard=surprise_card,
         full_quarters=list(reversed(full_old_to_new)),
         digest_quarters=list(reversed(digest_old_to_new)),

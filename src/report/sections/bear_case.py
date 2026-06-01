@@ -39,7 +39,7 @@ from report.models import (
     SegmentsSection,
     ThesisSection,
 )
-from report.sections._common import missing
+from report.sections._common import budget_gate, budget_skip_missing, missing
 from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_all_signals,
@@ -91,6 +91,14 @@ def build(
         cached = _read_cache(ticker, repo_root, cache_ttl_days)
         if cached is not None:
             return cached
+
+    skip = budget_gate("bear_case", "Bear case (§7)", repo_root)
+    if skip is not None:
+        return BearCaseSection(
+            status=SectionStatus.BUDGET_SKIPPED,
+            budget_skip=skip,
+            missing=budget_skip_missing(ticker, "bear_case", skip),
+        )
 
     try:
         response_text = generate_bear_case(

@@ -30,7 +30,7 @@ from report.models import (
     RecentDevelopmentsSection,
     SectionStatus,
 )
-from report.sections._common import missing
+from report.sections._common import budget_gate, budget_skip_missing, missing
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,15 @@ def build(
                     f"at {NEWS_CACHE_DIRNAME}/{ticker.upper()}.json."
                 ),
             ),
+            news_days_window=news_days,
+        )
+
+    skip = budget_gate("recent_developments", "Recent developments (§9)", repo_root)
+    if skip is not None:
+        return RecentDevelopmentsSection(
+            status=SectionStatus.BUDGET_SKIPPED,
+            budget_skip=skip,
+            missing=budget_skip_missing(ticker, "recent_developments", skip),
             news_days_window=news_days,
         )
 

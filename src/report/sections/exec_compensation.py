@@ -29,7 +29,7 @@ from report.models import (
     InsiderSignalRowModel,
     SectionStatus,
 )
-from report.sections._common import missing
+from report.sections._common import budget_gate, missing
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +101,14 @@ def build(
     flags = _detect_anomalies(rows, insider_signals, holdings_kpis)
 
     alignment_md: str | None = None
-    if enable_llm and (rows or insider_signals):
+    # Budget gate for the (optional) alignment-narrative LLM. On skip the §13
+    # comp/insider rows still render; only the narrative is forgone.
+    alignment_skip = (
+        budget_gate("exec_comp_alignment", "Exec-comp alignment (§13)", repo_root)
+        if enable_llm and (rows or insider_signals)
+        else None
+    )
+    if enable_llm and (rows or insider_signals) and alignment_skip is None:
         try:
             alignment_md = _generate_alignment_narrative(
                 ticker=ticker,
@@ -131,6 +138,7 @@ def build(
         fiscal_year_latest=fiscal_year_latest,
         packages=rows,
         insider_signals=insider_signals,
+        budget_skip=alignment_skip,
         alignment_narrative_md=alignment_md,
         anomaly_flags=flags,
     )
