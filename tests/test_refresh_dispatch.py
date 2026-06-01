@@ -14,12 +14,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 
-import refresh_dispatch  # noqa: E402
-from refresh_dispatch import Plan, build_plan, execute  # noqa: E402
+from refresh_dispatch import Plan, build_plan, execute
 
 
 def _seed_fmp(db_path: Path, ticker: str, last_pulled: str) -> None:
@@ -58,7 +55,9 @@ def test_plan_full_mode_never_skips(tmp_path):
     db = tmp_path / "p.db"
     _seed_fmp(db, "NU", "2026-05-11T01:02:14")
     plan = build_plan(ticker="NU", mode="full", db_path=db, now=datetime(2026, 5, 18, tzinfo=UTC))
-    assert plan == Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None)
+    assert plan.mode == "full"
+    assert plan.skip_fmp is False
+    assert plan.skip_fmp_reason is None
 
 
 def test_plan_stale_skips_fmp_when_pulled_within_window(tmp_path):
@@ -128,7 +127,10 @@ def test_plan_stale_respects_custom_window(tmp_path):
     _seed_fmp(db, "NU", "2026-05-15T01:00:00")  # 3 days before now
     # Window = 2 days → 3-day-old data is OUTSIDE → run FMP
     plan = build_plan(
-        ticker="NU", mode="stale", db_path=db, stale_fmp_days=2,
+        ticker="NU",
+        mode="stale",
+        db_path=db,
+        stale_fmp_days=2,
         now=datetime(2026, 5, 18, tzinfo=UTC),
     )
     assert plan.skip_fmp is False
@@ -175,7 +177,9 @@ def test_execute_full_runs_all_six_steps(tmp_path):
 def test_execute_stale_skips_fmp_when_planned(tmp_path):
     runner = _MockRunner()
     plan = Plan(
-        ticker="NU", mode="stale", skip_fmp=True,
+        ticker="NU",
+        mode="stale",
+        skip_fmp=True,
         skip_fmp_reason="fresh last_pulled=2026-05-15T01:00:00",
     )
     out = io.StringIO()

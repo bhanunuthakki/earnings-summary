@@ -35,11 +35,13 @@ import queue
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(SCRIPT_DIR))  # import sibling execution/ modules (refresh_dispatch)
 
 try:
     from flask import Flask, Response, abort, request, send_file, stream_with_context
@@ -51,6 +53,8 @@ except ImportError:  # pragma: no cover - install hint
     sys.exit(1)
 
 import sqlite3  # noqa: E402
+
+from refresh_dispatch import STEP_NAMES  # noqa: E402
 
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
@@ -229,7 +233,10 @@ def create_app(
             return ("", 204)
         t = ticker.upper()
         if request.method == "GET":
-            return {"ticker": t, "bypass_budget": ticker_settings.get_bypass_budget(t, db_path=db_path)}
+            return {
+                "ticker": t,
+                "bypass_budget": ticker_settings.get_bypass_budget(t, db_path=db_path),
+            }
         body = request.get_json(silent=True) or {}
         if "bypass_budget" not in body:
             return ({"error": "bypass_budget required"}, 400)
@@ -285,9 +292,23 @@ def create_app(
         if mode not in ("stale", "full"):
             return ({"error": f"mode must be 'stale' or 'full', got {mode!r}"}, 400)
         force_budget_bypass = bool(body.get("force_budget_bypass", False))
+        force = bool(body.get("force", False))
+        steps_raw = body.get("steps")
+        steps: list[str] | None = None
+        if steps_raw is not None:
+            if not isinstance(steps_raw, list):
+                return ({"error": "steps must be a list of step names"}, 400)
+            steps = [str(s) for s in cast("list[object]", steps_raw)]
+            bad = [s for s in steps if s not in STEP_NAMES]
+            if bad:
+                return ({"error": f"unknown step(s): {bad}; valid: {list(STEP_NAMES)}"}, 400)
 
         dispatcher = repo_root / "execution" / "refresh_dispatch.py"
         argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
+        if force:
+            argv.append("--force")
+        if steps:
+            argv += ["--steps", ",".join(steps)]
         if force_budget_bypass:
             argv.append("--force-budget-bypass")
         try:
