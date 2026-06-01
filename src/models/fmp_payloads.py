@@ -166,3 +166,28 @@ class FmpSegmentRecord(BaseModel):
     period: str
     fiscalYear: int | str | None = None
     data: dict[str, int | float]
+
+
+class FmpStockNewsRecord(BaseModel):
+    """One article from FMP's stable stock-news endpoint
+    (``GET /stable/news/stock?symbols={T}``).
+
+    Required fields are the ones the news feed actually maps into a NewsRow
+    (symbol, publishedDate, title, url); a drift in any of them is loud schema
+    drift (the fetcher dumps + halts that ticker) rather than a silently-empty
+    row. ``publishedDate`` arrives as ``'YYYY-MM-DD HH:MM:SS'`` in **US/Eastern**
+    at source and is converted to UTC at ingestion (Risk R1). ``publisher`` is a
+    field the stable shape adds over the old v3 ``stock_news``; modeled (unused)
+    to document the wire shape. ``extra="ignore"`` tolerates further additions.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    publishedDate: str  # 'YYYY-MM-DD HH:MM:SS', US/Eastern at source
+    title: str  # -> NewsRow.headline
+    url: str  # -> NewsRow.url
+    text: str | None = None  # -> NewsRow.snippet
+    site: str | None = None  # -> NewsRow.source
+    publisher: str | None = None  # stable adds this; documents the shape
+    image: str | None = None
