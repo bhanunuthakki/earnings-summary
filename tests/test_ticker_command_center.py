@@ -258,8 +258,9 @@ def test_ticker_api_returns_json(client) -> None:
     assert payload["tracker_url"].endswith("ticker=NU")
 
 
-def test_ticker_page_returns_html(client) -> None:
-    resp = client.get("/ticker/NU")
-    assert resp.status_code == 200
-    assert resp.mimetype == "text/html"
-    assert "Nu Holdings" in resp.get_data(as_text=True)
+def test_ticker_page_redirects_to_shell(client) -> None:
+    """/ticker/<t> is folded into the shell — it now 302-redirects to the
+    Holding drill-down deep link (ticker uppercased)."""
+    resp = client.get("/ticker/nu")  # lowercase in → uppercased in the deep link
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/#holding=NU"

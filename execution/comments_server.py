@@ -33,7 +33,7 @@ import json
 import os
 import queue
 import sys
-from datetime import UTC, date, datetime
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -44,7 +44,7 @@ sys.path.insert(0, str(SRC_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # import sibling execution/ modules (refresh_dispatch)
 
 try:
-    from flask import Flask, Response, abort, request, send_file, stream_with_context
+    from flask import Flask, Response, abort, redirect, request, send_file, stream_with_context
 except ImportError:  # pragma: no cover - install hint
     print(
         "Flask not installed. Install with: pip install flask",
@@ -68,13 +68,11 @@ from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
-from pipeline.analytical_dashboard_html import render_html as render_analytical_html  # noqa: E402
 from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
     render_holding_fragment,
-    render_ticker_html,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
@@ -229,14 +227,10 @@ def create_app(
 
     @app.route("/analytical", methods=["GET"])
     def analytical_page():
-        """Live server-rendered analytical dashboard — byte-identical markup
-        to the static export, but always fresh from the DB rather than a
-        regenerated file. This is the 'fold the static panels into the live
-        app' move: one server at :7421, no stale snapshot to rebuild."""
-        dash = build_analytical_dashboard(db_path)
-        coverage = tier_coverage_summary(repo_root)
-        html = render_analytical_html(dash, generated_at=datetime.now(UTC), tier_coverage=coverage)
-        return Response(html, mimetype="text/html")
+        """The standalone analytical dashboard is folded into the unified shell;
+        its content is the shell's Triggers tab. 302-redirect to that deep link
+        so existing bookmarks keep working."""
+        return redirect("/#holdings")
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
 
@@ -325,11 +319,10 @@ def create_app(
 
     @app.route("/ticker/<ticker>", methods=["GET"])
     def ticker_page(ticker: str):
-        """Per-ticker drill-down — the command-center detail view (artifacts,
-        analyses, decisions, thesis, position) for one name."""
-        tcc = build_ticker_command_center(repo_root, ticker)
-        html = render_ticker_html(tcc, generated_at=datetime.now(UTC))
-        return Response(html, mimetype="text/html")
+        """The standalone per-ticker page is folded into the unified shell; its
+        content is the shell's Holding drill-down tab. 302-redirect to that deep
+        link (ticker uppercased) so existing bookmarks keep working."""
+        return redirect(f"/#holding={ticker.upper()}")
 
     @app.route("/reports/<ticker>", methods=["GET"])
     def latest_report_for_ticker(ticker: str):

@@ -279,13 +279,12 @@ def test_overview_api_returns_json(client) -> None:
     assert payload["llm_budgets"]["rows"][0]["purpose"] == "bear_case"
 
 
-def test_analytical_page_returns_html(client) -> None:
+def test_analytical_page_redirects_to_shell(client) -> None:
+    """/analytical is folded into the shell — it now 302-redirects to the
+    Triggers tab deep link rather than rendering a standalone page."""
     resp = client.get("/analytical")
-    assert resp.status_code == 200
-    assert resp.mimetype == "text/html"
-    body = resp.get_data(as_text=True)
-    assert body.startswith("<!doctype html>")
-    assert "Trigger ladder" in body
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/#holdings"
 
 
 # ----- PR 4: shell backend seams -----
