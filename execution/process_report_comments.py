@@ -92,6 +92,7 @@ from comments import Comment, ThreadEntry  # noqa: E402
 from llm_client import (  # noqa: E402
     JSON_FENCE_RE,
     call_llm,
+    is_hard_stop,
     load_bear_anchor,
     load_ir_anchor,
     load_thesis_anchor,
@@ -143,6 +144,8 @@ def process_comments_for_ticker(
                 }
             )
         except Exception as e:
+            if is_hard_stop(e):
+                raise  # budget/setup hard-stop must propagate, not degrade to a per-comment error
             plan.append(
                 {
                     "comment": c,
@@ -229,6 +232,8 @@ def process_comments_for_ticker(
                     }
                 )
         except Exception as e:
+            if is_hard_stop(e):
+                raise
             for c in batch_comments_list:
                 results.append(
                     {
@@ -280,6 +285,8 @@ def process_comments_for_ticker(
                 }
             )
         except Exception as e:
+            if is_hard_stop(e):
+                raise
             results.append(
                 {
                     "id": c.id,
@@ -408,6 +415,8 @@ No markdown fence, no prose outside the JSON.
             raw = JSON_FENCE_RE.sub("", raw).strip()
         parsed = json.loads(raw)
     except Exception as e:
+        if is_hard_stop(e):
+            raise
         return {"ran": False, "reason": f"LLM/parse error: {type(e).__name__}: {e}"}
 
     revised = parsed.get("revised_thesis") if isinstance(parsed, dict) else None
@@ -743,6 +752,8 @@ The order array must be a permutation of {list(range(len(edit_positions)))} (0-i
         new_order = parsed.get("order")
         rationale = str(parsed.get("rationale", ""))
     except Exception as e:
+        if is_hard_stop(e):
+            raise
         return plan, {
             "reordered": False,
             "rationale": f"sequencer fallback (error): {type(e).__name__}: {e}",
@@ -1370,6 +1381,8 @@ markdown fence, no prose.
             "dry_run": False,
         }
     except Exception as e:
+        if is_hard_stop(e):
+            raise
         return {"summary": f"extract_kpi: error: {type(e).__name__}: {e}"}
     finally:
         conn.close()
