@@ -77,6 +77,16 @@ from pipeline.ticker_command_center import (  # noqa: E402
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
+# Repo-wide maintenance chores exposed on the dashboard, each dispatched as a
+# single-flight job running an existing CLI under execution/. (Onboarding a
+# specific ticker is handled separately — it needs a ticker argument.)
+_MAINTENANCE_ACTIONS: dict[str, list[str]] = {
+    "seed_kpis": ["seed_kpi_definitions.py", "--all"],
+    "process_inbox": ["register_dropped_documents.py", "--all"],
+    "sweep_history": ["sweep_output_history.py"],
+    "onboard_pending": ["onboard_pending_tickers.py"],
+}
+
 
 def create_app(
     repo_root: Path,
@@ -374,6 +384,44 @@ def create_app(
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
 
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/maintenance", methods=["POST", "OPTIONS"])
+    def start_maintenance():
+        """Repo-wide maintenance chores (seed KPI defs · process dropped docs ·
+        sweep output history · onboard pending · onboard <ticker>) dispatched as
+        single-flight jobs, streamed over /actions/stream/<job_id>. Each runs an
+        existing CLI under execution/."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True) or {}
+        action = str(body.get("action", ""))
+        if action == "onboard":
+            ticker = str(body.get("ticker", "")).upper()
+            if not ticker:
+                return ({"error": "onboard requires a ticker"}, 400)
+            parts = ["onboard_ticker.py", "--ticker", ticker]
+            slot_ticker, kind = ticker, "maint-onboard"
+        elif action in _MAINTENANCE_ACTIONS:
+            parts = _MAINTENANCE_ACTIONS[action]
+            slot_ticker, kind = "_REPO", f"maint-{action}"
+        else:
+            valid = [*sorted(_MAINTENANCE_ACTIONS), "onboard"]
+            return ({"error": f"unknown action {action!r}; valid: {valid}"}, 400)
+        argv = [sys.executable, str(repo_root / "execution" / parts[0]), *parts[1:]]
+        try:
+            job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
         return (
             {
                 "job_id": job.job_id,
