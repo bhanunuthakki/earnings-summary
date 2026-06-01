@@ -106,6 +106,7 @@ class LlmBudgetRow:
     headroom_pct: float
     warn_threshold_pct: float
     hard_block: bool
+    on_exceed: str = "warn"  # cap-exceeded mode (migration 0066): skip | block | warn
 
 
 @dataclass(slots=True)
@@ -238,6 +239,16 @@ def _build_decisions_panel(conn: sqlite3.Connection, *, recent_limit: int = 30) 
     )
 
 
+def _mode_from_row(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:
+    """Read the on_exceed mode from a budget row, deriving it from the legacy
+    hard_block bool on pre-0066 DBs (column absent)."""
+    if has_mode:
+        v = row["on_exceed"]
+        if isinstance(v, str) and v in ("skip", "block", "warn"):
+            return v
+    return "block" if hard_block else "warn"
+
+
 def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
     """Cross-purpose LLM spend vs cap. Empty panel when llm_budgets is missing
     (pre-migration repo) so the dashboard still renders.
@@ -256,20 +267,29 @@ def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
     now = datetime.now(UTC)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     month_label = f"{now.year:04d}-{now.month:02d}"
-    rows = conn.execute(
+    has_mode = (
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info('llm_budgets') WHERE name = 'on_exceed'"
+        ).fetchone()
+        is not None
+    )
+    if has_mode:
+        sql = """
+        SELECT b.purpose, b.monthly_cap_usd, b.warn_threshold_pct, b.hard_block,
+               b.on_exceed, COALESCE(SUM(c.cost_estimate_usd), 0.0) AS spend
+        FROM llm_budgets b
+        LEFT JOIN llm_calls c ON c.purpose = b.purpose AND c.called_at >= ?
+        GROUP BY b.purpose
         """
-        SELECT b.purpose,
-               b.monthly_cap_usd,
-               b.warn_threshold_pct,
-               b.hard_block,
+    else:
+        sql = """
+        SELECT b.purpose, b.monthly_cap_usd, b.warn_threshold_pct, b.hard_block,
                COALESCE(SUM(c.cost_estimate_usd), 0.0) AS spend
         FROM llm_budgets b
-        LEFT JOIN llm_calls c
-          ON c.purpose = b.purpose AND c.called_at >= ?
+        LEFT JOIN llm_calls c ON c.purpose = b.purpose AND c.called_at >= ?
         GROUP BY b.purpose
-        """,
-        (month_start.isoformat(),),
-    ).fetchall()
+        """
+    rows = conn.execute(sql, (month_start.isoformat(),)).fetchall()
     panel_rows: list[LlmBudgetRow] = []
     total_spend = 0.0
     for r in rows:
@@ -282,6 +302,7 @@ def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
         if r["purpose"] != "__default__":
             total_spend += spend
         headroom = 1.0 - (spend / cap) if cap > 0 else 1.0
+        hard_block = bool(r["hard_block"])
         panel_rows.append(
             LlmBudgetRow(
                 purpose=str(r["purpose"]),
@@ -289,7 +310,8 @@ def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
                 current_spend_usd=spend,
                 headroom_pct=headroom,
                 warn_threshold_pct=float(r["warn_threshold_pct"]),
-                hard_block=bool(r["hard_block"]),
+                hard_block=hard_block,
+                on_exceed=_mode_from_row(r, has_mode=has_mode, hard_block=hard_block),
             )
         )
     # Sort over-cap first (most over → least), then warn, then ok.
