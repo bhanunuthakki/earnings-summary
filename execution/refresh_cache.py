@@ -30,6 +30,8 @@ Operational notes:
     prevents concurrent runs.
 
 Tier semantics:
+    free     250 calls/day; /stable only — the v3/v4 fallback rungs are dropped
+             (they 403 globally on free) by propagating FMP_TIER=free to the fetcher
     basic    250 calls/day, no rate limit (we throttle to 4/sec for steady drip)
     starter  no daily cap, 300 calls/min
     premium  no daily cap, 720 calls/min (we use 720, not 750, for headroom)
@@ -105,6 +107,9 @@ class TierConfig:
 _UNLIMITED = sys.maxsize
 
 TIERS: dict[str, TierConfig] = {
+    # free == post-downgrade: 250/day, and save_fmp_data/fetch_etf_data drop the
+    # v3/v4 rungs (they 403 globally on free) when FMP_TIER=free is propagated.
+    "free":    TierConfig("free",    calls_per_day=250,        calls_per_sec=4.0),
     "basic":   TierConfig("basic",   calls_per_day=250,        calls_per_sec=4.0),
     "starter": TierConfig("starter", calls_per_day=_UNLIMITED, calls_per_sec=5.0),
     "premium": TierConfig("premium", calls_per_day=_UNLIMITED, calls_per_sec=12.0),
@@ -683,9 +688,12 @@ def _run_under_lock(args: argparse.Namespace) -> int:
         }, indent=2))
         return 0
 
-    # Set rate limit env var for save_fmp_data's TokenBucket
+    # Set rate limit env var for save_fmp_data's TokenBucket, and propagate the
+    # resolved tier so the fetcher's ladder gates correctly: FMP_TIER=free makes
+    # save_fmp_data (and fetch_etf_data) drop the v3/v4 rungs and hit /stable only.
     env = os.environ.copy()
     env["FMP_RATE_LIMIT_PER_SEC"] = str(tier.calls_per_sec)
+    env["FMP_TIER"] = tier.name
 
     cmd = [
         sys.executable,
