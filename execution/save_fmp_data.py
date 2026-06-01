@@ -27,14 +27,21 @@ import sys
 import time
 from datetime import datetime, timedelta, date
 from pathlib import Path
+from typing import cast
 
 import requests
 from dotenv import load_dotenv
+from pydantic import BaseModel, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from models.fmp_payloads import (  # noqa: E402
+    FmpBalanceSheetRecord,
+    FmpCashFlowRecord,
+    FmpIncomeStatementRecord,
+)
 
 load_dotenv(PROJECT_ROOT / ".env")
 API_KEY = os.environ.get("FMP_API_KEY")
@@ -305,6 +312,89 @@ def fmp_call(
 
 
 # ---------------------------------------------------------------------------
+# Pre-write validation gate (stable rungs only)
+# ---------------------------------------------------------------------------
+#
+# Ported from the retired execution/fetch_fmp_statements.py: Pydantic-validate
+# the first record of a statement response *before* persisting it, so a drifted
+# stable envelope can't silently overwrite good cached JSON and break the
+# downstream compute/* extractors. On drift we dump the raw body to .tmp/ and
+# skip the write (recording the endpoint as an error) rather than caching a
+# malformed envelope.
+
+_VALIDATION_DUMP_DIR = PROJECT_ROOT / ".tmp" / "fmp_validation_failures"
+
+# Catalog endpoint path -> stable-shaped Pydantic model, keyed by the catalog
+# `path` (job["path"]). The cash-flow catalog path is the stable spelling
+# "cashflow-statement" (PATH_ALIASES maps it to the v3-ish "cash-flow-statement").
+# Endpoints absent from this map are not gated.
+_STABLE_VALIDATORS: dict[str, type[BaseModel]] = {
+    "income-statement": FmpIncomeStatementRecord,
+    "balance-sheet-statement": FmpBalanceSheetRecord,
+    "cashflow-statement": FmpCashFlowRecord,
+}
+
+
+def _validate_stable_record(
+    endpoint: str, kind: str | None, body: object
+) -> ValidationError | None:
+    """Validate body[0] against the stable-shaped model for `endpoint`.
+
+    Returns the ValidationError on schema drift, else None. Validation applies
+    ONLY when the winning rung is a `stable:` rung — the v3/v4 fallback rungs
+    return v3-shaped bodies (calendarYear, dividendsPaid, ...) that the
+    stable-shaped model would (correctly) reject; that is legacy shape, NOT
+    drift, so non-stable rungs are passed through unchecked. An empty body is a
+    200-OK no-data signal (freshly-IPO'd ticker) and passes; endpoints with no
+    model pass.
+    """
+    if kind is None or not kind.startswith("stable:"):
+        return None
+    model = _STABLE_VALIDATORS.get(endpoint)
+    if model is None:
+        return None
+    if not isinstance(body, list):
+        return None
+    records = cast("list[object]", body)
+    if not records:
+        return None
+    try:
+        model.model_validate(records[0])
+    except ValidationError as exc:
+        return exc
+    return None
+
+
+def _dump_validation_failure(
+    ticker: str,
+    endpoint: str,
+    period: str,
+    suffix: str,
+    body: object,
+    err: ValidationError,
+) -> Path:
+    """Write the malformed stable response + error breakdown to .tmp/ for
+    inspection. Returns the dump path so the status row can cite it — the dump
+    makes a schema-drift fix a one-liner.
+    """
+    _VALIDATION_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    out = _VALIDATION_DUMP_DIR / f"{ticker}_{suffix}_{stamp}.json"
+    payload = {
+        "ticker": ticker,
+        "endpoint": endpoint,
+        "period": period,
+        "validation_errors": [
+            {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
+            for e in err.errors()
+        ],
+        "raw_response": body,
+    }
+    out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Endpoint catalog
 # ---------------------------------------------------------------------------
 
@@ -537,7 +627,7 @@ def run_ticker(
     force_snapshot: bool = False,
     manifest_filter: set[tuple[str, str]] | None = None,
     max_calls: int | None = None,
-) -> dict:
+) -> dict[str, int]:
     lt = _list_type_for(ticker)
     print(f"\n=== {ticker} ({lt}) ===", flush=True)
     jobs = per_ticker_jobs(ticker, list_type=lt)
@@ -563,9 +653,9 @@ def run_ticker(
     pending: list[tuple] = []
 
     for job in jobs:
-        endpoint = job["path"]
-        period = job["period"]
-        suffix = job["suffix"]
+        endpoint = cast("str", job["path"])
+        period = cast("str", job["period"])
+        suffix = cast("str", job["suffix"])
 
         if (endpoint, period) in already_ok:
             summary["skipped"] += 1
@@ -578,6 +668,28 @@ def run_ticker(
         code, body, err, kind = fmp_call(endpoint, ticker, job["extra"])
 
         if code == 200 and body is not None:
+            # Pre-write schema-drift gate: validate stable statement responses
+            # before caching. A drifted stable envelope is dumped to .tmp/ and
+            # the write is skipped (recorded as error) rather than overwriting
+            # good cached JSON. v3/v4 fallback rungs are not gated (see
+            # _validate_stable_record).
+            drift = _validate_stable_record(endpoint, kind, body)
+            if drift is not None:
+                dump_path = _dump_validation_failure(
+                    ticker, endpoint, period, suffix, body, drift
+                )
+                rel_dump = dump_path.relative_to(PROJECT_ROOT)
+                pending.append(_build_status_row(
+                    ticker, endpoint, period, status="error",
+                    http_code=code,
+                    error_msg=(f"schema_drift: {len(drift.errors())} validation "
+                               f"errors; raw dumped to {rel_dump}"),
+                ))
+                summary["error"] += 1
+                print(f"  drift {endpoint:48s} {period:8s} schema drift -> "
+                      f"{dump_path.name} (write skipped)")
+                continue
+
             file_path = FMP_DIR / f"{ticker}_{suffix}.json"
             file_path.write_text(json.dumps(body, indent=2), encoding="utf-8")
 
