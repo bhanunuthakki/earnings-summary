@@ -79,6 +79,31 @@ _NTM_MULTIPLES: frozenset[str] = frozenset(
 )
 
 
+def _coerce_multiple_payload(raw: str) -> dict[str, object] | None:
+    """Parse the multiple-selection LLM response into a JSON object.
+
+    Returns the decoded ``dict`` on success, or ``None`` when the response is
+    empty, fenced-but-empty, non-JSON prose, truncated, or valid JSON that is
+    not an object (e.g. a bare list or string). Returning ``None`` rather than
+    raising lets ``extract_for_ticker`` degrade to a ``skipped_reason`` result
+    so a transient malformed response can't surface an unhandled error out of
+    the compute layer. The ``isinstance(decoded, dict)`` check in particular
+    closes a latent ``AttributeError`` on the downstream ``parsed.get(...)``
+    when the model returned a non-object shape. Mirrors the defensive parse in
+    ``report.sections.bear_case`` / ``report.sections.earnings``.
+    """
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = JSON_FENCE_RE.sub("", cleaned).strip()
+    try:
+        decoded = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    return cast("dict[str, object]", decoded)
+
+
 def extract_for_ticker(
     ticker: str,
     repo_root: Path,
@@ -158,17 +183,25 @@ def extract_for_ticker(
             thesis_text=thesis_text,
             financial_profile_md=financial_profile,
             available_estimates_md=estimates_md,
-        ).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        try:
-            parsed = cast("dict[str, object]", json.loads(raw))
-        except json.JSONDecodeError as e:
+        )
+        parsed_opt = _coerce_multiple_payload(raw)
+        if parsed_opt is None:
+            # Empty / non-JSON / valid-JSON-but-not-an-object response. Degrade
+            # to a skipped_reason (the §Valuation section maps this to a loud
+            # MISSING_DATA banner carrying a --refresh fix command) rather than
+            # raising — a transient malformed multiple-selection response must
+            # not surface an unhandled error out of the compute layer. The
+            # non-object case in particular previously AttributeError'd on the
+            # `parsed.get(...)` calls below.
             return ValuationBasisResult(
                 ticker=ticker,
-                skipped_reason=f"LLM returned non-JSON: {e}",
+                skipped_reason=(
+                    "LLM returned an empty, non-JSON, or non-object "
+                    "multiple-selection response"
+                ),
                 cache_sha256=inputs_sha,
             )
+        parsed = parsed_opt
 
     multiple_name = _str_or_none(parsed.get("multiple"))
     if multiple_name not in VALUATION_MULTIPLE_CHOICES:
