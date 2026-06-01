@@ -178,6 +178,7 @@ def build_analytical_dashboard(
     insider_top_n: int = 25,
     list_types: tuple[str, ...] = ("portfolio", "watchlist"),
     sections: set[str] | frozenset[str] | None = None,
+    ticker: str | None = None,
 ) -> AnalyticalDashboard:
     """Build the cross-ticker analytical dashboard.
 
@@ -186,6 +187,9 @@ def build_analytical_dashboard(
     builds everything — the existing behaviour the static export + ``/api/overview``
     rely on. Per-panel selection lets the shell's ``/api/panel/<name>`` fetch one
     panel without running the other six sub-queries (e.g. the 500-row insider scan).
+
+    ``ticker`` scopes the dropdown-driven panels (pre-reads + insiders) to one
+    name; the other panels ignore it.
     """
     if not db_path.exists():
         return AnalyticalDashboard()
@@ -201,7 +205,9 @@ def build_analytical_dashboard(
                 _build_trigger_ladder(conn, list_types) if want("trigger_ladder") else []
             ),
             insider_events=(
-                _build_insider_events(conn, insider_window_days, insider_top_n, list_types)
+                _build_insider_events(
+                    conn, insider_window_days, insider_top_n, list_types, ticker=ticker
+                )
                 if want("insider_events")
                 else []
             ),
@@ -211,7 +217,9 @@ def build_analytical_dashboard(
             portfolio_synthesis_md=(
                 _load_portfolio_synthesis(conn) if want("portfolio_synthesis") else None
             ),
-            per_ticker_reread=(_load_per_ticker_rereads(conn) if want("rereads") else []),
+            per_ticker_reread=(
+                _load_per_ticker_rereads(conn, ticker=ticker) if want("rereads") else []
+            ),
             decisions=(_build_decisions_panel(conn) if want("decisions") else DecisionsPanel()),
             llm_budgets=(
                 _build_llm_budget_panel(conn) if want("llm_budgets") else LlmBudgetPanel()
@@ -453,8 +461,11 @@ def _load_portfolio_synthesis(conn: sqlite3.Connection) -> str | None:
     return row["content_md"] if row else None
 
 
-def _load_per_ticker_rereads(conn: sqlite3.Connection) -> list[PortfolioLensRow]:
-    """The five_min_reread lens output for every portfolio holding that has one."""
+def _load_per_ticker_rereads(
+    conn: sqlite3.Connection, *, ticker: str | None = None
+) -> list[PortfolioLensRow]:
+    """The five_min_reread lens output for every portfolio holding that has one
+    (or just ``ticker``'s, when given — the dropdown-driven Pre-reads panel)."""
     has_artifacts = (
         conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
@@ -463,8 +474,10 @@ def _load_per_ticker_rereads(conn: sqlite3.Connection) -> list[PortfolioLensRow]
     )
     if not has_artifacts:
         return []
+    ticker_clause = " AND a.ticker = ?" if ticker else ""
+    params: tuple[object, ...] = (ticker.upper(),) if ticker else ()
     rows = conn.execute(
-        """
+        f"""
         SELECT a.ticker, a.content_md, a.generated_at
         FROM llm_artifacts a
         INNER JOIN tracked_companies tc
@@ -472,9 +485,10 @@ def _load_per_ticker_rereads(conn: sqlite3.Connection) -> list[PortfolioLensRow]
           AND tc.archived_at IS NULL
           AND tc.list_type IN ('portfolio', 'evaluation')
         WHERE a.purpose = 'lens:five_min_reread'
-          AND a.superseded_by_id IS NULL
+          AND a.superseded_by_id IS NULL{ticker_clause}
         ORDER BY tc.list_type, a.ticker
-        """
+        """,
+        params,
     ).fetchall()
     return [
         PortfolioLensRow(
@@ -554,6 +568,8 @@ def _build_insider_events(
     window_days: int,
     top_n: int,
     list_types: tuple[str, ...],
+    *,
+    ticker: str | None = None,
 ) -> list[InsiderEventRow]:
     """Cross-ticker insider activity over `window_days`, ranked by approximation
     of conviction signal (open-market buys + cluster size + transaction value).
@@ -570,11 +586,15 @@ def _build_insider_events(
 
     placeholders = ",".join("?" * len(list_types))
     cutoff = (datetime.now(UTC) - timedelta(days=window_days)).isoformat()
+    ticker_clause = " AND ticker = ?" if ticker else ""
+    active_params: tuple[object, ...] = (
+        (*list_types, ticker.upper()) if ticker else tuple(list_types)
+    )
     rows = conn.execute(
         f"""
         WITH active AS (
             SELECT ticker FROM tracked_companies
-            WHERE archived_at IS NULL AND list_type IN ({placeholders})
+            WHERE archived_at IS NULL AND list_type IN ({placeholders}){ticker_clause}
         ),
         clustered AS (
             -- Same-day cluster count per (ticker, date)
@@ -599,7 +619,7 @@ def _build_insider_events(
         ORDER BY it.transaction_date DESC
         LIMIT 500
         """,
-        (*list_types, cutoff, cutoff),
+        (*active_params, cutoff, cutoff),
     ).fetchall()
 
     # Score: open-market buys >>> sells; weighted by role and value

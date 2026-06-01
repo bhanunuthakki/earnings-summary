@@ -174,6 +174,27 @@ def create_app(
         payload["tier_coverage"] = tier_coverage_summary(repo_root)
         return payload
 
+    @app.route("/api/panel/<name>", methods=["GET"])
+    def panel_fragment(name: str):
+        """One analytical panel as a head/foot-less HTML fragment, for the lazy
+        command-center shell — builds only that panel's section. ``?ticker=``
+        scopes the dropdown-driven panels (prereads, insiders) to one name.
+        404 for an unknown panel."""
+        from pipeline.analytical_dashboard_html import (
+            PANEL_TO_SECTION,
+            render_panel_fragment,
+        )
+
+        section_key = PANEL_TO_SECTION.get(name)
+        if section_key is None:
+            abort(404)
+        ticker = request.args.get("ticker") or None
+        dash = build_analytical_dashboard(db_path, sections={section_key}, ticker=ticker)
+        fragment = render_panel_fragment(dash, name)
+        if fragment is None:
+            abort(404)
+        return Response(fragment, mimetype="text/html")
+
     @app.route("/analytical", methods=["GET"])
     def analytical_page():
         """Live server-rendered analytical dashboard — byte-identical markup
