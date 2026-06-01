@@ -276,3 +276,38 @@ def test_analytical_page_returns_html(client) -> None:
     body = resp.get_data(as_text=True)
     assert body.startswith("<!doctype html>")
     assert "Trigger ladder" in body
+
+
+# ----- PR 4: shell backend seams -----
+
+
+def test_build_with_section_selector(tmp_path: Path) -> None:
+    """`sections=` builds only the requested panel; the rest stay empty. `None`
+    (default) still builds everything — the /api/overview + static-export path."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+
+    only_ladder = build_analytical_dashboard(db_path, sections={"trigger_ladder"})
+    assert [r.trigger_status for r in only_ladder.trigger_ladder] == ["sell"]  # requested
+    assert only_ladder.llm_budgets.rows == []  # not requested → default empty
+    assert only_ladder.decisions.recent == []
+
+    full = build_analytical_dashboard(db_path)  # sections=None
+    assert full.llm_budgets.rows  # everything built, as before
+
+
+def test_tickers_api(client) -> None:
+    resp = client.get("/api/tickers")
+    assert resp.status_code == 200
+    tickers = resp.get_json()["tickers"]
+    assert any(t["ticker"] == "NU" and t["list_type"] == "portfolio" for t in tickers)
+
+
+def test_dcf_route_404_then_serves(client, tmp_path: Path) -> None:
+    # The client fixture roots the app at tmp_path; no workbook yet → 404.
+    assert client.get("/dcf/NU").status_code == 404
+    dcf_dir = tmp_path / "dcf"
+    dcf_dir.mkdir()
+    (dcf_dir / "NU.xlsx").write_bytes(b"PK\x03\x04 fake xlsx bytes")
+    resp = client.get("/dcf/NU")
+    assert resp.status_code == 200
