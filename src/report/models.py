@@ -23,6 +23,7 @@ class SectionStatus(str, Enum):
     PARTIAL = "partial"  # some quarters/segments populated, others not
     LLM_PENDING = "llm_pending"  # LLM call deferred / not yet generated
     NOT_APPLICABLE = "not_applicable"  # ticker doesn't have this kind of data
+    BUDGET_SKIPPED = "budget_skipped"  # LLM call forgone to stay under a monthly budget cap
 
 
 class ReportFlavor(str, Enum):
@@ -44,6 +45,20 @@ class MissingReason(BaseModel):
     stage: str  # e.g. "INGEST(fmp)", "COMPUTE(extract_facts)"
     fix_command: str  # e.g. "python execution/extract_facts.py --ticker GOOG"
     detail: str | None = None
+
+
+class BudgetSkip(BaseModel):
+    """Why an LLM analysis was forgone: its per-purpose monthly budget cap was
+    reached (``on_exceed='skip'``). Carries the numbers so the renderer can show
+    "$X of $Y spent" and the dashboard can offer an override. ``section`` is the
+    human label; ``purpose`` is the ``llm_budgets`` key (links the skip to its
+    cap). See ``report.sections._common.budget_gate``."""
+
+    section: str  # human label, e.g. "Bear case (§7)"
+    purpose: str  # llm_budgets purpose key, e.g. "bear_case"
+    cap_usd: float
+    spend_usd: float
+    headroom_pct: float
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +584,7 @@ class EarningsSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None  # set when the themes LLM was forgone (budget)
     surprise_scorecard: SurpriseScorecardCard | None = None
     full_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
     digest_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
@@ -710,6 +726,7 @@ class FailureMode(BaseModel):
 class BearCaseSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None
     failure_modes: list[FailureMode] = Field(default_factory=list)
     most_underweighted: str | None = None
     out_of_scope_flags: list[str] = Field(default_factory=list)
@@ -731,6 +748,7 @@ class RecentDevelopmentsSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None
     cached_at: datetime | None = None
     news_days_window: int = 7
     content_md: str | None = None
@@ -875,6 +893,7 @@ class QARosterSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None  # set when the topic-labeling LLM was forgone (budget)
     quarters: list[QARosterQuarter] = Field(default_factory=list)
 
 
@@ -1004,6 +1023,7 @@ class ValuationBasisSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None
     multiple_name: str | None = None  # e.g. "EV/NTM Revenue", "P/B", "EV/LTM EBITDA"
     rationale: str | None = None  # 1-2 sentence Opus rationale
     current_value: float | None = None  # the multiple's current numeric value
@@ -1070,6 +1090,7 @@ class ExecCompSectionModel(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
+    budget_skip: BudgetSkip | None = None  # set when the alignment-narrative LLM was forgone (budget)
     ticker: str
     fiscal_year_latest: int | None = None
     packages: list[ExecCompRowModel] = Field(default_factory=list)
@@ -1092,6 +1113,10 @@ class ReportSpec(BaseModel):
     # this to decide whether to run optional LLM filters (e.g. SayDo
     # commitment importance ranking) without requiring per-call wiring.
     llm_enabled: bool = False
+    # Sections whose LLM analysis was forgone to stay under a monthly budget cap
+    # (on_exceed='skip'). Drives the brief's "forgone due to budget" header
+    # rollup + the dashboard indicator. Empty when nothing was budget-skipped.
+    forgone_due_to_budget: list[BudgetSkip] = Field(default_factory=list)
 
     portfolio_position: PortfolioPositionSection | None = None
     valuation_basis: ValuationBasisSection | None = None

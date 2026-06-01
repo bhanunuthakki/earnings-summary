@@ -12,7 +12,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from report.models import GrowthMetrics, MissingReason
+from report.models import BudgetSkip, GrowthMetrics, MissingReason
 
 DISPLAY_QUARTERS = 12
 UNDERLYING_QUARTERS = 16  # 12 display + 4 prior for TTM-1Y CAGR baseline
@@ -140,3 +140,55 @@ def has_table(conn: sqlite3.Connection, name: str) -> bool:
 
 def missing(stage: str, fix_command: str, detail: str | None = None) -> MissingReason:
     return MissingReason(stage=stage, fix_command=fix_command, detail=detail)
+
+
+def budget_gate(
+    purpose: str,
+    section_label: str,
+    repo_root: Path,
+    *,
+    bypass: bool = False,
+) -> BudgetSkip | None:
+    """Pre-flight LLM-budget gate for a section.
+
+    Returns a ``BudgetSkip`` (to attach to the section AND roll up into
+    ``ReportSpec.forgone_due_to_budget``) when ``purpose`` is configured
+    ``on_exceed='skip'`` and at/over its monthly cap — i.e. the section should
+    FORGO its LLM call (no spend) and render a "forgone due to budget" banner.
+    Returns None to proceed (under cap, a non-skip mode such as 'block'/'warn',
+    or ``bypass=True``). Best-effort: any failure reading the budget returns
+    None so the gate can never break a build.
+    """
+    try:
+        from llm_budget import should_skip_for_budget
+    except ImportError:
+        return None
+    check = should_skip_for_budget(
+        purpose, db_path=repo_root / "data" / "portfolio.db", bypass=bypass
+    )
+    if check is None:
+        return None
+    return BudgetSkip(
+        section=section_label,
+        purpose=purpose,
+        cap_usd=float(check.cap),
+        spend_usd=float(check.current_spend),
+        headroom_pct=check.headroom_pct,
+    )
+
+
+def budget_skip_missing(ticker: str, purpose: str, skip: BudgetSkip) -> MissingReason:
+    """Standard loud banner for an LLM section forgone to stay under budget —
+    names the cap + month-to-date spend and points at the override path."""
+    return MissingReason(
+        stage=f"BUDGET({purpose})",
+        fix_command=(
+            f"python execution/manage_llm_budget.py --set {purpose} --cap <higher>"
+            "  # or raise / override in the dashboard, then rebuild"
+        ),
+        detail=(
+            f"Forgone to stay under budget — {purpose} is at/over its "
+            f"${skip.cap_usd:g} monthly cap (${skip.spend_usd:g} spent this month, "
+            f"ticker {ticker.upper()}). Raise the cap or override, then rebuild."
+        ),
+    )

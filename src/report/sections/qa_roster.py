@@ -41,7 +41,7 @@ from report.models import (
     SectionStatus,
     TranscriptEntry,
 )
-from report.sections._common import missing
+from report.sections._common import budget_gate, missing
 
 # A turn boundary is the operator/host handing the floor to an analyst. The
 # free aggregators (roic.ai et al.) emit several shapes, all of the form
@@ -146,6 +146,13 @@ def build(
                 detail="No transcripts available to parse.",
             ),
         )
+    # Budget gate for the (optional) topic-labeling LLM. On skip the roster
+    # still renders with regex-derived labels; only the LLM upgrade is forgone.
+    topics_skip = (
+        budget_gate("qa_topics", "Q&A topics", repo_root)
+        if enable_llm and ticker and repo_root is not None
+        else None
+    )
     rosters: list[QARosterQuarter] = []
     for transcript in appendix.transcripts[:max_quarters]:
         entries = _parse(transcript)
@@ -153,7 +160,7 @@ def build(
             # Skip silently — older transcripts often have format drift; the
             # latest quarter is what the user is looking at first anyway.
             continue
-        if enable_llm and ticker and repo_root is not None:
+        if enable_llm and ticker and repo_root is not None and topics_skip is None:
             entries = _apply_llm_topics(ticker, repo_root, transcript, entries)
         rosters.append(
             QARosterQuarter(quarter=transcript.quarter, year=transcript.year, entries=entries)
@@ -171,7 +178,7 @@ def build(
                 ),
             ),
         )
-    return QARosterSection(status=SectionStatus.OK, quarters=rosters)
+    return QARosterSection(status=SectionStatus.OK, quarters=rosters, budget_skip=topics_skip)
 
 
 def _parse(transcript: TranscriptEntry) -> list[QAEntry]:

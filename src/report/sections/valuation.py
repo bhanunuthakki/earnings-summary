@@ -16,7 +16,7 @@ from report.models import (
     ValuationBasisHistoricalPoint,
     ValuationBasisSection,
 )
-from report.sections._common import missing, open_repo_db
+from report.sections._common import budget_gate, budget_skip_missing, missing, open_repo_db
 
 
 def build(
@@ -42,6 +42,18 @@ def build(
                 ),
             )
         return _to_section(cached)
+
+    skip = budget_gate("valuation_basis", "Valuation (multiple)", repo_root)
+    if skip is not None:
+        # A previously-cached multiple is free to render — prefer it over forgoing.
+        cached = compute_valuation.load(repo_root, ticker)
+        if cached is not None and cached.multiple_name is not None:
+            return _to_section(cached)
+        return ValuationBasisSection(
+            status=SectionStatus.BUDGET_SKIPPED,
+            budget_skip=skip,
+            missing=budget_skip_missing(ticker, "valuation_basis", skip),
+        )
 
     conn = open_repo_db(repo_root)
     try:

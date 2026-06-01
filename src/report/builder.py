@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from report.models import ReportFlavor, ReportSpec
+from report.models import BudgetSkip, ReportFlavor, ReportSpec
 from report.sections import (
     appendix,
     bear_case,
@@ -110,12 +110,27 @@ def build_report(
         ticker, repo_root, enable_llm=enable_llm
     )
     synthesis_section = synthesis.build(ticker, repo_root)
+    # Roll up every section's budget-forgone marker so renderers can show a
+    # brief-level "forgone due to budget" banner (and the dashboard an indicator).
+    forgone_due_to_budget: list[BudgetSkip] = [
+        skip
+        for skip in (
+            bear_case_section.budget_skip,
+            recent_developments_section.budget_skip,
+            valuation_section.budget_skip,
+            earnings_section.budget_skip,
+            qa_roster_section.budget_skip,
+            exec_compensation_section.budget_skip,
+        )
+        if isinstance(skip, BudgetSkip)
+    ]
     return ReportSpec(
         ticker=ticker,
         generation_date=date.today(),
         repo_root=str(repo_root),
         flavor=flavor,
         llm_enabled=enable_llm,
+        forgone_due_to_budget=forgone_due_to_budget,
         portfolio_position=portfolio_position_section,
         valuation_basis=valuation_section,
         snapshot=snapshot_section,
