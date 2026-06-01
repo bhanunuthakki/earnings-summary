@@ -859,6 +859,67 @@ def _route_drop_kpi(repo_root: Path, ticker: str, c: Comment, apply: bool) -> di
     }
 
 
+# --------------------------------------------------------------------------- #
+# Thesis-preview cache: so an Apply reuses the exact draft the dashboard
+# Preview showed (one LLM call, no drift) instead of re-running the model.
+# Keyed by current thesis + the exact comment set, with a TTL, so the cache is
+# used ONLY when nothing changed between preview and apply. Best-effort: a cache
+# miss / unreadable file just means a fresh LLM call. Lives under .tmp (wipeable).
+# --------------------------------------------------------------------------- #
+_THESIS_CACHE_TTL_SEC = 2 * 60 * 60  # preview -> apply is usually quick; 2h is generous
+
+
+def _thesis_cache_key(current_thesis: object, comments_list: list[Comment]) -> str:
+    parts = [str(current_thesis)]
+    parts += [f"{c.id} {c.comment}" for c in sorted(comments_list, key=lambda x: x.id)]
+    return hashlib.sha256("".join(parts).encode("utf-8")).hexdigest()
+
+
+def _thesis_cache_path(repo_root: Path, ticker: str) -> Path:
+    return repo_root / ".tmp" / "thesis_preview_cache" / f"{ticker.upper()}.json"
+
+
+def _read_cached_thesis(repo_root: Path, ticker: str, key: str) -> dict[str, str] | None:
+    """Return the cached {revised, diff} iff a fresh entry matches `key`."""
+    path = _thesis_cache_path(repo_root, ticker)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("key") != key:
+            return None
+        cached_at = data.get("cached_at")
+        revised = data.get("revised")
+        diff = data.get("diff")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(revised, str) or not isinstance(cached_at, (int, float)):
+        return None
+    if datetime.now(UTC).timestamp() - float(cached_at) > _THESIS_CACHE_TTL_SEC:
+        return None
+    return {"revised": revised, "diff": str(diff) if diff is not None else "(no diff summary)"}
+
+
+def _write_cached_thesis(repo_root: Path, ticker: str, key: str, revised: str, diff: str) -> None:
+    """Best-effort cache write — never break an edit on a cache failure."""
+    path = _thesis_cache_path(repo_root, ticker)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "key": key,
+                    "revised": revised,
+                    "diff": diff,
+                    "cached_at": datetime.now(UTC).timestamp(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def _route_edit_thesis(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
     """Ask Opus to revise the thesis text using the comment as guidance."""
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
@@ -888,14 +949,20 @@ Return a JSON object with EXACTLY these fields:
 
 Return ONLY the JSON object. No markdown fence, no prose.
 """
-    raw = call_llm(prompt, purpose="company_description").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    parsed = json.loads(raw)
-    revised = parsed.get("revised_thesis")
-    diff = parsed.get("diff_summary") or "(no diff summary)"
-    if not isinstance(revised, str):
-        return {"summary": "edit_thesis: LLM did not return a revised_thesis string"}
+    cache_key = _thesis_cache_key(current_thesis, [c])
+    cached = _read_cached_thesis(repo_root, ticker, cache_key)
+    if cached is not None:
+        revised, diff = cached["revised"], cached["diff"]
+    else:
+        raw = call_llm(prompt, purpose="company_description").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        parsed = json.loads(raw)
+        revised = parsed.get("revised_thesis")
+        diff = parsed.get("diff_summary") or "(no diff summary)"
+        if not isinstance(revised, str):
+            return {"summary": "edit_thesis: LLM did not return a revised_thesis string"}
+        _write_cached_thesis(repo_root, ticker, cache_key, revised, diff)
     if apply:
         payload["thesis"] = revised
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -904,6 +971,7 @@ Return ONLY the JSON object. No markdown fence, no prose.
         "diff_summary": diff,
         "revised_preview": revised[:200] + ("..." if len(revised) > 200 else ""),
         "revised_full": revised,  # full revised thesis for the dashboard diff preview
+        "from_cache": cached is not None,
         "dry_run": not apply,
     }
 
@@ -962,14 +1030,20 @@ Return a JSON object with EXACTLY these fields:
 
 Return ONLY the JSON object. No markdown fence, no prose.
 """
-    raw = call_llm(prompt, purpose="company_description").strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    parsed = json.loads(raw)
-    revised = parsed.get("revised_thesis")
-    diff = parsed.get("diff_summary") or "(no diff summary)"
-    if not isinstance(revised, str):
-        return {"summary": "edit_thesis_batch: LLM did not return a revised_thesis string"}
+    cache_key = _thesis_cache_key(current_thesis, comments_list)
+    cached = _read_cached_thesis(repo_root, ticker, cache_key)
+    if cached is not None:
+        revised, diff = cached["revised"], cached["diff"]
+    else:
+        raw = call_llm(prompt, purpose="company_description").strip()
+        if raw.startswith("```"):
+            raw = JSON_FENCE_RE.sub("", raw).strip()
+        parsed = json.loads(raw)
+        revised = parsed.get("revised_thesis")
+        diff = parsed.get("diff_summary") or "(no diff summary)"
+        if not isinstance(revised, str):
+            return {"summary": "edit_thesis_batch: LLM did not return a revised_thesis string"}
+        _write_cached_thesis(repo_root, ticker, cache_key, revised, diff)
 
     if apply:
         payload["thesis"] = revised
@@ -982,6 +1056,7 @@ Return ONLY the JSON object. No markdown fence, no prose.
         "revised_full": revised,  # full revised thesis for the dashboard diff preview
         "batched_count": len(comments_list),
         "batched_ids": [c.id for c in comments_list],
+        "from_cache": cached is not None,
         "dry_run": not apply,
     }
 
