@@ -155,28 +155,67 @@ class AnalyticalDashboard:
         return asdict(self)
 
 
+# Section keys accepted by ``build_analytical_dashboard(sections=...)``. Each maps
+# to one AnalyticalDashboard field / sub-builder so the unified command-center
+# shell can lazy-load a single panel without running the other (heavy) queries.
+DASHBOARD_SECTIONS: frozenset[str] = frozenset(
+    {
+        "trigger_ladder",
+        "insider_events",
+        "prediction_outcomes",
+        "portfolio_synthesis",
+        "rereads",
+        "decisions",
+        "llm_budgets",
+    }
+)
+
+
 def build_analytical_dashboard(
     db_path: Path,
     *,
     insider_window_days: int = 90,
     insider_top_n: int = 25,
     list_types: tuple[str, ...] = ("portfolio", "watchlist"),
+    sections: set[str] | frozenset[str] | None = None,
 ) -> AnalyticalDashboard:
+    """Build the cross-ticker analytical dashboard.
+
+    ``sections`` selects which panels to build (keys in ``DASHBOARD_SECTIONS``);
+    unrequested panels keep their empty dataclass default. ``None`` (the default)
+    builds everything — the existing behaviour the static export + ``/api/overview``
+    rely on. Per-panel selection lets the shell's ``/api/panel/<name>`` fetch one
+    panel without running the other six sub-queries (e.g. the 500-row insider scan).
+    """
     if not db_path.exists():
         return AnalyticalDashboard()
+
+    def want(name: str) -> bool:
+        return sections is None or name in sections
+
     conn = sqlite3.connect(str(db_path))
     try:
         conn.row_factory = sqlite3.Row
         return AnalyticalDashboard(
-            trigger_ladder=_build_trigger_ladder(conn, list_types),
-            insider_events=_build_insider_events(
-                conn, insider_window_days, insider_top_n, list_types
+            trigger_ladder=(
+                _build_trigger_ladder(conn, list_types) if want("trigger_ladder") else []
             ),
-            prediction_outcomes=_build_prediction_outcomes(conn, list_types),
-            portfolio_synthesis_md=_load_portfolio_synthesis(conn),
-            per_ticker_reread=_load_per_ticker_rereads(conn),
-            decisions=_build_decisions_panel(conn),
-            llm_budgets=_build_llm_budget_panel(conn),
+            insider_events=(
+                _build_insider_events(conn, insider_window_days, insider_top_n, list_types)
+                if want("insider_events")
+                else []
+            ),
+            prediction_outcomes=(
+                _build_prediction_outcomes(conn, list_types) if want("prediction_outcomes") else []
+            ),
+            portfolio_synthesis_md=(
+                _load_portfolio_synthesis(conn) if want("portfolio_synthesis") else None
+            ),
+            per_ticker_reread=(_load_per_ticker_rereads(conn) if want("rereads") else []),
+            decisions=(_build_decisions_panel(conn) if want("decisions") else DecisionsPanel()),
+            llm_budgets=(
+                _build_llm_budget_panel(conn) if want("llm_budgets") else LlmBudgetPanel()
+            ),
         )
     finally:
         conn.close()

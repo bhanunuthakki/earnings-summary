@@ -293,6 +293,41 @@ def create_app(
             abort(404)
         return send_file(matches[-1])
 
+    @app.route("/dcf/<ticker>", methods=["GET"])
+    def latest_dcf_for_ticker(ticker: str):
+        """Serve the live DCF workbook (``dcf/<TICKER>.xlsx``), falling back to the
+        most recent dated workbook under ``output/research/<T>/``. A served page
+        can't open a ``file://`` path, so the command-center Holding tab links here.
+        404 if no workbook exists."""
+        t = ticker.upper()
+        live = repo_root / "dcf" / f"{t}.xlsx"
+        if live.exists():
+            return send_file(live)
+        research_dir = repo_root / "output" / "research" / t
+        dated = sorted(research_dir.glob("*_dcf.xlsx")) if research_dir.exists() else []
+        if not dated:
+            abort(404)
+        return send_file(dated[-1])
+
+    @app.route("/api/tickers", methods=["GET"])
+    def tickers_api():
+        """Tracked tickers (non-archived) for the command-center dropdowns:
+        ``{"tickers": [{ticker, name, list_type}, ...]}`` sorted by list then symbol."""
+        conn = _open_db()
+        try:
+            rows = conn.execute(
+                "SELECT ticker, name, list_type FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY list_type, ticker"
+            ).fetchall()
+        finally:
+            conn.close()
+        return {
+            "tickers": [
+                {"ticker": r["ticker"], "name": r["name"], "list_type": r["list_type"]}
+                for r in rows
+            ]
+        }
+
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
     @app.route("/actions/refresh", methods=["POST", "OPTIONS"])
