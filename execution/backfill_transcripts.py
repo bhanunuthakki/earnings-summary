@@ -22,7 +22,9 @@ non-archived), or a single ticker via `--ticker`:
 The script is idempotent at every layer:
   - File-exists check skips a (ticker, year, quarter) we've already fetched
   - Aggregator misses are logged but tolerated — coverage gaps are expected
-    for delisted micro-caps and certain foreign issuers (e.g. NTDOY)
+    for delisted micro-caps and certain foreign issuers (e.g. NTDOY). Pass
+    --audio-fallback to escalate a miss to the YouTube-audio + Whisper path
+    (fetch_audio_transcripts); off by default since Whisper is CPU-heavy.
   - `ingest_transcripts.py` is sha256-keyed
   - `extract_commitments --auto` skips transcripts that already have commitments
 
@@ -40,12 +42,14 @@ Usage:
     python execution/backfill_transcripts.py --lookback-quarters 8
     python execution/backfill_transcripts.py --skip-extract        # fetch + ingest only
     python execution/backfill_transcripts.py --dry-run             # plan only
+    python execution/backfill_transcripts.py --ticker NU --audio-fallback  # miss -> Whisper
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from calendar import monthrange
@@ -141,8 +145,52 @@ def _has_transcript_file(ticker: str, year: int, quarter: int) -> bool:
     return (_RAW_DIR / name).exists() or (_PROCESSED_DIR / name).exists()
 
 
+def _try_audio_fallback(ticker: str, year: int, quarter: int) -> bool:
+    """Escalate an aggregator miss to the YouTube-audio + Whisper fallback.
+
+    Lazy-imports ``fetch_audio_transcripts`` so yt-dlp / faster-whisper stay
+    optional — the default backfill path never imports them. Returns True when a
+    transcript file was produced. CPU Whisper is slow (minutes per call), which
+    is why this is opt-in via ``--audio-fallback`` rather than the unattended
+    default.
+    """
+    try:
+        import fetch_audio_transcripts as fat  # type: ignore[import-not-found]
+    except Exception as e:  # optional heavy deps (yt-dlp / whisper) may be absent
+        sys.stderr.write(
+            f"[audio-fallback] unavailable ({type(e).__name__}: {e}); "
+            f"install yt-dlp + faster-whisper to enable.\n"
+        )
+        return False
+    # Resolve ffmpeg the way fetch_audio_transcripts' CLI does (FFMPEG_LOCATION
+    # env, then the Windows default, else PATH) without reaching into its
+    # private helper.
+    ffmpeg_env = os.environ.get("FFMPEG_LOCATION")
+    if ffmpeg_env:
+        ffmpeg: Path | None = Path(ffmpeg_env)
+    elif os.name == "nt" and Path("C:/ffmpeg/bin").exists():
+        ffmpeg = Path("C:/ffmpeg/bin")
+    else:
+        ffmpeg = None
+    try:
+        res = fat.fetch_and_transcribe(
+            fat.FetchSpec(ticker=ticker, year=year, quarter=quarter), ffmpeg
+        )
+    except Exception as e:  # audio fetch/transcribe is best-effort
+        sys.stderr.write(
+            f"[audio-fallback] {ticker} Q{quarter} {year} failed: {type(e).__name__}: {e}\n"
+        )
+        return False
+    return res is not None
+
+
 def _backfill_one(
-    ticker: str, fye_month: int, lookback: int, today: date, dry_run: bool
+    ticker: str,
+    fye_month: int,
+    lookback: int,
+    today: date,
+    dry_run: bool,
+    audio_fallback: bool = False,
 ) -> TickerBackfillResult:
     result = TickerBackfillResult(ticker=ticker, fye_month=fye_month)
     quarters = recent_fiscal_quarters(fye_month, today, lookback)
@@ -159,10 +207,12 @@ def _backfill_one(
         except Exception as e:  # noqa: BLE001 — aggregator scraping is fragile
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
             continue
-        if hit is None:
-            result.aggregator_misses.append(label)
-        else:
+        if hit is not None:
             result.fetched.append(label)
+        elif audio_fallback and _try_audio_fallback(ticker, y, q):
+            result.fetched.append(f"{label} [audio]")
+        else:
+            result.aggregator_misses.append(label)
     return result
 
 
@@ -278,6 +328,13 @@ def main() -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="Plan only — print what WOULD be fetched/ingested/extracted")
     p.add_argument(
+        "--audio-fallback",
+        action="store_true",
+        help="On an aggregator miss, escalate to the YouTube-audio + Whisper "
+        "fallback (fetch_audio_transcripts). Off by default — Whisper is "
+        "CPU-heavy (minutes per call) and needs yt-dlp + faster-whisper.",
+    )
+    p.add_argument(
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
@@ -301,7 +358,14 @@ def main() -> int:
           f"lookback={args.lookback_quarters}q  today={today.isoformat()}",
           file=sys.stderr)
     for ticker, fye_month in tickers:
-        r = _backfill_one(ticker, fye_month, args.lookback_quarters, today, args.dry_run)
+        r = _backfill_one(
+            ticker,
+            fye_month,
+            args.lookback_quarters,
+            today,
+            args.dry_run,
+            audio_fallback=args.audio_fallback,
+        )
         per_ticker.append(r)
         print(
             f"  {ticker:6s} fye={fye_month:02d}  "

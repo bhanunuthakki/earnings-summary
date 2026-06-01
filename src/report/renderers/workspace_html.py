@@ -2727,13 +2727,35 @@ def _company_tab(
     _lease_ladder_panel(body, lease_ladder or [])
 
     if ir.cards:
+        # Quarter-toggle, mirroring the earnings tab: show one quarter at a
+        # time, newest first, swapped by the generic data-quarter-group JS.
+        # A quarter can carry two cards (press release + presentation brief);
+        # both share one data-quarter value and surface together when that
+        # quarter's button is selected, so the selector labels are de-duped.
+        ordered = sorted(
+            ir.cards,
+            key=lambda c: (c.year, int(c.quarter[1:]) if c.quarter[1:].isdigit() else 0),
+            reverse=True,
+        )
+        labels: list[str] = []
+        for c in ordered:
+            lbl = f"{c.quarter} {c.year}"
+            if lbl not in labels:
+                labels.append(lbl)
+        active = labels[0] if labels else ""
         body.write(
             '<div class="panel"><div class="panel-head">'
             '<span class="panel-title">IR documents</span>'
             f'<span class="panel-sub">{len(ir.cards)} on file</span></div>'
         )
-        for c in ir.cards:
-            body.write('<div class="ir-card"><div class="ir-card-head">')
+        _quarter_selector(body, labels, group="ir")
+        for c in ordered:
+            qid = f"{c.quarter} {c.year}"
+            display = "" if qid == active else "display:none"
+            body.write(
+                f'<div class="ir-card" data-quarter-card data-quarter-group="ir" '
+                f'data-quarter="{_esc(qid)}" style="{display}"><div class="ir-card-head">'
+            )
             body.write(f'<span class="ir-type">{_esc(c.doc_type)}</span>')
             body.write(f'<span class="ir-quarter">{_esc(c.quarter)} {c.year}</span>')
             if c.source_url:

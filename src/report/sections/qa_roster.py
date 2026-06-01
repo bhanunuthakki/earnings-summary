@@ -43,42 +43,67 @@ from report.models import (
 )
 from report.sections._common import missing
 
-# "Operator ..." or "first question comes from ..." — both mark the start of
-# a Q&A turn. The fetcher's output uses both shapes (the very first turn
-# omits the Operator prefix). The appendix loader flattens transcripts to a
-# single line for the legacy renderer's needs, so we don't anchor to ^/$ —
-# we search the flat text for the phrase and grab the analyst metadata after
-# "from ... with ...".
+# A turn boundary is the operator/host handing the floor to an analyst. The
+# free aggregators (roic.ai et al.) emit several shapes, all of the form
+# "<lead-in> <Analyst> <connector> <Firm>." where the connector is with/at/from:
+#
+#   US operator:  "...(first|next) question comes from [the line of] <A> with <Firm>."
+#                 "...question comes from <A> at <Firm>."   (some calls use "at")
+#                 "...your first question for today is from <A> with <Firm>."
+#                 (older roic output dropped "the line of"; still matched here)
+#   Webcast / IR host (NU and other foreign issuers):
+#                 "...open the line for [Mr.] <A> from <Firm>."
+#
+# Keywords are case-insensitive (scoped via (?i:...)), so the name/firm
+# captures stay case-sensitive — otherwise a global (?i) makes [A-Z] match
+# lowercase and the analyst group swallows connective words like "the line of".
+# The appendix loader flattens transcripts to a single line for the legacy
+# renderer, so we don't anchor to ^/$ — we search the flat text for the phrase.
 _TURN_BOUNDARY_RX = re.compile(
-    r"""(?ix)
+    r"""(?x)
     (?:
-        Operator\s+(?:Your\s+next\s+question\s+comes|Our\s+(?:first|next|last)\s+question\s+comes)
+        (?i:question)\s+(?:(?i:for\s+today)\s+)?(?i:comes\s+from|is\s+from)\s+
+        (?i:the\s+line\s+of\s+)?
         |
-        \bfirst\s+question\s+comes
+        (?i:open\s+the\s+line\s+for)\s+(?:(?i:mr|mrs|ms|mx|dr)\.?\s+)?
     )
-    \s+from\s+
     (?P<analyst>[A-Z][\w'.\-]+(?:\s+[A-Z][\w'.\-]+){0,3})
-    \s+with\s+
+    \s+(?i:with|at|from)\s+
     (?P<firm>[^.\n]+?)
     \.
     """,
 )
 
 # A speaker block: single capital letter (the first-initial marker), then a
-# name whose first word begins with that same letter, then 1-3 more
-# capitalized words. The backreference ``(?P=initial)`` enforces the
-# initial==first-letter-of-name constraint, which keeps the regex from
-# matching mid-sentence patterns like ". I Think this is...". The leading
+# name whose first word begins with that same letter, then 1-2 more
+# capitalized words, plus an optional lowercase-particle tail ("do Lago",
+# "van Beurden") for Latin/Dutch surnames — without it, NU's CFO "Guilherme
+# Marques do Lago" isn't recognized and his answers merge into the analyst's
+# question paragraph. The particle list is case-sensitive (lowercase only) so a
+# sentence-initial "Do/De" can't trigger it. The backreference ``(?P=initial)``
+# enforces the initial==first-letter-of-name constraint, which keeps the regex
+# from matching mid-sentence patterns like ". I Think this is...". The leading
 # anchor accepts either start-of-text or a sentence-terminator + whitespace.
 _SPEAKER_BLOCK_START_RX = re.compile(
     r"""(?x)
     (?:(?<=[.!?])\s+|\A\s*)
     (?P<initial>[A-Z])\s+
-    (?P<name>(?P=initial)[a-z]+(?:\s+[A-Z][\w'.\-]+){1,2}?)
+    (?P<name>
+        (?P=initial)[a-z]+
+        (?:\s+[A-Z][\w'.\-]+){1,2}?
+        (?:\s+(?:do|de|da|dos|das|del|von|van|der)\s+[A-Z][\w'.\-]+)?
+    )
     \s+
     (?=[A-Z])
     """,
 )
+
+# Operator / IR-host hand-off stubs that leak into a turn body as a short
+# trailing "speaker block" (e.g. "Operator, could you please [open the line
+# for ...]" — the boundary regex eats the "open the line..." part, leaving the
+# stub). They aren't substantive Q&A, so we drop them rather than render them
+# as a one-line "answer".
+_HANDOFF_RX = re.compile(r"(?i)^operator[,.]?\s+(?:could|can|please|we\b|i\b|the\s+next)")
 
 # Keyword → short tag for the panel chip. Order matters (first match wins).
 _TAG_RULES: list[tuple[re.Pattern[str], str]] = [
@@ -231,6 +256,9 @@ def _split_speaker_paragraphs(body: str) -> list[tuple[str, str]]:
         # aggregator inserts between paragraphs.
         text = text.strip(" .").strip()
         if not text:
+            continue
+        if _HANDOFF_RX.match(text):
+            # IR/operator hand-off stub, not a Q&A turn — drop it.
             continue
         out.append((name, text))
     return out
