@@ -1,0 +1,211 @@
+"""PR A — shared overview module: AnalyticalDashboard.to_dict() + the relocated
+renderer + the live /api/overview and /analytical endpoints.
+
+The data layer (pipeline.analytical_dashboard) was already pure-read and shared;
+PR A adds a JSON view (`to_dict`) and moves the render layer into
+pipeline.analytical_dashboard_html so the static export and the live command
+center render from one code path. These tests lock that contract.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+
+from pipeline.analytical_dashboard import (  # noqa: E402
+    AnalyticalDashboard,
+    build_analytical_dashboard,
+)
+from pipeline.analytical_dashboard_html import render_html  # noqa: E402
+
+_EXPECTED_KEYS = {
+    "trigger_ladder",
+    "insider_events",
+    "prediction_outcomes",
+    "portfolio_synthesis_md",
+    "per_ticker_reread",
+    "decisions",
+    "llm_budgets",
+}
+
+
+def _seed_db(db_path: Path) -> None:
+    """Minimal schema + rows to make the budget, decisions, and trigger-ladder
+    panels non-empty."""
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            name TEXT,
+            list_type TEXT NOT NULL,
+            archived_at TIMESTAMP
+        );
+        CREATE TABLE thesis_state (
+            ticker TEXT NOT NULL,
+            breach_status TEXT
+        );
+        CREATE TABLE dcf_runs (
+            ticker TEXT NOT NULL,
+            valuation_date TEXT NOT NULL,
+            segment_name TEXT,
+            over_under_pct REAL,
+            mos_bar_used REAL,
+            live_price REAL,
+            npv_per_share REAL
+        );
+        CREATE TABLE decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            recommendation_kind TEXT NOT NULL,
+            recommendation_value REAL,
+            conviction TEXT,
+            made_at TIMESTAMP NOT NULL,
+            outcome_label TEXT,
+            outcome_pct REAL,
+            rationale_excerpt TEXT
+        );
+        CREATE TABLE llm_budgets (
+            purpose TEXT NOT NULL UNIQUE,
+            monthly_cap_usd NUMERIC NOT NULL,
+            warn_threshold_pct REAL DEFAULT 0.80,
+            hard_block INTEGER DEFAULT 0,
+            created_at TIMESTAMP,
+            updated_at TIMESTAMP,
+            notes TEXT
+        );
+        CREATE TABLE llm_calls (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purpose TEXT,
+            cost_estimate_usd REAL,
+            called_at TIMESTAMP
+        );
+        """
+    )
+    now = datetime.now(UTC)
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('NU', 'Nu', 'portfolio')"
+    )
+    conn.execute("INSERT INTO thesis_state (ticker, breach_status) VALUES ('NU', 'watch')")
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
+        "mos_bar_used, live_price, npv_per_share) "
+        "VALUES ('NU', '2026-05-01', NULL, 0.25, 0.25, 14.0, 11.0)"
+    )
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, recommendation_value, conviction, "
+        "made_at, outcome_label, outcome_pct, rationale_excerpt) "
+        "VALUES ('NU', 'trim', 20.0, 'high', ?, 'correct', 0.08, 'rich vs DCF')",
+        (now.isoformat(),),
+    )
+    conn.execute(
+        "INSERT INTO llm_budgets (purpose, monthly_cap_usd, warn_threshold_pct, hard_block, "
+        "created_at, updated_at) VALUES ('bear_case', 50.0, 0.80, 0, ?, ?)",
+        (now.isoformat(), now.isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO llm_calls (purpose, cost_estimate_usd, called_at) "
+        "VALUES ('bear_case', 12.50, ?)",
+        (now.isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_to_dict_empty_round_trips() -> None:
+    payload = AnalyticalDashboard().to_dict()
+    assert set(payload.keys()) == _EXPECTED_KEYS
+    # JSON-serializable with no custom encoder (proves no Decimal/datetime leaks).
+    restored = json.loads(json.dumps(payload))
+    assert restored["trigger_ladder"] == []
+    assert restored["decisions"]["recent"] == []
+    assert restored["llm_budgets"]["rows"] == []
+
+
+def test_build_missing_db_returns_empty(tmp_path: Path) -> None:
+    dash = build_analytical_dashboard(tmp_path / "does_not_exist.db")
+    payload = dash.to_dict()
+    assert set(payload.keys()) == _EXPECTED_KEYS
+    json.dumps(payload)  # must not raise
+
+
+def test_render_html_empty_has_all_panels() -> None:
+    html = render_html(
+        AnalyticalDashboard(),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    assert html.startswith("<!doctype html>")
+    assert html.rstrip().endswith("</body></html>")
+    # Every panel renders its header even when empty. (The budget <h2> uses a
+    # literal '&' in the source markup — match it verbatim, don't assume escaping.)
+    for marker in ("Trigger ladder", "LLM spend & budget", "Decisions", "Portfolio synthesis"):
+        assert marker in html
+
+
+def test_build_and_to_dict_with_seeded_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    dash = build_analytical_dashboard(db_path)
+
+    # Budget panel picked up the seeded cap + spend.
+    assert [r.purpose for r in dash.llm_budgets.rows] == ["bear_case"]
+    assert dash.llm_budgets.rows[0].current_spend_usd == pytest.approx(12.50)
+    # Decisions ledger picked up the seeded recommendation.
+    assert [d.ticker for d in dash.decisions.recent] == ["NU"]
+    # Trigger ladder positioned NU as 'sell' (over_under 0.25 > 0.20).
+    assert [r.trigger_status for r in dash.trigger_ladder] == ["sell"]
+
+    payload = dash.to_dict()
+    restored = json.loads(json.dumps(payload))  # round-trips cleanly
+    assert restored["llm_budgets"]["rows"][0]["purpose"] == "bear_case"
+    assert restored["decisions"]["recent"][0]["ticker"] == "NU"
+
+
+def test_render_html_with_seeded_db_shows_content(tmp_path: Path) -> None:
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    dash = build_analytical_dashboard(db_path)
+    html = render_html(dash, generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert "bear_case" in html
+    assert "NU" in html
+
+
+# ----- live endpoints (wired into comments_server) -----
+
+
+@pytest.fixture
+def client(tmp_path: Path):
+    import comments_server
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _seed_db(data_dir / "portfolio.db")
+    app = comments_server.create_app(tmp_path)
+    return app.test_client()
+
+
+def test_overview_api_returns_json(client) -> None:
+    resp = client.get("/api/overview")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert _EXPECTED_KEYS.issubset(payload.keys())
+    assert "tier_coverage" in payload
+    assert payload["llm_budgets"]["rows"][0]["purpose"] == "bear_case"
+
+
+def test_analytical_page_returns_html(client) -> None:
+    resp = client.get("/analytical")
+    assert resp.status_code == 200
+    assert resp.mimetype == "text/html"
+    body = resp.get_data(as_text=True)
+    assert body.startswith("<!doctype html>")
+    assert "Trigger ladder" in body

@@ -21,7 +21,7 @@ Pure reads from the unified data model. The renderer in
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -130,6 +130,16 @@ class AnalyticalDashboard:
     decisions: DecisionsPanel = field(default_factory=DecisionsPanel)
     llm_budgets: LlmBudgetPanel = field(default_factory=lambda: LlmBudgetPanel())
 
+    def to_dict(self) -> dict[str, object]:
+        """JSON-serializable view for the live ``GET /api/overview`` endpoint.
+
+        Every field is a primitive / list / nested dataclass of primitives —
+        the budget panel already converts ``Decimal`` caps to ``float`` at
+        build time — so ``dataclasses.asdict`` recurses to a clean JSON-able
+        dict with no boundary surprises (Flask's ``jsonify`` chokes on Decimal,
+        not on these)."""
+        return asdict(self)
+
 
 def build_analytical_dashboard(
     db_path: Path,
@@ -205,7 +215,9 @@ def _build_decisions_panel(conn: sqlite3.Connection, *, recent_limit: int = 30) 
     ).fetchall()
     hit_rate: dict[str, dict[str, int]] = {}
     for r in kind_rows:
-        hit_rate.setdefault(str(r["recommendation_kind"]), {})[str(r["outcome_label"])] = int(r["n"])
+        hit_rate.setdefault(str(r["recommendation_kind"]), {})[str(r["outcome_label"])] = int(
+            r["n"]
+        )
     conv_rows = conn.execute(
         """
         SELECT COALESCE(conviction, 'unstated') AS conv,
@@ -484,7 +496,15 @@ def _build_insider_events(
     scored: list[tuple[float, InsiderEventRow]] = []
     for r in rows:
         title = (r["insider_title"] or "").lower()
-        role_w = 1.0 if "chief executive" in title else 0.85 if "chief financial" in title else 0.7 if "president" in title else 0.5
+        role_w = (
+            1.0
+            if "chief executive" in title
+            else 0.85
+            if "chief financial" in title
+            else 0.7
+            if "president" in title
+            else 0.5
+        )
         type_w = (
             1.0
             if r["transaction_type"] == "open_market_buy"
@@ -520,7 +540,9 @@ def _build_insider_events(
                     transaction_date=r["transaction_date"][:10],
                     transaction_type=r["transaction_type"],
                     shares=float(r["shares"]),
-                    transaction_value=float(r["transaction_value"]) if r["transaction_value"] is not None else None,
+                    transaction_value=float(r["transaction_value"])
+                    if r["transaction_value"] is not None
+                    else None,
                     signal_strength=strength,
                     rationale=rationale,
                 ),
