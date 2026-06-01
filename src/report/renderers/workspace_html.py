@@ -32,6 +32,7 @@ from report.models import (
     AppendixSection,
     BearCaseSection,
     BreakRuleEvaluation,
+    BudgetSkip,
     CompanyDescriptionSection,
     DecisionBadge,
     EarningsSection,
@@ -127,6 +128,7 @@ def render(spec: ReportSpec) -> str:
     _comment_boot_data(body, spec)
     body.write('<div class="l1-root">')
     _identity(body, spec)
+    _forgone_strip(body, spec.forgone_due_to_budget)
     _thesis_strip(body, spec.snapshot, spec.thesis)
     _kpi_strip(body, spec.thesis.kpi_ledger)
 
@@ -3893,10 +3895,13 @@ def _fmt_pct(v: float | None) -> str:
 
 
 def _missing_panel(body: StringIO, status: SectionStatus, missing: MissingReason | None) -> None:
+    is_budget = status == SectionStatus.BUDGET_SKIPPED
+    title = "⏭ Forgone — budget" if is_budget else f"Section status: {status.value}"
     body.write('<div class="panel"><div class="panel-head">')
-    body.write(f'<span class="panel-title">Section status: {status.value}</span>')
+    body.write(f'<span class="panel-title">{title}</span>')
     body.write("</div>")
-    body.write(f'<div class="stub"><span class="stub-label">{status.value}</span>')
+    stub_style = ' style="border-left:3px solid #d97706;"' if is_budget else ""
+    body.write(f'<div class="stub"{stub_style}><span class="stub-label">{status.value}</span>')
     if missing is not None:
         body.write(_esc(missing.detail or "No data."))
         if missing.fix_command:
@@ -3904,6 +3909,23 @@ def _missing_panel(body: StringIO, status: SectionStatus, missing: MissingReason
     else:
         body.write("Section returned no data.")
     body.write("</div></div>")
+
+
+def _forgone_strip(body: StringIO, forgone: list[BudgetSkip]) -> None:
+    """Brief-wide banner listing the analyses forgone to stay under budget."""
+    if not forgone:
+        return
+    n = len(forgone)
+    word = "analysis" if n == 1 else "analyses"
+    names = _esc(", ".join(f.section for f in forgone))
+    body.write(
+        '<div class="forgone-strip" style="margin:8px 0;padding:8px 12px;'
+        "border-left:3px solid #d97706;background:rgba(217,119,6,0.10);"
+        'border-radius:6px;font-size:13px;line-height:1.5;">'
+        f"⏭ <strong>{n} {word} forgone to stay under budget:</strong> {names}. "
+        "Raise the cap or override, then rebuild."
+        "</div>"
+    )
 
 
 def _render_markdown(md: str) -> str:
