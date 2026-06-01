@@ -50,6 +50,25 @@ def render_dashboard_html(
     )
 
 
+def render_status_overview(rows_by_list: dict[str, list[DashboardRow]]) -> str:
+    """Overview-tab body for the command-center shell: the IR-KPI + maintenance
+    action blocks followed by the portfolio + evaluation status tables.
+
+    A public seam over the same private renderers the standalone dashboard page
+    uses, so the shell's inlined Overview and ``GET /``'s old page share one code
+    path (the privates stay internal — no cross-module private access)."""
+    portfolio_rows = rows_by_list.get("portfolio", [])
+    evaluation_rows = rows_by_list.get("evaluation", [])
+    return "".join(
+        [
+            _ACTIONS_BLOCK,
+            _MAINTENANCE_BLOCK,
+            _render_section("Portfolio", portfolio_rows, empty_msg="No portfolio tickers."),
+            _render_section("Evaluation", evaluation_rows, empty_msg="No evaluation tickers."),
+        ]
+    )
+
+
 def _render_section(title: str, rows: list[DashboardRow], *, empty_msg: str) -> str:
     body = _render_table(rows) if rows else f"<p class='empty'>{escape(empty_msg)}</p>"
     return f"""
