@@ -4,9 +4,11 @@ A research-grade pipeline that turns raw filings, earnings calls, IR documents, 
 
 Active universe lives in `tracked_companies` (DB-driven, not hardcoded) with four list types: `portfolio` (P1 tier, daily refresh), `watchlist` (P2, weekly), `evaluation` (P2, weekly with 7-day skip), and `archived`. Per-ticker thesis specs live as JSON in [`micro_thesis/holdings/`](micro_thesis/holdings/).
 
+The **dashboard command center** — `python execution/comments_server.py` → `http://127.0.0.1:7421` — is the primary interface: portfolio + per-ticker status, cross-ticker analytics (budget, decisions, trigger ladder), a per-ticker drill-down (artifacts, analyses-ran, thesis, live position), refreshes with per-step/force overrides, and comment + thesis editing with a preview→apply diff. It also deep-links each ticker into the companion **portfolio-tracker** app. See [HOW_TO_USE_REPORTS.md → Command center](HOW_TO_USE_REPORTS.md#command-center-start-here).
+
 This README is the system overview + user manual. Two companion docs:
 
-- **[HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md)** — day-to-day analyst workflow: slash-keyword shortcuts, comment processor, refresh-vs-rebuild matrix, onboarding a new ticker.
+- **[HOW_TO_USE_REPORTS.md](HOW_TO_USE_REPORTS.md)** — day-to-day analyst workflow: the command center, slash-keyword shortcuts, comment processor, refresh-vs-rebuild matrix, onboarding a new ticker.
 - **[cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md)** — one-time Windows Task Scheduler install for every cron.
 
 ---

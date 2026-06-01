@@ -7,7 +7,13 @@ analytical pipeline.
 All commands work from **any directory** in cmd.exe — the `.bat` launchers
 self-locate the repo, so you don't need to `cd` first.
 
+**The dashboard command center at `http://127.0.0.1:7421` is now the primary
+interface** — status, cross-ticker analytics, per-ticker drill-down, refreshes,
+and comment/thesis editing in one live app. The `.bat` / CLI workflow below
+remains for scripting and automation.
+
 **Jump to:**
+- [Command center (start here)](#command-center-start-here)
 - [One-time setup](#one-time-setup)
 - [Daily workflow](#daily-workflow)
 - [Slash-keywords in comments](#slash-keyword-shortcuts-fastest-path--skip-the-dropdown)
@@ -16,6 +22,72 @@ self-locate the repo, so you don't need to `cd` first.
 - [Pinning a valuation multiple per ticker](#pinning-a-specific-valuation-multiple-per-ticker)
 - [Analyst tips](#analyst-tips)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Command center (start here)
+
+One live app — `execution/comments_server.py` on **http://127.0.0.1:7421** — is
+the front door for status, analysis, refreshes, and editing. Launch it once and
+leave it running:
+
+```cmd
+python execution\comments_server.py --port 7421
+```
+
+(add `--repo-root <path>` to point at a specific checkout). Every action below
+is a click or a `POST`.
+
+### What's where
+
+| Page | What it shows |
+|---|---|
+| `/` | Portfolio + evaluation status — last FMP pull, last transcript, last build, open-comment count, breach badge. Each ticker links to its drill-down; **Open↗** opens the latest brief. Includes the IR-KPI refresh control. |
+| `/analytical` | Cross-ticker overview, **live**: LLM **budget** (read-only here), the **decisions** ledger + calibration, the DCF **trigger ladder**, insider activity, prediction outcomes. Byte-identical to the static `build_analytical_dashboard.py` export — same renderer, always fresh from the DB. |
+| `/ticker/<T>` | **Per-ticker command center**: identity + freshness; an **artifacts inventory** (every brief / DCF / holdings / transcript / IR / FMP / LLM-cache file with mtime + size); the **analyses-ran** log (thesis eval · time-series signals · trigger alerts · queued actions · Say-Do · DCF · LLM-call cost (30d) · brief renders); recent decisions; the read-only **thesis** (tier-1 KPIs + break rules + breakers); and your live **position** + an **Open in Portfolio Tracker ↗** deep link. |
+
+JSON siblings for scripting: `GET /api/overview`, `GET /api/ticker/<T>`, `GET /api/dashboard`.
+
+### Refreshes — with overrides
+
+`POST /actions/refresh` `{ticker, mode, steps?, force?, force_budget_bypass?}`:
+
+- **`mode`** — `stale` (skip FMP if pulled within the window) or `full`.
+- **`steps`** — run only a subset; any of `fmp, transcripts, process_ir_docs, news, extract_kpis, saydo, dcf, thesis_eval, build_report`. Omit for the standard chain. (`news` / `dcf` / `thesis_eval` are opt-in — a routine refresh stays lean.)
+- **`force`** — run FMP even if fresh (override the stale-skip).
+- **`force_budget_bypass`** — ignore LLM budget caps for this run.
+
+Output streams over `GET /actions/stream/<job_id>` (SSE); jobs are single-flight per ticker. (CLI equivalent: `python execution/refresh_dispatch.py --ticker NU --steps dcf,build_report --force`.)
+
+### Process comments + change the thesis (preview → apply)
+
+- **Preview a thesis edit** — `POST /api/thesis/<T>/preview` `{report_date, comment_ids?}` runs the Opus `edit_thesis` / `edit_structured` routers in dry-run and returns a **before/after diff** *without writing anything*. A budget/setup hard-stop surfaces as `402`/`503`; a transient LLM hiccup degrades to `{degraded: true}` (never a half-applied thesis).
+- **Apply** — `POST /api/comments/process` `{ticker, apply:true, report_date?, clear?, no_rebuild?}` runs the real pipeline (mutations + auto-rebuild) as a streamed job. `apply:false` returns the dry-run resolutions inline. This is also the apply path for thesis edits.
+
+### Budget
+
+The overview surfaces spend / cap / headroom **read-only**. Editing caps, the
+`skip` / `block` / `warn` modes, and the per-ticker "run anyway" bypass live in
+the dashboard's budget panel and `execution/manage_llm_budget.py`.
+
+### Two-app topology (research ↔ portfolio tracker)
+
+The command center and the **portfolio-tracker** app stay separate (own repos,
+own ports) and link **read-only**:
+
+- **research → tracker** — each `/ticker/<T>` page shows a live position strip
+  (shares / cost / value / unrealized P&L / last trade decision) read from the
+  tracker's SQLite at `../portfolio-tracker/portfolio.db` (opened read-only),
+  plus an **Open in Portfolio Tracker ↗** deep link to
+  `<PORTFOLIO_TRACKER_URL>/trade-analysis?ticker=<T>` (default
+  `http://localhost:5173`; the tracker pre-filters its table to the ticker).
+  Set `PORTFOLIO_TRACKER_URL` if the tracker runs elsewhere.
+- **tracker → research** — the tracker reads this repo's DB for next-earnings +
+  thesis status and links to the latest brief via its
+  `/api/earnings-summary/brief/<T>` passthrough.
+
+Both sides degrade gracefully when the sibling isn't running — the strip hides,
+the links still render.
 
 ---
 
