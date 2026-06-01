@@ -162,6 +162,34 @@ def _decisions_section(panel: DecisionsPanel) -> str:
     return "".join(out)
 
 
+_BUDGET_PANEL_SCRIPT = """<script>
+(function () {
+  document.querySelectorAll('.budget-table tbody tr[data-purpose]').forEach(function (tr) {
+    var btn = tr.querySelector('.budget-save');
+    if (!btn) return;
+    btn.addEventListener('click', function () {
+      var purpose = tr.getAttribute('data-purpose');
+      var msg = tr.querySelector('.budget-msg');
+      var payload = {
+        cap_usd: parseFloat(tr.querySelector('.budget-cap').value),
+        on_exceed: tr.querySelector('.budget-mode').value
+      };
+      msg.textContent = 'saving…';
+      fetch('/api/llm-budgets/' + encodeURIComponent(purpose), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (b) {
+          msg.textContent = res.ok ? 'saved \\u2713' : ('error: ' + (b.error || res.status));
+        });
+      }).catch(function () { msg.textContent = 'network error'; });
+    });
+  });
+})();
+</script>"""
+
+
 def _llm_budget_section(panel: LlmBudgetPanel) -> str:
     """LLM Spend & Budget panel — per-purpose progress bars + MTD totals.
 
@@ -177,10 +205,12 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
     out: list[str] = [
         '<section class="panel"><h2>LLM spend & budget</h2>',
         f'<p class="sub">Per-purpose monthly caps · {escape(panel.month_label)} · '
-        f"edit via <code>python execution/manage_llm_budget.py --set &lt;purpose&gt; --cap &lt;usd&gt;</code></p>",
+        "edit the cap or mode below and click Save. "
+        "<code>skip</code> forgoes the call when over cap (and flags it in the brief); "
+        "<code>block</code> fails the build; <code>warn</code> overspends.</p>",
         '<table class="budget-table"><thead><tr>',
         '<th>Purpose</th><th class="num">Spend</th><th class="num">Cap</th>',
-        '<th>Burn</th><th class="num">Headroom</th><th>Block</th>',
+        '<th>Burn</th><th class="num">Headroom</th><th>Mode</th><th></th>',
         "</tr></thead><tbody>",
     ]
     for r in panel.rows:
@@ -196,8 +226,10 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
         f"<strong>MTD total:</strong> ${panel.total_spend_mtd_usd:,.2f} · "
         f"<strong>Projected month-end:</strong> ${panel.projected_month_end_usd:,.2f} "
         f'<span class="muted">(MTD = {pct:.0f}% of projection)</span>'
-        "</p></section>"
+        "</p>"
     )
+    out.append(_BUDGET_PANEL_SCRIPT)
+    out.append("</section>")
     return "".join(out)
 
 
@@ -214,22 +246,28 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         bar_tone = "burn-warn"
     else:
         bar_tone = "burn-ok"
-    block_label = "HARD" if r.hard_block else "soft"
-    block_class = "block-hard" if r.hard_block else "block-soft"
     bar_width_pct = int(burn_pct * 100)
+    purpose_esc = escape(r.purpose)
+    mode_opts = "".join(
+        f'<option value="{m}"{" selected" if m == r.on_exceed else ""}>{m}</option>'
+        for m in ("skip", "block", "warn")
+    )
     # Render >100% as a full bar with the "over" tone — visual cap, the
     # number column still shows the real headroom_pct so the over-spend
     # is auditable.
     return (
-        f"<tr>"
-        f"<td><code>{escape(r.purpose)}</code></td>"
+        f'<tr data-purpose="{purpose_esc}">'
+        f"<td><code>{purpose_esc}</code></td>"
         f'<td class="num">${r.current_spend_usd:,.2f}</td>'
-        f'<td class="num">${r.monthly_cap_usd:,.2f}</td>'
+        f'<td class="num"><input class="budget-cap" type="number" min="0" step="1" '
+        f'style="width:80px" value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}"></td>'
         f'<td class="burn-cell"><div class="burn-bar">'
         f'<div class="burn-fill {bar_tone}" style="width: {min(100, bar_width_pct)}%"></div>'
         f"</div></td>"
         f'<td class="num">{r.headroom_pct * 100:+.0f}%</td>'
-        f'<td class="{block_class}">{block_label}</td>'
+        f'<td><select class="budget-mode" aria-label="mode for {purpose_esc}">{mode_opts}</select></td>'
+        f'<td><button type="button" class="budget-save">Save</button> '
+        f'<span class="budget-msg muted"></span></td>'
         "</tr>"
     )
 

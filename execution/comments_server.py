@@ -53,6 +53,7 @@ except ImportError:  # pragma: no cover - install hint
 import sqlite3  # noqa: E402
 
 import comments  # noqa: E402
+import llm_budget  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
@@ -162,6 +163,60 @@ def create_app(
         coverage = tier_coverage_summary(repo_root)
         html = render_analytical_html(dash, generated_at=datetime.now(UTC), tier_coverage=coverage)
         return Response(html, mimetype="text/html")
+
+    # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
+
+    @app.route("/api/llm-budgets", methods=["GET"])
+    def llm_budgets_api():
+        """Per-purpose budget rows (cap, MTD spend, headroom, on_exceed mode)
+        for the editable budget panel. Read-only sibling of the POST below."""
+
+        def _num(v: object) -> float:
+            return float(str(v))  # Decimal/str/float at the dict boundary -> float
+
+        out = [
+            {
+                "purpose": str(r["purpose"]),
+                "monthly_cap_usd": _num(r["monthly_cap_usd"]),
+                "on_exceed": str(r.get("on_exceed", "warn")),
+                "current_spend_usd": _num(r["current_spend_usd"]),
+                "headroom_pct": _num(r["headroom_pct"]),
+                "warn_threshold_pct": _num(r["warn_threshold_pct"]),
+                "hard_block": bool(r["hard_block"]),
+            }
+            for r in llm_budget.list_budgets(db_path=db_path)
+        ]
+        return {"budgets": out}
+
+    @app.route("/api/llm-budgets/<purpose>", methods=["POST", "OPTIONS"])
+    def set_llm_budget(purpose: str):
+        """Update a purpose's monthly cap and/or on_exceed mode. JSON body:
+        {"cap_usd": <number>, "on_exceed": "skip|block|warn"} — either or both.
+        400 on bad input, 404 when the purpose has no budget row."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True) or {}
+        cap = body.get("cap_usd")
+        mode = body.get("on_exceed")
+        if cap is None and mode is None:
+            return ({"error": "provide cap_usd and/or on_exceed"}, 400)
+        applied = False
+        if mode is not None:
+            try:
+                applied = llm_budget.set_mode(purpose, str(mode), db_path=db_path) or applied
+            except ValueError as e:
+                return ({"error": str(e)}, 400)
+        if cap is not None:
+            try:
+                cap_f = float(cap)
+            except (TypeError, ValueError):
+                return ({"error": f"cap_usd must be a number, got {cap!r}"}, 400)
+            if cap_f < 0:
+                return ({"error": "cap_usd must be >= 0"}, 400)
+            applied = llm_budget.set_cap(purpose, cap_f, db_path=db_path) or applied
+        if not applied:
+            return ({"error": f"no budget row for purpose {purpose!r}"}, 404)
+        return {"purpose": purpose, "ok": True}
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
