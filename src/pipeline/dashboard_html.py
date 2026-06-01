@@ -39,6 +39,7 @@ def render_dashboard_html(
 
     return _PAGE_TEMPLATE.format(
         actions_block=_ACTIONS_BLOCK,
+        maintenance_block=_MAINTENANCE_BLOCK,
         portfolio_section=_render_section(
             "Portfolio", portfolio_rows, empty_msg="No portfolio tickers."
         ),
@@ -292,6 +293,85 @@ _ACTIONS_BLOCK = """
 """.strip()
 
 
+# Repo-wide maintenance controls. Like _ACTIONS_BLOCK this is a `.format()`
+# argument, so its literal {/} (JS object literals, CSS) pass through untouched.
+# Reuses the .actions-section / .actions-output / .actions-status styles above.
+_MAINTENANCE_BLOCK = """
+<section class="actions-section" aria-labelledby="maint-h2">
+  <h2 id="maint-h2">Maintenance</h2>
+  <p class="actions-help">
+    Repo-wide chores, streamed live — the same CLIs the crons run.
+  </p>
+  <div class="actions-form">
+    <button type="button" class="maint-btn" data-action="seed_kpis">Seed KPI defs</button>
+    <button type="button" class="maint-btn" data-action="process_inbox">Process dropped docs</button>
+    <button type="button" class="maint-btn" data-action="sweep_history">Sweep output history</button>
+    <button type="button" class="maint-btn" data-action="onboard_pending">Onboard pending</button>
+    <span class="maint-sep">|</span>
+    <input type="text" id="maint-onboard-ticker" class="ir-ticker" placeholder="Ticker" aria-label="Ticker to onboard">
+    <button type="button" class="maint-btn" data-action="onboard" data-needs-ticker="1">Onboard ticker</button>
+    <span id="maint-status" class="actions-status" role="status" aria-live="polite"></span>
+  </div>
+  <pre id="maint-output" class="actions-output" hidden></pre>
+</section>
+<style>
+.maint-btn { padding: 6px 11px; font-size: 12px; font-weight: 600; color: #fff;
+  background: var(--link); border: none; border-radius: 4px; cursor: pointer; }
+.maint-btn:disabled { opacity: 0.5; cursor: progress; }
+.maint-sep { color: #ccc; margin: 0 4px; }
+</style>
+<script>
+(function () {
+  var btns = document.querySelectorAll('.maint-btn');
+  if (!btns.length) return;
+  var statusEl = document.getElementById('maint-status');
+  var outputEl = document.getElementById('maint-output');
+  var tickerEl = document.getElementById('maint-onboard-ticker');
+  var es = null, finished = false;
+  function setStatus(t, c) { statusEl.textContent = t; statusEl.className = 'actions-status' + (c ? ' ' + c : ''); }
+  function appendLine(l) { outputEl.hidden = false; outputEl.textContent += l + '\\n'; outputEl.scrollTop = outputEl.scrollHeight; }
+  function enable() { btns.forEach(function (b) { b.disabled = false; }); }
+  function run(action, ticker) {
+    if (es) { es.close(); es = null; }
+    finished = false; outputEl.textContent = ''; outputEl.hidden = true;
+    btns.forEach(function (b) { b.disabled = true; });
+    setStatus('Starting ' + action + '...', 'running');
+    var payload = { action: action };
+    if (ticker) payload.ticker = ticker;
+    fetch('/actions/maintenance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+    }).then(function (resp) {
+      return resp.json().then(function (body) { return { ok: resp.ok, status: resp.status, body: body }; });
+    }).then(function (r) {
+      if (!r.ok) { setStatus('Error: ' + ((r.body && r.body.error) || ('HTTP ' + r.status)), 'error'); enable(); return; }
+      setStatus('Running ' + r.body.kind + '...', 'running');
+      es = new EventSource(r.body.stream_url);
+      es.onmessage = function (e) {
+        var m; try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m.event === 'start') { appendLine('> ' + m.kind + ' started (job ' + m.job_id + ')'); }
+        else if (m.event === 'log') { appendLine(m.line); }
+        else if (m.event === 'done') {
+          finished = true; appendLine('# exit code ' + m.exit_code);
+          setStatus(m.exit_code === 0 ? 'Done.' : 'Failed (exit ' + m.exit_code + ').', m.exit_code === 0 ? 'ok' : 'error');
+          enable(); if (es) { es.close(); es = null; }
+        }
+      };
+      es.onerror = function () { if (finished) return; setStatus('Stream interrupted.', 'error'); enable(); if (es) { es.close(); es = null; } };
+    }).catch(function (err) { setStatus('Request failed: ' + err.message, 'error'); enable(); });
+  }
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var needsTicker = b.getAttribute('data-needs-ticker');
+      var ticker = needsTicker ? (tickerEl.value || '').trim().toUpperCase() : '';
+      if (needsTicker && !ticker) { setStatus('Enter a ticker to onboard.', 'error'); return; }
+      run(b.getAttribute('data-action'), ticker);
+    });
+  });
+})();
+</script>
+""".strip()
+
+
 _PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
@@ -404,6 +484,7 @@ td.ticker a:hover {{ text-decoration: underline; }}
   <span class="generated-at">generated {generated_at}</span>
 </header>
 {actions_block}
+{maintenance_block}
 {portfolio_section}
 {evaluation_section}
 <div class="banner">
