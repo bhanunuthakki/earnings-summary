@@ -62,6 +62,8 @@ def test_cli_module_exposes_expected_names() -> None:
         "CLAUDE_WEB_TIMEOUT_SECONDS",
         "CLAUDE_WEB_TOOLS",
         "LLMBudgetExceeded",
+        "LLMSetupError",
+        "is_hard_stop",
         "_model_for",
         "_verify_setup_once",
         "_enforce_budget_pre_call",
@@ -72,7 +74,9 @@ def test_cli_module_exposes_expected_names() -> None:
         assert hasattr(cli, name), f"llm.cli missing {name!r}"
     assert inspect.isfunction(cli.call_llm)
     assert inspect.isfunction(cli.call_llm_with_web)
+    assert inspect.isfunction(cli.is_hard_stop)
     assert issubclass(cli.LLMBudgetExceeded, RuntimeError)
+    assert issubclass(cli.LLMSetupError, RuntimeError)
     assert isinstance(cli.LLM_MODELS, dict)
     assert "bear_case" in cli.LLM_MODELS  # spot-check a known purpose
 

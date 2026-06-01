@@ -33,6 +33,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+from llm_client import is_hard_stop
 from report.models import (
     EarningsSection,
     QuarterlyEarningsCard,
@@ -356,6 +357,10 @@ def _build_themes(
                 ticker, payload, ts_signals_md=ts_block
             )
         except Exception as exc:  # surface but don't break the rest of §5
+            # Hard stops (monthly budget cap, CLI not installed) must propagate
+            # — re-running won't help and degrading would mask an over-budget run.
+            if is_hard_stop(exc):
+                raise
             log.error({"event": "earnings_themes_split_failed", "ticker": ticker, "error": str(exc)})
             return [], [], None
         # Parse at SECTION scope, separate from the call's exception handler

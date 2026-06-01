@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from compute import valuation_basis as compute_valuation
+from llm_client import is_hard_stop
 from report.models import (
     SectionStatus,
     ValuationBasisHistoricalPoint,
@@ -55,6 +56,11 @@ def build(
             )
         result = compute_valuation.extract_for_ticker(ticker, repo_root, conn)
     except Exception as e:
+        # Hard stops (monthly budget cap, CLI not installed) propagate — the
+        # LLM multiple-picker runs through call_llm inside the compute layer,
+        # so a budget cap surfaces here and must not be masked as MISSING_DATA.
+        if is_hard_stop(e):
+            raise
         return ValuationBasisSection(
             status=SectionStatus.MISSING_DATA,
             missing=missing(

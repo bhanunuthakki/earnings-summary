@@ -22,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from llm_client import is_hard_stop
 from report.models import (
     ExecCompRowModel,
     ExecCompSectionModel,
@@ -110,6 +111,12 @@ def build(
                 repo_root=repo_root,
             )
         except Exception as exc:  # noqa: BLE001 — defensive across LLM/cache
+            # Hard stops (monthly budget cap, CLI not installed) must propagate
+            # — degrading would silently mask an over-budget / unconfigured run.
+            # Everything else is transient: drop the alignment narrative and let
+            # the rest of §13 render from the deterministic comp/insider rows.
+            if is_hard_stop(exc):
+                raise
             log.warning(
                 {
                     "event": "exec_comp_alignment_failed",

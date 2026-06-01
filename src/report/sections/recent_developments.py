@@ -14,12 +14,14 @@ entry.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from llm_client import (
     compose_anchor_block,
     generate_recent_developments,
+    is_hard_stop,
     load_bear_anchor,
     load_ir_anchor,
     load_thesis_anchor,
@@ -29,6 +31,8 @@ from report.models import (
     SectionStatus,
 )
 from report.sections._common import missing
+
+log = logging.getLogger(__name__)
 
 NEWS_CACHE_DIRNAME = ".tmp/news_cache"
 DEFAULT_TTL_DAYS = 7
@@ -72,9 +76,40 @@ def build(
         load_bear_anchor(repo_root, ticker),
         load_ir_anchor(repo_root, ticker),
     )
-    content_md = generate_recent_developments(
-        ticker, news_days=news_days, anchor_block=anchor_block
-    )
+    try:
+        content_md = generate_recent_developments(
+            ticker, news_days=news_days, anchor_block=anchor_block
+        )
+    except Exception as exc:
+        # Hard LLM CALL exception. Propagate genuine hard stops (monthly budget
+        # cap, CLI not installed); degrade transient operational failures
+        # (timeout, non-zero exit, both Claude + Gemini momentarily down) to a
+        # loud MISSING_DATA banner so one flaky §8 call can't abort the whole
+        # multi-section build. We do NOT write the cache on failure, so a
+        # re-run retries the call instead of serving a degraded stub.
+        if is_hard_stop(exc):
+            raise
+        log.error(
+            "recent_developments LLM call failed for %s: %s: %s",
+            ticker,
+            type(exc).__name__,
+            exc,
+        )
+        return RecentDevelopmentsSection(
+            status=SectionStatus.MISSING_DATA,
+            missing=missing(
+                stage="SYNTHESIZE(recent_developments_websearch)",
+                fix_command=(
+                    f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm"
+                ),
+                detail=(
+                    "The recent-developments LLM call failed operationally "
+                    "(timeout, or both the Claude CLI and the Gemini fallback "
+                    "were momentarily unavailable). Re-run to retry."
+                ),
+            ),
+            news_days_window=news_days,
+        )
     section = RecentDevelopmentsSection(
         status=SectionStatus.OK,
         cached_at=datetime.now(UTC),
