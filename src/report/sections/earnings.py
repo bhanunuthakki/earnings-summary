@@ -358,7 +358,22 @@ def _build_themes(
         except Exception as exc:  # surface but don't break the rest of §5
             log.error({"event": "earnings_themes_split_failed", "ticker": ticker, "error": str(exc)})
             return [], [], None
-        parsed = _parse_themes_response(response)
+        # Parse at SECTION scope, separate from the call's exception handler
+        # above. `_parse_themes_response` is internally total today (it returns
+        # empty rollups on an empty / non-JSON / wrong-shape payload), but this
+        # guard makes the safety structural: a future change that lets the
+        # parser raise must still degrade to empty theme rollups — the §6 cards
+        # render regardless — and never abort the whole multi-section build.
+        # Mirrors the §7 bear-case fix (PR #197). Hard call-exceptions are
+        # handled by the `except Exception` above, not here.
+        try:
+            parsed = _parse_themes_response(response)
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning(
+                {"event": "earnings_themes_parse_degraded", "ticker": ticker, "error": str(exc)}
+            )
+            empty_rollups: tuple[list[ThemeRollup], list[ThemeRollup]] = ([], [])
+            parsed = empty_rollups
         _write_themes_cache(cache_path, cache_key, parsed)
     else:
         parsed = cached
