@@ -13,11 +13,14 @@ import sys
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from ir_pipeline.config import get_config  # noqa: E402
+from ir_pipeline.config import IrConfig, get_config  # noqa: E402
+from ir_pipeline.discover import discover_documents  # noqa: E402
+from ir_pipeline.discover._docmeta import classify  # noqa: E402
 from ir_pipeline.spreadsheet import (  # noqa: E402
     _header_row,
     _parse_period,
@@ -93,3 +96,22 @@ def test_max_quarters_truncates_to_recent(tmp_path: Path) -> None:
     parsed = parse_spreadsheet(path, get_config("NU"), max_quarters=2)
     arpac = parsed["Monthly ARPAC (USD)"]
     assert set(arpac) == {dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)}
+
+
+# ---------------------------------------------------------------------------
+# Discovery: doc classification + platform dispatch (no live browser)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_identifies_doc_types_by_filename() -> None:
+    assert classify("Nu Holdings Historical Data 1Q26.xlsx") == "spreadsheet"
+    assert classify("1T26 Results Presentation.pdf") == "deck"
+    assert classify("1Q26 Earnings Press Release.pdf") == "press_release"
+    assert classify("Transcript 1Q26.pdf") == "transcript"
+    assert classify("Some Unrelated Governance Doc.pdf") is None
+
+
+def test_discover_dispatch_rejects_unknown_platform() -> None:
+    cfg = IrConfig(ticker="ZZZ", platform="nope", results_center_url="https://x")
+    with pytest.raises(ValueError, match="discovery adapter"):
+        discover_documents(cfg)
