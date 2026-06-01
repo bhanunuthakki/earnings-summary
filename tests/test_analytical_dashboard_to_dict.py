@@ -86,6 +86,7 @@ def _seed_db(db_path: Path) -> None:
         CREATE TABLE llm_calls (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             purpose TEXT,
+            ticker TEXT,
             cost_estimate_usd REAL,
             called_at TIMESTAMP
         );
@@ -113,8 +114,15 @@ def _seed_db(db_path: Path) -> None:
         (now.isoformat(), now.isoformat()),
     )
     conn.execute(
-        "INSERT INTO llm_calls (purpose, cost_estimate_usd, called_at) "
-        "VALUES ('bear_case', 12.50, ?)",
+        "INSERT INTO llm_calls (purpose, ticker, cost_estimate_usd, called_at) "
+        "VALUES ('bear_case', 'NU', 12.50, ?)",
+        (now.isoformat(),),
+    )
+    # A second call on an UN-budgeted purpose, attributed to a different ticker —
+    # proves the by-ticker view spans every purpose, not just capped ones.
+    conn.execute(
+        "INSERT INTO llm_calls (purpose, ticker, cost_estimate_usd, called_at) "
+        "VALUES ('recent_developments', 'AMD', 5.00, ?)",
         (now.isoformat(),),
     )
     conn.commit()
@@ -211,6 +219,31 @@ def test_trigger_ladder_null_price_row_is_well_formed() -> None:
     # ...and the row has all 8 cells (ticker, list, verdict, live, fair, over/under,
     # mos, trigger) — the malformed bug row had fewer.
     assert row_html.count("<td") == 8
+
+
+def test_llm_budget_panel_by_ticker(tmp_path: Path) -> None:
+    """The by-ticker companion view: MTD spend grouped by attributed ticker,
+    spanning every purpose (budgeted or not), with a synthetic bucket for
+    unattributed calls."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    dash = build_analytical_dashboard(db_path)
+
+    by_ticker = {r.ticker: r for r in dash.llm_budgets.by_ticker}
+    # NU (bear_case, budgeted) + AMD (recent_developments, UN-budgeted) both appear.
+    assert by_ticker["NU"].current_spend_usd == pytest.approx(12.50)
+    assert by_ticker["AMD"].current_spend_usd == pytest.approx(5.00)
+    assert by_ticker["AMD"].call_count == 1
+    # The by-ticker total (17.50) exceeds the capped by-purpose total (12.50 —
+    # bear_case only) precisely because it also counts the un-budgeted call.
+    assert dash.llm_budgets.total_spend_mtd_usd == pytest.approx(12.50)
+    assert sum(r.current_spend_usd for r in dash.llm_budgets.by_ticker) == pytest.approx(17.50)
+
+    # Renders a By-ticker table and survives the JSON round-trip used by /api/overview.
+    html = render_html(dash, generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert "By ticker" in html
+    assert "AMD" in html
+    json.loads(json.dumps(dash.to_dict()))
 
 
 # ----- live endpoints (wired into comments_server) -----

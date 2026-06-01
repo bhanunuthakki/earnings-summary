@@ -110,6 +110,18 @@ class LlmBudgetRow:
 
 
 @dataclass(slots=True)
+class LlmTickerSpendRow:
+    """Month-to-date LLM spend for one ticker — the by-ticker companion to the
+    by-purpose caps. Aggregated over ALL llm_calls (every purpose, budgeted or
+    not), so the by-ticker total can exceed the capped by-purpose total. Calls
+    with no ticker attribution land in the synthetic '(unattributed)' bucket."""
+
+    ticker: str
+    current_spend_usd: float
+    call_count: int
+
+
+@dataclass(slots=True)
 class LlmBudgetPanel:
     """The dashboard's LLM Spend & Budget section — per-purpose rows plus
     the month-to-date totals + projected month-end. Returns empty rows + 0
@@ -119,6 +131,7 @@ class LlmBudgetPanel:
     total_spend_mtd_usd: float = 0.0
     projected_month_end_usd: float = 0.0
     month_label: str = ""  # 'YYYY-MM'
+    by_ticker: list[LlmTickerSpendRow] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -338,7 +351,45 @@ def _build_llm_budget_panel(conn: sqlite3.Connection) -> LlmBudgetPanel:
         total_spend_mtd_usd=total_spend,
         projected_month_end_usd=projected,
         month_label=month_label,
+        by_ticker=_build_llm_by_ticker(conn, month_start),
     )
+
+
+def _build_llm_by_ticker(
+    conn: sqlite3.Connection, month_start: datetime
+) -> list[LlmTickerSpendRow]:
+    """Month-to-date LLM spend grouped by attributed ticker, across every purpose
+    (not just budgeted ones). Empty when `llm_calls` lacks a `ticker` column
+    (pre-0034 / minimal test schemas). NULL/blank tickers fold into
+    '(unattributed)' so the rows still sum to the true MTD total."""
+    has_ticker = (
+        conn.execute(
+            "SELECT 1 FROM pragma_table_info('llm_calls') WHERE name = 'ticker'"
+        ).fetchone()
+        is not None
+    )
+    if not has_ticker:
+        return []
+    trows = conn.execute(
+        """
+        SELECT COALESCE(NULLIF(TRIM(ticker), ''), '(unattributed)') AS tkr,
+               COALESCE(SUM(cost_estimate_usd), 0.0) AS spend,
+               COUNT(*) AS calls
+        FROM llm_calls
+        WHERE called_at >= ?
+        GROUP BY tkr
+        ORDER BY spend DESC, tkr
+        """,
+        (month_start.isoformat(),),
+    ).fetchall()
+    return [
+        LlmTickerSpendRow(
+            ticker=str(t["tkr"]),
+            current_spend_usd=float(t["spend"] or 0.0),
+            call_count=int(t["calls"]),
+        )
+        for t in trows
+    ]
 
 
 def _load_portfolio_synthesis(conn: sqlite3.Connection) -> str | None:

@@ -228,6 +228,27 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
         f'<span class="muted">(MTD = {pct:.0f}% of projection)</span>'
         "</p>"
     )
+    if panel.by_ticker:
+        by_ticker_total = sum(t.current_spend_usd for t in panel.by_ticker)
+        out.append(
+            f"<h3>By ticker · {escape(panel.month_label)}</h3>"
+            '<p class="sub">All LLM calls this month grouped by attributed ticker '
+            "(every purpose, budgeted or not — so this can exceed the capped total above).</p>"
+            '<table class="budget-table"><thead><tr>'
+            '<th>Ticker</th><th class="num">Spend</th><th class="num">Calls</th>'
+            "</tr></thead><tbody>"
+        )
+        for t in panel.by_ticker:
+            out.append(
+                f"<tr><td><code>{escape(t.ticker)}</code></td>"
+                f'<td class="num">${t.current_spend_usd:,.2f}</td>'
+                f'<td class="num">{t.call_count}</td></tr>'
+            )
+        out.append(
+            "</tbody></table>"
+            f'<p class="budget-footer"><strong>By-ticker total:</strong> '
+            f"${by_ticker_total:,.2f}</p>"
+        )
     out.append(_BUDGET_PANEL_SCRIPT)
     out.append("</section>")
     return "".join(out)
