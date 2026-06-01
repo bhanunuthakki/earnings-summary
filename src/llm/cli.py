@@ -44,12 +44,26 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
 
 from llm.ledger import fallback_call_logged, record_llm_call
 
 log = logging.getLogger(__name__)
+
+# A cwd with no project `.mcp.json`. The nested `claude -p` subprocess otherwise
+# tries to boot every server in the project's `.mcp.json` on startup and hangs
+# (observed ~5 min then killed). Running it from a neutral directory skips that
+# while still loading the user-level `~/.claude` config. Cached per process.
+_neutral_cwd_cache: str | None = None
+
+
+def _neutral_subprocess_cwd() -> str:
+    global _neutral_cwd_cache
+    if _neutral_cwd_cache is None:
+        _neutral_cwd_cache = tempfile.mkdtemp(prefix="es_claude_cwd_")
+    return _neutral_cwd_cache
 
 
 # Default Claude model for prompt calls. Sonnet 4.6 chosen as a balance of
@@ -252,6 +266,7 @@ def _verify_setup_once() -> None:
     working without test changes; see this module's docstring.
     """
     import llm_client  # late import — breaks circular at import time
+
     if llm_client._setup_verified:
         return
     resolved = shutil.which("claude")
@@ -265,9 +280,7 @@ def _verify_setup_once() -> None:
     llm_client._setup_verified = True
 
 
-def _enforce_budget_pre_call(
-    purpose: str | None, *, force_budget_bypass: bool
-) -> None:
+def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) -> None:
     """Pre-call hook: consult llm_budget.check_budget for `purpose` and:
 
       * raise LLMBudgetExceeded when over a hard-block cap,
@@ -305,9 +318,7 @@ def _enforce_budget_pre_call(
                     "reason": check.reason,
                 }
             )
-            raise LLMBudgetExceeded(
-                check.reason or f"{purpose}: monthly cap exceeded", check=check
-            )
+            raise LLMBudgetExceeded(check.reason or f"{purpose}: monthly cap exceeded", check=check)
         log.warning(
             {
                 "event": "llm_budget_soft_cap_exceeded",
@@ -377,7 +388,10 @@ def _call_claude(
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()  # setup errors propagate; do NOT route to fallback
     import llm_client  # late import — state lives on llm_client for test compat
-    assert llm_client._claude_cli_path is not None  # set by _verify_setup_once when it returns successfully
+
+    assert (
+        llm_client._claude_cli_path is not None
+    )  # set by _verify_setup_once when it returns successfully
     log.info(
         {
             "event": "llm_call_start",
@@ -402,6 +416,7 @@ def _call_claude(
             errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
             check=True,
             timeout=timeout_seconds,
+            cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs)
         )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         # Parse the JSON envelope. ValueError when malformed → caught below
@@ -559,6 +574,7 @@ def call_llm_with_web(
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()
     import llm_client  # late import — state lives on llm_client for test compat
+
     assert llm_client._claude_cli_path is not None
     log.info(
         {

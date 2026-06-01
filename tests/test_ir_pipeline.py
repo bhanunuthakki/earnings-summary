@@ -9,6 +9,7 @@ canonical KPI series with `scale` applied.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +19,13 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from ir_pipeline.config import IrConfig, get_config  # noqa: E402
+from ir_pipeline import config_builder  # noqa: E402
+from ir_pipeline.config import (  # noqa: E402
+    IrConfig,
+    SheetKpi,
+    get_config,
+    save_config,
+)
 from ir_pipeline.discover import discover_documents  # noqa: E402
 from ir_pipeline.discover._docmeta import classify  # noqa: E402
 from ir_pipeline.spreadsheet import (  # noqa: E402
@@ -115,3 +122,78 @@ def test_discover_dispatch_rejects_unknown_platform() -> None:
     cfg = IrConfig(ticker="ZZZ", platform="nope", results_center_url="https://x")
     with pytest.raises(ValueError, match="discovery adapter"):
         discover_documents(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Config persistence + LLM-generated parser config
+# ---------------------------------------------------------------------------
+
+
+def test_config_save_load_roundtrip(tmp_path: Path) -> None:
+    cfg = IrConfig(
+        ticker="ZZ",
+        platform="mz",
+        results_center_url="https://ir.example",
+        spreadsheet_kpis=(
+            SheetKpi("Monthly ARPAC (USD)", "Sheet1", "arpac", "usd", 1.0),
+            SheetKpi("Risk-adjusted NIM", "Sheet1", "nim", "percent", 100.0),
+        ),
+    )
+    path = save_config(cfg, tmp_path)
+    assert path.exists()
+    loaded = get_config("ZZ", tmp_path)
+    assert loaded is not None
+    assert loaded.platform == "mz"
+    assert loaded.results_center_url == "https://ir.example"
+    assert len(loaded.spreadsheet_kpis) == 2
+    nim = loaded.spreadsheet_kpis[1]
+    assert nim.kpi_name == "Risk-adjusted NIM" and nim.scale == 100.0
+
+
+def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
+    """The builder feeds the sheet structure + canonical KPIs to the LLM and
+    assembles a persisted config from the mapping (LLM mocked)."""
+    sheet = tmp_path / "hist.xlsx"
+    _write_nu_like_sheet(sheet)
+    holdings_dir = tmp_path / "micro_thesis" / "holdings"
+    holdings_dir.mkdir(parents=True)
+    (holdings_dir / "ZZ.json").write_text(
+        json.dumps(
+            {
+                "tier_1_kpis": [{"name": "Monthly ARPAC (USD)"}],
+                "chart_priorities": ["Risk-adjusted NIM (NIM minus cost of risk)"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake = (
+        "```json\n"
+        + json.dumps(
+            {
+                "Monthly ARPAC (USD)": {
+                    "sheet": "Managerial indicators",
+                    "row_label": "Average Revenue",
+                    "unit": "usd",
+                    "scale": 1,
+                },
+                "Risk-adjusted NIM (NIM minus cost of risk)": {
+                    "sheet": "Managerial indicators",
+                    "row_label": "Risk-adjusted NIM",
+                    "unit": "percent",
+                    "scale": 100,
+                },
+            }
+        )
+        + "\n```"
+    )
+
+    import llm_client
+
+    monkeypatch.setattr(llm_client, "_call_claude", lambda *a, **k: fake)
+    cfg = config_builder.build_ir_config(
+        "ZZ", sheet, platform="mz", results_center_url="https://x", repo_root=tmp_path
+    )
+    by_name = {s.kpi_name: s for s in cfg.spreadsheet_kpis}
+    assert "Monthly ARPAC (USD)" in by_name
+    assert by_name["Risk-adjusted NIM (NIM minus cost of risk)"].scale == 100.0
+    assert (tmp_path / "micro_thesis" / "ir_config" / "ZZ.json").exists()
