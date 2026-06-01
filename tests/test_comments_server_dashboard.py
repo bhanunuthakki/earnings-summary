@@ -115,14 +115,32 @@ def client(app_repo: Path):
     return app.test_client()
 
 
-def test_dashboard_page_returns_html(client):
+def test_dashboard_page_returns_shell(client):
+    """GET / now serves the unified tabbed command-center shell, with the
+    Overview tab server-inlined (portfolio + evaluation tables) for first paint
+    and the other tabs as lazy placeholders."""
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.mimetype == "text/html"
     body = resp.get_data(as_text=True)
-    assert "<title>Earnings Summary — Dashboard</title>" in body
+    assert "<title>Portfolio · command center</title>" in body
+    # Tab bar + inlined Overview panel.
+    assert 'class="cc-tabs"' in body
+    assert 'data-panel="overview"' in body
+    # Other tabs lazy-load from /api/panel/<name>.
+    assert 'data-endpoint="/api/panel/holdings"' in body
+    assert 'data-endpoint="/api/panel/budget"' in body
+    # Overview is inlined → the seeded tickers appear on first paint.
     assert "NU" in body
     assert "MELI" in body
+
+
+def test_dashboard_shell_inlines_ir_kpi_form(client):
+    """The IR-KPI refresh form (+ its SSE wiring) is inlined in Overview so it
+    streams on first paint without a lazy fetch."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'id="refresh-ir-form"' in body
+    assert "/actions/refresh-ir" in body
 
 
 def test_dashboard_api_returns_grouped_json(client):

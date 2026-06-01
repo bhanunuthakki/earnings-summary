@@ -71,6 +71,12 @@ PANEL_TO_SECTION: dict[str, str] = {
 }
 
 
+def render_tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
+    """Public seam for the command-center shell's Overview tab — the one-line
+    tier-staleness strip, reusing the same renderer the full page uses."""
+    return _tier_coverage_strip(coverage)
+
+
 def render_panel_fragment(dash: AnalyticalDashboard, name: str) -> str | None:
     """Render ONE analytical panel as a head/foot-less HTML fragment — the same
     ``_<name>_section`` the full page uses, minus the page chrome — for the lazy

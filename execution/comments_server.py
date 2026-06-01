@@ -69,7 +69,7 @@ from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.analytical_dashboard_html import render_html as render_analytical_html  # noqa: E402
-from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
+from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
@@ -139,16 +139,23 @@ def create_app(
     def healthz():
         return {"status": "ok", "repo_root": str(repo_root)}
 
-    # ----- DASHBOARD (PR 1 — read-only) -----
+    # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
     def dashboard_page():
+        """Unified tabbed command center. Overview (portfolio/evaluation status
+        tables + tier-coverage strip + IR-KPI/maintenance actions) is
+        server-inlined for instant first paint; every other tab lazy-loads from
+        ``GET /api/panel/<name>`` on first activation. The standalone
+        ``/analytical`` and ``/ticker/<t>`` pages remain as deep-link targets."""
         conn = _open_db()
         try:
             rows = build_dashboard_rows(conn, repo_root)
         finally:
             conn.close()
-        return Response(render_dashboard_html(rows), mimetype="text/html")
+        coverage = tier_coverage_summary(repo_root)
+        overview = render_overview_panel(rows, coverage)
+        return Response(render_shell(overview_html=overview), mimetype="text/html")
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
