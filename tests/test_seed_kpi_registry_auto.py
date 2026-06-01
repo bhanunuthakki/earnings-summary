@@ -39,6 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scratch"))
 from seed_kpi_registry import (  # noqa: E402
     AutoSeedSummary,
     auto_seed_ticker,
+    main,
 )
 
 from triggers import KpiInflectionTrigger, UserStateContext  # noqa: E402
@@ -215,6 +216,22 @@ def fmp_dir(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture
+def db_without_registry(tmp_path: Path) -> Path:
+    """A DB with the rest of the schema but NO user_kpi_registry table — the
+    unmigrated (alembic rev < 0060) case the --auto precondition guards.
+    Dropping the table also drops its unique index (sqlite)."""
+    path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        _create_schema(conn)
+        _ = conn.execute("DROP TABLE user_kpi_registry")
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
 class _StatefulLLM:
     """Cycles canned responses; reuses the last once exhausted."""
 
@@ -270,6 +287,32 @@ def _run(
         review_out=tmp_path / "review" / f"{ticker}.yaml",
         only_new=only_new,
     )
+
+
+# ---------------------------------------------------------------------------
+# Precondition — unmigrated DB (no user_kpi_registry table)
+# ---------------------------------------------------------------------------
+
+
+def test_auto_missing_registry_table_fails_clean_no_llm(
+    db_without_registry: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--auto against a DB without user_kpi_registry (rev < 0060) fails with a
+    clear, actionable error and a non-zero exit — without spending an LLM call
+    or raising an uncaught traceback. The precondition check in _run_auto fires
+    before the ticker loop (and therefore before any Opus call)."""
+    llm = _StatefulLLM(["[]"])
+    monkeypatch.setattr("seed_kpi_registry.call_llm", llm)
+
+    rc = main(["--auto", "--ticker", "NU", "--db-path", str(db_without_registry)])
+
+    assert rc != 0
+    assert llm.call_count == 0
+    err = capsys.readouterr().err
+    assert "user_kpi_registry table not found" in err
+    assert "alembic upgrade head" in err
 
 
 # ---------------------------------------------------------------------------
