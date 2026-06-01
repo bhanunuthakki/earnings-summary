@@ -212,7 +212,27 @@ def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
     return (code, body, None)
 
 
-# Known alternate spellings — when one variant 403s, try these next
+# Tier gate. On free FMP every /api/v3 and /api/v4 call 403s — the v3
+# deprecation is global as of 2025-08-31, not just this account — so emitting
+# those fallback rungs only burns one of the 250 daily requests apiece. When
+# FMP_TIER=free (or the --stable-only CLI flag), the try-ladder drops to the
+# stable rung + stable PATH_ALIASES only. Any other tier keeps the v3/v4
+# fallbacks (legacy/paid accounts where v3 still resolves). The cutover is a
+# deliberate flip of FMP_TIER, never auto-detected.
+_stable_only = os.environ.get("FMP_TIER", "").strip().lower() == "free"
+
+
+def _enable_stable_only() -> None:
+    """Force the stable-only ladder (drop the v3/v4 rungs) for this process,
+    regardless of FMP_TIER. Used by the --stable-only and --probe-stable CLI
+    flags so a manual run can exercise the free-tier ladder on demand."""
+    global _stable_only
+    _stable_only = True
+
+
+# Known alternate spellings — when one variant 403s, try these next. These are
+# stable-to-stable aliases (alternate stable spellings), NOT v3, so they survive
+# the _stable_only gate.
 PATH_ALIASES: dict[str, list[str]] = {
     "cashflow-statement": ["cash-flow-statement"],
     "cashflow-statement-growth": ["cash-flow-statement-growth"],
@@ -247,30 +267,34 @@ PATH_ALIASES: dict[str, list[str]] = {
 }
 
 
-def _candidates(endpoint_path: str, symbol: str | None, extra: dict) -> list[tuple[str, str, dict]]:
+def _candidates(
+    endpoint_path: str, symbol: str | None, extra: dict[str, object]
+) -> list[tuple[str, str, dict[str, object]]]:
     paths = [endpoint_path] + PATH_ALIASES.get(endpoint_path, [])
-    out: list[tuple[str, str, dict]] = []
+    out: list[tuple[str, str, dict[str, object]]] = []
     for p in paths:
         if symbol is not None:
             out.append((f"stable:{p}",
                         f"https://financialmodelingprep.com/stable/{p}",
                         {"symbol": symbol, **extra}))
-            out.append((f"v3-path:{p}",
-                        f"https://financialmodelingprep.com/api/v3/{p}/{symbol}",
-                        {**extra}))
-            out.append((f"v4-query:{p}",
-                        f"https://financialmodelingprep.com/api/v4/{p}",
-                        {"symbol": symbol, **extra}))
+            if not _stable_only:
+                out.append((f"v3-path:{p}",
+                            f"https://financialmodelingprep.com/api/v3/{p}/{symbol}",
+                            {**extra}))
+                out.append((f"v4-query:{p}",
+                            f"https://financialmodelingprep.com/api/v4/{p}",
+                            {"symbol": symbol, **extra}))
         else:
             out.append((f"stable:{p}",
                         f"https://financialmodelingprep.com/stable/{p}",
                         {**extra}))
-            out.append((f"v3-path:{p}",
-                        f"https://financialmodelingprep.com/api/v3/{p}",
-                        {**extra}))
-            out.append((f"v4-query:{p}",
-                        f"https://financialmodelingprep.com/api/v4/{p}",
-                        {**extra}))
+            if not _stable_only:
+                out.append((f"v3-path:{p}",
+                            f"https://financialmodelingprep.com/api/v3/{p}",
+                            {**extra}))
+                out.append((f"v4-query:{p}",
+                            f"https://financialmodelingprep.com/api/v4/{p}",
+                            {**extra}))
     return out
 
 
@@ -450,7 +474,14 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
         add(base, "annual", f"{label}_annual", {"period": "annual", "limit": 50})
         add(base, "quarter", f"{label}_quarterly", {"period": "quarter", "limit": 100})
 
-    # TTM
+    # TTM. NOTE: the 2026-06-01 stable probe (run_stable_probe on GOOGL) found
+    # these three TTM *statement* endpoints return 403 "Restricted Endpoint ...
+    # not available under your current subscription" on /stable — including via
+    # their stable aliases. This is a subscription-tier restriction, not a
+    # v3-vs-stable gap (v3/v4 can't recover them either), so dropping the v3/v4
+    # rungs on free loses nothing. They stay in the catalog (a higher tier may
+    # serve them); the cacher records them `forbidden` and retries every 30d.
+    # key-metrics-ttm and ratios-ttm (below) DO resolve on stable.
     add("income-statements-ttm", "ttm", "income_statement_ttm", {"limit": 100})
     add("balance-sheet-statements-ttm", "ttm", "balance_sheet_ttm", {"limit": 100})
     add("cashflow-statements-ttm", "ttm", "cash_flow_ttm", {"limit": 100})
@@ -868,6 +899,54 @@ def _ticker_list(list_type: str) -> list[str]:
     return rows
 
 
+def run_stable_probe(ticker: str) -> dict[str, list[str]]:
+    """Probe every catalog endpoint on STABLE ONLY and report coverage.
+
+    Forces stable-only mode and runs each per_ticker_jobs endpoint through the
+    stable rung (+ stable PATH_ALIASES) only — exactly the ladder a free-tier
+    run uses. Read-only: writes no files and no DB rows. Prints a JSON report
+    and returns {outcome: [endpoint:period, ...]} so the migration can see which
+    endpoints do NOT resolve on stable (a `forbidden`/`error` outcome means the
+    endpoint needs a stable alias added to PATH_ALIASES, or is genuinely
+    unavailable on free and degrades to the SEC source-of-truth path).
+    """
+    _enable_stable_only()
+    jobs = cast("list[dict[str, object]]", per_ticker_jobs(ticker))
+    report: dict[str, list[str]] = {"ok": [], "empty": [], "forbidden": [], "error": []}
+    markers = {"ok": "ok   ", "empty": "empty", "forbidden": "403  ", "error": "err  "}
+    print(f"\n=== STABLE PROBE: {ticker} ({len(jobs)} endpoints, stable-only) ===",
+          flush=True)
+    for job in jobs:
+        endpoint = cast("str", job["path"])
+        period = cast("str", job["period"])
+        extra = cast("dict[str, object]", job["extra"])
+        label = f"{endpoint}:{period}" if period else endpoint
+        code, _body, err, kind = fmp_call(endpoint, ticker, extra)
+        if code == 200 and _body is not None:
+            bucket = "ok"
+        elif err == "empty-list":
+            bucket = "empty"
+        elif code in (401, 402, 403):
+            bucket = "forbidden"
+        else:
+            bucket = "error"
+        report[bucket].append(label)
+        detail = "" if bucket in ("ok", "empty") else f" {err or ''}"
+        print(f"  {markers[bucket]} {endpoint:46s} {period:8s} [{kind or '-'}]{detail}")
+
+    print("\n=== STABLE PROBE SUMMARY ===")
+    print(json.dumps({k: len(v) for k, v in report.items()}, indent=2))
+    not_on_stable = report["forbidden"] + report["error"]
+    if not_on_stable:
+        print("Endpoints that do NOT resolve on stable "
+              "(add a stable alias to PATH_ALIASES, or accept + document):")
+        print(json.dumps(sorted(not_on_stable), indent=2))
+    else:
+        print("All catalog endpoints resolve on stable (ok/empty).")
+    print(f"  http attempts: {_CALL_COUNTER}")
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--probe", action="store_true",
@@ -894,7 +973,23 @@ def main():
     ap.add_argument("--max-calls", type=int, default=None,
                     help="Soft cap on total HTTP attempts. Run halts mid-ticker when "
                     "the counter exceeds this; remaining work is left for next run")
+    ap.add_argument("--stable-only", action="store_true",
+                    help="Drop the /api/v3 + /api/v4 fallback rungs; hit /stable only "
+                    "(same as FMP_TIER=free). Use on the free tier where v3/v4 403.")
+    ap.add_argument("--probe-stable", action="store_true",
+                    help="Read-only: probe every catalog endpoint on /stable for one "
+                    "ticker (default GOOGL, or first --tickers entry) and report which "
+                    "do not resolve on stable. Writes nothing.")
     args = ap.parse_args()
+
+    if args.stable_only:
+        _enable_stable_only()
+
+    if args.probe_stable:
+        probe_ticker = (args.tickers.split(",")[0].strip().upper()
+                        if args.tickers else "GOOGL")
+        run_stable_probe(probe_ticker)
+        return
 
     targets: list[str] = []
     do_sector = False

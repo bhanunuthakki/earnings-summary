@@ -43,6 +43,11 @@ from models.instruments import EtfHolding, EtfProfile  # noqa: E402
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 FMP_BASE = "https://financialmodelingprep.com"
 
+# Tier gate: on free FMP the /api/v3 fallback 403s (v3 deprecated 2025-08-31),
+# so skip it and hit /stable only when FMP_TIER=free. Mirrors the gate in
+# execution/save_fmp_data.py; a deliberate flip, not auto-detected.
+_STABLE_ONLY = os.environ.get("FMP_TIER", "").strip().lower() == "free"
+
 
 # ---------------------------------------------------------------------------
 # Parsers — pure, no I/O
@@ -215,11 +220,14 @@ def ingest_live(
 def _fmp_get(
     session: "requests.Session", api_key: str, ticker: str, path: str
 ) -> object:
-    """Try /stable then /api/v3; return first 200 JSON body."""
+    """Try /stable (then /api/v3 unless stable-only); return first 200 JSON body."""
     import requests
 
     last_err: str | None = None
-    for base in (f"{FMP_BASE}/stable/{path}/{ticker}", f"{FMP_BASE}/api/v3/{path.replace('/', '-')}/{ticker}"):
+    bases = [f"{FMP_BASE}/stable/{path}/{ticker}"]
+    if not _STABLE_ONLY:
+        bases.append(f"{FMP_BASE}/api/v3/{path.replace('/', '-')}/{ticker}")
+    for base in bases:
         try:
             r = session.get(base, params={"apikey": api_key}, timeout=(10, 60))
         except requests.RequestException as e:
