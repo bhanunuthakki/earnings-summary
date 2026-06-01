@@ -261,9 +261,12 @@ def fetch_news_for_ticker(
 # ---------------------------------------------------------------------------
 
 
-def _default_tickers(db_path: str) -> list[str]:
+def default_tickers(db_path: str) -> list[str]:
     """Active tracked book (portfolio/watchlist/evaluation, not archived) — the
-    exact set the trigger driver scans. Empty list if the table is absent."""
+    exact set the trigger driver scans. Empty list if the table is absent.
+
+    Public so the dispatcher (execution/fetch_news.py) reuses one ticker-selection
+    rule across both feeds."""
     conn = sqlite3.connect(db_path)
     try:
         try:
@@ -356,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
     tickers = (
         [t.upper() for t in cast("list[str]", args.tickers)]
         if args.tickers
-        else _default_tickers(db_path)
+        else default_tickers(db_path)
     )
     return run(tickers, db_path=db_path, days=args.days, limit=args.limit)
 

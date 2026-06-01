@@ -39,6 +39,7 @@ import re
 import subprocess  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from dotenv import load_dotenv
 
@@ -1204,6 +1205,96 @@ Do not pad with stale or low-signal items just to fill the section.
     except Exception as e:
         log.error(f"CRITICAL ERROR: Recent-developments generation failed for {ticker}: {e}")
         raise
+
+
+_NEWS_STRUCTURING_RETRY_PREAMBLE = (
+    "IMPORTANT: your previous response was not a valid JSON array. Return ONLY "
+    "the JSON array specified below — no markdown fences, no commentary, no prose.\n\n"
+)
+
+
+def _parse_news_json_array(raw: str) -> list[object] | None:
+    """Parse an LLM response into a JSON array, tolerating ```json fences.
+
+    Returns None when the text isn't a JSON array (the caller retries once, then
+    degrades to []). An empty array is a valid response ("no determinable news").
+    """
+    stripped = raw.strip()
+    if stripped.startswith("```"):
+        stripped = JSON_FENCE_RE.sub("", stripped).strip()
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, list):
+        return None
+    return cast("list[object]", payload)
+
+
+def structure_recent_news_json(
+    ticker: str,
+    news_days: int = 2,
+    anchor_block: str = "",
+    max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
+) -> list[object]:
+    """WebSearch recent news for ``ticker`` and return STRUCTURED rows as a JSON
+    array — the FMP-independent fallback ingester (plan §4.3).
+
+    Each item is ``{"headline", "url", "published_at", "published_tz", "snippet",
+    "source"}``. The hard rule is baked into the prompt: return UTC where
+    determinable, and OMIT any item whose publication date can't be determined
+    (never guess) — preserving the trigger's "degrade, never fabricate" contract
+    at the source. The caller (execution/fetch_news_websearch.py) normalizes each
+    item's timestamp to UTC, drops anything still missing url/headline/date, and
+    maps to a NewsRow.
+
+    Routes through ``call_llm_with_web`` with ``purpose="news_structuring"``,
+    which resolves to Opus via ``LLM_MODELS``. Returns the parsed list of item
+    dicts, or ``[]`` on any LLM/parse failure (one retry on a parse miss,
+    mirroring the material_news trigger's discipline). The web budget is capped.
+    """
+    framing = anchor_block.strip()
+    anchor_clause = f"{framing}\n\n" if framing else ""
+    prompt = (
+        f"You are sourcing recent news for a long-term investor in {ticker} and "
+        f"returning it as STRUCTURED DATA (not prose).\n\n"
+        f"{anchor_clause}"
+        f"Search the web for {ticker} news from the last {news_days} days. "
+        f"Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press "
+        f"releases. Skip blog spam, opinion pieces with no new information, and "
+        f"pure stock-price chatter.\n\n"
+        f"WEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT "
+        f"MOST {max_web_results} URLs via web_fetch.\n\n"
+        "Return ONLY a JSON array, one object per distinct story, EXACTLY:\n"
+        '[{"headline": "<title>", "url": "<canonical article url>", '
+        '"published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", '
+        '"snippet": "<one-sentence gloss>", "source": "<outlet, e.g. Reuters>"}]\n\n'
+        "HARD RULES:\n"
+        "- published_at: the publication timestamp where you can determine it, "
+        "formatted 'YYYY-MM-DD HH:MM:SS' (24-hour, a space not 'T', no zone "
+        "suffix). Give it in UTC and set published_tz to 'UTC'. If you only know "
+        "the US/Eastern wall-clock time, return that and set published_tz to 'ET'.\n"
+        "- If you CANNOT determine a publication date for a story from its "
+        "source, OMIT that story entirely. Never guess or fabricate a date.\n"
+        "- url must be the real article URL (it is the dedup key). Omit any item "
+        "without one.\n"
+        "- Output the JSON array and nothing else: no markdown fences, no prose."
+    )
+    for attempt, body in enumerate((prompt, _NEWS_STRUCTURING_RETRY_PREAMBLE + prompt)):
+        try:
+            raw = call_llm_with_web(body, purpose="news_structuring", ticker=ticker)
+        except Exception as exc:
+            log.warning(
+                f"news_structuring web call failed for {ticker} (attempt {attempt + 1}): {exc}"
+            )
+            return []
+        parsed = _parse_news_json_array(raw)
+        if parsed is not None:
+            return parsed
+        log.warning(
+            f"news_structuring returned non-array JSON for {ticker} (attempt {attempt + 1})"
+        )
+    return []
 
 
 def _ticker_specific_block(md: str) -> str:
