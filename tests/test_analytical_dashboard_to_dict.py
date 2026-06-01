@@ -354,3 +354,16 @@ def test_panel_fragment_insiders_headless(client) -> None:
     resp = client.get("/api/panel/insiders?ticker=NU")
     assert resp.status_code == 200
     assert "<!doctype" not in resp.get_data(as_text=True).lower()
+
+
+def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) -> None:
+    """The Portfolio panel layers live tracker data over the cached synthesis.
+    With the tracker offline (dead URL) it must still render head/foot-less: the
+    live section shows the offline note and the synthesis still renders."""
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:59999")  # nothing listening
+    resp = client.get("/api/panel/portfolio")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()  # head/foot-less fragment
+    assert "Live portfolio" in body  # the live section (offline note)
+    assert "Portfolio synthesis" in body  # the cached synthesis still renders
