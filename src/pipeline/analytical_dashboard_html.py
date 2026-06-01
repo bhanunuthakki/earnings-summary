@@ -57,6 +57,41 @@ def render_html(
     return "".join(parts)
 
 
+# Command-center panel name -> the build_analytical_dashboard `sections` key it
+# needs. Drives the lazy `GET /api/panel/<name>` fetch: build one section, render
+# one fragment. (Overview / Holding / Portfolio-live tabs are assembled elsewhere.)
+PANEL_TO_SECTION: dict[str, str] = {
+    "portfolio": "portfolio_synthesis",
+    "holdings": "trigger_ladder",
+    "prereads": "rereads",
+    "insiders": "insider_events",
+    "predictions": "prediction_outcomes",
+    "decisions": "decisions",
+    "budget": "llm_budgets",
+}
+
+
+def render_panel_fragment(dash: AnalyticalDashboard, name: str) -> str | None:
+    """Render ONE analytical panel as a head/foot-less HTML fragment — the same
+    ``_<name>_section`` the full page uses, minus the page chrome — for the lazy
+    command-center shell. Returns None for an unknown panel name."""
+    if name == "portfolio":
+        return _portfolio_synthesis_section(dash.portfolio_synthesis_md)
+    if name == "holdings":
+        return _trigger_ladder_section(dash.trigger_ladder)
+    if name == "prereads":
+        return _per_ticker_reread_section(dash.per_ticker_reread)
+    if name == "insiders":
+        return _insider_events_section(dash.insider_events)
+    if name == "predictions":
+        return _predictions_section(dash.prediction_outcomes)
+    if name == "decisions":
+        return _decisions_section(dash.decisions)
+    if name == "budget":
+        return _llm_budget_section(dash.llm_budgets)
+    return None
+
+
 def _decisions_section(panel: DecisionsPanel) -> str:
     """Recent decisions table + hit-rate strip + calibration strip.
     Shows even when empty so the operator sees the panel exists."""
@@ -388,17 +423,23 @@ def _per_ticker_reread_section(rows: list[PortfolioLensRow]) -> str:
         '<div class="reread-grid">',
     ]
     for r in rows:
-        rendered = _light_markdown_to_html(r.content_md[:8000])
-        out.append(
-            f'<details class="reread-card"><summary>'
-            f'<a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a>'
-            f'<span class="reread-stamp">{escape(r.generated_at[:10])}</span>'
-            f"</summary>"
-            f'<div class="reread-body">{rendered}</div>'
-            "</details>"
-        )
+        out.append(_reread_card(r))
     out.append("</div></section>")
     return "".join(out)
+
+
+def _reread_card(r: PortfolioLensRow) -> str:
+    """One collapsible 5-min-reread card. Extracted so the grid panel and the
+    dropdown-driven Holding tab (PR 8) render an identical card from one place."""
+    rendered = _light_markdown_to_html(r.content_md[:8000])
+    return (
+        f'<details class="reread-card"><summary>'
+        f'<a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a>'
+        f'<span class="reread-stamp">{escape(r.generated_at[:10])}</span>'
+        f"</summary>"
+        f'<div class="reread-body">{rendered}</div>'
+        "</details>"
+    )
 
 
 def _light_markdown_to_html(md: str) -> str:

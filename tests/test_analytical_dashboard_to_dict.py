@@ -90,6 +90,11 @@ def _seed_db(db_path: Path) -> None:
             cost_estimate_usd REAL,
             called_at TIMESTAMP
         );
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT, purpose TEXT, scope TEXT, content_md TEXT,
+            generated_at TEXT, superseded_by_id INTEGER
+        );
         """
     )
     now = datetime.now(UTC)
@@ -123,6 +128,11 @@ def _seed_db(db_path: Path) -> None:
     conn.execute(
         "INSERT INTO llm_calls (purpose, ticker, cost_estimate_usd, called_at) "
         "VALUES ('recent_developments', 'AMD', 5.00, ?)",
+        (now.isoformat(),),
+    )
+    conn.execute(
+        "INSERT INTO llm_artifacts (ticker, purpose, content_md, generated_at, superseded_by_id) "
+        "VALUES ('NU', 'lens:five_min_reread', '## NU 5-min reread', ?, NULL)",
         (now.isoformat(),),
     )
     conn.commit()
@@ -311,3 +321,36 @@ def test_dcf_route_404_then_serves(client, tmp_path: Path) -> None:
     (dcf_dir / "NU.xlsx").write_bytes(b"PK\x03\x04 fake xlsx bytes")
     resp = client.get("/dcf/NU")
     assert resp.status_code == 200
+
+
+# ----- PR 5: panel fragment endpoints -----
+
+
+def test_panel_fragment_budget_is_headless(client) -> None:
+    resp = client.get("/api/panel/budget")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()  # a fragment, not a full page
+    assert "bear_case" in body  # the seeded budget row rendered
+
+
+def test_panel_fragment_unknown_404(client) -> None:
+    assert client.get("/api/panel/nope").status_code == 404
+
+
+def test_panel_fragment_prereads_ticker_filter(client) -> None:
+    # The seed has one NU reread; the full panel shows its card.
+    all_body = client.get("/api/panel/prereads").get_data(as_text=True)
+    assert 'class="reread-card"' in all_body
+    assert "NU" in all_body
+    # ?ticker=AMD (no AMD reread) → header still renders, but no card.
+    amd_body = client.get("/api/panel/prereads?ticker=AMD").get_data(as_text=True)
+    assert "Per-holding 5-min rereads" in amd_body
+    assert 'class="reread-card"' not in amd_body
+
+
+def test_panel_fragment_insiders_headless(client) -> None:
+    # No insider_transactions seeded → empty section, but headless + 200.
+    resp = client.get("/api/panel/insiders?ticker=NU")
+    assert resp.status_code == 200
+    assert "<!doctype" not in resp.get_data(as_text=True).lower()
