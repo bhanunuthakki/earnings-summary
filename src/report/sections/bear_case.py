@@ -5,8 +5,11 @@ the prompt template embedded for review. When True, first checks the on-disk
 cache (`data/bear_case/<TICKER>.json`); if the file exists and is younger than
 `cache_ttl_days`, parses it and returns without re-calling the LLM. Otherwise
 assembles inputs from the upstream sections, calls llm_client.generate_bear_case,
-caches the raw JSON, and parses into FailureMode rows. Any LLM / parsing error
-surfaces — no silent stub on failure (per repo's "fail loudly" rule).
+caches the raw JSON, and parses into FailureMode rows. A transient empty or
+unparseable LLM response degrades to a MISSING_DATA section that names the
+reason (loud, not a silent stub) so one flaky §7 call can't abort the whole
+multi-section brief build — re-running retries. A hard LLM-call exception
+still surfaces per the repo's "fail loudly" rule.
 
 The on-disk cache existed pre-Phase-A as a sidecar for cross-section anchoring
 (load_bear_anchor); this module now also READS from it for cost containment.
@@ -103,7 +106,34 @@ def build(
     # pairwise SayDo) can cross-pollinate the analyst's named bear failure
     # modes via load_bear_anchor() — see llm_client.py.
     _cache_bear_response(ticker, repo_root, response_text)
-    return _parse_response(response_text)
+    try:
+        return _parse_response(response_text)
+    except (json.JSONDecodeError, ValueError) as exc:
+        # A transient empty / unparseable LLM response must fail at SECTION
+        # scope, not abort the whole multi-section build: one flaky §7 call
+        # would otherwise cost every other section + the render, and leave the
+        # daily cron with no artifact at all. "Fail loudly" still holds — we
+        # surface a MISSING_DATA banner naming the reason, not a silent stub —
+        # but the rest of the brief renders and a re-run retries.
+        log.error(
+            "bear_case parse failed for %s (%d-char response): %s",
+            ticker,
+            len(response_text or ""),
+            exc,
+        )
+        return BearCaseSection(
+            status=SectionStatus.MISSING_DATA,
+            missing=missing(
+                stage="SYNTHESIZE(bear_case_llm)",
+                fix_command=(
+                    f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm"
+                ),
+                detail=(
+                    "The bear-case LLM call returned an empty or unparseable "
+                    "response (usually transient). Re-run to retry."
+                ),
+            ),
+        )
 
 
 def _read_cache(
