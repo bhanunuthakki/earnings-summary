@@ -60,7 +60,8 @@ def _make_db() -> sqlite3.Connection:
             value NUMERIC,
             unit VARCHAR,
             kpi_definition_id INTEGER NOT NULL,
-            fiscal_period_type VARCHAR NOT NULL
+            fiscal_period_type VARCHAR NOT NULL,
+            source_doc_id INTEGER NOT NULL DEFAULT 1
         );
         """
     )

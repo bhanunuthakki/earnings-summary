@@ -399,12 +399,23 @@ def _kpi_history(
         for c in cursor.execute("PRAGMA table_info(kpi_facts)").fetchall()
     )
     cols = "f.period_end, f.value" + (", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt")
+    # Dedup coexisting rows for the same period (e.g. an LLM brief value plus the
+    # issuer's later IR-spreadsheet restatement): keep only the latest-ingested
+    # source per logical key so break-rule evaluation sees one observation per
+    # quarter, matching the §3 chart loader and purge_duplicate_kpi_facts.
     cursor.execute(
         f"""
         SELECT {cols}
         FROM kpi_facts f
         JOIN kpi_definitions d ON d.id = f.kpi_definition_id
         WHERE d.ticker = ? AND d.name = ?
+          AND f.source_doc_id = (
+              SELECT MAX(f2.source_doc_id) FROM kpi_facts f2
+              WHERE f2.ticker = f.ticker
+                AND f2.kpi_definition_id = f.kpi_definition_id
+                AND f2.period_end = f.period_end
+                AND f2.fiscal_period_type = f.fiscal_period_type
+          )
         ORDER BY f.period_end ASC
         """,
         (ticker.upper(), kpi_name),

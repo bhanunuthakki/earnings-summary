@@ -53,6 +53,10 @@ class KpiExtractionManifest(BaseModel):
     source_doc_id: int
     primary_source: SourceType = SourceType.IR_DOC
     model_name: str | None = None
+    # Override for kpi_facts.extracted_by. Default (None) keeps the LLM-derived
+    # 'llm[:model]' tag; deterministic sources (e.g. IR-spreadsheet parsing) set
+    # an explicit tag like 'ir_spreadsheet' so audits don't mislabel them as LLM.
+    extracted_by: str | None = None
     values: list[KpiValue]
 
 
@@ -236,7 +240,7 @@ def persist_manifest(
     inserted = 0
     skipped = 0
     issues = 0
-    extracted_by = (
+    extracted_by = manifest.extracted_by or (
         f"llm:{manifest.model_name}" if manifest.model_name else "llm"
     )
 
