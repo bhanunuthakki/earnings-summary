@@ -25,6 +25,7 @@ import pytest
 from execution import run_morning_pipeline
 
 # Script basenames in canonical run order, used to assert dispatch order.
+NEWS_SCRIPT = "fetch_news.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 DIGEST_SCRIPT = "build_morning_digest.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -128,9 +129,10 @@ def test_all_stages_succeed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 0
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
 
     summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0_news"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_2_digest"] == "ok"
     assert summary["stage_3_feed"] == "ok"
@@ -155,7 +157,7 @@ def test_stage1_failure_still_runs_digest_and_feed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -173,7 +175,7 @@ def test_stage2_failure_still_runs_feed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "ok"
@@ -191,7 +193,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     rc = run_morning_pipeline.main([])
 
     assert rc == 3
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -216,7 +218,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -243,8 +245,11 @@ def test_skip_triggers_runs_only_renders(
     assert rc == 0
     assert fake.scripts == [DIGEST_SCRIPT, FEED_SCRIPT]
     assert TRIGGERS_SCRIPT not in fake.scripts
+    # --skip-triggers also skips stage 0 (no point fetching news we won't classify).
+    assert NEWS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0_news"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_2_digest"] == "ok"
     assert summary["stage_3_feed"] == "ok"
@@ -269,6 +274,11 @@ def test_args_passed_through_to_stages(monkeypatch: pytest.MonkeyPatch) -> None:
     triggers_argv = by_script[TRIGGERS_SCRIPT]
     digest_argv = by_script[DIGEST_SCRIPT]
     feed_argv = by_script[FEED_SCRIPT]
+    news_argv = by_script[NEWS_SCRIPT]
+
+    # The news fetcher takes neither --user-id nor --max-cost-usd.
+    assert "--user-id" not in news_argv
+    assert "--max-cost-usd" not in news_argv
 
     # The contract is the forwarded numeric value, not its string form —
     # argparse (type=float) normalizes "5" to "5.0", which run_triggers parses
@@ -311,6 +321,72 @@ def test_db_path_omitted_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
 
     for argv in fake.calls:
         assert "--db-path" not in argv
+
+
+# ---------------------------------------------------------------------------
+# Stage 0 — news fetch (before triggers; skip + source-forwarding + resilience)
+# ---------------------------------------------------------------------------
+
+
+def test_stage0_news_runs_first_with_default_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """By default Stage 0 runs first and invokes fetch_news.py --source auto."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 0
+    assert fake.scripts[0] == NEWS_SCRIPT  # ordered before triggers
+
+    news_argv = next(c for c in fake.calls if _script_of(c) == NEWS_SCRIPT)
+    assert _flag_value(news_argv, "--source") == "auto"
+
+
+def test_skip_news_removes_only_stage0(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--skip-news drops stage 0 but keeps triggers + the two renders."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main(["--skip-news"])
+    assert rc == 0
+    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert NEWS_SCRIPT not in fake.scripts
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0_news"] == "skipped"
+    assert summary["stage_1_triggers"] == "ok"
+
+
+def test_news_source_forwarded_to_stage0(monkeypatch: pytest.MonkeyPatch) -> None:
+    """--news-source flows through to fetch_news.py's --source."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main(["--news-source", "websearch"])
+    assert rc == 0
+
+    news_argv = next(c for c in fake.calls if _script_of(c) == NEWS_SCRIPT)
+    assert _flag_value(news_argv, "--source") == "websearch"
+
+
+def test_news_failure_does_not_stop_triggers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed stage 0 is counted but never blocks triggers/digest/feed — the
+    trigger sweep runs over whatever news already exists, degrading to none."""
+    fake = _RecordingRun(returncodes={NEWS_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the news stage failed
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0_news"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
+    assert summary["stage_2_digest"] == "ok"
+    assert summary["stage_3_feed"] == "ok"
 
 
 def _has_flag(argv: list[str], flag: str, value: str) -> bool:
