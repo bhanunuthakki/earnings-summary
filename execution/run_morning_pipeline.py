@@ -1,14 +1,17 @@
-"""Orchestrate the morning dashboard pipeline: triggers -> digest -> feed.
+"""Orchestrate the morning dashboard pipeline: news -> triggers -> digest -> feed.
 
 The daily trigger driver (``run_triggers.py``) fires alerts and persists them;
 the dashboard renderers (``build_morning_digest.py`` + ``build_alert_feed.py``)
 render HTML from those persisted alerts. On their own they are unchained: the
 driver runs at 04:00 via cron, but the digest HTML is only rebuilt when
 manually invoked, so a 07:00 read shows stale HTML. This orchestrator chains
-the three stages into one scheduled run.
+the stages into one scheduled run.
 
-Three stages run in sequence as subprocess-isolated children:
+Four stages run in sequence as subprocess-isolated children:
 
+  0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
+     ``news`` table so the material_news trigger has stories to classify;
+     ``--news-source`` selects FMP / WebSearch+Opus / auto).
   1. triggers -- ``run_triggers.py`` (the long pole; fans LLM-backed sensors
      across the portfolio, cost-capped via ``--max-cost-usd``).
   2. digest   -- ``build_morning_digest.py`` for today.
@@ -19,7 +22,9 @@ Resilience contract (the load-bearing behavior):
   * The orchestrator NEVER aborts early. A failed or timed-out stage is logged
     and the remaining stages still run. The digest + feed are read-only renders
     over whatever alerts already exist, so a trigger failure must not leave the
-    user staring at a stale digest -- the renders run regardless.
+    user staring at a stale digest -- the renders run regardless. Likewise a
+    failed news fetch (stage 0) never blocks the trigger sweep: triggers run
+    over whatever news already exists, degrading to none.
   * Each stage's stdout/stderr is captured and echoed under a stage header.
   * Exit code is the count of failed stages (0 = all good), reported only AFTER
     every non-skipped stage has been attempted. This lets cron / monitoring
@@ -27,15 +32,17 @@ Resilience contract (the load-bearing behavior):
 
 Usage:
     python execution/run_morning_pipeline.py
-    python execution/run_morning_pipeline.py --max-cost-usd 10
+    python execution/run_morning_pipeline.py --news-source websearch
+    python execution/run_morning_pipeline.py --max-cost-usd 10 --skip-news
     python execution/run_morning_pipeline.py --user-id bhanu --db-path /tmp/x.db
     python execution/run_morning_pipeline.py --skip-triggers   # re-render only
 
 ``--skip-triggers`` runs stages 2 + 3 only -- useful for re-rendering the
 digest/feed after manual approve/dismiss actions mutate the alert rows, without
-paying for another trigger sweep.
+paying for another trigger sweep (it skips stage 0 news too). ``--skip-news``
+skips only the news fetch.
 
-This orchestrates the three scripts via subprocess (process isolation, matching
+This orchestrates the scripts via subprocess (process isolation, matching
 the repo's drain-executor + daily-fetch-and-brief pattern) rather than importing
 their ``main()``. The child interpreter is ``sys.executable`` -- the exact
 interpreter running this orchestrator -- so the children never depend on PATH
@@ -63,13 +70,24 @@ DEFAULT_MAX_COST_USD = 10.0
 # two render stages are pure SQLite reads + HTML writes; 5 min is generous.
 _TRIGGERS_TIMEOUT_S = 1800
 _RENDER_TIMEOUT_S = 300
+# Stage 0 (news) is fast on the FMP path, but an `auto`/`websearch` run can make
+# one Opus web call per fallback ticker, so it gets more headroom than a render.
+_NEWS_TIMEOUT_S = 600
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
+STAGE_NEWS = "stage_0_news"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_DIGEST = "stage_2_digest"
 STAGE_FEED = "stage_3_feed"
-_ALL_STAGE_KEYS = (STAGE_TRIGGERS, STAGE_DIGEST, STAGE_FEED)
+_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_DIGEST, STAGE_FEED)
+
+# News ingestion source for Stage 0. Default `auto` (self-healing): FMP first,
+# falling back to WebSearch+Opus per ticker on refusal — so the material_news
+# trigger keeps eating regardless of FMP's free-tier news policy. (The plan's
+# one-shot probe couldn't determine that policy with no FMP key configured.)
+DEFAULT_NEWS_SOURCE = "auto"
+NEWS_SOURCES = ("fmp", "websearch", "auto")
 
 
 class StageStatus(StrEnum):
@@ -130,6 +148,28 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
     py = sys.executable
     exec_dir = PROJECT_ROOT / "execution"
     stages: list[_Stage] = []
+
+    # Stage 0 -- news fetch, BEFORE triggers so the morning's fresh news is
+    # classified in the same run. Skipped by --skip-news, and implicitly by
+    # --skip-triggers (the re-render-only path: no point fetching news that won't
+    # be classified). The news fetcher takes neither --user-id nor --max-cost-usd,
+    # so it does not use _stage_args_for; only --db-path is forwarded (when set).
+    if not args.skip_triggers and not args.skip_news:
+        db_path_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_NEWS,
+                label="Stage 0 - news fetch (fetch_news.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "fetch_news.py"),
+                    "--source",
+                    args.news_source,
+                    *db_path_args,
+                ],
+                timeout_s=_NEWS_TIMEOUT_S,
+            )
+        )
 
     if not args.skip_triggers:
         stages.append(
@@ -294,7 +334,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--skip-triggers",
         action="store_true",
         help="Skip stage 1 (triggers) and run only the digest + feed renders. "
-        "Useful for re-rendering after manual approve/dismiss actions.",
+        "Useful for re-rendering after manual approve/dismiss actions. Also "
+        "skips stage 0 (news), since there is nothing to classify.",
+    )
+    parser.add_argument(
+        "--news-source",
+        choices=NEWS_SOURCES,
+        default=DEFAULT_NEWS_SOURCE,
+        help=f"Stage 0 news source (default: {DEFAULT_NEWS_SOURCE!r}). 'auto' runs "
+        f"FMP and falls back to WebSearch+Opus per ticker on refusal; 'websearch' "
+        f"once FMP's news is cut off; 'fmp' to disable the LLM fallback.",
+    )
+    parser.add_argument(
+        "--skip-news",
+        action="store_true",
+        help="Skip stage 0 (news fetch) only — triggers still run over whatever "
+        "news rows already exist.",
     )
     return parser.parse_args(argv)
 
