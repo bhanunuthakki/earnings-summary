@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Eleven scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the two weekly + one monthly run off-cycle and refresh the synthesis / lens layer.
+Twelve scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the three weekly + one monthly run off-cycle and refresh the synthesis / lens layer and the IR-spreadsheet KPI series.
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -48,6 +48,14 @@ These regenerate the LLM "lens" artifacts (`five_min_reread`, `thesis_drift_qoq`
 | `earnings-summary\monthly_p3_refresh` | Monthly, 1st @ 03:00 | `monthly_p3_refresh.task.xml` | `run_monthly_p3_refresh.bat` | Regenerates P3-tier (index_member / etf / `none`) lens artifacts drifted past their 90-day cadence. Wraps `python execution/run_due_lenses.py --cadence monthly`. The P3 lens set is minimal (`five_min_reread` only) so the run stays bounded even with 2k+ index constituents — and the `cache_inputs` hash means stable tickers cost nothing. |
 
 The two weekly tasks deliberately bracket the trading week: `weekly_p2_lens_refresh` runs Sunday 02:00 (early) so any P2-tier reads are fresh before the analyst checks in, then `weekly_synthesis` runs Sunday 23:00 (late) so the portfolio dashboard reflects everything that landed during the week, ahead of Monday open. They don't depend on each other — `weekly_synthesis` step 1 (`refresh_dirty_artifacts`) is what guarantees current data, not the earlier weekly run.
+
+### IR-spreadsheet KPI refresh (weekly)
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\refresh_ir_kpis` | Weekly, Sunday 01:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | **IR-spreadsheet KPI refresh.** Runs `execution/refresh_ir_kpis_all.py`, which loops every ticker with a parser config (`micro_thesis/ir_config/<T>.json`, enumerated via `ir_pipeline.config.configured_tickers`) and, per ticker, shells out to `refresh_ir_kpis.py --ticker <T> --discover`: headless-renders the issuer's IR results-center, downloads the current historical-data spreadsheet, parses it, and ingests the KPI series at IR_DOC tier — superseding the lower-tier LLM brief values the report charts read. Subprocess-isolated per ticker with a 5-min cap; never aborts on one ticker's failure; exit code = count of failed tickers. Idempotent: an unchanged spreadsheet re-ingests as a no-op (the document is sha256-keyed), so the weekly poll simply catches each new quarter's file within a week of publication. Tickers without a config are skipped (a ticker's first refresh must run `refresh_ir_kpis.py --url`/`--file` to generate its config). **Requires the optional `ir` extra** in the task's Python — see Prerequisites. |
+
+Runs Sunday 01:00 — ahead of `weekly_p2_lens_refresh` (02:00) and the Sunday-night `weekly_synthesis` (23:00) — so the freshly-ingested issuer KPIs are in `kpi_facts` before any lens/synthesis read. To change the cadence (e.g. monthly), edit the trigger in `refresh_ir_kpis.task.xml`; the script is cadence-agnostic and idempotent either way. Today only `NU` has a config, so the run is a single ticker; it scales automatically as more configs are generated.
 
 ## Switching FMP tier
 
@@ -111,6 +119,12 @@ ORDER BY COUNT(*) DESC;
   — or any path you set in `PROJECT_ROOT` at the top of each `.bat`.
 - Claude Code CLI on PATH and authed (only required by `daily_fetch_and_brief`
   for §8/§9 generation; the worker falls back to Gemini if the CLI fails).
+- The optional `ir` extra (only required by `refresh_ir_kpis`, for the headless
+  browser that resolves each issuer's spreadsheet URL): from the repo root, run
+  `pip install -e .[ir] && playwright install chromium` in the same Python
+  `python` resolves to. Without it that task's per-ticker `--discover` children
+  exit non-zero (ImportError) and are logged as failures, but the batch still
+  completes — every other task is unaffected.
 
 ## Install
 
@@ -160,6 +174,10 @@ schtasks /create /tn "earnings-summary\weekly_synthesis" ^
 
 schtasks /create /tn "earnings-summary\monthly_p3_refresh" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_p3_refresh.task.xml" ^
+  /ru "%USERNAME%"
+
+schtasks /create /tn "earnings-summary\refresh_ir_kpis" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_ir_kpis.task.xml" ^
   /ru "%USERNAME%"
 ```
 
@@ -244,6 +262,15 @@ Then check:
 - For `monthly_p3_refresh`: new `llm_artifacts` rows for P3-tier
   (index_member / etf / `none`) tickers that drifted past their 90-day
   cadence. Bounded — the P3 lens set is `five_min_reread` only.
+- For `refresh_ir_kpis`: per configured ticker, a `=== IR-spreadsheet refresh -
+  <T>` header followed by the child's JSON (`rows_inserted`, `doc_id`, …), then a
+  final summary `{ "tickers": [...], "skipped_no_config": [...], "ok": N,
+  "failed": N, "rows_inserted": N, "elapsed_seconds": … }`. On success, expect a
+  refreshed `data/ir_spreadsheets/<T>/…xlsx` and new IR_DOC-tier rows in
+  `kpi_facts` (which supersede the LLM brief values for the covered KPI/period
+  pairs). A failed/timed-out ticker does NOT stop the others; exit code = number
+  of failed tickers. If every ticker shows an ImportError in its captured stderr,
+  the `ir` extra isn't installed (see Prerequisites).
 
 You can also run any wrapper directly to bypass the scheduler entirely:
 
