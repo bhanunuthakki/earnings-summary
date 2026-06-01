@@ -263,6 +263,12 @@ def _kpi_series_for(
     if resolved_name is None:
         return None
     cur = conn.cursor()
+    # When several sources report the same KPI for one period (e.g. an LLM brief
+    # value later restated by the issuer's IR spreadsheet, which coexist as
+    # separate rows), keep only the latest-ingested row per logical key —
+    # highest source_doc_id wins, matching purge_duplicate_kpi_facts' dedup. This
+    # makes the higher-tier IR-spreadsheet figure authoritative and the series
+    # deterministic (no arbitrary tie-break between duplicate period rows).
     cur.execute(
         """
         SELECT kf.period_end, kf.value, kf.unit, kd.name
@@ -271,6 +277,13 @@ def _kpi_series_for(
         WHERE kf.ticker = ?
           AND kd.name = ?
           AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
+          AND kf.source_doc_id = (
+              SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
+              WHERE k2.ticker = kf.ticker
+                AND k2.kpi_definition_id = kf.kpi_definition_id
+                AND k2.period_end = kf.period_end
+                AND k2.fiscal_period_type = kf.fiscal_period_type
+          )
         ORDER BY kf.period_end ASC
         """,
         (ticker.upper(), resolved_name),

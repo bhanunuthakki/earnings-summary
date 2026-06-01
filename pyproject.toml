@@ -17,6 +17,12 @@ dev = [
     "pyright>=1.1.380",
     "basedpyright>=1.10",
 ]
+# IR-document discovery (execution/refresh_ir_kpis.py --discover): a headless
+# browser renders the JS results-center to resolve hash-keyed document URLs.
+# Install with `pip install -e .[ir] && playwright install chromium`.
+ir = [
+    "playwright>=1.40",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

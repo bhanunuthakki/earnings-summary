@@ -7,9 +7,8 @@ the smoke test against `data/portfolio.db` post-merge.
 
 from __future__ import annotations
 
-import json
-import sys
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
+
 from dispatch_registry import Registry  # noqa: E402
 
 
@@ -158,3 +158,32 @@ def test_list_jobs_returns_snapshots_of_all(client):
     payload = resp.get_json()
     tickers = {j["ticker"] for j in payload["jobs"]}
     assert tickers == {"NU", "GOOG"}
+
+
+# ----- /actions/refresh-ir (IR-spreadsheet KPI refresh) -----
+
+
+def test_post_refresh_ir_returns_job_metadata(client):
+    resp = client.post("/actions/refresh-ir", json={"ticker": "NU", "quarters": 8})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["ticker"] == "NU"
+    assert body["kind"] == "refresh-ir"
+    assert body["job_id"].startswith("job_")
+    assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
+
+
+def test_post_refresh_ir_uppercases_ticker_and_defaults_quarters(client):
+    resp = client.post("/actions/refresh-ir", json={"ticker": "nu"})
+    assert resp.status_code == 201
+    assert resp.get_json()["ticker"] == "NU"
+
+
+def test_post_refresh_ir_missing_ticker_400(client):
+    resp = client.post("/actions/refresh-ir", json={})
+    assert resp.status_code == 400
+
+
+def test_post_refresh_ir_rejects_non_int_quarters(client):
+    resp = client.post("/actions/refresh-ir", json={"ticker": "NU", "quarters": "lots"})
+    assert resp.status_code == 400

@@ -178,6 +178,45 @@ def create_app(
             "started_at": job.started_at.isoformat(),
         }, 201)
 
+    @app.route("/actions/refresh-ir", methods=["POST", "OPTIONS"])
+    def start_refresh_ir():
+        """Refresh a ticker's KPIs from its IR historical-data spreadsheet.
+
+        Runs execution/refresh_ir_kpis.py --discover (headless browser resolves
+        the current spreadsheet URL → download → parse → tier-ingest, superseding
+        the LLM brief/press values). Streams via /actions/stream/<job_id> like
+        /actions/refresh.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True) or {}
+        ticker = str(body.get("ticker", "")).upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        try:
+            quarters = int(body.get("quarters", 8))
+        except (TypeError, ValueError):
+            return ({"error": "quarters must be an integer"}, 400)
+
+        script = repo_root / "execution" / "refresh_ir_kpis.py"
+        argv = [
+            sys.executable, str(script), "--ticker", ticker,
+            "--discover", "--quarters", str(quarters),
+            "--repo-root", str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker=ticker, kind="refresh-ir", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+
+        return ({
+            "job_id": job.job_id,
+            "ticker": job.ticker,
+            "kind": job.kind,
+            "stream_url": f"/actions/stream/{job.job_id}",
+            "started_at": job.started_at.isoformat(),
+        }, 201)
+
     @app.route("/actions/stream/<job_id>", methods=["GET"])
     def stream_action(job_id: str):
         job = job_registry.get(job_id)
