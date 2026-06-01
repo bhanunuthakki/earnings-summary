@@ -377,6 +377,47 @@ def _str_list(v: object) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Render
 # --------------------------------------------------------------------------- #
+_REFRESH_SCRIPT = """<script>
+document.querySelectorAll('.tcc-refresh').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var msg = document.querySelector('.tcc-refresh-msg');
+    msg.textContent = 'starting\\u2026';
+    fetch('/actions/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: b.getAttribute('data-ticker'),
+        mode: 'stale',
+        force_budget_bypass: b.getAttribute('data-bypass') === '1'
+      })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      msg.innerHTML = j.job_id
+        ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
+        : ('error: ' + (j.error || 'failed'));
+    }).catch(function () { msg.textContent = 'network error'; });
+  });
+});
+</script>"""
+
+
+def _refresh_section(ticker: str) -> str:
+    """Rebuild-this-ticker action panel. "Run anyway" passes force_budget_bypass
+    so analyses a skip-mode cap would forgo are run regardless."""
+    t = escape(ticker)
+    return (
+        '<section class="panel"><h2>Refresh</h2>'
+        '<p class="sub">Rebuild this brief. "Run anyway" ignores per-purpose LLM budget '
+        "caps for this run, so analyses forgone under a skip-mode cap are included.</p>"
+        f'<button type="button" class="tcc-refresh" data-ticker="{t}" data-bypass="0">'
+        "Refresh</button> "
+        f'<button type="button" class="tcc-refresh" data-ticker="{t}" data-bypass="1">'
+        "Run anyway (ignore caps)</button> "
+        '<span class="tcc-refresh-msg muted"></span>'
+        + _REFRESH_SCRIPT
+        + "</section>"
+    )
+
+
 def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> str:
     ident = tcc.identity
     title = f"{ident.ticker}" + (f" · {ident.name}" if ident.name else "")
@@ -399,6 +440,7 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
         _identity_badges(ident),
         "</header>",
         _freshness_strip(ident),
+        _refresh_section(ident.ticker),
         _position_section(tcc.position),
         _analyses_section(tcc.analysis),
         _decisions_section(tcc.recent_decisions),

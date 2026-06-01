@@ -44,6 +44,7 @@ def build_report(
     news_cache_ttl_days: int = 7,
     refresh_news: bool = False,
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
+    force_budget_bypass: bool = False,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -65,6 +66,10 @@ def build_report(
     (thesis verdict, KPI strip). EVALUATION builds an additional
     EvaluationSnapshot (3y quick-categorization data table) which renderers
     use in §1 instead of Snapshot — for new-name screening.
+
+    `force_budget_bypass=True` overrides every per-purpose budget gate for this
+    build (the "run anyway, ignore caps" path), so analyses that a `skip`-mode
+    cap would forgo are run regardless. See report.sections._common.budget_gate.
     """
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
@@ -77,7 +82,9 @@ def build_report(
     financials_section = financials.build(ticker, repo_root)
     signals_section = signals.build(ticker, repo_root)
     segments_section = segments.build(ticker, repo_root)
-    earnings_section = earnings.build(ticker, repo_root, enable_llm=enable_llm)
+    earnings_section = earnings.build(
+        ticker, repo_root, enable_llm=enable_llm, force_budget_bypass=force_budget_bypass
+    )
     saydo_section = saydo.build(ticker, repo_root)
     ir_docs_section = ir_docs.build(ticker, repo_root)
     recent_developments_section = recent_developments.build(
@@ -87,6 +94,7 @@ def build_report(
         news_days=news_days,
         cache_ttl_days=news_cache_ttl_days,
         force_refresh=refresh_news,
+        force_budget_bypass=force_budget_bypass,
     )
     bear_case_section = bear_case.build(
         ticker=ticker,
@@ -96,18 +104,26 @@ def build_report(
         financials=financials_section,
         segments=segments_section,
         earnings=earnings_section,
+        force_budget_bypass=force_budget_bypass,
     )
     provenance_section = provenance.build(ticker, repo_root)
     appendix_section = appendix.build(earnings_section)
     qa_roster_section = qa_roster.build(
-        appendix=appendix_section, ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
+        appendix=appendix_section,
+        ticker=ticker,
+        repo_root=repo_root,
+        enable_llm=enable_llm,
+        force_budget_bypass=force_budget_bypass,
     )
     valuation_section = valuation.build(
-        ticker=ticker, repo_root=repo_root, enable_llm=enable_llm
+        ticker=ticker,
+        repo_root=repo_root,
+        enable_llm=enable_llm,
+        force_budget_bypass=force_budget_bypass,
     )
     filing_intelligence_section = filing_intelligence.build(ticker, repo_root)
     exec_compensation_section = exec_compensation.build(
-        ticker, repo_root, enable_llm=enable_llm
+        ticker, repo_root, enable_llm=enable_llm, force_budget_bypass=force_budget_bypass
     )
     synthesis_section = synthesis.build(ticker, repo_root)
     # Roll up every section's budget-forgone marker so renderers can show a

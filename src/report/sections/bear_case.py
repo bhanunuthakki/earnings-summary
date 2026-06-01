@@ -60,6 +60,7 @@ def build(
     earnings: EarningsSection,
     cache_ttl_days: int = DEFAULT_CACHE_TTL_DAYS,
     force_refresh: bool = False,
+    force_budget_bypass: bool = False,
 ) -> BearCaseSection:
     if not enable_llm:
         return BearCaseSection(
@@ -92,7 +93,7 @@ def build(
         if cached is not None:
             return cached
 
-    skip = budget_gate("bear_case", "Bear case (§7)", repo_root)
+    skip = budget_gate("bear_case", "Bear case (§7)", repo_root, bypass=force_budget_bypass)
     if skip is not None:
         return BearCaseSection(
             status=SectionStatus.BUDGET_SKIPPED,

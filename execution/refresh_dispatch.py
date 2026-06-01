@@ -62,6 +62,7 @@ class Plan:
     mode: Mode
     skip_fmp: bool
     skip_fmp_reason: str | None  # e.g. "fresh last_pulled=2026-05-11T01:02:14"
+    force_budget_bypass: bool = False  # pass --force-budget-bypass to build_artifacts
 
 
 def build_plan(
@@ -71,19 +72,32 @@ def build_plan(
     db_path: Path,
     stale_fmp_days: int = STATEMENT_STALE_DAYS,
     now: datetime | None = None,
+    force_budget_bypass: bool = False,
 ) -> Plan:
     """Pure decision: given DB state, return what to skip.
 
     `now` is injectable for deterministic testing.
     """
     if mode == "full":
-        return Plan(ticker=ticker, mode=mode, skip_fmp=False, skip_fmp_reason=None)
+        return Plan(
+            ticker=ticker,
+            mode=mode,
+            skip_fmp=False,
+            skip_fmp_reason=None,
+            force_budget_bypass=force_budget_bypass,
+        )
 
     now = now or datetime.now(UTC)
     last_pulled, reason = _check_fmp_freshness(
         db_path=db_path, ticker=ticker, stale_days=stale_fmp_days, now=now
     )
-    return Plan(ticker=ticker, mode=mode, skip_fmp=last_pulled is not None, skip_fmp_reason=reason)
+    return Plan(
+        ticker=ticker,
+        mode=mode,
+        skip_fmp=last_pulled is not None,
+        skip_fmp_reason=reason,
+        force_budget_bypass=force_budget_bypass,
+    )
 
 
 def _check_fmp_freshness(
@@ -152,7 +166,12 @@ def execute(
         ("process_ir_docs", _argv_process_ir(project_root, plan.ticker), False, None),
         ("extract_kpis", _argv_extract_kpis(project_root, plan.ticker), False, None),
         ("saydo", _argv_saydo(project_root, plan.ticker), False, None),
-        ("build_report", _argv_build(project_root, plan.ticker), False, None),
+        (
+            "build_report",
+            _argv_build(project_root, plan.ticker, force_budget_bypass=plan.force_budget_bypass),
+            False,
+            None,
+        ),
     ]
 
     for name, argv, skip, skip_reason in steps:
@@ -232,8 +251,10 @@ def _argv_saydo(project_root: Path, ticker: str) -> list[str]:
     ]
 
 
-def _argv_build(project_root: Path, ticker: str) -> list[str]:
-    return [
+def _argv_build(
+    project_root: Path, ticker: str, *, force_budget_bypass: bool = False
+) -> list[str]:
+    argv = [
         sys.executable,
         str(project_root / "execution" / "build_artifacts.py"),
         "--ticker", ticker,
@@ -241,6 +262,9 @@ def _argv_build(project_root: Path, ticker: str) -> list[str]:
         "--enable-llm",
         "--repo-root", str(project_root),
     ]
+    if force_budget_bypass:
+        argv.append("--force-budget-bypass")
+    return argv
 
 
 def _emit(out, line: str) -> None:
@@ -260,6 +284,11 @@ def main() -> int:
     parser.add_argument("--stale-fmp-days", type=int, default=7)
     parser.add_argument("--plan-only", action="store_true", help="Print the plan as JSON and exit.")
     parser.add_argument(
+        "--force-budget-bypass",
+        action="store_true",
+        help="Pass --force-budget-bypass through to build_artifacts (ignore LLM budget caps).",
+    )
+    parser.add_argument(
         "--db",
         type=Path,
         default=PROJECT_ROOT / "data" / "portfolio.db",
@@ -272,6 +301,7 @@ def main() -> int:
         mode=args.mode,
         db_path=args.db,
         stale_fmp_days=args.stale_fmp_days,
+        force_budget_bypass=args.force_budget_bypass,
     )
 
     if args.plan_only:

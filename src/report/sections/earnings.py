@@ -101,7 +101,9 @@ _OPERATOR_FIRST_QUESTION = re.compile(
 )
 
 
-def build(ticker: str, repo_root: Path, enable_llm: bool = False) -> EarningsSection:
+def build(
+    ticker: str, repo_root: Path, enable_llm: bool = False, force_budget_bypass: bool = False
+) -> EarningsSection:
     """Build the §5 Earnings section.
 
     ``enable_llm=True`` runs the 4Q theme split extractor on top of the
@@ -140,7 +142,12 @@ def build(ticker: str, repo_root: Path, enable_llm: bool = False) -> EarningsSec
     # cards still render from the deterministic data — only the themes rollup is
     # forgone, surfaced via budget_skip + a note.
     themes_skip = (
-        budget_gate("earnings_themes_split", "Cross-quarter themes (§6)", repo_root)
+        budget_gate(
+            "earnings_themes_split",
+            "Cross-quarter themes (§6)",
+            repo_root,
+            bypass=force_budget_bypass,
+        )
         if enable_llm and transcripts
         else None
     )

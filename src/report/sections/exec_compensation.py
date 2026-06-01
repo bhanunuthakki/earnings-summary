@@ -40,6 +40,7 @@ def build(
     *,
     enable_llm: bool = False,
     insider_window_days: int = 365,
+    force_budget_bypass: bool = False,
 ) -> ExecCompSectionModel:
     """Build the §13 Executive Compensation section for one ticker."""
     ticker = ticker.upper()
@@ -104,7 +105,12 @@ def build(
     # Budget gate for the (optional) alignment-narrative LLM. On skip the §13
     # comp/insider rows still render; only the narrative is forgone.
     alignment_skip = (
-        budget_gate("exec_comp_alignment", "Exec-comp alignment (§13)", repo_root)
+        budget_gate(
+            "exec_comp_alignment",
+            "Exec-comp alignment (§13)",
+            repo_root,
+            bypass=force_budget_bypass,
+        )
         if enable_llm and (rows or insider_signals)
         else None
     )

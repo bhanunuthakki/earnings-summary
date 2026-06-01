@@ -46,6 +46,7 @@ def build(
     news_days: int = DEFAULT_NEWS_DAYS_WINDOW,
     cache_ttl_days: int = DEFAULT_TTL_DAYS,
     force_refresh: bool = False,
+    force_budget_bypass: bool = False,
 ) -> RecentDevelopmentsSection:
     cache_path = repo_root / NEWS_CACHE_DIRNAME / f"{ticker.upper()}.json"
 
@@ -71,7 +72,9 @@ def build(
             news_days_window=news_days,
         )
 
-    skip = budget_gate("recent_developments", "Recent developments (§9)", repo_root)
+    skip = budget_gate(
+        "recent_developments", "Recent developments (§9)", repo_root, bypass=force_budget_bypass
+    )
     if skip is not None:
         return RecentDevelopmentsSection(
             status=SectionStatus.BUDGET_SKIPPED,
