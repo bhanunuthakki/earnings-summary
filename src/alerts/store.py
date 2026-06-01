@@ -531,9 +531,20 @@ def _now_iso() -> str:
 
 
 def _parse_dt(raw: object) -> datetime:
-    if isinstance(raw, datetime):
-        return raw
-    return datetime.fromisoformat(str(raw))
+    """Parse a stored timestamp into a **naive-UTC** datetime.
+
+    The store's convention is naive-UTC throughout (see ``_now_iso`` and the
+    trigger ``fired_at`` writers). Rows written before that convention was
+    enforced carry an aware (``+00:00``) offset — e.g. ``queued_actions.
+    created_at`` rows stamped by the pre-#222 ``_now_iso``. Those are
+    converted to UTC and stripped to naive here, so every datetime the store
+    hands back is uniformly naive-UTC and no consumer has to reconcile a mix
+    of aware (legacy) and naive (new) rows.
+    """
+    dt = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
 
 
 def _parse_dt_opt(raw: object) -> datetime | None:
