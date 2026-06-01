@@ -237,3 +237,40 @@ A new dimension the original five axes don't fully capture. The verdict: **archi
 **Is this now a genuinely good tool?** The financial-brief engine — the original product — is genuinely good and meaningfully better than at baseline: richer surfacing (P3 accessors, §3.5 signals, TS-aware narrative all reach the eye now), trustworthy provenance, sane LLM routing, and graceful degradation. That half is a real 7+. The Personal-CIO layer is a genuinely good *architecture* sitting on top of a loop that doesn't yet turn — an impressive v1 skeleton, not a working product. The encouraging part is how closeable the gap is: the top three leverage items are a 3-line payload fix, one CI file, and populating a table the renderer already reads. None of them is hard; all of them are high-impact. **Composite 7.2 is an honest "good engine, half-built product on top" — and it is one focused cleanup sprint away from 7.8+.**
 
 *A separate end-to-end verification run is assessing live trigger firing; where this memo distinguishes "wired" from "live," that runtime behavior — not the code — is the authority, and those points are flagged as pending live verification.*
+
+---
+
+## Post-grade update — verified against PRs #219–#237 + ongoing sessions (2026-06-01, same day)
+
+After the grade above was written, **19 PRs (#219–#237) merged** the same day. I re-checked them against the findings and verified the consequential ones directly against `origin/main` and the prod DB (now at alembic `0067_ticker_settings`, two migrations ahead of the `0065` state the grade saw). The headline: **my #1 leverage gap is fixed, the command center got materially richer on its analytical side, and the composite ticks 7.2 → 7.3** — but the other two Tier-1 items (CI, evidence-drawer/ledger surfacing) and every Tier-2/3 gap still stand.
+
+**What changed (verified, not from PR titles):**
+- **The decision loop is now CLOSED end-to-end on real data (#231).** `approve_queued_action._resolve_ticker` derives the ticker from the parent alert (`get_alert(qa.alert_id).ticker`, with a valid payload `ticker` overriding) — exactly the "join to the parent alert" fix path the grade recommended. Prod now shows **all 17 queued actions `applied`** and **`thesis_ledger_entries` = 17** (8 `thesis_update`, 8 `earnings_prep_append`, 1 `bear_append`, all NU, `source_alert_id=1`), where the grade saw 17 pending / 0 ledger. The regression test now uses the real no-`ticker` payload shape, removing the masking the grade called out. This was the single biggest deduction in both the Richness axis and the product score.
+- **The command center got built out (PRs B–F: #220/#235/#236/#237 + #228/#230/#232/#233).** New live routes in `execution/comments_server.py`: per-ticker drill-down (`/ticker/<T>` — artifacts inventory, analyses-ran log, thesis, position strip), editable LLM budgets (`/api/llm-budgets/<purpose>` POST), per-ticker settings/budget-bypass (`/api/ticker-settings/<T>`, the new `0067` migration), refresh overrides with per-step/force/budget-bypass (`/actions/refresh*`), and a comments drawer + thesis editing via preview→apply (`/comments`). #237 reframes the docs around "command center first" and a research↔portfolio-tracker **two-app topology**.
+- **"Forgone due to budget" is now surfaced (#221)** — per-section banner + header rollup, completing the budget-attribution loop the grade noted as engine-only.
+- **A live digest crash was fixed + naive-UTC enforced (#225/#222/#227).** #225 fixed a morning-digest tz crash (aware/naive comparison) and pinned `earnings_tone_diff` to Opus; #222/#227 make alerts-store timestamps naive-UTC and normalize legacy aware stamps on read. This closes a latent crash class on the alerting path.
+- **Q&A roster coverage ~73% → ~98% (#223/#234)** — input data quality, upstream of several axes.
+
+**What still stands (recommendations unchanged or merely refined):**
+- **Still no CI (#2 Tier-1 → now the top remaining Tier-1).** No `.github/workflows/`, pre-commit, or Makefile on `origin/main`. **Quality enforcement holds at 6.5.** #219's date-fragile test fix is welcome but minor.
+- **Evidence-drawer citations still blank — refined and now even cheaper to fix.** The prod alert proves the citations *exist* but are nested under `evidence.shifts[].citations` (the earnings_tone schema produces them per-shift), while `evidence_drawer.py:106` reads top-level `evidence.citations` → "No citations supplied." The fix is a read-path flatten, not new extraction.
+- **Thesis ledger still has no renderer — now with 17 real rows to show.** `list_entries` is still consumed only by the writer/export (no `src/dashboard/` or `src/report/` consumer). #236's "thesis editing" edits the micro-thesis JSON, not the append-only ledger. Surfacing value went *up*.
+- **The alerting surface is still NOT in the live command center.** The overview (`/`, `/analytical`, `/api/overview`) renders only the analytical `dash.to_dict()`; there is still no `/digest`/`/feed`/`/alerts` route, and `build_alert_feed.py`/`build_morning_digest.py` still emit static files. The #237 "two apps" are research vs portfolio-tracker — the Personal-CIO alerting digest/feed are a *third, orphaned* surface in neither. The "two disjoint surfaces" gap is reinforced, not closed.
+- **Untouched:** calibration loop still covers only `bear_case` + `decision_audit` with `prompt_version` permanently `"v1"`; SayDo batch still dormant; FMP/SEC cost ledger still missing; drain executor still skips the 5 new purposes; web-search caps still soft. Smart caching (7.5) and LLM pass-through (7.5) are unmoved.
+- **Firing breadth unchanged:** still exactly **1 alert** ever fired (earnings_tone). The loop is now proven to *close*, but on one alert from one ticker; `kpi_inflection`/`saydo_due`/`material_news` have still produced no live alert (1 news row). Live firing breadth remains the separate end-to-end run's authority.
+
+**Ongoing sessions (open PRs):** #226 (auto-refresh IR-spreadsheet KPIs each quarter via a scheduled cron — extends #213/#228, doesn't touch the graded gaps); #189 (auto-seed KPI plan — superseded, already shipped #191–#193); #120 (DB pointer cleanup — unrelated). None changes the findings.
+
+**Revised scoring delta:**
+
+| Axis | Baseline | Mid | Grade (memo body) | **Revised (post #219–237)** | Projection |
+|---|---|---|---|---|---|
+| Data reliability | 5 | 6.5 | 7.5 | **7.5** | 8.5 |
+| Quality enforcement | 6 | 6.5 | 6.5 | **6.5** | 7.5 |
+| Smart caching | 5 | 6.5 | 7.5 | **7.5** | 8.0 |
+| Richness & surfacing | 5 | 6.0 | 7.0 | **7.5** | 8.0 |
+| LLM pass-through | 6 | 7.5 | 7.5 | **7.5** | 8.5 |
+| **Composite** | **5.4** | **6.6** | **7.2** | **7.3** | **8.1** |
+| *Personal CIO application* | — | — | 5.5 | **6.5** | — |
+
+**Richness 7.0 → 7.5:** the approve loop closed, the command center is now a genuinely rich live operational surface positioned as the primary interface, and budget attribution is surfaced — but the evidence drawer is still blank, the ledger is still unrendered, and the alerting surface still isn't a live route, so it stays short of 8.0. **Personal CIO product 5.5 → 6.5:** the loop now turns end-to-end on real data (the biggest single fix), but it has turned exactly once, on one alert, with three of four triggers still unproven live and the richest surfaces (drawer, ledger) still dark — a real, verified move, not yet a turned-key product. **The top-3 leverage gaps are now: (1) stand up CI; (2) flatten `shifts[].citations` into the evidence drawer; (3) render the thesis ledger (17 rows waiting). All three remain small, high-impact, and unbuilt.**
