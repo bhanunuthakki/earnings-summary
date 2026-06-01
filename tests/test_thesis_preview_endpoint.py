@@ -1,0 +1,123 @@
+"""PR D — /api/thesis/<t>/preview: the LLM-degradation contract.
+
+The preview routes Opus directly (apply=False), so this locks the project rule:
+- transient / unparseable LLM response -> 200 degraded (component scope),
+- budget/setup hard stop -> propagate (402/503),
+- and a preview NEVER writes the holdings JSON.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import sys
+from datetime import date
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+import comments_server  # noqa: E402
+import process_report_comments as prc  # noqa: E402
+
+import comments  # noqa: E402
+from llm.cli import LLMBudgetExceeded  # noqa: E402
+
+_HOLDINGS = {
+    "ticker": "NU",
+    "name": "Nu Holdings",
+    "thesis": "Original thesis about ROE.",
+    "verdict": "Pending",
+}
+_BEFORE = "Original thesis about ROE."
+
+
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    (tmp_path / "data").mkdir()
+    sqlite3.connect(str(tmp_path / "data" / "portfolio.db")).close()  # create_app wants the path
+    holdings = tmp_path / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text(json.dumps(_HOLDINGS), encoding="utf-8")
+    comments.append_comment(
+        tmp_path,
+        "NU",
+        date(2026, 5, 18),
+        anchor=comments.Anchor(type="thesis_lede", key="thesis_lede"),
+        text="Tighten the ROE language.",
+        selected_text=None,
+        intent="edit_thesis",
+    )
+    return tmp_path
+
+
+@pytest.fixture
+def client(repo: Path):
+    return comments_server.create_app(repo).test_client()
+
+
+def _on_disk_thesis(repo: Path) -> str:
+    data = json.loads((repo / "micro_thesis" / "holdings" / "NU.json").read_text(encoding="utf-8"))
+    return data["thesis"]
+
+
+def test_preview_happy_returns_before_after_diff(client, repo, monkeypatch) -> None:
+    monkeypatch.setattr(
+        prc,
+        "call_llm",
+        lambda *a, **k: (
+            '{"revised_thesis": "Revised: ROE durably above 30%.", "diff_summary": "tightened"}'
+        ),
+    )
+    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["before_thesis"] == _BEFORE
+    assert body["after_thesis"] == "Revised: ROE durably above 30%."
+    assert body["thesis_diff"]  # non-empty unified diff
+    assert _on_disk_thesis(repo) == _BEFORE  # preview never writes
+
+
+def test_preview_degrades_on_empty_response(client, repo, monkeypatch) -> None:
+    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "")
+    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
+    assert resp.status_code == 200
+    assert resp.get_json()["degraded"] is True
+    assert _on_disk_thesis(repo) == _BEFORE
+
+
+def test_preview_degrades_on_unparseable_response(client, repo, monkeypatch) -> None:
+    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "not json at all")
+    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
+    assert resp.status_code == 200
+    assert resp.get_json()["degraded"] is True
+
+
+def test_preview_propagates_budget_hard_stop(client, repo, monkeypatch) -> None:
+    def _boom(*a, **k):
+        raise LLMBudgetExceeded("monthly cap exceeded for company_description")
+
+    monkeypatch.setattr(prc, "call_llm", _boom)
+    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-05-18"})
+    assert resp.status_code == 402  # propagated, not degraded
+    assert resp.get_json()["kind"] == "LLMBudgetExceeded"
+    assert _on_disk_thesis(repo) == _BEFORE
+
+
+def test_preview_requires_report_date(client) -> None:
+    resp = client.post("/api/thesis/NU/preview", json={})
+    assert resp.status_code == 400
+
+
+def test_preview_no_relevant_comments_is_empty(client, repo, monkeypatch) -> None:
+    # An empty-string LLM would crash IF a router ran — assert it never runs
+    # when there are no edit_thesis/edit_structured comments for the date.
+    monkeypatch.setattr(prc, "call_llm", lambda *a, **k: "")
+    resp = client.post("/api/thesis/NU/preview", json={"report_date": "2026-01-01"})
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["comment_ids"] == []
+    assert body["after_thesis"] is None

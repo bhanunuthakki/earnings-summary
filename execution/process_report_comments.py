@@ -73,6 +73,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import sqlite3
@@ -95,7 +96,6 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
-
 
 # ---------------------------------------------------------------------------
 # Routing
@@ -134,20 +134,27 @@ def process_comments_for_ticker(
         intent = c.intent or _classify_intent(c)
         try:
             dry = _route(repo_root, ticker, report_date, c, intent, apply=False)
-            plan.append({
-                "comment": c, "intent": intent, "dry": dry, "_error": None,
-            })
+            plan.append(
+                {
+                    "comment": c,
+                    "intent": intent,
+                    "dry": dry,
+                    "_error": None,
+                }
+            )
         except Exception as e:
-            plan.append({
-                "comment": c, "intent": intent, "dry": None,
-                "_error": f"{type(e).__name__}: {e}",
-            })
+            plan.append(
+                {
+                    "comment": c,
+                    "intent": intent,
+                    "dry": None,
+                    "_error": f"{type(e).__name__}: {e}",
+                }
+            )
 
     if not apply:
         # Dry-run mode: emit the drafts as the legacy output shape.
-        results = [
-            _as_legacy_result(item) for item in plan
-        ]
+        results = [_as_legacy_result(item) for item in plan]
         return {
             "ticker": ticker,
             "report_date": report_date.isoformat(),
@@ -175,22 +182,26 @@ def process_comments_for_ticker(
     for item in plan:
         c, intent = item["comment"], item["intent"]
         if intent != c.intent:
-            comments.update_comment(
-                repo_root, ticker, report_date, c.id, intent=intent
-            )
+            comments.update_comment(repo_root, ticker, report_date, c.id, intent=intent)
 
     # Surface pass-1 errors first so they don't get lost.
     for item in plan:
         if item.get("_error") and item.get("dry") is None:
             c: Comment = item["comment"]
-            results.append({
-                "id": c.id, "intent": item["intent"], "status": "error",
-                "error": item["_error"], "stage": "draft",
-            })
+            results.append(
+                {
+                    "id": c.id,
+                    "intent": item["intent"],
+                    "status": "error",
+                    "error": item["_error"],
+                    "stage": "draft",
+                }
+            )
 
     # Batch all edit_thesis comments into ONE LLM call for a coherent rewrite.
     edit_thesis_items = [
-        item for item in plan
+        item
+        for item in plan
         if item["intent"] == "edit_thesis" and not (item.get("_error") and item.get("dry") is None)
     ]
     if edit_thesis_items:
@@ -201,22 +212,33 @@ def process_comments_for_ticker(
             )
             for c in batch_comments_list:
                 comments.update_comment(
-                    repo_root, ticker, report_date, c.id,
+                    repo_root,
+                    ticker,
+                    report_date,
+                    c.id,
                     status="addressed",
                     resolution_note=batch_resolution.get("summary", "applied"),
                 )
-                results.append({
-                    "id": c.id, "intent": "edit_thesis", "status": "ok",
-                    "resolution": batch_resolution,
-                    "batched": True,
-                })
+                results.append(
+                    {
+                        "id": c.id,
+                        "intent": "edit_thesis",
+                        "status": "ok",
+                        "resolution": batch_resolution,
+                        "batched": True,
+                    }
+                )
         except Exception as e:
             for c in batch_comments_list:
-                results.append({
-                    "id": c.id, "intent": "edit_thesis", "status": "error",
-                    "error": f"{type(e).__name__}: {e}",
-                    "stage": "apply_batch",
-                })
+                results.append(
+                    {
+                        "id": c.id,
+                        "intent": "edit_thesis",
+                        "status": "error",
+                        "error": f"{type(e).__name__}: {e}",
+                        "stage": "apply_batch",
+                    }
+                )
 
     # Now run the remaining (non-edit_thesis, non-error) items in plan order.
     # This preserves the sequencer's relative ordering of edit_structured vs
@@ -232,28 +254,41 @@ def process_comments_for_ticker(
             resolution = _route(repo_root, ticker, report_date, c, intent, apply=True)
             if intent == "ask_question" and resolution.get("answer"):
                 comments.update_comment(
-                    repo_root, ticker, report_date, c.id,
-                    append_thread=ThreadEntry(
-                        role="assistant", text=resolution["answer"]
-                    ),
+                    repo_root,
+                    ticker,
+                    report_date,
+                    c.id,
+                    append_thread=ThreadEntry(role="assistant", text=resolution["answer"]),
                     status="addressed",
                     resolution_note=resolution.get("summary", ""),
                 )
             else:
                 comments.update_comment(
-                    repo_root, ticker, report_date, c.id,
+                    repo_root,
+                    ticker,
+                    report_date,
+                    c.id,
                     status="addressed",
                     resolution_note=resolution.get("summary", "applied"),
                 )
-            results.append({
-                "id": c.id, "intent": intent, "status": "ok",
-                "resolution": resolution,
-            })
+            results.append(
+                {
+                    "id": c.id,
+                    "intent": intent,
+                    "status": "ok",
+                    "resolution": resolution,
+                }
+            )
         except Exception as e:
-            results.append({
-                "id": c.id, "intent": intent, "status": "error",
-                "error": f"{type(e).__name__}: {e}", "stage": "apply",
-            })
+            results.append(
+                {
+                    "id": c.id,
+                    "intent": intent,
+                    "status": "error",
+                    "error": f"{type(e).__name__}: {e}",
+                    "stage": "apply",
+                }
+            )
 
     cleared = 0
     if clear:
@@ -265,9 +300,7 @@ def process_comments_for_ticker(
     # (the batched edit_thesis already produced a coherent prose).
     # -------------------------------------------------------------------
     synthesis_info: dict[str, object] | None = None
-    applied_intents = {
-        r.get("intent") for r in results if r.get("status") == "ok"
-    }
+    applied_intents = {r.get("intent") for r in results if r.get("status") == "ok"}
     if "edit_structured" in applied_intents:
         synthesis_info = _synthesize_holdings_coherence(repo_root, ticker)
 
@@ -310,9 +343,7 @@ _SYNTHESIS_STRUCTURED_FIELDS: tuple[str, ...] = (
 )
 
 
-def _synthesize_holdings_coherence(
-    repo_root: Path, ticker: str
-) -> dict[str, object]:
+def _synthesize_holdings_coherence(repo_root: Path, ticker: str) -> dict[str, object]:
     """Final pass: rewrite thesis prose to ground in the (updated) structured fields.
 
     Triggered when `edit_structured` has succeeded — the structured fields
@@ -336,10 +367,7 @@ def _synthesize_holdings_coherence(
     if not current_thesis:
         return {"ran": False, "reason": "no thesis on file"}
 
-    structured_view = {
-        k: payload[k] for k in _SYNTHESIS_STRUCTURED_FIELDS
-        if k in payload and payload[k]
-    }
+    structured_view = {k: payload[k] for k in _SYNTHESIS_STRUCTURED_FIELDS if payload.get(k)}
     if not structured_view:
         return {"ran": False, "reason": "no structured fields to ground in"}
 
@@ -379,18 +407,23 @@ No markdown fence, no prose outside the JSON.
         if raw.startswith("```"):
             raw = JSON_FENCE_RE.sub("", raw).strip()
         parsed = json.loads(raw)
-    except Exception as e:  # noqa: BLE001 — synthesis must never crash the apply path
+    except Exception as e:
         return {"ran": False, "reason": f"LLM/parse error: {type(e).__name__}: {e}"}
 
     revised = parsed.get("revised_thesis") if isinstance(parsed, dict) else None
-    diff = (parsed.get("diff_summary") or "(no diff summary)") if isinstance(parsed, dict) else "(no diff summary)"
+    diff = (
+        (parsed.get("diff_summary") or "(no diff summary)")
+        if isinstance(parsed, dict)
+        else "(no diff summary)"
+    )
     if not isinstance(revised, str) or not revised.strip():
         return {"ran": False, "reason": "LLM did not return a usable revised_thesis"}
 
     # Only write if the revised thesis is materially different — avoids needless churn.
     if revised.strip() == current_thesis:
         return {
-            "ran": True, "wrote": False,
+            "ran": True,
+            "wrote": False,
             "diff_summary": "no change after synthesis",
             "structured_fields_considered": list(structured_view.keys()),
         }
@@ -398,7 +431,8 @@ No markdown fence, no prose outside the JSON.
     payload["thesis"] = revised
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {
-        "ran": True, "wrote": True,
+        "ran": True,
+        "wrote": True,
         "diff_summary": diff,
         "structured_fields_considered": list(structured_view.keys()),
         "new_thesis_length": len(revised),
@@ -441,7 +475,8 @@ def maybe_auto_rebuild(
     in one step does not raise; results are already persisted regardless.
     """
     mutated = [
-        r for r in results
+        r
+        for r in results
         if r.get("status") == "ok" and r.get("intent") in _HOLDINGS_MUTATING_INTENTS
     ]
     if not mutated:
@@ -455,8 +490,7 @@ def maybe_auto_rebuild(
     # re-extraction of stable KPIs in exchange for materially better
     # population of the new ones the analyst just added.
     structured_changed = any(
-        r.get("intent") == "edit_structured" and r.get("status") == "ok"
-        for r in results
+        r.get("intent") == "edit_structured" and r.get("status") == "ok" for r in results
     )
     refresh_kpi_facts = structured_changed
 
@@ -477,17 +511,21 @@ def maybe_auto_rebuild(
     # holdings JSON but kpi_definitions is what the brief's KPI history
     # join uses. Without this, new tier-1 KPIs show empty history forever.
     # Idempotent: INSERT OR IGNORE on (ticker, name).
-    steps.append(_spawn_step(
-        repo_root,
-        name="seed_kpi_definitions",
-        cmd=[
-            sys.executable,
-            str(repo_root / "execution" / "seed_kpi_definitions.py"),
-            "--ticker", ticker,
-            "--repo-root", str(repo_root),
-        ],
-        timeout=60,
-    ))
+    steps.append(
+        _spawn_step(
+            repo_root,
+            name="seed_kpi_definitions",
+            cmd=[
+                sys.executable,
+                str(repo_root / "execution" / "seed_kpi_definitions.py"),
+                "--ticker",
+                ticker,
+                "--repo-root",
+                str(repo_root),
+            ],
+            timeout=60,
+        )
+    )
 
     # Step 2a — LLM-extract values from per-quarter EARNINGS-CALL summaries.
     # Idempotent on (ticker, period, KPI name) — values already in kpi_facts
@@ -497,20 +535,24 @@ def maybe_auto_rebuild(
     earnings_cmd = [
         sys.executable,
         str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-        "--ticker", ticker,
-        "--source", "earnings",
-        "--repo-root", str(repo_root),
+        "--ticker",
+        ticker,
+        "--source",
+        "earnings",
+        "--repo-root",
+        str(repo_root),
     ]
     if refresh_kpi_facts:
         earnings_cmd.append("--refresh")
-    steps.append(_spawn_step(
-        repo_root,
-        name="extract_kpis_from_summaries(earnings)" + (
-            " [refresh]" if refresh_kpi_facts else ""
-        ),
-        cmd=earnings_cmd,
-        timeout=900,
-    ))
+    steps.append(
+        _spawn_step(
+            repo_root,
+            name="extract_kpis_from_summaries(earnings)"
+            + (" [refresh]" if refresh_kpi_facts else ""),
+            cmd=earnings_cmd,
+            timeout=900,
+        )
+    )
 
     # Step 2b — LLM-extract values from IR PRESS-RELEASE / PRESENTATION briefs.
     # These are typically richer with explicit numeric KPIs (NPL ratios,
@@ -519,49 +561,60 @@ def maybe_auto_rebuild(
     ir_cmd = [
         sys.executable,
         str(repo_root / "execution" / "extract_kpis_from_summaries.py"),
-        "--ticker", ticker,
-        "--source", "ir",
-        "--repo-root", str(repo_root),
+        "--ticker",
+        ticker,
+        "--source",
+        "ir",
+        "--repo-root",
+        str(repo_root),
     ]
     if refresh_kpi_facts:
         ir_cmd.append("--refresh")
-    steps.append(_spawn_step(
-        repo_root,
-        name="extract_kpis_from_summaries(ir)" + (
-            " [refresh]" if refresh_kpi_facts else ""
-        ),
-        cmd=ir_cmd,
-        timeout=900,
-    ))
+    steps.append(
+        _spawn_step(
+            repo_root,
+            name="extract_kpis_from_summaries(ir)" + (" [refresh]" if refresh_kpi_facts else ""),
+            cmd=ir_cmd,
+            timeout=900,
+        )
+    )
 
     # Step 3 — re-evaluate break_rules against the (now populated) kpi_facts
     # so the brief's Universal break rules panel reflects the new rules
     # with their actual current values.
-    steps.append(_spawn_step(
-        repo_root,
-        name="run_thesis_evaluator",
-        cmd=[
-            sys.executable,
-            str(repo_root / "execution" / "run_thesis_evaluator.py"),
-            "--ticker", ticker,
-        ],
-        timeout=300,
-    ))
+    steps.append(
+        _spawn_step(
+            repo_root,
+            name="run_thesis_evaluator",
+            cmd=[
+                sys.executable,
+                str(repo_root / "execution" / "run_thesis_evaluator.py"),
+                "--ticker",
+                ticker,
+            ],
+            timeout=300,
+        )
+    )
 
     # Step 4 — regenerate the workspace HTML from the updated DB + holdings.
-    steps.append(_spawn_step(
-        repo_root,
-        name="build_artifacts",
-        cmd=[
-            sys.executable,
-            str(repo_root / "execution" / "build_artifacts.py"),
-            "--ticker", ticker,
-            "--renderer", "workspace",
-            "--enable-llm",
-            "--repo-root", str(repo_root),
-        ],
-        timeout=900,
-    ))
+    steps.append(
+        _spawn_step(
+            repo_root,
+            name="build_artifacts",
+            cmd=[
+                sys.executable,
+                str(repo_root / "execution" / "build_artifacts.py"),
+                "--ticker",
+                ticker,
+                "--renderer",
+                "workspace",
+                "--enable-llm",
+                "--repo-root",
+                str(repo_root),
+            ],
+            timeout=900,
+        )
+    )
 
     overall_ok = all(s.get("exit_code") == 0 for s in steps)
     return {
@@ -572,12 +625,10 @@ def maybe_auto_rebuild(
     }
 
 
-def _spawn_step(
-    repo_root: Path, *, name: str, cmd: list[str], timeout: int
-) -> dict[str, object]:
+def _spawn_step(repo_root: Path, *, name: str, cmd: list[str], timeout: int) -> dict[str, object]:
     """Run one subprocess step; return a structured record. Never raises."""
     try:
-        proc = subprocess.run(  # noqa: S603 — internal script
+        proc = subprocess.run(
             cmd,
             cwd=str(repo_root),
             capture_output=True,
@@ -602,11 +653,16 @@ def _as_legacy_result(item: dict[str, object]) -> dict[str, object]:
     c: Comment = item["comment"]
     if item.get("_error") and item.get("dry") is None:
         return {
-            "id": c.id, "intent": item["intent"], "status": "error",
-            "error": item["_error"], "stage": "draft",
+            "id": c.id,
+            "intent": item["intent"],
+            "status": "error",
+            "error": item["_error"],
+            "stage": "draft",
         }
     return {
-        "id": c.id, "intent": item["intent"], "status": "ok",
+        "id": c.id,
+        "intent": item["intent"],
+        "status": "ok",
         "resolution": item["dry"],
     }
 
@@ -638,7 +694,8 @@ def sequence_resolutions(
          break_rules / KPI tiers and don't depend on narrative wording
     """
     edit_positions = [
-        i for i, item in enumerate(plan)
+        i
+        for i, item in enumerate(plan)
         if item["intent"] in _SEQUENCEABLE_INTENTS and item.get("dry") is not None
     ]
     if len(edit_positions) <= 1:
@@ -685,16 +742,13 @@ The order array must be a permutation of {list(range(len(edit_positions)))} (0-i
         parsed = json.loads(raw)
         new_order = parsed.get("order")
         rationale = str(parsed.get("rationale", ""))
-    except Exception as e:  # noqa: BLE001 — sequencer errors must fall back, not crash
+    except Exception as e:
         return plan, {
             "reordered": False,
             "rationale": f"sequencer fallback (error): {type(e).__name__}: {e}",
         }
 
-    if (
-        not isinstance(new_order, list)
-        or sorted(new_order) != list(range(len(edit_positions)))
-    ):
+    if not isinstance(new_order, list) or sorted(new_order) != list(range(len(edit_positions))):
         return plan, {
             "reordered": False,
             "rationale": "sequencer fallback (invalid permutation from LLM)",
@@ -708,9 +762,7 @@ The order array must be a permutation of {list(range(len(edit_positions)))} (0-i
         new_plan[pos] = item
 
     # Detect if the order actually changed (LLM could legitimately return identity)
-    changed = any(
-        new_plan[pos] is not plan[pos] for pos in edit_positions
-    )
+    changed = any(new_plan[pos] is not plan[pos] for pos in edit_positions)
     return new_plan, {
         "reordered": changed,
         "rationale": rationale or "(LLM returned no rationale)",
@@ -766,9 +818,7 @@ _STRUCTURED_EDITABLE_FIELDS: tuple[str, ...] = (
 # ---------------------------------------------------------------------------
 
 
-def _route_drop_kpi(
-    repo_root: Path, ticker: str, c: Comment, apply: bool
-) -> dict[str, object]:
+def _route_drop_kpi(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
     """Remove the named KPI from micro_thesis/holdings/<T>.json."""
     if c.anchor.type != "kpi_ledger_row":
         return {"summary": f"drop_kpi: anchor.type={c.anchor.type} is not a KPI row"}
@@ -798,9 +848,7 @@ def _route_drop_kpi(
     }
 
 
-def _route_edit_thesis(
-    repo_root: Path, ticker: str, c: Comment, apply: bool
-) -> dict[str, object]:
+def _route_edit_thesis(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
     """Ask Opus to revise the thesis text using the comment as guidance."""
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not path.exists():
@@ -844,6 +892,7 @@ Return ONLY the JSON object. No markdown fence, no prose.
         "summary": f"edit_thesis: {diff}",
         "diff_summary": diff,
         "revised_preview": revised[:200] + ("..." if len(revised) > 200 else ""),
+        "revised_full": revised,  # full revised thesis for the dashboard diff preview
         "dry_run": not apply,
     }
 
@@ -919,6 +968,7 @@ Return ONLY the JSON object. No markdown fence, no prose.
         "summary": f"edit_thesis_batch ({len(comments_list)} comments): {diff}",
         "diff_summary": diff,
         "revised_preview": revised[:300] + ("..." if len(revised) > 300 else ""),
+        "revised_full": revised,  # full revised thesis for the dashboard diff preview
         "batched_count": len(comments_list),
         "batched_ids": [c.id for c in comments_list],
         "dry_run": not apply,
@@ -942,16 +992,14 @@ def _route_edit_structured(
     payload = json.loads(path.read_text(encoding="utf-8"))
 
     # Slice the payload down to the editable fields for the prompt.
-    editable_snapshot = {
-        k: payload[k] for k in _STRUCTURED_EDITABLE_FIELDS if k in payload
-    }
+    editable_snapshot = {k: payload[k] for k in _STRUCTURED_EDITABLE_FIELDS if k in payload}
     thesis_excerpt = (payload.get("thesis") or "")[:600]
 
     prompt = f"""You are editing the STRUCTURED fields of an investment thesis JSON for {ticker}.
 
 The thesis NARRATIVE (already finalized — do not change) reads:
 \"\"\"
-{thesis_excerpt}{'...' if len(payload.get('thesis') or '') > 600 else ''}
+{thesis_excerpt}{"..." if len(payload.get("thesis") or "") > 600 else ""}
 \"\"\"
 
 CURRENT STRUCTURED FIELDS (you may edit any subset):
@@ -1027,13 +1075,96 @@ Return ONLY the JSON object. No markdown fence, no prose.
         "summary": f"edit_structured: {diff}",
         "diff_summary": diff,
         "fields_touched": touched,
+        "updated_fields": {f: payload[f] for f in touched},  # new values for the diff preview
         "dry_run": not apply,
     }
 
 
-def _route_extract_kpi(
-    repo_root: Path, ticker: str, c: Comment, apply: bool
+def preview_thesis_edits(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    *,
+    comment_ids: list[str] | None = None,
 ) -> dict[str, object]:
+    """Dry-run preview of the open edit_thesis / edit_structured comments.
+
+    Returns the before/after thesis (+ a unified diff) and the per-comment
+    structured-field changes WITHOUT writing the holdings JSON — it calls the
+    same routers the apply path uses (apply=False), so what you preview is what
+    Apply produces (modulo LLM nondeterminism; the prompt is identical).
+
+    Raises whatever the routers raise (e.g. LLMBudgetExceeded on a hard cap) —
+    the caller (the dashboard endpoint) decides propagate-vs-degrade via
+    `is_hard_stop`.
+    """
+    t = ticker.upper()
+    path = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
+    before_thesis = ""
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            before_thesis = str(payload.get("thesis") or payload.get("thesis_full") or "")
+        except (OSError, ValueError, AttributeError):
+            before_thesis = ""
+
+    open_comments = comments.list_comments(repo_root, t, report_date, status="open")
+    relevant = [c for c in open_comments if (c.intent or "") in ("edit_thesis", "edit_structured")]
+    if comment_ids is not None:
+        wanted = set(comment_ids)
+        relevant = [c for c in relevant if c.id in wanted]
+
+    thesis_comments = [c for c in relevant if c.intent == "edit_thesis"]
+    structured_comments = [c for c in relevant if c.intent == "edit_structured"]
+
+    result: dict[str, object] = {
+        "ticker": t,
+        "report_date": report_date.isoformat(),
+        "comment_ids": [c.id for c in relevant],
+        "intents_covered": sorted({c.intent for c in relevant if c.intent}),
+        "before_thesis": before_thesis,
+        "after_thesis": None,
+        "thesis_diff": None,
+        "diff_summary": None,
+        "structured": [],
+    }
+    if not relevant:
+        result["note"] = "no open edit_thesis / edit_structured comments"
+        return result
+
+    if thesis_comments:
+        r = _route_edit_thesis_batch(repo_root, t, thesis_comments, apply=False)
+        result["diff_summary"] = r.get("diff_summary")
+        revised = r.get("revised_full")
+        if isinstance(revised, str):
+            result["after_thesis"] = revised
+            result["thesis_diff"] = "".join(
+                difflib.unified_diff(
+                    before_thesis.splitlines(keepends=True),
+                    revised.splitlines(keepends=True),
+                    fromfile="thesis (before)",
+                    tofile="thesis (after)",
+                )
+            )
+        else:
+            result["thesis_note"] = str(r.get("summary") or "no thesis revision produced")
+
+    structured_out: list[dict[str, object]] = []
+    for c in structured_comments:
+        r = _route_edit_structured(repo_root, t, c, apply=False)
+        structured_out.append(
+            {
+                "comment_id": c.id,
+                "diff_summary": r.get("diff_summary"),
+                "fields_touched": r.get("fields_touched", []),
+                "updated_fields": r.get("updated_fields", {}),
+            }
+        )
+    result["structured"] = structured_out
+    return result
+
+
+def _route_extract_kpi(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
     """Comment-driven KPI extraction.
 
     The user comments on a `kpi_ledger_row` anchor (or any tier_*_kpi name)
@@ -1082,7 +1213,7 @@ def _route_extract_kpi(
         prompt = f"""You are extracting a KPI value the analyst supplied in a workspace comment.
 
 TICKER: {ticker.upper()}
-KPI: {kpi_name} (unit: {kdef_row['unit']})
+KPI: {kpi_name} (unit: {kdef_row["unit"]})
 
 ANALYST COMMENT (this is the source — it may contain a verbatim quote from a
 transcript / IR doc / filing, OR a direct value statement, OR both):
@@ -1166,7 +1297,7 @@ markdown fence, no prose.
         # Insert the synthetic ANALYST_COMMENT document row so kpi_facts has
         # a valid source_doc_id FK. file_path encodes the comment id so we
         # can trace back; sha256 is a stable hash of the comment text + id.
-        sha = hashlib.sha256(f"{c.id}::{c.comment}".encode("utf-8")).hexdigest()
+        sha = hashlib.sha256(f"{c.id}::{c.comment}".encode()).hexdigest()
         doc_cur = conn.execute(
             "INSERT OR IGNORE INTO documents "
             "(ticker, source_type, doc_type, period_end, file_path, sha256, "
@@ -1192,9 +1323,7 @@ markdown fence, no prose.
             doc_id = doc_cur.lastrowid
         else:
             # Already-inserted with the same sha → look it up.
-            existing = conn.execute(
-                "SELECT id FROM documents WHERE sha256 = ?", (sha,)
-            ).fetchone()
+            existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
             doc_id = int(existing["id"]) if existing else None
         if doc_id is None:
             return {"summary": "extract_kpi: failed to resolve synthetic document_id"}
@@ -1240,7 +1369,7 @@ markdown fence, no prose.
             "source_doc_id": int(doc_id),
             "dry_run": False,
         }
-    except Exception as e:  # noqa: BLE001 — extract path must never crash the loop
+    except Exception as e:
         return {"summary": f"extract_kpi: error: {type(e).__name__}: {e}"}
     finally:
         conn.close()
@@ -1279,9 +1408,7 @@ answered from the context, say so and name what data would resolve it.
     }
 
 
-def _route_fix_data(
-    repo_root: Path, ticker: str, c: Comment, apply: bool
-) -> dict[str, object]:
+def _route_fix_data(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
     """Log the comment to directives/data_fixes.md for manual intervention."""
     out = repo_root / "directives" / "data_fixes.md"
     line = (
@@ -1303,12 +1430,12 @@ def _route_fix_data(
 # land" tag so the backlog is grep-able by feature area. Keep it small —
 # better to under-classify (and tag `general`) than to invent buckets.
 _PLATFORM_AREA_HEURISTICS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("renderer",  ("hover", "tooltip", "click", "panel", "column", "render", "display", "ui")),
-    ("saydo",     ("saydo", "say-do", "say do", "attribution", "execution vs")),
-    ("pipeline",  ("fetch", "pull", "transcript", "ingest", "backfill", "refresh")),
-    ("kpi",       ("kpi", "break rule", "status", "tier")),
-    ("chart",     ("yoy", "chart", "matrix", "geography", "segment")),
-    ("dcf",       ("dcf", "valuation", "discounted cash flow")),
+    ("renderer", ("hover", "tooltip", "click", "panel", "column", "render", "display", "ui")),
+    ("saydo", ("saydo", "say-do", "say do", "attribution", "execution vs")),
+    ("pipeline", ("fetch", "pull", "transcript", "ingest", "backfill", "refresh")),
+    ("kpi", ("kpi", "break rule", "status", "tier")),
+    ("chart", ("yoy", "chart", "matrix", "geography", "segment")),
+    ("dcf", ("dcf", "valuation", "discounted cash flow")),
 )
 
 
@@ -1442,7 +1569,16 @@ Comment: \"\"\"{c.comment}\"\"\"
 Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi, ask_question, fix_data, rewrite_section
 """
     raw = call_llm(prompt, purpose="intake_classifier").strip().lower()
-    valid = {"platform_change", "drop_kpi", "edit_thesis", "edit_structured", "extract_kpi", "ask_question", "fix_data", "rewrite_section"}
+    valid = {
+        "platform_change",
+        "drop_kpi",
+        "edit_thesis",
+        "edit_structured",
+        "extract_kpi",
+        "ask_question",
+        "fix_data",
+        "rewrite_section",
+    }
     for tok in raw.split():
         if tok in valid:
             return tok
@@ -1473,17 +1609,24 @@ def main() -> int:
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker")
     g.add_argument("--all", action="store_true")
-    p.add_argument("--report-date", type=date.fromisoformat,
-                   help="ISO date of the report to process (default: latest)")
+    p.add_argument(
+        "--report-date",
+        type=date.fromisoformat,
+        help="ISO date of the report to process (default: latest)",
+    )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     p.add_argument("--apply", action="store_true", help="actually mutate files; default is dry-run")
-    p.add_argument("--clear", action="store_true", help="drop addressed+dismissed comments after processing")
     p.add_argument(
-        "--no-sequence", action="store_true",
+        "--clear", action="store_true", help="drop addressed+dismissed comments after processing"
+    )
+    p.add_argument(
+        "--no-sequence",
+        action="store_true",
         help="skip the sequencer pass (apply in classify order). Debug only — without sequencing, edit_thesis items can compound in surprising ways.",
     )
     p.add_argument(
-        "--no-rebuild", action="store_true",
+        "--no-rebuild",
+        action="store_true",
         help="skip the auto-rebuild after apply (debug only — leaves the workspace HTML stale vs the updated holdings JSON).",
     )
     args = p.parse_args()
@@ -1503,7 +1646,11 @@ def main() -> int:
             print(f"[{t}] no report on disk, skipping", file=sys.stderr)
             continue
         result = process_comments_for_ticker(
-            repo_root, t, rd, apply=args.apply, clear=args.clear,
+            repo_root,
+            t,
+            rd,
+            apply=args.apply,
+            clear=args.clear,
             sequence=not args.no_sequence,
             auto_rebuild=not args.no_rebuild,
         )
