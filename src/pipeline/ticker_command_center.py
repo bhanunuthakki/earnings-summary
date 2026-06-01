@@ -16,7 +16,7 @@ import json
 import os
 import sqlite3
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from html import escape
 from pathlib import Path
 from typing import cast
@@ -146,6 +146,10 @@ class TickerCommandCenter:
     thesis: ThesisView = field(default_factory=ThesisView)
     position: PositionStrip = field(default_factory=PositionStrip)
     tracker_url: str | None = None
+    # YYYY-MM-DD of the latest workspace brief — the (ticker, report_date) key the
+    # comment store + chat thread use, so the Holding tab's embedded report lines
+    # up with the right day. None when no brief has been built.
+    report_date: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -156,6 +160,7 @@ class TickerCommandCenter:
             "thesis": self.thesis.to_dict(),
             "position": self.position.to_dict(),
             "tracker_url": self.tracker_url,
+            "report_date": self.report_date,
         }
 
 
@@ -176,15 +181,34 @@ def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCe
     finally:
         if conn is not None:
             conn.close()
+    artifacts = build_artifact_inventory(repo_root, t)
     return TickerCommandCenter(
         identity=identity,
-        artifacts=build_artifact_inventory(repo_root, t),
+        artifacts=artifacts,
         analysis=analysis,
         recent_decisions=decisions,
         thesis=_thesis_view(repo_root, t),
         position=_position_strip(repo_root, t),
         tracker_url=_tracker_url(t),
+        report_date=_report_date_from_artifacts(artifacts),
     )
+
+
+def _report_date_from_artifacts(artifacts: list[Artifact]) -> str | None:
+    """Parse the latest workspace brief's report date (YYYY-MM-DD) from its
+    ``<DATE>_workspace.html`` filename. This is the (ticker, report_date) key the
+    comment store + chat thread use, so the Holding tab's embedded report and any
+    inline pipeline resolve to the right day."""
+    for a in artifacts:
+        if a.label == "Workspace report (HTML)" and a.exists and a.path:
+            stem = a.path.rsplit("/", 1)[-1]  # <DATE>_workspace.html
+            datepart = stem.split("_", 1)[0]
+            try:
+                date.fromisoformat(datepart)
+            except ValueError:
+                return None
+            return datepart
+    return None
 
 
 def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> TickerIdentity:
@@ -435,9 +459,7 @@ def _refresh_section(ticker: str) -> str:
         '<p style="margin-top:8px">'
         f'<label><input type="checkbox" class="tcc-bypass-toggle" data-ticker="{t}"> '
         "Always ignore budget caps for this ticker (persistent)</label> "
-        '<span class="tcc-bypass-msg muted"></span></p>'
-        + _REFRESH_SCRIPT
-        + "</section>"
+        '<span class="tcc-bypass-msg muted"></span></p>' + _REFRESH_SCRIPT + "</section>"
     )
 
 
@@ -472,6 +494,90 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
         _PAGE_FOOT,
     ]
     return "".join(parts)
+
+
+def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
+    """Head/foot-less command-center fragment for the unified shell's Holding tab:
+    the same per-ticker sections as the standalone page, minus the page chrome,
+    with a compact header carrying the report / DCF / tracker links. The section
+    renderers are reused as-is, so there is one code path for the panel content."""
+    ident = tcc.identity
+    name = f'<span class="cc-holding-name"> · {escape(ident.name)}</span>' if ident.name else ""
+    links = [
+        f'<a href="/reports/{escape(ident.ticker)}" target="_blank" rel="noopener">Full report ↗</a>',
+        f'<a href="/dcf/{escape(ident.ticker)}">DCF workbook ↓</a>',
+    ]
+    if tcc.tracker_url:
+        links.append(
+            f'<a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">'
+            "Portfolio Tracker ↗</a>"
+        )
+    head = (
+        '<div class="cc-holding-head">'
+        f'<div class="cc-holding-id"><span class="cc-holding-ticker">{escape(ident.ticker)}</span>'
+        f"{name}{_identity_badges(ident)}</div>"
+        f'<div class="cc-holding-links">{" · ".join(links)}</div>'
+        "</div>"
+    )
+    return "".join(
+        [
+            head,
+            _freshness_strip(ident),
+            _refresh_section(ident.ticker),
+            _position_section(tcc.position),
+            _analyses_section(tcc.analysis),
+            _decisions_section(tcc.recent_decisions),
+            _artifacts_section(tcc.artifacts),
+            _thesis_section(tcc.thesis),
+        ]
+    )
+
+
+def render_holding_fragment(repo_root: Path, ticker: str) -> str:
+    """Assemble the full Holding-tab panel for ``ticker``: the command-center
+    sections + the 5-min reread + an embedded ``/reports/<t>`` iframe that carries
+    the inline comment / chat / apply pipeline. Reuses the analytical reread
+    fragment via its public seam (no cross-module private access)."""
+    from pipeline.analytical_dashboard import build_analytical_dashboard
+    from pipeline.analytical_dashboard_html import render_panel_fragment
+
+    t = ticker.upper()
+    tcc = build_ticker_command_center(repo_root, t)
+    db_path = repo_root / "data" / "portfolio.db"
+    dash = build_analytical_dashboard(db_path, sections={"rereads"}, ticker=t)
+    reread_html = render_panel_fragment(dash, "prereads") or ""
+    return "".join(
+        [
+            render_ticker_fragment(tcc),
+            reread_html,
+            _report_embed_section(t, tcc.report_date),
+        ]
+    )
+
+
+def _report_embed_section(ticker: str, report_date: str | None) -> str:
+    """Embed the full workspace brief in an iframe. The report page boots the
+    comment pins + free-text commenting + Ask-Claude chat + apply-diff pipeline
+    against this same server, so the Holding tab carries all of it without
+    duplicating any of that JS here. 404-safe: a "no brief yet" note when the
+    ticker has never been built."""
+    t = escape(ticker)
+    if not report_date:
+        return (
+            '<section class="panel"><h2>Full report</h2>'
+            '<p class="muted">No workspace brief built yet for this ticker — '
+            "use Refresh above to build one.</p></section>"
+        )
+    return (
+        '<section class="panel cc-report-embed">'
+        "<h2>Full report · inline comments + chat</h2>"
+        '<p class="sub">The complete workspace brief — comment pins, free-text '
+        "commenting, and the Ask-Claude chat + apply-diff pipeline all run live "
+        f"against this server (report dated {escape(report_date)}).</p>"
+        f'<iframe class="cc-report-frame" src="/reports/{t}" '
+        f'title="{t} workspace report" loading="lazy"></iframe>'
+        "</section>"
+    )
 
 
 def _identity_badges(ident: TickerIdentity) -> str:

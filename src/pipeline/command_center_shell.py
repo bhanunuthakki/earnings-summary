@@ -38,13 +38,16 @@ from pipeline.dashboard_status import DashboardRow
 
 # Tab order. Each entry: (panel_id, label, endpoint, is_picker, picker_required).
 # ``overview`` is inlined (no endpoint). The picker tabs re-fetch ``endpoint?ticker=``
-# on dropdown change; ``picker_required`` panels (none yet — the Holding tab in a
-# follow-up) show a "pick a holding" prompt until one is chosen, while filter
-# pickers (prereads, insiders) default to the cross-ticker "All" view.
+# on dropdown change; ``picker_required`` panels (the per-ticker Holding drill-down)
+# show a "pick a holding" prompt until one is chosen, while filter pickers
+# (prereads, insiders) default to the cross-ticker "All" view. The trigger-ladder
+# tab keeps panel id ``holdings`` (matching ``/api/panel/holdings``) but is labelled
+# "Triggers" so it reads distinctly from the singular "Holding" drill-down.
 _TABS: tuple[tuple[str, str, str | None, bool, bool], ...] = (
     ("overview", "Overview", None, False, False),
     ("portfolio", "Portfolio", "/api/panel/portfolio", False, False),
-    ("holdings", "Holdings", "/api/panel/holdings", False, False),
+    ("holdings", "Triggers", "/api/panel/holdings", False, False),
+    ("holding", "Holding", "/api/panel/holding", True, True),
     ("prereads", "Pre-reads", "/api/panel/prereads", True, False),
     ("insiders", "Insiders", "/api/panel/insiders", True, False),
     ("predictions", "Predictions", "/api/panel/predictions", False, False),
@@ -323,6 +326,37 @@ td.ticker a:hover { text-decoration: underline; }
 .open-link { color: var(--link); text-decoration: none; }
 .open-link:hover { text-decoration: underline; }
 .empty { color: var(--muted); font-style: italic; padding: 12px; }
+
+/* ============================================================
+   Holding drill-down tab (ticker_command_center sections + embedded report)
+   ============================================================ */
+.cc-holding-head { display: flex; justify-content: space-between; align-items: flex-start;
+  flex-wrap: wrap; gap: 8px; margin-bottom: 18px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border); }
+.cc-holding-ticker { font-size: 22px; font-weight: 700; font-family: var(--font-mono); }
+.cc-holding-name { font-size: 16px; color: var(--ink-muted); }
+.cc-holding-links { font-size: 13px; display: flex; gap: 14px; align-items: center; }
+.cc-holding-links a { color: var(--link); text-decoration: none; white-space: nowrap; }
+.cc-holding-links a:hover { text-decoration: underline; }
+.badges { display: inline-flex; gap: 4px; margin-left: 8px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.4px; background: #2a2c30; }
+.badge.b-ok { background: #14532d; color: var(--ok); }
+.badge.b-warn { background: #422006; color: var(--warn); }
+.badge.b-bad { background: #450a0a; color: var(--bad); }
+.badge.b-muted { background: #2a2c30; color: var(--muted); }
+.fresh-strip { display: flex; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
+.fresh-cell { background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 14px; flex: 1; min-width: 140px; }
+.fresh-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.fresh-val { font-size: 15px; font-variant-numeric: tabular-nums; }
+.ok-dot { color: var(--ok); }
+.tcc-refresh, .tcc-refresh + .tcc-refresh { background: var(--accent); color: #0d1117; border: none;
+  padding: 6px 12px; border-radius: 4px; font-weight: 600; font-size: 12px; cursor: pointer; margin-right: 4px; }
+.artifact-table code { background: transparent; padding: 0; }
+.cc-report-embed { padding-bottom: 8px; }
+.cc-report-frame { width: 100%; height: calc(100vh - 220px); min-height: 560px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-top: 6px; }
 """.strip()
 
 
@@ -454,6 +488,21 @@ SHELL_JS = r"""
       var t = sel.value;
       location.hash = t ? ('#' + pid + '=' + encodeURIComponent(t)) : ('#' + pid);
     });
+  });
+
+  // A ticker link anywhere in the shell (analytical panels' .ticker-link, the
+  // Overview status tables' td.ticker links) opens the per-ticker Holding tab
+  // instead of navigating away. Delegated on document so it also catches links
+  // inside lazily-injected panels. (Links inside the embedded report iframe live
+  // in a separate document and are unaffected.)
+  document.addEventListener('click', function (ev) {
+    if (!ev.target.closest) return;
+    var a = ev.target.closest('a.ticker-link, td.ticker a');
+    if (!a) return;
+    var t = (a.textContent || '').trim().toUpperCase();
+    if (!t) return;
+    ev.preventDefault();
+    location.hash = '#holding=' + encodeURIComponent(t);
   });
 
   window.addEventListener('hashchange', onHashChange);
