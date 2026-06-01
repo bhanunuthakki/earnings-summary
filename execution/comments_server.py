@@ -264,9 +264,12 @@ def create_app(
             return ({"error": "ticker required"}, 400)
         if mode not in ("stale", "full"):
             return ({"error": f"mode must be 'stale' or 'full', got {mode!r}"}, 400)
+        force_budget_bypass = bool(body.get("force_budget_bypass", False))
 
         dispatcher = repo_root / "execution" / "refresh_dispatch.py"
         argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
+        if force_budget_bypass:
+            argv.append("--force-budget-bypass")
         try:
             job = job_registry.start(
                 ticker=ticker,

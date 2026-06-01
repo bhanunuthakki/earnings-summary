@@ -171,6 +171,7 @@ def main() -> int:
             flavor=flavor,
             trigger=args.trigger,
             renderer=args.renderer,
+            force_budget_bypass=args.force_budget_bypass,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -251,6 +252,14 @@ def _parse_args() -> argparse.Namespace:
             "'both' writes both files."
         ),
     )
+    parser.add_argument(
+        "--force-budget-bypass",
+        action="store_true",
+        help=(
+            "Ignore per-purpose LLM budget caps for this build — the 'run anyway' "
+            "override. Analyses a skip-mode cap would forgo are run regardless."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -303,6 +312,7 @@ def _build_one(
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
     trigger: str = "manual",
     renderer: str = "default",
+    force_budget_bypass: bool = False,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -349,6 +359,7 @@ def _build_one(
         news_cache_ttl_days=news_cache_ttl_days,
         refresh_news=refresh_news,
         flavor=flavor,
+        force_budget_bypass=force_budget_bypass,
     )
 
     if renderer in ("default", "both"):

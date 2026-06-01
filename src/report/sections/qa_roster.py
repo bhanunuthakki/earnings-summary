@@ -221,6 +221,7 @@ def build(
     repo_root: Path | None = None,
     enable_llm: bool = False,
     max_quarters: int = 5,
+    force_budget_bypass: bool = False,
 ) -> QARosterSection:
     """Parse the most recent ``max_quarters`` transcripts into per-quarter rosters.
 
@@ -241,7 +242,7 @@ def build(
     # Budget gate for the (optional) topic-labeling LLM. On skip the roster
     # still renders with regex-derived labels; only the LLM upgrade is forgone.
     topics_skip = (
-        budget_gate("qa_topics", "Q&A topics", repo_root)
+        budget_gate("qa_topics", "Q&A topics", repo_root, bypass=force_budget_bypass)
         if enable_llm and ticker and repo_root is not None
         else None
     )

@@ -23,6 +23,7 @@ def build(
     ticker: str,
     repo_root: Path,
     enable_llm: bool,
+    force_budget_bypass: bool = False,
 ) -> ValuationBasisSection:
     if not enable_llm:
         cached = compute_valuation.load(repo_root, ticker)
@@ -43,7 +44,7 @@ def build(
             )
         return _to_section(cached)
 
-    skip = budget_gate("valuation_basis", "Valuation (multiple)", repo_root)
+    skip = budget_gate("valuation_basis", "Valuation (multiple)", repo_root, bypass=force_budget_bypass)
     if skip is not None:
         # A previously-cached multiple is free to render — prefer it over forgoing.
         cached = compute_valuation.load(repo_root, ticker)
