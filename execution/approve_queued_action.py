@@ -47,6 +47,7 @@ from alerts import (  # noqa: E402
     cancel_action,
     dismiss_alert,
     get_action,
+    get_alert,
     list_queued_actions_for_alert,
 )
 from user_state.ledger import ThesisLedgerEntryRow, append_entry  # noqa: E402
@@ -213,14 +214,16 @@ def _write_ledger_entry(
 ) -> ThesisLedgerEntryRow:
     """Write one thesis_ledger_entries row from a queued_action payload.
 
-    Payload shape (expected, drafter-owned):
+    Payload shape (drafter-owned):
       {
-        "ticker": "GOOG",            # required
-        "body":   "Cloud margin ...", # required
+        "body": "Cloud margin ...",  # required
       }
+
+    ``ticker`` comes from the parent alert, not the payload — see
+    ``_resolve_ticker``.
     """
     entry_kind = _ACTION_TO_ENTRY_KIND[qa.action_kind]
-    ticker = _require_str(qa.payload, "ticker", qa)
+    ticker = _resolve_ticker(qa, db_path)
     body = _require_str(qa.payload, "body", qa)
     return append_entry(
         ticker=ticker,
@@ -238,13 +241,15 @@ def _write_sizing_intent(
 
     Payload shape (expected):
       {
-        "ticker":       "GOOG",       # required
         "intent_kind":  "target_pct", # required (e.g. target_pct / max_pct / note)
         "intent_value": 0.05,         # optional
         "narrative":    "..."         # optional
       }
+
+    ``ticker`` comes from the parent alert, not the payload — see
+    ``_resolve_ticker``.
     """
-    ticker = _require_str(qa.payload, "ticker", qa)
+    ticker = _resolve_ticker(qa, db_path)
     intent_kind = _require_str(qa.payload, "intent_kind", qa)
     raw_value = qa.payload.get("intent_value")
     intent_value: float | None
@@ -275,6 +280,23 @@ def _write_sizing_intent(
         narrative=narrative,
         db_path=db_path,
     )
+
+
+def _resolve_ticker(qa: QueuedActionRow, db_path: Path | None) -> str:
+    """Ticker for the downstream row — taken from the parent ALERT.
+
+    ``ticker`` is an alert-level property, so trigger-drafted payloads don't
+    carry it; requiring it in the payload made every queued action
+    un-approvable (KeyError → 0 ledger writes despite pending actions). The
+    parent alert (``qa.alert_id``) always has it. A valid payload ``ticker``,
+    if present, still wins as an explicit override (future-proofing); otherwise
+    fall back to the alert. Raises ``LookupError`` if the parent alert is gone
+    (caught by ``main`` and surfaced as a clean exit-1).
+    """
+    raw = qa.payload.get("ticker")
+    if isinstance(raw, str) and raw:
+        return raw
+    return get_alert(qa.alert_id, db_path=db_path).ticker
 
 
 def _require_str(payload: dict[str, object], key: str, qa: QueuedActionRow) -> str:

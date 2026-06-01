@@ -233,6 +233,90 @@ def test_approve_sizing_update_writes_intent_row(
 
 
 # ----------------------------------------------------------------------------
+# Regression: payload without `ticker` (the real trigger-drafted shape)
+# ----------------------------------------------------------------------------
+
+
+def test_approve_ledger_action_without_payload_ticker_uses_alert_ticker(
+    cli: Any,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Trigger-drafted payloads carry body + source_shift_topic but NOT
+    `ticker` (it's an alert-level property). Approving must succeed and take
+    the ticker from the parent alert. Before the fix this raised KeyError, so
+    every queued action was un-approvable (pending forever, 0 ledger writes)."""
+    alert_id = _seed_alert(db_path, ticker="NU", signature="sig-no-ticker")
+    qa = queue_action(
+        alert_id=alert_id,
+        action_kind="earnings_prep_append",
+        payload={
+            "body": "Probe risk-adjusted NIM seasonality next call",
+            "source_shift_topic": "Risk-adjusted NIM 100bps QoQ contraction",
+        },
+        db_path=db_path,
+    )
+    assert "ticker" not in qa.payload  # guard: the real production shape
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "approve_queued_action",
+            "--action-id",
+            str(qa.id),
+            "--db-path",
+            str(db_path),
+        ],
+    )
+    rc = cli.main()
+    assert rc == 0
+
+    refreshed = get_action(qa.id, db_path=db_path)
+    assert refreshed.status == ACTION_STATUS_APPLIED
+
+    # Ledger entry written under the PARENT ALERT's ticker
+    entries = list_entries(ticker="NU", db_path=db_path)
+    assert len(entries) == 1
+    assert entries[0].entry_kind == "earnings_prep_append"
+    assert entries[0].body == "Probe risk-adjusted NIM seasonality next call"
+    assert entries[0].source_alert_id == alert_id
+
+
+def test_approve_sizing_update_without_payload_ticker_uses_alert_ticker(
+    cli: Any,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same fix on the sizing path: ticker comes from the parent alert."""
+    alert_id = _seed_alert(db_path, ticker="MELI", signature="sig-sizing-no-ticker")
+    qa = queue_action(
+        alert_id=alert_id,
+        action_kind="sizing_update",
+        payload={"intent_kind": "max_pct", "intent_value": 0.06},
+        db_path=db_path,
+    )
+    assert "ticker" not in qa.payload
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "approve_queued_action",
+            "--action-id",
+            str(qa.id),
+            "--db-path",
+            str(db_path),
+        ],
+    )
+    rc = cli.main()
+    assert rc == 0
+
+    intents = list_intents(ticker="MELI", db_path=db_path)
+    assert len(intents) == 1
+    assert intents[0].intent_kind == "max_pct"
+    assert intents[0].intent_value == 0.06
+
+
+# ----------------------------------------------------------------------------
 # Dismiss single action
 # ----------------------------------------------------------------------------
 
