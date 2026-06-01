@@ -153,6 +153,16 @@ LLM_MODELS: dict[str, str] = {
     # repo's existing Opus pins (no one-off newer id).
     "material_news_classification": "claude-opus-4-7",
     "news_structuring": "claude-opus-4-7",
+    # Earnings-tone diff — the earnings_tone trigger's quarter-over-quarter
+    # transcript shift detector (src/triggers/earnings_tone.py): it compares the
+    # latest call against prior transcripts and emits confidence-scored, cited
+    # tone shifts mapped to thesis KPIs. Like material_news_classification it was
+    # ABSENT here and silently fell back to Sonnet; this is a high-stakes
+    # analytical-judgment task — it decides whether an alert fires AND writes the
+    # memo — so Opus's instruction-following and citation discipline matter. One
+    # retry-capped call per ticker per run, cached on disk via llm_artifacts, so
+    # cost is bounded. claude-opus-4-7 to match the repo's existing Opus pins.
+    "earnings_tone_diff": "claude-opus-4-7",
     # Recent-developments web brief (generate_recent_developments, via
     # call_llm_with_web). Stays on Sonnet — long-context news synthesis, not a
     # structured-judgment task. Pinned explicitly to DEFAULT_MODEL because
