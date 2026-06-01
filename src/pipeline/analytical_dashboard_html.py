@@ -471,21 +471,27 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
         tone = _TRIGGER_TONE.get(r.trigger_status or "unknown", "tone-muted")
         ou = f"{(r.over_under_pct or 0) * 100:+.1f}%" if r.over_under_pct is not None else "—"
         mos = f"{(r.mos_bar or 0) * 100:.0f}%" if r.mos_bar is not None else "—"
-        out.append(
-            f'<tr class="{tone}">'
-            f'<td><a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a></td>'
-            f"<td>{escape(r.list_type)}</td>"
-            f"<td>{escape(r.verdict or '—')}</td>"
+        # Precompute the conditional numeric cells. (Inlining the ``if/else`` into
+        # the f-string below would bind the ternary to the WHOLE concatenated
+        # string and drop the row opener + ticker/list/verdict cells whenever a
+        # value is NULL — exactly the "empty rows with just values" bug for
+        # watchlist tickers, which have no live price / over-under / MoS.)
+        live = (
             f'<td class="num">${r.live_price:.0f}</td>'
             if r.live_price is not None
             else '<td class="num muted">—</td>'
         )
-        out.append(
+        fair = (
             f'<td class="num">${r.dcf_fair_value:.0f}</td>'
             if r.dcf_fair_value is not None
             else '<td class="num muted">—</td>'
         )
         out.append(
+            f'<tr class="{tone}">'
+            f'<td><a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a></td>'
+            f"<td>{escape(r.list_type)}</td>"
+            f"<td>{escape(r.verdict or '—')}</td>"
+            f"{live}{fair}"
             f'<td class="num">{ou}</td><td class="num">{mos}</td>'
             f'<td class="trigger-cell">{escape((r.trigger_status or "unknown").replace("_", " "))}</td>'
             "</tr>"

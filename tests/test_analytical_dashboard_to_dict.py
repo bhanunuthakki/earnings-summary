@@ -179,6 +179,40 @@ def test_render_html_with_seeded_db_shows_content(tmp_path: Path) -> None:
     assert "NU" in html
 
 
+def test_trigger_ladder_null_price_row_is_well_formed() -> None:
+    """Regression: a watchlist row (live_price / over_under / mos all NULL) must
+    render a COMPLETE <tr> — ticker link, list, verdict + em-dash cells — not a
+    malformed values-only row. The old inline `… if live_price is not None else …`
+    ternary bound to the entire concatenated f-string and dropped the row opener +
+    first three cells whenever the live price was NULL (every watchlist ticker)."""
+    from pipeline.analytical_dashboard import TriggerLadderRow
+
+    row = TriggerLadderRow(
+        ticker="AMAT",
+        list_type="watchlist",
+        over_under_pct=None,
+        mos_bar=None,
+        trigger_status="unknown",
+        live_price=None,  # the bug trigger
+        dcf_fair_value=167.0,
+        verdict="Pending",
+    )
+    html = render_html(
+        AnalyticalDashboard(trigger_ladder=[row]),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    # Isolate the data row (its opener was the casualty of the bug).
+    section = html[html.index("Trigger ladder") :]
+    rstart = section.index('<tr class="tone-muted">')
+    row_html = section[rstart : section.index("</tr>", rstart)]
+    # Ticker link + verdict cells (also dropped by the bug) are present...
+    assert 'class="ticker-link">AMAT</a>' in row_html
+    assert ">Pending<" in row_html
+    # ...and the row has all 8 cells (ticker, list, verdict, live, fair, over/under,
+    # mos, trigger) — the malformed bug row had fewer.
+    assert row_html.count("<td") == 8
+
+
 # ----- live endpoints (wired into comments_server) -----
 
 
