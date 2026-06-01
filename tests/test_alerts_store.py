@@ -102,6 +102,55 @@ def test_queue_action_round_trip_decodes_payload(db_path: Path) -> None:
     assert qa.cancelled_at is None
 
 
+def test_store_stamps_round_trip_as_naive_utc(db_path: Path) -> None:
+    """Every store-written timestamp (``_now_iso``) round-trips tz-NAIVE.
+
+    ``created_at`` / ``applied_at`` / ``cancelled_at`` on queued_actions and
+    ``approved_at`` / ``dismissed_at`` on alerts must all come back with
+    ``.tzinfo is None`` — matching ``fired_at`` (written naive by triggers)
+    and the repo-wide naive-UTC convention. A tz-aware stamp is the landmine
+    that crashes any consumer comparing it against a naive datetime, so this
+    guards against ``_now_iso`` regressing to an aware offset.
+    """
+    # created_at — stamped on insert.
+    alert = _fire(db_path, signature="sig-naive-stamps")
+    qa = store.queue_action(
+        alert_id=alert.id,
+        action_kind="thesis_update",
+        payload={"body": "x"},
+        db_path=db_path,
+    )
+    assert qa.created_at.tzinfo is None
+
+    # applied_at — stamped on the action transition (the alert stays pending).
+    applied = store.apply_action(qa.id, db_path=db_path)
+    assert applied.created_at.tzinfo is None
+    assert applied.applied_at is not None
+    assert applied.applied_at.tzinfo is None
+
+    # approved_at — stamped on the alert transition.
+    approved = store.approve_alert(alert.id, db_path=db_path)
+    assert approved.approved_at is not None
+    assert approved.approved_at.tzinfo is None
+
+    # cancelled_at / dismissed_at — a second alert+action reaches the other
+    # terminal states (apply/cancel and approve/dismiss are mutually exclusive).
+    alert2 = _fire(db_path, signature="sig-naive-stamps-2")
+    qa2 = store.queue_action(
+        alert_id=alert2.id,
+        action_kind="thesis_update",
+        payload={"body": "y"},
+        db_path=db_path,
+    )
+    cancelled = store.cancel_action(qa2.id, db_path=db_path)
+    assert cancelled.cancelled_at is not None
+    assert cancelled.cancelled_at.tzinfo is None
+
+    dismissed = store.dismiss_alert(alert2.id, db_path=db_path)
+    assert dismissed.dismissed_at is not None
+    assert dismissed.dismissed_at.tzinfo is None
+
+
 # ----------------------------------------------------------------------------
 # FK enforcement
 # ----------------------------------------------------------------------------
@@ -126,9 +175,12 @@ def test_queue_action_fk_enforces_existing_alert(db_path: Path) -> None:
 
 def test_approve_alert_transitions_and_stamps(db_path: Path) -> None:
     alert = _fire(db_path, signature="sig-approve-1")
-    before = datetime.now(UTC)
+    # Naive-UTC bounds: the store stamps ``approved_at`` naive (see
+    # store._now_iso), so the window bounds must be naive too or the
+    # comparison would raise on naive-vs-aware.
+    before = datetime.now(UTC).replace(tzinfo=None)
     approved = store.approve_alert(alert.id, db_path=db_path)
-    after = datetime.now(UTC)
+    after = datetime.now(UTC).replace(tzinfo=None)
 
     assert approved.id == alert.id
     assert approved.status == store.ALERT_STATUS_APPROVED

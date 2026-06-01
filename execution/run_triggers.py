@@ -155,7 +155,11 @@ def _load_dismissed_signatures(
     rows since ``status != 'expired'`` — but the snapshot is composed
     consistently for every trigger.
     """
-    threshold = (datetime.now(UTC) - timedelta(days=lookback_days)).isoformat()
+    # Naive-UTC threshold to match the store's naive ``dismissed_at`` stamps
+    # (alerts.store._now_iso); the SQL ``>=`` below is a lexicographic string
+    # compare, so both sides must share the no-offset ISO format.
+    naive_now = datetime.now(UTC).replace(tzinfo=None)
+    threshold = (naive_now - timedelta(days=lookback_days)).isoformat()
     conn = sqlite3.connect(str(db_path))
     try:
         try:
