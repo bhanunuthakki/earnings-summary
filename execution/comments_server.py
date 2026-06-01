@@ -33,7 +33,7 @@ import json
 import os
 import queue
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -42,7 +42,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 try:
-    from flask import Flask, Response, abort, request, send_file, stream_with_context  # noqa: E402
+    from flask import Flask, Response, abort, request, send_file, stream_with_context
 except ImportError:  # pragma: no cover - install hint
     print(
         "Flask not installed. Install with: pip install flask",
@@ -50,13 +50,16 @@ except ImportError:  # pragma: no cover - install hint
     )
     sys.exit(1)
 
-import comments  # noqa: E402
 import sqlite3  # noqa: E402
 
-from chat_session import build_chat_response, apply_chat_diff  # noqa: E402
+import comments  # noqa: E402
+from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
+from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
+from pipeline.analytical_dashboard_html import render_html as render_analytical_html  # noqa: E402
 from pipeline.dashboard_html import render_dashboard_html  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
+from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
 
 def create_app(
@@ -128,8 +131,33 @@ def create_app(
             rows = build_dashboard_rows(conn, repo_root)
         finally:
             conn.close()
-        payload = {k: [r.to_dict() for r in v] for k, v in rows.items()}
+        return {k: [r.to_dict() for r in v] for k, v in rows.items()}
+
+    @app.route("/api/overview", methods=["GET"])
+    def overview_api():
+        """Cross-ticker analytical overview as JSON: trigger ladder, insider
+        activity, predictions, decisions ledger, and the (read-only) LLM
+        spend/budget panel, plus tier coverage. Same data the static export
+        and ``GET /analytical`` render — one code path, no divergence.
+
+        Budget WRITES are intentionally not here — dashboard-managed budgets
+        (editable caps + modes + override) are owned by the #215 track; this
+        surfaces spend/cap/headroom read-only."""
+        dash = build_analytical_dashboard(db_path)
+        payload = dash.to_dict()
+        payload["tier_coverage"] = tier_coverage_summary(repo_root)
         return payload
+
+    @app.route("/analytical", methods=["GET"])
+    def analytical_page():
+        """Live server-rendered analytical dashboard — byte-identical markup
+        to the static export, but always fresh from the DB rather than a
+        regenerated file. This is the 'fold the static panels into the live
+        app' move: one server at :7421, no stale snapshot to rebuild."""
+        dash = build_analytical_dashboard(db_path)
+        coverage = tier_coverage_summary(repo_root)
+        html = render_analytical_html(dash, generated_at=datetime.now(UTC), tier_coverage=coverage)
+        return Response(html, mimetype="text/html")
 
     @app.route("/reports/<ticker>", methods=["GET"])
     def latest_report_for_ticker(ticker: str):
@@ -165,18 +193,23 @@ def create_app(
         argv = [sys.executable, str(dispatcher), "--ticker", ticker, "--mode", mode]
         try:
             job = job_registry.start(
-                ticker=ticker, kind=f"refresh-{mode}", argv=argv,
+                ticker=ticker,
+                kind=f"refresh-{mode}",
+                argv=argv,
             )
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
 
-        return ({
-            "job_id": job.job_id,
-            "ticker": job.ticker,
-            "kind": job.kind,
-            "stream_url": f"/actions/stream/{job.job_id}",
-            "started_at": job.started_at.isoformat(),
-        }, 201)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
 
     @app.route("/actions/refresh-ir", methods=["POST", "OPTIONS"])
     def start_refresh_ir():
@@ -200,22 +233,31 @@ def create_app(
 
         script = repo_root / "execution" / "refresh_ir_kpis.py"
         argv = [
-            sys.executable, str(script), "--ticker", ticker,
-            "--discover", "--quarters", str(quarters),
-            "--repo-root", str(repo_root),
+            sys.executable,
+            str(script),
+            "--ticker",
+            ticker,
+            "--discover",
+            "--quarters",
+            str(quarters),
+            "--repo-root",
+            str(repo_root),
         ]
         try:
             job = job_registry.start(ticker=ticker, kind="refresh-ir", argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
 
-        return ({
-            "job_id": job.job_id,
-            "ticker": job.ticker,
-            "kind": job.kind,
-            "stream_url": f"/actions/stream/{job.job_id}",
-            "started_at": job.started_at.isoformat(),
-        }, 201)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
 
     @app.route("/actions/stream/<job_id>", methods=["GET"])
     def stream_action(job_id: str):
@@ -261,8 +303,13 @@ def create_app(
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
         c = comments.append_comment(
-            repo_root, ticker, report_date,
-            anchor=anchor, text=text, selected_text=selected_text, intent=intent,
+            repo_root,
+            ticker,
+            report_date,
+            anchor=anchor,
+            text=text,
+            selected_text=selected_text,
+            intent=intent,
         )
         return Response(c.model_dump_json(), mimetype="application/json", status=201)
 
@@ -280,8 +327,13 @@ def create_app(
         resolution = body.get("resolution_note")
         intent = body.get("intent")
         updated = comments.update_comment(
-            repo_root, ticker, report_date, comment_id,
-            status=status, resolution_note=resolution, intent=intent,
+            repo_root,
+            ticker,
+            report_date,
+            comment_id,
+            status=status,
+            resolution_note=resolution,
+            intent=intent,
         )
         if updated is None:
             return ({"error": "comment not found"}, 404)
@@ -312,8 +364,14 @@ def create_app(
             return ({"error": "report_date required"}, 400)
         report_date = _parse_date(report_date_str)
         thread = build_chat_response.load_thread(repo_root, ticker, report_date)
-        return ({"ticker": ticker, "report_date": report_date.isoformat(),
-                 "thread": [t.model_dump(mode="json") for t in thread]}, 200)
+        return (
+            {
+                "ticker": ticker,
+                "report_date": report_date.isoformat(),
+                "thread": [t.model_dump(mode="json") for t in thread],
+            },
+            200,
+        )
 
     @app.route("/chat/<ticker>", methods=["POST"])
     def chat_endpoint(ticker: str):
@@ -331,7 +389,11 @@ def create_app(
         chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
         chat_pool.submit(
             _drain_chat_stream,
-            repo_root, ticker, report_date, user_message, chunks,
+            repo_root,
+            ticker,
+            report_date,
+            user_message,
+            chunks,
         )
 
         def generate():
@@ -365,8 +427,7 @@ def create_app(
             dry_run = bool(body.get("dry_run", False))
         except (KeyError, TypeError):
             return ({"error": "diff required"}, 400)
-        result = apply_chat_diff(repo_root, ticker, diff, dry_run=dry_run)
-        return result
+        return apply_chat_diff(repo_root, ticker, diff, dry_run=dry_run)
 
     return app
 

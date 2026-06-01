@@ -144,10 +144,7 @@ def _format_breach(status: str | None) -> str:
     if status is None:
         return "<span class='muted'>—</span>"
     color = _BREACH_BADGE_COLOR.get(status, "#7a7a7a")
-    return (
-        f"<span class='breach-badge' "
-        f"style='background:{escape(color)}'>{escape(status)}</span>"
-    )
+    return f"<span class='breach-badge' style='background:{escape(color)}'>{escape(status)}</span>"
 
 
 _PAGE_TEMPLATE = """<!doctype html>
@@ -187,6 +184,9 @@ header {{
   padding-bottom: 12px;
 }}
 h1 {{ font-size: 20px; font-weight: 600; margin: 0; }}
+.title-block {{ display: flex; flex-direction: column; gap: 2px; }}
+.top-nav a {{ font-size: 12px; color: var(--link); text-decoration: none; }}
+.top-nav a:hover {{ text-decoration: underline; }}
 h2 {{ font-size: 15px; font-weight: 600; margin: 28px 0 10px; text-transform: uppercase; letter-spacing: 0.5px; }}
 h2 .count {{ font-weight: 400; color: var(--fg-muted); margin-left: 4px; }}
 .generated-at {{ font-size: 12px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }}
@@ -250,7 +250,10 @@ td.ticker {{ font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monosp
 </head>
 <body>
 <header>
-  <h1>Earnings Summary — Dashboard</h1>
+  <div class="title-block">
+    <h1>Earnings Summary — Dashboard</h1>
+    <nav class="top-nav"><a href="/analytical">Analytical overview ↗</a></nav>
+  </div>
   <span class="generated-at">generated {generated_at}</span>
 </header>
 {portfolio_section}
