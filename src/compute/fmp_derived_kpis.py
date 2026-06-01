@@ -100,12 +100,14 @@ def _fetch_quarterly_facts(
     `fiscal_period_type IN ('Q1'..'Q4')` filter is the real safety net — it
     rejects any non-quarterly leakage regardless of file naming.
 
-    Why the file-path filter widened: the legacy v3 statements endpoint
-    wrote `{TICKER}_income_statement_quarterly.json` and we filtered to
-    that. After v3 started returning 403 in May 2026, refreshes moved to
-    /stable, which writes the unsuffixed `{TICKER}_income_statement.json`.
-    The `grouped` dict below dedupes by (period_end, fiscal_period_type)
-    so feeding rows from both sources is safe.
+    On file naming: the live stable cacher (execution/save_fmp_data.py) writes
+    SUFFIXED files — `{TICKER}_income_statement_quarterly.json`,
+    `_annual.json`, `_ttm.json` — there is NO unsuffixed
+    `{TICKER}_income_statement.json` (no code writes one). So we exclude the
+    `_ttm`/`_annual` rollups by file path and lean on the
+    `fiscal_period_type IN ('Q1'..'Q4')` filter as the real guard against any
+    non-quarterly leakage. The `grouped` dict below dedupes by
+    (period_end, fiscal_period_type) so overlapping sources stay safe.
     """
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))

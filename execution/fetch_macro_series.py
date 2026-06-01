@@ -49,8 +49,6 @@ from macro_store import upsert_series_value  # noqa: E402
 load_dotenv(PROJECT_ROOT / ".env")
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 FMP_STABLE = "https://financialmodelingprep.com/stable"
-FMP_V3 = "https://financialmodelingprep.com/api/v3"
-FMP_V4 = "https://financialmodelingprep.com/api/v4"
 
 log = logging.getLogger("fetch_macro_series")
 
@@ -66,18 +64,13 @@ def _sync_db_path(repo_root: Path) -> None:
 
 
 def _resolve_url(provider: ProviderSpec) -> str:
-    # `historical-price-full/<symbol>` is /api/v3; `historical-price-eod/full`
-    # and `treasury-rates` + `economic-indicators` are /stable. The kind tag
-    # + path together steer us at one base; trust the path's leading slash if
-    # it's not just an endpoint name.
+    # All macro providers are on /stable (treasury-rates, economic-indicators,
+    # historical-price-eod/full). The legacy /api/v3 `historical-price-full`
+    # fallbacks were retired in the v3->stable migration (they 403 as "Legacy
+    # Endpoint" for non-legacy accounts). A fully-qualified URL is honoured
+    # verbatim; every other path is a /stable endpoint name.
     if provider.path.startswith(("http://", "https://")):
         return provider.path
-    if provider.path.startswith("v3/"):
-        return f"{FMP_V3}/{provider.path[3:]}"
-    if provider.path.startswith("v4/"):
-        return f"{FMP_V4}/{provider.path[3:]}"
-    if "historical-price-full/" in provider.path:
-        return f"{FMP_V3}/{provider.path}"
     return f"{FMP_STABLE}/{provider.path}"
 
 
