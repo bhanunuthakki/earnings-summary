@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
+import ticker_settings  # noqa: E402
 from compute.segment_definitions import (  # noqa: E402
     extract_for_ticker as _extract_segment_definitions,
 )
@@ -350,6 +351,11 @@ def _build_one(
     # in stderr but don't abort the build.
     _run_ticker_specific_extractors(ticker, repo_root)
 
+    # Persistent per-ticker override: the dashboard's "always ignore caps" toggle
+    # (ticker_settings.bypass_budget) ORs with the one-shot --force-budget-bypass.
+    effective_bypass = force_budget_bypass or ticker_settings.get_bypass_budget(
+        ticker, db_path=repo_root / "data" / "portfolio.db"
+    )
     spec = build_report(
         ticker=ticker,
         repo_root=repo_root,
@@ -359,7 +365,7 @@ def _build_one(
         news_cache_ttl_days=news_cache_ttl_days,
         refresh_news=refresh_news,
         flavor=flavor,
-        force_budget_bypass=force_budget_bypass,
+        force_budget_bypass=effective_bypass,
     )
 
     if renderer in ("default", "both"):
