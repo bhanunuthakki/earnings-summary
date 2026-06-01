@@ -36,20 +36,25 @@ from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
 
 def main() -> int:
     args = _parse_args()
-    cfg = get_config(args.ticker)
-    if cfg is None:
-        print(
-            f"No IR config for {args.ticker!r}. Configured: {configured_tickers()}",
-            file=sys.stderr,
-        )
-        return 2
-
     repo_root = args.repo_root.resolve()
+    cfg = get_config(args.ticker, repo_root)
+
+    # Resolve the spreadsheet (file / url / discover). --discover needs an existing
+    # config (for its results-center URL); a ticker's FIRST refresh must pass
+    # --url/--file so the parser config can be generated from the sheet itself.
     if args.file is not None:
         path = args.file
     elif args.url is not None:
         path = download_spreadsheet(args.url, repo_root, args.ticker)
     else:  # --discover
+        if cfg is None:
+            print(
+                f"No IR config for {args.ticker!r} yet — the first refresh must pass "
+                "--url/--file (plus --platform / --results-center-url) so the parser "
+                f"config can be generated. Configured: {configured_tickers(repo_root)}",
+                file=sys.stderr,
+            )
+            return 2
         from ir_pipeline.discover import discover_spreadsheet_url
 
         try:
@@ -61,6 +66,29 @@ def main() -> int:
             print(f"Could not discover a spreadsheet URL for {args.ticker}.", file=sys.stderr)
             return 4
         path = download_spreadsheet(url, repo_root, args.ticker)
+
+    # Self-generating per-company parser: if no config exists, the pipeline builds
+    # one from the just-fetched spreadsheet (LLM maps its rows -> the ticker's
+    # holdings tier_1_kpis) and persists it to micro_thesis/ir_config/<T>.json.
+    built = False
+    if cfg is None:
+        from ir_pipeline.config_builder import build_ir_config
+
+        cfg = build_ir_config(
+            args.ticker,
+            path,
+            platform=args.platform or "mz",
+            results_center_url=args.results_center_url or "",
+            repo_root=repo_root,
+        )
+        built = True
+        if not cfg.spreadsheet_kpis:
+            print(
+                f"Generated an empty IR config for {args.ticker} — no holdings "
+                "tier_1_kpis matched the spreadsheet. See micro_thesis/ir_config/.",
+                file=sys.stderr,
+            )
+            return 5
 
     parsed = parse_spreadsheet(path, cfg, max_quarters=args.quarters)
     db_path = repo_root / "data" / "portfolio.db"
@@ -75,6 +103,8 @@ def main() -> int:
         json.dumps(
             {
                 "ticker": args.ticker.upper(),
+                "config_generated": built,
+                "config_kpis": [s.kpi_name for s in cfg.spreadsheet_kpis],
                 "source_file": str(path),
                 "doc_id": doc_id,
                 "rows_inserted": inserted,
@@ -99,6 +129,13 @@ def _parse_args() -> argparse.Namespace:
         "--discover",
         action="store_true",
         help="Discover the current spreadsheet URL via the IR results-center browser adapter",
+    )
+    # Used only when generating a ticker's config on its first refresh.
+    p.add_argument("--platform", help="Discovery platform for a new config (mz | q4cdn)")
+    p.add_argument(
+        "--results-center-url",
+        dest="results_center_url",
+        help="IR results-center URL stored in a newly generated config (for future --discover)",
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     return p.parse_args()

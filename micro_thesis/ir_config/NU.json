@@ -1,0 +1,36 @@
+{
+  "ticker": "NU",
+  "platform": "mz",
+  "results_center_url": "https://www.investidores.nu/en/financials/results-center/",
+  "label_col": 1,
+  "spreadsheet_kpis": [
+    {
+      "kpi_name": "Monthly ARPAC (USD)",
+      "sheet": "Managerial indicators",
+      "row_label": "Average Revenue per Active Customer",
+      "unit": "usd",
+      "scale": 1.0
+    },
+    {
+      "kpi_name": "Risk-adjusted NIM (NIM minus cost of risk)",
+      "sheet": "Managerial indicators",
+      "row_label": "Risk-adjusted NIM (%)",
+      "unit": "percent",
+      "scale": 100.0
+    },
+    {
+      "kpi_name": "NPL 15-90d",
+      "sheet": "NPLs",
+      "row_label": "15-90 days NPL",
+      "unit": "percent",
+      "scale": 100.0
+    },
+    {
+      "kpi_name": "NPL 90d+",
+      "sheet": "NPLs",
+      "row_label": "90+ NPL",
+      "unit": "percent",
+      "scale": 100.0
+    }
+  ]
+}
