@@ -6,10 +6,13 @@ cache (`data/bear_case/<TICKER>.json`); if the file exists and is younger than
 `cache_ttl_days`, parses it and returns without re-calling the LLM. Otherwise
 assembles inputs from the upstream sections, calls llm_client.generate_bear_case,
 caches the raw JSON, and parses into FailureMode rows. A transient empty or
-unparseable LLM response degrades to a MISSING_DATA section that names the
-reason (loud, not a silent stub) so one flaky §7 call can't abort the whole
-multi-section brief build — re-running retries. A hard LLM-call exception
-still surfaces per the repo's "fail loudly" rule.
+unparseable LLM response — OR a transient call failure (timeout, non-zero exit,
+both Claude + Gemini momentarily down) — degrades to a MISSING_DATA section that
+names the reason (loud, not a silent stub) so one flaky §7 call can't abort the
+whole multi-section brief build; re-running retries. Genuine hard stops still
+surface per the repo's "fail loudly" rule: a monthly budget cap
+(LLMBudgetExceeded) or a missing CLI (LLMSetupError) propagate — see
+``is_hard_stop`` in src/llm/cli.py.
 
 The on-disk cache existed pre-Phase-A as a sidecar for cross-section anchoring
 (load_bear_anchor); this module now also READS from it for cost containment.
@@ -26,7 +29,7 @@ from io import StringIO
 from pathlib import Path
 from typing import cast
 
-from llm_client import generate_bear_case, load_ir_anchor
+from llm_client import generate_bear_case, is_hard_stop, load_ir_anchor
 from report.models import (
     BearCaseSection,
     EarningsSection,
@@ -89,19 +92,40 @@ def build(
         if cached is not None:
             return cached
 
-    response_text = generate_bear_case(
-        ticker=ticker,
-        thesis=thesis.thesis_full or "",
-        break_conditions=thesis.break_conditions,
-        last_quarter_summaries=_last_summaries(earnings, n=4),
-        financials_table_md=_financials_md(financials),
-        segments_table_md=_segments_md(segments),
-        kpi_status_md=_kpi_status_md(thesis),
-        ticker_specific_md=_ticker_specific_md(ticker, repo_root),
-        ts_signals_md=_ts_signals_md(ticker, repo_root),
-        ir_anchor_md=load_ir_anchor(repo_root, ticker),
-        repo_root=repo_root,
-    )
+    try:
+        response_text = generate_bear_case(
+            ticker=ticker,
+            thesis=thesis.thesis_full or "",
+            break_conditions=thesis.break_conditions,
+            last_quarter_summaries=_last_summaries(earnings, n=4),
+            financials_table_md=_financials_md(financials),
+            segments_table_md=_segments_md(segments),
+            kpi_status_md=_kpi_status_md(thesis),
+            ticker_specific_md=_ticker_specific_md(ticker, repo_root),
+            ts_signals_md=_ts_signals_md(ticker, repo_root),
+            ir_anchor_md=load_ir_anchor(repo_root, ticker),
+            repo_root=repo_root,
+        )
+    except Exception as exc:
+        # A hard LLM CALL exception (distinct from the empty/unparseable
+        # *response* handled in the parse guard below). Genuine hard stops — a
+        # monthly budget cap (LLMBudgetExceeded) or the CLI not being installed
+        # (LLMSetupError) — must PROPAGATE so the build fails loudly; re-running
+        # won't help. A transient operational failure (timeout, non-zero exit,
+        # both Claude + Gemini momentarily down) degrades to a loud MISSING_DATA
+        # banner so one flaky §7 call can't abort every other section + the
+        # render and leave the daily cron with no artifact at all.
+        if is_hard_stop(exc):
+            raise
+        log.error(
+            "bear_case LLM call failed for %s: %s: %s", ticker, type(exc).__name__, exc
+        )
+        return _degraded_bear(
+            ticker,
+            "The bear-case LLM call failed operationally (timeout, or both the "
+            "Claude CLI and the Gemini fallback were momentarily unavailable). "
+            "Re-run to retry.",
+        )
     # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
     # pairwise SayDo) can cross-pollinate the analyst's named bear failure
     # modes via load_bear_anchor() — see llm_client.py.
@@ -121,19 +145,28 @@ def build(
             len(response_text or ""),
             exc,
         )
-        return BearCaseSection(
-            status=SectionStatus.MISSING_DATA,
-            missing=missing(
-                stage="SYNTHESIZE(bear_case_llm)",
-                fix_command=(
-                    f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm"
-                ),
-                detail=(
-                    "The bear-case LLM call returned an empty or unparseable "
-                    "response (usually transient). Re-run to retry."
-                ),
-            ),
+        return _degraded_bear(
+            ticker,
+            "The bear-case LLM call returned an empty or unparseable "
+            "response (usually transient). Re-run to retry.",
         )
+
+
+def _degraded_bear(ticker: str, detail: str) -> BearCaseSection:
+    """Loud MISSING_DATA banner for a transient §7 failure — an empty /
+    unparseable response OR a transient call exception. Names the reason so the
+    failure is visible (not a silent stub); a re-run retries. Hard stops
+    (budget / setup) never reach here — they propagate (see ``is_hard_stop``)."""
+    return BearCaseSection(
+        status=SectionStatus.MISSING_DATA,
+        missing=missing(
+            stage="SYNTHESIZE(bear_case_llm)",
+            fix_command=(
+                f"python execution/build_artifacts.py --ticker {ticker.upper()} --enable-llm"
+            ),
+            detail=detail,
+        ),
+    )
 
 
 def _read_cache(

@@ -32,7 +32,7 @@ import re
 from pathlib import Path
 from typing import cast
 
-from llm_client import generate_qa_topics
+from llm_client import generate_qa_topics, is_hard_stop
 from report.models import (
     AppendixSection,
     QAEntry,
@@ -316,7 +316,11 @@ def _apply_llm_topics(
             raw = generate_qa_topics(ticker, quarter_label, payload)
             cached = _parse_topics_response(raw)
             _save_topics_cache(repo_root, ticker, cache_key, cached)
-        except Exception:
+        except Exception as exc:
+            # Hard stops (monthly budget cap, CLI not installed) must propagate
+            # — they affect the whole build, not just these Q&A labels.
+            if is_hard_stop(exc):
+                raise
             # Soft-fail: keep regex-derived labels. The exception was logged in
             # generate_qa_topics; no second log here keeps the noise down.
             return entries

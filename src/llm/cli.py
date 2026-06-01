@@ -201,6 +201,45 @@ class LLMBudgetExceeded(RuntimeError):
         self.check = check
 
 
+class LLMSetupError(RuntimeError):
+    """Raised when the Claude CLI cannot be located (binary not installed /
+    not on PATH).
+
+    Distinct from a transient operational failure: a missing binary is a
+    DETERMINISTIC, operator-actionable setup problem that affects EVERY LLM
+    call identically, so re-running won't help. Section-level callers must let
+    this PROPAGATE (fail the build loudly with the install hint) rather than
+    degrade one section to a "transient, re-run" banner that would be a lie.
+
+    Subclasses ``RuntimeError`` so the pre-existing ``except RuntimeError`` /
+    ``pytest.raises(RuntimeError)`` call sites that caught the old bare
+    RuntimeError keep working unchanged.
+    """
+
+
+def is_hard_stop(exc: BaseException) -> bool:
+    """Classify an LLM-call exception as a HARD STOP (must propagate) vs a
+    transient failure (a section may degrade and a re-run retries).
+
+    Single source of truth for the section-degradation policy — every report
+    section that wraps an LLM call routes its ``except`` through this so the
+    "what's non-degradable" taxonomy lives in one place.
+
+    Hard stops (return True → propagate, fail the whole build loudly):
+      * ``LLMBudgetExceeded`` — a hard per-purpose monthly cap. Degrading would
+        silently mask that spend is over budget; the operator must raise the
+        cap or wait for the reset.
+      * ``LLMSetupError`` — the ``claude`` CLI isn't installed / resolvable.
+        Deterministic and re-run-proof; fail loudly with the install hint.
+
+    Everything else (return False → degrade the affected section): subprocess
+    timeouts, non-zero exits, both Claude + Gemini momentarily unavailable,
+    empty / unparseable completions. One flaky call shouldn't nuke every other
+    section + the render.
+    """
+    return isinstance(exc, (LLMBudgetExceeded, LLMSetupError))
+
+
 def _verify_setup_once() -> None:
     """Resolve and cache the absolute path to the ``claude`` binary on first call.
 
@@ -217,7 +256,7 @@ def _verify_setup_once() -> None:
         return
     resolved = shutil.which("claude")
     if resolved is None:
-        raise RuntimeError(
+        raise LLMSetupError(
             "Claude Code CLI ('claude') not found in PATH. Install it from "
             "https://code.claude.com/docs/en/setup, then either set "
             "ANTHROPIC_API_KEY in your shell / .env or run `claude auth login`."
@@ -316,9 +355,11 @@ def _call_claude(
     or the binary becoming unavailable mid-run — falls back to Gemini Flash if
     ``GEMINI_API_KEY`` is available in the environment.
 
-    Setup errors (``claude`` binary missing on first call) raise RuntimeError
-    directly without invoking the fallback — that needs to be fixed by the
-    operator, not papered over.
+    Setup errors (``claude`` binary missing on first call) raise
+    ``LLMSetupError`` (a RuntimeError subclass) directly without invoking the
+    fallback — that needs to be fixed by the operator, not papered over.
+    ``is_hard_stop`` classifies it (and ``LLMBudgetExceeded``) as a hard stop
+    so section-level callers propagate rather than degrade.
 
     Prompts are passed via stdin to avoid Windows CreateProcess command-line
     length limits (32K). Output is ``--output-format json`` so the wrapper can
