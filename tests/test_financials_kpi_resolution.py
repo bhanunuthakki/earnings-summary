@@ -1,4 +1,4 @@
-"""Chart-priority → kpi_definition resolution in the §3 financials builder.
+"""End-to-end §3 chart series resolution in the financials builder.
 
 Regression guard for the NU bug where the holdings `chart_priorities` label
 ("Monthly ARPAC") resolved by exact name to a near-empty *duplicate* definition
@@ -6,9 +6,11 @@ Regression guard for the NU bug where the holdings `chart_priorities` label
 (12 rows), so the chart rendered as an empty "sparse series" placeholder even
 though the data was present one name-key away.
 
-The resolver now matches on a parenthetical-insensitive normalized name and
-prefers the definition with the MOST observations, so a fragmented duplicate can
-never shadow the canonical series.
+`_kpi_series_for` now delegates name resolution to the shared
+`compute.kpi_resolver` (parenthetical-insensitive, richest-definition-wins) — the
+resolver's own unit tests live in `tests/test_kpi_resolver.py`. These tests pin
+the financials-specific wiring: that the builder pulls the full history through
+the resolver and keeps deduping coexisting per-period sources to the latest.
 """
 
 from __future__ import annotations
@@ -20,11 +22,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from report.sections.financials import (  # noqa: E402
-    _kpi_series_for,
-    _normalize_kpi_name,
-    _resolve_kpi_definition_name,
-)
+from report.sections.financials import _kpi_series_for  # noqa: E402
 
 _QUARTER_ENDS = [
     "2023-03-31",
@@ -79,95 +77,23 @@ def _add_def(conn: sqlite3.Connection, ticker: str, name: str, unit: str = "actu
 
 
 def _add_facts(
-    conn: sqlite3.Connection, ticker: str, def_id: int, ends: list[str], unit: str = "actual"
+    conn: sqlite3.Connection,
+    ticker: str,
+    def_id: int,
+    ends: list[str],
+    *,
+    value: float = 1.0,
+    source_doc_id: int = 1,
+    unit: str = "actual",
 ) -> None:
     for end in ends:
         quarter = (int(end[5:7]) - 1) // 3 + 1
         conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, value, unit, kpi_definition_id, "
-            "fiscal_period_type) VALUES (?, ?, ?, ?, ?, ?)",
-            (ticker, end, 1.0, unit, def_id, f"Q{quarter}"),
+            "fiscal_period_type, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticker, end, value, unit, def_id, f"Q{quarter}", source_doc_id),
         )
     conn.commit()
-
-
-# ---------------------------------------------------------------------------
-# _normalize_kpi_name
-# ---------------------------------------------------------------------------
-
-
-def test_normalize_strips_trailing_parenthetical() -> None:
-    assert _normalize_kpi_name("Monthly ARPAC (USD)") == "monthly arpac"
-    assert _normalize_kpi_name("ROE (annualized, consolidated)") == "roe"
-    assert _normalize_kpi_name("Risk-adjusted NIM (NIM minus cost of risk)") == "risk-adjusted nim"
-
-
-def test_normalize_collapses_whitespace_and_case() -> None:
-    assert _normalize_kpi_name("  Monthly   ARPAC  ") == "monthly arpac"
-
-
-def test_normalize_keeps_distinct_metrics_distinct() -> None:
-    # "NIM" must NOT collapse onto "Risk-adjusted NIM ...".
-    assert _normalize_kpi_name("NIM") != _normalize_kpi_name(
-        "Risk-adjusted NIM (NIM minus cost of risk)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# _resolve_kpi_definition_name
-# ---------------------------------------------------------------------------
-
-
-def test_short_label_resolves_to_richest_canonical_definition() -> None:
-    conn = _make_db()
-    canonical = _add_def(conn, "NU", "Monthly ARPAC (USD)")
-    duplicate = _add_def(conn, "NU", "Monthly ARPAC")
-    _add_facts(conn, "NU", canonical, _QUARTER_ENDS)  # 12 obs
-    _add_facts(conn, "NU", duplicate, _QUARTER_ENDS[5:7])  # 2 stray obs
-
-    # The short holdings label must reach the 12-obs canonical series.
-    assert _resolve_kpi_definition_name(conn, "NU", "Monthly ARPAC") == "Monthly ARPAC (USD)"
-    # The canonical label resolves to itself.
-    assert _resolve_kpi_definition_name(conn, "NU", "Monthly ARPAC (USD)") == "Monthly ARPAC (USD)"
-
-
-def test_richest_wins_even_when_exact_duplicate_present() -> None:
-    """Exactness is only a tie-breaker — observation count dominates."""
-    conn = _make_db()
-    rich = _add_def(conn, "NU", "ROE (annualized, consolidated)")
-    sparse_exact = _add_def(conn, "NU", "ROE")
-    _add_facts(conn, "NU", rich, _QUARTER_ENDS)  # 12 obs
-    _add_facts(conn, "NU", sparse_exact, _QUARTER_ENDS[:1])  # 1 obs, exact name
-    assert _resolve_kpi_definition_name(conn, "NU", "ROE") == "ROE (annualized, consolidated)"
-
-
-def test_exactness_breaks_ties_at_equal_obs() -> None:
-    conn = _make_db()
-    exact = _add_def(conn, "NU", "Activity Rate")
-    qualified = _add_def(conn, "NU", "Activity Rate (consolidated)")
-    _add_facts(conn, "NU", exact, _QUARTER_ENDS[:3])
-    _add_facts(conn, "NU", qualified, _QUARTER_ENDS[3:6])  # same count (3)
-    assert _resolve_kpi_definition_name(conn, "NU", "Activity Rate") == "Activity Rate"
-
-
-def test_unrelated_label_does_not_match() -> None:
-    conn = _make_db()
-    nim = _add_def(conn, "NU", "Risk-adjusted NIM (NIM minus cost of risk)")
-    _add_facts(conn, "NU", nim, _QUARTER_ENDS)
-    # "NIM" is a different metric — must not borrow the risk-adjusted series.
-    assert _resolve_kpi_definition_name(conn, "NU", "NIM") is None
-
-
-def test_resolution_is_ticker_scoped() -> None:
-    conn = _make_db()
-    other = _add_def(conn, "MELI", "Monthly ARPAC (USD)")
-    _add_facts(conn, "MELI", other, _QUARTER_ENDS)
-    assert _resolve_kpi_definition_name(conn, "NU", "Monthly ARPAC") is None
-
-
-# ---------------------------------------------------------------------------
-# _kpi_series_for (end-to-end)
-# ---------------------------------------------------------------------------
 
 
 def test_series_pulls_full_history_through_resolver() -> None:
@@ -183,3 +109,21 @@ def test_series_pulls_full_history_through_resolver() -> None:
     assert series.name == "Monthly ARPAC (USD)"
     # Full 12-quarter history, not the 2-row duplicate → chartable, not "sparse".
     assert sum(1 for v in series.levels_full if v is not None) == 12
+
+
+def test_series_dedups_coexisting_sources_to_latest() -> None:
+    """An LLM-brief value and a later IR-spreadsheet restatement coexist as two
+    rows for one period; the series must surface the latest-ingested (highest
+    source_doc_id) value and still show exactly one observation per quarter —
+    the dedup behavior the refactor had to preserve."""
+    conn = _make_db()
+    canonical = _add_def(conn, "NU", "Monthly ARPAC (USD)")
+    _add_facts(conn, "NU", canonical, _QUARTER_ENDS, value=10.0, source_doc_id=1)
+    # Restate the most recent quarter from a higher-id source.
+    _add_facts(conn, "NU", canonical, _QUARTER_ENDS[-1:], value=20.0, source_doc_id=2)
+
+    labels = [f"{e[:4]} Q{(int(e[5:7]) - 1) // 3 + 1}" for e in _QUARTER_ENDS]
+    series = _kpi_series_for(conn, "NU", "Monthly ARPAC", labels[-12:], labels)
+    assert series is not None
+    assert series.levels_full[-1] == 20.0  # restated value wins
+    assert sum(1 for v in series.levels_full if v is not None) == 12  # one obs/quarter

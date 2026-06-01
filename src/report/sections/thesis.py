@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
+from compute.kpi_resolver import resolve_kpi_definition_name
 from report.models import (
     BreakRuleEvaluation,
     BreakRuleObservation,
@@ -393,6 +394,15 @@ def _kpi_history(
         conn.close()
         return [], None
     cursor = conn.cursor()
+    # Resolve the holdings/break-rule label to the canonical definition name so a
+    # short label ("Monthly ARPAC") reaches the richest definition ("Monthly
+    # ARPAC (USD)") instead of an exact-name miss or a sparse fragmented
+    # duplicate — same resolver the §3 chart loader uses. No match → empty ledger
+    # history (status falls back to "unknown"), exactly as an exact-name miss did.
+    resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    if resolved_name is None:
+        conn.close()
+        return [], None
     # Defensive: source_excerpt may not exist on pre-0033 DBs. Detect column.
     has_excerpt_col = any(
         c["name"] == "source_excerpt"
@@ -418,7 +428,7 @@ def _kpi_history(
           )
         ORDER BY f.period_end ASC
         """,
-        (ticker.upper(), kpi_name),
+        (ticker.upper(), resolved_name),
     )
     out: list[tuple[str, float | None]] = []
     latest_excerpt: str | None = None

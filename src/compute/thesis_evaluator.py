@@ -22,6 +22,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from compute.kpi_resolver import resolve_kpi_definition_name
 from compute.soft_rule_evaluator import (
     SoftRule,
     SoftRuleResult,
@@ -191,17 +192,37 @@ def _fetch_kpi_history(
     kpi_name: str,
     n_periods: int,
 ) -> list[KpiObservation]:
-    """Return up to `n_periods` most-recent kpi_facts observations for (ticker, kpi_name).
+    """Return up to `n_periods` most-recent kpi_facts observations for the rule's KPI.
 
-    Joined to kpi_definitions on name; ordered by period_end DESC so caller sees
-    newest-first.
+    The rule's ``kpi_name`` is first resolved to the canonical
+    ``kpi_definitions.name`` via the shared resolver, so a short break-rule label
+    ("Monthly ARPAC") reaches the richest definition ("Monthly ARPAC (USD)")
+    rather than exact-matching a sparse fragmented duplicate (the bug PR #195
+    fixed for the §3 chart). No resolvable definition → no observations (caller
+    treats that as OK / no-data), exactly as an exact-name miss did.
+
+    Coexisting rows for one period (an LLM brief value plus the issuer's later
+    IR-spreadsheet restatement) are deduped to the latest-ingested source per
+    logical key — highest ``source_doc_id`` wins — matching the §3 chart loader
+    and the §2 ledger so the consecutive-periods check sees one observation per
+    period. Joined to kpi_definitions on name; ordered by period_end DESC so the
+    caller sees newest-first.
     """
+    resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    if resolved_name is None:
+        return []
     cur = conn.execute(
         "SELECT kf.period_end, kf.value, kf.unit "
         "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
         "WHERE kf.ticker = ? AND kd.name = ? "
+        "  AND kf.source_doc_id = ("
+        "      SELECT MAX(k2.source_doc_id) FROM kpi_facts k2 "
+        "      WHERE k2.ticker = kf.ticker "
+        "        AND k2.kpi_definition_id = kf.kpi_definition_id "
+        "        AND k2.period_end = kf.period_end "
+        "        AND k2.fiscal_period_type = kf.fiscal_period_type) "
         "ORDER BY kf.period_end DESC LIMIT ?",
-        (ticker.upper(), kpi_name, n_periods),
+        (ticker.upper(), resolved_name, n_periods),
     )
     out: list[KpiObservation] = []
     for row in cur.fetchall():

@@ -14,11 +14,11 @@ no growth columns at the annual cadence.
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
+from compute.kpi_resolver import QUARTERLY_FACT_PERIOD_TYPES, resolve_kpi_definition_name
 from report.models import (
     AnnualLineItem,
     FinancialsSection,
@@ -187,70 +187,6 @@ def _resolve_priorities(
     return resolved, kpi_series
 
 
-# Trailing "(...)" qualifier on a stored KPI name, e.g. "Monthly ARPAC (USD)"
-# or "ROE (annualized, consolidated)". Stripped when matching a holdings chart
-# label to a stored definition.
-_KPI_NAME_PAREN_TAIL_RX = re.compile(r"\s*\([^()]*\)\s*$")
-
-
-def _normalize_kpi_name(name: str) -> str:
-    """Lowercase, collapse whitespace, drop trailing parenthetical qualifiers.
-
-    "Monthly ARPAC (USD)" and "Monthly ARPAC" both normalize to "monthly arpac"
-    so a short holdings chart label still resolves to the canonical definition.
-    Only *trailing* parentheticals are stripped; an interior qualifier is kept so
-    genuinely distinct metrics don't collide.
-    """
-    s = name.strip()
-    while True:
-        stripped = _KPI_NAME_PAREN_TAIL_RX.sub("", s).strip()
-        if stripped == s:
-            break
-        s = stripped
-    return " ".join(s.split()).lower()
-
-
-def _resolve_kpi_definition_name(
-    conn: sqlite3.Connection, ticker: str, requested: str
-) -> str | None:
-    """Choose which stored kpi_definitions.name to chart for a requested label.
-
-    Among this ticker's definitions that carry quarterly facts, accept an exact
-    name match or a normalized-equal (parenthetical-insensitive) one, then pick
-    the candidate with the MOST observations — exactness only breaks ties. This
-    keeps a near-empty fragmented duplicate (e.g. a stray "Monthly ARPAC" with 2
-    rows) from shadowing the fully-populated canonical "Monthly ARPAC (USD)".
-    """
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT kd.name AS name, COUNT(*) AS n
-        FROM kpi_facts kf
-        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-        WHERE kf.ticker = ?
-          AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-        GROUP BY kd.name
-        """,
-        (ticker.upper(),),
-    )
-    want = _normalize_kpi_name(requested)
-    best_name: str | None = None
-    best_rank: tuple[int, int] = (-1, -1)  # (obs_count, exactness)
-    for r in cur.fetchall():
-        stored = str(r["name"])
-        if stored == requested:
-            exactness = 1
-        elif _normalize_kpi_name(stored) == want:
-            exactness = 0
-        else:
-            continue
-        rank = (int(r["n"]), exactness)
-        if rank > best_rank:
-            best_rank = rank
-            best_name = stored
-    return best_name
-
-
 def _kpi_series_for(
     conn: sqlite3.Connection,
     ticker: str,
@@ -259,7 +195,9 @@ def _kpi_series_for(
     quarter_labels_full: list[str],
 ) -> KpiSeries | None:
     """Pull a kpi_facts series, aligned to both display + full-history labels."""
-    resolved_name = _resolve_kpi_definition_name(conn, ticker, kpi_name)
+    resolved_name = resolve_kpi_definition_name(
+        conn, ticker, kpi_name, period_types=QUARTERLY_FACT_PERIOD_TYPES
+    )
     if resolved_name is None:
         return None
     cur = conn.cursor()
