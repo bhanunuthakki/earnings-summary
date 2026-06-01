@@ -172,6 +172,43 @@ def test_outstanding_actions_section_excludes_alerts_in_whats_new(
     assert f"alert #{old_alert.id}" in html
 
 
+def test_naive_utc_fired_at_in_window_renders(db_path: Path) -> None:
+    """Regression for the tz naive/aware crash.
+
+    Production triggers persist ``fired_at`` as NAIVE-UTC
+    (``datetime.now(UTC).replace(tzinfo=None)``) — unlike the aware fixtures
+    the other tests here use. Before the fix, the renderer compared that naive
+    value against an aware window bound and raised ``TypeError: can't compare
+    offset-naive and offset-aware datetimes``, so the morning digest crashed the
+    instant a real alert landed. This exercises the true production timestamp
+    shape end-to-end.
+    """
+    fired_naive = datetime.combine(TODAY, datetime.min.time()).replace(hour=8)
+    assert fired_naive.tzinfo is None  # guard: this is the production shape
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=fired_naive,
+        evidence_json=json.dumps({"summary": "Risk-adjusted NIM down 100bps QoQ"}),
+        signature_sha="sig-naive-utc",
+        db_path=db_path,
+    )
+    queue_action(
+        alert_id=alert.id,
+        action_kind="thesis_update",
+        payload={"ticker": "NU", "body": "Re-underwrite the NIM trajectory"},
+        db_path=db_path,
+    )
+
+    html = render_morning_digest(TODAY, db_path=db_path)
+
+    assert "NU" in html
+    assert "earnings_tone" in html
+    assert "Risk-adjusted NIM down 100bps QoQ" in html
+    assert "Re-underwrite the NIM trajectory" in html
+    assert "Nothing fired in the last 24h" not in html
+
+
 # ----------------------------------------------------------------------------
 # Document validity
 # ----------------------------------------------------------------------------

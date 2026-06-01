@@ -54,7 +54,7 @@ def render_morning_digest(
         since=window_start,
         db_path=db_path,
     )
-    pending_alerts = [a for a in pending_alerts_all if a.fired_at < window_end]
+    pending_alerts = [a for a in pending_alerts_all if _as_naive_utc(a.fired_at) < window_end]
     pending_alerts.sort(key=lambda a: (a.ticker, a.trigger_kind))
 
     actions_per_alert: dict[int, list[QueuedActionRow]] = {}
@@ -201,19 +201,37 @@ def _render_footer(body: StringIO, render_date: date) -> None:
 # ----------------------------------------------------------------------------
 
 
+def _as_naive_utc(dt: datetime) -> datetime:
+    """Coerce a timestamp to naive-UTC — the convention triggers persist
+    ``fired_at`` in (``datetime.now(UTC).replace(tzinfo=None)``).
+
+    Naive input is assumed to already be UTC (the trigger contract) and
+    returned unchanged; aware input is converted to UTC then stripped. This
+    keeps the window comparison total — mixing a naive ``fired_at`` with an
+    aware bound raises ``TypeError`` — regardless of which shape a row was
+    written in.
+    """
+    return dt.astimezone(UTC).replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
 def _window_for_date(render_date: date) -> tuple[datetime, datetime]:
-    """24h window straddling ``render_date``.
+    """24h window straddling ``render_date``, as naive-UTC datetimes.
 
     Start: render_date − 1d at 00:00 UTC.
     End:   render_date + 1d at 00:00 UTC.
+
+    Returned tz-naive to match how triggers persist ``fired_at`` (naive-UTC
+    via ``datetime.now(UTC).replace(tzinfo=None)``); the store round-trips that
+    naive, so the bounds must be naive too or the ``fired_at < window_end``
+    comparison in ``render_morning_digest`` raises ``TypeError``.
 
     The wide window picks up after-close prints filed in yesterday's
     evening (any TZ) and morning-of-render fires alike. Filtering down
     to "alerts strictly before end" guards against a re-generated digest
     surfacing alerts from after the digest date.
     """
-    start_dt = datetime.combine(render_date - timedelta(days=1), time.min, tzinfo=UTC)
-    end_dt = datetime.combine(render_date + timedelta(days=1), time.min, tzinfo=UTC)
+    start_dt = datetime.combine(render_date - timedelta(days=1), time.min)
+    end_dt = datetime.combine(render_date + timedelta(days=1), time.min)
     return start_dt, end_dt
 
 
