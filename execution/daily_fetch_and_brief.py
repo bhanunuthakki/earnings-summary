@@ -167,6 +167,18 @@ def _parse_args() -> argparse.Namespace:
         help="Pass --enable-llm to build_artifacts (populates §8 recent_developments + §9 bear_case)",
     )
     p.add_argument(
+        "--renderer",
+        choices=("default", "workspace", "both"),
+        default="both",
+        help=(
+            "Which HTML renderer build_artifacts emits. 'default' writes only the "
+            "legacy {DATE}_report.html; 'workspace' writes only the tabbed "
+            "{DATE}_workspace.html; 'both' (default) writes both. Default is 'both' so "
+            "the dashboard/comments stack gets the workspace artifact it globs for "
+            "while build_earnings_calendar still finds report.html."
+        ),
+    )
+    p.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -443,6 +455,8 @@ def _refresh_one_ticker(
         "--repo-root",
         str(repo_root),
         "--allow-untracked",
+        "--renderer",
+        args.renderer,
     ]
     if args.enable_llm:
         build_cmd.append("--enable-llm")
