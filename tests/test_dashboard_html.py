@@ -7,7 +7,7 @@ Style / CSS specifics are not asserted — those can drift freely.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from pipeline.dashboard_html import render_dashboard_html
 from pipeline.dashboard_status import DashboardRow, TranscriptStatus
@@ -169,3 +169,29 @@ def test_render_escapes_ticker_in_links():
     # Ticker cell now links to the drill-down; the ticker is escaped into both
     # the href and the label (BRK-B has no HTML-special chars, so it's identity).
     assert "<td class='ticker'><a href='/ticker/BRK-B'>BRK-B</a></td>" in html
+
+
+# ----- Refresh IR KPIs control (POSTs /actions/refresh-ir, streams the job) -----
+
+
+def test_render_includes_refresh_ir_control():
+    """The IR-refresh form, its endpoint POST, and the SSE wiring all render —
+    even with no tickers (the control is page-level, not per-row)."""
+    html = render_dashboard_html({"portfolio": [], "evaluation": []}, generated_at=_FIXED_NOW)
+    assert 'id="refresh-ir-form"' in html
+    assert 'id="ir-ticker"' in html  # ticker input
+    assert 'id="ir-quarters"' in html  # quarters input
+    assert "fetch('/actions/refresh-ir'" in html  # POSTs to the endpoint
+    assert "new EventSource(r.body.stream_url)" in html  # streams via the job's stream_url
+    # Handles each SSE frame the registry emits (start / log / done).
+    assert "m.event === 'start'" in html
+    assert "m.event === 'log'" in html
+    assert "m.event === 'done'" in html
+
+
+def test_render_ir_control_js_escapes_newline_not_raw():
+    """Regression: the log-append must emit a JS `\\n` escape. A raw newline in
+    the Python source would land inside a single-quoted JS string and break it."""
+    html = render_dashboard_html({"portfolio": [], "evaluation": []}, generated_at=_FIXED_NOW)
+    assert "outputEl.textContent += line + '\\n'" in html  # two-char escape
+    assert "outputEl.textContent += line + '\n'" not in html  # never a raw newline

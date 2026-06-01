@@ -1,10 +1,11 @@
 """Server-side HTML renderer for the dashboard.
 
 Pure function: takes the rows dict produced by `dashboard_status.build_dashboard_rows`
-and returns a full HTML document. No JS yet — PR 1 is read-only; action UI lands
-in later PRs. Style is minimal and self-contained (no external CSS / fonts) so
-the page renders identically whether the user has the workspace report open
-elsewhere or not.
+and returns a full HTML document. Carries one piece of client JS — the "Refresh
+IR KPIs" control, which POSTs to `/actions/refresh-ir` and streams the job's
+output back via an EventSource on `/actions/stream/<job_id>`. Style is minimal
+and self-contained (no external CSS / fonts) so the page renders identically
+whether the user has the workspace report open elsewhere or not.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html import escape
 
-from pipeline.dashboard_status import DashboardRow
+from pipeline.dashboard_status import DashboardRow, TranscriptStatus
 
 _BREACH_BADGE_COLOR: dict[str, str] = {
     "intact": "#3a8a3a",
@@ -37,6 +38,7 @@ def render_dashboard_html(
     stamp = (generated_at or datetime.now(UTC)).isoformat(timespec="seconds")
 
     return _PAGE_TEMPLATE.format(
+        actions_block=_ACTIONS_BLOCK,
         portfolio_section=_render_section(
             "Portfolio", portfolio_rows, empty_msg="No portfolio tickers."
         ),
@@ -97,7 +99,7 @@ def _render_row(row: DashboardRow) -> str:
     )
 
 
-def _format_transcript(t) -> str:
+def _format_transcript(t: TranscriptStatus | None) -> str:
     if t is None or t.period_end is None:
         return "<span class='muted'>—</span>"
     qa_marker = ""
@@ -145,6 +147,149 @@ def _format_breach(status: str | None) -> str:
         return "<span class='muted'>—</span>"
     color = _BREACH_BADGE_COLOR.get(status, "#7a7a7a")
     return f"<span class='breach-badge' style='background:{escape(color)}'>{escape(status)}</span>"
+
+
+# The "Refresh IR KPIs" control. Rendered into the page via a `{actions_block}`
+# placeholder, so it is a `.format()` *argument* — its literal `{`/`}` (CSS rules,
+# JS object literals) pass through untouched and need no double-brace escaping.
+# In the JS, newlines appended to the log are written `\\n` in this Python source
+# so they reach the browser as a JS `\n` escape, not a raw line break (which would
+# be a syntax error inside a single-quoted JS string).
+_ACTIONS_BLOCK = """
+<section class="actions-section" aria-labelledby="actions-h2">
+  <h2 id="actions-h2">Refresh IR KPIs</h2>
+  <p class="actions-help">
+    Pull the issuer's official historical-data spreadsheet (a headless browser
+    discovers the current URL), parse it, and ingest KPI facts at the IR-doc
+    tier &mdash; superseding LLM-brief values. The ticker needs a parser config
+    in <code>micro_thesis/ir_config/</code> (e.g. NU).
+  </p>
+  <form id="refresh-ir-form" class="actions-form" autocomplete="off">
+    <input type="text" id="ir-ticker" name="ticker" class="ir-ticker"
+           placeholder="Ticker (e.g. NU)" required aria-label="Ticker">
+    <label class="ir-quarters-label">quarters
+      <input type="number" id="ir-quarters" name="quarters" class="ir-quarters"
+             value="8" min="1" max="40">
+    </label>
+    <button type="submit" id="ir-submit">Refresh IR KPIs</button>
+    <span id="ir-status" class="actions-status" role="status" aria-live="polite"></span>
+  </form>
+  <pre id="ir-output" class="actions-output" hidden></pre>
+</section>
+<style>
+.actions-section { margin: 0 0 28px; padding: 16px 18px; background: var(--bg-card);
+  border: 1px solid var(--border); border-radius: 4px; }
+.actions-section h2 { margin: 0 0 6px; }
+.actions-help { font-size: 12px; color: var(--fg-muted); margin: 0 0 12px; max-width: 760px; }
+.actions-help code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.actions-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.ir-ticker { width: 170px; padding: 6px 9px; font-size: 13px; border: 1px solid var(--border);
+  border-radius: 4px; text-transform: uppercase;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.ir-quarters-label { font-size: 12px; color: var(--fg-muted); display: inline-flex;
+  align-items: center; gap: 6px; }
+.ir-quarters { width: 60px; padding: 6px 8px; font-size: 13px; border: 1px solid var(--border);
+  border-radius: 4px; }
+#ir-submit { padding: 7px 14px; font-size: 13px; font-weight: 600; color: #fff;
+  background: var(--link); border: none; border-radius: 4px; cursor: pointer; }
+#ir-submit:disabled { opacity: 0.5; cursor: progress; }
+.actions-status { font-size: 12px; font-weight: 500; }
+.actions-status.running { color: #b88a1f; }
+.actions-status.ok { color: #3a8a3a; }
+.actions-status.error { color: #b04040; }
+.actions-output { margin: 12px 0 0; padding: 10px 12px; max-height: 320px; overflow-y: auto;
+  background: #1c1c1c; color: #e6e6e6; border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+</style>
+<script>
+(function () {
+  var form = document.getElementById('refresh-ir-form');
+  if (!form) return;
+  var tickerEl = document.getElementById('ir-ticker');
+  var quartersEl = document.getElementById('ir-quarters');
+  var submitEl = document.getElementById('ir-submit');
+  var statusEl = document.getElementById('ir-status');
+  var outputEl = document.getElementById('ir-output');
+  var es = null;
+  var finished = false;
+
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = 'actions-status' + (cls ? ' ' + cls : '');
+  }
+  function appendLine(line) {
+    outputEl.hidden = false;
+    outputEl.textContent += line + '\\n';
+    outputEl.scrollTop = outputEl.scrollHeight;
+  }
+  function closeStream() {
+    if (es) { es.close(); es = null; }
+  }
+
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var ticker = (tickerEl.value || '').trim().toUpperCase();
+    if (!ticker) { setStatus('Enter a ticker.', 'error'); return; }
+    var quarters = parseInt(quartersEl.value, 10);
+    if (!(quarters > 0)) quarters = 8;
+    closeStream();
+    finished = false;
+    outputEl.textContent = '';
+    outputEl.hidden = true;
+    submitEl.disabled = true;
+    setStatus('Starting...', 'running');
+
+    fetch('/actions/refresh-ir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: ticker, quarters: quarters })
+    }).then(function (resp) {
+      return resp.json().then(function (body) {
+        return { ok: resp.ok, status: resp.status, body: body };
+      });
+    }).then(function (r) {
+      if (!r.ok) {
+        var msg = (r.body && r.body.error) ? r.body.error : ('HTTP ' + r.status);
+        setStatus('Error: ' + msg, 'error');
+        submitEl.disabled = false;
+        return;
+      }
+      setStatus('Running ' + r.body.ticker + ' (' + r.body.kind + ')...', 'running');
+      es = new EventSource(r.body.stream_url);
+      es.onmessage = function (e) {
+        var m;
+        try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m.event === 'start') {
+          appendLine('> job ' + m.job_id + ' started for ' + m.ticker + ' (' + m.kind + ')');
+        } else if (m.event === 'log') {
+          appendLine(m.line);
+        } else if (m.event === 'done') {
+          finished = true;
+          appendLine('# exit code ' + m.exit_code);
+          if (m.exit_code === 0) {
+            setStatus('Done. KPIs ingested at IR-doc tier.', 'ok');
+          } else {
+            setStatus('Failed (exit ' + m.exit_code + '). See log above.', 'error');
+          }
+          submitEl.disabled = false;
+          closeStream();
+        }
+      };
+      es.onerror = function () {
+        if (finished) return;
+        setStatus('Stream interrupted - is the server still running?', 'error');
+        submitEl.disabled = false;
+        closeStream();
+      };
+    }).catch(function (err) {
+      setStatus('Request failed: ' + err.message, 'error');
+      submitEl.disabled = false;
+    });
+  });
+})();
+</script>
+""".strip()
 
 
 _PAGE_TEMPLATE = """<!doctype html>
@@ -258,11 +403,13 @@ td.ticker a:hover {{ text-decoration: underline; }}
   </div>
   <span class="generated-at">generated {generated_at}</span>
 </header>
+{actions_block}
 {portfolio_section}
 {evaluation_section}
 <div class="banner">
-  Read-only view (PR 1). Per-ticker actions, comments processing, and bulk
-  refreshes land in later PRs. Workspace report links open in a new tab.
+  Workspace report links open in a new tab. The "Refresh IR KPIs" panel above
+  ingests issuer-spreadsheet KPIs live; broader comments processing and bulk
+  refreshes land in later PRs.
 </div>
 </body>
 </html>
