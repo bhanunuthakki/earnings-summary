@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 
 class FmpIncomeStatementRecord(BaseModel):
-    """One period record from FMP /api/v3/income-statement/{ticker}."""
+    """One period record from FMP /stable/income-statement?symbol={ticker}."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -50,7 +50,7 @@ class FmpIncomeStatementRecord(BaseModel):
 
 
 class FmpBalanceSheetRecord(BaseModel):
-    """One period record from FMP /api/v3/balance-sheet-statement/{ticker}."""
+    """One period record from FMP /stable/balance-sheet-statement?symbol={ticker}."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -95,7 +95,7 @@ class FmpBalanceSheetRecord(BaseModel):
 
 
 class FmpCashFlowRecord(BaseModel):
-    """One period record from FMP /api/v3/cash-flow-statement/{ticker}."""
+    """One period record from FMP /stable/cashflow-statement?symbol={ticker}."""
 
     model_config = ConfigDict(extra="ignore")
 
@@ -131,7 +131,7 @@ class FmpCashFlowRecord(BaseModel):
 
 
 class FmpAsReportedRecord(BaseModel):
-    """One period record from FMP /api/v3/as-reported-* endpoints.
+    """One period record from FMP /stable/as-reported-* endpoints.
 
     The `data` field is a dict of XBRL tag names (lowercase concatenated) to
     values. Values are int/float for monetary fields, str for metadata fields
