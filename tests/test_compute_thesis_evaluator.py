@@ -16,6 +16,7 @@ from compute.thesis_evaluator import (
     KpiObservation,
     RuleTier,
     ThesisVerdict,
+    _fetch_kpi_history,
     evaluate_rule,
     evaluate_ticker_thesis,
     load_holdings_spec,
@@ -743,3 +744,94 @@ def test_persist_verdict_soft_column_null_when_no_soft_rules(
         "SELECT soft_rule_results_json FROM thesis_evaluations WHERE ticker='PURE'"
     ).fetchone()
     assert row["soft_rule_results_json"] is None
+
+
+# ---------------------------------------------------------------------------
+# KPI name resolution + per-period source dedup — break-rule evaluation reads
+# the canonical richest definition, not a sparse exact-name duplicate, and
+# collapses coexisting per-period sources to the latest (PR #195's evaluation-
+# path sibling). Resolver unit tests live in tests/test_kpi_resolver.py.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_kpi_history_resolves_short_label_to_richest_def(
+    conn: sqlite3.Connection,
+) -> None:
+    """A short break-rule label reaches the richest matching definition, not the
+    sparse exact-name duplicate it happens to spell."""
+    # Sparse exact-name duplicate (1 stray row) sits at 99; rich canonical (4
+    # rows) sits at 11. Exact-name matching would read 99; the resolver picks the
+    # 4-row "Monthly ARPAC (USD)".
+    _seed_kpi(conn, "NU", "Monthly ARPAC", [("2025-12-31", 99)])
+    _seed_kpi(
+        conn,
+        "NU",
+        "Monthly ARPAC (USD)",
+        [("2025-03-31", 11), ("2025-06-30", 11), ("2025-09-30", 11), ("2025-12-31", 11)],
+    )
+    obs = _fetch_kpi_history(conn, "NU", "Monthly ARPAC", 1)
+    assert len(obs) == 1
+    assert obs[0].value == Decimal("11")  # canonical series, not the stray 99
+
+
+def test_fetch_kpi_history_dedups_coexisting_sources_to_latest(
+    conn: sqlite3.Connection,
+) -> None:
+    """Two sources for one (period_end, fiscal_period_type) — an LLM brief later
+    restated by the IR spreadsheet — collapse to the latest-ingested value, so
+    the consecutive-periods check sees one observation per period."""
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES ('NU', 'NPL 90d+', 'percent', 'ir_doc')"
+    )
+    kpi_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='NU' AND name='NPL 90d+'"
+    ).fetchone()["id"]
+    for source_doc_id, val in ((1, 5.0), (2, 8.0)):
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+            "kpi_definition_id, value, unit, source_doc_id) "
+            "VALUES ('NU', '2025-12-31', 'Q4', ?, ?, 'percent', ?)",
+            (kpi_id, str(val), source_doc_id),
+        )
+    conn.commit()
+    obs = _fetch_kpi_history(conn, "NU", "NPL 90d+", 4)
+    assert len(obs) == 1  # deduped to one row for the period
+    assert obs[0].value == Decimal("8.0")  # latest-ingested source wins
+
+
+def test_fetch_kpi_history_returns_empty_for_unresolvable_label(
+    conn: sqlite3.Connection,
+) -> None:
+    """A label matching no fact-carrying definition yields no observations —
+    evaluate_rule then treats it as OK / no-data, exactly as before."""
+    _seed_kpi(conn, "NU", "Risk-adjusted NIM (NIM minus cost of risk)", [("2025-12-31", 9)])
+    # "NIM" is a distinct metric — must not borrow the risk-adjusted series.
+    assert _fetch_kpi_history(conn, "NU", "NIM", 4) == []
+
+
+def test_evaluate_ticker_thesis_resolves_short_break_rule_label(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """End-to-end: a break_rule whose kpi_name is a short label evaluates against
+    the richest definition. The sparse exact-name duplicate sits ABOVE the
+    threshold (would read OK); the rich canonical sits below and breaches."""
+    payload = {
+        "ticker": "NU",
+        "thesis": "...",
+        "business_model_rules": [
+            {
+                "rule_id": "arpac_below_20", "kpi_name": "Monthly ARPAC",
+                "comparator": "lt", "threshold": 20, "unit": "percent",
+                "consecutive_periods": 1, "narrative": "Monthly ARPAC < 20",
+            }
+        ],
+    }
+    (tmp_path / "NU.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "NU", "Monthly ARPAC", [("2025-12-31", 99)])  # stray, would be OK
+    _seed_kpi(
+        conn, "NU", "Monthly ARPAC (USD)", [("2025-09-30", 11), ("2025-12-31", 11)]
+    )  # canonical, breaches
+    verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.BREACH
+    assert verdict.rule_evaluations[0].observations[0].value == Decimal("11")
