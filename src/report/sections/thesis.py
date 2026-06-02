@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from compute.kpi_resolver import resolve_kpi_definition_name
+from compute.kpi_resolver import normalize_kpi_name, resolve_kpi_definition_name
+from report.kpi_naming import kpi_qualifier
 from report.models import (
     BreakRuleEvaluation,
     BreakRuleObservation,
@@ -183,39 +185,58 @@ def _build_ledger(
         if prev is None or rank.get(ev.status, 0) > rank.get(prev, 0):
             by_kpi[key] = ev.status
 
-    rows: list[KpiLedgerRow] = []
-    for tier_key, tier_label in (
-        ("tier_1_kpis", "tier_1"),
-        ("tier_2_kpis", "tier_2"),
-        ("tier_3_kpis", "tier_3"),
-    ):
-        kpis = holdings.get(tier_key) or []
-        if not isinstance(kpis, list):
-            continue
-        tier_rows: list[KpiLedgerRow] = []
-        for k in kpis:
-            if not isinstance(k, dict):
+    # One DB connection for the whole ledger: each KPI needs both its fact
+    # history and its definition metadata (notes / unit), which resolve through
+    # the same connection. None when the DB is absent — the ledger still renders
+    # from the holdings JSON with empty history and a name-derived definition.
+    conn = open_repo_db(repo_root)
+    try:
+        rows: list[KpiLedgerRow] = []
+        for tier_key, tier_label in (
+            ("tier_1_kpis", "tier_1"),
+            ("tier_2_kpis", "tier_2"),
+            ("tier_3_kpis", "tier_3"),
+        ):
+            raw_kpis = holdings.get(tier_key)
+            if not isinstance(raw_kpis, list):
                 continue
-            name = str(k.get("name", ""))
-            history, latest_excerpt = _kpi_history(ticker, repo_root, name)
-            tier_rows.append(
-                KpiLedgerRow(
-                    name=name,
-                    tier=tier_label,  # type: ignore[arg-type]
-                    unit=str(k.get("unit")) if k.get("unit") else None,
-                    source_hint=str(k.get("source")) if k.get("source") else None,
-                    # Schema-v2 holdings JSONs key this `break_condition`; older
-                    # ones use `break`. Accept either so the ledger's Break column
-                    # isn't silently empty for v2 tickers (NU, MELI, BN).
-                    break_condition=str(k.get("break") or k.get("break_condition") or "") or None,
-                    history=history,
-                    current_status=_status_for(name, history, by_kpi),
-                    latest_source_excerpt=latest_excerpt,
+            tier_rows: list[KpiLedgerRow] = []
+            for k in cast("list[object]", raw_kpis):
+                if not isinstance(k, dict):
+                    continue
+                kd = cast("dict[str, object]", k)
+                name = str(kd.get("name", ""))
+                if conn is not None:
+                    history, latest_excerpt = _kpi_history_conn(conn, ticker, name)
+                    notes, db_unit = _kpi_definition_meta(conn, ticker, name)
+                else:
+                    history, latest_excerpt, notes, db_unit = [], None, None, None
+                holdings_unit = str(kd.get("unit")) if kd.get("unit") else None
+                tier_rows.append(
+                    KpiLedgerRow(
+                        name=name,
+                        tier=tier_label,  # type: ignore[arg-type]
+                        # Backfill the unit from the resolved definition when the
+                        # holdings JSON declares none (schema-v2 tickers like NU
+                        # leave it blank) so the Unit column stops rendering empty.
+                        unit=holdings_unit or _unit_label(db_unit),
+                        source_hint=str(kd.get("source")) if kd.get("source") else None,
+                        # Schema-v2 holdings JSONs key this `break_condition`; older
+                        # ones use `break`. Accept either so the ledger's Break column
+                        # isn't silently empty for v2 tickers (NU, MELI, BN).
+                        break_condition=str(kd.get("break") or kd.get("break_condition") or "") or None,
+                        history=history,
+                        current_status=_status_for(name, history, by_kpi),
+                        latest_source_excerpt=latest_excerpt,
+                        definition=_derive_definition(name, notes, db_unit),
+                    )
                 )
-            )
-        tier_rows.sort(key=lambda r: r.name.lower())
-        rows.extend(tier_rows)
-    return rows
+            tier_rows.sort(key=lambda r: r.name.lower())
+            rows.extend(tier_rows)
+        return rows
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _status_for(
@@ -235,6 +256,102 @@ def _status_for(
     if any(v is not None for _, v in history):
         return "green"
     return "unknown"
+
+
+# kpi_definitions.unit enum value → short Unit-column label. 'actual' (the
+# non-descriptive catch-all unit) maps to None so it never fills the column
+# with a meaningless token; those KPIs carry their real unit in the name's
+# parenthetical (e.g. "Monthly ARPAC (USD)").
+_UNIT_LABEL: dict[str, str] = {
+    "percent": "%",
+    "bps": "bps",
+    "ratio": "ratio",
+    "count": "count",
+    "millions": "M",
+    "thousands": "K",
+    "billions": "B",
+}
+
+# Longer-form unit gloss used only as a last resort, when a KPI has neither
+# curator notes nor a parenthetical qualifier to define it.
+_UNIT_DESCRIPTOR: dict[str, str] = {
+    "percent": "percentage",
+    "bps": "basis points",
+    "ratio": "ratio",
+    "count": "count",
+    "millions": "millions",
+    "thousands": "thousands",
+    "billions": "billions",
+}
+
+
+def _unit_label(db_unit: str | None) -> str | None:
+    """Short Unit-column label for a kpi_definitions.unit value, or None."""
+    return _UNIT_LABEL.get((db_unit or "").strip().lower())
+
+
+def _derive_definition(name: str, notes: str | None, db_unit: str | None) -> str | None:
+    """Short gloss of what a KPI measures, in priority order:
+
+    1. Curator ``notes`` on the kpi_definitions row (verbatim) — richest, but
+       empty for ~every ticker today.
+    2. The name's own parenthetical qualifier (``"Risk-adjusted NIM (NIM minus
+       cost of risk)"`` → ``"NIM minus cost of risk"``) — the de-facto
+       definition in the current holdings JSONs.
+    3. A bare unit descriptor, when the name carries no qualifier — a weak last
+       resort so the row still says *something* about how it's measured.
+
+    Returns None when none of the above yields text.
+    """
+    if notes and notes.strip():
+        return notes.strip()
+    qualifier = kpi_qualifier(name)
+    if qualifier:
+        return qualifier
+    return _UNIT_DESCRIPTOR.get((db_unit or "").strip().lower())
+
+
+def _kpi_definition_meta(
+    conn: sqlite3.Connection, ticker: str, kpi_name: str
+) -> tuple[str | None, str | None]:
+    """Return ``(notes, unit)`` for the kpi_definitions row best matching
+    ``kpi_name``, or ``(None, None)``.
+
+    Resolution is *independent of whether facts exist* — unlike
+    ``_kpi_history_conn``, which goes through the fact-requiring resolver — so a
+    tracked-but-empty tier-2/3 KPI still surfaces its unit (and any curator
+    notes). Prefers the richest fact-bearing definition (the same row the
+    history came from), then an exact name match, then a parenthetical-insensitive
+    normalized match.
+    """
+    if not kpi_name or not has_table(conn, "kpi_definitions"):
+        return None, None
+    # Defensive: `notes` (and, on minimal fixtures, `unit`) may not exist on
+    # older / test DBs. Detect columns and alias missing ones to NULL so the
+    # query never references a phantom column — same pattern as `_kpi_history_conn`
+    # guarding `source_excerpt`.
+    cols = {c["name"] for c in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()}
+    notes_sel = "notes" if "notes" in cols else "NULL AS notes"
+    unit_sel = "unit" if "unit" in cols else "NULL AS unit"
+    meta_cols = f"{notes_sel}, {unit_sel}"
+    resolved = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    for candidate in (resolved, kpi_name):
+        if candidate is None:
+            continue
+        row = conn.execute(
+            f"SELECT {meta_cols} FROM kpi_definitions WHERE ticker = ? AND name = ?",
+            (ticker.upper(), candidate),
+        ).fetchone()
+        if row is not None:
+            return row["notes"], row["unit"]
+    want = normalize_kpi_name(kpi_name)
+    for row in conn.execute(
+        f"SELECT name, {meta_cols} FROM kpi_definitions WHERE ticker = ?",
+        (ticker.upper(),),
+    ):
+        if normalize_kpi_name(str(row["name"])) == want:
+            return row["notes"], row["unit"]
+    return None, None
 
 
 _BreachStatusLiteral = Literal["ok", "warn", "breach", "unresolved", "unknown"]
@@ -377,24 +494,21 @@ def _coerce_tier(v: object) -> Literal["universal", "business_model"]:
     return "business_model"
 
 
-def _kpi_history(
-    ticker: str, repo_root: Path, kpi_name: str
+def _kpi_history_conn(
+    conn: sqlite3.Connection, ticker: str, kpi_name: str
 ) -> tuple[list[tuple[str, float | None]], str | None]:
-    """Return ([(period, value), ...], latest_source_excerpt or None).
+    """Return ([(period, value), ...], latest_source_excerpt or None) for one KPI.
 
     The history list is chronological (oldest → newest) so the brief's
     sparkline renders left-to-right. The latest_source_excerpt is pulled
     from the row with the most recent period_end whose source_excerpt is
     non-null — gives the reader provenance for the headline value without
-    surfacing per-period quotes.
+    surfacing per-period quotes. Does not close ``conn`` (the caller owns it);
+    ``_build_ledger`` shares one connection across the whole ledger.
     """
     if not kpi_name:
         return [], None
-    conn = open_repo_db(repo_root)
-    if conn is None:
-        return [], None
     if not (has_table(conn, "kpi_facts") and has_table(conn, "kpi_definitions")):
-        conn.close()
         return [], None
     cursor = conn.cursor()
     # Resolve the holdings/break-rule label to the canonical definition name so a
@@ -404,7 +518,6 @@ def _kpi_history(
     # history (status falls back to "unknown"), exactly as an exact-name miss did.
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
     if resolved_name is None:
-        conn.close()
         return [], None
     # Defensive: source_excerpt may not exist on pre-0033 DBs. Detect column.
     has_excerpt_col = any(
@@ -444,5 +557,4 @@ def _kpi_history(
             # the analyst's most-recent supplied quote is the most relevant
             # context for the headline value.
             latest_excerpt = excerpt
-    conn.close()
     return out, latest_excerpt

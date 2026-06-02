@@ -1219,6 +1219,32 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .thesis-ledger-details[open] summary::before { transform: rotate(90deg); }
 .thesis-ledger-details summary:hover { background: var(--paper); }
 
+/* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a
+   muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness
+   flag, and the "tracked, no data yet" footnote. */
+.kpi-ledger-table td:first-child { white-space: normal; max-width: 300px; }
+.kpi-ledger-row td { vertical-align: top; }
+.ledger-def { margin-top: 3px; font-weight: 400; white-space: normal; max-width: 300px; }
+.ledger-trend { white-space: nowrap; }
+.ledger-spark { color: var(--accent); display: inline-block; vertical-align: middle; }
+.ledger-spark svg { display: inline-block; vertical-align: middle; }
+.ledger-delta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted); white-space: nowrap;
+}
+.ledger-stale {
+  margin-left: 6px; font-size: 9px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--warn);
+  border: 1px solid var(--warn); border-radius: 3px; padding: 0 4px;
+}
+/* Dim a stale row's data but keep the flag itself at full strength. */
+.ledger-stale-row td { opacity: 0.55; }
+.ledger-stale-row .ledger-stale { opacity: 1; }
+.ledger-tracked-only {
+  padding: 9px var(--panel-pad-x) 12px;
+  border-top: 1px dashed var(--hairline);
+}
+.ledger-tracked-only strong { color: var(--fg); }
+
 .underweighted-panel { border-color: var(--warn); }
 .underweighted-panel .panel-title { color: var(--warn); }
 

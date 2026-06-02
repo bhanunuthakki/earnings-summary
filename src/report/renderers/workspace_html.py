@@ -18,7 +18,7 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import TypeAlias
@@ -28,6 +28,7 @@ from llm.calibration import (
     daily_avg_scores,
     summarize_by_prompt_version,
 )
+from report.kpi_naming import clean_kpi_name
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -84,6 +85,8 @@ from report.renderers.workspace_data import (
     PrintVsGuideRow,
     WorkspaceP3Panels,
     filter_important_print_vs_guide,
+    kpi_is_stale,
+    kpi_trend_delta,
     load_workspace_p3_panels,
     parse_print_vs_guide,
     quarter_short,
@@ -410,7 +413,12 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "Thesis",
             len(spec.thesis.kpi_ledger),
             lambda b: _thesis_tab(
-                b, spec.snapshot, spec.thesis, spec.bear_case, p3.macro_sensitivities
+                b,
+                spec.snapshot,
+                spec.thesis,
+                spec.bear_case,
+                p3.macro_sensitivities,
+                spec.generation_date,
             ),
         ),
         (
@@ -1874,6 +1882,7 @@ def _thesis_tab(
     thesis: ThesisSection,
     bear: BearCaseSection,
     macro_sensitivities: list[MacroSensitivityRow] | None = None,
+    report_date: date | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     eyebrow_bits = ["Thesis", "Valuation", "Break conditions"]
@@ -1905,7 +1914,7 @@ def _thesis_tab(
     # breakers (soft thesis-breakers), competitive watchlist (who to track),
     # full tier-2/3 KPI ledger (collapsible). Each panel skips itself when
     # the underlying list is empty so the tab doesn't stack stub panels.
-    _thesis_hygiene_panels(body, thesis)
+    _thesis_hygiene_panels(body, thesis, report_date)
     body.write("</div>")
     # NOTE: bear case (`bear` arg) is rendered separately by `_bear_tab` —
     # it's promoted to a first-class tab. Arg kept here for back-compat
@@ -2098,7 +2107,9 @@ def _bear_tab(body: StringIO, bear: BearCaseSection) -> None:
     body.write("</div>")
 
 
-def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
+def _thesis_hygiene_panels(
+    body: StringIO, thesis: ThesisSection, report_date: date | None = None
+) -> None:
     """Render break_conditions / qualitative_breakers / competitive_watchlist
     side-by-side, then the full KPI ledger as a collapsible details panel."""
     cards: list[tuple[str, str, list[str]]] = []
@@ -2140,55 +2151,116 @@ def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
             body.write("</ul></div>")
         body.write("</div>")
 
-    # Full KPI ledger — every tier, every row. Tier-1 has the source/break
-    # metadata that the top sparkline strip can't carry; tier-2/3 don't make
-    # the strip at all. Show open by default (high signal, low cost).
+    # Full KPI ledger — definitions + parsed data, not a bare list. Each row
+    # carries a clean name + definition gloss, a sparkline + YoY/QoQ delta off
+    # the loaded history, and a staleness flag. Tier-2/3 rows with zero facts
+    # collapse into a "tracked, no data yet" footnote so the table isn't padded
+    # with empty rows. Show open by default (high signal, low cost).
     if thesis.kpi_ledger:
-        body.write(
-            '<details class="thesis-ledger-details" open><summary>'
-            f"KPI ledger detail ({len(thesis.kpi_ledger)} rows)</summary>"
-            '<div class="table-scroll"><table class="fin-table"><thead><tr>'
-            "<th>KPI</th><th>Tier</th><th>Unit</th>"
-            '<th class="num">Latest</th>'
-            "<th>Status</th><th>Break condition</th><th>Source</th>"
-            "</tr></thead><tbody>"
-        )
         # Sort: tier-1 first, then tier-2, then tier-3 — preserves analyst
         # priority in the visible list.
         tier_rank = {"tier_1": 0, "tier_2": 1, "tier_3": 2}
         rows_sorted = sorted(thesis.kpi_ledger, key=lambda r: (tier_rank.get(r.tier, 9), r.name))
-        for r in rows_sorted:
-            status_cls = {
-                "green": "pos",
-                "yellow": "warn",
-                "red": "neg",
-                "unknown": "muted",
-            }.get(r.current_status, "muted")
-            # Latest value cell. Shows `value (period)` when history exists,
-            # `—` otherwise. When latest_source_excerpt is set, attach it
-            # as a `title` tooltip so hovering reveals the verbatim quote /
-            # analyst statement that produced the value.
-            if r.history:
-                period_label, value = r.history[-1]
-                latest_text = f"{value:.2f}".rstrip("0").rstrip(".") if value is not None else "—"
-                latest_html = f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
-            else:
-                latest_html = '<span class="muted">—</span>'
-            tooltip_attr = (
-                f' title="{_esc(r.latest_source_excerpt)}"' if r.latest_source_excerpt else ""
-            )
+        # Keep every tier-1 row (its emptiness is itself thesis signal) but pull
+        # zero-fact tier-2/3 rows out of the table into the footnote.
+        shown = [r for r in rows_sorted if r.tier == "tier_1" or _kpi_has_data(r)]
+        tracked_only = [r for r in rows_sorted if r.tier != "tier_1" and not _kpi_has_data(r)]
+        summary = f"KPI ledger detail · {len(shown)} tracked"
+        if tracked_only:
+            summary += f", {len(tracked_only)} awaiting data"
+        body.write(
+            '<details class="thesis-ledger-details" open><summary>'
+            f"{_esc(summary)}</summary>"
+            '<div class="table-scroll"><table class="fin-table kpi-ledger-table"><thead><tr>'
+            "<th>KPI</th><th>Tier</th><th>Unit</th>"
+            '<th class="num">Latest</th><th>Trend</th>'
+            "<th>Status</th><th>Break condition</th><th>Source</th>"
+            "</tr></thead><tbody>"
+        )
+        for r in shown:
+            _kpi_ledger_row(body, r, report_date)
+        body.write("</tbody></table></div>")
+        if tracked_only:
+            names = ", ".join(_esc(clean_kpi_name(r.name)) for r in tracked_only)
             body.write(
-                f'<tr data-commentable="true" data-anchor-type="kpi_ledger_row" '
-                f'data-anchor-key="{_esc(r.name)}" data-anchor-tab="thesis">'
-                f"<td>{_esc(r.name)}</td>"
-                f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
-                f"<td>{_esc(r.unit or '')}</td>"
-                f'<td class="num"{tooltip_attr}>{latest_html}</td>'
-                f'<td class="num {status_cls}">{_esc(r.current_status.upper())}</td>'
-                f"<td>{_esc(r.break_condition or '')}</td>"
-                f"<td>{_esc(r.source_hint or '')}</td></tr>"
+                '<div class="ledger-tracked-only muted xsmall">'
+                f"<strong>Tracked, no data yet</strong> ({len(tracked_only)}): {names}"
+                "</div>"
             )
-        body.write("</tbody></table></div></details>")
+        body.write("</details>")
+
+
+def _kpi_has_data(row: KpiLedgerRow) -> bool:
+    return any(v is not None for _, v in row.history)
+
+
+def _kpi_ledger_row(body: StringIO, r: KpiLedgerRow, report_date: date | None) -> None:
+    """One enriched ledger row: clean name + definition gloss, latest value with
+    a staleness flag, and a sparkline + YoY/QoQ delta off ``r.history``."""
+    status_cls = {
+        "green": "pos",
+        "yellow": "warn",
+        "red": "neg",
+        "unknown": "muted",
+    }.get(r.current_status, "muted")
+
+    # Latest value cell — `value (period)` when history exists, with a `stale`
+    # flag when the latest fact predates the report by more than ~2 quarters so
+    # a year-old number doesn't read as current.
+    stale = False
+    if r.history:
+        period_label, value = r.history[-1]
+        latest_text = f"{value:.2f}".rstrip("0").rstrip(".") if value is not None else "—"
+        latest_html = (
+            f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
+        )
+        if (
+            report_date is not None
+            and value is not None
+            and kpi_is_stale(period_label, report_date)
+        ):
+            stale = True
+            latest_html += (
+                ' <span class="ledger-stale" title="Latest fact is older than ~2 quarters '
+                '— may not reflect the current period">stale</span>'
+            )
+    else:
+        latest_html = '<span class="muted">—</span>'
+
+    # Trend cell — sparkline + YoY/QoQ delta. Needs ≥2 real observations.
+    values = [v for _, v in r.history if v is not None]
+    if len(values) >= 2:
+        spark = sparkline(values, width=84, height=22)
+        label, sign = kpi_trend_delta(r.history, r.unit, r.name)
+        delta_html = f' <span class="ledger-delta {sign}">{_esc(label)}</span>' if label else ""
+        trend_html = f'<span class="ledger-spark">{spark}</span>{delta_html}'
+    elif len(values) == 1:
+        trend_html = '<span class="muted xsmall">single obs</span>'
+    else:
+        trend_html = '<span class="muted">—</span>'
+
+    tooltip_attr = f' title="{_esc(r.latest_source_excerpt)}"' if r.latest_source_excerpt else ""
+    row_cls = "kpi-ledger-row" + (" ledger-stale-row" if stale else "")
+
+    # KPI cell — clean (de-parenthesized) name, with the qualifier demoted to a
+    # muted definition line so the name reads cleanly and the definition isn't
+    # duplicated inside it.
+    name_html = f"<strong>{_esc(clean_kpi_name(r.name))}</strong>"
+    if r.definition:
+        name_html += f'<div class="ledger-def muted xsmall">{_esc(r.definition)}</div>'
+
+    body.write(
+        f'<tr class="{row_cls}" data-commentable="true" data-anchor-type="kpi_ledger_row" '
+        f'data-anchor-key="{_esc(r.name)}" data-anchor-tab="thesis">'
+        f"<td>{name_html}</td>"
+        f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
+        f"<td>{_esc(r.unit or '')}</td>"
+        f'<td class="num"{tooltip_attr}>{latest_html}</td>'
+        f'<td class="ledger-trend">{trend_html}</td>'
+        f'<td class="num {status_cls}">{_esc(r.current_status.upper())}</td>'
+        f"<td>{_esc(r.break_condition or '')}</td>"
+        f"<td>{_esc(r.source_hint or '')}</td></tr>"
+    )
 
 
 def _most_underweighted_panel(body: StringIO, bear: BearCaseSection) -> None:
