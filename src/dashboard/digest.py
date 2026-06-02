@@ -5,9 +5,12 @@ One self-contained HTML page per day with five sections:
   1. Header                     — date + "what's new since yesterday" label
   2. What's new (last 24h)      — pending alerts fired in the window
   3. Outstanding queued actions — pending actions whose alert is outside (2)
-  4. Upcoming this week         — hard-coded "no calendar integration yet"
-                                   stub (filled in by a later PR)
-  5. Cross-holding rollup       — hard-coded "deferred per roadmap" stub
+  4. Upcoming this week         — honest stub ("no calendar integration yet"):
+                                   no upcoming-earnings data source is persisted
+                                   (earnings_surprises holds only past releases)
+  5. Recent thesis changes      — the cross-holding thesis-ledger panel: the
+                                   newest accepted, alert-driven thesis edits
+                                   (_render_thesis_ledger over list_recent_entries)
 
 Empty-state path: sections 1+2 collapse to "Nothing fired in the last
 24h" rather than emitting empty divs, so the morning open of an empty
