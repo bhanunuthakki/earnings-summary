@@ -2008,6 +2008,7 @@ Selection guidance:
 - FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.
 - If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.
 - Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.
+- Note: choosing P/E (NTM) additionally surfaces a PEG ratio (forward P/E divided by forward EPS growth) on the Valuation tab — the diagnostic lens when the thesis is about earnings compounding and "cheap or rich vs growth" is the question. PEG is auto-omitted for every other multiple and for unprofitable / negative-growth names, so weigh it as a point in P/E (NTM)'s favor only when forward EPS growth is genuinely the bet.
 
 {NUMBER_FORMATTING_BLOCK}
 

@@ -121,6 +121,8 @@ def _to_section(r: compute_valuation.ValuationBasisResult) -> ValuationBasisSect
         rationale=r.rationale,
         current_value=r.current_value,
         current_value_display=r.current_value_display,
+        peg_ratio=r.peg_ratio,
+        peg_growth_pct=r.peg_growth_pct,
         current_period_end=_as_date(r.current_period_end),
         history=history,
         historical_min=r.historical_min,

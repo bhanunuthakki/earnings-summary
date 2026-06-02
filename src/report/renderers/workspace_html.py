@@ -1822,6 +1822,21 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
             f'<span class="mono">{vb.historical_median:.1f}x</span></div>'
             "</div>"
         )
+    # PEG (only when the chosen multiple is P/E (NTM) and forward EPS growth is
+    # positive — the compute layer leaves peg_ratio None elsewhere, so the row
+    # self-skips for P/B banks, EV/EBITDA, FCF multiples, and unprofitable /
+    # negative-growth names).
+    if vb.peg_ratio is not None:
+        growth_txt = f"{vb.peg_growth_pct:.1f}%" if vb.peg_growth_pct is not None else "—"
+        pe_txt = vb.current_value_display or "—"
+        body.write(
+            '<div class="valuation-peg" '
+            f'title="PEG = {_esc(pe_txt)} P/E (NTM) &divide; {_esc(growth_txt)} forward EPS growth">'
+            f'<div class="valuation-peg-value">{vb.peg_ratio:.2f}</div>'
+            '<div class="valuation-peg-label">PEG (NTM)</div>'
+            f'<div class="valuation-peg-sub">{_esc(pe_txt)} &divide; {_esc(growth_txt)} fwd EPS growth</div>'
+            "</div>"
+        )
     if vb.rich_cheap_verdict:
         body.write(f'<div class="valuation-verdict">{_esc(vb.rich_cheap_verdict)}</div>')
     body.write("</div>")
