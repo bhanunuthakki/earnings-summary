@@ -204,7 +204,10 @@ def _build_ledger(
                     tier=tier_label,  # type: ignore[arg-type]
                     unit=str(k.get("unit")) if k.get("unit") else None,
                     source_hint=str(k.get("source")) if k.get("source") else None,
-                    break_condition=str(k.get("break")) if k.get("break") else None,
+                    # Schema-v2 holdings JSONs key this `break_condition`; older
+                    # ones use `break`. Accept either so the ledger's Break column
+                    # isn't silently empty for v2 tickers (NU, MELI, BN).
+                    break_condition=str(k.get("break") or k.get("break_condition") or "") or None,
                     history=history,
                     current_status=_status_for(name, history, by_kpi),
                     latest_source_excerpt=latest_excerpt,
