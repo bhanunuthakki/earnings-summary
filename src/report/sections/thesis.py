@@ -237,7 +237,7 @@ def _status_for(
     return "unknown"
 
 
-_BreachStatusLiteral = Literal["ok", "warn", "breach", "unknown"]
+_BreachStatusLiteral = Literal["ok", "warn", "breach", "unresolved", "unknown"]
 
 
 def _load_break_rule_state(
@@ -324,7 +324,7 @@ def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
 
 def _coerce_status(s: str) -> _BreachStatusLiteral:
     s = s.lower()
-    if s in ("ok", "warn", "breach"):
+    if s in ("ok", "warn", "breach", "unresolved"):
         return s  # type: ignore[return-value]
     return "unknown"
 

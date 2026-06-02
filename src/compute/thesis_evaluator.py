@@ -191,7 +191,7 @@ def _fetch_kpi_history(
     ticker: str,
     kpi_name: str,
     n_periods: int,
-) -> list[KpiObservation]:
+) -> list[KpiObservation] | None:
     """Return up to `n_periods` most-recent kpi_facts observations for the rule's KPI.
 
     The rule's ``kpi_name`` is first resolved to the canonical
@@ -210,7 +210,11 @@ def _fetch_kpi_history(
     """
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
     if resolved_name is None:
-        return []
+        # Unresolvable: no kpi_facts definition matches this rule's KPI name
+        # (e.g. a derived "... YoY change (bps)" series the pipeline hasn't
+        # materialized, or a metric never extracted). Signal None so the caller
+        # marks the rule UNRESOLVED rather than silently OK.
+        return None
     cur = conn.execute(
         "SELECT kf.period_end, kf.value, kf.unit "
         "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
@@ -255,21 +259,33 @@ def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool
 
 
 def evaluate_rule(
-    rule: BreakRule, observations: list[KpiObservation]
+    rule: BreakRule, observations: list[KpiObservation] | None
 ) -> RuleEvaluation:
     """Classify one rule given its observations.
 
+    UNRESOLVED: ``observations is None`` — the rule's KPI didn't resolve to any
+                kpi_facts definition, so the breaker can't be evaluated. Kept
+                distinct from OK so an unevaluable breaker isn't read as passing.
     BREACH: have >= consecutive_periods observations and ALL match the rule.
     WARN:   any observation matches but not all consecutive_periods of them.
-    OK:     no observation matches the rule.
-    Returns the same OK status when there are zero observations (no data yet).
+    OK:     no observation matches the rule (incl. resolved-but-no-rows-yet).
     """
+    if observations is None:
+        return RuleEvaluation(
+            rule=rule,
+            status=BreachStatus.UNRESOLVED,
+            observations=(),
+            detail=(
+                "unresolved: rule KPI has no matching kpi_facts definition — "
+                "needs a derived or extracted series for this metric"
+            ),
+        )
     if not observations:
         return RuleEvaluation(
             rule=rule,
             status=BreachStatus.OK,
             observations=(),
-            detail="no kpi_facts observations available",
+            detail="resolved, but no observations on file yet",
         )
     matches = [
         _compare(obs.value, rule.comparator, rule.threshold) for obs in observations
@@ -306,6 +322,10 @@ def evaluate_rule(
 
 
 _STATUS_RANK: dict[BreachStatus, int] = {
+    # UNRESOLVED ranks with OK for the worst-rule rollup (a breaker we can't
+    # evaluate must not raise a false BREACH); the §2 panel surfaces it per-rule
+    # so the data gap stays visible.
+    BreachStatus.UNRESOLVED: 0,
     BreachStatus.OK: 0,
     BreachStatus.WARN: 1,
     BreachStatus.BREACH: 2,
@@ -313,10 +333,17 @@ _STATUS_RANK: dict[BreachStatus, int] = {
 
 
 def _rollup_status(evaluations: list[RuleEvaluation]) -> BreachStatus:
-    """Holding-level status from hard rules only = worst-rule status. Empty -> OK."""
+    """Holding-level status from hard rules only = worst-rule status. Empty -> OK.
+
+    UNRESOLVED never becomes the OVERALL verdict: it ranks with OK, but ``max``
+    can surface an UNRESOLVED element on an otherwise all-clear holding. The
+    overall is the worst EVALUABLE status (OK/WARN/BREACH); per-rule UNRESOLVED
+    stays visible in the §2 panel so the data gap isn't hidden.
+    """
     if not evaluations:
         return BreachStatus.OK
-    return max(evaluations, key=lambda e: _STATUS_RANK[e.status]).status
+    worst = max(evaluations, key=lambda e: _STATUS_RANK[e.status]).status
+    return BreachStatus.OK if worst is BreachStatus.UNRESOLVED else worst
 
 
 def _rollup_with_soft(
