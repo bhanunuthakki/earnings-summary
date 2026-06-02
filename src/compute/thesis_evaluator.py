@@ -258,9 +258,7 @@ def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool
     raise ValueError(f"Unhandled comparator: {comparator}")
 
 
-def evaluate_rule(
-    rule: BreakRule, observations: list[KpiObservation] | None
-) -> RuleEvaluation:
+def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) -> RuleEvaluation:
     """Classify one rule given its observations.
 
     UNRESOLVED: ``observations is None`` — the rule's KPI didn't resolve to any
@@ -287,9 +285,7 @@ def evaluate_rule(
             observations=(),
             detail="resolved, but no observations on file yet",
         )
-    matches = [
-        _compare(obs.value, rule.comparator, rule.threshold) for obs in observations
-    ]
+    matches = [_compare(obs.value, rule.comparator, rule.threshold) for obs in observations]
     matching_count = sum(matches)
     obs_tuple = tuple(observations)
 
@@ -300,9 +296,7 @@ def evaluate_rule(
             observations=obs_tuple,
             detail=f"none of last {len(observations)} obs match",
         )
-    if matching_count >= rule.consecutive_periods and all(
-        matches[: rule.consecutive_periods]
-    ):
+    if matching_count >= rule.consecutive_periods and all(matches[: rule.consecutive_periods]):
         latest = observations[0]
         return RuleEvaluation(
             rule=rule,
@@ -380,9 +374,7 @@ def evaluate_ticker_thesis(
     spec = load_holdings_spec(holdings_dir, ticker)
     evaluations: list[RuleEvaluation] = []
     for rule in (*spec.break_rules, *spec.business_model_rules):
-        history = _fetch_kpi_history(
-            conn, ticker, rule.kpi_name, rule.consecutive_periods
-        )
+        history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
         evaluations.append(evaluate_rule(rule, history))
     soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)
     overall = _rollup_with_soft(evaluations, soft_results)

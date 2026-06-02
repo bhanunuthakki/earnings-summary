@@ -130,9 +130,13 @@ def test_evaluate_rule_unresolved_when_observations_none() -> None:
     """observations=None (rule KPI resolved to no kpi_facts definition) -> UNRESOLVED,
     not OK — an unevaluable breaker must not read as passing/intact."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="Risk-adjusted NIM YoY change (bps)",
-        comparator=Comparator.LT, threshold=Decimal("0"), unit=Unit.PERCENT,
-        consecutive_periods=2, narrative="NIM YoY compression",
+        rule_id="r1",
+        kpi_name="Risk-adjusted NIM YoY change (bps)",
+        comparator=Comparator.LT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=2,
+        narrative="NIM YoY compression",
     )
     result = evaluate_rule(rule, None)
     assert result.status == BreachStatus.UNRESOLVED
@@ -145,14 +149,26 @@ def test_rollup_status_unresolved_never_sets_overall() -> None:
     regressed a Pydantic literal_error when the persisted overall reached the
     report. A real breach still wins over an unresolved rule."""
     lt0 = BreakRule(
-        rule_id="r", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("0"), unit=Unit.PERCENT, consecutive_periods=1, narrative="X < 0",
+        rule_id="r",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="X < 0",
     )
     gt0 = BreakRule(
-        rule_id="b", kpi_name="Y", comparator=Comparator.GT,
-        threshold=Decimal("0"), unit=Unit.PERCENT, consecutive_periods=1, narrative="Y > 0",
+        rule_id="b",
+        kpi_name="Y",
+        comparator=Comparator.GT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="Y > 0",
     )
-    obs5 = [KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("5"), unit=Unit.PERCENT)]
+    obs5 = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("5"), unit=Unit.PERCENT)
+    ]
     unresolved = evaluate_rule(lt0, None)  # UNRESOLVED
     ok = evaluate_rule(lt0, obs5)  # 5 < 0 is False -> OK
     breach = evaluate_rule(gt0, obs5)  # 5 > 0 is True -> BREACH

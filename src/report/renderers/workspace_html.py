@@ -2287,9 +2287,12 @@ def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:
         body.write(f'<td class="num">{_esc(latest_text)}</td>')
         body.write(f'<td class="num muted">{_esc(r.comparator)} {r.threshold:.1f}</td>')
         status_cls = f"break-status-{r.status}"
-        status_label = {"ok": "OK", "warn": "WARN", "breach": "BREACH", "unresolved": "UNRESOLVED"}.get(
-            r.status, r.status
-        )
+        status_label = {
+            "ok": "OK",
+            "warn": "WARN",
+            "breach": "BREACH",
+            "unresolved": "UNRESOLVED",
+        }.get(r.status, r.status)
         body.write(f'<td class="num {status_cls}">{_esc(status_label)}</td>')
         body.write("</tr>")
         # Detail row — observations sparkline + narrative detail. Renders
