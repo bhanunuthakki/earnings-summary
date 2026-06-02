@@ -635,6 +635,7 @@ def call_llm_with_web(
             errors="replace",
             check=True,
             timeout=timeout_seconds,
+            cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs); WebSearch/WebFetch are built-in tools and don't need .mcp.json
         )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         text, meta = parse_claude_json_output(result.stdout.strip())
