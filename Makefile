@@ -14,7 +14,7 @@ BASE ?= origin/main
 # Changed .py files vs BASE, excluding generated migrations and scratch/.
 CHANGED = $(shell git diff --name-only --diff-filter=ACMR $(BASE)...HEAD -- '*.py' | grep -vE '^(alembic/versions/|scratch/)')
 
-.PHONY: help install hooks format format-check lint lint-changed typecheck typecheck-changed test check ci-local
+.PHONY: help install hooks format format-check format-changed lint lint-changed typecheck typecheck-changed test check ci-local
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -28,8 +28,11 @@ hooks:  ## Install pre-commit hooks (commit + pre-push)
 format:  ## Auto-format the tree
 	ruff format .
 
-format-check:  ## Fail if anything is unformatted (whole tree)
+format-check:  ## Fail if anything is unformatted (whole tree — informational; ~247-file drift baseline)
 	ruff format --check .
+
+format-changed:  ## Format-check only the lines changed vs BASE (the enforceable gate)
+	@$(PY) execution/format_changed.py --base $(BASE) $(CHANGED)
 
 lint:  ## Lint the whole tree (informational — has a pre-existing baseline)
 	ruff check .
@@ -46,7 +49,7 @@ typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable 
 test:  ## Run the full test suite
 	pytest -q
 
-check: format-check lint-changed typecheck-changed test  ## Pre-push gate: format + your-files lint/types + tests
+check: format-changed lint-changed typecheck-changed test  ## Pre-push gate: your-lines format + your-files lint/types + tests
 
 ci-local:  ## Mirror CI locally (format-check on changed + full tests)
 	$(MAKE) lint-changed && $(MAKE) test
