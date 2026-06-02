@@ -57,6 +57,13 @@ class ValuationBasisResult:
     historical_max: float | None = None
     historical_median: float | None = None
     rich_cheap_verdict: str | None = None
+    # PEG = P/E(NTM) ÷ forward EPS growth%. Populated ONLY when the chosen
+    # multiple is the earnings multiple P/E (NTM) AND forward EPS growth is
+    # positive — None for book-value / EV / FCF multiples and unprofitable or
+    # negative-growth names (see `_compute_peg`). `peg_growth_pct` is the
+    # forward EPS growth rate used as the denominator, retained for display.
+    peg_ratio: float | None = None
+    peg_growth_pct: float | None = None
     cache_sha256: str | None = None
     extracted_at: str | None = None
     skipped_reason: str | None = None
@@ -77,6 +84,11 @@ _LTM_KEY_METRICS_FIELDS: dict[str, str] = {
 _NTM_MULTIPLES: frozenset[str] = frozenset(
     {"EV/NTM Revenue", "EV/NTM EBITDA", "P/E (NTM)"}
 )
+
+# Bump when the computed payload shape changes (new derived fields) so existing
+# caches recompute on their next --enable-llm build even though the underlying
+# inputs (thesis / profile / estimates) are unchanged. v2 added the PEG ratio.
+_CACHE_VERSION = "v2"
 
 
 def _coerce_multiple_payload(raw: str) -> dict[str, object] | None:
@@ -146,7 +158,9 @@ def extract_for_ticker(
 
     inputs_sha = hashlib.sha256(
         (
-            thesis_text
+            _CACHE_VERSION
+            + "\x00"
+            + thesis_text
             + "\x00"
             + financial_profile
             + "\x00"
@@ -219,6 +233,7 @@ def extract_for_ticker(
         sorted(hist_values)[len(hist_values) // 2] if hist_values else None
     )
     rich_cheap = _rich_cheap_verdict(current_value, hist_median, hist_min, hist_max)
+    peg_ratio, peg_growth_pct = _compute_peg(multiple_name, current_value, analyst_annual, income_q)
 
     result = ValuationBasisResult(
         ticker=ticker,
@@ -234,6 +249,8 @@ def extract_for_ticker(
         historical_max=hist_max,
         historical_median=hist_median,
         rich_cheap_verdict=rich_cheap,
+        peg_ratio=peg_ratio,
+        peg_growth_pct=peg_growth_pct,
         cache_sha256=inputs_sha,
         extracted_at=datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
     )
@@ -620,6 +637,82 @@ def _compute_realized_forward_value(
     if not numerator or numerator <= 0:
         return None
     return numerator / forward_sum
+
+
+def _compute_peg(
+    multiple_name: str | None,
+    current_value: float | None,
+    analyst_annual: list[dict[str, object]],
+    income_q: list[dict[str, object]] | None,
+) -> tuple[float | None, float | None]:
+    """PEG = P/E(NTM) ÷ forward-EPS-growth%. Returns (peg_ratio, peg_growth_pct).
+
+    Applicability — "PEG across the board, except where it doesn't make sense":
+    only an *earnings* multiple over a *positive* forward growth rate yields a
+    meaningful PEG. We gate on the chosen multiple being P/E (NTM) (so the
+    numerator `current_value` is literally the forward P/E, not a P/B / EV /
+    FCF multiple) AND a positive forward EPS growth rate. Returns (None, None)
+    for book-value-valued banks (P/B, P/TBV), EV/EBITDA, EV/Revenue, the FCF
+    multiples, and unprofitable / negative-growth names — i.e. PEG is simply
+    omitted where it would mislead.
+    """
+    if multiple_name != "P/E (NTM)" or not current_value or current_value <= 0:
+        return (None, None)
+    growth_pct = _compute_forward_eps_growth(analyst_annual, income_q)
+    if growth_pct is None or growth_pct <= 0:
+        return (None, None)
+    return (current_value / growth_pct, growth_pct)
+
+
+def _compute_forward_eps_growth(
+    analyst_annual: list[dict[str, object]],
+    income_q: list[dict[str, object]] | None,
+) -> float | None:
+    """Forward EPS growth % used as the PEG denominator.
+
+    Primary (forward-over-forward): year-over-year growth of the forward annual
+    EPS consensus, measured from the P/E(NTM) basis year (the closest forward
+    fiscal year — the same row `_compute_ntm_multiple` divides into) to the
+    following year, i.e. ``future[-2].epsAvg`` vs ``future[-1].epsAvg``. This is
+    the growth the forward multiple is paying for.
+
+    Fallback (only one forward year of consensus on file): grow the closest
+    forward-year EPS estimate over trailing-twelve-month actual EPS, keeping the
+    span ~1 year so the rate stays comparable.
+
+    Returns None when neither path has the inputs or the base EPS is <= 0 (a
+    growth rate off a zero / loss-making base isn't meaningful — those names are
+    PEG-ineligible anyway).
+    """
+    # `analyst_annual` is sorted newest-first by `_load_quarterly`; the filtered
+    # `future` list preserves that order, so future[-1] is the closest forward
+    # fiscal year and future[-2] the year after it.
+    today_iso = date.today().isoformat()
+    future = [r for r in analyst_annual if str(r.get("date") or "") > today_iso]
+    if len(future) >= 2:
+        next_eps = _float(future[-2].get("epsAvg"))
+        base_eps = _float(future[-1].get("epsAvg"))
+    elif len(future) == 1:
+        next_eps = _float(future[-1].get("epsAvg"))
+        base_eps = _ltm_eps(income_q)
+    else:
+        return None
+    if next_eps is None or base_eps is None or base_eps <= 0:
+        return None
+    return (next_eps - base_eps) / base_eps * 100.0
+
+
+def _ltm_eps(income_q: list[dict[str, object]] | None) -> float | None:
+    """Trailing-twelve-month EPS = sum of the latest 4 quarterly EPS values.
+
+    `income_q` is newest-first (see `_load_quarterly`). Returns None unless all
+    four trailing quarters disclose an EPS figure."""
+    if not income_q:
+        return None
+    eps_vals = [_float(r.get("eps")) for r in income_q[:4]]
+    if len(eps_vals) < 4 or any(v is None for v in eps_vals):
+        return None
+    return sum(v for v in eps_vals if v is not None)
 
 
 def _sector_fallback(sector: str | None, industry: str | None) -> str:

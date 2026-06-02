@@ -1306,6 +1306,13 @@ a.peer:hover { background: var(--paper); }
 .valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-muted); }
 .valuation-band-row { display: flex; gap: 6px; }
 .valuation-band-row .mono { font-family: var(--font-mono); color: var(--ink); }
+.valuation-peg { display: flex; flex-direction: column; gap: 2px; }
+.valuation-peg-value {
+  font-family: var(--font-mono); font-size: 22px; font-weight: 600;
+  letter-spacing: -0.01em; color: var(--ink);
+}
+.valuation-peg-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.valuation-peg-sub { font-size: 11px; color: var(--ink-muted); font-family: var(--font-mono); }
 .valuation-verdict {
   margin-left: auto; padding: 6px 10px;
   background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: 6px;

@@ -1038,6 +1038,13 @@ class ValuationBasisSection(BaseModel):
     rationale: str | None = None  # 1-2 sentence Opus rationale
     current_value: float | None = None  # the multiple's current numeric value
     current_value_display: str | None = None  # formatted display, e.g. "15.1x"
+    # PEG = P/E(NTM) ÷ forward EPS growth%. Populated only when the chosen
+    # multiple is the earnings multiple P/E (NTM) AND forward EPS growth is
+    # positive (see compute.valuation_basis._compute_peg) — None for book-value /
+    # EV / FCF multiples and unprofitable / negative-growth names. peg_growth_pct
+    # is the forward EPS growth rate the renderer shows beside the ratio.
+    peg_ratio: float | None = None
+    peg_growth_pct: float | None = None
     current_period_end: date | None = None
     history: list[ValuationBasisHistoricalPoint] = Field(default_factory=list)
     historical_min: float | None = None
