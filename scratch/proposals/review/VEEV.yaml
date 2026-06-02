@@ -1,0 +1,25 @@
+ticker: VEEV
+generated_at: '2026-06-01T07:12:23Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Operating Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False] The thesis pins profitability to non-GAAP operating margin (>40% floor, <38% breaker), not GAAP. GAAP operating margin is directionally aligned (higher is better) and load-bearing as a profitability check, but the named threshold doesn''t translate cleanly to the GAAP series, so no grounded threshold is set.'
+  status: proposed
+  notes: ''
+- kpi_name: FCF Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.50 < min 0.75; confidence=0.50; grounded=False] FCF conversion is a load-bearing confirmation signal for a high-margin vertical-SaaS compounder where the bull case rests on durable cash generation. The thesis anchor does not cite a specific FCF margin threshold, so no breaker level is set.'
+  status: proposed
+  notes: ''
+- kpi_name: Gross Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.45 < min 0.75; confidence=0.45; grounded=False] Subscription-led gross margin is structurally important to the SaaS thesis and the time-series shows it flat near ~75%, consistent with a durable software model. No specific threshold is grounded in the 10-K or thesis, so this is a confirmation KPI rather than a breaker.'
+  status: proposed
+  notes: ''

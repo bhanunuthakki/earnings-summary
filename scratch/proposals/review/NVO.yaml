@@ -1,0 +1,18 @@
+ticker: NVO
+generated_at: '2026-06-01T07:11:22Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Net Income Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False] Net income margin is a corroborating profitability KPI but no specific level is named in the thesis or 10-K excerpts. Tracking it confirms the operating-leverage story without standing as an independent breaker.'
+  status: proposed
+  notes: ''
+- kpi_name: Operating Cash Flow YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.50 < min 0.75; confidence=0.50; grounded=False] OCF growth corroborates the revenue/operating-margin thesis and tracks the capex-funding capacity for Wegovy buildout, but the thesis names no specific cash-flow threshold. Useful as a load-bearing watch item, not a breaker.'
+  status: proposed
+  notes: ''

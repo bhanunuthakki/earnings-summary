@@ -1,0 +1,32 @@
+ticker: MELI
+generated_at: '2026-06-01T07:09:22Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: FCF Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False] FCF margin is load-bearing for the operating-leverage leg of the thesis (shipping + fixed-cost scale) and shows accelerating slope with a 2020 inflection. No specific level is named in the anchor or excerpts, so it is tracked as a confirming KPI rather than a breaker.'
+  status: proposed
+  notes: ''
+- kpi_name: Operating Cash Flow YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.50 < min 0.75; confidence=0.50; grounded=False] OCF growth corroborates the revenue-acceleration + margin-expansion narrative and recent prints (30–78%) materially outpace revenue growth, consistent with fintech/credit scaling. No specific cash-flow threshold is grounded in the source, so it stays a confirmation KPI.'
+  status: proposed
+  notes: ''
+- kpi_name: Net Income Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.45 < min 0.75; confidence=0.45; grounded=False] Net income margin tracks the same operating-leverage thesis and the statistical pattern shows acceleration with a 2022 inflection. The anchor does not ground a specific net-margin level, so it is reported as supporting (not breaker) evidence.'
+  status: proposed
+  notes: ''
+- kpi_name: Gross Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.40 < min 0.75; confidence=0.40; grounded=False] Gross margin is decelerating (-1.0%/q, sig) which is relevant to the shipping-investment-moat and fintech-mix dynamics in the thesis. The source names no gross-margin threshold, so it is included as a watch KPI without a grounded breaker.'
+  status: proposed
+  notes: ''
