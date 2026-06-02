@@ -37,7 +37,7 @@ import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
@@ -373,6 +373,21 @@ Return ONLY the JSON object — no markdown fence, no commentary."""
     return {str(k): v for k, v in parsed.items() if isinstance(v, dict) and "value" in v}
 
 
+def parse_decimal_value(raw: object) -> Decimal | None:
+    """Parse an LLM-returned KPI value to Decimal, or None if unparseable.
+
+    Haiku occasionally returns a non-numeric string ("N/A", "~17%", "n.m.") for a
+    KPI it can't find a clean figure for. ``Decimal(str(raw))`` then raises
+    ``decimal.InvalidOperation`` (an ArithmeticError, NOT a ValueError), so
+    catching only (TypeError, ValueError) let one bad value abort the WHOLE
+    ticker's extraction. Returning None lets the caller skip just that KPI.
+    """
+    try:
+        return Decimal(str(raw))
+    except (TypeError, ValueError, InvalidOperation):
+        return None
+
+
 def _build_manifest(
     ticker: str,
     period_end: datetime,
@@ -382,9 +397,8 @@ def _build_manifest(
 ) -> KpiExtractionManifest:
     values: list[KpiValue] = []
     for name, payload in extracted.items():
-        try:
-            v = Decimal(str(payload.get("value")))
-        except (TypeError, ValueError):
+        v = parse_decimal_value(payload.get("value"))
+        if v is None:
             continue
         unit_raw = str(payload.get("unit") or "actual")
         try:
