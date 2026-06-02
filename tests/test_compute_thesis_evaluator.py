@@ -17,6 +17,7 @@ from compute.thesis_evaluator import (
     RuleTier,
     ThesisVerdict,
     _fetch_kpi_history,
+    _rollup_status,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     evaluate_rule,
     evaluate_ticker_thesis,
     load_holdings_spec,
@@ -122,7 +123,58 @@ def test_evaluate_rule_ok_when_no_observations() -> None:
     )
     result = evaluate_rule(rule, [])
     assert result.status == BreachStatus.OK
-    assert "no kpi_facts" in result.detail
+    assert "no observations on file" in result.detail
+
+
+def test_evaluate_rule_unresolved_when_observations_none() -> None:
+    """observations=None (rule KPI resolved to no kpi_facts definition) -> UNRESOLVED,
+    not OK — an unevaluable breaker must not read as passing/intact."""
+    rule = BreakRule(
+        rule_id="r1",
+        kpi_name="Risk-adjusted NIM YoY change (bps)",
+        comparator=Comparator.LT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=2,
+        narrative="NIM YoY compression",
+    )
+    result = evaluate_rule(rule, None)
+    assert result.status == BreachStatus.UNRESOLVED
+    assert "unresolved" in result.detail.lower()
+    assert result.observations == ()
+
+
+def test_rollup_status_unresolved_never_sets_overall() -> None:
+    """UNRESOLVED ranks with OK but must not become the OVERALL verdict — that
+    regressed a Pydantic literal_error when the persisted overall reached the
+    report. A real breach still wins over an unresolved rule."""
+    lt0 = BreakRule(
+        rule_id="r",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="X < 0",
+    )
+    gt0 = BreakRule(
+        rule_id="b",
+        kpi_name="Y",
+        comparator=Comparator.GT,
+        threshold=Decimal("0"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="Y > 0",
+    )
+    obs5 = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("5"), unit=Unit.PERCENT)
+    ]
+    unresolved = evaluate_rule(lt0, None)  # UNRESOLVED
+    ok = evaluate_rule(lt0, obs5)  # 5 < 0 is False -> OK
+    breach = evaluate_rule(gt0, obs5)  # 5 > 0 is True -> BREACH
+    assert _rollup_status([unresolved]) == BreachStatus.OK
+    assert _rollup_status([unresolved, ok]) == BreachStatus.OK
+    assert _rollup_status([unresolved, breach]) == BreachStatus.BREACH
 
 
 def test_evaluate_rule_ok_when_value_above_threshold() -> None:
@@ -770,6 +822,7 @@ def test_fetch_kpi_history_resolves_short_label_to_richest_def(
         [("2025-03-31", 11), ("2025-06-30", 11), ("2025-09-30", 11), ("2025-12-31", 11)],
     )
     obs = _fetch_kpi_history(conn, "NU", "Monthly ARPAC", 1)
+    assert obs is not None
     assert len(obs) == 1
     assert obs[0].value == Decimal("11")  # canonical series, not the stray 99
 
@@ -796,18 +849,19 @@ def test_fetch_kpi_history_dedups_coexisting_sources_to_latest(
         )
     conn.commit()
     obs = _fetch_kpi_history(conn, "NU", "NPL 90d+", 4)
+    assert obs is not None
     assert len(obs) == 1  # deduped to one row for the period
     assert obs[0].value == Decimal("8.0")  # latest-ingested source wins
 
 
-def test_fetch_kpi_history_returns_empty_for_unresolvable_label(
+def test_fetch_kpi_history_returns_none_for_unresolvable_label(
     conn: sqlite3.Connection,
 ) -> None:
-    """A label matching no fact-carrying definition yields no observations —
-    evaluate_rule then treats it as OK / no-data, exactly as before."""
+    """A label matching no fact-carrying definition returns None (unresolvable) —
+    evaluate_rule then marks the rule UNRESOLVED rather than silently OK."""
     _seed_kpi(conn, "NU", "Risk-adjusted NIM (NIM minus cost of risk)", [("2025-12-31", 9)])
     # "NIM" is a distinct metric — must not borrow the risk-adjusted series.
-    assert _fetch_kpi_history(conn, "NU", "NIM", 4) == []
+    assert _fetch_kpi_history(conn, "NU", "NIM", 4) is None
 
 
 def test_evaluate_ticker_thesis_resolves_short_break_rule_label(

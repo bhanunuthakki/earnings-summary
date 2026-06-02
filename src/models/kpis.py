@@ -27,6 +27,11 @@ class BreachStatus(StrEnum):
     OK = "ok"
     WARN = "warn"
     BREACH = "breach"
+    # The rule's KPI couldn't be resolved to any kpi_facts definition (a derived
+    # series the pipeline hasn't materialized, or a metric never extracted for
+    # this ticker). Distinct from OK so an unevaluable breaker can't masquerade
+    # as a passing rule.
+    UNRESOLVED = "unresolved"
 
 
 class KpiDefinition(BaseModel):

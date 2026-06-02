@@ -770,6 +770,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .break-status-ok { color: var(--accent); }
 .break-status-warn { color: var(--warn); }
 .break-status-breach { color: var(--bad); }
+.break-status-unresolved { color: var(--muted); }
 
 .failure { display: flex; gap: 14px; padding: 14px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .failure:last-child { border-bottom: 0; }

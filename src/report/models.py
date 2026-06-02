@@ -262,7 +262,7 @@ class BreakRuleEvaluation(BaseModel):
     threshold: float
     consecutive_periods: int
     tier: Literal["universal", "business_model"] = "business_model"
-    status: Literal["ok", "warn", "breach"]
+    status: Literal["ok", "warn", "breach", "unresolved"]
     detail: str
     narrative: str
     observations: list[BreakRuleObservation] = Field(default_factory=list)
@@ -296,7 +296,7 @@ class ThesisSection(BaseModel):
     competitive_watchlist: list[str] = Field(default_factory=list)
     qualitative_breakers: list[str] = Field(default_factory=list)
     kpi_ledger: list[KpiLedgerRow] = Field(default_factory=list)
-    overall_breach_status: Literal["ok", "warn", "breach", "unknown"] = "unknown"
+    overall_breach_status: Literal["ok", "warn", "breach", "unresolved", "unknown"] = "unknown"
     break_rule_evaluations: list[BreakRuleEvaluation] = Field(default_factory=list)
     soft_rule_evaluations: list[SoftRuleEvaluation] = Field(default_factory=list)
     last_evaluated_at: datetime | None = None
