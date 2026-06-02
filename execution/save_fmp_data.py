@@ -42,6 +42,7 @@ from models.fmp_payloads import (  # noqa: E402
     FmpCashFlowRecord,
     FmpIncomeStatementRecord,
 )
+from sources import registry as source_calls_log  # noqa: E402
 
 load_dotenv(PROJECT_ROOT / ".env")
 API_KEY = os.environ.get("FMP_API_KEY")
@@ -55,6 +56,16 @@ SECTOR_DIR = PROJECT_ROOT / "data" / "historical" / "sector_industry"
 FMP_DIR.mkdir(parents=True, exist_ok=True)
 SNAP_DIR.mkdir(parents=True, exist_ok=True)
 SECTOR_DIR.mkdir(parents=True, exist_ok=True)
+
+# Log every FMP fetch outcome (and every cache-skip) to the shared source_calls
+# provenance table so FMP cache-hit-rate is measurable from real data — the
+# dominant external path was previously invisible there (only the live-price
+# adapters logged). FMP is a flat-rate subscription, so the budget unit is
+# request VOLUME, not per-call dollars: an `ok` row is a request spent, a
+# `skipped` row is a request saved by the cache. Point the logger at the same DB
+# this fetcher writes to (db.DB_PATH), so prod, tests, and worktree runs agree.
+source_calls_log.set_db_path(Path(portfolio_db.DB_PATH))
+_FMP_SOURCE = "fmp"
 
 # Endpoints whose values change over time (forward consensus, current ratings,
 # DCF, TTM aggregates, market-quote-driven). Each pull is snapshotted to
@@ -82,12 +93,12 @@ TIME_SENSITIVE_ENDPOINTS: set[str] = {
 # index members are sampled monthly to keep snapshot drift bounded across
 # thousands of tickers.
 _SNAPSHOT_CADENCE_DAYS: dict[str, int] = {
-    "portfolio":    1,
-    "watchlist":    1,
-    "evaluation":   1,
-    "none":         1,
+    "portfolio": 1,
+    "watchlist": 1,
+    "evaluation": 1,
+    "none": 1,
     "index_member": 30,
-    "etf":          30,
+    "etf": 30,
 }
 
 
@@ -133,6 +144,7 @@ def _should_snapshot(
     except ValueError:
         return True
     return (today - last_date).days >= cadence_days
+
 
 SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "earnings-summary/1.0"
@@ -185,6 +197,7 @@ TODAY_STR = TODAY.isoformat()
 # HTTP try-ladder
 # ---------------------------------------------------------------------------
 
+
 def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
     full = {**params, "apikey": API_KEY}
     # 429 backoff: up to 3 retries, exponential
@@ -197,7 +210,7 @@ def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
         except requests.RequestException as e:
             return (0, None, f"network: {_redact(e)}")
         if r.status_code == 429:
-            wait = 5 * (2 ** attempt)
+            wait = 5 * (2**attempt)
             print(f"  [429 rate-limit, sleeping {wait}s]", flush=True)
             time.sleep(wait)
             continue
@@ -274,27 +287,37 @@ def _candidates(
     out: list[tuple[str, str, dict[str, object]]] = []
     for p in paths:
         if symbol is not None:
-            out.append((f"stable:{p}",
-                        f"https://financialmodelingprep.com/stable/{p}",
-                        {"symbol": symbol, **extra}))
+            out.append(
+                (
+                    f"stable:{p}",
+                    f"https://financialmodelingprep.com/stable/{p}",
+                    {"symbol": symbol, **extra},
+                )
+            )
             if not _stable_only:
-                out.append((f"v3-path:{p}",
-                            f"https://financialmodelingprep.com/api/v3/{p}/{symbol}",
-                            {**extra}))
-                out.append((f"v4-query:{p}",
-                            f"https://financialmodelingprep.com/api/v4/{p}",
-                            {"symbol": symbol, **extra}))
+                out.append(
+                    (
+                        f"v3-path:{p}",
+                        f"https://financialmodelingprep.com/api/v3/{p}/{symbol}",
+                        {**extra},
+                    )
+                )
+                out.append(
+                    (
+                        f"v4-query:{p}",
+                        f"https://financialmodelingprep.com/api/v4/{p}",
+                        {"symbol": symbol, **extra},
+                    )
+                )
         else:
-            out.append((f"stable:{p}",
-                        f"https://financialmodelingprep.com/stable/{p}",
-                        {**extra}))
+            out.append((f"stable:{p}", f"https://financialmodelingprep.com/stable/{p}", {**extra}))
             if not _stable_only:
-                out.append((f"v3-path:{p}",
-                            f"https://financialmodelingprep.com/api/v3/{p}",
-                            {**extra}))
-                out.append((f"v4-query:{p}",
-                            f"https://financialmodelingprep.com/api/v4/{p}",
-                            {**extra}))
+                out.append(
+                    (f"v3-path:{p}", f"https://financialmodelingprep.com/api/v3/{p}", {**extra})
+                )
+                out.append(
+                    (f"v4-query:{p}", f"https://financialmodelingprep.com/api/v4/{p}", {**extra})
+                )
     return out
 
 
@@ -409,8 +432,7 @@ def _dump_validation_failure(
         "endpoint": endpoint,
         "period": period,
         "validation_errors": [
-            {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]}
-            for e in err.errors()
+            {"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in err.errors()
         ],
         "raw_response": body,
     }
@@ -421,6 +443,7 @@ def _dump_validation_failure(
 # ---------------------------------------------------------------------------
 # Endpoint catalog
 # ---------------------------------------------------------------------------
+
 
 def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
     """Build the endpoint job list for a ticker.
@@ -434,16 +457,23 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
     skip_10k = list_type in ("index_member", "etf")
     jobs: list[dict] = []
 
-    def add(path: str, period: str, suffix: str, extra: dict | None = None,
-            file_override: str | None = None):
-        jobs.append({
-            "path": path,
-            "symbol": s,
-            "period": period,
-            "suffix": suffix,
-            "extra": extra or {},
-            "file_override": file_override,
-        })
+    def add(
+        path: str,
+        period: str,
+        suffix: str,
+        extra: dict | None = None,
+        file_override: str | None = None,
+    ):
+        jobs.append(
+            {
+                "path": path,
+                "symbol": s,
+                "period": period,
+                "suffix": suffix,
+                "extra": extra or {},
+                "file_override": file_override,
+            }
+        )
 
     # Standard statements
     for base, label in [
@@ -491,10 +521,8 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
         ("revenue-product-segmentation", "product_segments"),
         ("revenue-geographic-segments", "geo_segments"),
     ]:
-        add(path, "annual", f"{label}_annual",
-            {"period": "annual", "structure": "flat"})
-        add(path, "quarter", f"{label}_quarterly",
-            {"period": "quarter", "structure": "flat"})
+        add(path, "annual", f"{label}_annual", {"period": "annual", "structure": "flat"})
+        add(path, "quarter", f"{label}_quarterly", {"period": "quarter", "structure": "flat"})
 
     # Metrics & ratios
     add("key-metrics", "annual", "key_metrics_annual", {"period": "annual", "limit": 50})
@@ -503,8 +531,15 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
     add("ratios", "annual", "financial_ratios_annual", {"period": "annual", "limit": 50})
     add("ratios", "quarter", "financial_ratios_quarterly", {"period": "quarter", "limit": 100})
     add("ratios-ttm", "ttm", "financial_ratios_ttm")
-    add("enterprise-values", "annual", "enterprise_values_annual", {"period": "annual", "limit": 50})
-    add("enterprise-values", "quarter", "enterprise_values_quarterly", {"period": "quarter", "limit": 100})
+    add(
+        "enterprise-values", "annual", "enterprise_values_annual", {"period": "annual", "limit": 50}
+    )
+    add(
+        "enterprise-values",
+        "quarter",
+        "enterprise_values_quarterly",
+        {"period": "quarter", "limit": 100},
+    )
     add("financial-scores", "", "financial_scores")
     add("owner-earnings", "annual", "owner_earnings_annual", {"limit": 50})
 
@@ -513,14 +548,23 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
     # 10-K JSON: 10 calls per ticker (one per year) — SKIPPED for index_member/etf
     if not skip_10k:
         for year in range(TODAY.year - 10, TODAY.year):
-            add("financial-reports-form-10-k-json", f"FY{year}", f"form_10k_{year}",
-                {"year": year, "period": "FY"})
+            add(
+                "financial-reports-form-10-k-json",
+                f"FY{year}",
+                f"form_10k_{year}",
+                {"year": year, "period": "FY"},
+            )
 
     # Analyst
-    add("analyst-estimates", "annual", "analyst_estimates_annual",
-        {"period": "annual", "limit": 50})
-    add("analyst-estimates", "quarter", "analyst_estimates_quarterly",
-        {"period": "quarter", "limit": 100})
+    add(
+        "analyst-estimates", "annual", "analyst_estimates_annual", {"period": "annual", "limit": 50}
+    )
+    add(
+        "analyst-estimates",
+        "quarter",
+        "analyst_estimates_quarterly",
+        {"period": "quarter", "limit": 100},
+    )
     add("historical-rating", "", "historical_ratings", {"limit": 1000})
     add("price-target-consensus", "", "price_target_consensus")
     add("price-target-summary", "", "price_target_summary")
@@ -530,8 +574,12 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
 
     # Company
     add("profile", "", "profile")
-    add("historical-market-capitalization", "", "historical_market_cap",
-        {"from": TEN_YEARS_AGO, "to": TODAY_STR, "limit": 5000})
+    add(
+        "historical-market-capitalization",
+        "",
+        "historical_market_cap",
+        {"from": TEN_YEARS_AGO, "to": TODAY_STR, "limit": 5000},
+    )
     add("shares-float", "", "shares_float")
     add("stock-peers", "", "peers")
     add("key-executives", "", "company_executives")
@@ -542,8 +590,12 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
     add("levered-discounted-cash-flow", "", "dcf_levered")
 
     # Chart
-    add("historical-price-eod/dividend-adjusted", "10y", "price_chart_10y_div_adj",
-        {"from": TEN_YEARS_AGO, "to": TODAY_STR})
+    add(
+        "historical-price-eod/dividend-adjusted",
+        "10y",
+        "price_chart_10y_div_adj",
+        {"from": TEN_YEARS_AGO, "to": TODAY_STR},
+    )
 
     return jobs
 
@@ -567,15 +619,35 @@ _STATUS_UPSERT_SQL = """
 """
 
 
-def _build_status_row(ticker: str, endpoint: str, period: str, *, status: str,
-                      http_code: int | None = None, record_count: int | None = None,
-                      earliest: str | None = None, latest: str | None = None,
-                      file_path: str | None = None, file_bytes: int | None = None,
-                      error_msg: str | None = None) -> tuple:
+def _build_status_row(
+    ticker: str,
+    endpoint: str,
+    period: str,
+    *,
+    status: str,
+    http_code: int | None = None,
+    record_count: int | None = None,
+    earliest: str | None = None,
+    latest: str | None = None,
+    file_path: str | None = None,
+    file_bytes: int | None = None,
+    error_msg: str | None = None,
+) -> tuple:
     """Build the 12-tuple for the fmp_endpoint_status upsert."""
-    return (ticker, endpoint, period or "", status, http_code, record_count,
-            earliest, latest, file_path, file_bytes, error_msg,
-            datetime.now().isoformat(timespec="seconds"))
+    return (
+        ticker,
+        endpoint,
+        period or "",
+        status,
+        http_code,
+        record_count,
+        earliest,
+        latest,
+        file_path,
+        file_bytes,
+        error_msg,
+        datetime.now().isoformat(timespec="seconds"),
+    )
 
 
 def _flush_status_batch(rows: list[tuple]) -> None:
@@ -598,7 +670,7 @@ def _flush_status_batch(rows: list[tuple]) -> None:
             return
         except sqlite3.OperationalError as e:
             last_err = e
-            wait = 2 ** attempt  # 1, 2, 4, 8, 16 seconds
+            wait = 2**attempt  # 1, 2, 4, 8, 16 seconds
             print(f"  [db-locked, retry {attempt + 1}/5 after {wait}s: {e}]", flush=True)
             time.sleep(wait)
         finally:
@@ -607,19 +679,40 @@ def _flush_status_batch(rows: list[tuple]) -> None:
     raise last_err
 
 
-def _record_status(ticker: str, endpoint: str, period: str, *, status: str,
-                   http_code: int | None = None, record_count: int | None = None,
-                   earliest: str | None = None, latest: str | None = None,
-                   file_path: str | None = None, file_bytes: int | None = None,
-                   error_msg: str | None = None) -> None:
+def _record_status(
+    ticker: str,
+    endpoint: str,
+    period: str,
+    *,
+    status: str,
+    http_code: int | None = None,
+    record_count: int | None = None,
+    earliest: str | None = None,
+    latest: str | None = None,
+    file_path: str | None = None,
+    file_bytes: int | None = None,
+    error_msg: str | None = None,
+) -> None:
     """Upsert one fmp_endpoint_status row immediately. Used by global/sector path
     where there's no per-ticker batch to accumulate into.
     """
-    _flush_status_batch([_build_status_row(
-        ticker, endpoint, period, status=status, http_code=http_code,
-        record_count=record_count, earliest=earliest, latest=latest,
-        file_path=file_path, file_bytes=file_bytes, error_msg=error_msg,
-    )])
+    _flush_status_batch(
+        [
+            _build_status_row(
+                ticker,
+                endpoint,
+                period,
+                status=status,
+                http_code=http_code,
+                record_count=record_count,
+                earliest=earliest,
+                latest=latest,
+                file_path=file_path,
+                file_bytes=file_bytes,
+                error_msg=error_msg,
+            )
+        ]
+    )
 
 
 def _date_bounds(records) -> tuple[str | None, str | None]:
@@ -666,14 +759,16 @@ def run_ticker(
         jobs = [j for j in jobs if (j["path"], j["period"]) in manifest_filter]
     snapshot_index = snapshot_index if snapshot_index is not None else {}
 
-    summary = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0,
-               "total": len(jobs)}
+    summary = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0, "total": len(jobs)}
 
     if skip_existing:
         conn = portfolio_db.get_connection()
         cur = conn.cursor()
-        cur.execute("""SELECT endpoint, period FROM fmp_endpoint_status
-                       WHERE ticker = ? AND status = 'ok'""", (ticker,))
+        cur.execute(
+            """SELECT endpoint, period FROM fmp_endpoint_status
+                       WHERE ticker = ? AND status = 'ok'""",
+            (ticker,),
+        )
         already_ok = {(r["endpoint"], r["period"]) for r in cur.fetchall()}
         conn.close()
     else:
@@ -682,6 +777,11 @@ def run_ticker(
     # Accumulate fmp_endpoint_status upserts and flush once at end-of-ticker.
     # 57 individual commits cost ~1s/ticker on Windows; one batch commit is ~50ms.
     pending: list[tuple] = []
+    # Parallel accumulator of source_calls rows for FMP cache-hit observability;
+    # batch-flushed alongside `pending` so per-row connections don't reintroduce
+    # the per-call fsync cost the status batching avoids. kind = the FMP endpoint
+    # path (matches fmp_endpoint_status granularity).
+    src_calls: list[source_calls_log.PendingSourceCall] = []
 
     for job in jobs:
         endpoint = cast("str", job["path"])
@@ -690,13 +790,33 @@ def run_ticker(
 
         if (endpoint, period) in already_ok:
             summary["skipped"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.SKIPPED,
+                    notes="cache_hit",
+                )
+            )
             continue
 
         if max_calls is not None and _CALL_COUNTER >= max_calls:
             summary["skipped"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.SKIPPED,
+                    notes="budget_exhausted",
+                )
+            )
             continue
 
+        _call_started = time.monotonic()
         code, body, err, kind = fmp_call(endpoint, ticker, job["extra"])
+        _call_ms = int((time.monotonic() - _call_started) * 1000)
 
         if code == 200 and body is not None:
             # Pre-write schema-drift gate: validate stable statement responses
@@ -706,19 +826,37 @@ def run_ticker(
             # _validate_stable_record).
             drift = _validate_stable_record(endpoint, kind, body)
             if drift is not None:
-                dump_path = _dump_validation_failure(
-                    ticker, endpoint, period, suffix, body, drift
-                )
+                dump_path = _dump_validation_failure(ticker, endpoint, period, suffix, body, drift)
                 rel_dump = dump_path.relative_to(PROJECT_ROOT)
-                pending.append(_build_status_row(
-                    ticker, endpoint, period, status="error",
-                    http_code=code,
-                    error_msg=(f"schema_drift: {len(drift.errors())} validation "
-                               f"errors; raw dumped to {rel_dump}"),
-                ))
+                pending.append(
+                    _build_status_row(
+                        ticker,
+                        endpoint,
+                        period,
+                        status="error",
+                        http_code=code,
+                        error_msg=(
+                            f"schema_drift: {len(drift.errors())} validation "
+                            f"errors; raw dumped to {rel_dump}"
+                        ),
+                    )
+                )
                 summary["error"] += 1
-                print(f"  drift {endpoint:48s} {period:8s} schema drift -> "
-                      f"{dump_path.name} (write skipped)")
+                src_calls.append(
+                    source_calls_log.PendingSourceCall(
+                        source_name=_FMP_SOURCE,
+                        kind=endpoint,
+                        ticker=ticker,
+                        status=source_calls_log.CallStatus.ERROR,
+                        latency_ms=_call_ms,
+                        http_code=code,
+                        notes="schema_drift",
+                    )
+                )
+                print(
+                    f"  drift {endpoint:48s} {period:8s} schema drift -> "
+                    f"{dump_path.name} (write skipped)"
+                )
                 continue
 
             file_path = FMP_DIR / f"{ticker}_{suffix}.json"
@@ -734,48 +872,126 @@ def run_ticker(
                 snap_dir = SNAP_DIR / TODAY_STR
                 snap_dir.mkdir(parents=True, exist_ok=True)
                 (snap_dir / f"{ticker}_{suffix}.json").write_text(
-                    json.dumps(body, indent=2), encoding="utf-8")
+                    json.dumps(body, indent=2), encoding="utf-8"
+                )
                 snapshot_index[f"{ticker}_{suffix}"] = TODAY_STR
 
             count = len(body) if isinstance(body, list) else 1
             earliest, latest = _date_bounds(body if isinstance(body, list) else [body])
-            pending.append(_build_status_row(
-                ticker, endpoint, period, status="ok",
-                http_code=code, record_count=count,
-                earliest=earliest, latest=latest,
-                file_path=str(file_path.relative_to(PROJECT_ROOT)),
-                file_bytes=file_path.stat().st_size,
-            ))
+            pending.append(
+                _build_status_row(
+                    ticker,
+                    endpoint,
+                    period,
+                    status="ok",
+                    http_code=code,
+                    record_count=count,
+                    earliest=earliest,
+                    latest=latest,
+                    file_path=str(file_path.relative_to(PROJECT_ROOT)),
+                    file_bytes=file_path.stat().st_size,
+                )
+            )
             summary["ok"] += 1
-            print(f"  ok   {endpoint:48s} {period:8s} n={count:<5} "
-                  f"{earliest or '?':10s} -> {latest or '?':10s}  [{kind}]")
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.OK,
+                    latency_ms=_call_ms,
+                    http_code=code,
+                    record_count=count,
+                )
+            )
+            print(
+                f"  ok   {endpoint:48s} {period:8s} n={count:<5} "
+                f"{earliest or '?':10s} -> {latest or '?':10s}  [{kind}]"
+            )
         elif code in (401, 402, 403):
-            pending.append(_build_status_row(
-                ticker, endpoint, period, status="forbidden",
-                http_code=code, error_msg=err,
-            ))
+            pending.append(
+                _build_status_row(
+                    ticker,
+                    endpoint,
+                    period,
+                    status="forbidden",
+                    http_code=code,
+                    error_msg=err,
+                )
+            )
             summary["forbidden"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.TIER_RESTRICTED,
+                    latency_ms=_call_ms,
+                    http_code=code,
+                    notes=err,
+                )
+            )
             print(f"  403  {endpoint:48s} {period:8s} (tier-restricted)")
         elif err == "empty-list":
-            pending.append(_build_status_row(
-                ticker, endpoint, period, status="empty",
-                http_code=200, record_count=0, error_msg="empty-list",
-            ))
+            pending.append(
+                _build_status_row(
+                    ticker,
+                    endpoint,
+                    period,
+                    status="empty",
+                    http_code=200,
+                    record_count=0,
+                    error_msg="empty-list",
+                )
+            )
             summary["empty"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.NOT_FOUND,
+                    latency_ms=_call_ms,
+                    http_code=200,
+                    record_count=0,
+                    notes="empty-list",
+                )
+            )
             print(f"  empty {endpoint:48s} {period:8s}")
         else:
-            pending.append(_build_status_row(
-                ticker, endpoint, period, status="error",
-                http_code=code, error_msg=err,
-            ))
+            pending.append(
+                _build_status_row(
+                    ticker,
+                    endpoint,
+                    period,
+                    status="error",
+                    http_code=code,
+                    error_msg=err,
+                )
+            )
             summary["error"] += 1
+            src_calls.append(
+                source_calls_log.PendingSourceCall(
+                    source_name=_FMP_SOURCE,
+                    kind=endpoint,
+                    ticker=ticker,
+                    status=source_calls_log.CallStatus.ERROR,
+                    latency_ms=_call_ms,
+                    http_code=code,
+                    notes=err,
+                )
+            )
             print(f"  err  {endpoint:48s} {period:8s} code={code} {err}")
 
     _flush_status_batch(pending)
+    source_calls_log.log_calls_batch(src_calls)
 
-    print(f"  --- {ticker}: ok={summary['ok']} empty={summary['empty']} "
-          f"forbidden={summary['forbidden']} error={summary['error']} "
-          f"skipped={summary['skipped']} / {summary['total']}", flush=True)
+    print(
+        f"  --- {ticker}: ok={summary['ok']} empty={summary['empty']} "
+        f"forbidden={summary['forbidden']} error={summary['error']} "
+        f"skipped={summary['skipped']} / {summary['total']}",
+        flush=True,
+    )
     return summary
 
 
@@ -784,9 +1000,17 @@ def run_ticker(
 # ---------------------------------------------------------------------------
 
 GICS_SECTORS = [
-    "Communication Services", "Consumer Cyclical", "Consumer Defensive",
-    "Energy", "Financial Services", "Healthcare", "Industrials",
-    "Real Estate", "Technology", "Basic Materials", "Utilities",
+    "Communication Services",
+    "Consumer Cyclical",
+    "Consumer Defensive",
+    "Energy",
+    "Financial Services",
+    "Healthcare",
+    "Industrials",
+    "Real Estate",
+    "Technology",
+    "Basic Materials",
+    "Utilities",
 ]
 
 
@@ -796,26 +1020,52 @@ def _save_global(name: str, body) -> Path:
     return p
 
 
-def _save_global_status(endpoint: str, key: str, status: str, *, http_code=None,
-                        record_count=None, file_path=None, error_msg=None):
-    _record_status("__GLOBAL__", endpoint, key, status=status, http_code=http_code,
-                   record_count=record_count, file_path=file_path, error_msg=error_msg)
+def _save_global_status(
+    endpoint: str,
+    key: str,
+    status: str,
+    *,
+    http_code=None,
+    record_count=None,
+    file_path=None,
+    error_msg=None,
+):
+    _record_status(
+        "__GLOBAL__",
+        endpoint,
+        key,
+        status=status,
+        http_code=http_code,
+        record_count=record_count,
+        file_path=file_path,
+        error_msg=error_msg,
+    )
 
 
 def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
     print("\n=== sector + industry one-time ===", flush=True)
 
     # Snapshots
-    for ep in ["sector-pe-snapshot", "industry-pe-snapshot",
-               "sector-performance-snapshot", "industry-performance-snapshot"]:
-        code, body, err, kind = fmp_call(ep, None,
-                                         {"date": TODAY_STR})
+    for ep in [
+        "sector-pe-snapshot",
+        "industry-pe-snapshot",
+        "sector-performance-snapshot",
+        "industry-performance-snapshot",
+    ]:
+        code, body, err, kind = fmp_call(ep, None, {"date": TODAY_STR})
         if code == 200 and body is not None:
             p = _save_global(ep.replace("-", "_"), body)
-            print(f"  ok   {ep:42s}                  rows={len(body) if isinstance(body, list) else 1}")
-            _save_global_status(ep, "snapshot", "ok", http_code=code,
-                                record_count=len(body) if isinstance(body, list) else 1,
-                                file_path=str(p.relative_to(PROJECT_ROOT)))
+            print(
+                f"  ok   {ep:42s}                  rows={len(body) if isinstance(body, list) else 1}"
+            )
+            _save_global_status(
+                ep,
+                "snapshot",
+                "ok",
+                http_code=code,
+                record_count=len(body) if isinstance(body, list) else 1,
+                file_path=str(p.relative_to(PROJECT_ROOT)),
+            )
         else:
             print(f"  err  {ep:42s} code={code} {err}")
             _save_global_status(ep, "snapshot", "error", http_code=code, error_msg=err)
@@ -823,18 +1073,22 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
     # Sector PE & performance histories
     for sector in GICS_SECTORS:
         for ep in ["historical-sector-pe", "historical-sector-performance"]:
-            code, body, err, kind = fmp_call(ep, None,
-                                             {"sector": sector,
-                                              "from": TEN_YEARS_AGO,
-                                              "to": TODAY_STR})
+            code, body, err, kind = fmp_call(
+                ep, None, {"sector": sector, "from": TEN_YEARS_AGO, "to": TODAY_STR}
+            )
             key = f"{sector}".replace(" ", "_")
             if code == 200 and body is not None:
                 p = _save_global(f"{ep.replace('-', '_')}_{key}", body)
                 n = len(body) if isinstance(body, list) else 1
                 print(f"  ok   {ep:42s} {sector:24s} n={n}")
-                _save_global_status(ep, sector, "ok", http_code=code,
-                                    record_count=n,
-                                    file_path=str(p.relative_to(PROJECT_ROOT)))
+                _save_global_status(
+                    ep,
+                    sector,
+                    "ok",
+                    http_code=code,
+                    record_count=n,
+                    file_path=str(p.relative_to(PROJECT_ROOT)),
+                )
             else:
                 print(f"  err  {ep:42s} {sector:24s} code={code} {err}")
                 _save_global_status(ep, sector, "error", http_code=code, error_msg=err)
@@ -855,18 +1109,22 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
 
     for industry in sorted(industries):
         for ep in ["historical-industry-pe", "historical-industry-performance"]:
-            code, body, err, kind = fmp_call(ep, None,
-                                             {"industry": industry,
-                                              "from": TEN_YEARS_AGO,
-                                              "to": TODAY_STR})
+            code, body, err, kind = fmp_call(
+                ep, None, {"industry": industry, "from": TEN_YEARS_AGO, "to": TODAY_STR}
+            )
             key = industry.replace(" ", "_").replace("/", "_")
             if code == 200 and body is not None:
                 p = _save_global(f"{ep.replace('-', '_')}_{key}", body)
                 n = len(body) if isinstance(body, list) else 1
                 print(f"  ok   {ep:42s} {industry:32s} n={n}")
-                _save_global_status(ep, industry, "ok", http_code=code,
-                                    record_count=n,
-                                    file_path=str(p.relative_to(PROJECT_ROOT)))
+                _save_global_status(
+                    ep,
+                    industry,
+                    "ok",
+                    http_code=code,
+                    record_count=n,
+                    file_path=str(p.relative_to(PROJECT_ROOT)),
+                )
             else:
                 print(f"  err  {ep:42s} {industry:32s} code={code} {err}")
                 _save_global_status(ep, industry, "error", http_code=code, error_msg=err)
@@ -877,23 +1135,30 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
         p = _save_global("company_symbols_list", body)
         n = len(body) if isinstance(body, list) else 1
         print(f"  ok   company-symbols-list                                       n={n}")
-        _save_global_status("company-symbols-list", "all", "ok", http_code=code,
-                            record_count=n, file_path=str(p.relative_to(PROJECT_ROOT)))
+        _save_global_status(
+            "company-symbols-list",
+            "all",
+            "ok",
+            http_code=code,
+            record_count=n,
+            file_path=str(p.relative_to(PROJECT_ROOT)),
+        )
     else:
         print(f"  err  company-symbols-list code={code} {err}")
-        _save_global_status("company-symbols-list", "all", "error",
-                            http_code=code, error_msg=err)
+        _save_global_status("company-symbols-list", "all", "error", http_code=code, error_msg=err)
 
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def _ticker_list(list_type: str) -> list[str]:
     conn = portfolio_db.get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT ticker FROM tracked_companies WHERE list_type = ? ORDER BY ticker",
-                (list_type,))
+    cur.execute(
+        "SELECT ticker FROM tracked_companies WHERE list_type = ? ORDER BY ticker", (list_type,)
+    )
     rows = [r["ticker"] for r in cur.fetchall()]
     conn.close()
     return rows
@@ -914,8 +1179,7 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
     jobs = cast("list[dict[str, object]]", per_ticker_jobs(ticker))
     report: dict[str, list[str]] = {"ok": [], "empty": [], "forbidden": [], "error": []}
     markers = {"ok": "ok   ", "empty": "empty", "forbidden": "403  ", "error": "err  "}
-    print(f"\n=== STABLE PROBE: {ticker} ({len(jobs)} endpoints, stable-only) ===",
-          flush=True)
+    print(f"\n=== STABLE PROBE: {ticker} ({len(jobs)} endpoints, stable-only) ===", flush=True)
     for job in jobs:
         endpoint = cast("str", job["path"])
         period = cast("str", job["period"])
@@ -938,8 +1202,10 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
     print(json.dumps({k: len(v) for k, v in report.items()}, indent=2))
     not_on_stable = report["forbidden"] + report["error"]
     if not_on_stable:
-        print("Endpoints that do NOT resolve on stable "
-              "(add a stable alias to PATH_ALIASES, or accept + document):")
+        print(
+            "Endpoints that do NOT resolve on stable "
+            "(add a stable alias to PATH_ALIASES, or accept + document):"
+        )
         print(json.dumps(sorted(not_on_stable), indent=2))
     else:
         print("All catalog endpoints resolve on stable (ok/empty).")
@@ -949,45 +1215,71 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--probe", action="store_true",
-                    help="Run full endpoint set on GOOGL only")
+    ap.add_argument("--probe", action="store_true", help="Run full endpoint set on GOOGL only")
     ap.add_argument("--tickers", help="Comma-separated tickers")
     ap.add_argument("--portfolio", action="store_true")
     ap.add_argument("--watchlist", action="store_true")
-    ap.add_argument("--evaluation", action="store_true",
-                    help="Pull all tickers with list_type='evaluation'")
-    ap.add_argument("--index-members", action="store_true",
-                    help="Pull all tickers with list_type='index_member' (skips 10-K JSON)")
-    ap.add_argument("--etfs", action="store_true",
-                    help="Pull all tickers with list_type='etf' (skips 10-K JSON)")
+    ap.add_argument(
+        "--evaluation", action="store_true", help="Pull all tickers with list_type='evaluation'"
+    )
+    ap.add_argument(
+        "--index-members",
+        action="store_true",
+        help="Pull all tickers with list_type='index_member' (skips 10-K JSON)",
+    )
+    ap.add_argument(
+        "--etfs",
+        action="store_true",
+        help="Pull all tickers with list_type='etf' (skips 10-K JSON)",
+    )
     ap.add_argument("--sector-industry", action="store_true")
-    ap.add_argument("--all", action="store_true",
-                    help="Active universe (portfolio + watchlist + evaluation) + sector/industry")
-    ap.add_argument("--skip-existing", action="store_true",
-                    help="Skip endpoints already 'ok' in DB")
-    ap.add_argument("--force-snapshot", action="store_true",
-                    help="Snapshot every time-sensitive endpoint regardless of cadence")
-    ap.add_argument("--manifest", type=str, default=None,
-                    help="Path to JSON manifest of [{ticker, endpoint, period}] tuples; "
-                    "filters per_ticker_jobs to only those entries (cacher-driven runs)")
-    ap.add_argument("--max-calls", type=int, default=None,
-                    help="Soft cap on total HTTP attempts. Run halts mid-ticker when "
-                    "the counter exceeds this; remaining work is left for next run")
-    ap.add_argument("--stable-only", action="store_true",
-                    help="Drop the /api/v3 + /api/v4 fallback rungs; hit /stable only "
-                    "(same as FMP_TIER=free). Use on the free tier where v3/v4 403.")
-    ap.add_argument("--probe-stable", action="store_true",
-                    help="Read-only: probe every catalog endpoint on /stable for one "
-                    "ticker (default GOOGL, or first --tickers entry) and report which "
-                    "do not resolve on stable. Writes nothing.")
+    ap.add_argument(
+        "--all",
+        action="store_true",
+        help="Active universe (portfolio + watchlist + evaluation) + sector/industry",
+    )
+    ap.add_argument(
+        "--skip-existing", action="store_true", help="Skip endpoints already 'ok' in DB"
+    )
+    ap.add_argument(
+        "--force-snapshot",
+        action="store_true",
+        help="Snapshot every time-sensitive endpoint regardless of cadence",
+    )
+    ap.add_argument(
+        "--manifest",
+        type=str,
+        default=None,
+        help="Path to JSON manifest of [{ticker, endpoint, period}] tuples; "
+        "filters per_ticker_jobs to only those entries (cacher-driven runs)",
+    )
+    ap.add_argument(
+        "--max-calls",
+        type=int,
+        default=None,
+        help="Soft cap on total HTTP attempts. Run halts mid-ticker when "
+        "the counter exceeds this; remaining work is left for next run",
+    )
+    ap.add_argument(
+        "--stable-only",
+        action="store_true",
+        help="Drop the /api/v3 + /api/v4 fallback rungs; hit /stable only "
+        "(same as FMP_TIER=free). Use on the free tier where v3/v4 403.",
+    )
+    ap.add_argument(
+        "--probe-stable",
+        action="store_true",
+        help="Read-only: probe every catalog endpoint on /stable for one "
+        "ticker (default GOOGL, or first --tickers entry) and report which "
+        "do not resolve on stable. Writes nothing.",
+    )
     args = ap.parse_args()
 
     if args.stable_only:
         _enable_stable_only()
 
     if args.probe_stable:
-        probe_ticker = (args.tickers.split(",")[0].strip().upper()
-                        if args.tickers else "GOOGL")
+        probe_ticker = args.tickers.split(",")[0].strip().upper() if args.tickers else "GOOGL"
         run_stable_probe(probe_ticker)
         return
 
@@ -1005,9 +1297,7 @@ def main():
         manifest_filter = {}
         for e in entries:
             t = e["ticker"].upper()
-            manifest_filter.setdefault(t, set()).add(
-                (e["endpoint"], e.get("period", ""))
-            )
+            manifest_filter.setdefault(t, set()).add((e["endpoint"], e.get("period", "")))
         targets = sorted(manifest_filter.keys())
 
     if args.probe:
@@ -1062,8 +1352,10 @@ def main():
         run_sector_industry()
 
     print("\n=== GRAND TOTAL ===")
-    print(f"  ok={grand['ok']} empty={grand['empty']} forbidden={grand['forbidden']} "
-          f"error={grand['error']} skipped={grand['skipped']} / total={grand['total']}")
+    print(
+        f"  ok={grand['ok']} empty={grand['empty']} forbidden={grand['forbidden']} "
+        f"error={grand['error']} skipped={grand['skipped']} / total={grand['total']}"
+    )
     print(f"  tickers processed: {len(targets)}")
     print(f"  http attempts:     {_CALL_COUNTER}")
 

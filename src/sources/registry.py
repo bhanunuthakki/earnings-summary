@@ -120,6 +120,72 @@ def log_call(
         return
 
 
+@dataclass(frozen=True, slots=True)
+class PendingSourceCall:
+    """One ``source_calls`` row queued for a batched insert (see
+    :func:`log_calls_batch`). Mirrors :func:`log_call`'s parameters so a
+    high-volume caller can accumulate per-call outcomes and flush them in a
+    single transaction."""
+
+    source_name: str
+    kind: str
+    ticker: str | None
+    status: CallStatus | str
+    latency_ms: int | None = None
+    http_code: int | None = None
+    record_count: int | None = None
+    notes: str | None = None
+
+
+def log_calls_batch(calls: list[PendingSourceCall]) -> None:
+    """Insert many ``source_calls`` rows in one transaction. Best-effort —
+    never raises (a logging failure must not cascade into the caller's data
+    path).
+
+    The FMP fetcher logs one row per logical endpoint per ticker per run;
+    opening a fresh connection per row (as :func:`log_call` does) would
+    reintroduce the per-call fsync cost the ``fmp_endpoint_status`` batching was
+    built to avoid, so callers in a tight loop accumulate ``PendingSourceCall``
+    and flush once here. All rows share one ``called_at`` stamp (the flush
+    time), which is adequate for the per-(source, kind) rollup that consumes
+    them.
+    """
+    if not calls or not _DB_PATH.exists():
+        return
+    stamp = datetime.now().isoformat(timespec="seconds")
+    rows = [
+        (
+            c.source_name,
+            c.kind,
+            c.ticker.upper() if c.ticker else None,
+            stamp,
+            c.latency_ms,
+            c.status.value if isinstance(c.status, CallStatus) else str(c.status),
+            c.http_code,
+            c.record_count,
+            (c.notes or "")[:256] or None,
+        )
+        for c in calls
+    ]
+    try:
+        conn = sqlite3.connect(str(_DB_PATH))
+        try:
+            conn.executemany(
+                """
+                INSERT INTO source_calls
+                    (source_name, kind, ticker, called_at, latency_ms,
+                     status, http_code, record_count, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+
+
 # ---------------------------------------------------------------------------
 # Read side — the consumer the module docstring promised as a follow-up.
 # Makes external-fetch volume, error rates, and cache-skip rate measurable
