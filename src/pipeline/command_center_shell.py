@@ -86,6 +86,10 @@ def render_shell(
         [
             _DOC_HEAD,
             f'<div class="cc-topbar"><div class="cc-brand">Command Center</div>'
+            f'<nav class="cc-links">'
+            f'<a href="/digest">Morning digest</a>'
+            f'<a href="/feed">Alert feed</a>'
+            f"</nav>"
             f'<span class="cc-stamp">generated {escape(stamp)}</span></div>',
             _render_tab_bar(tabs),
             '<main class="cc-panels">',
@@ -173,6 +177,9 @@ a { color: var(--link); }
 .cc-topbar { display: flex; justify-content: space-between; align-items: baseline;
   padding: 16px 24px 10px; }
 .cc-brand { font-size: 18px; font-weight: 700; letter-spacing: 0.2px; }
+.cc-links { display: flex; gap: 16px; margin-left: 24px; margin-right: auto; }
+.cc-links a { color: var(--link); text-decoration: none; font-size: 13px; }
+.cc-links a:hover { text-decoration: underline; }
 .cc-stamp { color: var(--muted); font-size: 12px; font-family: var(--font-mono); }
 .cc-tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--border);
   overflow-x: auto; position: sticky; top: 0; background: var(--bg); z-index: 20; }

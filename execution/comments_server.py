@@ -29,11 +29,12 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 import os
 import queue
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -65,6 +66,7 @@ import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
+from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
@@ -231,6 +233,51 @@ def create_app(
         its content is the shell's Triggers tab. 302-redirect to that deep link
         so existing bookmarks keep working."""
         return redirect("/#holdings")
+
+    # ----- PERSONAL-CIO ALERTING SURFACES (digest / feed) -----
+    # Previously emitted only as static files (data/dashboard/...), unreachable
+    # from the live command center — so a user living in the app never saw their
+    # alerts. Serve the same renderers as live routes (linked from the shell
+    # topbar). Both are read-only and degrade to a valid empty-state document
+    # when the substrate tables are absent.
+
+    @app.route("/digest", methods=["GET"])
+    def digest_page():
+        """Morning digest (what's new, outstanding actions, recent thesis
+        changes). ``?date=YYYY-MM-DD`` overrides today; ``?user_id=`` scopes it."""
+        render_date = datetime.now(UTC).date()
+        date_arg = request.args.get("date")
+        if date_arg:
+            # Malformed ?date= falls back to today rather than 500-ing.
+            with contextlib.suppress(ValueError):
+                render_date = date.fromisoformat(date_arg)
+        user_id = request.args.get("user_id", "bhanu")
+        html_text = render_morning_digest(date=render_date, user_id=user_id, db_path=db_path)
+        return Response(html_text, mimetype="text/html")
+
+    @app.route("/feed", methods=["GET"])
+    def feed_page():
+        """Chronological alert feed. Optional AND-composed filters:
+        ``?ticker=``, ``?trigger_kind=``, ``?status=``, ``?limit=`` (default 200)."""
+        try:
+            limit = int(request.args.get("limit", "200"))
+        except ValueError:
+            limit = 200
+        html_text = render_alert_feed(
+            user_id=request.args.get("user_id", "bhanu"),
+            ticker=request.args.get("ticker"),
+            trigger_kind=request.args.get("trigger_kind"),
+            status=request.args.get("status"),
+            limit=limit,
+            db_path=db_path,
+        )
+        return Response(html_text, mimetype="text/html")
+
+    @app.route("/alerts", methods=["GET"])
+    def alerts_page():
+        """Alias for the alert feed (the alerts surface), preserving any filters."""
+        qs = request.query_string.decode()
+        return redirect("/feed" + (f"?{qs}" if qs else ""))
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
 
