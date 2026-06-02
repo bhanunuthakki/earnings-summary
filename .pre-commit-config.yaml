@@ -1,0 +1,29 @@
+# Local quality gate. Install once with `pre-commit install` (and
+# `pre-commit install --hook-type pre-push` for the heavier pyright stage).
+#
+# pre-commit passes ONLY the changed files to each hook, which is exactly the
+# project's "gate only on YOUR files" norm (the repo carries a large pre-existing
+# ruff/pyright baseline — see directives/regrade_memo_post_wedge.md). New/edited
+# code is kept clean without blocking on legacy debt.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      # Auto-format changed files, then lint-with-autofix. Order matters:
+      # format first so the linter sees final layout.
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+
+  - repo: local
+    hooks:
+      # Strict type gate on changed files. Heavier, so it runs at pre-push
+      # rather than on every commit. Requires the project deps installed
+      # (`pip install -e .[dev]`) so imports resolve.
+      - id: pyright
+        name: pyright (strict, changed files)
+        entry: pyright
+        language: system
+        types: [python]
+        exclude: ^(alembic/versions/|scratch/)
+        stages: [pre-push]

@@ -16,7 +16,13 @@ from alembic import context
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: running migrations in-process (tests,
+    # the morning pipeline, the dashboard) must NOT mute the application's
+    # already-configured loggers. The alembic default (True) disables every
+    # logger not named in alembic.ini — which silently drops app log records
+    # for the rest of the process and caused order-dependent test failures
+    # (a migration test running first muted llm.cli warnings caplog expected).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = None
 
