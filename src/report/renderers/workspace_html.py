@@ -927,93 +927,107 @@ def _saydo_tab(
             _saydo_verdicts_panel(body, verdicts)
         body.write("</div>")
         return
-    card = cards[0]
     ratings = [c.rating for c in cards][::-1]
-    body.write('<div class="row-split">')
-    body.write("<div>")
+    # Section eyebrow + the cross-quarter verdict trajectory (global), then a
+    # quarter selector. The per-quarter detail blocks below swap on click — so
+    # "Q1 2026" lands on the Q1 2026-vs-Q4 2025 read — mirroring the earnings
+    # tab's quarter toggles.
+    body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Say · Do · Track</div>')
-    body.write(
-        '<h2 class="section-title">'
-        f"{_esc(card.prior_quarter)} {card.prior_year} → "
-        f"{_esc(card.current_quarter)} {card.current_year}"
-        "</h2>"
-    )
-    if card.thesis_view:
-        body.write(f'<p class="lede">{_esc(card.thesis_view)}</p>')
     body.write("</div>")
-    body.write('<div class="saydo-meta">')
-    body.write(_rating_pill(card.rating))
-    body.write('<div class="saydo-meta-label">vs prior-quarter guide</div>')
-    body.write('<div class="saydo-history">')
+    body.write('<div class="saydo-meta"><div class="saydo-history">')
     body.write(verdict_bar(ratings))
     body.write(
         f'<div class="kpi-axis"><span>{len(ratings)} quarters tracked</span>'
         "<span>most recent →</span></div>"
     )
-    body.write("</div></div>")
-    body.write("</div>")
+    body.write("</div></div></div>")
+    _quarter_selector(body, [f"{c.current_quarter} {c.current_year}" for c in cards], group="saydo")
 
-    # Cross-card summary table — every quarter pair on one row so the
-    # trajectory is visible at a glance. Mirrors the legacy renderer's
-    # §7 summary table; only render when there are ≥2 cards.
+    # Cross-card panels are global (one trajectory, not per-quarter).
     if len(cards) >= 2:
         _saydo_summary_table(body, cards)
-
     if section.historical_metrics:
         _saydo_historical_ledger(body, section.historical_metrics)
 
-    pvg = parse_print_vs_guide(card)
-    if pvg:
-        # LLM-filter to drop trivial commitments (FX, tax rate, share count
-        # noise) when --enable-llm; otherwise show the parsed rows verbatim
-        # (truncated). Both paths cache to disk so re-runs are free.
-        filtered = filter_important_print_vs_guide(
-            ticker=spec.ticker,
-            repo_root=Path(spec.repo_root),
-            card=card,
-            rows=pvg,
-            enable_llm=spec.llm_enabled,
+    # Per-quarter detail blocks — one visible at a time, swapped by the selector.
+    for i, card in enumerate(cards):
+        display = "" if i == 0 else "display:none"
+        qid = f"{card.current_quarter} {card.current_year}"
+        body.write(
+            f'<div data-quarter-card data-quarter-group="saydo" '
+            f'data-quarter="{_esc(qid)}" style="{display}">'
         )
-        _saydo_print_vs_guide(
-            body, card, filtered, total_parsed=len(pvg), llm_filtered=spec.llm_enabled
+        body.write('<div class="row-split"><div>')
+        body.write(
+            '<h2 class="section-title">'
+            f"{_esc(card.prior_quarter)} {card.prior_year} → "
+            f"{_esc(card.current_quarter)} {card.current_year}"
+            "</h2>"
         )
-    else:
+        if card.thesis_view:
+            body.write(f'<p class="lede">{_esc(card.thesis_view)}</p>')
+        body.write("</div>")
+        body.write('<div class="saydo-meta">')
+        body.write(_rating_pill(card.rating))
+        body.write('<div class="saydo-meta-label">vs prior-quarter guide</div>')
+        body.write("</div></div>")
+
+        pvg = parse_print_vs_guide(card)
+        if pvg:
+            # LLM-filter to drop trivial commitments (FX, tax, share-count noise)
+            # when --enable-llm; else show parsed rows verbatim. Both cache to disk.
+            filtered = filter_important_print_vs_guide(
+                ticker=spec.ticker,
+                repo_root=Path(spec.repo_root),
+                card=card,
+                rows=pvg,
+                enable_llm=spec.llm_enabled,
+            )
+            _saydo_print_vs_guide(
+                body, card, filtered, total_parsed=len(pvg), llm_filtered=spec.llm_enabled
+            )
+        else:
+            body.write(
+                '<div class="panel"><div class="panel-head">'
+                '<span class="panel-title">Print vs guide</span>'
+                '<span class="panel-sub">extractor pending — see narrative below</span>'
+                "</div>"
+                '<div class="stub"><span class="stub-label">compute pending</span>'
+                "Auto-extraction of the print-vs-guide table from the saydo narrative is "
+                "not yet wired for this card's markdown shape. Full narrative renders "
+                "below.</div></div>"
+            )
+
+        body.write('<div class="grid-2col">')
         body.write(
             '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Print vs guide</span>'
-            '<span class="panel-sub">extractor pending — see narrative below</span>'
-            "</div>"
-            '<div class="stub"><span class="stub-label">compute pending</span>'
-            "Auto-extraction of the print-vs-guide table from the saydo narrative is "
-            "not yet wired for this card's markdown shape. Full narrative renders "
-            "below.</div></div>"
+            '<span class="panel-title">Thesis view</span>'
+            '<span class="panel-sub">Post-print read-through</span></div>'
         )
+        body.write(
+            f'<div class="prose-pad">{_render_markdown(card.thesis_view or "—")}</div></div>'
+        )
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Attribution</span>'
+            '<span class="panel-sub">Execution · exogenous · luck</span></div>'
+        )
+        body.write(
+            f'<div class="prose-pad">{_render_markdown(card.attribution or "—")}</div></div>'
+        )
+        body.write("</div>")
 
-    body.write('<div class="grid-2col">')
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Thesis view</span>'
-        '<span class="panel-sub">Post-print read-through</span></div>'
-    )
-    body.write(f'<div class="prose-pad">{_render_markdown(card.thesis_view or "—")}</div></div>')
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Attribution</span>'
-        '<span class="panel-sub">Execution · exogenous · luck</span></div>'
-    )
-    body.write(f'<div class="prose-pad">{_render_markdown(card.attribution or "—")}</div></div>')
-    body.write("</div>")
+        body.write(
+            '<div class="panel"><div class="panel-head">'
+            '<span class="panel-title">Full Say·Do narrative</span>'
+            f'<span class="panel-sub">{_esc(card.current_quarter)} {card.current_year}</span>'
+            "</div>"
+        )
+        body.write(f'<div class="prose-pad">{_render_markdown(card.saydo_md)}</div></div>')
+        body.write("</div>")
 
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Full Say·Do narrative</span>'
-        f'<span class="panel-sub">{_esc(card.current_quarter)} {card.current_year}</span></div>'
-    )
-    body.write(f'<div class="prose-pad">{_render_markdown(card.saydo_md)}</div></div>')
-
-    # P3-21 grading overlay — management commitments + outcome ledger.
-    # Always renders (empty-state if cold) so the analyst sees the grading
-    # slot alongside the narrative.
+    # P3-21 grading overlay — management commitments + outcome ledger (global).
     _saydo_verdicts_panel(body, verdicts or [])
 
     body.write("</div>")
