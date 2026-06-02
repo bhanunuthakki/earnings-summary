@@ -1,9 +1,11 @@
 """§7 Bear case — strategically deep, structured, LLM-driven.
 
-When `enable_llm` is False (default for dev runs), returns LLM_PENDING with
-the prompt template embedded for review. When True, first checks the on-disk
-cache (`data/bear_case/<TICKER>.json`); if the file exists and is younger than
-`cache_ttl_days`, parses it and returns without re-calling the LLM. Otherwise
+First checks the on-disk cache (`data/bear_case/<TICKER>.json`); if the file
+exists and is younger than `cache_ttl_days`, parses it and returns without
+re-calling the LLM — regardless of `enable_llm`, so a non-LLM build (the
+default) still surfaces a previously-generated bear case instead of blanking
+the section. When the cache misses and `enable_llm` is False, returns
+LLM_PENDING with the prompt template embedded for review. Otherwise
 assembles inputs from the upstream sections, calls llm_client.generate_bear_case,
 caches the raw JSON, and parses into FailureMode rows. A transient empty or
 unparseable LLM response — OR a transient call failure (timeout, non-zero exit,
@@ -62,6 +64,15 @@ def build(
     force_refresh: bool = False,
     force_budget_bypass: bool = False,
 ) -> BearCaseSection:
+    # Serve a valid on-disk cache regardless of enable_llm so a non-LLM build
+    # (the default) still surfaces a previously-generated bear case instead of
+    # blanking the section. Mirrors company_description's unconditional cache
+    # read; force_refresh bypasses the cache to force a fresh LLM call.
+    if not force_refresh:
+        cached = _read_cache(ticker, repo_root, cache_ttl_days)
+        if cached is not None:
+            return cached
+
     if not enable_llm:
         return BearCaseSection(
             status=SectionStatus.LLM_PENDING,
@@ -87,11 +98,6 @@ def build(
                 detail="Bear case requires a thesis + break conditions to ground itself.",
             ),
         )
-
-    if not force_refresh:
-        cached = _read_cache(ticker, repo_root, cache_ttl_days)
-        if cached is not None:
-            return cached
 
     skip = budget_gate("bear_case", "Bear case (§7)", repo_root, bypass=force_budget_bypass)
     if skip is not None:

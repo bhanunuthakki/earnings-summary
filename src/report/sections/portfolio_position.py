@@ -32,6 +32,18 @@ from report.models import (
 from report.sections._common import open_portfolio_tracker_db
 
 
+def _parse_snap_date(raw: object) -> date | None:
+    """Parse a tracker snapshot_date (ISO string or date) into a date, or None."""
+    if raw is None:
+        return None
+    if isinstance(raw, date):
+        return raw
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except ValueError:
+        return None
+
+
 def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
     """Return the position section for `ticker`. NOT_APPLICABLE when
     portfolio-tracker isn't installed or the user has zero exposure to
@@ -63,6 +75,9 @@ def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
         total_pnl = total_value - total_cost
         total_pct = (total_pnl / total_cost) if total_cost > 0 else None
 
+    snap_dates = [a.snapshot_date for a in accounts if a.snapshot_date is not None]
+    position_as_of = max(snap_dates) if snap_dates else None
+
     return PortfolioPositionSection(
         status=SectionStatus.OK,
         held=bool(accounts),
@@ -72,6 +87,7 @@ def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
         total_market_value=total_value,
         total_unrealized_pnl=total_pnl,
         total_unrealized_pct=total_pct,
+        position_as_of=position_as_of,
         recent_transactions=transactions,
         open_decisions=decisions,
         closed_decisions=closed,
@@ -92,6 +108,7 @@ def _holding_accounts(
                    hs.quantity,
                    hs.institution_value,
                    hs.cost_basis,
+                   hs.snapshot_date,
                    ROW_NUMBER() OVER (
                        PARTITION BY hs.account_id, hs.security_id
                        ORDER BY hs.snapshot_date DESC
@@ -105,6 +122,7 @@ def _holding_accounts(
                l.quantity,
                l.institution_value,
                l.cost_basis,
+               l.snapshot_date,
                cbo.total_cost_basis AS override_cost,
                cbo.source AS override_source
         FROM latest l
@@ -147,6 +165,7 @@ def _holding_accounts(
                 market_value=mv,
                 unrealized_pnl=pnl,
                 unrealized_pct=pct,
+                snapshot_date=_parse_snap_date(r["snapshot_date"]),
             )
         )
     return out

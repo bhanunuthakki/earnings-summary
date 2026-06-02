@@ -140,9 +140,14 @@ def render(spec: ReportSpec) -> str:
     body.write('<div class="l1-tabs-wrap">')
     tabs = _tab_defs(spec, p3)
     _tabs(body, tabs)
-    for tid, label, _count, render_fn in tabs:
+    for i, (tid, label, _count, render_fn) in enumerate(tabs):
         _ = label
-        body.write(f'<div class="tab-pane" data-tab="{_esc(tid)}">')
+        # First tab is active on load so its pane renders immediately. The tab
+        # BUTTON already gets `active` at i==0 (see _tabs); without the matching
+        # pane class every pane stays display:none until the user clicks one,
+        # which is why the report opened blank on the active tab.
+        active = " active" if i == 0 else ""
+        body.write(f'<div class="tab-pane{active}" data-tab="{_esc(tid)}">')
         render_fn(body)
         body.write("</div>")
     body.write("</div>")  # /l1-tabs-wrap
@@ -530,11 +535,8 @@ def _earnings_tab(
 
     body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Earnings calls</div>')
-    body.write(
-        '<h2 class="section-title">'
-        f"{len(cards)} quarter{'s' if len(cards) != 1 else ''} on file — most recent surfaced first."
-        "</h2>"
-    )
+    # (Removed the oversized "N quarters on file" section-title — the quarter
+    # selector below already conveys how many quarters are on file.)
     body.write("</div>")
     if cards:
         _quarter_selector(body, [c.quarter + " " + str(c.year) for c in cards], group="earnings")
@@ -2224,12 +2226,15 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
     if v.valuation_date is not None:
         _val_row(body, "Valuation date", v.valuation_date.isoformat(), muted=True)
     if v.model_link:
-        # The legacy renderer links directly to the .xlsx workbook so analysts
-        # can open the source-of-truth DCF model in one click. The link is
-        # relative to the report file (both live in output/research/<TICKER>/).
+        # Link to the live /dcf/<ticker> route (served by comments_server) instead
+        # of the bare relative filename: a report served over HTTP at
+        # /reports/<ticker> can't resolve a sibling .xlsx path, so the old link
+        # 404'd in the served app. The route streams dcf/<T>.xlsx (latest dated
+        # workbook as fallback). NOTE: opening the report as a file:// page needs
+        # the server running for this link to resolve.
         body.write(
             '<div class="val-row muted"><span>DCF workbook</span>'
-            f'<strong><a href="{_esc(v.model_link)}">{_esc(v.model_link)}</a>'
+            f'<strong><a href="/dcf/{_esc(snap.ticker)}">Open .xlsx</a>'
             "</strong></div>"
         )
     body.write("</div></div>")
@@ -3377,6 +3382,11 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
         f"{'s' if len(pp.accounts) != 1 else ''}."
         "</h2>"
     )
+    if pp.position_as_of is not None:
+        body.write(
+            f'<div class="panel-sub">Tracker snapshot as of '
+            f"{_esc(pp.position_as_of.isoformat())} (read at report build)</div>"
+        )
     body.write("</div></div>")
 
     body.write('<div class="position-stats">')

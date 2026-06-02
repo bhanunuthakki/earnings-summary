@@ -20,7 +20,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from report.sections.thesis import _kpi_history  # noqa: E402
+from report.sections.thesis import (  # noqa: E402
+    _build_ledger,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    _kpi_history,  # pyright: ignore[reportPrivateUsage]
+)
 
 _QUARTER_ENDS = [
     "2023-03-31",
@@ -134,3 +137,29 @@ def test_ledger_history_empty_for_unresolvable_label(tmp_path: Path) -> None:
     history, excerpt = _kpi_history("NU", repo, "NIM")
     assert history == []
     assert excerpt is None
+
+
+def test_ledger_populates_break_condition_from_v2_key(tmp_path: Path) -> None:
+    """Schema-v2 holdings JSONs key the break text as `break_condition` (NU/MELI/BN);
+    older ones use `break`. The ledger's Break column must populate from either —
+    regression for the always-empty Break/Unit columns on v2 tickers (the row was
+    read with k.get("break") only, which is None for v2)."""
+    repo = _build_repo(tmp_path)
+    holdings: dict[str, object] = {
+        "tier_1_kpis": [
+            {
+                "name": "ROE (annualized, consolidated)",
+                "break_condition": "Consolidated ROE <25% for 2 consecutive Qs",
+                "source": "earnings release",
+            },
+            {"name": "Legacy KPI", "break": "old-style break text"},
+        ]
+    }
+    rows = _build_ledger("NU", repo, holdings, evaluations=[])
+    by_name = {r.name: r for r in rows}
+    assert by_name["ROE (annualized, consolidated)"].break_condition == (
+        "Consolidated ROE <25% for 2 consecutive Qs"
+    )
+    assert by_name["ROE (annualized, consolidated)"].source_hint == "earnings release"
+    # The older `break` key still populates the column.
+    assert by_name["Legacy KPI"].break_condition == "old-style break text"

@@ -945,6 +945,7 @@ class PortfolioPositionAccountRow(BaseModel):
     market_value: float | None
     unrealized_pnl: float | None
     unrealized_pct: float | None  # decimal, 0.12 = +12%
+    snapshot_date: date | None = None  # tracker snapshot this row was valued at
 
 
 class PortfolioPositionTransaction(BaseModel):
@@ -995,6 +996,10 @@ class PortfolioPositionSection(BaseModel):
     total_market_value: float | None = None
     total_unrealized_pnl: float | None = None
     total_unrealized_pct: float | None = None
+    # Max tracker snapshot_date across the held accounts — the "as of" date for
+    # this position. None when no dated snapshot rows were returned. The position
+    # is a build-time snapshot, so this exposes how stale the figures are.
+    position_as_of: date | None = None
     recent_transactions: list[PortfolioPositionTransaction] = Field(default_factory=list)
     open_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
     closed_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)

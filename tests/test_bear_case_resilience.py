@@ -98,3 +98,45 @@ def test_build_parses_valid_llm_response(tmp_path: Path, monkeypatch: pytest.Mon
     assert section.status == SectionStatus.OK
     assert len(section.failure_modes) == 1
     assert section.failure_modes[0].leading_indicator == "cost of risk"
+
+
+def _build_no_llm(tmp_path: Path) -> BearCaseSection:
+    return bear_case.build(
+        ticker="NU",
+        repo_root=tmp_path,
+        enable_llm=False,  # the default dev / non-LLM build
+        thesis=_thesis(),
+        financials=FinancialsSection(status=SectionStatus.MISSING_DATA),
+        segments=SegmentsSection(status=SectionStatus.MISSING_DATA),
+        earnings=EarningsSection(status=SectionStatus.MISSING_DATA),
+        force_refresh=False,  # honor the on-disk cache
+    )
+
+
+def test_build_serves_cache_without_llm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-LLM build must serve a valid on-disk cache instead of blanking the
+    bear tab with LLM_PENDING. Regression for the gate-ordering bug where the
+    `enable_llm` short-circuit ran BEFORE the cache read, so a present, valid
+    data/bear_case/<T>.json was never consulted on the default (non-LLM) build —
+    which is exactly why NU's bear tab rendered empty while 16KB of cached
+    failure modes sat on disk."""
+    cache = tmp_path / "data" / "bear_case"
+    cache.mkdir(parents=True)
+    (cache / "NU.json").write_text(_VALID_RESPONSE, encoding="utf-8")
+
+    # The LLM must NOT be called when a fresh cache exists.
+    def _boom(*args: object, **kwargs: object) -> str:
+        raise AssertionError("LLM must not be called when a valid cache exists")
+
+    monkeypatch.setattr("report.sections.bear_case.generate_bear_case", _boom)
+
+    section = _build_no_llm(tmp_path)
+    assert section.status == SectionStatus.OK
+    assert len(section.failure_modes) == 1
+    assert section.failure_modes[0].leading_indicator == "cost of risk"
+
+
+def test_build_pending_without_llm_when_no_cache(tmp_path: Path) -> None:
+    """Cold path unchanged: no cache + no LLM still returns LLM_PENDING."""
+    section = _build_no_llm(tmp_path)
+    assert section.status == SectionStatus.LLM_PENDING
