@@ -1,0 +1,61 @@
+{
+  "ticker": "CRWV",
+  "name": "CoreWeave",
+  "last_updated": "2026-06-01",
+  "thesis": "STUB: CoreWeave (CRWV) is an evaluation candidate — an AI/GPU 'neocloud' hyperscaler renting accelerated compute (NVIDIA fleets) under multi-year take-or-pay contracts. Hyper-growth, capex-heavy, and FCF-negative by design: the thesis lives or dies on contracted backlog/RPO converting to revenue faster than the debt-funded data-center buildout compounds interest + depreciation. Needs user-authored thesis + tier_1_kpis (RPO/backlog, revenue, power capacity, GPU utilization, gross margin, net leverage) + DCF params if/when it graduates to portfolio.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "Contracted RPO/backlog conversion vs. debt-funded capex compounding",
+  "chart_priorities": [],
+  "tier_1_kpis": [],
+  "tier_2_kpis": [],
+  "nuance": {},
+  "competitive_watchlist": [],
+  "thesis_breakers_qualitative": [
+    "Customer concentration — a single hyperscaler/lab is a large share of revenue; non-renewal or insourcing breaks the take-or-pay base.",
+    "Net leverage / interest coverage — the buildout is debt-funded; a financing-cost spike or refinancing wall ahead of revenue ramp is the core balance-sheet risk.",
+    "GPU obsolescence / depreciation schedule — useful-life assumptions on the fleet drive both margin and the residual-value story."
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 16.0
+  },
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "_status": "evaluation_stub",
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction. (FCF/OCF universals deliberately omitted: a capex-heavy, debt-funded neocloud is FCF-negative by design, so those floors would false-breach permanently — calibrate per-ticker instead.)"
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "crwv_revenue_yoy_below_40",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 40,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY < 40% for 2Q — STUB; the neocloud hyper-growth thesis requires sustained 40%+ at current scale as contracted backlog converts. Below this, backlog conversion is stalling relative to the capex it was raised against."
+    },
+    {
+      "rule_id": "crwv_gross_margin_below_55",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 55,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin < 55% for 2Q — STUB calibration floor; sustained GPU-rental pricing erosion or under-utilization would compress GM and break the unit economics underpinning the debt-service coverage."
+    }
+  ]
+}
