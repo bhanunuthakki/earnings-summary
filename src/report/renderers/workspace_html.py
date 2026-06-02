@@ -468,8 +468,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "exec_comp",
             "Exec Comp",
             (
-                len(spec.exec_compensation.insider_signals)
-                + len(spec.exec_compensation.packages)
+                len(spec.exec_compensation.insider_signals) + len(spec.exec_compensation.packages)
                 if spec.exec_compensation is not None
                 else None
             ),
@@ -644,7 +643,9 @@ def _earnings_themes_panel(body: StringIO, section: EarningsSection) -> None:
     if section.themes_note:
         body.write(f'<p class="muted theme-note">{_esc(section.themes_note)}</p>')
     if section.prepared_remarks_themes:
-        body.write('<div class="theme-bucket"><h4 class="theme-bucket-title">Prepared remarks themes</h4>')
+        body.write(
+            '<div class="theme-bucket"><h4 class="theme-bucket-title">Prepared remarks themes</h4>'
+        )
         _theme_list(body, section.prepared_remarks_themes)
         body.write("</div>")
     if section.qa_themes:
@@ -678,7 +679,7 @@ def _theme_list(body: StringIO, themes) -> None:
             for ev in theme.evidence:
                 speaker = f"{_esc(ev.speaker)} · " if ev.speaker else ""
                 body.write(
-                    f'<li><em>&ldquo;{_esc(ev.text)}&rdquo;</em>'
+                    f"<li><em>&ldquo;{_esc(ev.text)}&rdquo;</em>"
                     f' <span class="muted">— {speaker}{_esc(ev.period)}</span></li>'
                 )
             body.write("</ul>")
@@ -1031,7 +1032,7 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         graded = sum(1 for r in rows if r.outcome is not None)
         body.write(
             f'<span class="panel-sub">{len(rows)} commitment'
-            f'{"s" if len(rows) != 1 else ""} · {graded} graded</span></div>'
+            f"{'s' if len(rows) != 1 else ''} · {graded} graded</span></div>"
         )
     else:
         body.write('<span class="panel-sub">no commitments extracted</span></div>')
@@ -1370,12 +1371,9 @@ def _segment_secondary_expansions_panel(body: StringIO, seg: SegmentsSection) ->
         parent = f" — under {exp.parent_label}" if exp.parent_label else ""
         body.write('<div class="panel"><div class="panel-head">')
         body.write(
-            f'<span class="panel-title">By {_esc(axis_label)}{_esc(parent)} '
-            f"· cross-tab</span>"
+            f'<span class="panel-title">By {_esc(axis_label)}{_esc(parent)} · cross-tab</span>'
         )
-        body.write(
-            f'<span class="panel-sub">{len(matrix_rows)} rows · junction data</span></div>'
-        )
+        body.write(f'<span class="panel-sub">{len(matrix_rows)} rows · junction data</span></div>')
         body.write('<div class="prose-pad">')
         body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
         body.write("</div></div>")
@@ -1504,15 +1502,13 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
     """
     if not (signals.red_signals or signals.yellow_signals or signals.green_signals):
         return
-    total = (
-        len(signals.red_signals) + len(signals.yellow_signals) + len(signals.green_signals)
-    )
+    total = len(signals.red_signals) + len(signals.yellow_signals) + len(signals.green_signals)
     fires = list(signals.red_signals) + list(signals.yellow_signals)
     body.write('<div class="panel"><div class="panel-head">')
     body.write('<span class="panel-title">§3.5 Signals</span>')
     body.write(
         f'<span class="panel-sub">{len(signals.red_signals)} red · '
-        f'{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green</span>'
+        f"{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green</span>"
     )
     body.write("</div>")
     if fires:
@@ -1520,10 +1516,7 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
         for r in fires:
             _signal_card_workspace(body, r)
         body.write("</div>")
-    body.write(
-        '<details class="signals-all"><summary>'
-        f"All signals ({total})</summary>"
-    )
+    body.write(f'<details class="signals-all"><summary>All signals ({total})</summary>')
     all_rows = (
         list(signals.red_signals) + list(signals.yellow_signals) + list(signals.green_signals)
     )
@@ -1566,13 +1559,10 @@ def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
     )
     body.write("</div>")
     if r.narrative:
-        body.write(
-            '<div style="line-height:1.45;margin:4px 0 6px;">'
-            f"{_esc(r.narrative)}</div>"
-        )
+        body.write(f'<div style="line-height:1.45;margin:4px 0 6px;">{_esc(r.narrative)}</div>')
     if r.value_summary:
         body.write(
-            '<div style="font-family:\'JetBrains Mono\',Consolas,monospace;'
+            "<div style=\"font-family:'JetBrains Mono',Consolas,monospace;"
             f'font-size:11.5px;color:var(--muted);">{_esc(r.value_summary)}</div>'
         )
     body.write("</div>")
@@ -1582,8 +1572,7 @@ def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
     body.write('<div class="prose-pad"><div class="table-scroll">')
     body.write('<table class="metrics-table"><thead><tr>')
     body.write(
-        "<th>Sev</th><th>Metric</th><th>Kind</th>"
-        "<th>Signal</th><th>Narrative</th><th>Stat</th>"
+        "<th>Sev</th><th>Metric</th><th>Kind</th><th>Signal</th><th>Narrative</th><th>Stat</th>"
     )
     body.write("</tr></thead><tbody>")
     sev_color = {"red": "var(--bad)", "yellow": "var(--warn)", "green": "var(--ok)"}
@@ -1790,13 +1779,9 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     # Headline panel: chosen multiple, current value, rich/cheap.
     body.write('<div class="panel valuation-headline">')
     body.write('<div class="panel-head">')
-    body.write(
-        f'<span class="panel-title">{_esc(vb.multiple_name or "—")}</span>'
-    )
+    body.write(f'<span class="panel-title">{_esc(vb.multiple_name or "—")}</span>')
     if vb.current_period_end:
-        body.write(
-            f'<span class="panel-sub">as of {vb.current_period_end.isoformat()}</span>'
-        )
+        body.write(f'<span class="panel-sub">as of {vb.current_period_end.isoformat()}</span>')
     body.write("</div>")
     body.write('<div class="valuation-headline-row">')
     body.write(
@@ -1816,9 +1801,7 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
             "</div>"
         )
     if vb.rich_cheap_verdict:
-        body.write(
-            f'<div class="valuation-verdict">{_esc(vb.rich_cheap_verdict)}</div>'
-        )
+        body.write(f'<div class="valuation-verdict">{_esc(vb.rich_cheap_verdict)}</div>')
     body.write("</div>")
 
     # Sparkline of 12Q history. Drop None values — sparkline doesn't
@@ -1832,9 +1815,9 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
         if vb.history:
             body.write(
                 '<div class="valuation-spark-axis">'
-                f'<span>{vb.history[0].period_end.isoformat() if vb.history[0].period_end else "—"}</span>'
+                f"<span>{vb.history[0].period_end.isoformat() if vb.history[0].period_end else '—'}</span>"
                 f'<span class="muted">{len(vb.history)}q trailing</span>'
-                f'<span>{vb.history[-1].period_end.isoformat() if vb.history[-1].period_end else "—"}</span>'
+                f"<span>{vb.history[-1].period_end.isoformat() if vb.history[-1].period_end else '—'}</span>"
                 "</div>"
             )
     body.write("</div>")  # /headline panel
@@ -1924,9 +1907,7 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
     """
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
-    body.write(
-        f'<div class="eyebrow">Decision audit · recommendations {_TIMES} outcomes</div>'
-    )
+    body.write(f'<div class="eyebrow">Decision audit · recommendations {_TIMES} outcomes</div>')
     title = (
         f"{history.total} decision{'s' if history.total != 1 else ''} tracked"
         if history.total
@@ -1986,7 +1967,7 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
         '<div class="panel"><div class="panel-head">'
         '<span class="panel-title">Decision ledger</span>'
         f'<span class="panel-sub">{len(history.rows)} row'
-        f'{"s" if len(history.rows) != 1 else ""} · newest first</span></div>'
+        f"{'s' if len(history.rows) != 1 else ''} · newest first</span></div>"
         '<div class="table-scroll"><table class="fin-table"><thead><tr>'
         "<th>Made</th>"
         "<th>Kind</th>"
@@ -2001,10 +1982,7 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
                 "num pos"
                 if (
                     (r.recommendation_kind.upper() in ("TRIM", "SELL") and r.outcome_pct < 0)
-                    or (
-                        r.recommendation_kind.upper() not in ("TRIM", "SELL")
-                        and r.outcome_pct > 0
-                    )
+                    or (r.recommendation_kind.upper() not in ("TRIM", "SELL") and r.outcome_pct > 0)
                 )
                 else "num neg"
             )
@@ -2023,9 +2001,7 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
     body.write("</div>")
 
 
-def _decision_conviction_outcome_panel(
-    body: StringIO, history: DecisionHistorySummary
-) -> None:
+def _decision_conviction_outcome_panel(body: StringIO, history: DecisionHistorySummary) -> None:
     """Cross-tab of conviction × outcome bucket — surfaces whether "high"
     convictions actually grade out better than "medium" or "low" ones.
 
@@ -2179,9 +2155,7 @@ def _thesis_hygiene_panels(body: StringIO, thesis: ThesisSection) -> None:
             if r.history:
                 period_label, value = r.history[-1]
                 latest_text = f"{value:.2f}".rstrip("0").rstrip(".") if value is not None else "—"
-                latest_html = (
-                    f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
-                )
+                latest_html = f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
             else:
                 latest_html = '<span class="muted">—</span>'
             tooltip_attr = (
@@ -2372,7 +2346,7 @@ def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> N
         '<div class="panel decision-history-panel"><div class="panel-head">'
         '<span class="panel-title">Recent decisions</span>'
         f'<span class="panel-sub">last {len(decisions)} LLM recommendation'
-        f'{"s" if len(decisions) != 1 else ""}</span></div>'
+        f"{'s' if len(decisions) != 1 else ''}</span></div>"
         '<div class="decision-list">'
     )
     for d in decisions:
@@ -2402,8 +2376,8 @@ def _macro_sensitivity_panel(body: StringIO, rows: list[MacroSensitivityRow]) ->
     if rows:
         body.write(
             f'<span class="panel-sub">{len(rows)} factor'
-            f'{"s" if len(rows) != 1 else ""} '
-            f'· lookback {rows[0].lookback_window_days}d</span>'
+            f"{'s' if len(rows) != 1 else ''} "
+            f"· lookback {rows[0].lookback_window_days}d</span>"
         )
     else:
         body.write('<span class="panel-sub">no factors tracked</span>')
@@ -2596,7 +2570,7 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
     if rows:
         body.write(
             f'<span class="panel-sub">{len(rows)} peer'
-            f'{"s" if len(rows) != 1 else ""} · TTM key metrics from FMP</span></div>'
+            f"{'s' if len(rows) != 1 else ''} · TTM key metrics from FMP</span></div>"
         )
     else:
         body.write('<span class="panel-sub">peers cache cold</span></div>')
@@ -2619,7 +2593,7 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
     for r in rows:
         body.write("<tr>")
         body.write(f'<td><strong class="mono">{_esc(r.peer_ticker)}</strong></td>')
-        body.write(f'<td>{_esc(r.peer_name or "—")}</td>')
+        body.write(f"<td>{_esc(r.peer_name or '—')}</td>")
         body.write(
             f'<td class="num">{_fmt_usd_compact(r.market_cap_usd)}</td>'
             if r.market_cap_usd is not None
@@ -2798,7 +2772,9 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             '<span class="panel-title">Buy-side narrative synthesis</span>'
             '<span class="panel-sub">Critical operational shifts &amp; strategic takeaways</span></div>'
         )
-        body.write(f'<div class="prose-pad">{_render_markdown(section.raw_synthesis_md)}</div></div>')
+        body.write(
+            f'<div class="prose-pad">{_render_markdown(section.raw_synthesis_md)}</div></div>'
+        )
 
     seg = section.segment_changes
     comp = section.executive_comp
@@ -2830,11 +2806,11 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             metrics_str = ", ".join(comp.metrics_used) if comp.metrics_used else "—"
             body.write(f"<p><strong>Metrics tracked:</strong> {_esc(metrics_str)}</p>")
             body.write(
-                f'<p><strong>Targets:</strong> {_esc(comp.targets_and_thresholds or "—")}</p>'
+                f"<p><strong>Targets:</strong> {_esc(comp.targets_and_thresholds or '—')}</p>"
             )
             body.write(
                 '<p style="margin-top: 10px; font-style: italic;">'
-                f'<strong>Thesis alignment:</strong> {_esc(comp.alignment_verdict or "—")}</p>'
+                f"<strong>Thesis alignment:</strong> {_esc(comp.alignment_verdict or '—')}</p>"
             )
             body.write("</div></div>")
 
@@ -2851,7 +2827,9 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
         else:
             body.write('<span class="pill pill-ok">UNCHANGED</span>')
         body.write('</div><div class="prose-pad">')
-        body.write(f'<p>{_esc(metric.description or "No operational/financial metric redefinitions detected.")}</p>')
+        body.write(
+            f"<p>{_esc(metric.description or 'No operational/financial metric redefinitions detected.')}</p>"
+        )
         body.write("</div></div>")
 
     if section.investment_signals:
@@ -2868,7 +2846,9 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             tone = sev_class.get(sig.severity, "muted")
             body.write("<tr>")
             body.write(f'<td class="saydo-metric">{_esc(sig.signal_type)}</td>')
-            body.write(f'<td><span class="pill pill-{tone}">{_esc(sig.severity.upper())}</span></td>')
+            body.write(
+                f'<td><span class="pill pill-{tone}">{_esc(sig.severity.upper())}</span></td>'
+            )
             body.write(f'<td class="saydo-guide">{_esc(sig.description)}</td>')
             body.write("</tr>")
         body.write("</tbody></table></div>")
@@ -2887,7 +2867,7 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
     if rows:
         body.write(
             f'<span class="panel-sub">{len(rows)} long-term '
-            f'commitment{"s" if len(rows) != 1 else ""} · from investor decks</span></div>'
+            f"commitment{'s' if len(rows) != 1 else ''} · from investor decks</span></div>"
         )
     else:
         body.write('<span class="panel-sub">no decks extracted</span></div>')
@@ -2920,16 +2900,12 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
             body.write(f'<td class="num muted">{_esc(r.target_unit)}</td>')
         body.write(f"<td>{_esc(r.target_period)}</td>")
         body.write(f'<td class="num">{r.confidence * 100:.0f}%</td>')
-        body.write(
-            f'<td class="seg-desc"><em>&ldquo;{_esc(r.narrative_excerpt)}&rdquo;</em></td>'
-        )
+        body.write(f'<td class="seg-desc"><em>&ldquo;{_esc(r.narrative_excerpt)}&rdquo;</em></td>')
         body.write("</tr>")
     body.write("</tbody></table></div>")
 
 
-def _customer_concentration_panel(
-    body: StringIO, rows: list[CustomerConcentrationRow]
-) -> None:
+def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrationRow]) -> None:
     """P3-19a customer concentration table — named customers ≥ 5% of revenue.
 
     Empty-state when none reported (most large-cap diversified businesses).
@@ -2942,7 +2918,7 @@ def _customer_concentration_panel(
     if rows:
         body.write(
             f'<span class="panel-sub">{len(rows)} customer'
-            f'{"s" if len(rows) != 1 else ""} ≥ 5% of revenue</span></div>'
+            f"{'s' if len(rows) != 1 else ''} ≥ 5% of revenue</span></div>"
         )
     else:
         body.write('<span class="panel-sub">none ≥ 5% reported</span></div>')
@@ -3071,10 +3047,7 @@ def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeigh
         '<th class="num">Share</th>'
     )
     if has_oi:
-        body.write(
-            '<th class="num">Op income ($M)</th>'
-            '<th class="num">OI share</th>'
-        )
+        body.write('<th class="num">Op income ($M)</th><th class="num">OI share</th>')
     body.write("<th>Description</th></tr></thead><tbody>")
     for r in rows:
         body.write(f"<tr><td><strong>{_esc(r.name)}</strong></td>")
@@ -3133,7 +3106,9 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
     body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Compensation &amp; Alignment</div>')
     yr_label = f"FY {section.fiscal_year_latest}" if section.fiscal_year_latest else "Latest data"
-    body.write(f'<h2 class="section-title">Executive comp &amp; insider activity · {_esc(yr_label)}</h2>')
+    body.write(
+        f'<h2 class="section-title">Executive comp &amp; insider activity · {_esc(yr_label)}</h2>'
+    )
     body.write("</div></div>")
 
     # 1. Alignment narrative
@@ -3141,10 +3116,12 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
         body.write(
             '<div class="panel"><div class="panel-head">'
             '<span class="panel-title">Alignment read</span>'
-            '<span class="panel-sub">Do management\'s comp metrics reward the analyst\'s thesis?</span>'
+            "<span class=\"panel-sub\">Do management's comp metrics reward the analyst's thesis?</span>"
             "</div>"
         )
-        body.write(f'<div class="prose-pad">{_render_markdown(section.alignment_narrative_md)}</div></div>')
+        body.write(
+            f'<div class="prose-pad">{_render_markdown(section.alignment_narrative_md)}</div></div>'
+        )
     else:
         body.write(
             '<div class="panel"><div class="panel-head">'
@@ -3191,7 +3168,9 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             body.write(f'<td class="num">{_fmt_usd_short(pkg.base_salary)}</td>')
             bonus_pair = _fmt_usd_short(pkg.cash_bonus_actual)
             if pkg.cash_bonus_target is not None and pkg.cash_bonus_target != pkg.cash_bonus_actual:
-                bonus_pair += f' <span class="muted">/ {_fmt_usd_short(pkg.cash_bonus_target)} tgt</span>'
+                bonus_pair += (
+                    f' <span class="muted">/ {_fmt_usd_short(pkg.cash_bonus_target)} tgt</span>'
+                )
             body.write(f'<td class="num">{bonus_pair}</td>')
             body.write(f'<td class="num">{_fmt_usd_short(pkg.equity_grant_value)}</td>')
             body.write(f'<td class="num">{_fmt_usd_short(pkg.total_comp_granted)}</td>')
@@ -3211,8 +3190,8 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
         if ceo and ceo.ceo_pay_ratio:
             body.write(
                 f'<tr><td colspan="9" class="table-footer">CEO pay ratio: '
-                f'<strong>{ceo.ceo_pay_ratio:.0f}x</strong> median employee comp '
-                f'(S&amp;P 500 average ~300x).</td></tr>'
+                f"<strong>{ceo.ceo_pay_ratio:.0f}x</strong> median employee comp "
+                f"(S&amp;P 500 average ~300x).</td></tr>"
             )
         body.write("</tbody></table></div>")
 
@@ -3249,7 +3228,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
                 else "signal-weak"
             )
             body.write(f'<tr class="{tone}">')
-            body.write(f'<td>{_esc(s.transaction_date)}</td>')
+            body.write(f"<td>{_esc(s.transaction_date)}</td>")
             body.write(f"<td>{_esc(s.insider_name)}</td>")
             body.write(f"<td>{_esc(s.role or '?')}</td>")
             body.write(f"<td>{_esc(s.transaction_type.replace('_', ' '))}</td>")
@@ -3284,7 +3263,10 @@ def _fmt_usd_short(v: float | None) -> str:
 
 _LENS_LABELS: dict[str, tuple[str, str]] = {
     # name -> (display_label, one-line description)
-    "five_min_reread": ("5-min reread", "What changed · recommended action · what would change my mind"),
+    "five_min_reread": (
+        "5-min reread",
+        "What changed · recommended action · what would change my mind",
+    ),
     "thesis_drift_qoq": ("Thesis drift Q/Q", "How this quarter engaged with the prior bear case"),
     "bull_case": ("Bull case", "What would have to happen for this to work spectacularly"),
     "reverse_dcf": ("Reverse DCF", "What the market is implying vs the thesis"),
@@ -3312,19 +3294,17 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
             '<div class="panel"><div class="stub"><span class="stub-label">no lens artifacts cached</span>'
             "Generate per-ticker analytical lenses with:</div>"
             '<pre class="cli-hint">python execution/run_lens.py --ticker '
-            f'{section.ticker if section else "<TICKER>"} --all</pre></div>'
+            f"{section.ticker if section else '<TICKER>'} --all</pre></div>"
         )
         body.write("</div>")
         return
 
     body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Cross-section synthesis</div>')
-    body.write(
-        f'<h2 class="section-title">Synthesis · {len(section.lenses)} lens artifacts</h2>'
-    )
+    body.write(f'<h2 class="section-title">Synthesis · {len(section.lenses)} lens artifacts</h2>')
     body.write(
         '<p class="sub">Cached cross-section analytical reads. '
-        f'Regenerate with <code>python execution/run_lens.py --ticker {_esc(section.ticker)} --all</code>.</p>'
+        f"Regenerate with <code>python execution/run_lens.py --ticker {_esc(section.ticker)} --all</code>.</p>"
     )
     body.write("</div></div>")
 
@@ -3335,13 +3315,16 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
         if lens.generated_at:
             from datetime import UTC as _UTC
             from datetime import datetime as _dt
+
             age = _dt.now(_UTC) - lens.generated_at
             if age.days >= 1:
                 age_str = f" · {age.days}d ago"
             else:
                 age_str = f" · {int(age.total_seconds() / 3600)}h ago"
-        warn = ' <span class="lens-warn">DIRTY</span>' if lens.is_dirty else (
-            ' <span class="lens-stale">STALE</span>' if lens.is_stale else ""
+        warn = (
+            ' <span class="lens-warn">DIRTY</span>'
+            if lens.is_dirty
+            else (' <span class="lens-stale">STALE</span>' if lens.is_stale else "")
         )
         model_str = f" · {lens.model}" if lens.model else ""
 
@@ -3663,9 +3646,7 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     # Stored scored_at is naive UTC ISO; compare with a naive cutoff so the
     # SQL string comparison is well-defined.
     since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=window_days)
-    summaries: list[VersionSummary] = summarize_by_prompt_version(
-        db_path=db_path, since=since
-    )
+    summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
 
     body.write(
         '<div class="panel"><div class="panel-head">'
@@ -3739,11 +3720,7 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
     }
-    body.write(
-        '<script id="workspace-boot" type="application/json">'
-        f"{_json.dumps(boot)}"
-        "</script>"
-    )
+    body.write(f'<script id="workspace-boot" type="application/json">{_json.dumps(boot)}</script>')
     try:
         store = load_store(Path(spec.repo_root), spec.ticker, spec.generation_date)
         payload = to_json_payload(store)
@@ -3754,9 +3731,7 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
             "comments": [],
         }
     body.write(
-        '<script id="workspace-comments" type="application/json">'
-        f"{_json.dumps(payload)}"
-        "</script>"
+        f'<script id="workspace-comments" type="application/json">{_json.dumps(payload)}</script>'
     )
 
 
