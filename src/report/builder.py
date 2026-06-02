@@ -73,7 +73,9 @@ def build_report(
     """
     ticker = ticker.upper()
     portfolio_position_section = portfolio_position.build(ticker, repo_root)
-    snapshot_section = snapshot.build(ticker, repo_root, model_link)
+    snapshot_section = snapshot.build(
+        ticker, repo_root, model_link, held=portfolio_position_section.held
+    )
     evaluation_snapshot_section = (
         evaluation_snapshot.build(ticker, repo_root) if flavor == ReportFlavor.EVALUATION else None
     )
