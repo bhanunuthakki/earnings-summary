@@ -7,9 +7,10 @@ name: CI
 # the project's actual norm — "gate only on YOUR files" — as machinery:
 #
 #   * tests   — the FULL pytest suite must pass (the strong, whole-repo gate).
-#   * quality — ruff lint + format are enforced ONLY on the files a PR changed,
-#               so new code stays clean while the legacy baseline is paid down
-#               incrementally rather than blocking every PR.
+#   * quality — ruff lint (changed files) + format (changed LINES) are enforced
+#               only on what a PR touched, so new code stays clean while the
+#               legacy baseline is paid down incrementally rather than blocking
+#               every PR.
 #
 # pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
 # it compares the whole-repo strict error count in the PR against the base
@@ -93,9 +94,16 @@ jobs:
             echo "Changed Python files:"
             echo "$changed"
           fi
-      - name: ruff format (changed files)
+      - name: ruff format (no NEW misformatting on changed lines)
+        # Diff-aware format gate, mirroring the lint gate below. The repo carries
+        # a large pre-existing `ruff format` backlog (247 files of tooling drift),
+        # so a whole-file format check forces unrelated reformatting onto any PR
+        # that merely touches a drifted file. Instead we fail only when a line the
+        # PR actually changed is misformatted — see execution/format_changed.py.
         if: steps.changed.outputs.files != ''
-        run: echo "${{ steps.changed.outputs.files }}" | xargs ruff format --check
+        run: |
+          echo "${{ steps.changed.outputs.files }}" \
+            | xargs python execution/format_changed.py --base "${{ steps.changed.outputs.base }}"
       - name: ruff check (no NEW violations in changed files)
         # Diff-aware lint gate. The repo carries a large pre-existing ruff
         # baseline (~332 errors across many files — tooling drift), so a
@@ -103,8 +111,8 @@ jobs:
         # touches a legacy file. Instead, for each changed file we compare the
         # violation count in this PR against the base branch's version and fail
         # only when the PR ADDS violations — new code stays clean while the
-        # baseline is paid down incrementally. (ruff format above stays a hard
-        # whole-file gate; formatting is uniformly auto-fixable.)
+        # baseline is paid down incrementally. (ruff format above is likewise
+        # diff-aware — gated on changed lines via execution/format_changed.py.)
         if: steps.changed.outputs.files != ''
         shell: bash
         run: |
