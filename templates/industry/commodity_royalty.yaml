@@ -1,5 +1,11 @@
 industry: commodity_royalty
 display_name: "Commodity Royalty / Streaming"
+# Section-relevance map (see src/industry_classifier.py). Royalty/streaming
+# operates no mines or plants -- effectively zero operating leases -- so the
+# lease ladder is immaterial; omit it. Customer (operator/asset) concentration
+# is highly relevant and stays.
+suppress_sections:
+  - lease_ladder
 canonical_kpis:
   - name: "Realized Prices"
     aliases: ["Average Realized Price", "Realized Price per Ounce", "Average Sale Price"]

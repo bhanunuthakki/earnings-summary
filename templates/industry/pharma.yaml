@@ -1,5 +1,11 @@
 industry: pharma
 display_name: "Pharmaceuticals / Biotech"
+# Section-relevance map (see src/industry_classifier.py). All workspace panels
+# are model-relevant here: plant/lab facility leases make the operating-lease
+# ladder material, and wholesaler concentration (a few distributors are each
+# >10% of revenue) makes the customer-concentration panel material. Nothing to
+# suppress.
+suppress_sections: []
 canonical_kpis:
   - name: "Pipeline NPV (Top 5 Assets)"
     aliases: ["Risk-Adjusted Pipeline Value", "Pipeline rNPV"]

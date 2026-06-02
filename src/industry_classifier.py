@@ -61,6 +61,11 @@ class IndustryTemplate:
     industry: str
     display_name: str
     canonical_kpis: list[CanonicalKPI]
+    # Workspace section keys this business model should OMIT entirely (default:
+    # none). The section-relevance map -- see SUPPRESSIBLE_SECTIONS and the
+    # structural-review matrix below. (Typed factory keeps pyright strict from
+    # inferring list[Unknown].)
+    suppress_sections: list[str] = field(default_factory=list[str])
 
     def to_tier_1_kpis(self) -> list[dict[str, object]]:
         """Render canonical_kpis in the shape `micro_thesis/holdings/<T>.json`
@@ -82,6 +87,57 @@ class IndustryTemplate:
                 row["unit_kind"] = k.unit_kind
             out.append(row)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Section-relevance map (workspace report)
+# ---------------------------------------------------------------------------
+#
+# Some workspace panels are structurally irrelevant to certain business models:
+# a neobank has no meaningful operating-lease ladder, a pure-software vendor has
+# no named-customer concentration worth a panel, and so on. Rather than render
+# an empty stub ("be smart about whether to display this element" -- NU report
+# comment #15), the report builder asks suppressed_sections_for_ticker() which
+# panels to OMIT, and the workspace renderer skips them.
+#
+# Canonical section keys: the vocabulary shared by (a) the `suppress_sections:`
+# lists in templates/industry/*.yaml and (b) the gate checks in
+# report/renderers/workspace_html.py:_company_tab. A test asserts both sides
+# only ever use keys from SUPPRESSIBLE_SECTIONS so a typo can't silently fail to
+# suppress.
+SECTION_LEASE_LADDER = "lease_ladder"
+SECTION_CUSTOMER_CONCENTRATION = "customer_concentration"
+SECTION_STRATEGIC_TARGETS = "strategic_targets"
+
+SUPPRESSIBLE_SECTIONS = frozenset(
+    {SECTION_LEASE_LADDER, SECTION_CUSTOMER_CONCENTRATION, SECTION_STRATEGIC_TARGETS},
+)
+
+# Structural review -- which workspace panels belong in which company reports
+# (the Opus enumeration requested in NU report comment #15). Only the three
+# Company-tab P3 panels below vary by business model; every other workspace
+# panel (thesis, earnings, financials, segments, valuation, bear case,
+# decisions, say-do, exec comp, synthesis, sources) is model-agnostic and
+# always renders.
+#
+#   panel                   bank  saas  hyper  pharma  royalty
+#   ----------------------  ----  ----  -----  ------  -------
+#   strategic_targets       show  show  show   show    show
+#   customer_concentration  hide  show  show   show    show
+#   lease_ladder            hide  hide  show   show    hide
+#
+# strategic_targets: universal -- every issuer sets long-term commitments
+#   (banks: ROTCE/efficiency; software: ARR/margin; etc.).
+# customer_concentration: a bank's revenue is net interest + fee income on a
+#   diversified loan/deposit book, not named accounts, so the "customer >= 5% of
+#   revenue" panel is always empty. Material for enterprise SaaS (whale accounts
+#   >10%), pharma (a few wholesalers each >10%), and royalty/streaming (revenue
+#   keyed to a handful of cornerstone assets/operators).
+# lease_ladder: material where the P&L rides on leased physical capacity --
+#   hyperscaler (data centers + fulfillment), pharma (plants/labs), and
+#   retail/logistics. Immaterial for banks (branch leases are a rounding error
+#   vs the loan book; a neobank has none), asset-light software (office leases
+#   don't move the ARR/FCF thesis), and royalty/streaming (no operated assets).
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +365,36 @@ def available_industries(repo_root: Path) -> list[str]:
     return sorted(p.stem for p in dir_.glob("*.yaml"))
 
 
+def suppressed_sections_for_ticker(ticker: str, repo_root: Path) -> frozenset[str]:
+    """Workspace section keys to OMIT for `ticker`, per its business model.
+
+    Resolves the industry via `classify_ticker`, then reads that template's
+    `suppress_sections`. DEFAULT TO SHOW: returns an empty set when the ticker
+    is unclassified (no rule matches) or its template can't be loaded, so an
+    unseeded ticker renders every panel rather than being silently blanked.
+
+    Pure-deterministic (classify + read one YAML); no LLM, no network. Computed
+    once in the report builder and threaded onto ReportSpec.suppressed_sections;
+    the workspace renderer gates the Company-tab P3 panels on the result.
+    """
+    slug = classify_ticker(ticker, repo_root)
+    if slug is None:
+        return frozenset()
+    try:
+        template = load_template(slug, repo_root)
+    except (FileNotFoundError, ValueError) as exc:
+        log.debug(
+            {
+                "event": "suppress_sections_template_load_failed",
+                "ticker": ticker,
+                "slug": slug,
+                "error": str(exc),
+            },
+        )
+        return frozenset()
+    return frozenset(template.suppress_sections)
+
+
 def _build_template(parsed: dict[str, object], *, source_path: Path) -> IndustryTemplate:
     industry = parsed.get("industry")
     if not isinstance(industry, str):
@@ -352,7 +438,16 @@ def _build_template(parsed: dict[str, object], *, source_path: Path) -> Industry
                 primary_source=primary,
             ),
         )
-    return IndustryTemplate(industry=industry, display_name=display_name, canonical_kpis=kpis)
+    suppress_raw = parsed.get("suppress_sections")
+    suppress_sections: list[str] = []
+    if isinstance(suppress_raw, list):
+        suppress_sections = [str(s) for s in cast("list[object]", suppress_raw)]
+    return IndustryTemplate(
+        industry=industry,
+        display_name=display_name,
+        canonical_kpis=kpis,
+        suppress_sections=suppress_sections,
+    )
 
 
 def _parse_expected_range(raw: object) -> tuple[float | None, float | None] | None:

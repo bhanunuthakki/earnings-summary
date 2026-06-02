@@ -1,5 +1,11 @@
 industry: software_saas
 display_name: "Software / SaaS"
+# Section-relevance map (see src/industry_classifier.py). Asset-light: office
+# leases don't move the ARR/NDR/FCF thesis, so the operating-lease ladder is
+# noise -- omit it. Customer concentration stays (enterprise SaaS can carry
+# whale accounts >10% of revenue).
+suppress_sections:
+  - lease_ladder
 canonical_kpis:
   - name: "Net Revenue Retention"
     aliases: ["NDR", "Net Retention", "Dollar-Based Net Retention", "DBNR", "DBNRR"]

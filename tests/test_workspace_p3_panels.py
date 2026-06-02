@@ -24,6 +24,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from industry_classifier import suppressed_sections_for_ticker  # noqa: E402
 from report.models import (  # noqa: E402
     BearCaseSection,
     CompanyDescriptionSection,
@@ -662,6 +663,105 @@ def test_company_tab_emits_panels_with_data() -> None:
     # No stub-label for the data-populated panels
     assert "1 long-term commitment" in html
     assert "1 customer" in html
+
+
+# ---------------------------------------------------------------------------
+# Company tab — business-model section suppression (NU report comment #15)
+# ---------------------------------------------------------------------------
+
+
+def _one_lease_row() -> list[LeaseLadderRow]:
+    return [
+        LeaseLadderRow(
+            fiscal_year=2025,
+            as_of_date=date(2025, 12, 31),
+            lease_type="operating",
+            ladder_year="Y1",
+            ladder_calendar_year=2026,
+            amount=10_000,
+            currency="USD",
+            unit="millions",
+        ),
+    ]
+
+
+def test_company_tab_suppresses_listed_sections() -> None:
+    """A section key in `suppressed_sections` omits that panel entirely -- not
+    even an empty-state stub renders. The lease ladder has data here yet is
+    still dropped, proving suppression beats the empty/populated state."""
+    out = StringIO()
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        _one_lease_row(),
+        suppressed_sections=frozenset({"lease_ladder", "customer_concentration"}),
+    )
+    html = out.getvalue()
+    assert "Operating lease maturity ladder" not in html
+    assert "Customer concentration" not in html
+    # Strategic targets is not suppressed -> still rendered (empty-state).
+    assert "Strategic targets" in html
+
+
+def test_company_tab_shows_all_panels_when_suppressed_empty() -> None:
+    out = StringIO()
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        _one_lease_row(),
+        suppressed_sections=frozenset(),
+    )
+    html = out.getvalue()
+    assert "Operating lease maturity ladder" in html
+    assert "Customer concentration" in html
+    assert "Strategic targets" in html
+
+
+def test_company_tab_omits_bank_lease_ladder_end_to_end() -> None:
+    """NU=bank: the operating-lease ladder is structurally irrelevant, so it is
+    omitted end-to-end (classifier -> template -> renderer)."""
+    suppressed = suppressed_sections_for_ticker("NU", PROJECT_ROOT)
+    out = StringIO()
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        _one_lease_row(),
+        suppressed_sections=suppressed,
+    )
+    html = out.getvalue()
+    assert "Operating lease maturity ladder" not in html
+    assert "Customer concentration" not in html
+
+
+def test_company_tab_keeps_hyperscaler_lease_ladder_end_to_end() -> None:
+    """AMZN=hyperscaler: data-center leases are material, so the ladder stays."""
+    suppressed = suppressed_sections_for_ticker("AMZN", PROJECT_ROOT)
+    out = StringIO()
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        _one_lease_row(),
+        suppressed_sections=suppressed,
+    )
+    html = out.getvalue()
+    assert "Operating lease maturity ladder" in html
+    assert "Year 1" in html
 
 
 def test_saydo_tab_includes_verdicts_panel() -> None:
