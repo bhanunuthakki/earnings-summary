@@ -51,11 +51,7 @@ def render_alert_card(
     body.write(f'<span class="trigger-badge">{_esc(alert.trigger_kind)}</span>')
     if show_status_badge:
         status_class = f"status-{alert.status}"
-        body.write(
-            f'<span class="status-badge {status_class}">'
-            f"{_esc(alert.status)}"
-            "</span>"
-        )
+        body.write(f'<span class="status-badge {status_class}">{_esc(alert.status)}</span>')
     fired_at_iso = alert.fired_at.isoformat(timespec="seconds")
     body.write(f'<span class="fired-at">{_esc(fired_at_iso)}</span>')
     body.write("</div>")
@@ -93,9 +89,7 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
     body.write(f'<div class="qa-body">{_esc(qa_body)}</div>')
     body.write('<div class="qa-actions">')
     if qa.status == ACTION_STATUS_APPLIED:
-        body.write(
-            f'<span class="qa-status-applied">applied {_esc(_iso(qa.applied_at))}</span>'
-        )
+        body.write(f'<span class="qa-status-applied">applied {_esc(_iso(qa.applied_at))}</span>')
     elif qa.status == ACTION_STATUS_CANCELLED:
         body.write(
             f'<span class="qa-status-cancelled">cancelled {_esc(_iso(qa.cancelled_at))}</span>'
@@ -129,14 +123,22 @@ def _action_body(payload: Mapping[str, object]) -> str:
     return json.dumps(dict(payload), sort_keys=True, default=str)
 
 
-def _memo_text_from_evidence(raw: str) -> str | None:
-    """Pull a draft memo text from evidence_json if the sensor stashed one.
+# Per-trigger evidence fields that carry the human "so-what" line, tried in
+# order: an explicit ``memo`` first, then each sensor's own summary field —
+# earnings_tone writes ``summary``, material_news ``why_material``, saydo_due
+# ``narrative``. So the card's at-a-glance line shows real content instead of
+# "memo pending" for every trigger that surfaces a summary in its evidence.
+_MEMO_EVIDENCE_FIELDS: tuple[str, ...] = ("memo", "summary", "why_material", "narrative")
 
-    Sensors today don't write a separate ``memo_text`` column on alerts —
-    the drafter is a downstream PR. As an interim, the renderer looks
-    for an inline ``memo`` field on the evidence; missing → "memo pending".
-    Malformed JSON also → None (the evidence drawer surfaces the
-    parse error separately, so we don't double-render the warning).
+
+def _memo_text_from_evidence(raw: str) -> str | None:
+    """Pull the card's at-a-glance memo line from evidence_json.
+
+    Tries ``_MEMO_EVIDENCE_FIELDS`` in order and returns the first non-empty
+    string. Returns None (→ "memo pending") only when none is present, e.g. a
+    kpi_inflection alert whose memo rides on the draft rather than the evidence.
+    Malformed JSON also → None (the evidence drawer surfaces the parse error
+    separately, so we don't double-render the warning).
     """
     if not raw:
         return None
@@ -147,9 +149,10 @@ def _memo_text_from_evidence(raw: str) -> str | None:
     if not isinstance(parsed, dict):
         return None
     parsed_map = cast("Mapping[str, object]", parsed)
-    memo_raw = parsed_map.get("memo")
-    if isinstance(memo_raw, str) and memo_raw:
-        return memo_raw
+    for field in _MEMO_EVIDENCE_FIELDS:
+        value = parsed_map.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
     return None
 
 

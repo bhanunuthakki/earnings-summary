@@ -135,9 +135,7 @@ def test_fact_id_with_unmatched_locator_renders_no_match() -> None:
         }
     )
     alert = _make_alert(evidence=evidence)
-    brief_provenance: dict[str, object] = {
-        "sources_used": {"per_metric": {"revenue_q_latest": {}}}
-    }
+    brief_provenance: dict[str, object] = {"sources_used": {"per_metric": {"revenue_q_latest": {}}}}
     html = render_evidence_drawer(alert, brief_provenance=brief_provenance)
     assert "no match" in html
 
@@ -202,11 +200,7 @@ def test_brief_provenance_without_sources_used_is_treated_as_no_provenance() -> 
     shouldn't crash the drawer — it should degrade to 'no match' for any
     fact_id citation."""
     evidence = json.dumps(
-        {
-            "citations": [
-                {"kind": "fact_id", "locator": "revenue_q_latest", "excerpt": ""}
-            ]
-        }
+        {"citations": [{"kind": "fact_id", "locator": "revenue_q_latest", "excerpt": ""}]}
     )
     alert = _make_alert(evidence=evidence)
     html = render_evidence_drawer(alert, brief_provenance={"unrelated": "field"})
@@ -222,3 +216,41 @@ def test_summary_section_present_when_drawer_default_expanded() -> None:
     alert = _make_alert(evidence=json.dumps({"summary": "abc"}))
     html = render_evidence_drawer(alert)
     assert html.startswith("<details open")
+
+
+def test_citations_nested_under_shifts_render_with_composed_locator() -> None:
+    """earnings_tone nests its citations PER-SHIFT (``shifts[].citations``) with
+    ``{period, line_number}`` rather than a top-level ``citations[]`` carrying a
+    ``locator``. The drawer must gather those nested citations and compose a
+    locator, so the richest evidence renders instead of degrading to "No
+    citations supplied" (the regrade memo's #1 Richness gap — the drawer was a
+    shell for every real alert)."""
+    alert = _make_alert(
+        trigger_kind="earnings_tone",
+        evidence=json.dumps(
+            {
+                "summary": "Risk-adjusted NIM contracted.",
+                "shifts": [
+                    {
+                        "topic": "NIM",
+                        "direction": "softer",
+                        "citations": [
+                            {
+                                "kind": "transcript_line",
+                                "line_number": 165,
+                                "period": "Q1-2026",
+                                "excerpt": "risk-adjusted NIM came in at 9.5%, down 100bps",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+    )
+    html = render_evidence_drawer(alert)
+    assert "No citations supplied" not in html
+    assert "Source citations" in html
+    assert "Transcript line" in html
+    assert "Q1-2026" in html
+    assert "line 165" in html
+    assert "down 100bps" in html

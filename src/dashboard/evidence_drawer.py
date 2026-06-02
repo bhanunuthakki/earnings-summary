@@ -107,8 +107,12 @@ def _render_citations_section(
     parsed: Mapping[str, object],
     per_metric: Mapping[str, object] | None,
 ) -> str:
-    raw_citations = parsed.get("citations")
-    citations = _normalize_citations(raw_citations)
+    # Citations live at the top level for triggers that emit them there, AND
+    # nested under each shift for earnings_tone (shifts[].citations). Gather
+    # both so the richest evidence — the cited transcript lines — actually
+    # renders instead of degrading to "No citations supplied".
+    citations = _normalize_citations(parsed.get("citations"))
+    citations.extend(_citations_from_shifts(parsed.get("shifts")))
     if not citations:
         return (
             '<div class="evidence-section evidence-citations">'
@@ -187,7 +191,11 @@ def _normalize_citations(raw: object) -> list[_Citation]:
         kind_raw = entry_map.get("kind")
         if not isinstance(kind_raw, str) or not kind_raw:
             continue
-        locator_raw = entry_map.get("locator", "")
+        locator_raw = entry_map.get("locator")
+        if not (isinstance(locator_raw, str) and locator_raw):
+            # No explicit locator — compose one from per-trigger fields, e.g.
+            # earnings_tone cites a transcript line as {period, line_number}.
+            locator_raw = _compose_locator(entry_map)
         excerpt_raw = entry_map.get("excerpt", "")
         out.append(
             _Citation(
@@ -196,6 +204,36 @@ def _normalize_citations(raw: object) -> list[_Citation]:
                 excerpt=str(excerpt_raw),
             )
         )
+    return out
+
+
+def _compose_locator(entry: Mapping[str, object]) -> str:
+    """Best-effort locator string from per-trigger citation fields when the
+    entry carries no explicit ``locator`` (earnings_tone writes ``period`` +
+    ``line_number`` instead of a single locator)."""
+    parts: list[str] = []
+    period = entry.get("period")
+    if isinstance(period, str) and period:
+        parts.append(period)
+    line_no = entry.get("line_number")
+    if isinstance(line_no, int):
+        parts.append(f"line {line_no}")
+    elif isinstance(line_no, str) and line_no.strip():
+        parts.append(f"line {line_no.strip()}")
+    return " · ".join(parts)
+
+
+def _citations_from_shifts(raw_shifts: object) -> list[_Citation]:
+    """Gather citations nested under each shift. earnings_tone writes its
+    citations per-shift (``shifts[].citations``) rather than at the top level,
+    so the drawer must reach into the shifts to surface them."""
+    if not isinstance(raw_shifts, list):
+        return []
+    out: list[_Citation] = []
+    for shift in cast("list[object]", raw_shifts):
+        if isinstance(shift, dict):
+            shift_map = cast("Mapping[str, object]", shift)
+            out.extend(_normalize_citations(shift_map.get("citations")))
     return out
 
 
