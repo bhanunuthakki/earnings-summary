@@ -679,7 +679,9 @@ def yoy_heatmap_table(
                 # Ratio/percentage metric: show the absolute level; shade by the
                 # YoY direction of that level (YoY% of a ratio isn't meaningful).
                 bg = heat_color(pct)
-                tb.append(f'<td class="cv2-matrix-cell" style="{bg}">{_fmt_level(curr, row.unit)}</td>')
+                tb.append(
+                    f'<td class="cv2-matrix-cell" style="{bg}">{_fmt_level(curr, row.unit)}</td>'
+                )
                 continue
             noisy = is_noisy(pct, base, latest_val)
             cls = "cv2-matrix-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cell"
@@ -716,10 +718,10 @@ def yoy_heatmap_table(
         f'<div class="cv2-matrix-wrap"><div class="cv2-matrix-title">{html.escape(title)}</div>'
         f'<table class="cv2-matrix">{"".join(th)}{"".join(tb)}</table>'
         f'<div class="cv2-matrix-footnote">Ratio/percentage rows show the absolute '
-        f'level (trailing columns = pp/bps change); dollar/flow rows show YoY% '
-        f'(trailing columns = CAGR). Gray italic cells mark low-base noise '
-        f'(|YoY| &gt; 200% or base &lt; 15% of latest) — directionally meaningful, '
-        f'numerically unstable.</div></div>'
+        f"level (trailing columns = pp/bps change); dollar/flow rows show YoY% "
+        f"(trailing columns = CAGR). Gray italic cells mark low-base noise "
+        f"(|YoY| &gt; 200% or base &lt; 15% of latest) — directionally meaningful, "
+        f"numerically unstable.</div></div>"
     )
 
 
