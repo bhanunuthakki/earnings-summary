@@ -1,20 +1,33 @@
-"""Derive standard KPIs from FMP `financial_facts` for every tracked ticker.
+"""Derive standard KPIs from FMP `financial_facts` (and transforms over kpi_facts).
 
 The IR-doc KPI extraction pipeline ingests issuer-published metrics one PDF at
-a time. This module fills the long tail by computing universally-meaningful KPIs
-from FMP fundamentals we already have on disk:
+a time. This module fills the long tail by computing two categories of derived
+KPI and persisting both into `kpi_facts`:
 
+1. Margins & growth from FMP fundamentals (`financial_facts`):
   - Operating Margin (GAAP)         = operating_income / revenue * 100
   - Net Income Margin (GAAP)        = net_income / revenue * 100
   - Gross Margin (GAAP)             = gross_profit / revenue * 100
   - Revenue YoY Growth (USD)        = (rev_t - rev_{t-4Q}) / rev_{t-4Q} * 100
+  All in PERCENT, provenance-tagged to the source `fmp_income_statement`
+  document whose file_path ends `_quarterly.json` (standalone quarter, never
+  TTM / YTD).
 
-All values are in PERCENT. Provenance: each derived kpi_fact references the
-source FMP `fmp_income_statement` document whose file_path ends with
-`_quarterly.json` — i.e., standalone-quarter values, never TTM or YTD.
+2. Same-fiscal-quarter YoY *transforms* over an existing kpi_facts LEVEL series
+  (`derive_kpi_transforms`). A thesis break rule may reference the YoY *change*
+  of a level series the pipeline only stores as a level — e.g. NU's rules want
+  "Risk-adjusted NIM YoY change (bps)" but only "Risk-adjusted NIM (...)" is
+  extracted. These derivers read the resolved base series from kpi_facts,
+  compute the transform against the same fiscal quarter one year prior, and
+  register the canonical derived name so the break-rule resolver hits a real
+  series instead of evaluating against nothing. The base must be a PERCENT-unit
+  series (the transforms assume a percentage scale); non-percent rows are
+  skipped. A spec whose base does not resolve for a ticker simply emits nothing.
 
-The four metric names are registered as kpi_definitions on first use so
-downstream break_rules can reference them by string match.
+Every derived name is registered as a kpi_definition on first emission so
+downstream break_rules can reference it by string match. `derive_for_ticker`
+runs category 1 first (persisting Revenue YoY Growth), then category 2 (which
+can read that freshly-persisted series as a base).
 """
 
 from __future__ import annotations
@@ -25,8 +38,10 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from pathlib import Path
 
+from compute.kpi_resolver import resolve_kpi_definition_name
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
 from pipeline.kpi_persistence import find_or_create_kpi_definition
@@ -52,6 +67,14 @@ _DERIVED_KPI_NAMES: tuple[str, ...] = (
     KPI_OCF_YOY_USD,
     KPI_ROE,
 )
+
+# Transform-derived KPIs (category 2): same-fiscal-quarter YoY transforms over an
+# existing kpi_facts LEVEL series (see `derive_kpi_transforms` + `_TRANSFORM_DERIVER_SPECS`).
+# Names match the `kpi_name` a holdings break_rule references verbatim, so the rule
+# resolver hits the materialized series. Registered as kpi_definitions on first emission.
+KPI_RISK_ADJ_NIM_YOY_BPS = "Risk-adjusted NIM YoY change (bps)"
+KPI_REVENUE_YOY_DECELERATION = "Revenue YoY Growth Deceleration (YoY of YoY growth rate)"
+KPI_NPL_15D_TOTAL_YOY_PP = "NPL 15d+ total YoY change (pp)"
 
 # Income-statement line items needed for margin + revenue YoY derivations.
 _REQUIRED_LINE_ITEMS: tuple[str, ...] = (
@@ -98,9 +121,7 @@ class QuarterlyFacts:
     total_stockholders_equity: Decimal | None = None
 
 
-def _fetch_quarterly_facts(
-    conn: sqlite3.Connection, ticker: str
-) -> list[QuarterlyFacts]:
+def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[QuarterlyFacts]:
     """Pull standalone-quarter fundamentals for a ticker.
 
     Accepts rows from any `fmp_income_statement` / `fmp_cashflow` document
@@ -362,10 +383,10 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
     segments = [str(r["segment_name"]) for r in cur.fetchall() if r["segment_name"]]
     if not segments:
         return []
-        
+
     repo_root = Path(__file__).resolve().parents[2]
     holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
-    
+
     kpi_targets: list[tuple[str, str, str]] = []
     if holdings_path.exists():
         try:
@@ -378,11 +399,11 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                     name = item.get("name") or item.get("kpi_name")
                     if name:
                         kpi_names.add(str(name).strip())
-            
+
             for kpi in kpi_names:
                 kpi_lower = kpi.lower()
                 for seg in segments:
-                    if re.search(r'\b' + re.escape(seg.lower()) + r'\b', kpi_lower):
+                    if re.search(r"\b" + re.escape(seg.lower()) + r"\b", kpi_lower):
                         if "margin" in kpi_lower or "operating margin" in kpi_lower:
                             kpi_targets.append((kpi, seg, "operating_margin"))
                         elif "growth" in kpi_lower or "yoy" in kpi_lower:
@@ -392,7 +413,7 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                                 kpi_targets.append((kpi, seg, "revenue_growth"))
         except Exception:
             pass
-            
+
     if ticker.upper() == "AMZN":
         default_amzn = [
             ("AWS operating margin", "AWS", "operating_margin"),
@@ -455,7 +476,7 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
         metric = r["metric"]
         val = Decimal(str(r["value"]))
         source_docs[key] = int(r["source_doc_id"])
-        
+
         grouped.setdefault(key, {}).setdefault(seg, {})[metric] = val
 
     out: list[DerivedKpiRow] = []
@@ -466,41 +487,51 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
         pe, fpt = key
         segments_data = grouped[key]
         doc_id = source_docs[key]
-        
+
         for kpi_name, seg_name, metric_type in kpi_targets:
             if seg_name not in segments_data:
                 continue
             seg_data = segments_data[seg_name]
-            
+
             if metric_type == "operating_margin":
                 rev = seg_data.get("revenue_by_product")
                 oi = seg_data.get("operating_income")
                 if rev and oi is not None:
                     margin = (oi / rev) * Decimal(100)
-                    out.append(DerivedKpiRow(pe, FiscalPeriodType(fpt), kpi_name, margin, Unit.PERCENT, doc_id))
-            
+                    out.append(
+                        DerivedKpiRow(
+                            pe, FiscalPeriodType(fpt), kpi_name, margin, Unit.PERCENT, doc_id
+                        )
+                    )
+
             elif metric_type == "revenue_growth":
                 rev = seg_data.get("revenue_by_product")
                 if rev:
-                    history.setdefault(seg_name, {}).setdefault("revenue", {}).setdefault(fpt, {})[pe.year] = (rev, doc_id)
-                    
+                    history.setdefault(seg_name, {}).setdefault("revenue", {}).setdefault(fpt, {})[
+                        pe.year
+                    ] = (rev, doc_id)
+
             elif metric_type == "operating_income_growth":
                 oi = seg_data.get("operating_income")
                 if oi is not None:
-                    history.setdefault(seg_name, {}).setdefault("operating_income", {}).setdefault(fpt, {})[pe.year] = (oi, doc_id)
+                    history.setdefault(seg_name, {}).setdefault("operating_income", {}).setdefault(
+                        fpt, {}
+                    )[pe.year] = (oi, doc_id)
 
     for seg_name, metrics in history.items():
         for metric_name, fpt_map in metrics.items():
             targets = [
-                kpi_name for kpi_name, s, m in kpi_targets
-                if s == seg_name and (
-                    (metric_name == "revenue" and m == "revenue_growth") or
-                    (metric_name == "operating_income" and m == "operating_income_growth")
+                kpi_name
+                for kpi_name, s, m in kpi_targets
+                if s == seg_name
+                and (
+                    (metric_name == "revenue" and m == "revenue_growth")
+                    or (metric_name == "operating_income" and m == "operating_income_growth")
                 )
             ]
             if not targets:
                 continue
-                
+
             for fpt, year_map in fpt_map.items():
                 for year, (val, doc_id) in year_map.items():
                     prior_year = year - 1
@@ -508,10 +539,218 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                         prior_val, _ = year_map[prior_year]
                         if prior_val > 0:
                             yoy = ((val - prior_val) / prior_val) * Decimal(100)
-                            pe_current = next(k[0] for k in sorted_keys if k[0].year == year and k[1] == fpt)
+                            pe_current = next(
+                                k[0] for k in sorted_keys if k[0].year == year and k[1] == fpt
+                            )
                             for kpi_name in targets:
-                                out.append(DerivedKpiRow(pe_current, FiscalPeriodType(fpt), kpi_name, yoy, Unit.PERCENT, doc_id))
+                                out.append(
+                                    DerivedKpiRow(
+                                        pe_current,
+                                        FiscalPeriodType(fpt),
+                                        kpi_name,
+                                        yoy,
+                                        Unit.PERCENT,
+                                        doc_id,
+                                    )
+                                )
 
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Category 2: same-fiscal-quarter YoY transforms over an existing kpi_facts
+# LEVEL series. Materializes the derived series a break_rule references by name
+# (e.g. "Risk-adjusted NIM YoY change (bps)") from the level series the pipeline
+# actually stores ("Risk-adjusted NIM (...)"), so the rule resolver hits real
+# observations instead of evaluating against nothing.
+# ---------------------------------------------------------------------------
+
+
+class TransformKind(StrEnum):
+    """Which same-fiscal-quarter YoY transform `compute_yoy_transform` applies."""
+
+    YOY_CHANGE_BPS = "yoy_change_bps"
+    YOY_CHANGE_PP = "yoy_change_pp"
+    YOY_DECELERATION = "yoy_deceleration"
+
+
+@dataclass(frozen=True)
+class KpiSeriesPoint:
+    """One observation of a base kpi_facts series, carrying source_doc_id so a
+    derived row inherits the provenance of the period that produced it."""
+
+    period_end: datetime
+    fiscal_period_type: FiscalPeriodType
+    value: Decimal
+    source_doc_id: int
+
+
+@dataclass(frozen=True)
+class _TransformSpec:
+    """A transform deriver: read `base_label` from kpi_facts, apply `kind`, then
+    register the output under `derived_name` with `unit`."""
+
+    derived_name: str
+    base_label: str
+    kind: TransformKind
+    unit: Unit
+
+
+_TRANSFORM_DERIVER_SPECS: tuple[_TransformSpec, ...] = (
+    # Risk-adjusted NIM contracting YoY — NU's expanding-spread breaker. Base is
+    # the extracted level %; (curr - prior) * 100 expresses the pp delta in bps.
+    _TransformSpec(
+        derived_name=KPI_RISK_ADJ_NIM_YOY_BPS,
+        base_label="Risk-adjusted NIM (NIM minus cost of risk)",
+        kind=TransformKind.YOY_CHANGE_BPS,
+        unit=Unit.BPS,
+    ),
+    # Revenue growth-rate collapse — base is the YoY growth RATE itself, so this is
+    # the YoY decel OF that rate: (prior - curr) / prior, as a % of the prior rate.
+    _TransformSpec(
+        derived_name=KPI_REVENUE_YOY_DECELERATION,
+        base_label=KPI_REVENUE_YOY_USD,
+        kind=TransformKind.YOY_DECELERATION,
+        unit=Unit.PERCENT,
+    ),
+    # Consolidated NPL 15d+ deteriorating YoY. `base_label` is the short normalized
+    # form so the resolver reaches the verbose extracted def "NPL 15d+ ratio
+    # (consolidated total: ...)" — which the rule's own label ("NPL 15d+ total")
+    # does NOT normalize-match. (curr - prior) is the pp delta directly.
+    _TransformSpec(
+        derived_name=KPI_NPL_15D_TOTAL_YOY_PP,
+        base_label="NPL 15d+ ratio",
+        kind=TransformKind.YOY_CHANGE_PP,
+        unit=Unit.PERCENT,
+    ),
+)
+
+
+def compute_yoy_transform(
+    points: list[KpiSeriesPoint],
+    *,
+    kind: TransformKind,
+    name: str,
+    unit: Unit,
+) -> list[DerivedKpiRow]:
+    """Compute a same-fiscal-quarter YoY transform over a level/rate series.
+
+    For each point P, look up the point one year earlier in the SAME fiscal
+    quarter ``(fiscal_period_type, period_end.year - 1)``. When found:
+
+      - ``YOY_CHANGE_BPS``:   ``(P - prior) * 100`` — level pp delta, in bps
+      - ``YOY_CHANGE_PP``:    ``(P - prior)``       — level pp delta (pct points)
+      - ``YOY_DECELERATION``: ``(prior - P) / prior * 100``, skipping ``prior <= 0``
+            (P and prior are themselves YoY growth-rate %; this is the YoY
+             deceleration of that rate — positive = decelerating, negative =
+             accelerating. A non-positive prior rate makes the ratio meaningless,
+             so it is skipped rather than emitting a spurious value.)
+
+    Points with no same-quarter prior-year match are skipped — the natural case
+    for a sparse series (e.g. NPL prints scattered across distinct quarters) and
+    the first year of any series. Output ``period_end`` / ``fiscal_period_type`` /
+    ``source_doc_id`` are the CURRENT point's, so provenance ties to the filing
+    that reported the latest value. Callers must pass a percentage-scale series.
+    """
+    by_fiscal_quarter: dict[tuple[FiscalPeriodType, int], KpiSeriesPoint] = {}
+    for p in points:
+        by_fiscal_quarter[(p.fiscal_period_type, p.period_end.year)] = p
+
+    out: list[DerivedKpiRow] = []
+    for p in points:
+        prior = by_fiscal_quarter.get((p.fiscal_period_type, p.period_end.year - 1))
+        if prior is None:
+            continue
+        if kind is TransformKind.YOY_CHANGE_BPS:
+            value = (p.value - prior.value) * Decimal(100)
+        elif kind is TransformKind.YOY_CHANGE_PP:
+            value = p.value - prior.value
+        elif kind is TransformKind.YOY_DECELERATION:
+            if prior.value <= 0:
+                continue
+            value = (prior.value - p.value) / prior.value * Decimal(100)
+        else:  # pragma: no cover - exhaustive over TransformKind
+            raise ValueError(f"Unhandled transform kind: {kind}")
+        out.append(
+            DerivedKpiRow(
+                period_end=p.period_end,
+                fiscal_period_type=p.fiscal_period_type,
+                name=name,
+                value=value,
+                unit=unit,
+                source_doc_id=p.source_doc_id,
+            )
+        )
+    return out
+
+
+def _fetch_full_kpi_series(
+    conn: sqlite3.Connection, ticker: str, base_label: str
+) -> list[KpiSeriesPoint]:
+    """Resolve `base_label` to its canonical definition and pull the full,
+    per-period-deduped PERCENT series from kpi_facts (oldest-first).
+
+    Resolution + per-period source dedup mirror
+    ``thesis_evaluator._fetch_kpi_history`` (richest definition wins; highest
+    ``source_doc_id`` per ``(period_end, fiscal_period_type)`` wins) so the
+    transform reads exactly the series the evaluator and the §3 chart read.
+    Non-PERCENT rows are skipped — the YoY transforms assume a percentage scale.
+    Returns ``[]`` when the label resolves to no fact-carrying definition.
+    """
+    resolved = resolve_kpi_definition_name(conn, ticker, base_label)
+    if resolved is None:
+        return []
+    cur = conn.execute(
+        "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
+        "       kf.source_doc_id "
+        "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        "WHERE kf.ticker = ? AND kd.name = ? "
+        "  AND kf.source_doc_id = ("
+        "      SELECT MAX(k2.source_doc_id) FROM kpi_facts k2 "
+        "      WHERE k2.ticker = kf.ticker "
+        "        AND k2.kpi_definition_id = kf.kpi_definition_id "
+        "        AND k2.period_end = kf.period_end "
+        "        AND k2.fiscal_period_type = kf.fiscal_period_type) "
+        "ORDER BY kf.period_end ASC",
+        (ticker.upper(), resolved),
+    )
+    points: list[KpiSeriesPoint] = []
+    for row in cur.fetchall():
+        if Unit(row["unit"]) is not Unit.PERCENT:
+            continue
+        pe = row["period_end"]
+        if isinstance(pe, str):
+            pe = datetime.fromisoformat(pe)
+        points.append(
+            KpiSeriesPoint(
+                period_end=pe,
+                fiscal_period_type=FiscalPeriodType(row["fiscal_period_type"]),
+                value=Decimal(str(row["value"])),
+                source_doc_id=int(row["source_doc_id"]),
+            )
+        )
+    return points
+
+
+def derive_kpi_transforms(conn: sqlite3.Connection, ticker: str) -> list[DerivedKpiRow]:
+    """Compute every configured YoY transform whose base series resolves.
+
+    Reads from kpi_facts (NOT financial_facts), so it must run AFTER the
+    category-1 FMP derivation has persisted — a transform whose base is itself a
+    derived KPI (Revenue YoY Growth Deceleration over Revenue YoY Growth (USD))
+    then sees a populated base. A spec whose base does not resolve for this
+    ticker (wrong business model, or not yet extracted) contributes nothing;
+    a base with fewer than two observations cannot yield a YoY pair and is
+    likewise skipped.
+    """
+    out: list[DerivedKpiRow] = []
+    for spec in _TRANSFORM_DERIVER_SPECS:
+        points = _fetch_full_kpi_series(conn, ticker, spec.base_label)
+        if len(points) < 2:
+            continue
+        out.extend(
+            compute_yoy_transform(points, kind=spec.kind, name=spec.derived_name, unit=spec.unit)
+        )
     return out
 
 
@@ -520,14 +759,17 @@ def persist_derived_kpis(
     *,
     ticker: str,
     rows: list[DerivedKpiRow],
+    extracted_by: str = "fmp_derived",
 ) -> int:
     """Insert kpi_facts rows for the derived metrics. Returns count actually inserted.
 
     Routes through `insert_kpi_with_restatement_detection` so that when a
     later filing restates an earlier quarter's value, the new derived KPI
-    row links back to the incumbent via `supersedes_id`. `extracted_by` is
-    tagged `'fmp_derived'` so the audit trail distinguishes derivation
-    from direct FMP ingestion.
+    row links back to the incumbent via `supersedes_id`. `extracted_by`
+    tags the audit trail: category-1 FMP derivations keep the default
+    `'fmp_derived'`; category-2 transforms over kpi_facts (see
+    `derive_kpi_transforms`) pass `'kpi_transform_derived'` so the two are
+    distinguishable from direct FMP ingestion and from each other.
     """
     inserted = 0
     for row in rows:
@@ -547,7 +789,7 @@ def persist_derived_kpis(
             value=row.value,
             unit=row.unit.value,
             source_doc_id=row.source_doc_id,
-            extracted_by="fmp_derived",
+            extracted_by=extracted_by,
         )
         if new_id is not None:
             inserted += 1
@@ -556,17 +798,35 @@ def persist_derived_kpis(
 
 
 def derive_for_ticker(conn: sqlite3.Connection, ticker: str) -> tuple[int, int]:
-    """End-to-end: fetch quarterly facts, derive KPIs, persist. Returns (rows_emitted, rows_inserted)."""
+    """End-to-end: derive KPIs and persist. Returns (rows_emitted, rows_inserted).
+
+    Two phases. Phase 1 derives category-1 metrics from `financial_facts`
+    (margins + Revenue YoY Growth + segment KPIs) and persists them. Phase 2
+    runs `derive_kpi_transforms`, the same-fiscal-quarter YoY transforms over
+    kpi_facts level series — it MUST follow phase 1's persist so a transform
+    whose base is itself a phase-1 output (Revenue YoY Growth Deceleration)
+    reads a populated base. Each phase is idempotent (UNIQUE index dedupes), so
+    re-running inserts nothing new.
+    """
     facts = _fetch_quarterly_facts(conn, ticker)
-    rows = []
+    rows: list[DerivedKpiRow] = []
     if facts:
         rows.extend(derive_for_facts(facts))
-        
-    segment_rows = _derive_segment_kpis(conn, ticker)
-    rows.extend(segment_rows)
-    
-    if not rows:
-        return (0, 0)
-        
-    inserted = persist_derived_kpis(conn, ticker=ticker, rows=rows)
-    return (len(rows), inserted)
+    rows.extend(_derive_segment_kpis(conn, ticker))
+
+    inserted = 0
+    if rows:
+        inserted += persist_derived_kpis(conn, ticker=ticker, rows=rows)
+
+    # Phase 2: transforms over the now-persisted kpi_facts (incl. the Revenue
+    # YoY Growth just written, plus IR-extracted bases like Risk-adjusted NIM).
+    transform_rows = derive_kpi_transforms(conn, ticker)
+    if transform_rows:
+        inserted += persist_derived_kpis(
+            conn,
+            ticker=ticker,
+            rows=transform_rows,
+            extracted_by="kpi_transform_derived",
+        )
+
+    return (len(rows) + len(transform_rows), inserted)

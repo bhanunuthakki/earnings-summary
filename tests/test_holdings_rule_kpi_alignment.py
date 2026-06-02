@@ -37,9 +37,12 @@ from compute.fmp_derived_kpis import (
     KPI_FCF_MARGIN_GAAP,
     KPI_GROSS_MARGIN_GAAP,
     KPI_NET_MARGIN_GAAP,
+    KPI_NPL_15D_TOTAL_YOY_PP,
     KPI_OCF_YOY_USD,
     KPI_OPERATING_MARGIN_GAAP,
+    KPI_REVENUE_YOY_DECELERATION,
     KPI_REVENUE_YOY_USD,
+    KPI_RISK_ADJ_NIM_YOY_BPS,
     KPI_ROE,
 )
 from compute.kpi_resolver import normalize_kpi_name
@@ -56,9 +59,10 @@ CLEAN_TICKERS = ("VEEV", "MELI", "NVO", "BN")
 _TIER_KEYS = ("tier_1_kpis", "tier_2_kpis", "tier_3_kpis")
 _RULE_KEYS = ("break_rules", "business_model_rules")
 
-# Canonical FMP-derived KPI names (see compute.fmp_derived_kpis). Listed via the
-# public constants rather than the module-private tuple; if a derived KPI is added
-# there, add its constant here too.
+# Canonical derived KPI names (see compute.fmp_derived_kpis). Listed via the
+# public constants rather than the module-private tuples; if a derived KPI is added
+# there, add its constant here too. Covers both the category-1 FMP-fundamentals
+# derivations and the category-2 same-fiscal-quarter YoY transforms over kpi_facts.
 _DERIVED_KPI_NAMES = (
     KPI_OPERATING_MARGIN_GAAP,
     KPI_NET_MARGIN_GAAP,
@@ -68,6 +72,9 @@ _DERIVED_KPI_NAMES = (
     KPI_FCF_MARGIN_GAAP,
     KPI_OCF_YOY_USD,
     KPI_ROE,
+    KPI_RISK_ADJ_NIM_YOY_BPS,
+    KPI_REVENUE_YOY_DECELERATION,
+    KPI_NPL_15D_TOTAL_YOY_PP,
 )
 _DERIVED_NORM = {normalize_kpi_name(name) for name in _DERIVED_KPI_NAMES}
 
