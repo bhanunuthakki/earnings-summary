@@ -11,10 +11,11 @@ name: CI
 #               so new code stays clean while the legacy baseline is paid down
 #               incrementally rather than blocking every PR.
 #
-# pyright (the strict type gate) is intentionally run locally via pre-commit /
-# `make typecheck` rather than here, because the 3070-error baseline would make
-# a diff gate fire on pre-existing errors in any touched file. Promote it to a
-# blocking CI job once the baseline is ratcheted down.
+# pyright (the strict type gate) runs as the `typecheck` job below — a RATCHET:
+# it compares the whole-repo strict error count in the PR against the base
+# branch and fails only when the PR RAISES it. The ~3070-error baseline is
+# tolerated (never blocking) and paid down incrementally, exactly like the ruff
+# diff gate. pyright also still runs locally via pre-commit / `make typecheck`.
 
 on:
   pull_request:
@@ -128,3 +129,65 @@ jobs:
             echo "No new ruff violations in changed files."
           fi
           exit "$status"
+
+  typecheck:
+    # Diff-aware pyright (strict) ratchet. The repo carries a large pre-existing
+    # strict baseline (~3070 — tooling drift), so a whole-repo "must be clean"
+    # gate is impossible. Instead we compare the whole-repo strict error count in
+    # this PR against the base branch and fail only when the PR RAISES it — new
+    # code stays strict-clean while the baseline is paid down incrementally.
+    # Whole-repo (not per-file) so cross-module regressions are caught and the
+    # count is computed in identical import context for base and head.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        # Runtime deps (so third-party imports resolve) + pyright. Deliberately
+        # NOT `pip install -e .` — an editable install would point pyright at the
+        # HEAD checkout's src even while analysing the base worktree, corrupting
+        # the base count. First-party modules resolve via [tool.pyright].extraPaths.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyright>=1.1.380"
+      - name: Resolve base ref
+        id: base
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}"
+            echo "ref=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+          else
+            b="${{ github.event.before }}"
+            if ! git rev-parse --quiet --verify "$b^{commit}" >/dev/null 2>&1; then
+              b="HEAD~1"
+            fi
+            echo "ref=$b" >> "$GITHUB_OUTPUT"
+          fi
+      - name: pyright strict — no NEW errors vs base (ratchet)
+        shell: bash
+        run: |
+          set -uo pipefail
+          errcount() { python -c 'import json,sys; print(json.load(sys.stdin).get("summary",{}).get("errorCount",0))'; }
+          head_n=$(pyright --outputjson 2>/dev/null | errcount || echo 0)
+          base="${{ steps.base.outputs.ref }}"
+          wt="$RUNNER_TEMP/base-pyright"
+          if ! git worktree add --quiet --detach "$wt" "$base" 2>/dev/null; then
+            echo "::warning::could not check out base ($base) for the pyright ratchet — skipping (not blocking)."
+            exit 0
+          fi
+          base_n=$( (cd "$wt" && pyright --outputjson 2>/dev/null | errcount) || echo 0 )
+          git worktree remove --force "$wt" 2>/dev/null || true
+          echo "pyright strict errors — base=$base_n  head=$head_n"
+          if [ "$head_n" -gt "$base_n" ]; then
+            echo "::error::pyright introduced $((head_n - base_n)) new strict error(s) ($base_n -> $head_n). Run 'make typecheck-changed' locally to see them on your changed files."
+            exit 1
+          fi
+          echo "No new pyright strict errors (baseline $base_n tolerated)."
