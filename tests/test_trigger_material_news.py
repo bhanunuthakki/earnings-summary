@@ -241,8 +241,28 @@ def _empty_state() -> UserStateContext:
 
 
 def _patch_anchor(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stub load_thesis_anchor for a scan test (hermetic, deterministic)."""
+    """Stub the anchor loaders for a scan test (hermetic, deterministic). Only
+    the thesis anchor returns content; bear/IR return empty so the composed
+    anchor equals the thesis — the historical shape these scan tests assert."""
     monkeypatch.setattr("triggers.material_news.load_thesis_anchor", _anchor_stub)
+    monkeypatch.setattr("triggers.material_news.load_bear_anchor", lambda *_a, **_k: "")
+    monkeypatch.setattr("triggers.material_news.load_ir_anchor", lambda *_a, **_k: "")
+
+
+def test_load_anchor_composes_thesis_bear_and_ir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The materiality anchor is the composed 3-block (thesis + bear case + IR
+    narrative), not just the thesis — so a story that validates a named bear
+    hypothesis or undercuts management's own IR framing can be judged material.
+    All three blocks must reach the anchor that frames the classification."""
+    monkeypatch.setattr("triggers.material_news.load_thesis_anchor", lambda *_a, **_k: "THESIS-XYZ")
+    monkeypatch.setattr("triggers.material_news.load_bear_anchor", lambda *_a, **_k: "BEAR-XYZ")
+    monkeypatch.setattr("triggers.material_news.load_ir_anchor", lambda *_a, **_k: "IR-XYZ")
+
+    anchor = MaterialNewsTrigger()._load_anchor("BN")
+
+    assert "THESIS-XYZ" in anchor
+    assert "BEAR-XYZ" in anchor
+    assert "IR-XYZ" in anchor
 
 
 # ---------------------------------------------------------------------------

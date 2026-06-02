@@ -62,7 +62,12 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from alerts.store import compute_signature_sha
-from llm.anchors import load_thesis_anchor
+from llm.anchors import (
+    compose_anchor_block,
+    load_bear_anchor,
+    load_ir_anchor,
+    load_thesis_anchor,
+)
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -661,13 +666,22 @@ class MaterialNewsTrigger:
     # ------------------------------------------------------------------
 
     def _load_anchor(self, ticker: str) -> str:
-        """Best-effort thesis anchor markdown, or "" on any failure.
+        """Best-effort composed anchor markdown (thesis + bear + IR), or "" on
+        any failure.
 
         The anchor frames the materiality judgment; its absence is fine (the
         prompt falls back to generic framing) so a load failure must never sink
-        the scan."""
+        the scan. The bear case + IR narrative are included so a story that
+        validates a bear hypothesis — or undercuts management's IR framing —
+        scores material; compose_anchor_block omits whichever blocks are
+        absent."""
         try:
-            return load_thesis_anchor(_repo_root(), ticker)
+            repo_root = _repo_root()
+            return compose_anchor_block(
+                load_thesis_anchor(repo_root, ticker),
+                load_bear_anchor(repo_root, ticker),
+                load_ir_anchor(repo_root, ticker),
+            )
         except Exception as exc:  # anchor is optional; never block classification
             log.debug(
                 {

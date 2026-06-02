@@ -61,7 +61,12 @@ from pathlib import Path
 from typing import ClassVar
 
 from alerts.store import compute_signature_sha
-from llm.anchors import load_thesis_anchor
+from llm.anchors import (
+    compose_anchor_block,
+    load_bear_anchor,
+    load_ir_anchor,
+    load_thesis_anchor,
+)
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -611,7 +616,15 @@ class SayDoDueTrigger:
         db_path = _db_path()
 
         try:
-            anchor_block = load_thesis_anchor(repo_root, ticker)
+            # Compose the full 3-block anchor (thesis + bear + IR) so the
+            # "what it means for the thesis" line can weigh a met/missed
+            # commitment against the bear case and management's IR framing;
+            # compose_anchor_block omits whichever blocks are absent.
+            anchor_block = compose_anchor_block(
+                load_thesis_anchor(repo_root, ticker),
+                load_bear_anchor(repo_root, ticker),
+                load_ir_anchor(repo_root, ticker),
+            )
         except Exception as exc:  # anchor is optional; never block the memo
             log.debug(
                 {

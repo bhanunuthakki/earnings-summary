@@ -78,6 +78,7 @@ jobs:
               base="HEAD~1"
             fi
           fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           # Changed .py files, excluding generated migrations and scratch/
           # (both excluded from the ruff config too).
           changed=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.py' \
@@ -94,6 +95,36 @@ jobs:
       - name: ruff format (changed files)
         if: steps.changed.outputs.files != ''
         run: echo "${{ steps.changed.outputs.files }}" | xargs ruff format --check
-      - name: ruff check (changed files)
+      - name: ruff check (no NEW violations in changed files)
+        # Diff-aware lint gate. The repo carries a large pre-existing ruff
+        # baseline (~332 errors across many files — tooling drift), so a
+        # whole-file "must be clean" check would fail on any PR that merely
+        # touches a legacy file. Instead, for each changed file we compare the
+        # violation count in this PR against the base branch's version and fail
+        # only when the PR ADDS violations — new code stays clean while the
+        # baseline is paid down incrementally. (ruff format above stays a hard
+        # whole-file gate; formatting is uniformly auto-fixable.)
         if: steps.changed.outputs.files != ''
-        run: echo "${{ steps.changed.outputs.files }}" | xargs ruff check
+        shell: bash
+        run: |
+          set -uo pipefail
+          base="${{ steps.changed.outputs.base }}"
+          status=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            head_n=$(ruff check "$f" --output-format=concise 2>/dev/null \
+              | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
+            base_n=$(git show "$base:$f" 2>/dev/null \
+              | ruff check --stdin-filename "$f" --output-format=concise - 2>/dev/null \
+              | grep -cE '^[^:]+:[0-9]+:[0-9]+:' || true)
+            head_n=${head_n:-0}; base_n=${base_n:-0}
+            if [ "$head_n" -gt "$base_n" ]; then
+              echo "::error file=$f::ruff introduced $((head_n - base_n)) new violation(s) (${base_n} -> ${head_n})"
+              ruff check "$f" --output-format=concise || true
+              status=1
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+          if [ "$status" -eq 0 ]; then
+            echo "No new ruff violations in changed files."
+          fi
+          exit "$status"
