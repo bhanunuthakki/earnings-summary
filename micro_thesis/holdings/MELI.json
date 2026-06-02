@@ -1,11 +1,11 @@
 {
   "ticker": "MELI",
   "name": "MercadoLibre",
-  "last_updated": "2026-05-10",
-  "thesis": "Latin America's e-commerce + fintech compounder. (1) Marketplace GMV grows on category penetration and shipping investment moat (Mercado Envios), (2) MercadoPago credit + payments scale ahead of GMV with rising take-rate, (3) operating leverage on shipping + fixed costs as scale builds. Bet: 25%+ revenue growth (USD) with operating-margin expansion to mid-teens through 2027. STUB regenerated from corrupted source — needs user review.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "GMV growth (FXN) + MercadoPago TPV + take rate × operating margin",
+  "last_updated": "2026-06-01",
+  "thesis": "Latin America's e-commerce + fintech compounder built on the lowest cost-to-serve. (1) Marketplace GMV (1P + 3P) compounds on category penetration and the logistics flywheel (Mercado Envios) - unit shipping costs keep falling as density builds; (2) Mercado Pago scales fintech with risk-adjusted interest income (NIMAL) as credit + payments grow ahead of GMV; (3) decades of management execution credibility. Core call: the market is too scared about credit performance while NPLs are stable and well-provisioned. Deliberate near-term margin compression (free-shipping thresholds, 1P, cross-border, credit, AI) is ACCEPTED as investment for share - it is not a thesis breaker. The real leg to watch is NIMAL (risk-adjusted spread), which compresses structurally as the lower-spread credit-card book grows.",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Logistics cost-to-serve flywheel (GMV) + Mercado Pago TPV and risk-adjusted spread (NIMAL); stable credit NPLs vs the market's fear",
   "chart_priorities": [
     "Revenue",
     "Operating income",
@@ -15,61 +15,97 @@
     "Operating margin (consolidated)",
     "Credit portfolio NPL ratio"
   ],
-  "_status": "stub_regenerated_from_corruption",
   "tier_1_kpis": [
     {
       "name": "GMV growth FX-neutral (consolidated)",
-      "current": "TBV from latest earnings release",
+      "current": "+42% YoY Q1'26 ($19B); Brazil items sold +56%",
       "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<25% FXN for 2 consecutive Qs",
+      "yoy": "+42%",
+      "status": "Green",
+      "break_condition": "<20% for 2 consecutive Qs (marketplace scale thesis stalls)",
       "source": "earnings release"
     },
     {
       "name": "Revenue YoY growth (USD)",
-      "current": "TBV",
+      "current": "+49% YoY Q1'26 ($8.85B) - fastest in ~4 years",
       "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<30% YoY for 2 consecutive Qs (USD reporting)",
+      "yoy": "+49%",
+      "status": "Green",
+      "break_condition": "<20% YoY for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
-      "name": "Operating margin (consolidated)",
-      "current": "TBV",
+      "name": "MercadoPago TPV growth (FXN)",
+      "current": "TPV $87.2B (+50% YoY); MAU 82.9M (+29%)",
       "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Compresses below 12% for 2 consecutive Qs",
+      "yoy": "+50%",
+      "status": "Green",
+      "break_condition": "TPV growth materially below GMV growth for 2 Qs (fintech engine slowing)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "Credit portfolio 90+ day NPL",
+      "current": "17.6% Q1'26 (-40bps YoY); reserve coverage 149% of 90+ past-due",
+      "prior": null,
+      "yoy": "-40bps",
+      "status": "Green",
+      "break_condition": "90+ day NPL >21% for 2 consecutive Qs (the credit fear validated)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "Credit portfolio 15-90 day NPL",
+      "current": "8.0% Q1'26 (-20bps YoY) - the early-stage bucket",
+      "prior": null,
+      "yoy": "-20bps",
+      "status": "Green",
+      "break_condition": "Early-bucket NPL rising sharply for 2 Qs (leading indicator of 90+ deterioration)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "Total credit portfolio",
+      "current": "$14.6B (+87% YoY); credit card now 46% of book",
+      "prior": null,
+      "yoy": "+87%",
+      "status": "Green",
+      "break_condition": "Portfolio contraction (credit-led growth engine stalls)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "NIMAL (net interest margin after losses)",
+      "current": "17.8% Q1'26 (vs 22.7% Q1'25, 23.3% Q4'25) - compressing as the lower-spread card book reached 46%, but still above the 15% floor",
+      "prior": "23.3%",
+      "yoy": "-490bps",
+      "status": "Green",
+      "break_condition": "NIMAL <15% for 2 consecutive Qs (PM floor revised to 15%+; 17.8% currently clears it - card-mix compression is the expected yield-for-scale trade-off)",
+      "source": "earnings release fintech segment"
+    },
+    {
+      "name": "Operating margin (consolidated) - compression accepted",
+      "current": "6.9% Q1'26 (-600bps YoY; deliberate investment, op income -20% YoY)",
+      "prior": null,
+      "yoy": "-600bps",
+      "status": "Green",
+      "break_condition": "Op margin <4% for 2Q or outright operating losses (real break; deliberate compression to mid-single-digits for share is accepted)",
       "source": "earnings release"
     },
     {
-      "name": "MercadoPago TPV growth + take rate",
-      "current": "TBV",
+      "name": "ROE",
+      "current": "31.3% trailing; net debt/EBITDA up to 1.46x (from 1.16x) as the credit book scales",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "TPV growth materially below GMV growth (signals fintech engine slowing)",
-      "source": "earnings release fintech segment"
-    },
-    {
-      "name": "Credit portfolio NPL ratio",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "NPL >7% for 2 consecutive Qs (cycle-of-credit deterioration)",
-      "source": "earnings release fintech segment"
+      "status": "Green",
+      "break_condition": "ROE below 20% for 2 consecutive Qs (PM floor; 31.3% currently clears it comfortably)",
+      "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Unique active users + buyer growth",
+      "name": "Unique active buyers + logistics unit cost",
+      "current": "Brazil unique buyers +32% (fastest in 5y); Brazil unit shipping cost -17% YoY; 199M same/next-day shipments (+39%)",
       "source": "earnings release"
     },
     {
-      "name": "Shipping cost as % of revenue",
+      "name": "Mercado Ads revenue mix",
       "source": "earnings release"
     },
     {
@@ -79,20 +115,22 @@
   ],
   "tier_3_kpis": [
     {
-      "name": "Mercado Ads revenue mix",
+      "name": "Capex pace",
       "source": "earnings release"
     },
     {
-      "name": "Capex pace",
+      "name": "Adjusted free cash flow",
+      "current": "-$56M Q1'26 (negative quarter on credit-book growth + investment)",
       "source": "earnings release"
     }
   ],
   "competitive_watchlist": [
-    "Amazon LatAm",
+    "Amazon Brazil ($10B+ committed; Nu credit partnership; FBA fee waivers)",
     "Sea (Shopee)",
+    "TikTok Shop (6% seller commission; gaining in fashion/beauty)",
+    "Nubank (fintech overlap)",
     "Magazine Luiza",
-    "Casas Bahia",
-    "Nubank (fintech overlap)"
+    "Casas Bahia"
   ],
   "data_rules": {
     "segment_name_aliases": {
@@ -113,9 +151,11 @@
     }
   },
   "thesis_breakers_qualitative": [
-    "FXN GMV growth below 25% for 2 consecutive Qs",
-    "Operating margin compresses below 12%",
-    "Credit NPL spikes structurally",
+    "90+ day NPL above 21% for 2 consecutive Qs (credit fear validated)",
+    "NIMAL below 15% for 2 consecutive Qs",
+    "ROE below 20% for 2 consecutive Qs",
+    "Consolidated operating losses (vs accepted deliberate compression)",
+    "Logistics unit cost stops falling (the cost-to-serve moat erodes)",
     "Latin America macro shock that breaks consumer spending"
   ],
   "break_rules": [
@@ -126,7 +166,7 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+      "narrative": "Revenue declining YoY for 2 consecutive quarters - outright top-line contraction."
     },
     {
       "rule_id": "universal_fcf_margin_collapse",
@@ -135,7 +175,7 @@
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+      "narrative": "FCF margin below 5% for 2 consecutive Qs - cash conversion broken. (Universal floor; note MELI FCF is lumpy as the credit book grows.)"
     },
     {
       "rule_id": "universal_ocf_decline_yoy",
@@ -159,40 +199,58 @@
   "break_rules_soft": [],
   "business_model_rules": [
     {
-      "rule_id": "meli_gmv_growth_below_25",
+      "rule_id": "meli_gmv_growth_below_20",
       "kpi_name": "GMV growth FX-neutral (consolidated)",
       "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GMV FX-neutral <20% for 2Q - marketplace scale thesis stalls (MELI ran 30-50% historically; relaxed from 25 to capture sentiment)."
+    },
+    {
+      "rule_id": "meli_tpv_growth_below_25",
+      "kpi_name": "MercadoPago TPV growth (FXN)",
+      "comparator": "lt",
       "threshold": 25,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "GMV FX-neutral < 25% for 2Q — marketplace scale thesis breaks; MELI runs 30-50% historically."
+      "narrative": "Mercado Pago TPV FX-neutral <25% - fintech leg loses momentum."
     },
     {
-      "rule_id": "meli_consolidated_op_margin_below_8",
+      "rule_id": "meli_90plus_npl_above_21",
+      "kpi_name": "Credit portfolio 90+ day NPL",
+      "comparator": "gt",
+      "threshold": 21,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "90+ day NPL >21% for 2Q - the market's credit fear is validated; replaces the mis-specified single-bucket NPL rule. Latest 90+ is 17.6% and improving."
+    },
+    {
+      "rule_id": "meli_nimal_below_15",
+      "kpi_name": "NIMAL (net interest margin after losses)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "NIMAL <15% for 2Q - risk-adjusted spread eroded below the PM's 15% floor (revised from a 20% watch; card-mix compression above 15% is the expected yield-for-scale trade-off)."
+    },
+    {
+      "rule_id": "meli_op_margin_below_4",
       "kpi_name": "Operating margin (consolidated)",
       "comparator": "lt",
-      "threshold": 8,
+      "threshold": 4,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Consolidated op margin < 8% for 2Q — credit + fintech margin investment cycle breaks owner economics."
+      "narrative": "Consolidated op margin <4% for 2Q - relaxed from 8 because deliberate margin investment for share is part of the thesis; sub-4 means investment is no longer discretionary."
     },
     {
-      "rule_id": "meli_tpv_growth_below_30",
-      "kpi_name": "TPV Growth (FXN)",
+      "rule_id": "meli_roe_below_20",
+      "kpi_name": "ROE",
       "comparator": "lt",
-      "threshold": 30,
+      "threshold": 20,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "MercadoPago TPV FX-neutral < 30% — fintech leg loses momentum."
-    },
-    {
-      "rule_id": "meli_credit_npl_above_25",
-      "kpi_name": "Credit portfolio NPL ratio",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Credit-portfolio NPL > 25% for 2Q — Mercado Crédito risk model breaks; credit losses dominate fintech contribution."
+      "narrative": "ROE <20% for 2Q - the PM's return floor (revised up from ~15%); MELI runs ~30%+, so sub-20 means spread compression + credit-book capital intensity are overwhelming returns."
     }
   ]
 }

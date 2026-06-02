@@ -1,10 +1,10 @@
 {
   "ticker": "NVO",
   "name": "Novo Nordisk",
-  "last_updated": "2026-05-10",
-  "thesis": "Long-term holder of the GLP-1 secular growth story at $37-40 cost basis. The bet is (a) global GLP-1 script volume continues compounding faster than price decline, (b) Novo defends share against Lilly through patent extensions in key emerging markets and next-gen pipeline (CagriSema, oral sema for obesity), and (c) the 2026 reset is the price-driven trough, not the structural top.",
-  "verdict": "Broken (original thesis); Held under revised volume/share/patent thesis",
-  "verdict_color": "red",
+  "last_updated": "2026-06-01",
+  "thesis": "Held under a REVISED thesis (the original 20%+ GLP-1 growth thesis broke on US pricing). The bet now: 2026 revenue decline comes in BETTER than the -4% to -12% CER guide and better than Street, on solid pricing and/or volume - driven by oral Wegovy (genuinely market-expansionary; beating at launch), international expansion, share defense in select segments, next-gen pipeline (CagriSema NDA, amycretin), and a stable insulin base. View: the 2026 reset is a price-driven trough, not the structural top. This is explicitly a VOLUME + orals-expansion bet that must clear a falling-net-price curve (Medicare IRA cuts ~70% from list effective 2027).",
+  "verdict": "Watch (held under revised thesis; original GLP-1-growth thesis broke on pricing)",
+  "verdict_color": "yellow",
   "key_driver": "Global GLP-1 script volume vs price decline + patent extensions in EM + share defense vs Lilly",
   "chart_priorities": [
     "Revenue",
@@ -14,6 +14,33 @@
     "Capex / Revenue (GAAP)"
   ],
   "tier_1_kpis": [
+    {
+      "name": "2026 CER revenue vs guidance and consensus (PRIMARY thesis bar)",
+      "current": "FY26 guide -4% to -12% CER (narrowed up from -5% to -13%); Q1'26 beat consensus; US ops -11% CER on lower realized price",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "Actual CER revenue worse than the guidance midpoint AND/OR worse than consensus (the thesis is to BEAT the lowered bar)",
+      "source": "annual report + guidance + consensus"
+    },
+    {
+      "name": "Oral Wegovy (oral semaglutide 25mg) uptake",
+      "current": "~$354M Q1'26, ~2x estimates, 2M+ scripts - the strongest-ever GLP-1 volume launch; the market-expansion engine",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Oral Wegovy scripts stall, OR Lilly orforglipron (no food restrictions) takes the oral share before Novo scales it",
+      "source": "press releases + transcripts"
+    },
+    {
+      "name": "US net price / realization",
+      "current": "US ops -11% CER Q1'26 on price; Medicare IRA negotiated ~70% off list for Ozempic/Wegovy effective 2027",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "Net-price decline accelerates beyond plan (price compression overwhelms volume)",
+      "source": "annual report + IRA disclosures"
+    },
     {
       "name": "Global GLP-1 script (TRx) volume growth — diabetes + obesity combined",
       "current": "TBD — requires external data source (IQVIA / sell-side aggregation / transcript readouts)",
@@ -34,7 +61,7 @@
     },
     {
       "name": "Novo GLP-1 market share (diabetes vs Lilly tirzepatide; obesity vs Zepbound)",
-      "current": "TBD — diabetes share historically ~55%+; obesity losing share to Zepbound",
+      "current": "TBD — diabetes share historically ~55%+; obesity LOSING US share - Mounjaro 23.4% vs Wegovy 16.5% of GLP-1 TRx; Zepbound US +79% while Novo US fell",
       "prior": null,
       "yoy": null,
       "status": "Yellow",
@@ -83,10 +110,11 @@
     }
   ],
   "nuance": {
-    "bear_case": "Three forces compounding: (1) MFN pricing on Wegovy/Ozempic US (~48% cuts in select markets), (2) Semaglutide LOE in CN/IN/BR/CA in 2026, (3) Lilly tirzepatide taking share. Original 20%+ CER growth thesis is broken. The bull case is now a 'wait for the next catalyst' (CagriSema), not 'original thesis holds'.",
+    "bear_case": "It is a PRICE problem more than a volume problem: 2026 guide is -4% to -12% sales, US -11% in Q1 on price, and Medicare IRA cuts Ozempic/Wegovy ~70% from list effective 2027 (MFN/net-price pressure on top). Share is also moving the wrong way in the US - Mounjaro 23.4% vs Wegovy 16.5% of GLP-1 TRx, Zepbound US +79% while Novo US fell - and Lilly's oral orforglipron (no food/water restrictions, likely cheaper small molecule) threatens to cap Novo's oral first-mover window to ~12-18 months. CagriSema's REDEFINE 1 landed at 22.7% weight loss, short of the ~25% bar the market wanted for clear superiority over tirzepatide. The CEO departed under duress after the ~50% drawdown and the board is reconstituting. 'Too draconian' requires being right on net PRICE, not just volume.",
     "adversarial_take": "CagriSema is 12-18 months from meaningful revenue under optimistic timelines, AND Lilly retatrutide could pre-empt any clean CagriSema launch window. Holding requires conviction that the 2026 trough is single-cycle pricing, not the start of a multi-year volume-share-price compression spiral.",
     "stress_test": "If 2026 actuals come in worse than -13% CER guide AND Wegovy Q-over-Q volumes decelerate AND Lilly retatrutide approval comes through, the position may need to be cut even before CagriSema readouts."
   },
+  "data_note": "Novo reports in DKK at constant exchange rates (CER); the universal USD-based break rules are FX-distorted - judge the thesis on CER growth vs guide/consensus, not USD.",
   "competitive_watchlist": [
     "Eli Lilly (tirzepatide / retatrutide / orforglipron)",
     "Pfizer (oral GLP-1 candidates)",

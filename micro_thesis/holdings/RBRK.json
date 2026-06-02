@@ -1,8 +1,8 @@
 {
   "ticker": "RBRK",
   "name": "Rubrik",
-  "last_updated": "2026-05-10",
-  "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors (Cohesity, Veeam, legacy Dell PowerProtect) as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform. The bet: (1) net new subscription ARR continues at $100M+ quarterly cadence, (2) NRR holds >120% as land-and-expand deepens within existing accounts, (3) operating leverage continues to inflect as the IPO-era customer-acquisition cost cycle normalizes (Q4 sub ARR contribution margin jumped from 2.1% to 11.6% YoY).",
+  "last_updated": "2026-06-01",
+  "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform, then tack on adjacent modules (Identity, DSPM) to become multi-product. The bet: (1) subscription ARR keeps compounding above 25% YoY with growth endurance >=85% (deceleration is acceptable, a cliff is not), (2) NRR holds >120% as land-and-expand deepens, (3) multi-product attach widens the moat - customers >$1M ARR and Identity/DSPM ARR are the signals, (4) operating leverage inflects as the IPO-era CAC cycle normalizes. Not seat-exposed. Narrative kicker (NOT yet a tracked KPI): AI-agent proliferation drives a step-change in data/backup volumes. Competitive reality: Cohesity (post-Veritas) is now a scaled, profitable rival (~$1.5B ARR, targeting a 2026 IPO) - share gains must come against a funded peer, not just legacy incumbents.",
   "verdict": "Intact",
   "verdict_color": "green",
   "key_driver": "Net new subscription ARR cadence + sub ARR contribution margin inflection",
@@ -66,9 +66,41 @@
       "status": "Green",
       "break_condition": "<15% YoY (large-customer attach is the moat signal)",
       "source": "earnings release"
+    },
+    {
+      "name": "Subscription ARR growth endurance (YoY growth / prior-year YoY growth)",
+      "current": "~76% implied (FY27 guide ~26% / FY26 34%)",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "<85% (decelerating faster than the thesis tolerates; guidance already implies sub-85, so this is the live watch)",
+      "source": "derived from guidance"
+    },
+    {
+      "name": "Customers >$1M ARR",
+      "current": "net +32 in Q4 FY26 (total count not separately disclosed)",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Net adds turn flat/negative for 2 consecutive Qs (high-end land-and-expand stalling)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Multi-product attach (Identity / DSPM ARR)",
+      "current": "Identity ARR ~$20M (early, customers >2x QoQ); DSPM >300% YoY (small base)",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Attach modules stop scaling (multi-product thesis stalls)",
+      "source": "earnings release commentary"
     }
   ],
   "tier_2_kpis": [
+    {
+      "name": "Rubrik net-new ARR / Cohesity net-new ARR (competitive share of incremental)",
+      "current": "FUTURE METRIC - Cohesity is private and discloses ARR only sporadically; track when both disclose",
+      "source": "competitor disclosures (future)"
+    },
     {
       "name": "Total Revenue Growth",
       "current": "+46% Q4 FY26 ($377.7M)",
@@ -86,7 +118,7 @@
     }
   ],
   "nuance": {
-    "bear_case": "A Cohesity/Veeam consolidation play (PE-backed merger creates a credible scaled competitor) could compress RBRK's pricing power before scale economics fully kick in. Backup/recovery is historically a price-competitive category once the differentiation cycle ends.",
+    "bear_case": "Cohesity (post-Veritas merger) is now a SCALED, profitable rival - it claims ~$1.5B ARR (larger than Rubrik's $1.46B), ~28% profit margin, deep Global-500 penetration, and is targeting a 2026 IPO. Backup/recovery is historically price-competitive once the differentiation cycle ends, and RBRK must take share against a funded peer that can out-spend on R&D and price-compete - not just legacy incumbents.",
     "adversarial_take": "34% sub ARR growth at $1.5B base is excellent, but the law of large numbers will bend the trajectory by FY27. The thesis must accommodate growth deceleration to ~25% as the new normal without panicking — break threshold below 25% is calibrated for that.",
     "stress_test": "If $100K+ customer growth slows below 15% AND a competitor M&A creates a >$3B scaled rival, the moat thesis weakens even before any single break trips."
   },
@@ -98,6 +130,7 @@
     "Druva"
   ],
   "thesis_breakers_qualitative": [
+    "Subscription ARR growth endurance <85% (decelerating faster than thesis tolerates)",
     "Net new sub ARR <$80M for 2 consecutive Qs",
     "NRR drops below 115%",
     "Sub ARR contribution margin reverses inflection",

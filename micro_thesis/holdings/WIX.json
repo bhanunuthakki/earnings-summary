@@ -1,8 +1,8 @@
 {
   "ticker": "WIX",
   "name": "Wix",
-  "last_updated": "2026-05-10",
-  "thesis": "Two-engine model — (1) Base44 ARR scales rapidly post-acquisition as the AI-first builder, while (2) the core Creative Subs business holds single-digit-but-positive growth. FCF margin compression in 2026 is acceptable as long as Base44 ARR keeps stair-stepping at milestone disclosures and core stays positive.",
+  "last_updated": "2026-06-01",
+  "thesis": "Two-engine model — (1) Base44 ARR scales rapidly post-acquisition as the AI-first builder, while (2) the core Creative Subs business holds single-digit-but-positive growth. FCF margin compression in 2026 is acceptable (high-teens FCF margin is fine) as long as Base44 ARR keeps stair-stepping at milestone disclosures and core Partners + fintech stay in low-to-mid-teens growth. The payoff is a WHOLE-COMPANY re-rate toward ~3x revenue as FCF normalizes - Base44 is embedded optionality (it looks cheap IF private vibecoding valuations are even somewhat rational), realized via the consolidated re-rate, NOT a separate spin. Overhang to respect: the $1.6B buyback executed at ~$92 (stock ~$62) levered the balance sheet and is a real near-term drag.",
   "verdict": "Intact",
   "verdict_color": "green",
   "key_driver": "Base44 ARR growth (milestone-disclosed) + Creative Subs holding positive",
@@ -57,10 +57,20 @@
       "name": "Business Solutions Revenue Growth",
       "current": "+18% Q4'25 ($153.8M)",
       "source": "earnings release"
+    },
+    {
+      "name": "Partners revenue growth (Q1'26)",
+      "current": "+19% YoY ($203M) - decelerating from +24% three Qs ago (self-inflicted Studio marketing pullback)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Wix Payments GPV + transaction revenue (Q1'26)",
+      "current": "Transaction revenue $70M (+19% YoY); GPV $3.8B (+12% YoY); take rate 1.84% (+3bps)",
+      "source": "earnings release"
     }
   ],
   "nuance": {
-    "bear_case": "AI builders (Bolt, Lovable, and Base44 competitors) commoditize SMB site creation. Wix downgraded by analysts in Mar 2026 on this risk.",
+    "bear_case": "AI builders commoditize SMB site creation. 'Massively undervalued vs private comps' doesn't survive sizing: Base44 (~$100M ARR) is only ~5% of revenue and is CONSOLIDATED, so Lovable's ~16x / Replit's ~37x ARR multiples don't transfer without a spin (no signal of one). Even at a generous 10x ARR, Base44 is ~$1B of ~$2.2B EV - implying the core trades ~0.6x sales (that IS the cheap part). Add the FCF-margin guide cut (low-mid-20s to high-teens), S&M nearly doubling, and a $1.6B buyback at ~$92 (stock ~$62) that levered the balance sheet, and the 'interim' margin hit looks longer and more structural than the bull case assumes.",
     "adversarial_take": "Wix owns Base44, so the AI-first builder is additive to their funnel rather than cannibalistic — but if Base44 ARR ever stalls between milestones, the bull case collapses because core Creative Subs alone doesn't justify the multiple at single-digit growth.",
     "stress_test": "Two consecutive Qs of Creative Subs <5% growth + a Base44 milestone gap >9 months would force a thesis re-evaluation."
   },
@@ -127,13 +137,13 @@
       "narrative": "Revenue YoY < 10% for 2Q — durable creator-tooling growth thesis breaks; consumer SaaS floor."
     },
     {
-      "rule_id": "wix_fcf_margin_below_18",
+      "rule_id": "wix_fcf_margin_below_15",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
-      "threshold": 18,
+      "threshold": 15,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin < 18% for 2Q — WIX's structural floor is ~20%; the FCF-compounder thesis depends on this holding."
+      "narrative": "FCF margin < 15% for 2Q — high-teens FCF is acceptable per the thesis, so the hard floor is 15 (relaxed from 18); below that the FCF-compounder thesis is genuinely in question."
     },
     {
       "rule_id": "wix_studio_arr_growth_below_30",
