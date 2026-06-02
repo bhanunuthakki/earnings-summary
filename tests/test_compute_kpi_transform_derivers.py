@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from compute.fmp_derived_kpis import (
+    KPI_CUSTOMERS_100K_YOY,
     KPI_NPL_15D_TOTAL_YOY_PP,
     KPI_REVENUE_YOY_DECELERATION,
     KPI_RISK_ADJ_NIM_YOY_BPS,
@@ -213,6 +214,44 @@ def test_yoy_change_pp_is_raw_level_delta() -> None:
     by_year = {r.period_end.year: r.value for r in rows}
     assert by_year[2024] == Decimal("2.0")
     assert by_year[2025] == Decimal("1.6")
+
+
+def test_yoy_pct_growth_is_relative_growth_of_a_level() -> None:
+    """A count 2000 -> 2400 -> 3000 (same Q4) yields +20% then +25% YoY growth."""
+    points = [_q4(2023, 2000.0), _q4(2024, 2400.0), _q4(2025, 3000.0)]
+    rows = compute_yoy_transform(
+        points, kind=TransformKind.YOY_PCT_GROWTH, name=KPI_CUSTOMERS_100K_YOY, unit=Unit.PERCENT
+    )
+    by_year = {r.period_end.year: r.value for r in rows}
+    assert by_year[2024] == Decimal("20")
+    assert by_year[2025] == Decimal("25")
+    assert all(r.unit is Unit.PERCENT for r in rows)
+
+
+def test_yoy_pct_growth_skips_nonpositive_prior() -> None:
+    """A zero/negative prior base makes relative growth undefined -> skipped."""
+    points = [_q4(2023, 0.0), _q4(2024, 100.0)]
+    rows = compute_yoy_transform(
+        points, kind=TransformKind.YOY_PCT_GROWTH, name=KPI_CUSTOMERS_100K_YOY, unit=Unit.PERCENT
+    )
+    assert rows == []
+
+
+def test_derive_kpi_transforms_count_growth_accepts_count_base(conn: sqlite3.Connection) -> None:
+    """RBRK >$100K customer COUNT (unit=count) -> derived YoY growth %, proving
+    base_unit=None lets a non-percent base through the YOY_PCT_GROWTH spec."""
+    _seed_base_kpi(
+        conn,
+        "RBRK",
+        "Customers >$100K ARR",
+        [("2024-12-31", "Q4", 2000.0), ("2025-12-31", "Q4", 2500.0)],
+        unit="count",
+    )
+    rows = derive_kpi_transforms(conn, "RBRK")
+    growth = [r for r in rows if r.name == KPI_CUSTOMERS_100K_YOY]
+    assert len(growth) == 1
+    assert growth[0].value == Decimal("25")
+    assert growth[0].unit is Unit.PERCENT
 
 
 def test_yoy_deceleration_skips_nonpositive_prior() -> None:

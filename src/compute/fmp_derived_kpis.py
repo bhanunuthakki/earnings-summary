@@ -75,6 +75,7 @@ _DERIVED_KPI_NAMES: tuple[str, ...] = (
 KPI_RISK_ADJ_NIM_YOY_BPS = "Risk-adjusted NIM YoY change (bps)"
 KPI_REVENUE_YOY_DECELERATION = "Revenue YoY Growth Deceleration (YoY of YoY growth rate)"
 KPI_NPL_15D_TOTAL_YOY_PP = "NPL 15d+ total YoY change (pp)"
+KPI_CUSTOMERS_100K_YOY = "Customers >$100K ARR YoY Growth"
 
 # Income-statement line items needed for margin + revenue YoY derivations.
 _REQUIRED_LINE_ITEMS: tuple[str, ...] = (
@@ -572,6 +573,7 @@ class TransformKind(StrEnum):
     YOY_CHANGE_BPS = "yoy_change_bps"
     YOY_CHANGE_PP = "yoy_change_pp"
     YOY_DECELERATION = "yoy_deceleration"
+    YOY_PCT_GROWTH = "yoy_pct_growth"
 
 
 @dataclass(frozen=True)
@@ -588,12 +590,17 @@ class KpiSeriesPoint:
 @dataclass(frozen=True)
 class _TransformSpec:
     """A transform deriver: read `base_label` from kpi_facts, apply `kind`, then
-    register the output under `derived_name` with `unit`."""
+    register the output under `derived_name` with `unit`.
+
+    `base_unit` filters the base series to that unit (the YoY transforms assume a
+    percentage scale by default); set it to None to accept any numeric unit — used
+    by YOY_PCT_GROWTH, whose base is a level/count rather than a percentage."""
 
     derived_name: str
     base_label: str
     kind: TransformKind
     unit: Unit
+    base_unit: Unit | None = Unit.PERCENT
 
 
 _TRANSFORM_DERIVER_SPECS: tuple[_TransformSpec, ...] = (
@@ -623,6 +630,16 @@ _TRANSFORM_DERIVER_SPECS: tuple[_TransformSpec, ...] = (
         kind=TransformKind.YOY_CHANGE_PP,
         unit=Unit.PERCENT,
     ),
+    # RBRK large-customer (>$100K ARR) count growth — the moat-attach breaker. The
+    # base is the extracted customer COUNT (not a percentage), so accept any base
+    # unit and emit relative YoY growth as a percent.
+    _TransformSpec(
+        derived_name=KPI_CUSTOMERS_100K_YOY,
+        base_label="Customers >$100K ARR",
+        kind=TransformKind.YOY_PCT_GROWTH,
+        unit=Unit.PERCENT,
+        base_unit=None,
+    ),
 )
 
 
@@ -645,12 +662,16 @@ def compute_yoy_transform(
              deceleration of that rate — positive = decelerating, negative =
              accelerating. A non-positive prior rate makes the ratio meaningless,
              so it is skipped rather than emitting a spurious value.)
+      - ``YOY_PCT_GROWTH``:   ``(P - prior) / prior * 100``, skipping ``prior <= 0``
+            (relative YoY % growth of a level/count base — the one kind whose base
+             is not itself a percentage, e.g. a customer count.)
 
     Points with no same-quarter prior-year match are skipped — the natural case
     for a sparse series (e.g. NPL prints scattered across distinct quarters) and
     the first year of any series. Output ``period_end`` / ``fiscal_period_type`` /
     ``source_doc_id`` are the CURRENT point's, so provenance ties to the filing
-    that reported the latest value. Callers must pass a percentage-scale series.
+    that reported the latest value. The percentage-change kinds assume a
+    percentage-scale series; YOY_PCT_GROWTH takes a level/count base.
     """
     by_fiscal_quarter: dict[tuple[FiscalPeriodType, int], KpiSeriesPoint] = {}
     for p in points:
@@ -669,6 +690,10 @@ def compute_yoy_transform(
             if prior.value <= 0:
                 continue
             value = (prior.value - p.value) / prior.value * Decimal(100)
+        elif kind is TransformKind.YOY_PCT_GROWTH:
+            if prior.value <= 0:
+                continue
+            value = (p.value - prior.value) / prior.value * Decimal(100)
         else:  # pragma: no cover - exhaustive over TransformKind
             raise ValueError(f"Unhandled transform kind: {kind}")
         out.append(
@@ -685,17 +710,22 @@ def compute_yoy_transform(
 
 
 def _fetch_full_kpi_series(
-    conn: sqlite3.Connection, ticker: str, base_label: str
+    conn: sqlite3.Connection,
+    ticker: str,
+    base_label: str,
+    base_unit: Unit | None = Unit.PERCENT,
 ) -> list[KpiSeriesPoint]:
     """Resolve `base_label` to its canonical definition and pull the full,
-    per-period-deduped PERCENT series from kpi_facts (oldest-first).
+    per-period-deduped series from kpi_facts (oldest-first).
 
     Resolution + per-period source dedup mirror
     ``thesis_evaluator._fetch_kpi_history`` (richest definition wins; highest
     ``source_doc_id`` per ``(period_end, fiscal_period_type)`` wins) so the
     transform reads exactly the series the evaluator and the §3 chart read.
-    Non-PERCENT rows are skipped — the YoY transforms assume a percentage scale.
-    Returns ``[]`` when the label resolves to no fact-carrying definition.
+    Rows whose unit != ``base_unit`` are skipped (the YoY transforms assume a
+    percentage scale by default); pass ``base_unit=None`` to accept any unit (for
+    a level/count base). Returns ``[]`` when the label resolves to no
+    fact-carrying definition.
     """
     resolved = resolve_kpi_definition_name(conn, ticker, base_label)
     if resolved is None:
@@ -716,7 +746,7 @@ def _fetch_full_kpi_series(
     )
     points: list[KpiSeriesPoint] = []
     for row in cur.fetchall():
-        if Unit(row["unit"]) is not Unit.PERCENT:
+        if base_unit is not None and Unit(row["unit"]) is not base_unit:
             continue
         pe = row["period_end"]
         if isinstance(pe, str):
@@ -745,7 +775,7 @@ def derive_kpi_transforms(conn: sqlite3.Connection, ticker: str) -> list[Derived
     """
     out: list[DerivedKpiRow] = []
     for spec in _TRANSFORM_DERIVER_SPECS:
-        points = _fetch_full_kpi_series(conn, ticker, spec.base_label)
+        points = _fetch_full_kpi_series(conn, ticker, spec.base_label, spec.base_unit)
         if len(points) < 2:
             continue
         out.extend(

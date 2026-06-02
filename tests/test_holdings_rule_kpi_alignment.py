@@ -34,6 +34,7 @@ import pytest
 
 from compute.fmp_derived_kpis import (
     KPI_CAPEX_REVENUE_RATIO,
+    KPI_CUSTOMERS_100K_YOY,
     KPI_FCF_MARGIN_GAAP,
     KPI_GROSS_MARGIN_GAAP,
     KPI_NET_MARGIN_GAAP,
@@ -75,6 +76,7 @@ _DERIVED_KPI_NAMES = (
     KPI_RISK_ADJ_NIM_YOY_BPS,
     KPI_REVENUE_YOY_DECELERATION,
     KPI_NPL_15D_TOTAL_YOY_PP,
+    KPI_CUSTOMERS_100K_YOY,
 )
 _DERIVED_NORM = {normalize_kpi_name(name) for name in _DERIVED_KPI_NAMES}
 
@@ -82,7 +84,7 @@ _DERIVED_NORM = {normalize_kpi_name(name) for name in _DERIVED_KPI_NAMES}
 # dedicated extractor/deriver not built yet (see the deferred-followups memory).
 # Pinned so a NEW dead rule fails the test and a future fix forces an update.
 NARRATIVE_ALLOWLIST: dict[str, set[str]] = {
-    "RBRK": {"Customers >$100K ARR YoY Growth", "SBC / Subscription Revenue"},
+    "RBRK": {"SBC / Subscription Revenue"},
     "NOW": {"Now Assist >$1M ACV YoY Growth", "Customers >$5M ACV YoY Growth"},
     "WIX": {"Wix Studio ARR YoY Growth", "Partners Revenue Share"},
 }
