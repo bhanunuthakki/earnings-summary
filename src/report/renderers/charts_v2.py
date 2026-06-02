@@ -63,6 +63,46 @@ def fmt_dollar(v: float | None, digits: int = 1) -> str:
     return "$" + fmt_compact(v, digits)
 
 
+# ----- Ratio vs flow classification (matrix display mode) -----
+
+_LEVEL_UNITS = frozenset({"%", "percent", "pp", "bps", "ratio"})
+
+
+def _is_level_unit(unit: str) -> bool:
+    """True for ratio/percentage units whose YoY% is meaningless — the matrix
+    shows the ABSOLUTE level instead (ROE, NIM, CET1, margins, NPL ratios).
+    Dollar flows and counts keep the YoY% + CAGR treatment."""
+    u = (unit or "").strip().lower()
+    return u in _LEVEL_UNITS or u.endswith("%")
+
+
+def _fmt_level(v: float | None, unit: str) -> str:
+    """Absolute level cell for a ratio/percentage row."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "—"
+    u = (unit or "").strip().lower()
+    if u in {"%", "percent"} or u.endswith("%"):
+        return f"{v:.1f}%"
+    if u == "bps":
+        return f"{v:.0f}bps"
+    if u == "ratio":
+        return f"{v:.2f}"
+    return fmt_compact(v)
+
+
+def _fmt_level_delta(v: float | None, unit: str) -> str:
+    """Absolute change over a horizon for a ratio/percentage row (pp/bps) — the
+    useful trailing-column analog of CAGR, which is meaningless for a ratio."""
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "—"
+    u = (unit or "").strip().lower()
+    if u == "bps":
+        return f"{v:+.0f}bps"
+    if u == "ratio":
+        return f"{v:+.2f}"
+    return f"{v:+.1f}pp"
+
+
 # ----- Bar charts -----
 
 @dataclass
@@ -619,6 +659,9 @@ def yoy_heatmap_table(
     latest = rows[0].levels[-1] if rows else None
     for row in rows:
         latest_val = row.levels[-1] if row.levels else None
+        # Ratio/percentage rows render absolute levels (+ pp/bps change); dollar
+        # flows and counts keep YoY% (+ CAGR). Driven off the per-row unit.
+        level_mode = _is_level_unit(row.unit)
         if row.tooltip:
             label_html = (
                 f'<span title="{html.escape(row.tooltip)}">{html.escape(row.name)}'
@@ -632,14 +675,31 @@ def yoy_heatmap_table(
             curr = row.levels[j_full]
             base = row.levels[j_full - 4] if j_full >= 4 else None
             pct = yoy(curr, base) if j_full >= 4 else None
+            if level_mode:
+                # Ratio/percentage metric: show the absolute level; shade by the
+                # YoY direction of that level (YoY% of a ratio isn't meaningful).
+                bg = heat_color(pct)
+                tb.append(f'<td class="cv2-matrix-cell" style="{bg}">{_fmt_level(curr, row.unit)}</td>')
+                continue
             noisy = is_noisy(pct, base, latest_val)
             cls = "cv2-matrix-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cell"
             bg = "" if noisy else heat_color(pct)
             tb.append(f'<td class="{cls}" style="{bg}">{fmt_pct(pct, 1)}</td>')
-        # CAGR columns — compute against absolute levels.
+        # Trailing columns: CAGR for flows; absolute pp/bps change for ratios.
         for q in cagr_periods:
+            base = row.levels[-1 - q] if n_total > q else None
+            if level_mode:
+                delta = (
+                    row.levels[-1] - base
+                    if (base is not None and row.levels[-1] is not None)
+                    else None
+                )
+                bg = heat_color(delta)
+                tb.append(
+                    f'<td class="cv2-matrix-cagr-cell" style="{bg}">{_fmt_level_delta(delta, row.unit)}</td>'
+                )
+                continue
             if n_total > q:
-                base = row.levels[-1 - q]
                 pct = cagr(row.levels[-1], base, q / 4)
                 noisy = is_noisy(pct, base, latest_val)
             else:
@@ -655,7 +715,9 @@ def yoy_heatmap_table(
     return (
         f'<div class="cv2-matrix-wrap"><div class="cv2-matrix-title">{html.escape(title)}</div>'
         f'<table class="cv2-matrix">{"".join(th)}{"".join(tb)}</table>'
-        f'<div class="cv2-matrix-footnote">Gray italic cells mark low-base noise '
+        f'<div class="cv2-matrix-footnote">Ratio/percentage rows show the absolute '
+        f'level (trailing columns = pp/bps change); dollar/flow rows show YoY% '
+        f'(trailing columns = CAGR). Gray italic cells mark low-base noise '
         f'(|YoY| &gt; 200% or base &lt; 15% of latest) — directionally meaningful, '
         f'numerically unstable.</div></div>'
     )
