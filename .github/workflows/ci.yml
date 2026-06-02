@@ -1,0 +1,99 @@
+name: CI
+
+# Quality-enforcement machinery for a repo with a large pre-existing lint/type
+# baseline (ruff ~332, pyright strict ~3070 — tooling drift, see
+# directives/regrade_memo_post_wedge.md). A whole-repo "must be clean" gate is
+# therefore impossible without a months-long cleanup, so this workflow encodes
+# the project's actual norm — "gate only on YOUR files" — as machinery:
+#
+#   * tests   — the FULL pytest suite must pass (the strong, whole-repo gate).
+#   * quality — ruff lint + format are enforced ONLY on the files a PR changed,
+#               so new code stays clean while the legacy baseline is paid down
+#               incrementally rather than blocking every PR.
+#
+# pyright (the strict type gate) is intentionally run locally via pre-commit /
+# `make typecheck` rather than here, because the 3070-error baseline would make
+# a diff gate fire on pre-existing errors in any touched file. Promote it to a
+# blocking CI job once the baseline is ratcheted down.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .[dev]
+      - name: Ensure data dir exists
+        # The suite is hermetic (tmp_path everywhere); the few tests that touch
+        # the gitignored data/portfolio.db degrade gracefully when it is absent
+        # — verified by running the full suite with data/ moved aside (1940
+        # passed). We only guarantee the directory exists so a test that writes
+        # into data/ does not trip over a missing folder. (Full bootstrap is
+        # init_db() + alembic, not `alembic upgrade head` alone — the 0000
+        # baseline assumes the legacy init_db tables — so we skip it here.)
+        run: mkdir -p data
+      - name: Run test suite
+        run: pytest -q
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install ruff
+        run: pip install -e .[dev]
+      - name: Compute changed Python files
+        id: changed
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+            base="origin/${{ github.base_ref }}"
+          else
+            base="${{ github.event.before }}"
+            if ! git rev-parse --quiet --verify "$base^{commit}" >/dev/null 2>&1; then
+              base="HEAD~1"
+            fi
+          fi
+          # Changed .py files, excluding generated migrations and scratch/
+          # (both excluded from the ruff config too).
+          changed=$(git diff --name-only --diff-filter=ACMR "$base"...HEAD -- '*.py' \
+            | grep -vE '^(alembic/versions/|scratch/)' || true)
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$changed" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -z "$changed" ]; then
+            echo "No Python files changed — quality gate is a no-op."
+          else
+            echo "Changed Python files:"
+            echo "$changed"
+          fi
+      - name: ruff format (changed files)
+        if: steps.changed.outputs.files != ''
+        run: echo "${{ steps.changed.outputs.files }}" | xargs ruff format --check
+      - name: ruff check (changed files)
+        if: steps.changed.outputs.files != ''
+        run: echo "${{ steps.changed.outputs.files }}" | xargs ruff check
