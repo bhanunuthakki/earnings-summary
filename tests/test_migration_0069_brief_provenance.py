@@ -50,7 +50,7 @@ def test_0069_recreates_table_for_the_writer(tmp_path: Path) -> None:
     command.upgrade(cfg, "head")
     cols = _columns(db, "brief_provenance_log")
     assert cols, "brief_provenance_log should exist at head"
-    assert _WRITER_COLUMNS <= cols  # the writer's INSERT will succeed
+    assert cols >= _WRITER_COLUMNS  # the recreated table carries every writer column
 
 
 def test_0069_downgrade_roundtrips(tmp_path: Path) -> None:
