@@ -43,6 +43,7 @@ Usage from an adapter:
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -63,11 +64,11 @@ class CallStatus(StrEnum):
     """Closed enum for source_calls.status. Keep stable — the log is queried."""
 
     OK = "ok"
-    NOT_FOUND = "not_found"          # source returned empty for this ticker/kind
+    NOT_FOUND = "not_found"  # source returned empty for this ticker/kind
     TIER_RESTRICTED = "tier_restricted"  # 403 / Legacy Endpoint / etc.
-    RATE_LIMITED = "rate_limited"    # 429
-    ERROR = "error"                  # network / parse / unknown
-    SKIPPED = "skipped"              # adapter chose not to call (e.g. cache hit)
+    RATE_LIMITED = "rate_limited"  # 429
+    ERROR = "error"  # network / parse / unknown
+    SKIPPED = "skipped"  # adapter chose not to call (e.g. cache hit)
 
 
 def log_call(
@@ -117,3 +118,130 @@ def log_call(
     except sqlite3.Error:
         # Logging must not crash the fetch path. Silently drop.
         return
+
+
+# ---------------------------------------------------------------------------
+# Read side — the consumer the module docstring promised as a follow-up.
+# Makes external-fetch volume, error rates, and cache-skip rate measurable
+# (you can't keep caching honest if you can't see it). Consumed by
+# execution/show_source_calls.py.
+# ---------------------------------------------------------------------------
+
+# Statuses that represent a failed/blocked external call (vs. a clean OK, an
+# empty NOT_FOUND, or a deliberate SKIPPED cache hit).
+_ERROR_STATUSES: frozenset[str] = frozenset(
+    {CallStatus.ERROR, CallStatus.RATE_LIMITED, CallStatus.TIER_RESTRICTED}
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCallSummary:
+    """Per-(source, kind) rollup of source_calls. ``cache_skip_rate`` is the
+    share of attempts that never hit the network (a cache hit / deliberate
+    skip); ``error_rate`` is the share that failed or were blocked."""
+
+    source_name: str
+    kind: str
+    total: int
+    ok: int
+    skipped: int
+    not_found: int
+    errors: int
+    error_rate: float
+    cache_skip_rate: float
+    p50_latency_ms: int | None
+    p95_latency_ms: int | None
+    total_records: int
+
+
+def _empty_int_list() -> list[int]:
+    # Typed factory so the dataclass field is list[int], not list[Unknown].
+    return []
+
+
+@dataclass(slots=True)
+class _Acc:
+    """Mutable per-(source, kind) accumulator used while folding rows."""
+
+    total: int = 0
+    ok: int = 0
+    skipped: int = 0
+    not_found: int = 0
+    errors: int = 0
+    records: int = 0
+    latencies: list[int] = field(default_factory=_empty_int_list)
+
+
+def _percentile(sorted_vals: list[int], pct: float) -> int | None:
+    if not sorted_vals:
+        return None
+    # Nearest-rank percentile — adequate for an operational latency readout.
+    rank = max(0, min(len(sorted_vals) - 1, round(pct * (len(sorted_vals) - 1))))
+    return sorted_vals[rank]
+
+
+def summarize_source_calls(
+    *,
+    since: str | None = None,
+    db_path: Path | None = None,
+) -> list[SourceCallSummary]:
+    """Aggregate ``source_calls`` into a per-(source_name, kind) summary.
+
+    ``since`` is an inclusive ISO lower bound on ``called_at`` (e.g. ``'2026-06-01'``).
+    Read-only and best-effort: a missing DB / table yields ``[]`` rather than
+    raising, so a reporting call never takes down a caller. Rows are sorted by
+    descending total so the busiest source/kind reads first.
+    """
+    path = db_path or _DB_PATH
+    if not Path(path).exists():
+        return []
+    sql = "SELECT source_name, kind, status, latency_ms, record_count FROM source_calls"
+    params: tuple[str, ...] = ()
+    if since is not None:
+        sql += " WHERE called_at >= ?"
+        params = (since,)
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+
+    groups: dict[tuple[str, str], _Acc] = {}
+    for source_name, kind, status, latency_ms, record_count in rows:
+        acc = groups.setdefault((str(source_name), str(kind)), _Acc())
+        acc.total += 1
+        if status == CallStatus.OK:
+            acc.ok += 1
+        elif status == CallStatus.SKIPPED:
+            acc.skipped += 1
+        elif status == CallStatus.NOT_FOUND:
+            acc.not_found += 1
+        elif status in _ERROR_STATUSES:
+            acc.errors += 1
+        if record_count is not None:
+            acc.records += int(record_count)
+        if latency_ms is not None:
+            acc.latencies.append(int(latency_ms))
+
+    summaries = [
+        SourceCallSummary(
+            source_name=source_name,
+            kind=kind,
+            total=acc.total,
+            ok=acc.ok,
+            skipped=acc.skipped,
+            not_found=acc.not_found,
+            errors=acc.errors,
+            error_rate=(acc.errors / acc.total) if acc.total else 0.0,
+            cache_skip_rate=(acc.skipped / acc.total) if acc.total else 0.0,
+            p50_latency_ms=_percentile(sorted(acc.latencies), 0.50),
+            p95_latency_ms=_percentile(sorted(acc.latencies), 0.95),
+            total_records=acc.records,
+        )
+        for (source_name, kind), acc in groups.items()
+    ]
+    summaries.sort(key=lambda s: s.total, reverse=True)
+    return summaries

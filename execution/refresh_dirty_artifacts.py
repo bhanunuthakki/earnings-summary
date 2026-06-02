@@ -59,32 +59,79 @@ log = logging.getLogger("refresh_dirty_artifacts")
 # purposes are added upstream.
 _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
     "bear_case": [
-        "python", "execution/build_artifacts.py", "--ticker", "{ticker}", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "{ticker}",
+        "--enable-llm",
     ],
     "qa_topics": [
-        "python", "execution/build_artifacts.py", "--ticker", "{ticker}", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "{ticker}",
+        "--enable-llm",
     ],
     "saydo_filter": [
-        "python", "execution/build_artifacts.py", "--ticker", "{ticker}", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "{ticker}",
+        "--enable-llm",
     ],
     "valuation_basis": [
-        "python", "execution/build_artifacts.py", "--ticker", "{ticker}", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "{ticker}",
+        "--enable-llm",
     ],
     "exec_comp_alignment": [
-        "python", "execution/build_artifacts.py", "--ticker", "{ticker}", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "{ticker}",
+        "--enable-llm",
     ],
     "company_description": [
-        "python", "execution/extract_company_description.py",
-        "--ticker", "{ticker}", "--refresh",
+        "python",
+        "execution/extract_company_description.py",
+        "--ticker",
+        "{ticker}",
+        "--refresh",
     ],
     "filing_intelligence": [
-        "python", "execution/analyze_filing_intelligence.py",
-        "--ticker", "{ticker}", "--refresh",
+        "python",
+        "execution/analyze_filing_intelligence.py",
+        "--ticker",
+        "{ticker}",
+        "--refresh",
     ],
     "saydo_pair": [
-        "python", "execution/build_saydo_pairs.py", "--ticker", "{ticker}", "--refresh",
+        "python",
+        "execution/build_saydo_pairs.py",
+        "--ticker",
+        "{ticker}",
+        "--refresh",
     ],
 }
+
+
+# Trigger/news-side LLM caches have NO standalone drain regenerator: recomputing
+# them is a side effect of the daily trigger scan / news fetch (which already
+# honor the dirty flag), and running those here would also fire alerts. So the
+# drain classifies them as "refreshed by the daily scan" rather than warning
+# "no_regenerator" (which reads like a missing-config bug). Keep in lockstep with
+# the trigger/news family in llm_artifact_store.FACT_DEPENDENT_PURPOSES.
+_DAILY_SCAN_PURPOSES: frozenset[str] = frozenset(
+    {
+        "earnings_tone_diff",
+        "kpi_inflection_context",
+        "saydo_due_context",
+        "material_news_classification",
+        "news_structuring",
+    }
+)
 
 
 # Per-subprocess wall-clock cap. The brief builder typically runs in 60-120s
@@ -116,10 +163,7 @@ def _aggregate_breakdown(
         if not art.ticker:
             continue
         counts[(art.ticker, art.purpose)] += 1
-    return [
-        (ticker, purpose, count)
-        for (ticker, purpose), count in sorted(counts.items())
-    ]
+    return [(ticker, purpose, count) for (ticker, purpose), count in sorted(counts.items())]
 
 
 def _accrued_cost_usd(db_path: Path, since: datetime) -> float:
@@ -135,10 +179,7 @@ def _accrued_cost_usd(db_path: Path, since: datetime) -> float:
         conn = sqlite3.connect(str(db_path))
         try:
             tables = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
             if "llm_calls" not in tables:
                 return 0.0
@@ -171,9 +212,12 @@ def _build_pending_jobs(
             continue
         template = _PURPOSE_TO_REGENERATOR.get(purpose)
         if template is None:
-            log.warning(
-                {"event": "no_regenerator", "purpose": purpose, "ticker": ticker}
-            )
+            if purpose in _DAILY_SCAN_PURPOSES:
+                # Expected: recomputed by the daily trigger scan / news fetch,
+                # not the drain. Informational, not a missing-config warning.
+                log.info({"event": "refreshed_by_daily_scan", "purpose": purpose, "ticker": ticker})
+            else:
+                log.warning({"event": "no_regenerator", "purpose": purpose, "ticker": ticker})
             continue
         argv = [tok.replace("{ticker}", ticker) for tok in template]
         key = (ticker, tuple(argv))
@@ -222,16 +266,18 @@ def _run_subprocess(job: _PendingJob, cwd: Path) -> dict[str, object]:
     }
 
 
-def _print_manifest(
-    breakdown: list[tuple[str, str, int]], total: int
-) -> None:
+def _print_manifest(breakdown: list[tuple[str, str, int]], total: int) -> None:
     """Render the human-readable manifest to stdout. Same format the
     operator-piped runner has consumed since Phase 8."""
     by_ticker: dict[str, list[tuple[str, str]]] = defaultdict(list)
     for ticker, purpose, _count in breakdown:
         template = _PURPOSE_TO_REGENERATOR.get(purpose)
         if template is None:
-            log.warning({"event": "no_regenerator", "purpose": purpose})
+            # Daily-scan purposes are not drain-regenerated, so they simply do
+            # not appear in the drain manifest; only a genuinely unmapped
+            # brief-side purpose is a config gap worth warning about.
+            if purpose not in _DAILY_SCAN_PURPOSES:
+                log.warning({"event": "no_regenerator", "purpose": purpose})
             continue
         if not ticker:
             continue
@@ -272,8 +318,7 @@ def _execute_jobs(
         if accrued >= max_cost_usd:
             remaining = len(jobs) - idx
             print(
-                f"halted: cost cap reached at ${accrued:.2f}, "
-                f"{remaining} artifact(s) unprocessed"
+                f"halted: cost cap reached at ${accrued:.2f}, {remaining} artifact(s) unprocessed"
             )
             log.info(
                 {
@@ -312,9 +357,7 @@ def _execute_jobs(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--limit", type=int, default=50, help="Max dirty rows to inspect."
-    )
+    parser.add_argument("--limit", type=int, default=50, help="Max dirty rows to inspect.")
     parser.add_argument(
         "--repo-root",
         type=Path,

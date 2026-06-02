@@ -120,9 +120,7 @@ def _insert_dirty(
     conn.commit()
 
 
-def _insert_llm_call(
-    conn: sqlite3.Connection, *, called_at: datetime, cost_usd: float
-) -> None:
+def _insert_llm_call(conn: sqlite3.Connection, *, called_at: datetime, cost_usd: float) -> None:
     conn.execute(
         """
         INSERT INTO llm_calls (called_at, model, prompt_sha256, prompt_chars,
@@ -179,9 +177,7 @@ def test_default_mode_does_not_invoke_subprocess(
 
     fake_run = _CapturingFakeRun()
     monkeypatch.setattr(executor.subprocess, "run", fake_run)
-    monkeypatch.setattr(
-        sys, "argv", ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root)]
-    )
+    monkeypatch.setattr(sys, "argv", ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root)])
 
     rc = executor.main()
     assert rc == 0
@@ -216,9 +212,11 @@ def test_execute_invokes_correct_subprocess(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "100",
+            "--max-cost-usd",
+            "100",
         ],
     )
 
@@ -228,12 +226,18 @@ def test_execute_invokes_correct_subprocess(
 
     argvs = {tuple(c) for c in fake_run.calls}
     expected_bear = (
-        "python", "execution/build_artifacts.py",
-        "--ticker", "GOOG", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "GOOG",
+        "--enable-llm",
     )
     expected_desc = (
-        "python", "execution/extract_company_description.py",
-        "--ticker", "META", "--refresh",
+        "python",
+        "execution/extract_company_description.py",
+        "--ticker",
+        "META",
+        "--refresh",
     )
     assert expected_bear in argvs
     assert expected_desc in argvs
@@ -263,9 +267,11 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "100",
+            "--max-cost-usd",
+            "100",
         ],
     )
 
@@ -273,8 +279,11 @@ def test_execute_dedupes_shared_cli_for_one_ticker(
     assert rc == 0
     assert len(fake_run.calls) == 1
     assert fake_run.calls[0] == [
-        "python", "execution/build_artifacts.py",
-        "--ticker", "NU", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "NU",
+        "--enable-llm",
     ]
 
 
@@ -315,9 +324,11 @@ def test_execute_halts_at_cost_cap(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "5",
+            "--max-cost-usd",
+            "5",
         ],
     )
 
@@ -328,9 +339,7 @@ def test_execute_halts_at_cost_cap(
     )
 
 
-def test_accrued_cost_usd_sums_ledger_rows_since_window(
-    executor: Any, tmp_path: Path
-) -> None:
+def test_accrued_cost_usd_sums_ledger_rows_since_window(executor: Any, tmp_path: Path) -> None:
     """The cost-query helper must SUM cost_estimate_usd for rows whose
     called_at >= since. Older rows are excluded; newer rows accrue."""
     repo_root = tmp_path
@@ -382,9 +391,11 @@ def test_cost_check_runs_before_each_job(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "5",
+            "--max-cost-usd",
+            "5",
         ],
     )
 
@@ -401,7 +412,10 @@ def test_cost_check_runs_before_each_job(
 
 
 def test_empty_queue_exits_cleanly(
-    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """No dirty/expired rows → 'No dirty artifacts. Pipeline is fresh.' + exit 0.
     Subprocess.run must never be called."""
@@ -418,9 +432,11 @@ def test_empty_queue_exits_cleanly(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "5",
+            "--max-cost-usd",
+            "5",
         ],
     )
 
@@ -462,9 +478,11 @@ def test_unmapped_purpose_logs_warning_and_skips(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "100",
+            "--max-cost-usd",
+            "100",
         ],
     )
 
@@ -476,14 +494,63 @@ def test_unmapped_purpose_logs_warning_and_skips(
         "the mapped artifact (META bear_case) should still be processed"
     )
     assert fake_run.calls[0] == [
-        "python", "execution/build_artifacts.py",
-        "--ticker", "META", "--enable-llm",
+        "python",
+        "execution/build_artifacts.py",
+        "--ticker",
+        "META",
+        "--enable-llm",
     ]
     no_regen_warnings = [
-        r for r in caplog.records if isinstance(r.msg, dict)
-        and r.msg.get("event") == "no_regenerator"
+        r
+        for r in caplog.records
+        if isinstance(r.msg, dict) and r.msg.get("event") == "no_regenerator"
     ]
     assert no_regen_warnings, "expected a no_regenerator warning for the unmapped purpose"
+
+
+def test_daily_scan_purpose_classified_not_warned(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A trigger/news purpose (earnings_tone_diff) has no standalone drain
+    regenerator BY DESIGN — it is recomputed as a side effect of the daily
+    trigger scan, and running the trigger here would also fire alerts. The drain
+    must classify it as 'refreshed_by_daily_scan' (info), NOT 'no_regenerator'
+    (warning), and must never subprocess it."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="GOOG", purpose="earnings_tone_diff")
+    finally:
+        conn.close()
+
+    fake_run = _CapturingFakeRun(returncode=0)
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(repo_root),
+            "--execute",
+            "--max-cost-usd",
+            "100",
+        ],
+    )
+
+    with caplog.at_level("INFO", logger="refresh_dirty_artifacts"):
+        rc = executor.main()
+
+    assert rc == 0
+    assert fake_run.calls == [], "a daily-scan purpose must not be subprocessed by the drain"
+    events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+    assert "refreshed_by_daily_scan" in events
+    assert "no_regenerator" not in events
 
 
 # ---------------------------------------------------------------------------
@@ -503,9 +570,7 @@ def test_expired_artifact_drives_execute_path(
     conn = _make_portfolio_db(db_path)
     try:
         past = (datetime.now(UTC) - timedelta(days=1)).isoformat()
-        _insert_dirty(
-            conn, ticker="WIX", purpose="bear_case", dirty=0, expires_at=past
-        )
+        _insert_dirty(conn, ticker="WIX", purpose="bear_case", dirty=0, expires_at=past)
     finally:
         conn.close()
 
@@ -516,9 +581,11 @@ def test_expired_artifact_drives_execute_path(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "100",
+            "--max-cost-usd",
+            "100",
         ],
     )
 
@@ -558,9 +625,11 @@ def test_subprocess_failure_continues_drain(
         "argv",
         [
             "refresh_dirty_artifacts.py",
-            "--repo-root", str(repo_root),
+            "--repo-root",
+            str(repo_root),
             "--execute",
-            "--max-cost-usd", "100",
+            "--max-cost-usd",
+            "100",
         ],
     )
 
@@ -570,7 +639,8 @@ def test_subprocess_failure_continues_drain(
     assert rc == 0
     assert len(fake_run.calls) == 2
     failures = [
-        r for r in caplog.records if isinstance(r.msg, dict)
-        and r.msg.get("event") == "drain_subprocess_failed"
+        r
+        for r in caplog.records
+        if isinstance(r.msg, dict) and r.msg.get("event") == "drain_subprocess_failed"
     ]
     assert len(failures) == 2
