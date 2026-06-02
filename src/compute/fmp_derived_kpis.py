@@ -40,6 +40,7 @@ KPI_REVENUE_YOY_USD = "Revenue YoY Growth (USD)"
 KPI_CAPEX_REVENUE_RATIO = "Capex / Revenue (GAAP)"
 KPI_FCF_MARGIN_GAAP = "FCF Margin (GAAP)"
 KPI_OCF_YOY_USD = "Operating Cash Flow YoY Growth (USD)"
+KPI_ROE = "ROE"
 
 _DERIVED_KPI_NAMES: tuple[str, ...] = (
     KPI_OPERATING_MARGIN_GAAP,
@@ -49,6 +50,7 @@ _DERIVED_KPI_NAMES: tuple[str, ...] = (
     KPI_CAPEX_REVENUE_RATIO,
     KPI_FCF_MARGIN_GAAP,
     KPI_OCF_YOY_USD,
+    KPI_ROE,
 )
 
 # Income-statement line items needed for margin + revenue YoY derivations.
@@ -66,6 +68,11 @@ _OPTIONAL_LINE_ITEMS: tuple[str, ...] = (
     "free_cash_flow",
     "operating_cash_flow",
 )
+
+# Balance-sheet line item (doc_type fmp_balance_sheet) for ROE = trailing-4Q net
+# income / period-end shareholders' equity. Optional — a quarter without equity
+# (or without four trailing quarters of net income) simply gets no ROE row.
+_BALANCE_LINE_ITEMS: tuple[str, ...] = ("total_stockholders_equity",)
 
 
 @dataclass(frozen=True)
@@ -88,6 +95,7 @@ class QuarterlyFacts:
     capital_expenditure: Decimal | None = None
     free_cash_flow: Decimal | None = None
     operating_cash_flow: Decimal | None = None
+    total_stockholders_equity: Decimal | None = None
 
 
 def _fetch_quarterly_facts(
@@ -109,7 +117,7 @@ def _fetch_quarterly_facts(
     non-quarterly leakage. The `grouped` dict below dedupes by
     (period_end, fiscal_period_type) so overlapping sources stay safe.
     """
-    all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS
+    all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
     cur = conn.execute(
         f"""
@@ -117,7 +125,7 @@ def _fetch_quarterly_facts(
         FROM financial_facts ff
         JOIN documents d ON d.id = ff.source_doc_id
         WHERE ff.ticker = ?
-          AND d.doc_type IN ('fmp_income_statement', 'fmp_cashflow')
+          AND d.doc_type IN ('fmp_income_statement', 'fmp_cashflow', 'fmp_balance_sheet')
           AND d.file_path NOT LIKE '%_ttm.json'
           AND d.file_path NOT LIKE '%_annual.json'
           AND ff.line_item IN ({placeholders})
@@ -145,6 +153,8 @@ def _fetch_quarterly_facts(
         ocf = bucket.get("operating_cash_flow")
         capex = bucket.get("capital_expenditure")
         fcf = bucket.get("free_cash_flow")
+        equity = bucket.get("total_stockholders_equity")
+        equity_dec = equity if isinstance(equity, Decimal) else None
         # FMP coverage-gap signature: when OCF, Capex, AND FCF are all
         # simultaneously exactly zero in a quarter with non-zero revenue, the
         # upstream parser failed (NTDOY's JP filing format and HDB's IN filing
@@ -168,6 +178,7 @@ def _fetch_quarterly_facts(
                 capital_expenditure=capex,  # type: ignore[arg-type]
                 free_cash_flow=fcf,  # type: ignore[arg-type]
                 operating_cash_flow=ocf,  # type: ignore[arg-type]
+                total_stockholders_equity=equity_dec,
             )
         )
     return results
@@ -301,6 +312,30 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                         source_doc_id=f.source_doc_id,
                     )
                 )
+
+    # ROE = trailing-4Q net income / period-end shareholders' equity (percent).
+    # Needs four consecutive quarters (the TTM window, within ~13 months to reject
+    # gaps) and a non-zero equity reading at the period.
+    chrono = sorted(facts, key=lambda q: q.period_end)
+    for i in range(3, len(chrono)):
+        cur = chrono[i]
+        equity = cur.total_stockholders_equity
+        if equity is None or equity == 0:
+            continue
+        window = chrono[i - 3 : i + 1]
+        if (cur.period_end - window[0].period_end).days > 400:
+            continue
+        ttm_net_income = sum((q.net_income for q in window), Decimal(0))
+        out.append(
+            DerivedKpiRow(
+                period_end=cur.period_end,
+                fiscal_period_type=cur.fiscal_period_type,
+                name=KPI_ROE,
+                value=ttm_net_income / equity * Decimal(100),
+                unit=Unit.PERCENT,
+                source_doc_id=cur.source_doc_id,
+            )
+        )
     return out
 
 
