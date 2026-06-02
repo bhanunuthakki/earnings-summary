@@ -170,7 +170,7 @@
       "kpi_name": "Risk-adjusted NIM YoY change (bps)",
       "comparator": "lt",
       "threshold": 0,
-      "unit": "percent",
+      "unit": "bps",
       "consecutive_periods": 2,
       "narrative": "Risk-adjusted NIM (NIM minus cost of risk) contracting YoY for 2 consecutive quarters \u2014 either pricing power is eroding or cost of risk is outrunning yield, undermining the expanding-spread thesis."
     },
