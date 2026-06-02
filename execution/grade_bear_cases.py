@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from bear_case_grader import grade_due_predictions, materialize_predictions  # noqa: E402
 from llm.calibration import CalibrationScore, record_score  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
 
 log = logging.getLogger("grade_bear_cases")
 
@@ -39,16 +40,10 @@ def _aggregate_to_calibration_score(outcomes: dict[str, int]) -> float | None:
     about a failure mode; 'mixed' is half-credit; 'unfalsifiable' is dropped
     (not a signal). Returns None when no falsifiable predictions landed.
     """
-    counted = (
-        outcomes.get("met", 0)
-        + outcomes.get("missed", 0)
-        + outcomes.get("mixed", 0)
-    )
+    counted = outcomes.get("met", 0) + outcomes.get("missed", 0) + outcomes.get("mixed", 0)
     if counted == 0:
         return None
-    score = (
-        outcomes.get("met", 0) + 0.5 * outcomes.get("mixed", 0)
-    ) / counted
+    score = (outcomes.get("met", 0) + 0.5 * outcomes.get("mixed", 0)) / counted
     return float(score)
 
 
@@ -81,9 +76,7 @@ def main() -> int:
         action="store_true",
         help="Grade every portfolio holding's bear cases.",
     )
-    parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root."
-    )
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root.")
     parser.add_argument(
         "--skip-materialize",
         action="store_true",
@@ -108,16 +101,10 @@ def main() -> int:
     for ticker in tickers:
         if not args.skip_materialize:
             inserted = materialize_predictions(ticker=ticker, repo_root=args.repo_root)
-            log.info(
-                {"event": "materialized", "ticker": ticker, "inserted": inserted}
-            )
+            log.info({"event": "materialized", "ticker": ticker, "inserted": inserted})
             total_inserted += inserted
-        outcomes = grade_due_predictions(
-            ticker=ticker, repo_root=args.repo_root
-        )
-        log.info(
-            {"event": "graded", "ticker": ticker, "outcomes": outcomes}
-        )
+        outcomes = grade_due_predictions(ticker=ticker, repo_root=args.repo_root)
+        log.info({"event": "graded", "ticker": ticker, "outcomes": outcomes})
         for k, v in outcomes.items():
             total_graded[k] = total_graded.get(k, 0) + v
         # Calibration hook: durable-log this ticker's quality score so
@@ -129,7 +116,7 @@ def main() -> int:
             record_score(
                 CalibrationScore(
                     purpose="bear_case",
-                    prompt_version="v1",
+                    prompt_version=prompt_version_for("bear_case"),
                     ticker=ticker,
                     score=per_ticker_score,
                     reason=(

@@ -47,6 +47,7 @@ def _sync_db_path(repo_root: Path) -> None:
 
 from decision_extractor import OutcomeLabel, pending_for_grading, record_outcome  # noqa: E402
 from llm.calibration import CalibrationScore, record_score  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
 
 log = logging.getLogger("grade_decisions")
 
@@ -58,11 +59,7 @@ def _decisions_calibration_score(tally: dict[str, int]) -> float | None:
     'unfalsifiable' = dropped. Returns None when no falsifiable
     decisions landed.
     """
-    counted = (
-        tally.get("correct", 0)
-        + tally.get("wrong", 0)
-        + tally.get("mixed", 0)
-    )
+    counted = tally.get("correct", 0) + tally.get("wrong", 0) + tally.get("mixed", 0)
     if counted == 0:
         return None
     return (tally.get("correct", 0) + 0.5 * tally.get("mixed", 0)) / counted
@@ -74,7 +71,11 @@ def _load_price_series(repo_root: Path, ticker: str) -> list[tuple[str, float]] 
     candidates = [
         repo_root / "data" / "historical" / "fmp" / f"{ticker}_price_chart_10y_div_adj.json",
         # Some tickers (GOOG) are stored under their primary symbol (GOOGL)
-        repo_root / "data" / "historical" / "fmp" / f"{_fmp_alias(ticker)}_price_chart_10y_div_adj.json",
+        repo_root
+        / "data"
+        / "historical"
+        / "fmp"
+        / f"{_fmp_alias(ticker)}_price_chart_10y_div_adj.json",
     ]
     for path in candidates:
         if not path.exists():
@@ -117,9 +118,7 @@ def _price_on_or_before(series: list[tuple[str, float]], iso_date: str) -> float
     return None
 
 
-def _verdict(
-    *, kind: str, pct_change: float, threshold_pct: float
-) -> tuple[str, str]:
+def _verdict(*, kind: str, pct_change: float, threshold_pct: float) -> tuple[str, str]:
     """Map (recommendation_kind, realized_pct_change) → (outcome_label, notes).
     Threshold is the symmetric move that flips correct vs wrong."""
     big_move = abs(pct_change) > threshold_pct
@@ -130,23 +129,38 @@ def _verdict(
             return ("correct", f"price moved +{pct_change * 100:.1f}% — ADD captured upside")
         if pct_change <= -threshold_pct:
             return ("wrong", f"price moved {pct_change * 100:.1f}% — ADD into drawdown")
-        return ("mixed", f"price moved {pct_change * 100:.1f}% — flat band, neither vindicated nor refuted")
+        return (
+            "mixed",
+            f"price moved {pct_change * 100:.1f}% — flat band, neither vindicated nor refuted",
+        )
 
     if kind == "trim" or kind == "sell":
         if pct_change <= -threshold_pct:
             return ("correct", f"price moved {pct_change * 100:.1f}% — TRIM/SELL avoided drawdown")
         if pct_change >= threshold_pct:
             return ("wrong", f"price moved +{pct_change * 100:.1f}% — TRIM/SELL gave up upside")
-        return ("mixed", f"price moved {pct_change * 100:.1f}% — flat band, neither vindicated nor refuted")
+        return (
+            "mixed",
+            f"price moved {pct_change * 100:.1f}% — flat band, neither vindicated nor refuted",
+        )
 
     if kind == "hold" or kind == "avoid":
         if not big_move:
-            return ("correct", f"price moved {pct_change * 100:.1f}% — HOLD/AVOID was right to not act")
+            return (
+                "correct",
+                f"price moved {pct_change * 100:.1f}% — HOLD/AVOID was right to not act",
+            )
         # Holding through a big drawdown is wrong; holding through a big rally is mixed
         # (could have added more)
         if pct_change <= -threshold_pct * 3:  # 15% drawdown threshold for HOLD-wrong
-            return ("wrong", f"price moved {pct_change * 100:.1f}% — HOLD through significant drawdown")
-        return ("mixed", f"price moved {direction} {abs(pct_change * 100):.1f}% — HOLD missed an action signal")
+            return (
+                "wrong",
+                f"price moved {pct_change * 100:.1f}% — HOLD through significant drawdown",
+            )
+        return (
+            "mixed",
+            f"price moved {direction} {abs(pct_change * 100):.1f}% — HOLD missed an action signal",
+        )
 
     return ("unfalsifiable", f"unknown kind={kind}")
 
@@ -188,7 +202,14 @@ def main() -> int:
     )
     log.info({"event": "pending_decisions", "n": len(pending)})
 
-    tally = {"graded": 0, "correct": 0, "wrong": 0, "mixed": 0, "unfalsifiable": 0, "skipped_no_price": 0}
+    tally = {
+        "graded": 0,
+        "correct": 0,
+        "wrong": 0,
+        "mixed": 0,
+        "unfalsifiable": 0,
+        "skipped_no_price": 0,
+    }
     today_iso = datetime.now(UTC).date().isoformat()
 
     for dec in pending:
@@ -237,12 +258,10 @@ def main() -> int:
         record_score(
             CalibrationScore(
                 purpose="decision_audit",
-                prompt_version="v1",
+                prompt_version=prompt_version_for("decision_audit"),
                 score=calibration_score,
                 reason=(
-                    f"correct={tally['correct']} "
-                    f"wrong={tally['wrong']} "
-                    f"mixed={tally['mixed']}"
+                    f"correct={tally['correct']} wrong={tally['wrong']} mixed={tally['mixed']}"
                 ),
                 scored_by="auto:grade_decisions",
             ),
