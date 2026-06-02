@@ -1,0 +1,25 @@
+ticker: META
+generated_at: '2026-06-01T07:09:52Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Capex / Revenue (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.62 < min 0.75; confidence=0.62; grounded=False; cite: Thesis anchor Tier-1: ''Capex guidance + AI ROI commentary — breaks if Capex up + ad-efficiency metrics not improving (2022 redux signal)''] Capex intensity is a Tier-1 monitoring KPI for the capital-allocation-discipline pillar of the thesis, but the anchor conditions its break on a joint signal (capex up AND ad efficiency flat) rather than a standalone Capex/Revenue level. No grounded threshold; tracked as a directional alert.'
+  status: proposed
+  notes: ''
+- kpi_name: FCF Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.60 < min 0.75; confidence=0.60; grounded=False; cite: Thesis anchor pillar (2): ''consolidated op margin holds 35%+ even as capex compounds'' — FCF margin is the downstream net of capex compounding against operating profitability.] FCF margin is the net read on whether op-margin durability survives the capex ramp called out in the thesis. It''s load-bearing as a confirmation signal but the anchor specifies no FCF-margin level; treat as monitored, not breaker.'
+  status: proposed
+  notes: ''
+- kpi_name: Net Income Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.35 < min 0.75; confidence=0.35; grounded=False] Net income margin is downstream of operating margin (already covered as the breaker) plus tax/non-operating noise. Not separately named in the thesis; lower confidence and not a breaker.'
+  status: proposed
+  notes: ''

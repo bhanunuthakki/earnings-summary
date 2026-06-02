@@ -1,0 +1,25 @@
+ticker: NOW
+generated_at: '2026-06-01T07:10:11Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Revenue YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.70 < min 0.75; confidence=0.70; grounded=False] Thesis anchor names Subscription Revenue Growth (CC) as Tier-1 with a consensus-relative break (>100bps miss). USD revenue YoY is the closest available candidate proxy but the anchor''s threshold is consensus-relative, not an absolute level, so no grounded threshold.'
+  status: proposed
+  notes: ''
+- kpi_name: Operating Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False] Operating leverage is implicit in the SaaS scale thesis (durable subscription growth at $15B+) and operating income is flagged as inflecting upward in the statistical patterns. No specific threshold is grounded in the 10-K excerpt or anchor, so this is directional only.'
+  status: proposed
+  notes: ''
+- kpi_name: Gross Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.50 < min 0.75; confidence=0.50; grounded=False] Subscription gross margin is foundational to the SaaS thesis and recent prints are stable at 75-77%. No threshold is cited in the source text, and the anchor does not flag gross margin as a Tier-1 KPI, so directional polarity only.'
+  status: proposed
+  notes: ''

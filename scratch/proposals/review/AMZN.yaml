@@ -1,0 +1,32 @@
+ticker: AMZN
+generated_at: '2026-06-01T07:08:05Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Revenue YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.72 < min 0.75; confidence=0.72; grounded=False; cite: Thesis anchor: ''monitored top-down through revenue, operating income, and cash conversion (OCF/FCF/capex intensity)''] Consolidated revenue growth is the top-down proxy for all three thesis engines (AWS reacceleration, NA retail ex-ads acceleration, ads compounding). The thesis explicitly names revenue as one of the three top-down monitors, but the named breaker thresholds (AWS YoY <15%, ads YoY <18%, NA ex-ads <8%) are segment-specific and cannot be grounded to a consolidated number.'
+  status: proposed
+  notes: ''
+- kpi_name: Capex / Revenue (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False; cite: Thesis anchor: ''capex/AWS-revenue keeps rising while AWS growth fails to reaccelerate — the spending without payoff signal that converts long-cycle capex from earned ROI into stranded AI optionality''] Capex intensity is explicitly named as a tier-1 monitor and a break signal when paired with non-reaccelerating AWS growth. Polarity is set lower_is_better to capture the adverse ''spending without payoff'' direction, though the thesis-grounded form is capex/AWS-revenue (not consolidated capex/revenue), and the break condition is conditional rather than threshold-based — hence no grounded threshold.'
+  status: proposed
+  notes: ''
+- kpi_name: FCF Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.60 < min 0.75; confidence=0.60; grounded=False; cite: Thesis anchor: ''monitored top-down through revenue, operating income, and cash conversion (OCF/FCF/capex intensity)''] FCF margin is explicitly listed as one of the three cash-conversion monitors in the thesis, capturing whether long-cycle AI capex is compressing free cash generation. No specific numerical threshold is grounded in the anchor or 10-K text.'
+  status: proposed
+  notes: ''
+- kpi_name: Operating Cash Flow YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False; cite: Thesis anchor: ''monitored top-down through revenue, operating income, and cash conversion (OCF/FCF/capex intensity)''] OCF growth is named alongside FCF and capex intensity as a top-down cash-conversion monitor. Useful as a leading indicator of whether AWS scale and retail margin gains are translating into cash earnings, but no specific numerical break threshold is grounded.'
+  status: proposed
+  notes: ''

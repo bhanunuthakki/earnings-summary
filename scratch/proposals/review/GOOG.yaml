@@ -1,0 +1,32 @@
+ticker: GOOG
+generated_at: '2026-06-01T07:08:59Z'
+model: claude-opus-4-7
+proposals:
+- kpi_name: Capex / Revenue (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.60 < min 0.75; confidence=0.60; grounded=False; cite: Thesis anchor Tier-1 KPI: ''Capex / cloud-revenue ratio + AI ROI commentary — breaks if Capex/cloud rev rising while GCP margin not expanding''] Thesis flags capex absorption as load-bearing — capex must produce visible cloud ROI. Polarity is lower-is-better at the consolidated level (the candidate is capex/total-revenue, not capex/cloud-rev), but the breaker is conditional on GCP margin trajectory which this single KPI cannot capture, so no standalone threshold is grounded.'
+  status: proposed
+  notes: ''
+- kpi_name: Revenue YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.55 < min 0.75; confidence=0.55; grounded=False; cite: Thesis anchor: thesis-breakers are stated for Search ads CC and GCP YoY, not consolidated revenue YoY] Consolidated revenue YoY is load-bearing as a high-level confirmation that the search engine plus GCP plus other segments continue to compound, and recent prints (14-22%) show acceleration. The thesis names breakers at the segment level (Search ads, GCP), so no consolidated threshold is grounded.'
+  status: proposed
+  notes: ''
+- kpi_name: FCF Margin (GAAP)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.60 < min 0.75; confidence=0.60; grounded=False; cite: Thesis anchor: ''capex absorption — capex must produce visible ROI''; FCF margin is the absorption signal (recent Q1 collapsed to 9.2% from 21.6% as capex stepped up)] FCF margin is the direct readout of whether capex is being absorbed by the cash engine; the recent Q1 drop to 9.2% from 21.6% shows the compression. Higher is better, but the thesis names no specific FCF-margin floor, so no breaker threshold is grounded.'
+  status: proposed
+  notes: ''
+- kpi_name: Operating Cash Flow YoY Growth (USD)
+  threshold_direction: null
+  threshold_value: null
+  is_thesis_breaker: false
+  rationale: '[auto-seed -> review: confidence 0.45 < min 0.75; confidence=0.45; grounded=False] OCF YoY growth supports the capex-absorption pillar by showing whether the cash engine is keeping pace with rising investment, and recent prints (4-58%) are volatile. No specific threshold is named in source text.'
+  status: proposed
+  notes: ''
