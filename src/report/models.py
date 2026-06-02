@@ -373,6 +373,9 @@ class FinancialsSection(BaseModel):
     # Full-history quarter labels (parallel to QuarterlyLineItem.levels_full).
     # Used by the YoY matrix renderer; empty when not populated.
     quarter_labels_full: list[str] = Field(default_factory=list)
+    # Reporting currency from the metrics view (e.g. "USD", "EUR", "BRL"). Drives
+    # the "<ccy> millions" unit label instead of a hardcoded "USD millions".
+    currency: str = "USD"
 
 
 class SegmentSeries(BaseModel):

@@ -118,6 +118,12 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         requested_priorities, line_items, ticker, repo_root, display_labels, quarter_labels_full
     )
 
+    currency = "USD"
+    if deduped_quarterly:
+        raw_ccy = deduped_quarterly[-1].get("currency")
+        if isinstance(raw_ccy, str) and raw_ccy.strip():
+            currency = raw_ccy.strip().upper()
+
     return FinancialsSection(
         status=status,
         quarter_labels=display_labels,
@@ -127,6 +133,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         chart_priorities=resolved_priorities,
         kpi_chart_series=kpi_series,
         quarter_labels_full=quarter_labels_full,
+        currency=currency,
     )
 
 

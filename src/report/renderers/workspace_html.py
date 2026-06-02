@@ -1223,7 +1223,7 @@ def _financials_tab(
     when the time-series writer has materialized any current signals."""
     body.write('<div class="tab-body">')
     body.write(
-        f'<div class="eyebrow">Financials · {len(fin.quarter_labels)} quarters · USD millions</div>'
+        f'<div class="eyebrow">Financials · {len(fin.quarter_labels)} quarters · {fin.currency} millions</div>'
     )
 
     if fin.status != SectionStatus.OK and not fin.line_items:
@@ -1401,7 +1401,7 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
     if not matrix_rows:
         return
     body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">YoY% — tracked KPIs</span>')
+    body.write('<span class="panel-title">Tracked KPIs</span>')
     body.write(f'<span class="panel-sub">{len(matrix_rows)} analyst-tracked series</span></div>')
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
@@ -1654,7 +1654,7 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
     body.write(
         '<div class="panel"><div class="panel-head">'
         '<span class="panel-title">Line items · last 12 quarters</span>'
-        '<span class="panel-sub">USD millions · QoQ · YoY · 3-yr CAGR · click ▶ to drill</span></div>'
+        f'<span class="panel-sub">{fin.currency} millions · QoQ · YoY · 3-yr CAGR · click ▶ to drill</span></div>'
         '<div class="table-scroll"><table class="fin-table"><thead><tr>'
         "<th>Line item</th>"
     )
