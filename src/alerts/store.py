@@ -44,6 +44,28 @@ ACTION_STATUS_PENDING = "pending"
 ACTION_STATUS_APPLIED = "applied"
 ACTION_STATUS_CANCELLED = "cancelled"
 
+# Canonical enum vocabularies — the single source of truth the DB CHECK
+# constraints (alembic 0068) mirror. Validated at the write path below so a bad
+# value fails with a clear ValueError before the INSERT, and is rejected even on
+# a DB that predates the 0068 constraints.
+ALERT_STATUSES: frozenset[str] = frozenset(
+    {ALERT_STATUS_PENDING, ALERT_STATUS_APPROVED, ALERT_STATUS_DISMISSED, ALERT_STATUS_EXPIRED}
+)
+ACTION_STATUSES: frozenset[str] = frozenset(
+    {ACTION_STATUS_PENDING, ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED}
+)
+# The dashboard's trigger-kind vocabulary (src/dashboard/evidence_drawer.py):
+# the four live sensor `kind` classvars plus 'thesis_drift', which was folded
+# into the kpi_inflection sensor rather than shipped on its own but is still a
+# recognized alert kind the feed/drawer render.
+TRIGGER_KINDS: frozenset[str] = frozenset(
+    {"kpi_inflection", "earnings_tone", "saydo_due", "thesis_drift", "material_news"}
+)
+# Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
+ACTION_KINDS: frozenset[str] = frozenset(
+    {"thesis_update", "bear_append", "sizing_update", "earnings_prep_append"}
+)
+
 
 @dataclass(slots=True)
 class AlertRow:
@@ -133,6 +155,10 @@ def fire_alert(
     signature already exists. Keeping dedup in the sensor lets the sensor
     decide whether a slightly-different evidence shape merits a fresh fire.
     """
+    if trigger_kind not in TRIGGER_KINDS:
+        raise ValueError(
+            f"unknown trigger_kind {trigger_kind!r}; expected one of {sorted(TRIGGER_KINDS)}"
+        )
     conn = _open(db_path)
     try:
         cur = conn.execute(
@@ -333,6 +359,10 @@ def queue_action(
     to JSON for storage and decoded back into ``QueuedActionRow.payload``
     on the return.
     """
+    if action_kind not in ACTION_KINDS:
+        raise ValueError(
+            f"unknown action_kind {action_kind!r}; expected one of {sorted(ACTION_KINDS)}"
+        )
     payload_json = json.dumps(dict(payload), default=str)
     conn = _open(db_path)
     try:

@@ -117,15 +117,22 @@ def _map_record(rec: FmpStockNewsRecord, ticker: str) -> NewsRow | None:
             url=rec.url[:120],
         )
         return None
-    return NewsRow(
-        ticker=ticker,
-        headline=rec.title,
-        url=rec.url,
-        published_at=published_at,
-        snippet=rec.text or None,
-        source=rec.site,
-        source_feed=SOURCE_FEED_FMP,
-    )
+    try:
+        return NewsRow(
+            ticker=ticker,
+            headline=rec.title,
+            url=rec.url,
+            published_at=published_at,
+            snippet=rec.text or None,
+            source=rec.site,
+            source_feed=SOURCE_FEED_FMP,
+        )
+    except ValidationError:
+        # A record that clears FmpStockNewsRecord but fails the stricter NewsRow
+        # gate (e.g. empty url/title) is dropped, never fabricated — same
+        # discipline as the unparseable-date path above.
+        _log("fmp_news_row_rejected", ticker=ticker, url=rec.url[:120])
+        return None
 
 
 def _validate_and_map(body: object, ticker: str) -> tuple[list[NewsRow], ValidationError | None]:

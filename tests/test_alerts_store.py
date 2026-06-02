@@ -265,23 +265,20 @@ def test_apply_action_raises_after_cancellation(db_path: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_find_by_signature_returns_most_recent_non_expired(db_path: Path) -> None:
-    """Two alerts with the same signature, both non-expired — the more recent
-    must come back. (Sensors use this for re-fire dedup.)"""
-    older = _fire(
-        db_path,
-        signature="sig-dedup",
-        fired_at=datetime(2026, 1, 1, tzinfo=UTC),
-    )
-    newer = _fire(
-        db_path,
-        signature="sig-dedup",
-        fired_at=datetime(2026, 5, 1, tzinfo=UTC),
-    )
+def test_active_signature_is_unique(db_path: Path) -> None:
+    """At most ONE active (non-expired) alert may exist per signature — the DB
+    enforces it via the alembic 0068 partial unique index, upgrading the
+    sensor-side dedup from an advisory SELECT into a real idempotency guarantee
+    that survives a race between the SELECT and the INSERT. A second active fire
+    with the same signature is rejected outright; ``find_by_signature`` returns
+    the surviving active alert. (A re-fire becomes possible again only once the
+    prior alert expires — see ``test_find_by_signature_skips_expired``.)"""
+    first = _fire(db_path, signature="sig-dedup", fired_at=datetime(2026, 1, 1, tzinfo=UTC))
+    with pytest.raises(sqlite3.IntegrityError):
+        _fire(db_path, signature="sig-dedup", fired_at=datetime(2026, 5, 1, tzinfo=UTC))
     found = store.find_by_signature(signature_sha="sig-dedup", db_path=db_path)
     assert found is not None
-    assert found.id == newer.id
-    assert found.id != older.id
+    assert found.id == first.id
 
 
 def test_find_by_signature_skips_expired(db_path: Path) -> None:
@@ -496,3 +493,25 @@ def test_legacy_aware_rows_normalize_to_naive(db_path: Path) -> None:
     qa = store.list_queued_actions_for_alert(alert_id, db_path=db_path)[0]
     assert qa.created_at.tzinfo is None
     assert qa.created_at == aware.replace(tzinfo=None)
+
+
+# ----------------------------------------------------------------------------
+# Write-path enum validation (clear error before the DB CHECK; pre-0068-safe)
+# ----------------------------------------------------------------------------
+
+
+def test_fire_alert_rejects_unknown_trigger_kind(db_path: Path) -> None:
+    """A trigger_kind outside the canonical four fails loud at the write path —
+    before the INSERT — so the caller gets a clear ValueError rather than an
+    opaque IntegrityError, and the guard holds even on a DB predating 0068."""
+    with pytest.raises(ValueError, match="unknown trigger_kind"):
+        _fire(db_path, trigger_kind="bogus_kind")
+
+
+def test_queue_action_rejects_unknown_action_kind(db_path: Path) -> None:
+    """An action_kind outside the canonical four is rejected before the INSERT."""
+    alert = _fire(db_path, signature="sig-qa-validate")
+    with pytest.raises(ValueError, match="unknown action_kind"):
+        store.queue_action(
+            alert_id=alert.id, action_kind="bogus", payload={"body": "x"}, db_path=db_path
+        )

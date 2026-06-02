@@ -804,6 +804,11 @@ def write_from_yaml(
     written = 0
     skipped = 0
     errors = 0
+    # Correctness guards for the MANUAL path (the --auto path runs these in
+    # _gate_proposal; without them a hand-edited YAML could persist a
+    # wrong-signed threshold — the catastrophic "breaker fires on good news,
+    # stays silent on the break" failure — or a non-fireable KPI name).
+    allowed = allowed_kpi_names(ticker, db_path=db_path)
     for idx, entry in enumerate(proposals_raw):
         where = f"{yaml_path}::proposals[{idx}]"
         if not isinstance(entry, dict):
@@ -837,6 +842,40 @@ def write_from_yaml(
             log.warning({"event": "write_skip_malformed_threshold", "error": str(exc)})
             errors += 1
             continue
+
+        # Polarity gate (HARD): if the deterministic table knows this KPI's
+        # polarity and the YAML's direction disagrees with the adverse
+        # comparator, the threshold is wrong-signed — reject rather than persist
+        # a breaker that fires on improvement and is silent on deterioration.
+        table_polarity = infer_polarity_from_table(kpi_name)
+        if direction is not None and table_polarity is not None:
+            expected = adverse_direction(table_polarity)
+            if direction != expected:
+                log.warning(
+                    {
+                        "event": "write_skip_polarity_conflict",
+                        "where": where,
+                        "kpi_name": kpi_name,
+                        "yaml_direction": direction,
+                        "adverse_direction": expected,
+                        "polarity": table_polarity.value,
+                    }
+                )
+                errors += 1
+                continue
+
+        # Catalog check (SOFT): a name with no >=8-quarter series can't reliably
+        # fire an inflection. Warn but allow — the manual path may intentionally
+        # pre-register a KPI ahead of its data.
+        if kpi_name not in allowed:
+            log.warning(
+                {
+                    "event": "write_kpi_name_off_catalog",
+                    "where": where,
+                    "kpi_name": kpi_name,
+                    "note": "no >=8-quarter series; will not fire until data accrues",
+                }
+            )
 
         is_breaker_raw = e.get("is_thesis_breaker")
         is_breaker = bool(is_breaker_raw) if isinstance(is_breaker_raw, bool) else False
