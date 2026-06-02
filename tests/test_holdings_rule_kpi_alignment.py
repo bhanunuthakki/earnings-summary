@@ -40,6 +40,7 @@ from compute.fmp_derived_kpis import (
     KPI_OCF_YOY_USD,
     KPI_OPERATING_MARGIN_GAAP,
     KPI_REVENUE_YOY_USD,
+    KPI_ROE,
 )
 from compute.kpi_resolver import normalize_kpi_name
 
@@ -66,6 +67,7 @@ _DERIVED_KPI_NAMES = (
     KPI_CAPEX_REVENUE_RATIO,
     KPI_FCF_MARGIN_GAAP,
     KPI_OCF_YOY_USD,
+    KPI_ROE,
 )
 _DERIVED_NORM = {normalize_kpi_name(name) for name in _DERIVED_KPI_NAMES}
 

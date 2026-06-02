@@ -13,6 +13,7 @@ from compute.fmp_derived_kpis import (
     KPI_NET_MARGIN_GAAP,
     KPI_OPERATING_MARGIN_GAAP,
     KPI_REVENUE_YOY_USD,
+    KPI_ROE,
     QuarterlyFacts,
     derive_for_facts,
     derive_for_ticker,
@@ -423,3 +424,57 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
     
     assert by_name_and_pe[("AWS revenue growth (YoY)", datetime(2024, 12, 31))] == Decimal("50")
     assert by_name_and_pe[("AWS Revenue YoY Growth", datetime(2024, 12, 31))] == Decimal("50")
+
+
+_FPT = {1: FiscalPeriodType.Q1, 2: FiscalPeriodType.Q2, 3: FiscalPeriodType.Q3, 4: FiscalPeriodType.Q4}
+_QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+
+def _qf(year: int, qtr: int, net_income: Decimal, equity: Decimal | None) -> QuarterlyFacts:
+    month, day = _QUARTER_END[qtr]
+    return QuarterlyFacts(
+        ticker="MELI",
+        period_end=datetime(year, month, day),
+        fiscal_period_type=_FPT[qtr],
+        revenue=Decimal(100),
+        operating_income=Decimal(10),
+        net_income=net_income,
+        gross_profit=Decimal(40),
+        source_doc_id=1,
+        total_stockholders_equity=equity,
+    )
+
+
+def test_derive_roe_is_ttm_net_income_over_period_end_equity() -> None:
+    facts = [
+        _qf(2025, 1, Decimal(4), Decimal(180)),
+        _qf(2025, 2, Decimal(5), Decimal(190)),
+        _qf(2025, 3, Decimal(6), Decimal(195)),
+        _qf(2025, 4, Decimal(5), Decimal(200)),
+    ]
+    roe_rows = [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
+    # Only the 4th quarter has a full trailing-4Q window. TTM NI = 4+5+6+5 = 20;
+    # period-end equity = 200 -> 10%.
+    assert len(roe_rows) == 1
+    assert roe_rows[0].value == Decimal(10)
+    assert roe_rows[0].unit == Unit.PERCENT
+    assert roe_rows[0].period_end == datetime(2025, 12, 31)
+
+
+def test_derive_roe_skipped_with_fewer_than_four_quarters() -> None:
+    facts = [
+        _qf(2025, 1, Decimal(4), Decimal(180)),
+        _qf(2025, 2, Decimal(5), Decimal(190)),
+        _qf(2025, 3, Decimal(6), Decimal(195)),
+    ]
+    assert not [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
+
+
+def test_derive_roe_skipped_when_period_end_equity_missing() -> None:
+    facts = [
+        _qf(2025, 1, Decimal(4), Decimal(180)),
+        _qf(2025, 2, Decimal(5), Decimal(190)),
+        _qf(2025, 3, Decimal(6), Decimal(195)),
+        _qf(2025, 4, Decimal(5), None),
+    ]
+    assert not [r for r in derive_for_facts(facts) if r.name == KPI_ROE]
