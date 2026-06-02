@@ -54,6 +54,10 @@ def test_render_shell_structure() -> None:
     # Overview is inlined verbatim and marked loaded.
     assert "OVERVIEW" in html
     assert 'data-panel="overview" data-loaded="1"' in html
+    # Topbar links to the live Personal-CIO alerting surfaces (digest + feed),
+    # so they are reachable from the app rather than static-file-only.
+    assert 'href="/digest"' in html
+    assert 'href="/feed"' in html
 
 
 def test_render_shell_lazy_endpoints_and_pickers() -> None:
