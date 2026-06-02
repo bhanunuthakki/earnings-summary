@@ -20,25 +20,41 @@ JS = r"""
     var TICKER = boot.ticker;
     var REPORT_DATE = boot.report_date;
 
-    // Drawer shell is emitted statically by the Python template — see
-    // _chat_drawer_shell in workspace_html.py. Keeps the body's flex
-    // layout (.l1-root | .cmt-sidebar) explicit in markup.
-    var drawer = document.getElementById('chat-drawer');
-    if (!drawer) return;
-    var toggle = drawer.querySelector('.chat-toggle');
-    var panel = drawer.querySelector('.chat-panel');
-    var threadEl = drawer.querySelector('#chat-thread');
-    var form = drawer.querySelector('#chat-form');
-    var hintEl = drawer.querySelector('#chat-hint');
+    // The chat panel is now a push-sidebar (flex sibling of .l1-root),
+    // mirroring the comments sidebar — see _chat_drawer_shell +
+    // _comment_sidebar_shell in workspace_html.py. The floating
+    // .chat-drawer keeps only the launcher toggle; the panel content
+    // lives in .chat-sidebar and slides the document aside when open.
+    var sidebar = document.getElementById('chat-sidebar');
+    var toggle = document.getElementById('chat-toggle');
+    if (!sidebar || !toggle) return;
+    var threadEl = document.getElementById('chat-thread');
+    var form = document.getElementById('chat-form');
+    var hintEl = document.getElementById('chat-hint');
+    // Kept in sync with `.chat-sidebar.open { width }` in the CSS so the
+    // floating toggle (positioned via --sidebar-open-width) rides the
+    // sidebar's left edge.
+    var CHAT_WIDTH = '460px';
 
     function setOpen(open) {
-      panel.setAttribute('aria-hidden', open ? 'false' : 'true');
-      panel.classList.toggle('open', open);
+      // One-open-at-a-time: opening chat collapses the comments sidebar.
+      if (open && window.__closeCommentSidebar) window.__closeCommentSidebar();
+      sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
+      sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
-      if (open) form.message.focus();
+      if (open) {
+        document.documentElement.style.setProperty('--sidebar-open-width', CHAT_WIDTH);
+        form.message.focus();
+      } else {
+        document.documentElement.style.removeProperty('--sidebar-open-width');
+      }
     }
-    toggle.addEventListener('click', function() { setOpen(panel.getAttribute('aria-hidden') === 'true'); });
-    drawer.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
+    // Let the comments module collapse chat when a comment is opened.
+    window.__closeChatSidebar = function() { setOpen(false); };
+
+    toggle.addEventListener('click', function() { setOpen(sidebar.getAttribute('aria-hidden') === 'true'); });
+    sidebar.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
+    document.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') setOpen(false); });
 
     // Cmd+Enter / Ctrl+Enter submits
     form.message.addEventListener('keydown', function(ev) {
@@ -215,19 +231,27 @@ CSS = r"""
 }
 .chat-toggle.open { background: var(--ink-muted); }
 .chat-toggle-icon { font-family: var(--font-mono); }
-.chat-panel {
-  position: fixed;
-  right: calc(var(--sidebar-open-width, 0px) + 16px);
-  bottom: 70px;
-  width: 480px; max-width: calc(100vw - 32px);
-  height: 600px; max-height: calc(100vh - 100px);
+/* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat
+   slides the document aside instead of floating over it. The floating
+   .chat-drawer above keeps only the launcher toggle. Width matches
+   CHAT_WIDTH in the JS so the toggle rides the sidebar's left edge. */
+.chat-sidebar {
+  flex-shrink: 0;
+  width: 0;
+  height: 100vh;
+  overflow: hidden;
   background: var(--bg-elev, var(--panel));
-  border: 1px solid var(--hairline);
-  border-radius: 8px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
-  display: none; flex-direction: column;
-  transition: right 0.2s ease;
+  border-left: 0 solid var(--hairline);
+  transition: width 0.2s ease, border-left-width 0s 0.2s;
+  display: flex; flex-direction: column;
+  position: sticky; top: 0;
 }
-.chat-panel.open { display: flex; }
+.chat-sidebar.open {
+  width: 460px;
+  border-left-width: 1px;
+  transition: width 0.2s ease, border-left-width 0s;
+  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+}
 .chat-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--hairline);

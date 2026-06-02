@@ -3803,20 +3803,18 @@ def _comment_sidebar_shell(body: StringIO) -> None:
 
 
 def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
-    """Static chat drawer shell — position:fixed, not in flex flow.
+    """Chat shell — a push-sidebar (`.chat-sidebar`) plus a fixed launcher
+    (`.chat-drawer`).
 
-    Same template-time-vs-runtime rationale as `_comment_sidebar_shell`:
-    keeping the markup static avoids ordering surprises with the
-    sidebar's flex layout. The chat JS wires the toggle/close buttons
-    and streams from `comments_server.py`.
+    The panel is a flex sibling of `.l1-root`, mirroring
+    `_comment_sidebar_shell`: opening it slides the document aside rather
+    than floating an overlay. The chat JS toggles `.open`, sets
+    `--sidebar-open-width`, and enforces one-open-at-a-time with the
+    comments sidebar. The launcher pill stays `position: fixed` and rides
+    the open sidebar's left edge.
     """
     body.write(
-        '<aside class="chat-drawer" id="chat-drawer">'
-        '<button class="chat-toggle" type="button" aria-label="Open chat">'
-        '<span class="chat-toggle-icon">&#8984;</span>'
-        '<span class="chat-toggle-label">Chat</span>'
-        "</button>"
-        '<div class="chat-panel" aria-hidden="true">'
+        '<aside class="chat-sidebar" id="chat-sidebar" aria-hidden="true">'
         '<header class="chat-head">'
         "<div>"
         f'<div class="chat-title">Ask Claude about {_esc(ticker)}</div>'
@@ -3835,7 +3833,12 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         '<button type="submit">Send</button>'
         "</div>"
         "</form>"
-        "</div>"
+        "</aside>"
+        '<aside class="chat-drawer" id="chat-drawer">'
+        '<button class="chat-toggle" id="chat-toggle" type="button" aria-label="Open chat">'
+        '<span class="chat-toggle-icon">&#8984;</span>'
+        '<span class="chat-toggle-label">Chat</span>'
+        "</button>"
         "</aside>"
     )
 

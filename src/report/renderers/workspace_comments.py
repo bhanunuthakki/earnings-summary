@@ -94,6 +94,8 @@ JS = r"""
   // marks supply their own free-text label.
   function openWithAnchor(anchor, label) {
     if (!sidebar) return;
+    // One-open-at-a-time: opening a comment collapses the chat sidebar.
+    if (window.__closeChatSidebar) window.__closeChatSidebar();
     currentAnchor = anchor;
     sidebar.setAttribute('aria-hidden', 'false');
     sidebar.classList.add('open');
@@ -114,6 +116,8 @@ JS = r"""
     document.documentElement.style.removeProperty('--sidebar-open-width');
     currentAnchor = null;
   }
+  // Let the chat module collapse this sidebar when chat opens.
+  window.__closeCommentSidebar = closeSidebar;
 
   function humanAnchor(a) {
     return (a.type.replace(/_/g, ' ') + ' · ' + a.key).substring(0, 80);
@@ -260,7 +264,8 @@ JS = r"""
       if (node.classList) {
         if (node.classList.contains('cmt-sidebar') ||
             node.classList.contains('cmt-floater') ||
-            node.classList.contains('chat-drawer')) return hideFloater();
+            node.classList.contains('chat-drawer') ||
+            node.classList.contains('chat-sidebar')) return hideFloater();
       }
       node = node.parentNode;
     }
