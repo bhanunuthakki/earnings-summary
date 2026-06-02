@@ -1,5 +1,13 @@
 industry: bank
 display_name: "Bank / Lender"
+# Section-relevance map (see src/industry_classifier.py). A bank's P&L is net
+# interest + fee income on a diversified loan/deposit book: the operating-lease
+# ladder (branch leases are immaterial; a neobank has none) and the named
+# customer-concentration panel ("customer >= 5% of revenue") render empty, so
+# omit them rather than show empty stubs.
+suppress_sections:
+  - lease_ladder
+  - customer_concentration
 canonical_kpis:
   - name: "Net Interest Margin"
     aliases: ["NIM", "Net Interest Margin (annualized)"]

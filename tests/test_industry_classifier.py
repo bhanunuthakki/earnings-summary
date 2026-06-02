@@ -21,6 +21,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from industry_classifier import (  # noqa: E402
+    SECTION_CUSTOMER_CONCENTRATION,
+    SECTION_LEASE_LADDER,
+    SECTION_STRATEGIC_TARGETS,
+    SUPPRESSIBLE_SECTIONS,
     CanonicalKPI,
     IndustryTemplate,
     _apply_rules,
@@ -28,6 +32,7 @@ from industry_classifier import (  # noqa: E402
     available_industries,
     classify_ticker,
     load_template,
+    suppressed_sections_for_ticker,
 )
 
 # ---------------------------------------------------------------------------
@@ -249,6 +254,84 @@ def test_to_tier_1_kpis_shape() -> None:
         assert row["status"] == "Unknown"
         assert "break_condition" in row
         assert "source" in row
+
+
+# ---------------------------------------------------------------------------
+# Section-relevance map (suppress_sections)
+# ---------------------------------------------------------------------------
+
+
+def test_suppressible_sections_vocabulary() -> None:
+    # The three Company-tab P3 panels are the gateable vocabulary.
+    assert SECTION_LEASE_LADDER in SUPPRESSIBLE_SECTIONS
+    assert SECTION_CUSTOMER_CONCENTRATION in SUPPRESSIBLE_SECTIONS
+    assert SECTION_STRATEGIC_TARGETS in SUPPRESSIBLE_SECTIONS
+    assert len(SUPPRESSIBLE_SECTIONS) == 3
+
+
+@pytest.mark.parametrize(
+    "slug",
+    ["software_saas", "bank", "pharma", "commodity_royalty", "hyperscaler"],
+)
+def test_template_suppress_sections_only_use_known_keys(slug: str) -> None:
+    """Every key a shipped template lists must be in the renderer's vocabulary,
+    so a typo in a YAML can't silently fail to suppress a panel."""
+    t = load_template(slug, PROJECT_ROOT)
+    assert isinstance(t.suppress_sections, list)
+    for key in t.suppress_sections:
+        assert key in SUPPRESSIBLE_SECTIONS, f"{slug}: unknown suppress key {key!r}"
+
+
+def test_bank_template_suppresses_lease_and_concentration() -> None:
+    t = load_template("bank", PROJECT_ROOT)
+    assert SECTION_LEASE_LADDER in t.suppress_sections
+    assert SECTION_CUSTOMER_CONCENTRATION in t.suppress_sections
+    # Strategic targets stay -- banks set long-term ROTCE/efficiency targets.
+    assert SECTION_STRATEGIC_TARGETS not in t.suppress_sections
+
+
+def test_hyperscaler_and_pharma_suppress_nothing() -> None:
+    assert load_template("hyperscaler", PROJECT_ROOT).suppress_sections == []
+    assert load_template("pharma", PROJECT_ROOT).suppress_sections == []
+
+
+def test_software_and_royalty_suppress_lease_only() -> None:
+    for slug in ("software_saas", "commodity_royalty"):
+        t = load_template(slug, PROJECT_ROOT)
+        assert t.suppress_sections == [SECTION_LEASE_LADDER]
+
+
+# Declared type so the empty `frozenset()` rows infer `frozenset[str]` (not
+# `frozenset[Unknown]`) under pyright strict.
+_SUPPRESS_GOLDEN: list[tuple[str, frozenset[str]]] = [
+    # bank -> hide lease ladder + customer concentration (NU report comment #15)
+    ("NU", frozenset({SECTION_LEASE_LADDER, SECTION_CUSTOMER_CONCENTRATION})),
+    # hyperscaler -> keep everything (data-center leases are material)
+    ("AMZN", frozenset()),
+    ("GOOGL", frozenset()),
+    # software_saas + royalty -> hide just the lease ladder
+    ("CRWD", frozenset({SECTION_LEASE_LADDER})),
+    ("WPM", frozenset({SECTION_LEASE_LADDER})),
+    # pharma -> keep everything
+    ("NVO", frozenset()),
+    # unclassified -> DEFAULT TO SHOW (empty set so the panel isn't blanked)
+    ("COST", frozenset()),
+    ("UNKNOWN_TICKER", frozenset()),
+]
+
+
+@pytest.mark.parametrize(("ticker", "expected"), _SUPPRESS_GOLDEN)
+def test_suppressed_sections_for_ticker_golden(ticker: str, expected: frozenset[str]) -> None:
+    assert suppressed_sections_for_ticker(ticker, PROJECT_ROOT) == expected
+
+
+def test_suppressed_sections_returns_frozenset() -> None:
+    assert isinstance(suppressed_sections_for_ticker("NU", PROJECT_ROOT), frozenset)
+
+
+def test_suppressed_sections_unclassified_default_show(tmp_path: Path) -> None:
+    # No DB, no seed match -> classify returns None -> show everything.
+    assert suppressed_sections_for_ticker("ZZZZ", tmp_path) == frozenset()
 
 
 # ---------------------------------------------------------------------------

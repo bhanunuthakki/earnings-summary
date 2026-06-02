@@ -23,6 +23,11 @@ from io import StringIO
 from pathlib import Path
 from typing import TypeAlias
 
+from industry_classifier import (
+    SECTION_CUSTOMER_CONCENTRATION,
+    SECTION_LEASE_LADDER,
+    SECTION_STRATEGIC_TARGETS,
+)
 from llm.calibration import (
     VersionSummary,
     daily_avg_scores,
@@ -467,6 +472,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
                 p3.strategic_targets,
                 p3.customer_concentrations,
                 p3.lease_ladder,
+                suppressed_sections=frozenset(spec.suppressed_sections),
             ),
         ),
         (
@@ -2677,6 +2683,7 @@ def _company_tab(
     strategic_targets: list[StrategicTargetRow] | None = None,
     customer_concentrations: list[CustomerConcentrationRow] | None = None,
     lease_ladder: list[LeaseLadderRow] | None = None,
+    suppressed_sections: frozenset[str] | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -2720,11 +2727,19 @@ def _company_tab(
         _segment_breakdown_panel(body, "Geographic breakdown", cd.geographic_breakdown)
 
     # P3 panels (strategic targets / customer concentrations / lease ladder)
-    # always render — empty state when no rows so the analyst sees the slot
-    # rather than wondering whether the extractor ran.
-    _strategic_targets_panel(body, strategic_targets or [])
-    _customer_concentration_panel(body, customer_concentrations or [])
-    _lease_ladder_panel(body, lease_ladder or [])
+    # render an empty-state when no rows so the analyst sees the slot rather
+    # than wondering whether the extractor ran -- UNLESS the panel is
+    # structurally irrelevant to this company's business model (e.g. a bank has
+    # no operating-lease ladder), in which case the builder lists its key in
+    # `suppressed_sections` and we omit it entirely instead of showing an empty
+    # stub. See industry_classifier.suppressed_sections_for_ticker.
+    suppressed: frozenset[str] = suppressed_sections or frozenset()
+    if SECTION_STRATEGIC_TARGETS not in suppressed:
+        _strategic_targets_panel(body, strategic_targets or [])
+    if SECTION_CUSTOMER_CONCENTRATION not in suppressed:
+        _customer_concentration_panel(body, customer_concentrations or [])
+    if SECTION_LEASE_LADDER not in suppressed:
+        _lease_ladder_panel(body, lease_ladder or [])
 
     if ir.cards:
         # Quarter-toggle, mirroring the earnings tab: show one quarter at a

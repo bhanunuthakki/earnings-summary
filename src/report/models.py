@@ -1127,6 +1127,13 @@ class ReportSpec(BaseModel):
     # (on_exceed='skip'). Drives the brief's "forgone due to budget" header
     # rollup + the dashboard indicator. Empty when nothing was budget-skipped.
     forgone_due_to_budget: list[BudgetSkip] = Field(default_factory=list)
+    # Workspace section keys to OMIT for this ticker's business model (e.g. a
+    # bank hides the operating-lease ladder + customer-concentration panels).
+    # Computed once in the builder via
+    # industry_classifier.suppressed_sections_for_ticker(); empty = show
+    # everything (the default for unclassified tickers). The workspace renderer
+    # gates the Company-tab P3 panels on this set.
+    suppressed_sections: list[str] = Field(default_factory=list)
 
     portfolio_position: PortfolioPositionSection | None = None
     valuation_basis: ValuationBasisSection | None = None

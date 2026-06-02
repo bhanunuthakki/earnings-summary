@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from industry_classifier import suppressed_sections_for_ticker
 from report.models import BudgetSkip, ReportFlavor, ReportSpec
 from report.sections import (
     appendix,
@@ -142,6 +143,11 @@ def build_report(
         )
         if isinstance(skip, BudgetSkip)
     ]
+    # Section-relevance map: which workspace panels are structurally irrelevant
+    # to this ticker's business model (e.g. a bank has no operating-lease ladder
+    # worth a panel). Empty for unclassified tickers, so the renderer shows
+    # everything by default. Deterministic (no LLM / network).
+    suppressed_sections = sorted(suppressed_sections_for_ticker(ticker, repo_root))
     return ReportSpec(
         ticker=ticker,
         generation_date=date.today(),
@@ -149,6 +155,7 @@ def build_report(
         flavor=flavor,
         llm_enabled=enable_llm,
         forgone_due_to_budget=forgone_due_to_budget,
+        suppressed_sections=suppressed_sections,
         portfolio_position=portfolio_position_section,
         valuation_basis=valuation_section,
         snapshot=snapshot_section,

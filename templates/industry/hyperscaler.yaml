@@ -1,5 +1,10 @@
 industry: hyperscaler
 display_name: "Hyperscaler / Cloud Platform"
+# Section-relevance map (see src/industry_classifier.py). All workspace panels
+# are model-relevant here: data-center + fulfillment leases make the operating-
+# lease ladder material, and the customer-concentration + strategic-target
+# panels apply. Nothing to suppress.
+suppress_sections: []
 canonical_kpis:
   - name: "Cloud Revenue Growth"
     aliases: ["Cloud YoY Growth", "AWS Growth", "Azure Growth", "GCP Growth", "Cloud Revenue YoY"]
