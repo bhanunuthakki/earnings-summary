@@ -21,7 +21,7 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # The exact stored shape of `published_at` (and `fetched_at`): UTC, naive, fixed
 # width, space separator. The trigger compares ``published_at >= ?`` LEXICALLY
@@ -48,9 +48,13 @@ class NewsRow(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ticker: str
-    headline: str
-    url: str
+    # min_length=1 on the identity + dedup-key fields: an empty ticker or url
+    # silently degrades the (ticker, url) uniqueness key, and an empty headline
+    # makes a material-news alert meaningless. Reject the row at the gate rather
+    # than persisting a story with no source link (regrade memo gap #5).
+    ticker: str = Field(min_length=1)
+    headline: str = Field(min_length=1)
+    url: str = Field(min_length=1)
     published_at: str  # UTC 'YYYY-MM-DD HH:MM:SS' — enforced below
     snippet: str | None = None
     source: str | None = None

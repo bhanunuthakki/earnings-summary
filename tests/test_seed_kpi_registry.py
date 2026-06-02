@@ -146,9 +146,7 @@ def _seed_portfolio(db_path: Path, tickers: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_holdings_json(
-    repo_root: Path, ticker: str, *, thesis: str = "Thesis text."
-) -> Path:
+def _write_holdings_json(repo_root: Path, ticker: str, *, thesis: str = "Thesis text.") -> Path:
     """Write a minimal holdings JSON so load_thesis_anchor returns non-empty."""
     holdings_dir = repo_root / "micro_thesis" / "holdings"
     holdings_dir.mkdir(parents=True, exist_ok=True)
@@ -156,9 +154,7 @@ def _write_holdings_json(
     payload: dict[str, object] = {
         "thesis": thesis,
         "key_driver": "Customer growth and ARPAC trajectory",
-        "tier_1_kpis": [
-            {"name": "Total customers (millions)", "break_condition": "<100M"}
-        ],
+        "tier_1_kpis": [{"name": "Total customers (millions)", "break_condition": "<100M"}],
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -194,9 +190,7 @@ def _write_10k_json(
             },
         ],
         # Financial statement that should be FILTERED OUT
-        "CONSOLIDATED BALANCE SHEETS": [
-            {"Assets": ["Cash 1234", "Receivables 5678"]}
-        ],
+        "CONSOLIDATED BALANCE SHEETS": [{"Assets": ["Cash 1234", "Receivables 5678"]}],
     }
     if extra_sections:
         payload.update(extra_sections)
@@ -282,18 +276,14 @@ def _canned_response(
                 "threshold_direction": "below",
                 "threshold_value": 100.0,
                 "is_thesis_breaker": True,
-                "rationale": (
-                    "Thesis anchor names <100M as the customer-floor break."
-                ),
+                "rationale": ("Thesis anchor names <100M as the customer-floor break."),
             },
             {
                 "kpi_name": "ROE (annualized, consolidated)",
                 "threshold_direction": None,
                 "threshold_value": None,
                 "is_thesis_breaker": False,
-                "rationale": (
-                    "Informational — track ROE but no specific break level."
-                ),
+                "rationale": ("Informational — track ROE but no specific break level."),
             },
         ]
     return json.dumps(proposals)
@@ -338,9 +328,7 @@ def test_propose_happy_path_writes_yaml_with_three_entries(
     assert out.exists()
     assert mock.call_count == 1
 
-    parsed = cast(
-        "dict[str, object]", yaml.safe_load(out.read_text(encoding="utf-8"))
-    )
+    parsed = cast("dict[str, object]", yaml.safe_load(out.read_text(encoding="utf-8")))
     assert parsed["ticker"] == "NU"
     assert isinstance(parsed["proposals"], list)
     proposals = cast("list[dict[str, object]]", parsed["proposals"])
@@ -522,9 +510,7 @@ def _write_test_yaml(
     )
 
 
-def test_write_happy_path_persists_accepted_skips_rejected(
-    db_path: Path, tmp_path: Path
-) -> None:
+def test_write_happy_path_persists_accepted_skips_rejected(db_path: Path, tmp_path: Path) -> None:
     """2 accepted + 1 rejected → 2 rows written, 1 skipped."""
     yaml_path = tmp_path / "proposals" / "NU.yaml"
     _write_test_yaml(
@@ -581,6 +567,39 @@ def test_write_happy_path_persists_accepted_skips_rejected(
     assert nim_row.threshold_value == 17.0
     assert nim_row.scaffold_source == "llm_proposal"
     assert nim_row.notes == "NIM compression risk per Risk Factors."
+
+
+def test_write_rejects_wrong_signed_threshold(db_path: Path, tmp_path: Path) -> None:
+    """The MANUAL --write path must not persist a wrong-signed threshold. NIM is
+    higher-is-better, so its adverse comparator is 'below'; a hand-edited YAML
+    claiming 'above' is a backwards breaker — it would fire on improvement and
+    stay silent on the actual break. The polarity guard the --auto path runs in
+    _gate_proposal now also gates --write, so the row is rejected, not persisted
+    (regrade memo gap #2). A KPI the polarity table does not know is left to the
+    YAML (no false rejects)."""
+    yaml_path = tmp_path / "proposals" / "NU.yaml"
+    _write_test_yaml(
+        yaml_path,
+        ticker="NU",
+        entries=[
+            {
+                "kpi_name": "Net Interest Margin",
+                "threshold_direction": "above",  # WRONG: adverse for NIM is 'below'
+                "threshold_value": 17.0,
+                "is_thesis_breaker": True,
+                "rationale": "hand-edited with the sign backwards",
+                "status": "accepted",
+                "notes": "",
+            },
+        ],
+    )
+
+    summary = write_from_yaml(yaml_path, db_path=db_path)
+
+    assert summary.accepted == 1
+    assert summary.written == 0
+    assert summary.errors == 1
+    assert registry.list_kpis(ticker="NU", db_path=db_path) == []
 
 
 def test_write_dry_run_does_not_persist(db_path: Path, tmp_path: Path) -> None:
@@ -666,9 +685,7 @@ def test_yaml_round_trip_propose_then_mark_accepted_then_write(
     )
 
     # Simulate the user editing the YAML: accept 2 of 3
-    parsed = cast(
-        "dict[str, object]", yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
-    )
+    parsed = cast("dict[str, object]", yaml.safe_load(yaml_path.read_text(encoding="utf-8")))
     proposals = cast("list[dict[str, object]]", parsed["proposals"])
     for p in proposals:
         if p["kpi_name"] in (

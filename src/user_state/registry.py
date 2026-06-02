@@ -65,6 +65,10 @@ def upsert_kpi(
     non-key column is overwritten with the new value and ``updated_at`` is
     bumped to now; ``created_at`` from the original row is preserved.
     """
+    if threshold_direction is not None and threshold_direction not in ("above", "below"):
+        raise ValueError(
+            f"threshold_direction must be 'above', 'below', or None; got {threshold_direction!r}"
+        )
     conn = open_conn(db_path)
     try:
         now = now_iso()

@@ -217,3 +217,14 @@ def test_upsert_persists_all_columns_and_stamps_fetched_at(news_db: Path) -> Non
         assert len(row[7]) == 19
     finally:
         conn.close()
+
+
+def test_newsrow_rejects_empty_identity_fields() -> None:
+    """The gate rejects an empty ticker / url / headline. An empty url or ticker
+    silently degrades the (ticker, url) dedup key, and an empty headline makes a
+    material-news alert meaningless — so the row is refused at construction
+    rather than persisted with no source link (regrade memo gap #5)."""
+    _row()  # baseline: the valid shape constructs fine
+    for field in ("ticker", "url", "headline"):
+        with pytest.raises(ValidationError):
+            _row(**{field: ""})
