@@ -42,6 +42,7 @@ refactor — zero behavior change).
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -196,7 +197,7 @@ def _model_for(purpose: str) -> str:
 
 # Default per-call timeout (seconds). Long-context thesis prompts can take
 # a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
-# leaves headroom for the heaviest cases (4-quarter ticker × dense schema)
+# leaves headroom for the heaviest cases (4-quarter ticker x dense schema)
 # while still catching CLI hangs in a reasonable wall time.
 DEFAULT_TIMEOUT_SECONDS = 1200
 
@@ -207,6 +208,15 @@ DEFAULT_TIMEOUT_SECONDS = 1200
 # instead of leaning on a stale FMP news pre-pull.
 CLAUDE_WEB_TOOLS = "WebSearch WebFetch"
 CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
+
+# HARD per-call cost ceiling for a web-enabled call, enforced by the CLI's
+# --max-budget-usd flag (terminates the call once API spend hits it). The prompt
+# tells the model "AT MOST 2 web_search queries" etc., but that is advisory —
+# nothing stopped a model that ignored it from issuing unbounded searches/fetches
+# on the most expensive LLM path (the regrade memo's "soft caps" gap). A
+# well-behaved call (≤2 searches + a few fetches) costs a few cents even on Opus,
+# so $2 only bites a genuinely runaway call. Overridable via env for tuning.
+CLAUDE_WEB_MAX_BUDGET_USD = float(os.environ.get("CLAUDE_WEB_MAX_BUDGET_USD", "2.0"))
 
 
 class LLMBudgetExceeded(RuntimeError):
@@ -609,6 +619,11 @@ def call_llm_with_web(
         "json",
         "--allowedTools",
         *CLAUDE_WEB_TOOLS.split(),
+        # Hard cost ceiling so the web path (the only agentic, multi-tool call)
+        # cannot run away on cost if the model ignores the prompt's advisory
+        # "AT MOST 2 searches" budget. Degrades like any other web-call failure.
+        "--max-budget-usd",
+        str(CLAUDE_WEB_MAX_BUDGET_USD),
     ]
     try:
         result = subprocess.run(

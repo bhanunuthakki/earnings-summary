@@ -44,7 +44,12 @@ from pathlib import Path
 from typing import ClassVar
 
 from alerts.store import compute_signature_sha
-from llm.anchors import load_thesis_anchor
+from llm.anchors import (
+    compose_anchor_block,
+    load_bear_anchor,
+    load_ir_anchor,
+    load_thesis_anchor,
+)
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -171,9 +176,7 @@ def _load_registered_kpis(ticker: str, db_path: Path) -> list[UserKpiRegistryRow
         return []
 
 
-def _load_kpi_unit(
-    conn: sqlite3.Connection, ticker: str, kpi_name: str
-) -> str | None:
+def _load_kpi_unit(conn: sqlite3.Connection, ticker: str, kpi_name: str) -> str | None:
     """Display unit for the KPI's most-recent fact, or None.
 
     ``load_kpi_series`` intentionally returns only (period_end, value); the
@@ -285,10 +288,7 @@ def _is_thesis_breaker_cross(evidence: Mapping[str, object]) -> bool:
     flagged KPI that inflects without breaching its registered level reads
     as a routine inflection, not a thesis-breaker event.
     """
-    return (
-        evidence.get("is_thesis_breaker") is True
-        and evidence.get("threshold_crossed") is True
-    )
+    return evidence.get("is_thesis_breaker") is True and evidence.get("threshold_crossed") is True
 
 
 def _factual_memo(ticker: str, evidence: dict[str, object]) -> str:
@@ -346,10 +346,7 @@ def _escalated_memo(ticker: str, evidence: dict[str, object]) -> str:
     td = evidence.get("registered_threshold_direction")
     tv = evidence.get("registered_threshold_value")
     if isinstance(td, str) and isinstance(tv, (int, float)) and not isinstance(tv, bool):
-        memo += (
-            f", crossing the '{td} {float(tv):g}' level you registered "
-            "as thesis-breaking"
-        )
+        memo += f", crossing the '{td} {float(tv):g}' level you registered as thesis-breaking"
     memo += f". Reconsider your thesis on {ticker}."
     return memo
 
@@ -446,9 +443,7 @@ class KpiInflectionTrigger:
     kind: ClassVar[str] = "kpi_inflection"
     cadence: ClassVar[Cadence] = Cadence.DAILY
 
-    def scan(
-        self, ticker: str, db: sqlite3.Connection
-    ) -> list[TriggerCandidate]:
+    def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
         """Emit one candidate per registered KPI whose series just inflected.
 
         Loads the user's registered KPIs, then for each loads the recent
@@ -470,9 +465,7 @@ class KpiInflectionTrigger:
         now = datetime.now(UTC).replace(tzinfo=None)
         candidates: list[TriggerCandidate] = []
         for reg in registered:
-            series = load_kpi_series(
-                ticker=ticker, kpi_name=reg.kpi_name, db_path=db_path
-            )
+            series = load_kpi_series(ticker=ticker, kpi_name=reg.kpi_name, db_path=db_path)
             if len(series) > _LOOKBACK_QUARTERS:
                 series = series[-_LOOKBACK_QUARTERS:]
             candidate = self._candidate_from_series(
@@ -586,9 +579,7 @@ class KpiInflectionTrigger:
         ):
             return False
 
-        direction, threshold = _registered_threshold(
-            user_state.registered_kpis, kpi_name
-        )
+        direction, threshold = _registered_threshold(user_state.registered_kpis, kpi_name)
         if direction is not None and threshold is not None:
             return _crosses_threshold(direction, threshold, float(curr_value))
 
@@ -597,9 +588,7 @@ class KpiInflectionTrigger:
             return abs(float(z)) >= _SIGNIFICANT_ZSCORE
         return False
 
-    def signature_key_evidence(
-        self, candidate: TriggerCandidate
-    ) -> Mapping[str, object]:
+    def signature_key_evidence(self, candidate: TriggerCandidate) -> Mapping[str, object]:
         """Key the dedup hash on (kpi_name, period_end): a given quarter's
         inflection fires once, but next quarter's fires fresh. Must match the
         key_evidence ``build_alert`` feeds compute_signature_sha so the
@@ -630,9 +619,7 @@ class KpiInflectionTrigger:
 
         breaker_cross = _is_thesis_breaker_cross(evidence)
         base_memo = (
-            _escalated_memo(ticker, evidence)
-            if breaker_cross
-            else _factual_memo(ticker, evidence)
+            _escalated_memo(ticker, evidence) if breaker_cross else _factual_memo(ticker, evidence)
         )
         llm_context = self._maybe_llm_context(
             ticker=ticker, evidence=evidence, factual_core=base_memo
@@ -642,9 +629,7 @@ class KpiInflectionTrigger:
         evidence_obj = dict(evidence)
         evidence_obj["llm_context_available"] = llm_context is not None
         evidence_obj["is_thesis_breaker_cross"] = breaker_cross
-        evidence_json = json.dumps(
-            evidence_obj, sort_keys=True, ensure_ascii=False, default=str
-        )
+        evidence_json = json.dumps(evidence_obj, sort_keys=True, ensure_ascii=False, default=str)
         signature_sha = compute_signature_sha(
             self.kind, ticker, self.signature_key_evidence(candidate)
         )
@@ -704,8 +689,7 @@ class KpiInflectionTrigger:
                 _reconsider_thesis_body(evidence, memo_text)
                 if breaker_cross
                 else (
-                    f"{kpi_name} crossed your "
-                    f"{_threshold_label(evidence)} threshold: {memo_text}"
+                    f"{kpi_name} crossed your {_threshold_label(evidence)} threshold: {memo_text}"
                 )
             )
             actions.append(
@@ -756,7 +740,15 @@ class KpiInflectionTrigger:
         db_path = _db_path()
 
         try:
-            anchor_block = load_thesis_anchor(repo_root, ticker)
+            # Compose the full 3-block anchor (thesis + bear + IR) so the
+            # "why it matters" line can read an inflection against the bear case
+            # and management's IR framing, not the thesis alone; empty blocks are
+            # omitted by compose_anchor_block.
+            anchor_block = compose_anchor_block(
+                load_thesis_anchor(repo_root, ticker),
+                load_bear_anchor(repo_root, ticker),
+                load_ir_anchor(repo_root, ticker),
+            )
         except Exception as exc:  # anchor is optional; never block the memo
             log.debug(
                 {
@@ -817,9 +809,7 @@ class KpiInflectionTrigger:
             fiscal_period=kpi_name,
             db_path=db_path,
         )
-        new_sha = compute_input_sha256(
-            prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs
-        )
+        new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
         if (
             existing is not None
             and not existing.dirty

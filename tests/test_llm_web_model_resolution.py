@@ -128,3 +128,16 @@ def test_web_no_purpose_no_model_defaults_to_sonnet(
     cmd = capture_web_cmd["cmd"]
     assert cmd is not None
     assert _model_arg(cmd) == cli.DEFAULT_MODEL
+
+
+def test_web_call_carries_hard_cost_cap(capture_web_cmd: dict[str, Any]) -> None:
+    """The web path — the only agentic, multi-tool call — carries a HARD
+    --max-budget-usd ceiling, so a model that ignores the prompt's advisory
+    'AT MOST 2 web_search queries' budget still cannot run away on cost
+    (the regrade memo's soft-caps gap). The CLI terminates the call at the cap."""
+    cli.call_llm_with_web("prompt", purpose="news_structuring", force_budget_bypass=True)
+    cmd = capture_web_cmd["cmd"]
+    assert cmd is not None
+    assert "--max-budget-usd" in cmd
+    value = float(cmd[cmd.index("--max-budget-usd") + 1])
+    assert value > 0

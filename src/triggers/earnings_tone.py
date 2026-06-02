@@ -49,7 +49,12 @@ from typing import ClassVar, cast
 import jinja2
 
 from alerts.store import compute_signature_sha
-from llm.anchors import load_thesis_anchor
+from llm.anchors import (
+    compose_anchor_block,
+    load_bear_anchor,
+    load_ir_anchor,
+    load_thesis_anchor,
+)
 from llm.style import NUMBER_FORMATTING_BLOCK
 from llm_artifact_store import (
     UpsertRequest,
@@ -113,9 +118,7 @@ _DIRECTIONS_WARRANTING_THESIS_UPDATE: frozenset[str] = frozenset(
 # *adverse* tonal moves (softer guidance, a topic management dropped)
 # qualify as bear-case ammunition; a firmer / new positive topic is
 # upside, not downside.
-_DIRECTIONS_WARRANTING_BEAR_APPEND: frozenset[str] = frozenset(
-    {"softer", "dropped_topic"}
-)
+_DIRECTIONS_WARRANTING_BEAR_APPEND: frozenset[str] = frozenset({"softer", "dropped_topic"})
 
 # Confidence floor for promoting a shift to ``thesis_update``. Below
 # this, the shift is recorded only as ``earnings_prep_append`` so the
@@ -173,18 +176,14 @@ def _format_threshold(threshold: datetime) -> str:
 # (prepared_remarks, qa) text. Mirrors the regex patterns in
 # ``report/sections/earnings.py`` so the trigger's split agrees with the
 # section renderer's view of the same transcript.
-_CALLSTREET_QA_HEADER = re.compile(
-    r"\n\s*QUESTION\s+AND\s+ANSWER\s+SECTION\b", re.IGNORECASE
-)
+_CALLSTREET_QA_HEADER = re.compile(r"\n\s*QUESTION\s+AND\s+ANSWER\s+SECTION\b", re.IGNORECASE)
 _OPERATOR_FIRST_QUESTION = re.compile(
     r"first\s+question\s+(?:is\s+from|comes\s+from|will\s+come\s+from)",
     re.IGNORECASE,
 )
 
 
-def _reconstruct_transcript_text(
-    conn: sqlite3.Connection, transcript_id: int
-) -> str:
+def _reconstruct_transcript_text(conn: sqlite3.Connection, transcript_id: int) -> str:
     """Reassemble the full transcript text from ``transcript_segments``.
 
     Joins segments in ``seq`` order with one speaker-header line per
@@ -217,9 +216,7 @@ def _reconstruct_transcript_text(
     return "".join(parts)
 
 
-def _split_prepared_qa(
-    text: str, has_qa_section: bool | None
-) -> tuple[str, str]:
+def _split_prepared_qa(text: str, has_qa_section: bool | None) -> tuple[str, str]:
     """Split a reconstructed transcript into (prepared_remarks, qa).
 
     Detection ladder:
@@ -250,9 +247,7 @@ def _split_prepared_qa(
     return text.strip(), ""
 
 
-def _load_transcript_text(
-    conn: sqlite3.Connection, transcript_id: int
-) -> tuple[str, str]:
+def _load_transcript_text(conn: sqlite3.Connection, transcript_id: int) -> tuple[str, str]:
     """Return ``(prepared_remarks, qa)`` for the given transcript.
 
     Empty strings when the transcript has no segments. The ``has_qa_section``
@@ -369,9 +364,7 @@ def _render_prompt(
     """Render the diff-prompt body with the supplied context."""
     template = _load_prompt_template()
     prior_periods = [
-        _format_period_label(
-            cast("str", p["fiscal_period_type"]), cast("str", p["fiscal_period"])
-        )
+        _format_period_label(cast("str", p["fiscal_period_type"]), cast("str", p["fiscal_period"]))
         for p in prior_transcripts
     ]
     return template.render(
@@ -622,9 +615,7 @@ class EarningsToneTrigger:
     kind: ClassVar[str] = "earnings_tone"
     cadence: ClassVar[Cadence] = Cadence.ON_EARNINGS
 
-    def scan(
-        self, ticker: str, db: sqlite3.Connection
-    ) -> list[TriggerCandidate]:
+    def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
         """Emit one candidate per fresh transcript arrival in the last 24h.
 
         Joins ``transcripts`` to ``documents`` so the freshness gate is
@@ -722,9 +713,7 @@ class EarningsToneTrigger:
         _ = user_state
         return _FEATURE_ENABLED and bool(candidate)
 
-    def signature_key_evidence(
-        self, candidate: TriggerCandidate
-    ) -> Mapping[str, object]:
+    def signature_key_evidence(self, candidate: TriggerCandidate) -> Mapping[str, object]:
         """Key the dedup hash on the transcript id alone.
 
         Two scans for the same ticker against the same transcript MUST
@@ -767,9 +756,7 @@ class EarningsToneTrigger:
         # this connection only for the transcript loading window.
         conn = sqlite3.connect(str(db_path))
         try:
-            current_prepared, current_qa = _load_transcript_text(
-                conn, current_transcript_id
-            )
+            current_prepared, current_qa = _load_transcript_text(conn, current_transcript_id)
             prior_transcripts = _load_prior_transcripts(
                 conn,
                 ticker=ticker,
@@ -778,11 +765,19 @@ class EarningsToneTrigger:
         finally:
             conn.close()
 
-        prior_transcript_ids = [
-            cast("int", p["transcript_id"]) for p in prior_transcripts
-        ]
+        prior_transcript_ids = [cast("int", p["transcript_id"]) for p in prior_transcripts]
 
-        thesis_anchor_block = load_thesis_anchor(repo_root, ticker)
+        # Compose the full 3-block anchor (thesis + bear case + IR narrative),
+        # not just the thesis. A tone shift that confirms a named bear hypothesis
+        # — or that contradicts management's own IR framing — is the
+        # highest-value signal here, and the model can only flag it if the bear
+        # case and the IR narrative are in front of it. compose_anchor_block
+        # omits whichever blocks are absent for this ticker.
+        thesis_anchor_block = compose_anchor_block(
+            load_thesis_anchor(repo_root, ticker),
+            load_bear_anchor(repo_root, ticker),
+            load_ir_anchor(repo_root, ticker),
+        )
         template_text = _PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
 
         cache_inputs = _build_cache_inputs(
@@ -813,9 +808,7 @@ class EarningsToneTrigger:
             "transcript_id": current_transcript_id,
             "prior_transcript_ids": prior_transcript_ids,
         }
-        evidence_json = json.dumps(
-            evidence_obj, sort_keys=True, ensure_ascii=False, default=str
-        )
+        evidence_json = json.dumps(evidence_obj, sort_keys=True, ensure_ascii=False, default=str)
         signature_sha = compute_signature_sha(
             self.kind, ticker, self.signature_key_evidence(candidate)
         )
@@ -868,11 +861,7 @@ class EarningsToneTrigger:
         for entry in cast("Iterable[object]", shifts_raw):
             if not isinstance(entry, dict):
                 continue
-            out.extend(
-                _draft_actions_for_shift(
-                    cast("dict[str, object]", entry), alert.memo_text
-                )
-            )
+            out.extend(_draft_actions_for_shift(cast("dict[str, object]", entry), alert.memo_text))
         return out
 
     # ------------------------------------------------------------------
@@ -898,12 +887,8 @@ class EarningsToneTrigger:
         cache_inputs)``. A hit short-circuits the LLM call. A miss runs
         the LLM, then writes the response back via ``upsert``.
         """
-        existing = read_current(
-            ticker=ticker, purpose=_ARTIFACT_PURPOSE, db_path=db_path
-        )
-        new_sha = compute_input_sha256(
-            prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs
-        )
+        existing = read_current(ticker=ticker, purpose=_ARTIFACT_PURPOSE, db_path=db_path)
+        new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
         if (
             existing is not None
             and not existing.dirty
