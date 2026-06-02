@@ -34,6 +34,11 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import call_llm
+from synthesis.grounded_numbers import (
+    check_numeric_drift,
+    grounding_footnote,
+    load_grounded_numbers,
+)
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +142,25 @@ def run_lens(
             {"event": "lens_llm_call_failed", "lens": lens.name, "ticker": ticker, "error": str(exc)}
         )
         return None
+
+    # Grounding: if the model's prose restated a DCF/MoS figure that contradicts
+    # the figures of record (dcf_runs), append a corrective footnote carrying the
+    # canonical numbers and log the drift. Conservative — only fires on an explicit
+    # fair-value / MoS claim, so a lens that never mentions the DCF is untouched.
+    if ctx.ticker:
+        grounded = load_grounded_numbers(ctx.ticker, repo_root)
+        if grounded is not None and grounded.has_dcf():
+            drifts = check_numeric_drift(content, grounded)
+            if drifts:
+                content += grounding_footnote(grounded, drifts)
+                log.warning(
+                    {
+                        "event": "lens_numeric_drift",
+                        "lens": lens.name,
+                        "ticker": ctx.ticker,
+                        "drifts": drifts,
+                    }
+                )
 
     artifact_id, _ = upsert(
         UpsertRequest(
