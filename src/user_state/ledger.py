@@ -114,6 +114,34 @@ def list_entries(
         conn.close()
 
 
+def list_recent_entries(
+    *,
+    user_id: str = "bhanu",
+    limit: int = 20,
+    db_path: Path | str | None = None,
+) -> list[ThesisLedgerEntryRow]:
+    """Newest-first ledger entries across ALL tickers for ``user_id``.
+
+    Powers the digest's cross-holding "recent thesis changes" panel — the
+    append-only history of every accepted, alert-driven thesis edit, which
+    otherwise has no reader on any surface. ``limit`` keeps the panel bounded.
+    """
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM thesis_ledger_entries
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, int(limit)),
+        ).fetchall()
+        return [_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def _fetch_one(conn: sqlite3.Connection, row_id: int) -> ThesisLedgerEntryRow:
     row = conn.execute("SELECT * FROM thesis_ledger_entries WHERE id = ?", (row_id,)).fetchone()
     if row is None:

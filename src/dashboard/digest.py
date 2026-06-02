@@ -17,6 +17,7 @@ day still looks intentional.
 from __future__ import annotations
 
 import html
+import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from io import StringIO
@@ -31,6 +32,7 @@ from alerts import (
 )
 from dashboard._card import render_alert_card, render_queued_action
 from dashboard._styles import CSS
+from user_state.ledger import list_recent_entries
 
 
 def render_morning_digest(
@@ -63,9 +65,7 @@ def render_morning_digest(
 
     in_section_2_ids = {a.id for a in pending_alerts}
     all_pending_actions = list_pending_actions(user_id=user_id, db_path=db_path)
-    outstanding_actions = [
-        qa for qa in all_pending_actions if qa.alert_id not in in_section_2_ids
-    ]
+    outstanding_actions = [qa for qa in all_pending_actions if qa.alert_id not in in_section_2_ids]
 
     body = StringIO()
     body.write('<div class="l1-shell">')
@@ -73,7 +73,7 @@ def render_morning_digest(
     _render_whats_new(body, pending_alerts, actions_per_alert)
     _render_outstanding(body, outstanding_actions)
     _render_upcoming_stub(body)
-    _render_crossholding_stub(body)
+    _render_thesis_ledger(body, user_id, db_path)
     _render_footer(body, date)
     body.write("</div>")
 
@@ -135,9 +135,7 @@ def _render_outstanding(body: StringIO, actions: list[QueuedActionRow]) -> None:
     body.write("</div>")
 
     if not actions:
-        body.write(
-            '<div class="empty-state">No outstanding queued actions.</div>'
-        )
+        body.write('<div class="empty-state">No outstanding queued actions.</div>')
         body.write("</section>")
         return
 
@@ -175,17 +173,51 @@ def _render_upcoming_stub(body: StringIO) -> None:
     body.write("</section>")
 
 
-def _render_crossholding_stub(body: StringIO) -> None:
-    body.write('<section class="dash-section dash-crossholding">')
+_LEDGER_KIND_LABELS: Mapping[str, str] = {
+    "thesis_update": "Thesis update",
+    "bear_append": "Bear case",
+    "earnings_prep_append": "Earnings prep",
+}
+
+
+def _render_thesis_ledger(body: StringIO, user_id: str, db_path: Path | None) -> None:
+    """Cross-holding 'recent thesis changes' — the append-only ledger of every
+    accepted, alert-driven thesis edit. This previously had no reader on any
+    surface (the section was a hard-coded 'deferred' stub), so the durable
+    record of how the thesis moved over time was computed but never shown."""
+    try:
+        entries = list_recent_entries(user_id=user_id, limit=20, db_path=db_path)
+    except (FileNotFoundError, RuntimeError, sqlite3.Error):
+        entries = []
+
+    body.write('<section class="dash-section dash-ledger">')
     body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Cross-holding rollup</div>')
+    body.write('<div class="dash-section-title">Recent thesis changes</div>')
+    label = "entry" if len(entries) == 1 else "entries"
+    body.write(f'<div class="dash-section-count">{len(entries)} {label}</div>')
     body.write("</div>")
-    body.write(
-        '<div class="empty-state">'
-        "Cross-holding synthesis deferred (per roadmap)."
-        "</div>"
-    )
-    body.write("</section>")
+    if not entries:
+        body.write(
+            '<div class="empty-state">'
+            "No thesis-ledger entries yet — approving a queued action records one here."
+            "</div></section>"
+        )
+        return
+    body.write('<ul class="ledger-list">')
+    for entry in entries:
+        kind_label = _LEDGER_KIND_LABELS.get(entry.entry_kind, entry.entry_kind)
+        when = _esc(entry.created_at.date().isoformat())
+        body.write(
+            '<li class="ledger-entry">'
+            '<div class="ledger-meta">'
+            f'<span class="ledger-ticker">{_esc(entry.ticker)}</span>'
+            f'<span class="ledger-kind">{_esc(kind_label)}</span>'
+            f'<span class="ledger-when">{when}</span>'
+            "</div>"
+            f'<div class="ledger-body">{_esc(entry.body)}</div>'
+            "</li>"
+        )
+    body.write("</ul></section>")
 
 
 def _render_footer(body: StringIO, render_date: date) -> None:

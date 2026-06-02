@@ -52,9 +52,11 @@ def test_empty_db_renders_quiet_message(db_path: Path) -> None:
     # Even with no alerts, the digest is still a complete document
     assert "<!doctype html>" in html
     assert "</html>" in html
-    # Upcoming + cross-holding stubs render unconditionally
+    # Upcoming stub + the recent-thesis-changes (ledger) panel render
+    # unconditionally; with no ledger entries the panel shows its empty state.
     assert "Upcoming this week" in html
-    assert "Cross-holding rollup" in html
+    assert "Recent thesis changes" in html
+    assert "No thesis-ledger entries yet" in html
 
 
 # ----------------------------------------------------------------------------
@@ -63,9 +65,7 @@ def test_empty_db_renders_quiet_message(db_path: Path) -> None:
 
 
 def test_two_alerts_in_window_render_as_cards(db_path: Path) -> None:
-    fired_at = datetime.combine(TODAY, datetime.min.time(), tzinfo=UTC).replace(
-        hour=8
-    )
+    fired_at = datetime.combine(TODAY, datetime.min.time(), tzinfo=UTC).replace(hour=8)
     alert_a = fire_alert(
         ticker="GOOG",
         trigger_kind="kpi_inflection",
@@ -105,10 +105,13 @@ def test_two_alerts_in_window_render_as_cards(db_path: Path) -> None:
     # The trigger kinds appear
     assert "kpi_inflection" in html
     assert "material_news" in html
-    # The memo text from evidence renders (alert_a has it, alert_b doesn't)
+    # The card's at-a-glance line renders for both: alert_a from its explicit
+    # ``memo``; alert_b falls back to its ``summary`` (the card reads the
+    # per-trigger summary fields), so neither shows the "memo pending"
+    # placeholder.
     assert "Reset cloud-margin tier" in html
-    # alert_b has no memo so the pending placeholder appears at least once
-    assert "memo pending" in html
+    assert "Reality Labs guidance cut" in html
+    assert "memo pending" not in html
     # Queued action bodies render
     assert "Cloud margin watch-item activated" in html
     assert "RL guidance hint" in html
@@ -126,12 +129,8 @@ def test_outstanding_actions_section_excludes_alerts_in_whats_new(
     should NOT also appear in 'outstanding queued actions' — that section
     is for actions on older alerts (outside the 24h window or fired
     outside today's render date)."""
-    fired_today = datetime.combine(TODAY, datetime.min.time(), tzinfo=UTC).replace(
-        hour=12
-    )
-    fired_old = datetime.combine(
-        TODAY - timedelta(days=10), datetime.min.time(), tzinfo=UTC
-    )
+    fired_today = datetime.combine(TODAY, datetime.min.time(), tzinfo=UTC).replace(hour=12)
+    fired_old = datetime.combine(TODAY - timedelta(days=10), datetime.min.time(), tzinfo=UTC)
 
     new_alert = fire_alert(
         ticker="GOOG",
@@ -280,9 +279,7 @@ def test_html_is_a_complete_document(db_path: Path) -> None:
 def test_alerts_outside_window_are_filtered_out(db_path: Path) -> None:
     """An alert fired well after the render date must not appear in the
     digest (catches the re-render-historical-date case)."""
-    far_future = datetime.combine(
-        TODAY + timedelta(days=10), datetime.min.time(), tzinfo=UTC
-    )
+    far_future = datetime.combine(TODAY + timedelta(days=10), datetime.min.time(), tzinfo=UTC)
     fire_alert(
         ticker="GOOG",
         trigger_kind="kpi_inflection",
@@ -298,9 +295,7 @@ def test_alerts_outside_window_are_filtered_out(db_path: Path) -> None:
 
 def test_alerts_older_than_window_are_filtered_out(db_path: Path) -> None:
     """An alert fired well before the window start should not appear."""
-    old = datetime.combine(
-        TODAY - timedelta(days=10), datetime.min.time(), tzinfo=UTC
-    )
+    old = datetime.combine(TODAY - timedelta(days=10), datetime.min.time(), tzinfo=UTC)
     fire_alert(
         ticker="GOOG",
         trigger_kind="kpi_inflection",
@@ -311,3 +306,33 @@ def test_alerts_older_than_window_are_filtered_out(db_path: Path) -> None:
     )
     html = render_morning_digest(TODAY, db_path=db_path)
     assert "very-old-alert-text" not in html
+
+
+def test_thesis_ledger_panel_renders_recent_entries(db_path: Path) -> None:
+    """The 'Recent thesis changes' panel surfaces ledger entries across all
+    holdings — the append-only record of accepted, alert-driven thesis edits
+    that previously had no reader on any surface."""
+    from user_state.ledger import append_entry
+
+    append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="ROE inflected below the 18% floor",
+        db_path=db_path,
+    )
+    append_entry(
+        ticker="GOOG",
+        entry_kind="bear_append",
+        body="Cloud margin softening confirmed",
+        db_path=db_path,
+    )
+
+    html = render_morning_digest(TODAY, db_path=db_path)
+
+    assert "Recent thesis changes" in html
+    assert "No thesis-ledger entries yet" not in html
+    assert "ROE inflected below the 18% floor" in html
+    assert "Cloud margin softening confirmed" in html
+    # Cross-holding: both tickers and their entry-kind labels render.
+    assert "Thesis update" in html
+    assert "Bear case" in html
