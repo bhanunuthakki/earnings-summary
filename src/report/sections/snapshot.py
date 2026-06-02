@@ -25,13 +25,17 @@ from report.sections._common import has_table, missing, open_repo_db
 from report.sections.thesis import _split_stub_warning
 
 
-def build(ticker: str, repo_root: Path, model_link: str | None) -> SnapshotSection:
+def build(
+    ticker: str, repo_root: Path, model_link: str | None, *, held: bool = False
+) -> SnapshotSection:
     holdings = _read_holdings(ticker, repo_root)
     rules = load_rules(ticker, repo_root)
     company_name = _company_name(ticker, repo_root)
     mos_bar = _mos_bar(holdings)
     current_price = rules.current_price_override or _latest_price(ticker, repo_root)
-    valuation = _valuation_snapshot(ticker, repo_root, current_price, model_link, mos_bar)
+    valuation = _valuation_snapshot(
+        ticker, repo_root, current_price, model_link, mos_bar, held=held
+    )
     verdict = _verdict(ticker, repo_root)
     tier_1_strip = _tier_1_strip(holdings)
     recent_decisions = _recent_decisions(ticker, repo_root)
@@ -136,6 +140,7 @@ def _valuation_snapshot(
     current_price: float | None,
     model_link: str | None,
     mos_bar: float | None,
+    held: bool = False,
 ) -> ValuationSnapshot:
     conn = open_repo_db(repo_root)
     if conn is None or not has_table(conn, "dcf_runs"):
@@ -181,7 +186,7 @@ def _valuation_snapshot(
     mos_bar_used = float(row["mos_bar_used"]) if row["mos_bar_used"] is not None else mos_bar
     live_price_at = _parse_iso_datetime(row["live_price_at"])
     upside = -over_under if over_under is not None else None
-    trigger = _trigger_status(over_under, mos_bar_used)
+    trigger = _trigger_status(over_under, mos_bar_used, held=held)
 
     return ValuationSnapshot(
         consolidated_npv_per_share=cons_npv_per_share,
@@ -208,12 +213,15 @@ def _mos_bar(holdings: dict[str, object] | None) -> float | None:
 
 
 def _trigger_status(
-    over_under: float | None, mos_bar: float | None
-) -> Literal["sell", "trim", "hold", "initiate_candidate", "unknown"]:
-    """Map over_under_pct to the design's trim/sell ladder.
+    over_under: float | None, mos_bar: float | None, *, held: bool = False
+) -> Literal["sell", "trim", "hold", "add", "initiate_candidate", "unknown"]:
+    """Map over_under_pct to the trim/sell ladder, holding-aware.
 
-    >20% over → sell; >10% over → trim; > -mos_bar → hold; else initiate.
-    Returns 'unknown' when we have no over/under reading yet.
+    >20% over → sell; >10% over → trim; below the MoS bar → ADD when the name is
+    already held (accumulate the discount) else INITIATE_CANDIDATE (open a new
+    position); otherwise hold. 'initiate_candidate' is reserved for unowned names
+    — a held position trading at a discount is an add, not an initiation. Returns
+    'unknown' when we have no over/under reading yet.
     """
     if over_under is None:
         return "unknown"
@@ -222,7 +230,7 @@ def _trigger_status(
     if over_under > 0.10:
         return "trim"
     if mos_bar is not None and over_under < -mos_bar:
-        return "initiate_candidate"
+        return "add" if held else "initiate_candidate"
     return "hold"
 
 

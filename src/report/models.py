@@ -81,7 +81,9 @@ class ValuationSnapshot(BaseModel):
     # Phase 3 — populated by execution/refresh_dcf.py from dcf_runs audit cols.
     over_under_pct: float | None = None  # (live - fair) / fair; positive = over
     mos_bar: float | None = None  # initiation threshold from holdings JSON
-    trigger_status: Literal["sell", "trim", "hold", "initiate_candidate", "unknown"] = "unknown"
+    trigger_status: Literal["sell", "trim", "hold", "add", "initiate_candidate", "unknown"] = (
+        "unknown"
+    )
     live_price_at: datetime | None = None  # timestamp on dcf_runs.live_price
 
 
