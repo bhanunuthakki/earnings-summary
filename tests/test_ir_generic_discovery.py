@@ -90,6 +90,7 @@ def test_attributes_period_and_doc_type() -> None:
     [
         ("Q3 2025 Press Release", 2025, 3),
         ("1Q26 Earnings", 2026, 1),
+        ("1T26 Resultados", 2026, 1),  # Portuguese "trimestre" (NU/MELI/DLO)
         ("FY2025 Q2 Results", 2025, 2),
         ("2024-Q4 deck", 2024, 4),
         ("Annual governance doc", None, None),
@@ -175,7 +176,9 @@ def test_hybrid_merges_precise_without_dup(monkeypatch: pytest.MonkeyPatch) -> N
     from ir_pipeline import discover as disc
     from ir_pipeline.discover import generic
 
-    def _fake_generic(*, ir_url: str, max_quarters: int = 8) -> list[CandidateDoc]:
+    def _fake_generic(
+        *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
+    ) -> list[CandidateDoc]:
         return [CandidateDoc("u1", "", "f", "press_release", 2025, 3, ir_url)]
 
     def _fake_precise(config: IrConfig) -> dict[str, str]:
@@ -192,7 +195,9 @@ def test_hybrid_merges_precise_without_dup(monkeypatch: pytest.MonkeyPatch) -> N
 def test_hybrid_generic_only_when_no_mz_config(monkeypatch: pytest.MonkeyPatch) -> None:
     from ir_pipeline.discover import generic
 
-    def _fake_generic(*, ir_url: str, max_quarters: int = 8) -> list[CandidateDoc]:
+    def _fake_generic(
+        *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
+    ) -> list[CandidateDoc]:
         return [CandidateDoc("u1", "", "f", None, None, None, ir_url)]
 
     monkeypatch.setattr(generic, "discover_document_history", _fake_generic)

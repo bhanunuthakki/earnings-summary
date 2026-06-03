@@ -36,7 +36,9 @@ def discover_spreadsheet_url(config: IrConfig) -> str | None:
     return discover_documents(config).get("spreadsheet")
 
 
-def discover_history(*, ir_url: str, max_quarters: int = 8) -> list[CandidateDoc]:
+def discover_history(
+    *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
+) -> list[CandidateDoc]:
     """Generic headless crawl of `ir_url` → up to `max_quarters` of IR documents.
 
     The universal fallback for any issuer (no per-ticker config required). See
@@ -44,11 +46,13 @@ def discover_history(*, ir_url: str, max_quarters: int = 8) -> list[CandidateDoc
     """
     from ir_pipeline.discover import generic
 
-    return generic.discover_document_history(ir_url=ir_url, max_quarters=max_quarters)
+    return generic.discover_document_history(
+        ir_url=ir_url, max_quarters=max_quarters, timeout_ms=timeout_ms
+    )
 
 
 def discover_history_hybrid(
-    *, ir_url: str, config: IrConfig | None = None, max_quarters: int = 8
+    *, ir_url: str, config: IrConfig | None = None, max_quarters: int = 8, timeout_ms: int = 60_000
 ) -> list[CandidateDoc]:
     """Hybrid discovery: generic history + the precise mz adapter's fast path.
 
@@ -59,7 +63,9 @@ def discover_history_hybrid(
     """
     from ir_pipeline.discover import generic
 
-    docs = generic.discover_document_history(ir_url=ir_url, max_quarters=max_quarters)
+    docs = generic.discover_document_history(
+        ir_url=ir_url, max_quarters=max_quarters, timeout_ms=timeout_ms
+    )
     if config is not None and config.platform == "mz":
         try:
             precise = discover_documents(config)

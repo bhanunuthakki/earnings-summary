@@ -49,10 +49,11 @@ _HISTORY_NAV_RX = re.compile(
 )
 
 # Tier-1 period guesses (hint only — content classification is authoritative).
+# Q (English) and T (Portuguese "trimestre" — NU/MELI/DLO use 1T26 etc.).
 _RX_FY_Q = re.compile(r"\bFY\s*((?:20)?\d{2})[\s_/-]*Q([1-4])\b", re.IGNORECASE)
 _RX_YEAR_Q = re.compile(r"\b(20\d{2})[\s_/-]*Q([1-4])\b", re.IGNORECASE)
 _RX_Q_YEAR = re.compile(r"\bQ([1-4])[\s'/_-]*((?:20)?\d{2})\b", re.IGNORECASE)
-_RX_NQ_YEAR = re.compile(r"\b([1-4])Q[\s'/_-]*((?:20)?\d{2})\b", re.IGNORECASE)
+_RX_NQ_YEAR = re.compile(r"\b([1-4])[QT][\s'/_-]*((?:20)?\d{2})\b", re.IGNORECASE)
 
 # ``_docmeta.classify`` speaks spreadsheet/deck/press_release/transcript; the
 # manifest + categorizer speak the legacy aliases. Map the two that differ.
