@@ -216,10 +216,8 @@ def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> No
     a write failure does not break the report build (the bear case section
     still renders from the parsed in-memory payload)."""
     try:
-        payload = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", response_text.strip(), flags=re.MULTILINE))
-    except json.JSONDecodeError:
-        return
-    if not isinstance(payload, dict):
+        payload = _loads_first_json_object(response_text)
+    except (json.JSONDecodeError, ValueError):
         return
     out_dir = repo_root / "data" / "bear_case"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -363,12 +361,35 @@ def _format_target_value(
     return f"{formatted} {suffix}".strip()
 
 
-def _parse_response(text: str) -> BearCaseSection:
-    """LLM occasionally wraps JSON in ``` fences; strip and parse."""
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE)
-    payload = json.loads(cleaned)
+def _loads_first_json_object(text: str) -> dict[str, object]:
+    """Decode the first JSON object out of an LLM response.
+
+    Tolerant of three things the model does intermittently: wrapping the JSON
+    in ``` fences, prefixing a sentence of prose, and — the case that used to
+    degrade bear cases to MISSING_DATA — appending commentary *after* the
+    closing brace (a bare ``json.loads`` raises "Extra data: ... char N" on
+    that trailing text). Strip fences, seek the first ``{``, then ``raw_decode``
+    so anything trailing the object is ignored.
+    """
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE
+    ).strip()
+    start = cleaned.find("{")
+    if start == -1:
+        raise ValueError("bear case response contained no JSON object")
+    payload, _ = json.JSONDecoder().raw_decode(cleaned[start:])
     if not isinstance(payload, dict):
-        raise ValueError(f"Bear case response was not a JSON object: {type(payload).__name__}")
+        raise ValueError(
+            f"Bear case response was not a JSON object: {type(payload).__name__}"
+        )
+    return payload
+
+
+def _parse_response(text: str) -> BearCaseSection:
+    """Parse the bear-case LLM response. See ``_loads_first_json_object`` for
+    the fence/prose tolerance that keeps a chatty response from degrading the
+    section to MISSING_DATA."""
+    payload = _loads_first_json_object(text)
 
     failure_modes_raw = payload.get("failure_modes") or []
     failure_modes = [FailureMode(**_coerce_failure_mode(fm)) for fm in failure_modes_raw]
