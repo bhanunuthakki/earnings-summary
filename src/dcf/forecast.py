@@ -2,32 +2,37 @@
 
 The workbook's Forecast sheet has two zones:
 
-  INPUTS    — user-editable. Seeded from the ticker's TTM history; the user
-              edits per-cell as desired. The refresher does NOT overwrite
-              these on subsequent runs — re-seed with `force=True` to reset
-              from latest FMP.
+  INPUTS    — user-editable. A per-year assumption GRID (one column per forecast
+              year) seeded from the ticker's own history, plus a handful of
+              scalars. The refresher does NOT overwrite these on subsequent runs
+              — re-seed with `force=True` to reset from latest FMP.
 
-  PROJECTED — program-owned table (Year / Revenue / FCF / Op Margin / Capex
-              Intensity columns). Rewritten on every refresh from the current
-              INPUTS via Python (not Excel formulas, so openpyxl reads stay
-              deterministic regardless of whether the user opens the workbook
-              in Excel between refreshes).
+  PROJECTED — program-owned line-item bridge, rewritten each refresh from the
+              current INPUTS via Python (not Excel formulas, so openpyxl reads
+              stay deterministic).
 
-The projection model decomposes FCF into operating-leverage + capex-intensity
-drivers, each ramping linearly from a Y1 current-state value to a Y5
-normalized value:
+The model is a full P&L -> FCF bridge (replacing the prior 7-scalar
+op-margin/capex-intensity model), built to mirror the line-item analyst models
+in `examples/dcf/` (ASML, FIG):
 
-  revenue_t      = revenue_{t-1} × (1 + growth_t)             # growth decays Y1→terminal
-  op_margin_t    = linear ramp from y1_op_margin to y5_op_margin
-  capex_intens_t = linear ramp from y1_capex_intensity to y5_capex_intensity
-  after_tax_op_t = revenue_t × op_margin_t × (1 - tax_rate)
-  fcf_t          = after_tax_op_t - revenue_t × capex_intens_t
+    revenue_t        = revenue_{t-1} x (1 + growth_t)           # growth decays Y1->terminal
+    gross_profit_t   = revenue_t x gross_margin_t
+    operating_inc_t  = gross_profit_t - rnd_t - sga_t           # R&D, SG&A each % of revenue
+    nopat_t          = operating_inc_t x (1 - tax_t)
+    cfo_t            = nopat_t + d&a_t + sbc_t - delta_nwc_t     # SBC added back (non-cash)
+    fcff_t           = cfo_t - capex_t                          # capex = (capex/d&a)_t x d&a_t
+    valuation_fcf_t  = fcff_t - sbc_t                           # SBC re-charged as a real cost
 
-This replaces a prior flat-FCF-margin model, which produced negative terminal
-FCFs (and a negative terminal value, blowing the DCF) for tickers in a heavy
-capex cycle (AMZN's AI buildout) or with structurally lumpy FCF (BN). The
-decomposition lets the user see WHY the FCF moves — margin compression vs.
-capex elevation — and normalize each driver independently.
+Working capital is days-driven: receivables (DSO), payables (DPO), and deferred
+revenue (% of revenue) are each projected, and their period-over-period change
+is `delta_nwc`. Diluted shares evolve by a net-share-change driver (SBC dilution
+net of buybacks) so the projected-share row shows the dilution path.
+
+SBC treatment: it is added back in CFO (it is genuinely non-cash) but subtracted
+again to reach the valuation FCF, so stock comp is charged as the real economic
+cost it is. That keeps the per-share denominator at *current* shares (no
+double-count against the evolving-share row) — `workbook_reader` reads the
+`valuation_fcf` series into the Valuation sheet's FCF row unchanged.
 """
 
 from __future__ import annotations
@@ -35,434 +40,507 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 DEFAULT_FORECAST_YEARS = 5
 DEFAULT_TERMINAL_GROWTH = 0.025
-# Normalization defaults — applied when TTM-derived Y1 is unprofitable or
-# capex-elevated. Mature-business steady-state shapes; user overrides per
-# ticker as needed.
-_Y5_OP_MARGIN_FLOOR = 0.15  # deeply-unprofitable Y1s still land at a viable terminal year
-_Y5_OP_MARGIN_LIFT = 0.02  # ~200bps of operating leverage over 5y for growing names
-_Y5_CAPEX_INTENSITY_DEFAULT = 0.06  # mature steady-state capex / revenue
-_Y1_OP_MARGIN_CLAMP = (-0.50, 0.60)
-_TAX_RATE_CLAMP = (0.15, 0.35)
-_DEFAULT_TAX_RATE = 0.25
-_DEFAULT_Y1_OP_MARGIN_FALLBACK = 0.10  # used when income data is missing
-_DEFAULT_Y1_CAPEX_INTENSITY_FALLBACK = 0.05  # used when cashflow data is missing
 
 _TTM_QUARTERS = 4
-_MAX_SCAN_ROW = 50
 _MILLIONS = 1_000_000.0
+_MAX_HORIZON = 10
+_DAYS = 365.0
 
-# Single source of truth for the INPUTS layout — every read and write path
-# pulls labels and target rows from here.
-_INPUT_LABEL_BASE_REVENUE = "Base Revenue (TTM, $M)"
-_INPUT_LABEL_Y1_GROWTH = "Y1 Revenue Growth %"
-_INPUT_LABEL_TERMINAL_GROWTH = "Terminal Revenue Growth %"
-_INPUT_LABEL_Y1_OP_MARGIN = "Y1 Operating Margin %"
-_INPUT_LABEL_Y5_OP_MARGIN = "Y5 Operating Margin %"
-_INPUT_LABEL_Y1_CAPEX_INTENSITY = "Y1 Capex % of Revenue"
-_INPUT_LABEL_Y5_CAPEX_INTENSITY = "Y5 Capex % of Revenue"
-_INPUT_LABEL_TAX_RATE = "Tax Rate %"
-_INPUT_LABEL_DILUTED_SHARES = "Diluted Shares (M)"
-_INPUT_LABEL_FORECAST_YEARS = "Forecast Years"
-
-# Accepted label variants for label-scan reads. Lowercased + stripped.
-# Listed widest-to-tightest so even a user who shortens a label still parses.
-_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
-    "base_revenue": ("base revenue (ttm, $m)", "base revenue"),
-    "y1_growth": ("y1 revenue growth %", "y1 growth", "year 1 growth"),
-    "terminal_growth": (
-        "terminal revenue growth %",
-        "terminal growth %",
-        "terminal growth",
-    ),
-    "y1_op_margin": (
-        "y1 operating margin %",
-        "y1 op margin %",
-        "y1 operating margin",
-    ),
-    "y5_op_margin": (
-        "y5 operating margin %",
-        "y5 op margin %",
-        "y5 operating margin",
-    ),
-    "y1_capex_intensity": (
-        "y1 capex % of revenue",
-        "y1 capex intensity %",
-        "y1 capex intensity",
-    ),
-    "y5_capex_intensity": (
-        "y5 capex % of revenue",
-        "y5 capex intensity %",
-        "y5 capex intensity",
-    ),
-    "tax_rate": ("tax rate %", "tax rate"),
-    "diluted_shares": ("diluted shares (m)", "diluted shares"),
-    "forecast_years": ("forecast years", "horizon", "forecast horizon"),
+# Per-driver clamps + fallbacks (applied when history is missing or degenerate).
+_TAX_CLAMP = (0.10, 0.35)
+_GROSS_MARGIN_CLAMP = (0.05, 0.95)
+_DEFAULTS: dict[str, float] = {
+    "gross_margin": 0.50,
+    "rnd_pct": 0.10,
+    "sga_pct": 0.20,
+    "sbc_pct": 0.03,
+    "da_pct": 0.04,
+    "capex_to_da": 1.20,
+    "dso_days": 45.0,
+    "dpo_days": 30.0,
+    "deferred_rev_pct": 0.0,
+    "tax_rate": 0.25,
+    "net_share_change": 0.0,
 }
 
-# Fixed row positions for the INPUTS zone (column A = label, B = value).
-_INPUT_ROWS: dict[str, tuple[int, str]] = {
-    "base_revenue": (3, _INPUT_LABEL_BASE_REVENUE),
-    "y1_growth": (4, _INPUT_LABEL_Y1_GROWTH),
-    "terminal_growth": (5, _INPUT_LABEL_TERMINAL_GROWTH),
-    "y1_op_margin": (6, _INPUT_LABEL_Y1_OP_MARGIN),
-    "y5_op_margin": (7, _INPUT_LABEL_Y5_OP_MARGIN),
-    "y1_capex_intensity": (8, _INPUT_LABEL_Y1_CAPEX_INTENSITY),
-    "y5_capex_intensity": (9, _INPUT_LABEL_Y5_CAPEX_INTENSITY),
-    "tax_rate": (10, _INPUT_LABEL_TAX_RATE),
-    "diluted_shares": (11, _INPUT_LABEL_DILUTED_SHARES),
-    "forecast_years": (12, _INPUT_LABEL_FORECAST_YEARS),
-}
-# Spacer at row 13, header at 14, spacer at 15, table starts at 16.
-_PROJECTED_HEADER_ROW = 14
-_PROJECTED_START_ROW = 16
+# --------------------------------------------------------------------------- #
+# Forecast-sheet layout. Single source of truth for every read + write path.
+# Column A = label; column B = base/TTM (reference); columns C.. = forecast years.
+# --------------------------------------------------------------------------- #
+_BASE_COL = 2  # column B — base/TTM reference
+_FORECAST_COL0 = 3  # column C — first forecast year
 
-# Visual cue — user-editable input cells get a light yellow fill so the user
-# can spot them in Excel without reading the headers.
+# Scalars (column A label -> row, value in column B, yellow/editable).
+_SCALAR_ROWS: dict[str, tuple[int, str]] = {
+    "base_revenue": (3, "Base Revenue (TTM, $M)"),
+    "diluted_shares": (4, "Diluted Shares (M)"),
+    "terminal_multiple": (5, "Terminal FCF Multiple"),
+    "forecast_years": (6, "Forecast Years"),
+}
+
+# Per-year assumption rows (yellow/editable across the forecast columns).
+_ASSUMPTION_HEADER_ROW = 8
+_ASSUMPTION_ROWS: dict[str, tuple[int, str, str]] = {
+    # key: (row, label, number_format)
+    "revenue_growth": (9, "Revenue Growth %", "0.00%"),
+    "gross_margin": (10, "Gross Margin %", "0.00%"),
+    "rnd_pct": (11, "R&D % of Revenue", "0.00%"),
+    "sga_pct": (12, "SG&A % of Revenue", "0.00%"),
+    "sbc_pct": (13, "SBC % of Revenue", "0.00%"),
+    "da_pct": (14, "D&A % of Revenue", "0.00%"),
+    "capex_to_da": (15, "Capex / D&A (x)", "0.00"),
+    "dso_days": (16, "DSO (days)", "0"),
+    "dpo_days": (17, "DPO (days)", "0"),
+    "deferred_rev_pct": (18, "Deferred Rev % of Revenue", "0.00%"),
+    "tax_rate": (19, "Tax Rate %", "0.00%"),
+    "net_share_change": (20, "Net Share Change %/yr", "0.00%"),
+}
+
+# Projected bridge rows (program-owned, recomputed each refresh).
+_PROJECTED_HEADER_ROW = 22
+_PROJECTED_YEAR_ROW = 23
+_PROJECTED_ROWS: list[tuple[str, str, str]] = [
+    # (projections-field, label, number_format) — order = display order.
+    ("revenue_M", "Revenue ($M)", "#,##0"),
+    ("gross_profit_M", "Gross Profit ($M)", "#,##0"),
+    ("rnd_M", "R&D ($M)", "#,##0"),
+    ("sga_M", "SG&A ($M)", "#,##0"),
+    ("operating_income_M", "Operating Income ($M)", "#,##0"),
+    ("operating_margin_pct", "Operating Margin %", "0.00%"),
+    ("nopat_M", "NOPAT ($M)", "#,##0"),
+    ("da_M", "+ D&A ($M)", "#,##0"),
+    ("sbc_M", "+ SBC ($M, non-cash)", "#,##0"),
+    ("delta_nwc_M", "- Chg in NWC ($M)", "#,##0"),
+    ("cfo_M", "= CFO ($M)", "#,##0"),
+    ("capex_M", "- Capex ($M)", "#,##0"),
+    ("fcff_M", "= FCFF ($M)", "#,##0"),
+    ("valuation_fcf_M", "= Valuation FCF ($M, SBC-charged)", "#,##0"),
+    ("fcf_margin_pct", "Valuation FCF Margin %", "0.00%"),
+    ("shares_M", "Diluted Shares (projected, M)", "#,##0"),
+]
+
 _INPUT_FILL = PatternFill(start_color="FFF7DC", end_color="FFF7DC", fill_type="solid")
 _HEADER_FONT = Font(bold=True)
 _NOTE_FONT = Font(italic=True, color="666666")
+_MAX_SCAN_ROW = 60
 
 
 @dataclass(frozen=True)
 class ForecastInputs:
-    """User-editable assumptions. Units: USD millions where applicable;
-    growth, margins, and tax rate are decimals (0.10 == 10%)."""
+    """User-editable assumptions. Scalars + per-year driver series.
+
+    Every `*_pct`/ratio list holds one value per forecast year (decimals;
+    0.10 == 10%). `dso_days`/`dpo_days` are in days. List length == horizon.
+    """
 
     base_revenue_M: float
-    y1_growth_pct: float
-    terminal_growth_pct: float
-    y1_operating_margin_pct: float
-    y5_operating_margin_pct: float
-    y1_capex_intensity_pct: float
-    y5_capex_intensity_pct: float
-    tax_rate_pct: float
     diluted_shares_M: float
+    terminal_multiple: float
     forecast_years: int
+    revenue_growth_pct: list[float]
+    gross_margin_pct: list[float]
+    rnd_pct: list[float]
+    sga_pct: list[float]
+    sbc_pct: list[float]
+    da_pct: list[float]
+    capex_to_da: list[float]
+    dso_days: list[float]
+    dpo_days: list[float]
+    deferred_rev_pct: list[float]
+    tax_rate_pct: list[float]
+    net_share_change_pct: list[float]
 
 
 @dataclass(frozen=True)
 class ForecastProjections:
-    """Year-by-year revenue + FCF stream computed from `ForecastInputs`.
+    """Full year-by-year P&L -> FCF bridge computed from `ForecastInputs`.
 
-    `operating_margin_pct` and `capex_intensity_pct` expose the per-year
-    ramped drivers so the workbook can show them alongside the headline
-    revenue + FCF rows (and so callers can audit what's behind the FCF).
+    `valuation_fcf_M` is the series the Valuation sheet's FCF row consumes;
+    `shares_M` is the projected diluted-share path. All `_M` series are USD
+    millions; `years` is the forecast year labels.
     """
 
     years: list[int]
     revenue_M: list[float]
-    fcf_M: list[float]
+    gross_profit_M: list[float]
+    rnd_M: list[float]
+    sga_M: list[float]
+    operating_income_M: list[float]
     operating_margin_pct: list[float]
-    capex_intensity_pct: list[float]
+    nopat_M: list[float]
+    da_M: list[float]
+    sbc_M: list[float]
+    delta_nwc_M: list[float]
+    cfo_M: list[float]
+    capex_M: list[float]
+    fcff_M: list[float]
+    valuation_fcf_M: list[float]
+    fcf_margin_pct: list[float]
+    shares_M: list[float]
 
 
 class ForecastError(Exception):
     """Forecast inputs are missing or malformed in the workbook."""
 
 
+# --------------------------------------------------------------------------- #
+# Derivation — starter per-year assumptions from the ticker's history
+# --------------------------------------------------------------------------- #
 def derive_initial_inputs(
     income_records: list[dict[str, object]],
     cashflow_records: list[dict[str, object]],
+    balance_records: list[dict[str, object]] | None = None,
     *,
     terminal_growth_pct: float = DEFAULT_TERMINAL_GROWTH,
     forecast_years: int = DEFAULT_FORECAST_YEARS,
 ) -> ForecastInputs:
-    """Derive starter assumptions from the ticker's TTM history.
+    """Derive starter per-year assumptions from the ticker's TTM history.
 
-    Records must be sorted newest-first (FMP's native order). Y1 driver
-    values come from TTM ratios; Y5 driver values apply forward-looking
-    normalization (margin recovery + capex normalization) so a heavy-capex
-    or unprofitable Y1 still produces a viable terminal year. Falls back
-    gracefully when data is incomplete:
-      - <4 quarters of revenue: use what's available, scaled to TTM-equivalent.
-      - prior TTM unavailable: Y1 growth defaults to terminal_growth_pct.
-      - operating income missing: Y1 op margin defaults to 10% (amber flag).
-      - capex missing: Y1 capex intensity defaults to 5%.
-      - pretax non-positive: tax rate defaults to 25%.
-      - shares count missing: defaults to 1000 (user will obviously override).
+    Records must be newest-first (FMP's native order). Each ratio defaults to
+    its TTM value held flat across the horizon; revenue growth decays linearly
+    from the TTM YoY rate to `terminal_growth_pct`. Missing inputs fall back to
+    the `_DEFAULTS` steady-state shapes so a sparse/recently-IPO'd ticker still
+    yields a viable model.
     """
-    base_revenue_actual = _ttm_sum(income_records[:_TTM_QUARTERS], "revenue")
-    base_revenue_M = (
-        base_revenue_actual / _MILLIONS if base_revenue_actual is not None else 0.0
+    balance_records = balance_records or []
+    horizon = max(1, min(forecast_years, _MAX_HORIZON))
+
+    rev_ttm = _ttm_sum(income_records[:_TTM_QUARTERS], "revenue")
+    base_revenue = (rev_ttm / _MILLIONS) if rev_ttm else 0.0
+    rev_safe = rev_ttm if (rev_ttm and rev_ttm > 0) else None
+
+    prior_rev = _ttm_sum(income_records[_TTM_QUARTERS : 2 * _TTM_QUARTERS], "revenue")
+    y1_growth = (
+        (rev_safe / prior_rev - 1.0)
+        if (rev_safe is not None and prior_rev and prior_rev > 0)
+        else terminal_growth_pct
     )
 
-    prior_revenue = _ttm_sum(
-        income_records[_TTM_QUARTERS : 2 * _TTM_QUARTERS], "revenue"
+    gross_ttm = _ttm_sum(income_records[:_TTM_QUARTERS], "grossProfit")
+    if gross_ttm is None:
+        cogs_ttm = _ttm_sum(income_records[:_TTM_QUARTERS], "costOfRevenue")
+        gross_ttm = (rev_ttm - cogs_ttm) if (rev_ttm is not None and cogs_ttm is not None) else None
+    gross_margin = _ratio(gross_ttm, rev_safe, _DEFAULTS["gross_margin"])
+    gross_margin = _clamp(gross_margin, *_GROSS_MARGIN_CLAMP)
+    cogs_for_dpo = rev_safe * (1.0 - gross_margin) if rev_safe is not None else None
+
+    rnd_pct = _ratio(
+        _ttm_sum(income_records[:_TTM_QUARTERS], "researchAndDevelopmentExpenses"),
+        rev_safe,
+        _DEFAULTS["rnd_pct"],
     )
-    if base_revenue_actual is not None and prior_revenue and prior_revenue > 0:
-        y1_growth_pct = base_revenue_actual / prior_revenue - 1.0
-    else:
-        y1_growth_pct = terminal_growth_pct
-
-    ttm_op_income = _ttm_sum(income_records[:_TTM_QUARTERS], "operatingIncome")
-    if (
-        ttm_op_income is not None
-        and base_revenue_actual
-        and base_revenue_actual > 0
-    ):
-        y1_op_margin = ttm_op_income / base_revenue_actual
-    else:
-        y1_op_margin = _DEFAULT_Y1_OP_MARGIN_FALLBACK
-    y1_op_margin = max(_Y1_OP_MARGIN_CLAMP[0], min(y1_op_margin, _Y1_OP_MARGIN_CLAMP[1]))
-    y5_op_margin = max(y1_op_margin + _Y5_OP_MARGIN_LIFT, _Y5_OP_MARGIN_FLOOR)
-
-    ttm_capex = _ttm_sum(cashflow_records[:_TTM_QUARTERS], "capitalExpenditure")
-    if (
-        ttm_capex is not None
-        and base_revenue_actual
-        and base_revenue_actual > 0
-    ):
-        y1_capex_intensity = abs(ttm_capex) / base_revenue_actual
-    else:
-        y1_capex_intensity = _DEFAULT_Y1_CAPEX_INTENSITY_FALLBACK
-
-    ttm_pretax = _ttm_sum(income_records[:_TTM_QUARTERS], "incomeBeforeTax")
-    ttm_tax = _ttm_sum(income_records[:_TTM_QUARTERS], "incomeTaxExpense")
-    if ttm_pretax is not None and ttm_pretax > 0 and ttm_tax is not None:
-        tax_rate = ttm_tax / ttm_pretax
-    else:
-        tax_rate = _DEFAULT_TAX_RATE
-    tax_rate = max(_TAX_RATE_CLAMP[0], min(tax_rate, _TAX_RATE_CLAMP[1]))
-
-    shares_actual = _latest_value(income_records, "weightedAverageShsOutDil")
-    diluted_shares_M = (
-        shares_actual / _MILLIONS if shares_actual is not None else 1000.0
+    sga_pct = _ratio(
+        _ttm_sum(income_records[:_TTM_QUARTERS], "sellingGeneralAndAdministrativeExpenses"),
+        rev_safe,
+        _DEFAULTS["sga_pct"],
     )
+    sbc_pct = _ratio(
+        _ttm_sum(cashflow_records[:_TTM_QUARTERS], "stockBasedCompensation"),
+        rev_safe,
+        _DEFAULTS["sbc_pct"],
+    )
+
+    da_ttm = _ttm_sum(cashflow_records[:_TTM_QUARTERS], "depreciationAndAmortization")
+    da_pct = _ratio(da_ttm, rev_safe, _DEFAULTS["da_pct"])
+    capex_ttm = _ttm_sum(cashflow_records[:_TTM_QUARTERS], "capitalExpenditure")
+    capex_to_da = (
+        (abs(capex_ttm) / da_ttm)
+        if (capex_ttm is not None and da_ttm and da_ttm > 0)
+        else _DEFAULTS["capex_to_da"]
+    )
+
+    dso = _days(_latest_value(balance_records, "netReceivables"), rev_safe, _DEFAULTS["dso_days"])
+    dpo = _days(
+        _latest_value(balance_records, "accountPayables"), cogs_for_dpo, _DEFAULTS["dpo_days"]
+    )
+    deferred_pct = _ratio(
+        _latest_value(balance_records, "deferredRevenue"), rev_safe, _DEFAULTS["deferred_rev_pct"]
+    )
+
+    pretax = _ttm_sum(income_records[:_TTM_QUARTERS], "incomeBeforeTax")
+    tax_exp = _ttm_sum(income_records[:_TTM_QUARTERS], "incomeTaxExpense")
+    tax_rate = (
+        (tax_exp / pretax)
+        if (pretax and pretax > 0 and tax_exp is not None)
+        else _DEFAULTS["tax_rate"]
+    )
+    tax_rate = _clamp(tax_rate, *_TAX_CLAMP)
+
+    shares_now = _latest_value(income_records, "weightedAverageShsOutDil")
+    shares_year_ago = _quarter_value(income_records, "weightedAverageShsOutDil", _TTM_QUARTERS)
+    net_share_change = (
+        _clamp(shares_now / shares_year_ago - 1.0, -0.15, 0.15)
+        if (shares_now and shares_year_ago and shares_year_ago > 0)
+        else _DEFAULTS["net_share_change"]
+    )
+    diluted_shares = (shares_now / _MILLIONS) if shares_now else 1000.0
+
+    growth_series = _linear_decay(y1_growth, terminal_growth_pct, horizon)
+
+    def flat(v: float) -> list[float]:
+        return [round(v, 4)] * horizon
 
     return ForecastInputs(
-        base_revenue_M=round(base_revenue_M, 2),
-        y1_growth_pct=round(y1_growth_pct, 4),
-        terminal_growth_pct=round(terminal_growth_pct, 4),
-        y1_operating_margin_pct=round(y1_op_margin, 4),
-        y5_operating_margin_pct=round(y5_op_margin, 4),
-        y1_capex_intensity_pct=round(y1_capex_intensity, 4),
-        y5_capex_intensity_pct=round(_Y5_CAPEX_INTENSITY_DEFAULT, 4),
-        tax_rate_pct=round(tax_rate, 4),
-        diluted_shares_M=round(diluted_shares_M, 2),
-        forecast_years=forecast_years,
+        base_revenue_M=round(base_revenue, 2),
+        diluted_shares_M=round(diluted_shares, 2),
+        terminal_multiple=15.0,
+        forecast_years=horizon,
+        revenue_growth_pct=[round(g, 4) for g in growth_series],
+        gross_margin_pct=flat(gross_margin),
+        rnd_pct=flat(rnd_pct),
+        sga_pct=flat(sga_pct),
+        sbc_pct=flat(sbc_pct),
+        da_pct=flat(da_pct),
+        capex_to_da=[round(capex_to_da, 2)] * horizon,
+        dso_days=[round(dso, 1)] * horizon,
+        dpo_days=[round(dpo, 1)] * horizon,
+        deferred_rev_pct=flat(deferred_pct),
+        tax_rate_pct=flat(tax_rate),
+        net_share_change_pct=flat(net_share_change),
     )
 
 
-def compute_projections(
-    inputs: ForecastInputs, base_year: int
-) -> ForecastProjections:
-    """Project revenue + FCF over `forecast_years` years starting at `base_year + 1`.
+# --------------------------------------------------------------------------- #
+# Projection — the P&L -> FCF bridge
+# --------------------------------------------------------------------------- #
+def compute_projections(inputs: ForecastInputs, base_year: int) -> ForecastProjections:
+    """Project the full line-item bridge over the horizon from `base_year + 1`.
 
-    Growth decays linearly Y1→terminal across the horizon. Operating margin
-    and capex intensity also ramp linearly across the horizon (Y1→Y5 values),
-    decomposing FCF into operating-leverage + capex-normalization drivers:
-
-        revenue_t       = revenue_{t-1} × (1 + growth_t)
-        op_margin_t     = linear ramp
-        capex_intens_t  = linear ramp
-        fcf_t           = revenue_t × op_margin_t × (1 - tax_rate)
-                          - revenue_t × capex_intens_t
-
-    Horizon is clamped to [1, 10] to defend against absurd user input.
+    Working capital is days-driven; `delta_nwc` for year 1 is measured against
+    the base-year NWC implied by the same DSO/DPO/deferred-rev assumptions on
+    the base revenue, so the first forecast year isn't penalised by a phantom
+    jump. Horizon is clamped to [1, 10].
     """
-    horizon = max(1, min(inputs.forecast_years, 10))
-    growths = _linear_decay(
-        inputs.y1_growth_pct, inputs.terminal_growth_pct, horizon
-    )
-    op_margins = _linear_decay(
-        inputs.y1_operating_margin_pct, inputs.y5_operating_margin_pct, horizon
-    )
-    capex_intensities = _linear_decay(
-        inputs.y1_capex_intensity_pct, inputs.y5_capex_intensity_pct, horizon
-    )
+    horizon = max(1, min(inputs.forecast_years, _MAX_HORIZON))
     years = list(range(base_year + 1, base_year + 1 + horizon))
-    revenues: list[float] = []
-    fcfs: list[float] = []
-    rev = inputs.base_revenue_M
-    one_minus_tax = 1.0 - inputs.tax_rate_pct
-    for g, om, ci in zip(growths, op_margins, capex_intensities, strict=True):
-        rev = rev * (1 + g)
-        revenues.append(rev)
-        after_tax_op = rev * om * one_minus_tax
-        capex = rev * ci
-        fcfs.append(after_tax_op - capex)
-    return ForecastProjections(
-        years=years,
-        revenue_M=revenues,
-        fcf_M=fcfs,
-        operating_margin_pct=op_margins,
-        capex_intensity_pct=capex_intensities,
+
+    def at(series: list[float], i: int, fallback: float) -> float:
+        return series[i] if i < len(series) else (series[-1] if series else fallback)
+
+    base_rev = inputs.base_revenue_M
+    # Base-year NWC anchor (year-1 deltas measure against this).
+    prev_nwc = _nwc(
+        base_rev,
+        at(inputs.gross_margin_pct, 0, _DEFAULTS["gross_margin"]),
+        at(inputs.dso_days, 0, _DEFAULTS["dso_days"]),
+        at(inputs.dpo_days, 0, _DEFAULTS["dpo_days"]),
+        at(inputs.deferred_rev_pct, 0, _DEFAULTS["deferred_rev_pct"]),
     )
 
+    rev = base_rev
+    shares = inputs.diluted_shares_M
+    cols: dict[str, list[float]] = {f: [] for f, _, _ in _PROJECTED_ROWS}
+    for i in range(horizon):
+        gm = at(inputs.gross_margin_pct, i, _DEFAULTS["gross_margin"])
+        rev = rev * (1.0 + at(inputs.revenue_growth_pct, i, 0.0))
+        gross = rev * gm
+        rnd = rev * at(inputs.rnd_pct, i, _DEFAULTS["rnd_pct"])
+        sga = rev * at(inputs.sga_pct, i, _DEFAULTS["sga_pct"])
+        op_inc = gross - rnd - sga
+        nopat = op_inc * (1.0 - at(inputs.tax_rate_pct, i, _DEFAULTS["tax_rate"]))
+        da = rev * at(inputs.da_pct, i, _DEFAULTS["da_pct"])
+        sbc = rev * at(inputs.sbc_pct, i, _DEFAULTS["sbc_pct"])
+        capex = at(inputs.capex_to_da, i, _DEFAULTS["capex_to_da"]) * da
+        nwc = _nwc(
+            rev,
+            gm,
+            at(inputs.dso_days, i, _DEFAULTS["dso_days"]),
+            at(inputs.dpo_days, i, _DEFAULTS["dpo_days"]),
+            at(inputs.deferred_rev_pct, i, _DEFAULTS["deferred_rev_pct"]),
+        )
+        delta_nwc = nwc - prev_nwc
+        prev_nwc = nwc
+        cfo = nopat + da + sbc - delta_nwc
+        fcff = cfo - capex
+        valuation_fcf = fcff - sbc  # re-charge SBC as a real cost
+        shares = shares * (1.0 + at(inputs.net_share_change_pct, i, 0.0))
 
+        cols["revenue_M"].append(rev)
+        cols["gross_profit_M"].append(gross)
+        cols["rnd_M"].append(rnd)
+        cols["sga_M"].append(sga)
+        cols["operating_income_M"].append(op_inc)
+        cols["operating_margin_pct"].append(op_inc / rev if rev else 0.0)
+        cols["nopat_M"].append(nopat)
+        cols["da_M"].append(da)
+        cols["sbc_M"].append(sbc)
+        cols["delta_nwc_M"].append(delta_nwc)
+        cols["cfo_M"].append(cfo)
+        cols["capex_M"].append(capex)
+        cols["fcff_M"].append(fcff)
+        cols["valuation_fcf_M"].append(valuation_fcf)
+        cols["fcf_margin_pct"].append(valuation_fcf / rev if rev else 0.0)
+        cols["shares_M"].append(shares)
+
+    return ForecastProjections(years=years, **cols)
+
+
+def _nwc(revenue: float, gross_margin: float, dso: float, dpo: float, deferred_pct: float) -> float:
+    """Net working capital (a use of cash when it rises). Receivables tie up
+    cash; payables and deferred revenue are sources, so they net down."""
+    cogs = revenue * (1.0 - gross_margin)
+    receivables = dso * revenue / _DAYS
+    payables = dpo * cogs / _DAYS
+    deferred = deferred_pct * revenue
+    return receivables - payables - deferred
+
+
+# --------------------------------------------------------------------------- #
+# Sheet writers
+# --------------------------------------------------------------------------- #
 def write_inputs_section(ws: Worksheet, inputs: ForecastInputs) -> None:
-    """Write the INPUTS zone. Yellow-fills the user-editable cells.
-
-    Called by the seeder. The refresher must NOT call this on subsequent
-    runs — preserving user edits is the contract.
-    """
-    ws.cell(row=1, column=1, value="FORECAST INPUTS - edit these cells").font = (
-        _HEADER_FONT
-    )
+    """Write the INPUTS zone: scalars + the per-year assumption grid. Yellow-
+    fills every editable cell. The refresher must NOT call this (it would clobber
+    user edits) — it only rewrites the PROJECTED zone."""
+    horizon = inputs.forecast_years
+    ws.cell(row=1, column=1, value="FORECAST INPUTS - edit the yellow cells").font = _HEADER_FONT
     ws.cell(
         row=2,
         column=1,
-        value="(yellow-filled = user-editable; refresh preserves your edits)",
+        value="(yellow = user-editable; one column per forecast year; refresh preserves your edits)",
     ).font = _NOTE_FONT
 
-    rows: list[tuple[int, str, float | int]] = [
-        (
-            _INPUT_ROWS["base_revenue"][0],
-            _INPUT_LABEL_BASE_REVENUE,
-            inputs.base_revenue_M,
-        ),
-        (_INPUT_ROWS["y1_growth"][0], _INPUT_LABEL_Y1_GROWTH, inputs.y1_growth_pct),
-        (
-            _INPUT_ROWS["terminal_growth"][0],
-            _INPUT_LABEL_TERMINAL_GROWTH,
-            inputs.terminal_growth_pct,
-        ),
-        (
-            _INPUT_ROWS["y1_op_margin"][0],
-            _INPUT_LABEL_Y1_OP_MARGIN,
-            inputs.y1_operating_margin_pct,
-        ),
-        (
-            _INPUT_ROWS["y5_op_margin"][0],
-            _INPUT_LABEL_Y5_OP_MARGIN,
-            inputs.y5_operating_margin_pct,
-        ),
-        (
-            _INPUT_ROWS["y1_capex_intensity"][0],
-            _INPUT_LABEL_Y1_CAPEX_INTENSITY,
-            inputs.y1_capex_intensity_pct,
-        ),
-        (
-            _INPUT_ROWS["y5_capex_intensity"][0],
-            _INPUT_LABEL_Y5_CAPEX_INTENSITY,
-            inputs.y5_capex_intensity_pct,
-        ),
-        (_INPUT_ROWS["tax_rate"][0], _INPUT_LABEL_TAX_RATE, inputs.tax_rate_pct),
-        (
-            _INPUT_ROWS["diluted_shares"][0],
-            _INPUT_LABEL_DILUTED_SHARES,
-            inputs.diluted_shares_M,
-        ),
-        (
-            _INPUT_ROWS["forecast_years"][0],
-            _INPUT_LABEL_FORECAST_YEARS,
-            inputs.forecast_years,
-        ),
-    ]
-    for row, label, value in rows:
+    scalars: dict[str, float | int] = {
+        "base_revenue": inputs.base_revenue_M,
+        "diluted_shares": inputs.diluted_shares_M,
+        "terminal_multiple": inputs.terminal_multiple,
+        "forecast_years": inputs.forecast_years,
+    }
+    for key, (row, label) in _SCALAR_ROWS.items():
         ws.cell(row=row, column=1, value=label)
-        c = ws.cell(row=row, column=2, value=value)
+        c = ws.cell(row=row, column=_BASE_COL, value=scalars[key])
         c.fill = _INPUT_FILL
-        if "%" in label:
-            c.number_format = "0.00%"
-        elif "$M" in label or "(M)" in label:
-            c.number_format = "#,##0.00"
+        c.number_format = (
+            "#,##0.00" if key in ("base_revenue", "diluted_shares", "terminal_multiple") else "0"
+        )
+
+    # Assumption-grid header: forecast-year numbers across the columns.
+    ws.cell(
+        row=_ASSUMPTION_HEADER_ROW, column=1, value="ASSUMPTIONS (per forecast year)"
+    ).font = _HEADER_FONT
+    ws.cell(row=_ASSUMPTION_HEADER_ROW, column=_BASE_COL, value="TTM").font = _HEADER_FONT
+    for j in range(horizon):
+        ws.cell(
+            row=_ASSUMPTION_HEADER_ROW, column=_FORECAST_COL0 + j, value=f"FY{j + 1}"
+        ).font = _HEADER_FONT
+
+    for key, (row, label, fmt) in _ASSUMPTION_ROWS.items():
+        ws.cell(row=row, column=1, value=label)
+        series = _series_of(inputs, key)
+        for j in range(horizon):
+            c = ws.cell(
+                row=row,
+                column=_FORECAST_COL0 + j,
+                value=round(series[j], 4) if j < len(series) else None,
+            )
+            c.fill = _INPUT_FILL
+            c.number_format = fmt
+
+    _autosize(ws, horizon)
 
 
-def write_projections_section(
-    ws: Worksheet, projections: ForecastProjections
-) -> None:
-    """Write/overwrite the PROJECTED table.
-
-    Called by both seeder (first write) and refresher (rewrite from current
-    inputs). The previous projections (if any) get cleared first so a
-    shorter horizon doesn't leave stale columns. The table shows Year,
-    Revenue, FCF, Operating Margin %, and Capex % rows so the user can see
-    the per-year ramp without re-running the math by hand.
-    """
+def write_projections_section(ws: Worksheet, projections: ForecastProjections) -> None:
+    """Write/overwrite the PROJECTED bridge. Called by seeder (first write) and
+    refresher (rewrite from current inputs). Clears the prior bridge first so a
+    shorter horizon leaves no stale columns."""
     _clear_projections_section(ws)
     ws.cell(
         row=_PROJECTED_HEADER_ROW,
         column=1,
-        value="PROJECTED - program-owned, recomputed each refresh",
+        value="PROJECTED - program-owned, recomputed each refresh from the inputs above",
     ).font = _HEADER_FONT
 
-    ws.cell(row=_PROJECTED_START_ROW, column=1, value="Year").font = _HEADER_FONT
-    ws.cell(row=_PROJECTED_START_ROW + 1, column=1, value="Revenue ($M)").font = (
-        _HEADER_FONT
-    )
-    ws.cell(row=_PROJECTED_START_ROW + 2, column=1, value="FCF ($M)").font = (
-        _HEADER_FONT
-    )
-    ws.cell(row=_PROJECTED_START_ROW + 3, column=1, value="Op Margin %").font = (
-        _HEADER_FONT
-    )
-    ws.cell(row=_PROJECTED_START_ROW + 4, column=1, value="Capex % of Revenue").font = (
-        _HEADER_FONT
-    )
-
+    ws.cell(row=_PROJECTED_YEAR_ROW, column=1, value="Year").font = _HEADER_FONT
     for i, year in enumerate(projections.years):
-        col = 2 + i
-        ws.cell(row=_PROJECTED_START_ROW, column=col, value=year).font = _HEADER_FONT
-        rev = ws.cell(
-            row=_PROJECTED_START_ROW + 1, column=col, value=projections.revenue_M[i]
-        )
-        rev.number_format = "#,##0"
-        fcf = ws.cell(
-            row=_PROJECTED_START_ROW + 2, column=col, value=projections.fcf_M[i]
-        )
-        fcf.number_format = "#,##0"
-        om = ws.cell(
-            row=_PROJECTED_START_ROW + 3,
-            column=col,
-            value=projections.operating_margin_pct[i],
-        )
-        om.number_format = "0.00%"
-        ci = ws.cell(
-            row=_PROJECTED_START_ROW + 4,
-            column=col,
-            value=projections.capex_intensity_pct[i],
-        )
-        ci.number_format = "0.00%"
+        ws.cell(row=_PROJECTED_YEAR_ROW, column=_FORECAST_COL0 + i, value=year).font = _HEADER_FONT
+
+    for r, (field, label, fmt) in enumerate(_PROJECTED_ROWS, start=_PROJECTED_YEAR_ROW + 1):
+        ws.cell(row=r, column=1, value=label)
+        series: list[float] = getattr(projections, field)
+        for i, v in enumerate(series):
+            c = ws.cell(row=r, column=_FORECAST_COL0 + i, value=v)
+            c.number_format = fmt
 
 
+# --------------------------------------------------------------------------- #
+# Sheet reader
+# --------------------------------------------------------------------------- #
 def read_inputs_from_sheet(ws: Worksheet) -> ForecastInputs:
-    """Label-scan column A; pull values from column B.
+    """Read the INPUTS zone back (scalars + the per-year grid), tolerant of the
+    user having edited cells. Raises `ForecastError` on missing/invalid scalars."""
+    horizon_raw = _scalar(ws, "forecast_years")
+    if horizon_raw is None:
+        raise ForecastError("Forecast sheet missing 'Forecast Years'")
+    horizon = int(horizon_raw)
+    if horizon < 1 or horizon > _MAX_HORIZON:
+        raise ForecastError(f"forecast_years out of range [1, {_MAX_HORIZON}]: got {horizon}")
 
-    Raises `ForecastError` if any of the ten required inputs is missing or
-    non-numeric. Tolerates label edits via the alias lists in `_LABEL_ALIASES`.
-    """
-    values: dict[str, float] = {}
-    for key, aliases in _LABEL_ALIASES.items():
-        val = _lookup_input_cell(ws, aliases)
-        if val is None:
-            raise ForecastError(
-                f"Forecast sheet missing input row for {key!r} "
-                f"(expected one of: {aliases})"
-            )
-        values[key] = val
+    base_rev = _scalar(ws, "base_revenue")
+    shares = _scalar(ws, "diluted_shares")
+    terminal = _scalar(ws, "terminal_multiple")
+    if base_rev is None or shares is None:
+        raise ForecastError("Forecast sheet missing 'Base Revenue' or 'Diluted Shares'")
 
-    horizon_raw = values["forecast_years"]
-    if horizon_raw < 1 or horizon_raw > 10:
-        raise ForecastError(
-            f"forecast_years out of range [1, 10]: got {horizon_raw}"
-        )
+    def grid(key: str) -> list[float]:
+        row = _ASSUMPTION_ROWS[key][0]
+        out: list[float] = []
+        for j in range(horizon):
+            v = ws.cell(row=row, column=_FORECAST_COL0 + j).value
+            out.append(float(v) if isinstance(v, (int, float)) else _DEFAULTS.get(key, 0.0))
+        return out
 
     return ForecastInputs(
-        base_revenue_M=values["base_revenue"],
-        y1_growth_pct=values["y1_growth"],
-        terminal_growth_pct=values["terminal_growth"],
-        y1_operating_margin_pct=values["y1_op_margin"],
-        y5_operating_margin_pct=values["y5_op_margin"],
-        y1_capex_intensity_pct=values["y1_capex_intensity"],
-        y5_capex_intensity_pct=values["y5_capex_intensity"],
-        tax_rate_pct=values["tax_rate"],
-        diluted_shares_M=values["diluted_shares"],
-        forecast_years=int(horizon_raw),
+        base_revenue_M=base_rev,
+        diluted_shares_M=shares,
+        terminal_multiple=terminal if terminal is not None else 15.0,
+        forecast_years=horizon,
+        revenue_growth_pct=grid("revenue_growth"),
+        gross_margin_pct=grid("gross_margin"),
+        rnd_pct=grid("rnd_pct"),
+        sga_pct=grid("sga_pct"),
+        sbc_pct=grid("sbc_pct"),
+        da_pct=grid("da_pct"),
+        capex_to_da=grid("capex_to_da"),
+        dso_days=grid("dso_days"),
+        dpo_days=grid("dpo_days"),
+        deferred_rev_pct=grid("deferred_rev_pct"),
+        tax_rate_pct=grid("tax_rate"),
+        net_share_change_pct=grid("net_share_change"),
     )
 
 
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
 # Helpers (private)
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------- #
+def _series_of(inputs: ForecastInputs, key: str) -> list[float]:
+    return {
+        "revenue_growth": inputs.revenue_growth_pct,
+        "gross_margin": inputs.gross_margin_pct,
+        "rnd_pct": inputs.rnd_pct,
+        "sga_pct": inputs.sga_pct,
+        "sbc_pct": inputs.sbc_pct,
+        "da_pct": inputs.da_pct,
+        "capex_to_da": inputs.capex_to_da,
+        "dso_days": inputs.dso_days,
+        "dpo_days": inputs.dpo_days,
+        "deferred_rev_pct": inputs.deferred_rev_pct,
+        "tax_rate": inputs.tax_rate_pct,
+        "net_share_change": inputs.net_share_change_pct,
+    }[key]
+
+
+def _scalar(ws: Worksheet, key: str) -> float | None:
+    row = _SCALAR_ROWS[key][0]
+    v = ws.cell(row=row, column=_BASE_COL).value
+    return float(v) if isinstance(v, (int, float)) else None
 
 
 def _ttm_sum(records: list[dict[str, object]], field: str) -> float | None:
-    """Sum a numeric field across the first N records (newest-first FMP order)."""
     total = 0.0
     seen = 0
     for r in records:
@@ -474,12 +552,35 @@ def _ttm_sum(records: list[dict[str, object]], field: str) -> float | None:
 
 
 def _latest_value(records: list[dict[str, object]], field: str) -> float | None:
-    """Pull the most recent numeric value for `field`, walking newest-first."""
     for r in records:
         v = r.get(field)
         if isinstance(v, (int, float)):
             return float(v)
     return None
+
+
+def _quarter_value(records: list[dict[str, object]], field: str, index: int) -> float | None:
+    if index < len(records):
+        v = records[index].get(field)
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def _ratio(numerator: float | None, denominator: float | None, fallback: float) -> float:
+    if numerator is None or not denominator or denominator <= 0:
+        return fallback
+    return numerator / denominator
+
+
+def _days(balance: float | None, flow_ttm: float | None, fallback: float) -> float:
+    if balance is None or not flow_ttm or flow_ttm <= 0:
+        return fallback
+    return abs(balance) / flow_ttm * _DAYS
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return max(lo, min(v, hi))
 
 
 def _linear_decay(start: float, end: float, n: int) -> list[float]:
@@ -491,21 +592,14 @@ def _linear_decay(start: float, end: float, n: int) -> list[float]:
     return [start + i * step for i in range(n)]
 
 
-def _lookup_input_cell(ws: Worksheet, aliases: tuple[str, ...]) -> float | None:
-    for row in range(1, _MAX_SCAN_ROW + 1):
-        raw = ws.cell(row=row, column=1).value
-        if not isinstance(raw, str):
-            continue
-        if raw.strip().lower() not in aliases:
-            continue
-        val = ws.cell(row=row, column=2).value
-        if isinstance(val, (int, float)):
-            return float(val)
-    return None
+def _autosize(ws: Worksheet, horizon: int) -> None:
+    ws.column_dimensions["A"].width = 30
+    for j in range(horizon + 1):
+        ws.column_dimensions[get_column_letter(_BASE_COL + j)].width = 12
 
 
 def _clear_projections_section(ws: Worksheet) -> None:
-    """Wipe rows from PROJECTED header down so a fresh write lands cleanly."""
-    for row in range(_PROJECTED_HEADER_ROW, _PROJECTED_START_ROW + 6):
-        for col in range(1, 15):
+    last_row = _PROJECTED_YEAR_ROW + len(_PROJECTED_ROWS) + 1
+    for row in range(_PROJECTED_HEADER_ROW, last_row + 1):
+        for col in range(1, _FORECAST_COL0 + _MAX_HORIZON + 1):
             ws.cell(row=row, column=col, value=None)

@@ -190,15 +190,19 @@ def refresh_one(
                     base_year=valuation_year,
                     db_path=db_path,
                 )
+                fi = refresh_result.forecast_inputs
+                proj = refresh_result.projections
                 seed_refresh = {
                     "workbook": "refreshed",
                     "historicals_cells": refresh_result.historicals_cells_written,
-                    "y1_growth": refresh_result.forecast_inputs.y1_growth_pct,
-                    "y1_op_margin": refresh_result.forecast_inputs.y1_operating_margin_pct,
-                    "y5_op_margin": refresh_result.forecast_inputs.y5_operating_margin_pct,
-                    "y1_capex_intensity": refresh_result.forecast_inputs.y1_capex_intensity_pct,
-                    "y5_capex_intensity": refresh_result.forecast_inputs.y5_capex_intensity_pct,
-                    "tax_rate": refresh_result.forecast_inputs.tax_rate_pct,
+                    "y1_growth": fi.revenue_growth_pct[0] if fi.revenue_growth_pct else None,
+                    "y1_gross_margin": fi.gross_margin_pct[0] if fi.gross_margin_pct else None,
+                    "y1_op_margin": proj.operating_margin_pct[0]
+                    if proj.operating_margin_pct
+                    else None,
+                    "y1_sbc_pct": fi.sbc_pct[0] if fi.sbc_pct else None,
+                    "y1_capex_to_da": fi.capex_to_da[0] if fi.capex_to_da else None,
+                    "tax_rate": fi.tax_rate_pct[0] if fi.tax_rate_pct else None,
                 }
             except refresher_mod.RefresherError as e:
                 seed_refresh = {"workbook": "refresh_failed", "reason": str(e)}

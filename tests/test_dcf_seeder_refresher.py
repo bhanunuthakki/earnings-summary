@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 import pytest
@@ -22,65 +23,74 @@ from openpyxl.worksheet.worksheet import Worksheet
 from dcf import forecast, refresher, seeder
 from dcf.workbook_reader import read_valuation
 
+
 # A miniature FMP-shaped fixture. 8 quarters so we can compute TTM + prior TTM
-# (for Y1 growth derivation). The TTM quarters (first 4) carry the operating
-# margin / capex / tax fields the FCF decomposition needs.
+# (for Y1 growth derivation). The TTM quarters (first 4) carry the full set of
+# line items the P&L -> FCF bridge needs (gross/R&D/SG&A, D&A/SBC, working
+# capital).
 #
 # TTM sums (for assertion math):
-#   revenue           = 4_100M
-#   operatingIncome   =   760M  → op_margin ≈ 18.5%
-#   incomeTaxExpense  =   237M
-#   incomeBeforeTax   =   950M  → tax_rate ≈ 24.9%
-#   capitalExpenditure = -190M  → capex_intensity ≈ 4.6%
+#   revenue            = 4_100M
+#   grossProfit        = 2_050M  -> gross margin = 50%
+#   R&D                =   615M  -> 15% of revenue
+#   SG&A               =   615M  -> 15% of revenue
+#   incomeBeforeTax    =   950M ; incomeTaxExpense = 237M -> tax 24.95%
+#   D&A                =   205M  -> 5% of revenue
+#   SBC                =   328M  -> 8% of revenue
+#   capitalExpenditure = -190M   -> capex/D&A = 190/205 = 0.93x
+# Balance (latest): receivables 337M -> DSO 30; payables 225M -> DPO 40 (on
+#   COGS 2_050M); deferred revenue 410M -> 10% of revenue.
+def _income_q(
+    rev: float, op: float, pretax: float, tax: float, **extra: object
+) -> dict[str, object]:
+    return {
+        "revenue": rev,
+        "costOfRevenue": rev * 0.5,
+        "grossProfit": rev * 0.5,
+        "researchAndDevelopmentExpenses": rev * 0.15,
+        "sellingGeneralAndAdministrativeExpenses": rev * 0.15,
+        "operatingIncome": op,
+        "incomeBeforeTax": pretax,
+        "incomeTaxExpense": tax,
+        "weightedAverageShsOutDil": 100_000_000,
+        **extra,
+    }
+
+
 _INCOME_RECORDS: list[dict[str, object]] = [
     {
-        "fiscalYear": "2025",  # str variant — coercion test
+        "fiscalYear": "2025",
         "period": "Q4",
         "date": "2025-12-31",
-        "revenue": 1_100_000_000,
-        "costOfRevenue": 440_000_000,
-        "grossProfit": 660_000_000,
-        "operatingIncome": 220_000_000,
-        "incomeBeforeTax": 280_000_000,
-        "incomeTaxExpense": 70_000_000,
-        "netIncome": 165_000_000,
-        "epsDiluted": 1.65,
-        "weightedAverageShsOutDil": 100_000_000,
+        **_income_q(1_100_000_000, 220_000_000, 280_000_000, 70_000_000, netIncome=165_000_000),
     },
     {
         "fiscalYear": 2025,
         "period": "Q3",
         "date": "2025-09-30",
-        "revenue": 1_050_000_000,
-        "operatingIncome": 200_000_000,
-        "incomeBeforeTax": 250_000_000,
-        "incomeTaxExpense": 62_000_000,
-        "netIncome": 150_000_000,
-        "weightedAverageShsOutDil": 100_000_000,
+        **_income_q(1_050_000_000, 200_000_000, 250_000_000, 62_000_000),
     },
     {
         "fiscalYear": 2025,
         "period": "Q2",
         "date": "2025-06-30",
-        "revenue": 1_000_000_000,
-        "operatingIncome": 180_000_000,
-        "incomeBeforeTax": 220_000_000,
-        "incomeTaxExpense": 55_000_000,
-        "weightedAverageShsOutDil": 100_000_000,
+        **_income_q(1_000_000_000, 180_000_000, 220_000_000, 55_000_000),
     },
     {
         "fiscalYear": 2025,
         "period": "Q1",
         "date": "2025-03-31",
-        "revenue": 950_000_000,
-        "operatingIncome": 160_000_000,
-        "incomeBeforeTax": 200_000_000,
-        "incomeTaxExpense": 50_000_000,
-        "weightedAverageShsOutDil": 100_000_000,
+        **_income_q(950_000_000, 160_000_000, 200_000_000, 50_000_000),
     },
-    # Prior TTM — 4 quarters of 2024 at ~10% lower run-rate so derived Y1
-    # growth lands near 10%.
-    {"fiscalYear": 2024, "period": "Q4", "date": "2024-12-31", "revenue": 1_000_000_000},
+    # Prior TTM — 2024 at ~10% lower run-rate. Q4 carries a share count so the
+    # net-share-change driver derives (100M now vs 98M a year ago -> +2.04%).
+    {
+        "fiscalYear": 2024,
+        "period": "Q4",
+        "date": "2024-12-31",
+        "revenue": 1_000_000_000,
+        "weightedAverageShsOutDil": 98_000_000,
+    },
     {"fiscalYear": 2024, "period": "Q3", "date": "2024-09-30", "revenue": 950_000_000},
     {"fiscalYear": 2024, "period": "Q2", "date": "2024-06-30", "revenue": 900_000_000},
     {"fiscalYear": 2024, "period": "Q1", "date": "2024-03-31", "revenue": 850_000_000},
@@ -93,40 +103,80 @@ _BALANCE_RECORDS: list[dict[str, object]] = [
         "totalAssets": 5_000_000_000,
         "totalStockholdersEquity": 3_000_000_000,
         "longTermDebt": 800_000_000,
+        "netReceivables": 337_000_000,
+        "accountPayables": 225_000_000,
+        "deferredRevenue": 410_000_000,
     },
 ]
+
+
+def _cashflow_q(
+    capex: float, da: float, sbc: float, fcf: float, **extra: object
+) -> dict[str, object]:
+    return {
+        "capitalExpenditure": capex,
+        "depreciationAndAmortization": da,
+        "stockBasedCompensation": sbc,
+        "freeCashFlow": fcf,
+        **extra,
+    }
+
+
 _CASHFLOW_RECORDS: list[dict[str, object]] = [
     {
         "fiscalYear": 2025,
         "period": "Q4",
         "date": "2025-12-31",
-        "operatingCashFlow": 250_000_000,
-        "capitalExpenditure": -50_000_000,
-        "freeCashFlow": 200_000_000,
-        "netIncome": 165_000_000,
+        **_cashflow_q(
+            -50_000_000,
+            55_000_000,
+            88_000_000,
+            200_000_000,
+            operatingCashFlow=250_000_000,
+            netIncome=165_000_000,
+        ),
     },
     {
         "fiscalYear": 2025,
         "period": "Q3",
         "date": "2025-09-30",
-        "capitalExpenditure": -55_000_000,
-        "freeCashFlow": 180_000_000,
+        **_cashflow_q(-55_000_000, 52_500_000, 84_000_000, 180_000_000),
     },
     {
         "fiscalYear": 2025,
         "period": "Q2",
         "date": "2025-06-30",
-        "capitalExpenditure": -45_000_000,
-        "freeCashFlow": 170_000_000,
+        **_cashflow_q(-45_000_000, 50_000_000, 80_000_000, 170_000_000),
     },
     {
         "fiscalYear": 2025,
         "period": "Q1",
         "date": "2025-03-31",
-        "capitalExpenditure": -40_000_000,
-        "freeCashFlow": 150_000_000,
+        **_cashflow_q(-40_000_000, 47_500_000, 76_000_000, 150_000_000),
     },
 ]
+
+
+def _set_assumption(ws: object, label: str, value: float, fy: int = 0) -> None:
+    """Edit a per-year assumption-grid cell (col A label -> forecast column).
+
+    Mirrors a user editing a yellow cell in Excel. `fy` is the 0-based forecast
+    year (FY1 == 0). Sets every forecast column when `fy` is None-equivalent via
+    -1, so a single edit can flatten a whole row.
+    """
+    from openpyxl.worksheet.worksheet import Worksheet
+
+    assert isinstance(ws, Worksheet)
+    for r in range(1, 30):
+        if ws.cell(row=r, column=1).value == label:
+            if fy < 0:
+                for col in range(3, 3 + 10):
+                    if ws.cell(row=r, column=col).value is not None:
+                        ws.cell(row=r, column=col, value=value)
+            else:
+                ws.cell(row=r, column=3 + fy, value=value)
+            return
+    raise AssertionError(f"assumption row {label!r} not found")
 
 
 @pytest.fixture
@@ -215,87 +265,122 @@ _S1_FACTS: dict[str, dict[int, float]] = {
 # ---------------------------------------------------------------------------
 
 
+def _flat_inputs(**over: object) -> forecast.ForecastInputs:
+    """A ForecastInputs with flat per-year driver series; override any field."""
+    h_raw = over.pop("forecast_years", 5)
+    h = int(h_raw) if isinstance(h_raw, (int, float)) else 5
+
+    def num(key: str, default: float) -> float:
+        v = over.pop(key, None)
+        return float(v) if isinstance(v, (int, float)) else default
+
+    def series(key: str, default: float) -> list[float]:
+        v = over.pop(key, None)
+        if isinstance(v, list):
+            return [float(x) for x in cast("list[float]", v)]
+        return [float(v) if isinstance(v, (int, float)) else default] * h
+
+    return forecast.ForecastInputs(
+        base_revenue_M=num("base_revenue_M", 1000.0),
+        diluted_shares_M=num("diluted_shares_M", 100.0),
+        terminal_multiple=num("terminal_multiple", 15.0),
+        forecast_years=h,
+        revenue_growth_pct=series("revenue_growth_pct", 0.10),
+        gross_margin_pct=series("gross_margin_pct", 0.60),
+        rnd_pct=series("rnd_pct", 0.10),
+        sga_pct=series("sga_pct", 0.15),
+        sbc_pct=series("sbc_pct", 0.05),
+        da_pct=series("da_pct", 0.04),
+        capex_to_da=series("capex_to_da", 1.0),
+        dso_days=series("dso_days", 30.0),
+        dpo_days=series("dpo_days", 30.0),
+        deferred_rev_pct=series("deferred_rev_pct", 0.0),
+        tax_rate_pct=series("tax_rate_pct", 0.25),
+        net_share_change_pct=series("net_share_change_pct", 0.02),
+    )
+
+
 def test_derive_initial_inputs_from_history() -> None:
     inputs = forecast.derive_initial_inputs(
         _INCOME_RECORDS,
         _CASHFLOW_RECORDS,
+        _BALANCE_RECORDS,
         terminal_growth_pct=0.025,
         forecast_years=5,
     )
-    # TTM revenue (sum of first 4 quarters): 1100 + 1050 + 1000 + 950 = 4100M
-    assert inputs.base_revenue_M == pytest.approx(4100.0, rel=1e-3)
-    # Prior TTM: 1000 + 950 + 900 + 850 = 3700M -> growth 4100/3700 - 1 = 10.81%
-    assert inputs.y1_growth_pct == pytest.approx(0.108, abs=0.005)
-    # TTM op income: 220 + 200 + 180 + 160 = 760M; op margin = 760/4100 = 18.54%
-    assert inputs.y1_operating_margin_pct == pytest.approx(0.1854, abs=0.001)
-    # Y5 op margin = max(0.1854 + 0.02, 0.15) = 0.2054
-    assert inputs.y5_operating_margin_pct == pytest.approx(0.2054, abs=0.001)
-    # TTM capex: 50 + 55 + 45 + 40 = 190M; intensity = 190/4100 = 4.63%
-    assert inputs.y1_capex_intensity_pct == pytest.approx(0.0463, abs=0.001)
-    # Y5 capex intensity = 6% (default mature-steady-state)
-    assert inputs.y5_capex_intensity_pct == pytest.approx(0.06)
-    # TTM pretax: 280 + 250 + 220 + 200 = 950M; tax: 70 + 62 + 55 + 50 = 237M
-    # → tax rate = 237/950 = 24.95% (inside [0.15, 0.35] clamp)
-    assert inputs.tax_rate_pct == pytest.approx(0.2495, abs=0.001)
+    assert inputs.base_revenue_M == pytest.approx(4100.0, rel=1e-3)  # TTM revenue
     assert inputs.diluted_shares_M == pytest.approx(100.0)
-    assert inputs.terminal_growth_pct == 0.025
+    assert inputs.terminal_multiple == 15.0
     assert inputs.forecast_years == 5
+    # Y1 growth = 4100/3700 - 1 = 10.81%, decaying to terminal 2.5% by FY5.
+    assert inputs.revenue_growth_pct[0] == pytest.approx(0.1081, abs=0.001)
+    assert inputs.revenue_growth_pct[-1] == pytest.approx(0.025, abs=1e-6)
+    # Ratios default to their TTM value, held flat across the horizon.
+    assert inputs.gross_margin_pct == pytest.approx([0.50] * 5)  # 2050/4100
+    assert inputs.rnd_pct == pytest.approx([0.15] * 5)  # 615/4100
+    assert inputs.sga_pct == pytest.approx([0.15] * 5)  # 615/4100
+    assert inputs.sbc_pct[0] == pytest.approx(0.08, abs=0.002)  # 328/4100
+    assert inputs.da_pct[0] == pytest.approx(0.05, abs=0.002)  # 205/4100
+    assert inputs.capex_to_da[0] == pytest.approx(0.93, abs=0.02)  # 190/205
+    assert inputs.dso_days[0] == pytest.approx(30.0, abs=0.6)
+    assert inputs.dpo_days[0] == pytest.approx(40.0, abs=0.6)
+    assert inputs.deferred_rev_pct[0] == pytest.approx(0.10, abs=0.005)
+    assert inputs.tax_rate_pct[0] == pytest.approx(0.2495, abs=0.001)  # 237/950
+    assert inputs.net_share_change_pct[0] == pytest.approx(0.0204, abs=0.002)  # 100/98 - 1
 
 
-def test_compute_projections_linear_decay() -> None:
-    inputs = forecast.ForecastInputs(
+def test_compute_projections_bridge() -> None:
+    inputs = _flat_inputs(
         base_revenue_M=1000.0,
-        y1_growth_pct=0.20,
-        terminal_growth_pct=0.04,
-        y1_operating_margin_pct=0.10,
-        y5_operating_margin_pct=0.20,
-        y1_capex_intensity_pct=0.08,
-        y5_capex_intensity_pct=0.04,
+        revenue_growth_pct=0.10,
+        gross_margin_pct=0.60,
+        rnd_pct=0.10,
+        sga_pct=0.15,
+        sbc_pct=0.05,
+        da_pct=0.04,
+        capex_to_da=1.0,
         tax_rate_pct=0.25,
-        diluted_shares_M=100.0,
-        forecast_years=5,
+        net_share_change_pct=0.02,
     )
     proj = forecast.compute_projections(inputs, base_year=2026)
     assert proj.years == [2027, 2028, 2029, 2030, 2031]
-    # Year 1: 1000 * 1.20 = 1200
-    assert proj.revenue_M[0] == pytest.approx(1200.0)
-    # Year 5 growth = 4%, so revenue Y5 / revenue Y4 = 1.04 (terminal)
-    assert proj.revenue_M[-1] / proj.revenue_M[-2] == pytest.approx(1.04, abs=1e-3)
-    # Op margin ramps linearly from 0.10 → 0.20 across 5 years
-    # → [0.10, 0.125, 0.15, 0.175, 0.20]
-    assert proj.operating_margin_pct == pytest.approx([0.10, 0.125, 0.15, 0.175, 0.20])
-    # Capex intensity ramps linearly from 0.08 → 0.04
-    # → [0.08, 0.07, 0.06, 0.05, 0.04]
-    assert proj.capex_intensity_pct == pytest.approx([0.08, 0.07, 0.06, 0.05, 0.04])
-    # Year 1 FCF = 1200 * 0.10 * 0.75 - 1200 * 0.08 = 90 - 96 = -6
-    assert proj.fcf_M[0] == pytest.approx(-6.0)
-    # Year 5 FCF margin = 0.20 * 0.75 - 0.04 = 0.11 — positive terminal year
-    assert proj.fcf_M[-1] == pytest.approx(proj.revenue_M[-1] * 0.11, rel=1e-6)
+    # FY1: revenue 1000*1.10 = 1100; gross 660; op income 660-110-165 = 385.
+    assert proj.revenue_M[0] == pytest.approx(1100.0)
+    assert proj.gross_profit_M[0] == pytest.approx(660.0)
+    assert proj.operating_income_M[0] == pytest.approx(385.0)
+    assert proj.operating_margin_pct[0] == pytest.approx(0.35, abs=1e-6)
+    # SBC is added back in CFO but re-charged to reach Valuation FCF:
+    assert proj.sbc_M[0] == pytest.approx(55.0)  # 5% of 1100
+    assert proj.valuation_fcf_M[0] == pytest.approx(proj.fcff_M[0] - proj.sbc_M[0])
+    assert proj.cfo_M[0] == pytest.approx(
+        proj.nopat_M[0] + proj.da_M[0] + proj.sbc_M[0] - proj.delta_nwc_M[0]
+    )
+    assert proj.fcff_M[0] == pytest.approx(proj.cfo_M[0] - proj.capex_M[0])
+    # Shares dilute at +2%/yr: FY1 = 102, compounding.
+    assert proj.shares_M[0] == pytest.approx(102.0)
+    assert proj.shares_M[-1] == pytest.approx(100.0 * 1.02**5, rel=1e-6)
 
 
-def test_amzn_style_negative_y1_fcf_normalizes_to_positive_y5() -> None:
-    """The whole point of the decomposition: a heavy-capex Y1 (AMZN's AI
-    buildout, BN's lumpy quarters) must still produce a positive Y5 FCF so
-    the terminal value calc doesn't blow the DCF."""
-    inputs = forecast.ForecastInputs(
-        base_revenue_M=600_000.0,  # AMZN-ish TTM revenue, USD millions
-        y1_growth_pct=0.10,
-        terminal_growth_pct=0.025,
-        y1_operating_margin_pct=0.10,  # depressed by AI capex amortization
-        y5_operating_margin_pct=0.15,  # mature-business floor
-        y1_capex_intensity_pct=0.20,  # elevated by AI buildout
-        y5_capex_intensity_pct=0.06,  # normalized
+def test_heavy_capex_year_depresses_fcf_then_recovers() -> None:
+    """A heavy-capex early year (AMZN-style AI buildout) should depress FCF, and
+    a per-year Capex/D&A that normalises down should let it recover — the
+    per-year grid gives the user that control."""
+    inputs = _flat_inputs(
+        base_revenue_M=600_000.0,
+        revenue_growth_pct=0.10,
+        gross_margin_pct=0.45,
+        rnd_pct=0.05,
+        sga_pct=0.10,
+        da_pct=0.10,
+        sbc_pct=0.0,
+        capex_to_da=[3.0, 2.5, 2.0, 1.5, 1.0],  # elevated then normalising
         tax_rate_pct=0.25,
-        diluted_shares_M=10_500.0,
-        forecast_years=5,
+        net_share_change_pct=0.0,
     )
     proj = forecast.compute_projections(inputs, base_year=2026)
-    # Y1 FCF margin = 0.10*0.75 - 0.20 = -12.5%  → negative
-    assert proj.fcf_M[0] < 0
-    # Y5 FCF margin = 0.15*0.75 - 0.06 = 5.25%  → positive (the whole point)
-    assert proj.fcf_M[-1] > 0
-    # Y5 FCF as % of Y5 revenue should be ~5.25%
-    assert proj.fcf_M[-1] / proj.revenue_M[-1] == pytest.approx(0.0525, abs=0.001)
+    # Heavy early capex (3x D&A) suppresses FY1 FCF well below the normalised FY5.
+    assert proj.valuation_fcf_M[0] < proj.valuation_fcf_M[-1]
+    assert proj.capex_M[0] > proj.capex_M[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -322,14 +407,14 @@ def test_seeder_derives_forecast_inputs_from_history(tmp_path: Path, fmp_dir: Pa
     wb = openpyxl.load_workbook(str(out), data_only=True)
     inputs = forecast.read_inputs_from_sheet(wb[seeder.FORECAST_SHEET])
     # Same values as the standalone derive_initial_inputs test — confirms the
-    # seeder is wiring the derivation correctly.
+    # seeder writes the grid and read_inputs_from_sheet round-trips it.
     assert inputs.base_revenue_M == pytest.approx(4100.0, rel=1e-3)
-    assert inputs.y1_growth_pct == pytest.approx(0.108, abs=0.005)
-    assert inputs.y1_operating_margin_pct == pytest.approx(0.1854, abs=0.001)
-    assert inputs.y5_operating_margin_pct == pytest.approx(0.2054, abs=0.001)
-    assert inputs.y1_capex_intensity_pct == pytest.approx(0.0463, abs=0.001)
-    assert inputs.y5_capex_intensity_pct == pytest.approx(0.06)
-    assert inputs.tax_rate_pct == pytest.approx(0.2495, abs=0.001)
+    assert inputs.revenue_growth_pct[0] == pytest.approx(0.1081, abs=0.005)
+    assert inputs.gross_margin_pct[0] == pytest.approx(0.50, abs=0.01)
+    assert inputs.rnd_pct[0] == pytest.approx(0.15, abs=0.01)
+    assert inputs.sbc_pct[0] == pytest.approx(0.08, abs=0.005)
+    assert inputs.da_pct[0] == pytest.approx(0.05, abs=0.005)
+    assert inputs.tax_rate_pct[0] == pytest.approx(0.2495, abs=0.001)
 
 
 def test_seeded_workbook_parses_via_workbook_reader(tmp_path: Path, fmp_dir: Path) -> None:
@@ -427,7 +512,11 @@ def test_seeder_fallback_derives_forecast_inputs_from_annuals(
     assert inputs.base_revenue_M == pytest.approx(0.14, abs=0.005)  # latest FY 138k
     assert inputs.diluted_shares_M == pytest.approx(12.46, abs=0.01)  # latest FY
     # Y1 growth = YoY of the two fiscal years: 138k / 199k - 1.
-    assert inputs.y1_growth_pct == pytest.approx(138_000.0 / 199_000.0 - 1, abs=0.001)
+    assert inputs.revenue_growth_pct[0] == pytest.approx(138_000.0 / 199_000.0 - 1, abs=0.001)
+    # The S-1 facts carry no gross/R&D/SBC lines, so those default to the
+    # steady-state shapes rather than crashing.
+    assert inputs.gross_margin_pct[0] == pytest.approx(0.50)
+    assert inputs.tax_rate_pct[0] == pytest.approx(0.25)
 
 
 def test_seeder_prefers_fmp_when_both_fmp_and_facts_present(tmp_path: Path, fmp_dir: Path) -> None:
@@ -464,20 +553,16 @@ def test_refresh_uses_financial_facts_fallback(tmp_path: Path) -> None:
     out = tmp_path / "S1CO.xlsx"
     seeder.seed_workbook("S1CO", empty_fmp, out, base_year=2026, db_path=db)
 
-    # Simulate a user edit, then refresh via the facts fallback.
+    # Simulate a user edit (FY1 revenue growth), then refresh via the facts fallback.
     wb = openpyxl.load_workbook(str(out))
-    fws = wb[seeder.FORECAST_SHEET]
-    for r in range(1, 25):
-        if fws.cell(row=r, column=1).value == "Y1 Revenue Growth %":
-            fws.cell(row=r, column=2, value=0.5)
-            break
+    _set_assumption(wb[seeder.FORECAST_SHEET], "Revenue Growth %", 0.5, fy=0)
     wb.save(str(out))
 
     result = refresher.refresh_historicals(
         out, empty_fmp, ticker="S1CO", base_year=2026, db_path=db
     )
     assert result.historicals_cells_written > 0
-    assert result.forecast_inputs.y1_growth_pct == pytest.approx(0.5)  # edit preserved
+    assert result.forecast_inputs.revenue_growth_pct[0] == pytest.approx(0.5)  # edit preserved
 
     wb2 = openpyxl.load_workbook(str(out), data_only=True)
     hist = wb2[seeder.HISTORICALS_SHEET]
@@ -491,44 +576,30 @@ def test_refresh_uses_financial_facts_fallback(tmp_path: Path) -> None:
 
 
 def test_refresh_preserves_user_edited_inputs(tmp_path: Path, fmp_dir: Path) -> None:
-    """The core user-edit contract: open the workbook in Excel, change Forecast
-    INPUT cells, save. Re-running the refresher must read those edited values
-    back and use them (not re-derive from FMP). We edit one legacy field
-    (Y1 growth) and a couple of the new driver fields (Y5 Op Margin, Tax Rate)
-    so the contract covers both."""
+    """The core user-edit contract: open the workbook, change Forecast INPUT
+    cells, save. Re-running the refresher must read those edited values back and
+    use them (not re-derive from FMP). We edit FY1 revenue growth, gross margin
+    (all years), and the tax rate so the contract covers scalars + the grid."""
     out = tmp_path / "TEST.xlsx"
     seeder.seed_workbook("TEST", fmp_dir, out, base_year=2026)
 
-    # Simulate the user editing several inputs in Excel.
-    edits = {
-        "Y1 Revenue Growth %": 0.25,
-        "Y5 Operating Margin %": 0.30,
-        "Tax Rate %": 0.20,
-    }
     wb = openpyxl.load_workbook(str(out))
-    forecast_ws = wb[seeder.FORECAST_SHEET]
-    for r in range(1, 25):
-        label = forecast_ws.cell(row=r, column=1).value
-        if isinstance(label, str) and label in edits:
-            forecast_ws.cell(row=r, column=2, value=edits[label])
+    fws = wb[seeder.FORECAST_SHEET]
+    _set_assumption(fws, "Revenue Growth %", 0.25, fy=0)  # FY1 growth -> 25%
+    _set_assumption(fws, "Gross Margin %", 0.70, fy=-1)  # all years -> 70%
+    _set_assumption(fws, "Tax Rate %", 0.20, fy=-1)
     wb.save(str(out))
 
     result = refresher.refresh_historicals(out, fmp_dir, ticker="TEST", base_year=2026)
 
-    # All edited values MUST round-trip through the refresher.
-    assert result.forecast_inputs.y1_growth_pct == pytest.approx(0.25)
-    assert result.forecast_inputs.y5_operating_margin_pct == pytest.approx(0.30)
-    assert result.forecast_inputs.tax_rate_pct == pytest.approx(0.20)
-    # And the projection MUST reflect the growth edit: Y1 revenue = 4100 * 1.25 = 5125.
+    # The edited values MUST round-trip through the refresher.
+    assert result.forecast_inputs.revenue_growth_pct[0] == pytest.approx(0.25)
+    assert result.forecast_inputs.gross_margin_pct[0] == pytest.approx(0.70)
+    assert result.forecast_inputs.tax_rate_pct[0] == pytest.approx(0.20)
+    # And the projection MUST reflect the growth edit: FY1 revenue = 4100 * 1.25 = 5125.
     assert result.projections.revenue_M[0] == pytest.approx(5125.0, abs=1.0)
-    # Y1 FCF uses the auto-derived Y1 op_margin (18.54%) and capex (4.63%) with
-    # the edited tax rate (20%):
-    #   5125 * 0.1854 * 0.80 - 5125 * 0.0463 ≈ 760 - 237 = 523
-    assert result.projections.fcf_M[0] == pytest.approx(523.0, abs=15.0)
-    # The Y5 op-margin edit should bend the operating-margin ramp upward — the
-    # last forecast year should land at the edited Y5 value (0.30), not the
-    # auto-derived 0.2054.
-    assert result.projections.operating_margin_pct[-1] == pytest.approx(0.30)
+    # FY1 gross profit reflects the edited 70% gross margin: 5125 * 0.70 = 3587.5.
+    assert result.projections.gross_profit_M[0] == pytest.approx(3587.5, abs=2.0)
 
 
 def test_refresh_updates_valuation_fcf(tmp_path: Path, fmp_dir: Path) -> None:
@@ -539,21 +610,16 @@ def test_refresh_updates_valuation_fcf(tmp_path: Path, fmp_dir: Path) -> None:
 
     fcf_before = read_valuation(out, valuation_year=2026).fcf_by_year[2027]
 
-    # Bump Y1 operating margin from auto-derived ~18.5% to 40% — Y1 after-tax
-    # operating income roughly doubles → Y1 FCF should jump well above 1.5x.
+    # Bump gross margin from the auto-derived 50% to 80% — gross profit (and so
+    # operating income and Valuation FCF) jumps; the 2027 FCF must rise.
     wb = openpyxl.load_workbook(str(out))
-    forecast_ws = wb[seeder.FORECAST_SHEET]
-    for r in range(1, 25):
-        if forecast_ws.cell(row=r, column=1).value == "Y1 Operating Margin %":
-            forecast_ws.cell(row=r, column=2, value=0.40)
-            break
+    _set_assumption(wb[seeder.FORECAST_SHEET], "Gross Margin %", 0.80, fy=-1)
     wb.save(str(out))
 
     refresher.refresh_historicals(out, fmp_dir, ticker="TEST", base_year=2026)
     fcf_after = read_valuation(out, valuation_year=2026).fcf_by_year[2027]
 
-    # Y1 op margin more than doubled → 2027 FCF should jump well above 1.5x.
-    assert fcf_after > fcf_before * 1.5
+    assert fcf_after > fcf_before * 1.2
 
 
 def test_refresh_recomputes_historicals_from_latest_fmp(tmp_path: Path, fmp_dir: Path) -> None:
