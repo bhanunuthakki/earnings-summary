@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import dcf_sheets  # noqa: E402
+import refresh_dcf  # noqa: E402
 
 from dcf import seeder  # noqa: E402
 from integrations import gsheets  # noqa: E402
@@ -469,3 +470,51 @@ def test_reingest_missing_db(tmp_path: Path) -> None:
         ]
     )
     assert rc == 2
+
+
+class _FakeLive:
+    price = 50.0
+    fetched_at = None
+
+
+def test_refresh_one_persists_negative_fair_value_without_crashing(
+    reingest_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A GAAP-unprofitable forecast (opex above gross margin every year) yields a
+    negative Valuation FCF and a negative fair value. refresh_one must persist it
+    with over_under None rather than crash on the over/under calc (which rejects
+    a non-positive fair value)."""
+    repo = reingest_repo
+    fmp = repo / "data" / "historical" / "fmp"
+    wb = repo / "dcf" / "TEST.xlsx"
+    seeder.seed_workbook("TEST", fmp, wb, base_year=2026)
+
+    # Force every forecast year unprofitable: R&D + SG&A exceed gross margin.
+    book = openpyxl.load_workbook(str(wb))
+    ws = book[seeder.FORECAST_SHEET]
+    for label, val in (
+        ("Gross Margin %", 0.20),
+        ("R&D % of Revenue", 0.40),
+        ("SG&A % of Revenue", 0.40),
+    ):
+        for r in range(1, 30):
+            if ws.cell(row=r, column=1).value == label:
+                for col in range(3, 9):
+                    if ws.cell(row=r, column=col).value is not None:
+                        ws.cell(row=r, column=col, value=val)
+                break
+    book.save(str(wb))
+
+    # A live price is present, so the guard (fair value > 0) is what nulls over_under.
+    def _fake_read(_repo: object, _t: object) -> _FakeLive:
+        return _FakeLive()
+
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+
+    result = refresh_dcf.refresh_one(
+        "TEST", repo, repo / "data" / "portfolio.db", valuation_year=2026
+    )
+    assert result["status"] == "ok"  # did not crash
+    fv = result["fair_value_per_share"]
+    assert isinstance(fv, float) and fv < 0
+    assert result["over_under_pct"] is None
