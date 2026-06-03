@@ -207,6 +207,7 @@ def seed_workbook(
     if _fmp_quarterly_available(ticker, fmp_quarterly_dir):
         income_records = _load_records(ticker, fmp_quarterly_dir, "income_statement")
         cashflow_records = _load_records(ticker, fmp_quarterly_dir, "cash_flow")
+        balance_records = _load_records(ticker, fmp_quarterly_dir, "balance_sheet")
     else:
         # financial_facts fallback: the per-fiscal-year Historicals records ARE
         # the forecast deriver's source. Pad each annual record into a
@@ -214,10 +215,12 @@ def seed_workbook(
         # per window (see _pad_annual_records).
         income_records = _pad_annual_records([q.income for q in reversed(quarters_data)])
         cashflow_records = _pad_annual_records([q.cashflow for q in reversed(quarters_data)])
+        balance_records = _pad_annual_records([q.balance for q in reversed(quarters_data)])
 
     inputs = forecast_mod.derive_initial_inputs(
         income_records,
         cashflow_records,
+        balance_records,
         terminal_growth_pct=terminal_growth_pct,
         forecast_years=forecast_years,
     )
@@ -288,12 +291,14 @@ def write_valuation_sheet(
     `base_year` (the current-year actual) and continuing through the
     forecast horizon. Two data rows:
 
-      FCF — base_year column = TTM FCF (from FMP); forecast columns =
-            `projections.fcf_M`.
+      FCF — base_year column = TTM FCF (actual, from FMP); forecast columns =
+            `projections.valuation_fcf_M` (the SBC-charged FCF the bridge
+            produces — see dcf.forecast).
 
-      #diluted shares outstanding — flat across all columns, sourced from
-            `inputs.diluted_shares_M`. The workbook_reader uses the base
-            year's shares value as the per-share denominator.
+      #diluted shares outstanding — base_year column = current diluted shares;
+            forecast columns = `projections.shares_M` (the evolving, diluting
+            path). The workbook_reader uses the base year's (current) shares
+            value as the per-share denominator.
     """
     # Wipe whatever was there (refresher reuses this on every cycle).
     for row in ws.iter_rows():
@@ -312,14 +317,15 @@ def write_valuation_sheet(
     if ttm_fcf_M is not None:
         c = ws.cell(row=2, column=2, value=ttm_fcf_M)
         c.number_format = "#,##0"
-    for i, fcf in enumerate(projections.fcf_M):
+    for i, fcf in enumerate(projections.valuation_fcf_M):
         c = ws.cell(row=2, column=3 + i, value=fcf)
         c.number_format = "#,##0"
 
     ws.cell(row=3, column=1, value=_SHARES_LABEL).font = bold
-    shares = inputs.diluted_shares_M
-    for col in range(2, 3 + len(projections.years)):
-        c = ws.cell(row=3, column=col, value=shares)
+    base_shares = ws.cell(row=3, column=2, value=inputs.diluted_shares_M)
+    base_shares.number_format = "#,##0"
+    for i, sh in enumerate(projections.shares_M):
+        c = ws.cell(row=3, column=3 + i, value=sh)
         c.number_format = "#,##0"
 
     ws.cell(

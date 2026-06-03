@@ -353,11 +353,12 @@ def _read_dcf_npv(repo_root: Path, ticker: str) -> float | None:
 
 
 def _set_forecast_input(workbook_path: Path, label: str, value: float) -> None:
+    """Edit a Forecast assumption-grid cell (FY1 forecast column = column 3)."""
     wb = openpyxl.load_workbook(str(workbook_path))
     ws = wb[seeder.FORECAST_SHEET]
-    for r in range(1, 25):
+    for r in range(1, 30):
         if ws.cell(row=r, column=1).value == label:
-            ws.cell(row=r, column=2, value=value)
+            ws.cell(row=r, column=3, value=value)
             break
     wb.save(str(workbook_path))
 
@@ -414,7 +415,7 @@ def test_reingest_file_persists_and_reflects_input_edit(reingest_repo: Path) -> 
     assert (repo / "dcf" / "TEST.xlsx").exists()
 
     # Simulate a user bumping Y1 growth in the Sheet, then re-ingesting.
-    _set_forecast_input(downloaded, "Y1 Revenue Growth %", 0.40)
+    _set_forecast_input(downloaded, "Revenue Growth %", 0.40)
     rc2 = dcf_sheets.main(
         [
             "import",
