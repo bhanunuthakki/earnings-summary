@@ -170,6 +170,13 @@ LLM_MODELS: dict[str, str] = {
     # call_llm_with_web now resolves its model from purpose: registering this
     # keeps the brief on Sonnet AND silences the unknown-purpose warning.
     "recent_developments": DEFAULT_MODEL,
+    # DCF forecast-assumption normalization (execution/improve_dcf_assumptions.py):
+    # bottom-up reasoning about where each driver (growth, margins, capex, SBC,
+    # working capital) should NORMALIZE over the horizon vs the naive flat-TTM
+    # default. A sector/business-model judgment grounded in valuation best
+    # practice — Opus's wider knowledge + instruction-following matter. One call
+    # per ticker, cached on disk, run rarely — cost bounded. Latest Opus.
+    "dcf_assumptions": "claude-opus-4-8",
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
