@@ -7,6 +7,7 @@ the smoke test against `data/portfolio.db` post-merge.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -226,3 +227,66 @@ def test_post_refresh_rejects_unknown_step(client):
 def test_post_refresh_rejects_non_list_steps(client):
     resp = client.post("/actions/refresh", json={"ticker": "NU", "steps": "dcf"})
     assert resp.status_code == 400
+
+
+# ----- /actions/dcf-export, /actions/dcf-import, /api/dcf-sheet -----
+
+
+def test_post_dcf_export_returns_job_metadata(client):
+    resp = client.post("/actions/dcf-export", json={"ticker": "nu"})
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["ticker"] == "NU"
+    assert body["kind"] == "dcf-export"
+    assert body["job_id"].startswith("job_")
+    assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
+
+
+def test_post_dcf_export_threads_share_with_and_new(client):
+    reg: Registry = client.application.config["DISPATCH_REGISTRY"]
+    resp = client.post(
+        "/actions/dcf-export", json={"ticker": "NU", "share_with": "me@x.com", "new": True}
+    )
+    job = reg.get(resp.get_json()["job_id"])
+    assert job is not None
+    assert "export" in job.argv
+    assert job.argv[job.argv.index("--share-with") + 1] == "me@x.com"
+    assert "--new" in job.argv
+
+
+def test_post_dcf_export_missing_ticker_400(client):
+    assert client.post("/actions/dcf-export", json={}).status_code == 400
+
+
+def test_post_dcf_import_returns_job_metadata(client):
+    resp = client.post("/actions/dcf-import", json={"ticker": "NU"})
+    assert resp.status_code == 201
+    assert resp.get_json()["kind"] == "dcf-import"
+
+
+def test_post_dcf_import_threads_sheet_id(client):
+    reg: Registry = client.application.config["DISPATCH_REGISTRY"]
+    resp = client.post("/actions/dcf-import", json={"ticker": "NU", "sheet_id": "SID123"})
+    job = reg.get(resp.get_json()["job_id"])
+    assert job is not None
+    assert "import" in job.argv
+    assert job.argv[job.argv.index("--sheet-id") + 1] == "SID123"
+
+
+def test_post_dcf_import_missing_ticker_400(client):
+    assert client.post("/actions/dcf-import", json={}).status_code == 400
+
+
+def test_api_dcf_sheet_unlinked_returns_null(client):
+    resp = client.get("/api/dcf-sheet/TEST")
+    assert resp.status_code == 200
+    assert resp.get_json()["sheet_id"] is None
+
+
+def test_api_dcf_sheet_linked_returns_url(client, tmp_path):
+    holdings = tmp_path / "micro_thesis" / "holdings" / "TEST.json"
+    holdings.parent.mkdir(parents=True, exist_ok=True)
+    holdings.write_text(json.dumps({"ticker": "TEST", "dcf_defaults": {"gsheet_id": "SHEET99"}}))
+    body = client.get("/api/dcf-sheet/TEST").get_json()
+    assert body["sheet_id"] == "SHEET99"
+    assert body["url"] == "https://docs.google.com/spreadsheets/d/SHEET99/edit"

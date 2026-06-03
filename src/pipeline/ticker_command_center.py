@@ -463,6 +463,66 @@ def _refresh_section(ticker: str) -> str:
     )
 
 
+_DCF_SHEETS_SCRIPT = """<script>
+(function () {
+  var root = document.querySelector('.tcc-dcfsheets');
+  if (!root) return;
+  var tk = root.getAttribute('data-ticker');
+  var msg = root.querySelector('.tcc-dcfsheets-msg');
+  var openLink = root.querySelector('.tcc-dcfsheets-open');
+  function refreshLink() {
+    fetch('/api/dcf-sheet/' + encodeURIComponent(tk))
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s && s.url) { openLink.href = s.url; openLink.style.display = ''; }
+        else { openLink.style.display = 'none'; }
+      }).catch(function () {});
+  }
+  function post(url, label) {
+    msg.textContent = label + '\\u2026';
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: tk })
+    }).then(function (r) { return r.json(); }).then(function (j) {
+      msg.innerHTML = j.job_id
+        ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
+        : ('error: ' + (j.error || 'failed'));
+      if (j.job_id) { setTimeout(refreshLink, 2000); }
+    }).catch(function () { msg.textContent = 'network error'; });
+  }
+  root.querySelector('.tcc-dcf-export').addEventListener('click', function () {
+    post('/actions/dcf-export', 'pushing to Sheets');
+  });
+  root.querySelector('.tcc-dcf-import').addEventListener('click', function () {
+    post('/actions/dcf-import', 'pulling + recomputing');
+  });
+  refreshLink();
+})();
+</script>"""
+
+
+def _dcf_sheets_section(ticker: str) -> str:
+    """DCF ⇄ Google Sheets round-trip panel: push the workbook to a Sheet,
+    edit the Forecast INPUTS in the browser, then re-ingest to recompute. Needs
+    Google credentials configured server-side (directives/dcf_gsheets_setup.md) — the
+    buttons surface the job's error if they aren't. The "Open" link appears once
+    a Sheet has been linked (via GET /api/dcf-sheet/<ticker>)."""
+    t = escape(ticker)
+    return (
+        f'<section class="panel tcc-dcfsheets" data-ticker="{t}">'
+        "<h2>DCF ⇄ Google Sheets</h2>"
+        '<p class="sub">Push this ticker\'s DCF workbook to a Google Sheet, edit the Forecast '
+        "INPUTS in the browser, then re-ingest to recompute the fair value into "
+        "<code>dcf_runs</code>.</p>"
+        '<button type="button" class="tcc-dcf-export">Push to Sheets</button> '
+        '<button type="button" class="tcc-dcf-import">Re-ingest from Sheets</button> '
+        '<a class="tcc-dcfsheets-open" href="#" target="_blank" rel="noopener" '
+        'style="display:none">Open in Google Sheets ↗</a> '
+        '<span class="tcc-dcfsheets-msg muted"></span>' + _DCF_SHEETS_SCRIPT + "</section>"
+    )
+
+
 def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> str:
     ident = tcc.identity
     title = f"{ident.ticker}" + (f" · {ident.name}" if ident.name else "")
@@ -486,6 +546,7 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
         "</header>",
         _freshness_strip(ident),
         _refresh_section(ident.ticker),
+        _dcf_sheets_section(ident.ticker),
         _position_section(tcc.position),
         _analyses_section(tcc.analysis),
         _decisions_section(tcc.recent_decisions),
@@ -524,6 +585,7 @@ def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
             head,
             _freshness_strip(ident),
             _refresh_section(ident.ticker),
+            _dcf_sheets_section(ident.ticker),
             _position_section(tcc.position),
             _analyses_section(tcc.analysis),
             _decisions_section(tcc.recent_decisions),

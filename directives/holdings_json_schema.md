@@ -35,7 +35,9 @@ mean. When a field's semantics change, edit here in the same PR.
   "schema_version": 2,
   "wacc": 0.095,
   "mos_bar": 0.2,
-  "dcf_defaults": {"forecast_years": 5, "terminal_multiple": 22.0},
+  // dcf_defaults.gsheet_id is written by `dcf_sheets.py export` (the DCF ⇄ Google
+  // Sheets round-trip) and read back by `import`; see directives/dcf_gsheets_setup.md.
+  "dcf_defaults": {"forecast_years": 5, "terminal_multiple": 22.0, "gsheet_id": "1AbC...optional"},
   "segments": [...],
   "operational_kpis": [...],
   "valuation_multiple_override": "P/E (NTM)",   // optional
