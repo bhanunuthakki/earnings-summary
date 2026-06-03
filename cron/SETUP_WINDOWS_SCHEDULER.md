@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Twelve scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the three weekly + one monthly run off-cycle and refresh the synthesis / lens layer and the IR-spreadsheet KPI series.
+Thirteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the four weekly + one monthly run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus.
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -57,6 +57,14 @@ The two weekly tasks deliberately bracket the trading week: `weekly_p2_lens_refr
 | `earnings-summary\refresh_ir_kpis` | Weekly, Sunday 01:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | **IR-spreadsheet KPI refresh.** Runs `execution/refresh_ir_kpis_all.py`, which loops every ticker with a parser config (`micro_thesis/ir_config/<T>.json`, enumerated via `ir_pipeline.config.configured_tickers`) and, per ticker, shells out to `refresh_ir_kpis.py --ticker <T> --discover`: headless-renders the issuer's IR results-center, downloads the current historical-data spreadsheet, parses it, and ingests the KPI series at IR_DOC tier — superseding the lower-tier LLM brief values the report charts read. Subprocess-isolated per ticker with a 5-min cap; never aborts on one ticker's failure; exit code = count of failed tickers. Idempotent: an unchanged spreadsheet re-ingests as a no-op (the document is sha256-keyed), so the weekly poll simply catches each new quarter's file within a week of publication. Tickers without a config are skipped (a ticker's first refresh must run `refresh_ir_kpis.py --url`/`--file` to generate its config). **Requires the optional `ir` extra** in the task's Python — see Prerequisites. |
 
 Runs Sunday 01:00 — ahead of `weekly_p2_lens_refresh` (02:00) and the Sunday-night `weekly_synthesis` (23:00) — so the freshly-ingested issuer KPIs are in `kpi_facts` before any lens/synthesis read. To change the cadence (e.g. monthly), edit the trigger in `refresh_ir_kpis.task.xml`; the script is cadence-agnostic and idempotent either way. Today only `NU` has a config, so the run is a single ticker; it scales automatically as more configs are generated.
+
+### IR-document discovery + fetch (weekly)
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\discover_ir_documents` | Weekly, Sunday 01:30 | `discover_ir_documents.task.xml` | `run_discover_ir_documents.bat` | **IR-document corpus refresh.** Runs `execution/discover_ir_documents_all.py`, which reads the active-universe roster from the DB (`tracked_companies.list_type` in `portfolio`/`evaluation`) and, per ticker, shells out to two subprocess-isolated stages: (1) `discover_ir_documents.py --ticker <T>` headless-crawls the issuer's IR site (curated override → `ir_config` → `tracked_companies.ir_url`) and writes its URL manifest (`.tmp/ir_url_manifest/<T>_urls.json`); (2) `fetch_ir_documents.py --ticker <T> --categorize --calendar <id>` downloads the manifest's documents into staging and registers them at the canonical path (`documents` table, `source_type='ir_doc'` + the ir_narrative-visible layout). **Roster is read at run time, so newly-added evaluation companies are auto-included.** Subprocess-isolated per ticker with per-stage timeouts; never aborts on one ticker's failure; a ticker with no resolvable IR URL is `SKIPPED` (not a failure); exit code = count of FAILED tickers. Idempotent: a URL already in `documents.source_url` is skipped, and the append-only manifest accumulates history across weekly runs (mz JS-widget sites like NU expose only the current quarter, so history builds up over time). **Requires the optional `ir` extra** (headless browser) — same as `refresh_ir_kpis`. |
+
+Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before `weekly_p2_lens_refresh` (02:00) — so freshly-registered IR documents (and their `ir_narrative` anchors) precede the lens/synthesis reads. To change the cadence, edit the trigger in `discover_ir_documents.task.xml`. The same per-ticker fetch also runs best-effort on onboard (`execution/onboard_ticker.py`, `--skip-ir` to disable), so a newly-tracked name gets day-one coverage and the weekly run keeps it current.
 
 ## Switching FMP tier
 
@@ -120,10 +128,11 @@ ORDER BY COUNT(*) DESC;
   — or any path you set in `PROJECT_ROOT` at the top of each `.bat`.
 - Claude Code CLI on PATH and authed (only required by `daily_fetch_and_brief`
   for §8/§9 generation; the worker falls back to Gemini if the CLI fails).
-- The optional `ir` extra (only required by `refresh_ir_kpis`, for the headless
-  browser that resolves each issuer's spreadsheet URL): from the repo root, run
+- The optional `ir` extra (required by `refresh_ir_kpis` and
+  `discover_ir_documents`, for the headless browser that resolves each issuer's
+  spreadsheet / document URLs): from the repo root, run
   `pip install -e .[ir] && playwright install chromium` in the same Python
-  `python` resolves to. Without it that task's per-ticker `--discover` children
+  `python` resolves to. Without it those tasks' per-ticker discovery children
   exit non-zero (ImportError) and are logged as failures, but the batch still
   completes — every other task is unaffected.
 
@@ -179,6 +188,10 @@ schtasks /create /tn "earnings-summary\monthly_p3_refresh" ^
 
 schtasks /create /tn "earnings-summary\refresh_ir_kpis" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_ir_kpis.task.xml" ^
+  /ru "%USERNAME%"
+
+schtasks /create /tn "earnings-summary\discover_ir_documents" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_documents.task.xml" ^
   /ru "%USERNAME%"
 ```
 
@@ -272,6 +285,16 @@ Then check:
   pairs). A failed/timed-out ticker does NOT stop the others; exit code = number
   of failed tickers. If every ticker shows an ImportError in its captured stderr,
   the `ir` extra isn't installed (see Prerequisites).
+- For `discover_ir_documents`: per roster ticker, a `=== IR-document discovery -
+  <T>` header followed by the discover child's JSON (`status`, `discovered`) and
+  the fetch child's JSON (`downloaded`), then a final summary `{ "tickers": [...],
+  "ok": N, "skipped": N, "failed": N, "discovered": N, "downloaded": N, … }`. On
+  success, expect new canonical files `ir_documents/<T>/<period_end>/ir_*__<sha8>.<ext>`
+  and new `documents` rows (`SELECT doc_type, period_end, source_url FROM documents
+  WHERE source_type='ir_doc'`). A ticker with no resolvable IR URL is `SKIPPED`
+  (not counted in the exit code); a failed/timed-out ticker does NOT stop the
+  others; exit code = number of FAILED tickers. Same `ir`-extra prerequisite as
+  `refresh_ir_kpis`.
 
 You can also run any wrapper directly to bypass the scheduler entirely:
 

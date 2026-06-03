@@ -65,11 +65,38 @@ without IR data — IR rows simply don't appear in `documents` for that ticker.
 `process_ir_documents.py` LLM step, but they are first-class citizens of the
 `documents` table for downstream analytical queries.
 
-## Path A: Auto-fetch (URL Discovery → Download)
+## Path A: Auto-fetch (headless discovery → download → register)
 
-1. **Browser discovery** (one session per company, run once): Navigate IR pages, extract direct PDF URLs, save to `.tmp/ir_url_manifest/<TICKER>_urls.json`.
-2. **Download** (`execution/fetch_ir_documents.py --ticker <X>`): Reads manifest, downloads PDFs to `ir_documents/<TICKER>/<YEAR>_<QUARTER>/<doc_type>.pdf`, registers in `document_index.json`.
-3. **Idempotency**: If file already exists locally, skip. Manifest can be re-run safely.
+Fully automated and headless — no per-company manual browser session. Wired into
+the weekly cron (`cron/discover_ir_documents.task.xml`, Sunday 01:30) and a
+best-effort step on onboard (`execution/onboard_ticker.py`, `--skip-ir` to skip).
+
+1. **Headless discovery** (`execution/discover_ir_documents.py --ticker <X>`):
+   resolves the issuer's IR URL (curated map in `src/ir_pipeline/ir_url_overrides.py`
+   → `ir_config.results_center_url` → `tracked_companies.ir_url`), then runs the
+   **hybrid** discovery in `src/ir_pipeline/discover/`: the precise `mz` adapter's
+   current-quarter links **plus** a generic Playwright crawler
+   (`discover/generic.py`) that renders ANY IR page, harvests every document link
+   (.pdf/.xlsx/CDN/filemanager), follows obvious "quarterly results / archive"
+   sub-links one hop, and classifies each by filename + link text. Merges the
+   results into `.tmp/ir_url_manifest/<TICKER>_urls.json` (append-only, URL-keyed).
+   Best-effort: no IR URL → `no_ir_url` (exit 0); a JS-widget site that exposes
+   only the current quarter accumulates history across weekly runs.
+2. **Download + register** (`execution/fetch_ir_documents.py --ticker <X> --categorize`):
+   downloads each manifest URL into the staging folder `ir_documents/<TICKER>/`
+   (extension from the response headers), records the source URL in
+   `.tmp/ir_incoming_urls.json`, then hands the ticker to `categorize_ir_uploads.py`
+   — which **content-classifies** each file (authoritative), moves it to the
+   canonical `ir_documents/<TICKER>/<period_end_iso>/<doc_type>__<sha8>.<ext>`, and
+   inserts the `documents` row (`source_type='ir_doc'`, real `source_url`) + the
+   legacy JSON-index mirror. `--calendar <id>` (FYE-derived) lets a ticker not yet
+   in `ISSUER_REGISTRY` register best-effort.
+3. **Batch** (`execution/discover_ir_documents_all.py`): the scheduled entry point.
+   Reads the portfolio+evaluation roster from the DB at run time (so new eval names
+   are auto-included), runs steps 1–2 per ticker subprocess-isolated, never aborts
+   on one ticker's failure; exit code = count of FAILED tickers.
+4. **Idempotency**: a URL already in `documents.source_url` is skipped; identical
+   bytes are a sha256-keyed no-op. Re-running discovery or the batch is safe.
 
 ## Path B: Manual upload (Categorize → Register)
 
