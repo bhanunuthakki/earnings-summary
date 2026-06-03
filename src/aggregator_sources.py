@@ -6,6 +6,9 @@ Free, no-auth earnings-transcript aggregator sources, ranked by coverage.
 Probed against the 11-name portfolio (NOW, NVO, NU, MELI, META, GOOG, AMZN,
 WIX, RBRK, VEEV, BN) on 2026-05-06. Coverage:
 
+  issuer_ir      latest quarter only, but EARLIEST — the company's own results-
+                 center PDF is posted before any aggregator indexes the call
+                 (config-gated to MZ-platform issuers; see ir_pipeline.transcript)
   roic.ai        10/10  including foreign ADRs (NVO, NU, MELI) and Brookfield (BN)
   stockanalysis  7/10   misses NVO, GOOG, BN
   tickertrends   recent only; aggressive rate-limit on bursty access
@@ -16,12 +19,15 @@ with a `fetch_qa(ticker, year, quarter) -> AggregatorHit | None` callable.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Callable
 
 import requests
+
+log = logging.getLogger(__name__)
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -243,10 +249,41 @@ def _tickertrends_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit |
 
 
 # ---------------------------------------------------------------------------
+# Source: issuer IR results-center (the timeliest — published before aggregators)
+# ---------------------------------------------------------------------------
+
+
+def _issuer_ir_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
+    """The issuer's own IR results-center transcript (see `ir_pipeline.transcript`).
+
+    Best-effort and config-gated: tickers without an MZ IR config short-circuit
+    before any browser launch, and any discovery/render/download failure (incl. a
+    missing optional `ir`/Playwright extra) degrades to None so the chain falls
+    through to the free aggregators.
+    """
+    try:
+        from ir_pipeline.transcript import fetch_ir_transcript
+
+        hit = fetch_ir_transcript(ticker, year, quarter)
+    except Exception as exc:  # first source must never break the chain
+        log.debug("issuer_ir fetch failed for %s Q%s %s: %s", ticker, quarter, year, exc)
+        return None
+    if hit is None:
+        return None
+    return AggregatorHit(
+        source_name="issuer_ir",
+        page_url=hit.page_url,
+        qa_text=hit.qa_text,
+        full_text_chars=len(hit.qa_text),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registered fallback chain — order is the priority order
 # ---------------------------------------------------------------------------
 
 SOURCES: list[AggregatorSource] = [
+    AggregatorSource("issuer_ir", _issuer_ir_fetch),
     AggregatorSource("roic", _roic_fetch),
     AggregatorSource("stockanalysis", _stockanalysis_fetch),
     AggregatorSource("tickertrends", _tickertrends_fetch),
