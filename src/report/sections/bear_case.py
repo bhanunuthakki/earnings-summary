@@ -26,10 +26,10 @@ import json
 import logging
 import re
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from llm_client import generate_bear_case, is_hard_stop, load_ir_anchor
 from report.models import (
@@ -132,9 +132,7 @@ def build(
         # render and leave the daily cron with no artifact at all.
         if is_hard_stop(exc):
             raise
-        log.error(
-            "bear_case LLM call failed for %s: %s: %s", ticker, type(exc).__name__, exc
-        )
+        log.error("bear_case LLM call failed for %s: %s: %s", ticker, type(exc).__name__, exc)
         return _degraded_bear(
             ticker,
             "The bear-case LLM call failed operationally (timeout, or both the "
@@ -184,9 +182,7 @@ def _degraded_bear(ticker: str, detail: str) -> BearCaseSection:
     )
 
 
-def _read_cache(
-    ticker: str, repo_root: Path, cache_ttl_days: int
-) -> BearCaseSection | None:
+def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSection | None:
     """Read data/bear_case/<TICKER>.json if it exists and is younger than TTL.
 
     Returns a parsed BearCaseSection on hit, None on miss / stale / unreadable.
@@ -195,10 +191,10 @@ def _read_cache(
     if not path.exists():
         return None
     try:
-        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     except OSError:
         return None
-    if datetime.now(timezone.utc) - mtime > timedelta(days=cache_ttl_days):
+    if datetime.now(UTC) - mtime > timedelta(days=cache_ttl_days):
         return None
     try:
         raw = path.read_text(encoding="utf-8")
@@ -239,9 +235,7 @@ def _ts_signals_md(ticker: str, repo_root: Path) -> str:
     rows exist for the ticker so the prompt stays clean.
     """
     signals = load_all_signals(ticker, repo_root=repo_root)
-    return format_signals_as_prompt_block(
-        signals, heading="Time-Series Disconfirmation Candidates"
-    )
+    return format_signals_as_prompt_block(signals, heading="Time-Series Disconfirmation Candidates")
 
 
 def _ticker_specific_md(ticker: str, repo_root: Path) -> str:
@@ -334,17 +328,13 @@ def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
         if len(excerpt_short) > 160:
             excerpt_short = excerpt_short[:157] + "..."
         if value_str:
-            lines.append(
-                f"- **{kind}** — {value_str} by {period} — \"{excerpt_short}\""
-            )
+            lines.append(f'- **{kind}** — {value_str} by {period} — "{excerpt_short}"')
         else:
-            lines.append(f"- **{kind}** — {period} — \"{excerpt_short}\"")
+            lines.append(f'- **{kind}** — {period} — "{excerpt_short}"')
     return "\n".join(lines)
 
 
-def _format_target_value(
-    value: object, unit: object, currency: object
-) -> str:
+def _format_target_value(value: object, unit: object, currency: object) -> str:
     """Compose '50000 USD_M', '30%', etc. Returns '' for qualitative rows."""
     if value is None:
         return ""
@@ -361,7 +351,7 @@ def _format_target_value(
     return f"{formatted} {suffix}".strip()
 
 
-def _loads_first_json_object(text: str) -> dict[str, object]:
+def _loads_first_json_object(text: str) -> dict[str, Any]:
     """Decode the first JSON object out of an LLM response.
 
     Tolerant of three things the model does intermittently: wrapping the JSON
@@ -371,18 +361,14 @@ def _loads_first_json_object(text: str) -> dict[str, object]:
     that trailing text). Strip fences, seek the first ``{``, then ``raw_decode``
     so anything trailing the object is ignored.
     """
-    cleaned = re.sub(
-        r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE
-    ).strip()
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.MULTILINE).strip()
     start = cleaned.find("{")
     if start == -1:
         raise ValueError("bear case response contained no JSON object")
     payload, _ = json.JSONDecoder().raw_decode(cleaned[start:])
     if not isinstance(payload, dict):
-        raise ValueError(
-            f"Bear case response was not a JSON object: {type(payload).__name__}"
-        )
-    return payload
+        raise ValueError(f"Bear case response was not a JSON object: {type(payload).__name__}")
+    return cast("dict[str, Any]", payload)
 
 
 def _parse_response(text: str) -> BearCaseSection:
@@ -391,15 +377,16 @@ def _parse_response(text: str) -> BearCaseSection:
     section to MISSING_DATA."""
     payload = _loads_first_json_object(text)
 
-    failure_modes_raw = payload.get("failure_modes") or []
+    raw_modes = payload.get("failure_modes")
+    failure_modes_raw = cast("list[Any]", raw_modes) if isinstance(raw_modes, list) else []
     failure_modes = [FailureMode(**_coerce_failure_mode(fm)) for fm in failure_modes_raw]
+    raw_flags = payload.get("out_of_scope_flags")
+    flags = cast("list[Any]", raw_flags) if isinstance(raw_flags, list) else []
     return BearCaseSection(
         status=SectionStatus.OK,
         failure_modes=failure_modes,
         most_underweighted=_str_or_none(payload.get("most_underweighted")),
-        out_of_scope_flags=[
-            s for s in (payload.get("out_of_scope_flags") or []) if isinstance(s, str)
-        ],
+        out_of_scope_flags=[s for s in flags if isinstance(s, str)],
     )
 
 
