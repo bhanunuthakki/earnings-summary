@@ -67,7 +67,13 @@ def main() -> int:
 
     results: list[dict[str, object]] = []
     for ticker in tickers:
-        result = _refresh_one(ticker, repo_root, db_path, args)
+        result = refresh_one(
+            ticker,
+            repo_root,
+            db_path,
+            workbook_override=args.workbook,
+            valuation_year=args.valuation_year,
+        )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
     return 0
@@ -127,17 +133,32 @@ def _named_holdings_with_wacc(repo_root: Path) -> list[str]:
     return out
 
 
-def _refresh_one(
-    ticker: str, repo_root: Path, db_path: Path, args: argparse.Namespace
+def refresh_one(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    *,
+    workbook_override: Path | None = None,
+    valuation_year: int,
 ) -> dict[str, object]:
-    """Run the full refresh chain for one ticker. Returns a structured result."""
+    """Run the full refresh chain for one ticker. Returns a structured result.
+
+    Seeds-or-refreshes the workbook, recomputes the PV from the (possibly
+    user-edited) Forecast INPUTS, and upserts the `dcf_runs` row. Public so the
+    Google-Sheets re-ingest (`execution/dcf_sheets.py import`) can drive the same
+    recompute after pulling an edited Sheet down to `dcf/<TICKER>.xlsx`, instead
+    of duplicating the WACC / terminal-multiple / live-price / persist plumbing.
+
+    `workbook_override` pins a specific workbook (else `dcf/<TICKER>.xlsx`);
+    `valuation_year` is the actuals/forecast cutoff.
+    """
     from typing import cast
 
     holdings = _load_holdings(repo_root, ticker)
     if holdings is None:
         return {"ticker": ticker, "status": "skipped", "reason": "no holdings JSON"}
 
-    workbook_path = _resolve_workbook(repo_root, ticker, args.workbook)
+    workbook_path = _resolve_workbook(repo_root, ticker, workbook_override)
     fmp_dir = repo_root / FMP_QUARTERLY_DIR
 
     # Seed-or-refresh BEFORE the WACC / terminal-multiple gates, so an un-WACC'd
@@ -155,7 +176,7 @@ def _refresh_one(
                 ticker,
                 fmp_quarterly_dir=fmp_dir,
                 output_path=new_path,
-                base_year=args.valuation_year,
+                base_year=valuation_year,
                 db_path=db_path,
             )
             workbook_path = new_path
@@ -166,7 +187,7 @@ def _refresh_one(
                     workbook_path,
                     fmp_dir,
                     ticker=ticker,
-                    base_year=args.valuation_year,
+                    base_year=valuation_year,
                     db_path=db_path,
                 )
                 seed_refresh = {
@@ -218,7 +239,7 @@ def _refresh_one(
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 
     try:
-        snapshot = workbook_reader.read_valuation(workbook_path, args.valuation_year)
+        snapshot = workbook_reader.read_valuation(workbook_path, valuation_year)
     except workbook_reader.WorkbookReadError as e:
         return {
             "ticker": ticker,
@@ -287,7 +308,7 @@ def _refresh_one(
         "ticker": ticker,
         "status": "ok",
         "workbook": str(workbook_path),
-        "valuation_year": args.valuation_year,
+        "valuation_year": valuation_year,
         "forecast_years": forecast_years_used,
         "fair_value_per_share": pv.fair_value_per_share,
         "enterprise_value_M": pv.enterprise_value,

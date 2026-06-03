@@ -421,6 +421,28 @@ def create_app(
             ]
         }
 
+    @app.route("/api/dcf-sheet/<ticker>", methods=["GET"])
+    def dcf_sheet_link(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """The Google Sheet linked to a ticker's DCF, if any:
+        ``{"ticker", "sheet_id", "url"}`` (sheet_id/url null when unlinked). Read
+        from holdings ``dcf_defaults.gsheet_id``, which an `export` populates."""
+        t = ticker.upper()
+        path = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
+        sheet_id: str | None = None
+        if path.exists():
+            try:
+                raw: object = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raw = None
+            if isinstance(raw, dict):
+                dd = cast("dict[str, object]", raw).get("dcf_defaults")
+                if isinstance(dd, dict):
+                    gid = cast("dict[str, object]", dd).get("gsheet_id")
+                    if isinstance(gid, str) and gid:
+                        sheet_id = gid
+        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit" if sheet_id else None
+        return {"ticker": t, "sheet_id": sheet_id, "url": url}
+
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
     @app.route("/actions/refresh", methods=["POST", "OPTIONS"])
@@ -512,6 +534,89 @@ def create_app(
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
 
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/dcf-export", methods=["POST", "OPTIONS"])
+    def start_dcf_export():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Push a ticker's dcf/<T>.xlsx to a Google Sheet (execution/dcf_sheets.py
+        export). Re-exports the linked Sheet if one exists, else creates one (and,
+        for service-account creds, shares it to `share_with`) and links its id in
+        holdings. Streams via /actions/stream/<job_id>. Needs Google credentials —
+        see directives/dcf_gsheets_setup.md."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker", "")).upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        script = repo_root / "execution" / "dcf_sheets.py"
+        argv = [
+            sys.executable,
+            str(script),
+            "export",
+            "--ticker",
+            ticker,
+            "--repo-root",
+            str(repo_root),
+        ]
+        share_with = str(body.get("share_with", "")).strip()
+        if share_with:
+            argv += ["--share-with", share_with]
+        if bool(body.get("new", False)):
+            argv.append("--new")
+        try:
+            job = job_registry.start(ticker=ticker, kind="dcf-export", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/dcf-import", methods=["POST", "OPTIONS"])
+    def start_dcf_import():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Pull the ticker's linked Google Sheet and recompute the DCF
+        (execution/dcf_sheets.py import → refresh_dcf.refresh_one → dcf_runs). The
+        Sheet id comes from `sheet_id` in the body or holdings dcf_defaults.gsheet_id.
+        Streams via /actions/stream/<job_id>. Needs Google credentials."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker", "")).upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        script = repo_root / "execution" / "dcf_sheets.py"
+        argv = [
+            sys.executable,
+            str(script),
+            "import",
+            "--ticker",
+            ticker,
+            "--repo-root",
+            str(repo_root),
+        ]
+        sheet_id = str(body.get("sheet_id", "")).strip()
+        if sheet_id:
+            argv += ["--sheet-id", sheet_id]
+        try:
+            job = job_registry.start(ticker=ticker, kind="dcf-import", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
         return (
             {
                 "job_id": job.job_id,

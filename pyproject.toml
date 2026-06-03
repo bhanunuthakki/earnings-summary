@@ -23,6 +23,16 @@ dev = [
 ir = [
     "playwright>=1.40",
 ]
+# DCF <-> Google Sheets round-trip (execution/dcf_sheets.py export/import): pushes
+# the DCF workbook to a Google Sheet and pulls the edited Sheet back to recompute.
+# Imported lazily in src/integrations/gsheets.py, so the credential-free re-ingest
+# `--file` path never needs these. Install with `pip install -e .[gsheets]`.
+# See directives/dcf_gsheets_setup.md for the credential setup.
+gsheets = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.30",
+    "google-auth-oauthlib>=1.2",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -63,7 +73,12 @@ ignore = [
 [tool.pyright]
 include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
-extraPaths = ["src", "scratch"]
+# `execution` is an import root too: its CLIs import each other as top-level
+# modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
+# after a runtime sys.path.insert. Listing it here lets pyright resolve those —
+# without it every such import is an unresolved-import error with a cascade of
+# Unknowns behind it.
+extraPaths = ["src", "execution", "scratch"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -72,7 +87,7 @@ reportUnknownMemberType = false
 [tool.basedpyright]
 include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions"]
-extraPaths = ["src", "scratch"]
+extraPaths = ["src", "execution", "scratch"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
 reportMissingTypeStubs = false
