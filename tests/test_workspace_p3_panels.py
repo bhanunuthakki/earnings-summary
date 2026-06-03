@@ -30,6 +30,7 @@ from report.models import (  # noqa: E402
     CompanyDescriptionSection,
     EvaluationSnapshotSection,
     IrDocsSection,
+    KpiLedgerRow,
     QuickCategorizationRow,
     SayDoCard,
     SayDoSection,
@@ -53,6 +54,7 @@ from report.renderers.workspace_html import (  # noqa: E402
     _saydo_tab,
     _saydo_verdicts_panel,
     _strategic_targets_panel,
+    _thesis_hygiene_panels,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     _thesis_tab,
 )
 from report.sections.p3_data import (  # noqa: E402
@@ -592,6 +594,109 @@ def test_thesis_tab_emits_macro_panel_with_rows() -> None:
     assert "VIX" in html
     assert "-0.42" in html
     assert "lookback 180d" in html
+
+
+def _ledger_thesis() -> ThesisSection:
+    """A ThesisSection whose ledger exercises every enriched-row branch: a fresh
+    multi-quarter tier-1 row (sparkline + YoY delta), a stale single-obs tier-1
+    row, a zero-fact tier-1 row (kept in the table), and a zero-fact tier-2 row
+    (collapsed into the footnote)."""
+    return ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="t",
+        overall_breach_status="ok",
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="ROE (annualized, consolidated)",
+                tier="tier_1",
+                unit="%",
+                definition="annualized, consolidated",
+                current_status="green",
+                history=[
+                    ("2025-03-31", 25.0),
+                    ("2025-06-30", 24.8),
+                    ("2025-09-30", 25.1),
+                    ("2025-12-31", 25.2),
+                    ("2026-03-31", 25.4),
+                ],
+            ),
+            KpiLedgerRow(
+                name="Operating margin (GAAP)",
+                tier="tier_1",
+                unit="%",
+                definition="GAAP",
+                current_status="green",
+                history=[("2023-06-30", 6.4)],  # ~3 years old → stale
+            ),
+            KpiLedgerRow(
+                name="Credit exposure (loan mix)",
+                tier="tier_1",
+                unit="%",
+                definition="loan mix",
+                current_status="unknown",
+                history=[],  # zero-fact tier-1 stays in the table
+            ),
+            KpiLedgerRow(
+                name="Cost of risk (NPL formation)",
+                tier="tier_2",
+                definition="NPL formation",
+                current_status="unknown",
+                history=[],  # zero-fact tier-2 → footnote
+            ),
+        ],
+    )
+
+
+def test_thesis_ledger_enriches_rows_and_collapses_empty_tier23() -> None:
+    out = StringIO()
+    _thesis_hygiene_panels(out, _ledger_thesis(), date(2026, 6, 2))
+    html = out.getvalue()
+
+    # Sparkline + YoY delta rendered off the loaded history.
+    assert "ledger-spark" in html
+    assert "<svg" in html
+    assert "YoY" in html
+
+    # Clean name (parenthetical demoted) + definition line surfaced.
+    assert "<strong>ROE</strong>" in html
+    assert "ledger-def" in html
+    assert "annualized, consolidated" in html
+
+    # Staleness: the 2023 single-obs row is flagged and its row dimmed.
+    assert "ledger-stale" in html
+    assert "ledger-stale-row" in html
+
+    # Zero-fact tier-2 row collapses into the footnote; zero-fact tier-1 stays.
+    assert "Tracked, no data yet" in html
+    assert "Cost of risk" in html
+    assert "Credit exposure" in html
+    assert "3 tracked, 1 awaiting data" in html
+
+
+def test_thesis_ledger_omits_stale_flag_without_report_date() -> None:
+    """No report date (e.g. a bare panel render) → no staleness comparison,
+    but the rest of the ledger still renders."""
+    out = StringIO()
+    _thesis_hygiene_panels(out, _ledger_thesis(), None)
+    html = out.getvalue()
+    assert "ledger-spark" in html
+    assert "ledger-stale" not in html
+
+
+def test_thesis_tab_forwards_report_date_to_ledger() -> None:
+    """The report date threads through `_thesis_tab` to the ledger so staleness
+    flags — the exact path the page-level renderer's tab lambda uses."""
+    out = StringIO()
+    _thesis_tab(
+        out,
+        _empty_snapshot(),
+        _ledger_thesis(),
+        _empty_bear(),
+        [],
+        date(2026, 6, 2),
+    )
+    html = out.getvalue()
+    assert "ledger-stale" in html  # the 2023 row flagged once the date reaches the ledger
 
 
 def test_company_tab_emits_all_three_p3_panels_empty() -> None:

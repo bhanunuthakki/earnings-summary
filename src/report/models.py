@@ -237,6 +237,12 @@ class KpiLedgerRow(BaseModel):
     break_condition: str | None = None
     history: list[tuple[str, float | None]] = Field(default_factory=list)  # [(period, value)]
     current_status: Literal["green", "yellow", "red", "unknown"] = "unknown"
+    # Short gloss of what the metric measures, so the ledger reads as
+    # definitions + data rather than a bare list of names. Populated by
+    # `thesis._build_ledger` from the resolved `kpi_definitions` row (the
+    # curator `notes`, else the name's parenthetical qualifier). None when the
+    # name carries no qualifier and the definition has no notes.
+    definition: str | None = None
     # Verbatim quote / analyst statement that produced the latest history
     # point's value, when known. Populated by the kpi_facts.source_excerpt
     # column (added in migration 0033). Surfaced in the brief as a tooltip

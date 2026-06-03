@@ -25,6 +25,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -516,6 +517,146 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
         if len(tiles) >= n:
             break
     return tiles
+
+
+# ---------------------------------------------------------------------------
+# KPI ledger row enrichment (staleness + trend delta)
+# ---------------------------------------------------------------------------
+#
+# The §2 ledger table renders one row per tracked KPI. These pure helpers turn
+# the already-loaded ``KpiLedgerRow.history`` into the two signals the bare
+# "latest value" cell can't carry: whether that value is current, and how it's
+# moved. The sparkline itself reuses ``workspace_charts.sparkline``.
+
+# A ledger fact older than ~2 quarters from the report date is stale: the issuer
+# has reported newer quarters since, so the value shouldn't read as current. The
+# 200-day cut ≈ two quarterly cadences plus reporting-lag headroom, so the most
+# recently reported quarter (≤ ~135 days old at report time) never false-flags.
+KPI_STALE_AFTER_DAYS = 200
+
+
+def _parse_period(period: str) -> date | None:
+    try:
+        return date.fromisoformat(period[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def kpi_is_stale(latest_period: str, report_date: date) -> bool:
+    """True when a KPI's most recent fact predates ``report_date`` by more than
+    ~2 quarters (see ``KPI_STALE_AFTER_DAYS``). False for an unparseable period
+    so a malformed date never flags a row."""
+    latest = _parse_period(latest_period)
+    if latest is None:
+        return False
+    return (report_date - latest).days > KPI_STALE_AFTER_DAYS
+
+
+# Units whose change reads as percentage *points* vs. a percent change of a
+# level. ``_RATIO_HINT_RX`` / ``_PCT_HINT_RX`` (defined above for the strip)
+# back the name-based fallback when the unit is absent.
+_PP_UNITS = frozenset({"%", "percent", "pp"})
+_LEVEL_UNITS = frozenset(
+    {"count", "actual", "millions", "thousands", "billions", "m", "k", "b", "usd", "$", "x"}
+)
+
+
+def _delta_mode(unit: str | None, name: str) -> str:
+    """Classify how a KPI's change should read: ``'pp'`` (percentage points),
+    ``'bps'``, ``'ratio'`` (absolute, unitless) or ``'pct'`` (percent change of
+    a level)."""
+    u = (unit or "").strip().lower()
+    if u == "bps":
+        return "bps"
+    if u == "ratio":
+        return "ratio"
+    if u in _PP_UNITS or "%" in u or "margin" in u:
+        return "pp"
+    if u in _LEVEL_UNITS:
+        return "pct"
+    # No decisive unit — reuse the same name heuristic the KPI strip uses.
+    if _PCT_HINT_RX.search(name) and not _RATIO_HINT_RX.search(name):
+        return "pp"
+    return "pct"
+
+
+def _year_ago_value(points: list[tuple[str, float]], latest_period: str) -> float | None:
+    """Value ~1 year before ``latest_period``, matched by date within ±50 days
+    (robust to quarter-end drift and irregular spacing). None when no earlier
+    point falls in that window."""
+    target = _parse_period(latest_period)
+    if target is None:
+        return None
+    want = target - timedelta(days=365)
+    best: float | None = None
+    best_gap = 51
+    for period, value in points[:-1]:
+        d = _parse_period(period)
+        if d is None:
+            continue
+        gap = abs((d - want).days)
+        if gap < best_gap:
+            best_gap = gap
+            best = value
+    return best
+
+
+def _trim(x: float) -> str:
+    """One-decimal float with a redundant trailing ``.0`` removed ("4.0"→"4",
+    "0.3"→"0.3", "10.0"→"10")."""
+    s = f"{x:.1f}"
+    return s[:-2] if s.endswith(".0") else s
+
+
+def _format_delta(
+    current: float, base: float, unit: str | None, name: str, tag: str
+) -> tuple[str | None, str]:
+    mode = _delta_mode(unit, name)
+    if mode == "pct":
+        if base == 0:
+            return None, ""
+        change = (current / base - 1.0) * 100.0
+        if abs(change) < 0.5:  # rounds to 0%
+            return None, ""
+        arrow, direction = ("↑", "pos") if change > 0 else ("↓", "neg")
+        return f"{arrow} {abs(change):.0f}% {tag}", direction
+    delta = current - base
+    if mode == "bps":
+        if abs(delta) < 0.5:
+            return None, ""
+        arrow, direction = ("↑", "pos") if delta > 0 else ("↓", "neg")
+        return f"{arrow} {abs(delta):.0f}bps {tag}", direction
+    # 'pp' (percentage points) and 'ratio' (absolute, no suffix) share the
+    # absolute-difference formatting; only the suffix differs.
+    if abs(delta) < 0.05:
+        return None, ""
+    arrow, direction = ("↑", "pos") if delta > 0 else ("↓", "neg")
+    suffix = "pp" if mode == "pp" else ""
+    return f"{arrow} {_trim(abs(delta))}{suffix} {tag}", direction
+
+
+def kpi_trend_delta(
+    history: list[tuple[str, float | None]], unit: str | None, name: str
+) -> tuple[str | None, str]:
+    """Return ``(label, direction)`` for a ledger row's recent change, e.g.
+    ``("↑ 4pp YoY", "pos")``. Prefers a year-over-year delta (date-matched ~1y
+    back); falls back to quarter-over-quarter when there's no year-ago point.
+    ``(None, "")`` when there are fewer than two real observations or the change
+    rounds to zero.
+
+    ``direction`` ('pos'/'neg') reflects only which way the metric moved —
+    whether that move is good or bad is the Status column's job (a rising NPL is
+    'pos' here but red there)."""
+    points = [(p, v) for p, v in history if v is not None]
+    if len(points) < 2:
+        return None, ""
+    latest_period, latest_value = points[-1]
+    base = _year_ago_value(points, latest_period)
+    tag = "YoY"
+    if base is None:
+        base = points[-2][1]
+        tag = "QoQ"
+    return _format_delta(latest_value, base, unit, name, tag)
 
 
 # ---------------------------------------------------------------------------
