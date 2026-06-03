@@ -1,9 +1,9 @@
 """Discover a ticker's IR documents headlessly and write its URL manifest.
 
-Resolves the ticker's IR URL (curated override → ``ir_config.results_center_url``
-→ ``tracked_companies.ir_url``), crawls it via the hybrid discovery (generic
+Resolves the ticker's IR URL (curated override -> ``ir_config.results_center_url``
+-> ``tracked_companies.ir_url``), crawls it via the hybrid discovery (generic
 crawler + the mz precise fast-path), and merges the discovered document URLs into
-``.tmp/ir_url_manifest/<T>_urls.json`` — the manifest
+``.tmp/ir_url_manifest/<T>_urls.json`` --the manifest
 ``execution/fetch_ir_documents.py`` downloads from.
 
 Best-effort by design: a ticker with no resolvable IR URL prints status
@@ -40,7 +40,7 @@ def _db_ir_url(db_path: Path, ticker: str) -> str | None:
     """Read ``tracked_companies.ir_url`` for ``ticker``; None on any failure.
 
     Graceful when the DB is absent (gitignored; in a worktree it lives next to
-    the main checkout) — discovery then relies on the curated override / config.
+    the main checkout) --discovery then relies on the curated override / config.
     """
     if not db_path.exists():
         return None
