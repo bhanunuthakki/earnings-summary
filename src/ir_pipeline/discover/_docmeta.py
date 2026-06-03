@@ -11,8 +11,29 @@ from __future__ import annotations
 import re
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
+
+@dataclass(frozen=True)
+class CandidateDoc:
+    """One discoverable IR document link from the generic crawler.
+
+    ``doc_type_guess`` (legacy alias) / ``year_guess`` / ``quarter_guess`` are
+    cheap link-text + filename heuristics used to *select* which links to keep;
+    authoritative attribution happens later from the downloaded file's content.
+    Any of them may be ``None`` when the link text was uninformative.
+    """
+
+    url: str
+    link_text: str
+    filename_hint: str
+    doc_type_guess: str | None
+    year_guess: int | None
+    quarter_guess: int | None  # 1..4
+    source_page: str
+
 
 # Canonical doc_type → regexes matched (case-insensitively) against the filename.
 _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
