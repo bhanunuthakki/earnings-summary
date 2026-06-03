@@ -372,3 +372,56 @@ def test_speaker_block_split_real_aggregator_strings() -> None:
     assert paras[1][0] == "Matthew J. Tobolski"
     assert paras[1][1].startswith("Yes.")
     assert "Tobolski" not in paras[1][1]
+
+
+# ---------------------------------------------------------------------------
+# Issuer-published IR transcript — "<Name>: <speech>" / "<Name>, <Firm>:" format
+# ---------------------------------------------------------------------------
+# Foreign issuers (e.g. Nu Holdings) publish their own transcript on the IR site
+# before any aggregator indexes it. The host hands off with "open the line for
+# Mr. <A> from <Firm>" (a _TURN_BOUNDARY_RX shape) and every turn is labeled with
+# a colon — analysts as "<Name>, <Firm>:" and management as "<Name>:". This has
+# no single-initial marker and no role keyword, so it exercises the third
+# splitter rung, _split_colon_paragraphs.
+IR_COLON = (
+    "Operator: We will now start the Q&A session for investors and analysts. "
+    "Guilherme Souto: Thank you, operator. Could you please open the line for "
+    "Mr. Jorge Kuri from Morgan Stanley? "
+    "Jorge Kuri, Morgan Stanley: Congrats on the results. What is the SME "
+    "opportunity in Brazil and how is it differentiated? "
+    "David Velez: Thanks, Jorge, for that question. We have quietly built the "
+    "largest SME base in Brazil at near-zero acquisition cost. "
+    "Jorge Kuri, Morgan Stanley: And how large can that business become? "
+    "Guilherme Souto: Could you please open the line for Mr. Yuri Fernandes "
+    "from JPMorgan? "
+    "Yuri Fernandes, JPMorgan: Thank you. One on asset quality, please. "
+    "Guilherme Lago: Thanks so much for the question. Our balance sheet remains "
+    "solid and provisions reflect growth and seasonality, not deterioration."
+)
+
+
+def test_ir_published_colon_speaker_format() -> None:
+    entries = _entries(IR_COLON)
+    assert len(entries) == 2
+    # Analyst + firm come from the host hand-off boundary, not the colon label.
+    assert entries[0].analysts == "Jorge Kuri (Morgan Stanley)"
+    assert entries[0].question.startswith("Congrats on the results.")
+    assert entries[0].answers[0][0] == "David Velez"
+    # The analyst's second colon turn in the same segment is a follow-up.
+    assert entries[0].follow_up is not None
+    assert entries[0].follow_up.startswith("And how large")
+    assert entries[1].analysts == "Yuri Fernandes (JPMorgan)"
+    assert entries[1].answers[0][0] == "Guilherme Lago"
+
+
+def test_colon_split_ignores_single_word_section_labels() -> None:
+    # A single-word label (acronym / section header) inside an answer body must
+    # NOT be read as a speaker — only >=2-word names split a colon turn, even
+    # when speech happens to start capitalized after the colon.
+    body = (
+        "Jorge Kuri, Morgan Stanley: How is engagement trending across markets? "
+        "David Velez: Strong quarter. NPS: Very high and still improving steadily."
+    )
+    names = [name for name, _ in qa_roster._split_colon_paragraphs(body)]
+    assert names == ["Jorge Kuri", "David Velez"]
+    assert "NPS" not in names

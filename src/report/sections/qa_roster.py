@@ -176,6 +176,32 @@ _FULLNAME_HEADER_RX = re.compile(
     r"\s+(?=(?:" + _ROLE_ANCHOR + r")\b)"
 )
 
+# ---------------------------------------------------------------------------
+# Colon-delimited speaker format (issuer's own IR-published transcript)
+# ---------------------------------------------------------------------------
+# Companies that publish their own transcript (PDF/HTML on the IR site, e.g. Nu
+# Holdings) label each turn "<Name>: <speech>" or "<Name>, <Firm>: <speech>":
+#
+#   "David Velez: Thanks, Jorge, for that question. ..."
+#   "Jorge Kuri, Morgan Stanley: Congrats on the results. ..."
+#
+# There is no single-initial marker (so _SPEAKER_BLOCK_START_RX finds nothing)
+# and no role keyword after the name (so _FULLNAME_HEADER_RX finds nothing), so
+# this is the third and last fallback in the splitter ladder.
+#
+# We require >=2 name words (the surname guarantees a real person) so a section
+# or acronym label ("NPS:", "Pix:", "Q&A:", "Note:") inside a turn body can't be
+# mistaken for a speaker, and the speech must open with a capital/digit after the
+# colon — both keep false splits out of answer text. The optional ", <Firm>" is
+# matched but not captured (the analyst's firm already comes from the operator
+# hand-off boundary).
+_COLON_SPEAKER_HDR_RX = re.compile(
+    r"(?:(?<=[.!?”\"])\s+|\A\s*)"
+    r"(?P<name>" + _NAME_WORD + r"(?:\s+" + _NAME_WORD + r"){1,3})"
+    r"(?:\s*,\s*[A-Z][^:\n]{1,40})?"
+    r"\s*:\s+(?=[A-Z0-9])"
+)
+
 # Lowercase words that belong to a title (consumed) rather than marking speech.
 _TITLE_CONNECTORS = frozenset(
     {"and", "of", "the", "for", "to", "in", "at", "&", "do", "de", "da", "e"}
@@ -380,7 +406,9 @@ def _split_fullname_paragraphs(body: str) -> list[tuple[str, str]]:
     """
     headers = list(_FULLNAME_HEADER_RX.finditer(body))
     if not headers:
-        return []
+        # No role-anchored full-name headers — try the issuer's own
+        # colon-delimited "<Name>: <speech>" format before giving up.
+        return _split_colon_paragraphs(body)
     out: list[tuple[str, str]] = []
     for i, m in enumerate(headers):
         body_start = m.end()
@@ -392,6 +420,31 @@ def _split_fullname_paragraphs(body: str) -> list[tuple[str, str]]:
             continue
         if _HANDOFF_RX.match(text):
             # IR/operator hand-off stub ("Operator, could you please …") — drop.
+            continue
+        out.append((name, text))
+    return out
+
+
+def _split_colon_paragraphs(body: str) -> list[tuple[str, str]]:
+    """Scan a turn body for colon-delimited speaker blocks; return [(name, text)].
+
+    For the issuer-published format where each turn is "<Name>: <speech>" or
+    "<Name>, <Firm>: <speech>" (no initial marker, no role keyword). The block
+    body runs from one header's end to the next header's start (or end of turn).
+    A ``_HANDOFF_RX`` stub ("Operator, could you please …") is dropped.
+    """
+    headers = list(_COLON_SPEAKER_HDR_RX.finditer(body))
+    if not headers:
+        return []
+    out: list[tuple[str, str]] = []
+    for i, m in enumerate(headers):
+        body_start = m.end()
+        body_end = headers[i + 1].start() if i + 1 < len(headers) else len(body)
+        name = m.group("name").strip()
+        text = _normalize_whitespace(body[body_start:body_end]).strip(" .").strip()
+        if not text:
+            continue
+        if _HANDOFF_RX.match(text):
             continue
         out.append((name, text))
     return out
