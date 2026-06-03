@@ -59,6 +59,7 @@ from industry_classifier import (  # noqa: E402
     classify_ticker,
     load_template,
 )
+from ir_uploads import calendar_id_from_fye  # noqa: E402
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     index_fmp_files_for_ticker,
@@ -78,6 +79,8 @@ _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _FMP_SCRIPT = PROJECT_ROOT / "execution" / "save_fmp_data.py"
 _BACKFILL_SCRIPT = PROJECT_ROOT / "execution" / "backfill_transcripts.py"
+_DISCOVER_IR_SCRIPT = PROJECT_ROOT / "execution" / "discover_ir_documents.py"
+_FETCH_IR_SCRIPT = PROJECT_ROOT / "execution" / "fetch_ir_documents.py"
 
 # Mapping from list_type → processing tier. Used by the template applier when
 # it sets tracked_companies.processing_tier. Mirrors the rules in migration
@@ -143,7 +146,9 @@ def apply_industry_template(
     template = load_template(industry_slug, repo_root)
     holdings_path = holdings_dir_resolved / f"{ticker.upper()}.json"
     holdings, was_existing = _load_or_init_holdings(
-        ticker=ticker, holdings_path=holdings_path, template=template,
+        ticker=ticker,
+        holdings_path=holdings_path,
+        template=template,
     )
     added, kept = _merge_tier_1_kpis(holdings, template)
     _stamp_template_meta(holdings, template)
@@ -154,10 +159,12 @@ def apply_industry_template(
     )
 
     entity_id = _seed_company_entity(
-        ticker=ticker.upper(), db_path=db_path_resolved,
+        ticker=ticker.upper(),
+        db_path=db_path_resolved,
     )
     processing_tier = _set_processing_tier(
-        ticker=ticker.upper(), db_path=db_path_resolved,
+        ticker=ticker.upper(),
+        db_path=db_path_resolved,
     )
 
     log.info(
@@ -185,7 +192,10 @@ def apply_industry_template(
 
 
 def _load_or_init_holdings(
-    *, ticker: str, holdings_path: Path, template: IndustryTemplate,
+    *,
+    ticker: str,
+    holdings_path: Path,
+    template: IndustryTemplate,
 ) -> tuple[dict[str, object], bool]:
     """Return (holdings_dict, was_existing). Initializes a minimal stub when
     the file doesn't exist — same shape as the recurring-onboard stubs (see
@@ -228,7 +238,8 @@ def _load_or_init_holdings(
 
 
 def _merge_tier_1_kpis(
-    holdings: dict[str, object], template: IndustryTemplate,
+    holdings: dict[str, object],
+    template: IndustryTemplate,
 ) -> tuple[list[str], list[str]]:
     """Merge template canonical_kpis into holdings.tier_1_kpis. Returns
     (added_names, kept_existing_names). Existing entries (matched by case-
@@ -319,10 +330,7 @@ def _set_processing_tier(*, ticker: str, db_path: Path) -> str | None:
         conn = sqlite3.connect(str(db_path), timeout=5.0)
         conn.row_factory = sqlite3.Row
         # Bail if the column isn't present (migration 0044 hasn't run yet)
-        cols = {
-            r["name"]
-            for r in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()
-        }
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()}
         if "processing_tier" not in cols:
             conn.close()
             return None
@@ -356,7 +364,8 @@ def _run_fmp_fetch(ticker: str) -> int:
     cmd = [
         sys.executable,
         str(_FMP_SCRIPT),
-        "--tickers", ticker,
+        "--tickers",
+        ticker,
         "--skip-existing",
     ]
     proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
@@ -372,10 +381,53 @@ def _run_transcript_backfill(ticker: str) -> int:
     cmd = [
         sys.executable,
         str(_BACKFILL_SCRIPT),
-        "--ticker", ticker,
+        "--ticker",
+        ticker,
     ]
     proc = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     return proc.returncode
+
+
+def _ir_calendar(ticker: str) -> str:
+    """Fiscal-calendar id for the IR auto-fetch, from tracked_companies.fiscal_year_end."""
+    try:
+        conn = sqlite3.connect(str(_DB_PATH))
+        try:
+            row = conn.execute(
+                "SELECT fiscal_year_end FROM tracked_companies WHERE ticker = ? LIMIT 1",
+                (ticker,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return calendar_id_from_fye(None)
+    return calendar_id_from_fye(row[0] if row and row[0] else None)
+
+
+def _run_ir_documents(ticker: str) -> int:
+    """Discover + fetch + register IR documents for a single ticker.
+
+    Best-effort day-one coverage on onboard (the weekly cron keeps it current).
+    Needs the optional ``ir`` extra for the headless crawl; a missing extra just
+    makes the discover child exit non-zero, which the caller tolerates.
+    """
+    disc = subprocess.run(
+        [sys.executable, str(_DISCOVER_IR_SCRIPT), "--ticker", ticker],
+        cwd=str(PROJECT_ROOT),
+    )
+    fetch = subprocess.run(
+        [
+            sys.executable,
+            str(_FETCH_IR_SCRIPT),
+            "--ticker",
+            ticker,
+            "--categorize",
+            "--calendar",
+            _ir_calendar(ticker),
+        ],
+        cwd=str(PROJECT_ROOT),
+    )
+    return disc.returncode or fetch.returncode
 
 
 # ---------------------------------------------------------------------------
@@ -387,12 +439,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ticker", required=True, help="Ticker to onboard (e.g. BKNG)")
     ap.add_argument(
-        "--skip-fmp", action="store_true",
+        "--skip-fmp",
+        action="store_true",
         help="Skip the FMP fetch step (parse-only; useful for re-runs)",
     )
     ap.add_argument(
-        "--skip-transcripts", action="store_true",
+        "--skip-transcripts",
+        action="store_true",
         help="Skip the aggregator-transcript backfill step (faster onboard for re-runs)",
+    )
+    ap.add_argument(
+        "--skip-ir",
+        action="store_true",
+        help="Skip the IR-document discover+fetch step (e.g. no `ir` extra installed)",
     )
     ap.add_argument(
         "--industry-template",
@@ -413,11 +472,7 @@ def main() -> int:
 
     industry_arg = args.industry_template
     if industry_arg:
-        slug = (
-            classify_ticker(ticker, PROJECT_ROOT)
-            if industry_arg == "auto"
-            else industry_arg
-        )
+        slug = classify_ticker(ticker, PROJECT_ROOT) if industry_arg == "auto" else industry_arg
         if slug is None:
             print(
                 f"[onboard] {ticker} --industry-template=auto found no match; "
@@ -485,12 +540,16 @@ def main() -> int:
         )
         any_failed = any(s.status is RefreshStageStatus.FAILED for s in report.stages)
         end_run(
-            conn, run_id,
+            conn,
+            run_id,
             RunStageStatus.OK if not any_failed else RunStageStatus.FAILED,
             error_summary="one or more stages failed" if any_failed else None,
         )
         for s in report.stages:
-            print(f"[onboard] {ticker} {s.name.value:24s} {s.status.value:8s} rows={s.rows_processed:<5} {s.notes}", flush=True)
+            print(
+                f"[onboard] {ticker} {s.name.value:24s} {s.status.value:8s} rows={s.rows_processed:<5} {s.notes}",
+                flush=True,
+            )
     finally:
         conn.close()
 
@@ -503,6 +562,19 @@ def main() -> int:
             print(
                 f"[onboard] {ticker} backfill_transcripts returned rc={transcript_rc}; "
                 f"continuing (aggregator misses are tolerated)",
+                flush=True,
+            )
+
+    ir_rc: int | None = None
+    if not args.skip_ir:
+        print(f"[onboard] {ticker} stage=ir_documents", flush=True)
+        ir_rc = _run_ir_documents(ticker)
+        if ir_rc != 0:
+            # IR sites vary wildly / may not be discoverable; best-effort, the
+            # weekly cron retries. Never fail the onboard on this.
+            print(
+                f"[onboard] {ticker} ir_documents returned rc={ir_rc}; "
+                f"continuing (IR discovery is best-effort)",
                 flush=True,
             )
 

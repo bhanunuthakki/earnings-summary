@@ -35,6 +35,7 @@ import shutil
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -66,6 +67,9 @@ UNSORTED_DIR = IR_DIR / "_unsorted"
 RUN_MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "ir_categorization"
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 DEFAULT_REL_PATH_ROOT = PROJECT_ROOT
+# {staging_filename: source_url} written by fetch_ir_documents.py, so auto-fetched
+# docs carry their real IR URL as documents.source_url (not a manual_upload: stub).
+INCOMING_URLS_PATH = PROJECT_ROOT / ".tmp" / "ir_incoming_urls.json"
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
@@ -109,6 +113,19 @@ def _connect_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _load_url_overrides(path: Path) -> dict[str, str]:
+    """``{staging_filename: source_url}`` from fetch_ir_documents.py's sidecar."""
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in cast("dict[str, object]", data).items()}
 
 
 def _insert_document_row(
@@ -156,9 +173,7 @@ def _move_or_error(src: Path, dest: Path, dry_run: bool) -> None:
         if sha256_of(dest) == sha256_of(src):
             src.unlink()
             return
-        raise FileExistsError(
-            f"refuse_to_clobber: {dest} exists with different bytes than {src}"
-        )
+        raise FileExistsError(f"refuse_to_clobber: {dest} exists with different bytes than {src}")
     shutil.move(str(src), str(dest))
 
 
@@ -204,6 +219,9 @@ def _process_one(
     ticker_filter: str | None,
     ir_dir: Path,
     rel_root: Path,
+    *,
+    url_overrides: dict[str, str] | None = None,
+    calendar_override: str | None = None,
 ) -> dict[str, object]:
     """Classify, move, register one file. Returns a record for the run manifest.
 
@@ -219,13 +237,15 @@ def _process_one(
             return {"status": "skipped", "original": path.name, "ticker": canonical.ticker}
         sha = sha256_of(path)
         raw_bytes_size = path.stat().st_size
-        log.info({
-            "event": "reindexed",
-            "ticker": canonical.ticker,
-            "doc_type": canonical.doc_type.value,
-            "period_end": canonical.period_end.isoformat(),
-            "path": _safe_rel(path, rel_root),
-        })
+        log.info(
+            {
+                "event": "reindexed",
+                "ticker": canonical.ticker,
+                "doc_type": canonical.doc_type.value,
+                "period_end": canonical.period_end.isoformat(),
+                "path": _safe_rel(path, rel_root),
+            }
+        )
         db_inserted = False
         if not dry_run and conn is not None:
             fetched_at = dt.datetime.fromtimestamp(path.stat().st_mtime)
@@ -270,11 +290,10 @@ def _process_one(
         }
 
     hint = ticker_hint_from_path(path, ir_dir)
-    outcome = classify_ir_file(path, ticker_hint=hint)
+    outcome = classify_ir_file(path, ticker_hint=hint, calendar_override=calendar_override)
+    src_url = (url_overrides or {}).get(path.name)
     if isinstance(outcome, CategorizationFailure):
-        log.warning(
-            {"event": "rejected", "file": path.name, "reason": outcome.reason}
-        )
+        log.warning({"event": "rejected", "file": path.name, "reason": outcome.reason})
         if hint is not None:
             return {
                 "status": "rejected",
@@ -294,9 +313,7 @@ def _process_one(
         }
 
     if ticker_filter and outcome.ticker != ticker_filter:
-        log.info(
-            {"event": "skipped_filter", "file": path.name, "ticker": outcome.ticker}
-        )
+        log.info({"event": "skipped_filter", "file": path.name, "ticker": outcome.ticker})
         return {
             "status": "skipped",
             "original": path.name,
@@ -321,7 +338,9 @@ def _process_one(
 
     _move_or_error(path, new_path, dry_run)
 
-    fetched_at = dt.datetime.fromtimestamp(path.stat().st_mtime if path.exists() else new_path.stat().st_mtime)
+    fetched_at = dt.datetime.fromtimestamp(
+        path.stat().st_mtime if path.exists() else new_path.stat().st_mtime
+    )
 
     db_inserted = False
     if not dry_run and conn is not None:
@@ -334,7 +353,7 @@ def _process_one(
             sha256=sha,
             fetched_at=fetched_at,
             raw_bytes_size=raw_bytes_size,
-            source_url=f"manual_upload:{path.name}",
+            source_url=src_url or f"manual_upload:{path.name}",
             rel_root=rel_root,
         )
         legacy = _LEGACY_INDEX_MAP.get(outcome.doc_type)
@@ -345,7 +364,7 @@ def _process_one(
                 year=year,
                 quarter=qlabel,
                 doc_type=legacy,
-                ir_url=f"manual_upload:{path.name}",
+                ir_url=src_url or f"manual_upload:{path.name}",
                 local_path=str(new_path),
                 fiscal_label=outcome.period_label,
                 note="categorized_by:categorize_ir_uploads",
@@ -385,7 +404,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Categorize manually-uploaded IR documents under ir_documents/."
     )
-    parser.add_argument("--dry-run", action="store_true", help="Classify and report; no moves, no DB writes.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Classify and report; no moves, no DB writes."
+    )
     parser.add_argument(
         "--ticker",
         type=str,
@@ -415,12 +436,21 @@ def main() -> int:
         default=DEFAULT_REL_PATH_ROOT,
         help="Root that `documents.file_path` and log paths are reported relative to.",
     )
+    parser.add_argument(
+        "--calendar",
+        default=None,
+        help="Fiscal-calendar id for the auto-fetch path: trust the parent-folder "
+        "ticker hint and attribute periods for tickers not in ISSUER_REGISTRY. "
+        "Omit for the strict manual-upload behavior.",
+    )
     args = parser.parse_args()
 
     src_dir: Path = args.source_dir.resolve()
     if not src_dir.exists():
         log.info({"event": "no_source_dir", "path": str(src_dir)})
-        print(json.dumps({"status": "no_source_dir", "categorized": 0, "rejected": 0, "skipped": 0}))
+        print(
+            json.dumps({"status": "no_source_dir", "categorized": 0, "rejected": 0, "skipped": 0})
+        )
         return 0
 
     files = iter_uncategorized_files(src_dir)
@@ -433,6 +463,8 @@ def main() -> int:
     if not args.dry_run:
         conn = _connect_db(args.db_path)
 
+    url_overrides = _load_url_overrides(INCOMING_URLS_PATH)
+
     records: list[dict[str, object]] = []
     counts = {"categorized": 0, "rejected": 0, "skipped": 0}
     try:
@@ -444,6 +476,8 @@ def main() -> int:
                 args.ticker,
                 ir_dir=src_dir,
                 rel_root=args.rel_root.resolve(),
+                url_overrides=url_overrides,
+                calendar_override=args.calendar,
             )
             records.append(record)
             counts[record["status"]] = counts.get(record["status"], 0) + 1

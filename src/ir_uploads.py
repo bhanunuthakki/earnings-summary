@@ -48,6 +48,8 @@ _CAL_CALENDAR = "calendar"  # FY-end Dec 31 — Q1=Mar-31, Q2=Jun-30, Q3=Sep-30,
 _CAL_VEEV = "veeva"  # FY-end Jan 31
 _CAL_RUBRIK = "rubrik"  # FY-end Apr 30 — per fetch_ir_documents.md quarter table
 _CAL_NVO = "nvo"  # Calendar, but H1=Q2, 9M=Q3, FY=Q4
+_CAL_VISA = "visa"  # FY-end Sep 30 — Q1=Dec-31, Q2=Mar-31, Q3=Jun-30, Q4=Sep-30
+_CAL_ORACLE = "oracle"  # FY-end May 31 — Q1=Aug-31, Q2=Nov-30, Q3=Feb-28, Q4=May-31
 
 ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("MELI", _CAL_CALENDAR, ("MercadoLibre", "Mercado Libre", "Mercado  Libre")),
@@ -97,6 +99,15 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
         "dLocal",
         "DLocal",
     )),
+    # Evaluation list (added for the headless IR-document auto-fetch path). The
+    # auto-fetch flow attributes the ticker from the crawl (a trusted hint), so
+    # these issuer-name substrings matter mainly for *manual* uploads of these
+    # names; the fiscal calendars are what the period math needs.
+    ("V", _CAL_VISA, ("Visa Inc.", "VISA INC", "Visa Inc")),
+    ("ORCL", _CAL_ORACLE, ("Oracle Corporation", "ORACLE CORPORATION", "Oracle Corp")),
+    ("TEM", _CAL_CALENDAR, ("Tempus AI, Inc.", "Tempus AI", "Tempus's")),
+    ("CRWV", _CAL_CALENDAR, ("CoreWeave, Inc.", "CoreWeave Inc", "CoreWeave")),
+    ("NBIS", _CAL_CALENDAR, ("Nebius Group", "Nebius Group N.V.", "Nebius")),
 ]
 
 
@@ -395,6 +406,23 @@ def _period_end_for(ticker_calendar: str, year: int, q: int) -> date:
         ][q - 1]
     if ticker_calendar == _CAL_NVO:
         return [date(year, 3, 31), date(year, 6, 30), date(year, 9, 30), date(year, 12, 31)][q - 1]
+    if ticker_calendar == _CAL_VISA:
+        # FY-N Q1 ends Dec 31 (N-1), Q4 ends Sep 30 (N).
+        return [
+            date(year - 1, 12, 31),
+            date(year, 3, 31),
+            date(year, 6, 30),
+            date(year, 9, 30),
+        ][q - 1]
+    if ticker_calendar == _CAL_ORACLE:
+        # FY-N Q1 ends Aug 31 (N-1), Q4 ends May 31 (N). Q3 uses Feb-28 as the
+        # conventional last-day key (the existing calendars all use fixed dates).
+        return [
+            date(year - 1, 8, 31),
+            date(year - 1, 11, 30),
+            date(year, 2, 28),
+            date(year, 5, 31),
+        ][q - 1]
     raise ValueError(f"Unknown calendar id: {ticker_calendar!r}")
 
 
@@ -403,6 +431,28 @@ def _calendar_for(ticker: str) -> str:
         if tk == ticker:
             return cal
     raise ValueError(f"No calendar registered for ticker {ticker!r}")
+
+
+# Map a `tracked_companies.fiscal_year_end` ("MM-DD") to a fiscal-calendar id.
+_FYE_TO_CALENDAR: dict[str, str] = {
+    "12-31": _CAL_CALENDAR,
+    "01-31": _CAL_VEEV,
+    "04-30": _CAL_RUBRIK,
+    "09-30": _CAL_VISA,
+    "05-31": _CAL_ORACLE,
+}
+
+
+def calendar_id_from_fye(mmdd: str | None) -> str:
+    """Derive a fiscal-calendar id from a ``fiscal_year_end`` ("MM-DD") string.
+
+    Used by the headless auto-fetch path to attribute periods for tickers not in
+    ``ISSUER_REGISTRY`` (the crawl supplies the ticker; the FYE supplies the
+    calendar). Unknown / missing FYE falls back to the Dec-31 calendar. NVO's
+    H1/9M/FY labeling can't be inferred from the FYE alone (it shares calendar's
+    Dec-31), so NVO stays registry-only.
+    """
+    return _FYE_TO_CALENDAR.get((mmdd or "").strip(), _CAL_CALENDAR)
 
 
 # ---------------------------------------------------------------------------
@@ -841,6 +891,7 @@ def classify_ir_file(
     path: Path,
     *,
     ticker_hint: str | None = None,
+    calendar_override: str | None = None,
 ) -> CategorizationResult | CategorizationFailure:
     """Classify a single IR-uploads file. Pure function — only reads the file.
 
@@ -852,6 +903,13 @@ def classify_ir_file(
     fail to identify a ticker. Callers pass the parent-folder ticker when a
     file is dropped under `ir_documents/<TICKER>/...` — the path is then strong
     evidence for the issuer.
+
+    `calendar_override` (the headless auto-fetch path): when set, the
+    `ticker_hint` is trusted as authoritative — the file was downloaded from that
+    issuer's own IR site into its folder — so the content/filename conflict gating
+    is skipped, and this fiscal-calendar id attributes the period when the ticker
+    has no `ISSUER_REGISTRY` calendar (a registered ticker still uses its registry
+    calendar). The manual-upload path leaves it None and keeps strict behavior.
     """
     ext = path.suffix.lower()
     if ext not in {".pdf", ".xlsx"}:
@@ -877,22 +935,29 @@ def classify_ir_file(
     content_ticker, content_ev = _detect_ticker(text)
     ticker_evidence = file_ev + content_ev
 
-    if file_ticker and content_ticker and file_ticker != content_ticker:
-        return CategorizationFailure(
-            reason=f"ticker_conflict:filename={file_ticker} content={content_ticker}",
-            text_sample=text[:600],
-            ticker_guess=file_ticker,
-        )
-    ticker = file_ticker or content_ticker
-    if ticker is None and ticker_hint is not None:
-        if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
-            ticker = ticker_hint
-            ticker_evidence = ticker_evidence + ["path_hint"]
-    if ticker is None:
-        return CategorizationFailure(
-            reason="ticker_unidentified",
-            text_sample=text[:600],
-        )
+    if calendar_override is not None and ticker_hint is not None:
+        # Auto-fetch: the file was downloaded from this ticker's own IR site into
+        # its folder, so the path hint is authoritative — skip the filename/content
+        # conflict gating that the strict manual-upload path enforces.
+        ticker = ticker_hint
+        ticker_evidence = [*ticker_evidence, "trusted_path_hint"]
+    else:
+        if file_ticker and content_ticker and file_ticker != content_ticker:
+            return CategorizationFailure(
+                reason=f"ticker_conflict:filename={file_ticker} content={content_ticker}",
+                text_sample=text[:600],
+                ticker_guess=file_ticker,
+            )
+        ticker = file_ticker or content_ticker
+        if ticker is None and ticker_hint is not None:
+            if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
+                ticker = ticker_hint
+                ticker_evidence = ticker_evidence + ["path_hint"]
+        if ticker is None:
+            return CategorizationFailure(
+                reason="ticker_unidentified",
+                text_sample=text[:600],
+            )
 
     doc_type, doc_ev = _detect_doc_type(text, ext, path.name)
     if doc_type is None:
@@ -902,7 +967,19 @@ def classify_ir_file(
             ticker_guess=ticker,
         )
 
-    cal = _calendar_for(ticker)
+    # Registered ticker → its registry calendar (most authoritative). Otherwise
+    # fall back to the auto-fetch calendar_override; with neither, fail cleanly.
+    try:
+        cal = _calendar_for(ticker)
+    except ValueError:
+        if calendar_override is None:
+            return CategorizationFailure(
+                reason=f"no_calendar_for:{ticker}",
+                text_sample=text[:600],
+                ticker_guess=ticker,
+                doc_type_guess=doc_type,
+            )
+        cal = calendar_override
 
     # IR_EVENT (investor day, broker conference, capital markets day) is keyed
     # by event date, not fiscal quarter. Pull the first explicit date out of
@@ -967,7 +1044,7 @@ def classify_ir_file(
 
 def _period_label(cal: str, year: int, q: int) -> str:
     """Render a human-readable label, e.g. 'Q3 2024' or 'FY26 Q1'."""
-    if cal in (_CAL_VEEV, _CAL_RUBRIK):
+    if cal in (_CAL_VEEV, _CAL_RUBRIK, _CAL_VISA, _CAL_ORACLE):
         return f"FY{year % 100:02d} Q{q}"
     if cal == _CAL_NVO:
         return ["Q1", "H1", "9M", "FY"][q - 1] + f" {year}"
@@ -1046,6 +1123,10 @@ def _quarter_for_period_end(cal: str, period_end: date) -> int | None:
         return {4: 1, 7: 2, 10: 3, 1: 4}.get(period_end.month)
     if cal == _CAL_RUBRIK:
         return {7: 1, 10: 2, 1: 3, 4: 4}.get(period_end.month)
+    if cal == _CAL_VISA:
+        return {12: 1, 3: 2, 6: 3, 9: 4}.get(period_end.month)
+    if cal == _CAL_ORACLE:
+        return {8: 1, 11: 2, 2: 3, 5: 4}.get(period_end.month)
     return {3: 1, 6: 2, 9: 3, 12: 4}.get(period_end.month)
 
 
@@ -1101,6 +1182,7 @@ __all__: Sequence[str] = (
     "CategorizationFailure",
     "CategorizationResult",
     "Confidence",
+    "calendar_id_from_fye",
     "canonical_path",
     "classify_ir_file",
     "parse_canonical_path",

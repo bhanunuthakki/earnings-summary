@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 
 from ir_pipeline.config import IrConfig
+from ir_pipeline.discover._docmeta import CandidateDoc
 
 _ADAPTERS: dict[str, str] = {
     "mz": "ir_pipeline.discover.mz",
@@ -33,3 +34,46 @@ def discover_documents(config: IrConfig) -> dict[str, str]:
 def discover_spreadsheet_url(config: IrConfig) -> str | None:
     """Resolve the current historical-data spreadsheet URL for `config`'s ticker."""
     return discover_documents(config).get("spreadsheet")
+
+
+def discover_history(
+    *, ir_url: str, max_quarters: int = 8, timeout_ms: int = 60_000
+) -> list[CandidateDoc]:
+    """Generic headless crawl of `ir_url` → up to `max_quarters` of IR documents.
+
+    The universal fallback for any issuer (no per-ticker config required). See
+    `ir_pipeline.discover.generic`. Never raises on an empty/dead site (returns []).
+    """
+    from ir_pipeline.discover import generic
+
+    return generic.discover_document_history(
+        ir_url=ir_url, max_quarters=max_quarters, timeout_ms=timeout_ms
+    )
+
+
+def discover_history_hybrid(
+    *, ir_url: str, config: IrConfig | None = None, max_quarters: int = 8, timeout_ms: int = 60_000
+) -> list[CandidateDoc]:
+    """Hybrid discovery: generic history + the precise mz adapter's fast path.
+
+    Runs the generic crawler for deep history, and — when the ticker is on the
+    high-fidelity ``mz`` platform — folds in the mz adapter's current-quarter
+    links (reliable Content-Disposition doc types), merged + deduped by URL. A
+    ``q4cdn`` (or absent) config simply relies on the generic crawler.
+    """
+    from ir_pipeline.discover import generic
+
+    docs = generic.discover_document_history(
+        ir_url=ir_url, max_quarters=max_quarters, timeout_ms=timeout_ms
+    )
+    if config is not None and config.platform == "mz":
+        try:
+            precise = discover_documents(config)
+        except Exception:  # precise path is best-effort; the generic crawl still stands
+            precise = {}
+        seen = {d.url for d in docs}
+        for cand in generic.precise_to_candidates(precise, config.results_center_url):
+            if cand.url not in seen:
+                seen.add(cand.url)
+                docs.append(cand)
+    return docs
