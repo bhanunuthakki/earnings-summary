@@ -100,6 +100,29 @@ def test_build_parses_valid_llm_response(tmp_path: Path, monkeypatch: pytest.Mon
     assert section.failure_modes[0].leading_indicator == "cost of risk"
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        _VALID_RESPONSE + "\n\nThis bear case centers on NIM compression.",
+        "```json\n" + _VALID_RESPONSE + "\n```",
+        "```json\n" + _VALID_RESPONSE + "\n```\n\nThe analysis above is grounded in the filings.",
+        "Here is the bear case:\n```json\n" + _VALID_RESPONSE + "\n```",
+    ],
+)
+def test_build_parses_response_with_surrounding_prose(
+    response: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model intermittently appends commentary after the JSON object and/or
+    wraps it in ``` fences. A bare ``json.loads`` raised "Extra data" on the
+    trailing text and silently degraded the section to MISSING_DATA — observed
+    live on NVO (6504-char response, "Extra data: line 1 column 13"). The first
+    JSON object must still parse cleanly into an OK section."""
+    section = _build(monkeypatch, tmp_path, response)
+    assert section.status == SectionStatus.OK
+    assert len(section.failure_modes) == 1
+    assert section.failure_modes[0].leading_indicator == "cost of risk"
+
+
 def _build_no_llm(tmp_path: Path) -> BearCaseSection:
     return bear_case.build(
         ticker="NU",
