@@ -891,6 +891,7 @@ def classify_ir_file(
     path: Path,
     *,
     ticker_hint: str | None = None,
+    calendar_override: str | None = None,
 ) -> CategorizationResult | CategorizationFailure:
     """Classify a single IR-uploads file. Pure function — only reads the file.
 
@@ -902,6 +903,13 @@ def classify_ir_file(
     fail to identify a ticker. Callers pass the parent-folder ticker when a
     file is dropped under `ir_documents/<TICKER>/...` — the path is then strong
     evidence for the issuer.
+
+    `calendar_override` (the headless auto-fetch path): when set, the
+    `ticker_hint` is trusted as authoritative — the file was downloaded from that
+    issuer's own IR site into its folder — so the content/filename conflict gating
+    is skipped, and this fiscal-calendar id attributes the period when the ticker
+    has no `ISSUER_REGISTRY` calendar (a registered ticker still uses its registry
+    calendar). The manual-upload path leaves it None and keeps strict behavior.
     """
     ext = path.suffix.lower()
     if ext not in {".pdf", ".xlsx"}:
@@ -927,22 +935,29 @@ def classify_ir_file(
     content_ticker, content_ev = _detect_ticker(text)
     ticker_evidence = file_ev + content_ev
 
-    if file_ticker and content_ticker and file_ticker != content_ticker:
-        return CategorizationFailure(
-            reason=f"ticker_conflict:filename={file_ticker} content={content_ticker}",
-            text_sample=text[:600],
-            ticker_guess=file_ticker,
-        )
-    ticker = file_ticker or content_ticker
-    if ticker is None and ticker_hint is not None:
-        if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
-            ticker = ticker_hint
-            ticker_evidence = ticker_evidence + ["path_hint"]
-    if ticker is None:
-        return CategorizationFailure(
-            reason="ticker_unidentified",
-            text_sample=text[:600],
-        )
+    if calendar_override is not None and ticker_hint is not None:
+        # Auto-fetch: the file was downloaded from this ticker's own IR site into
+        # its folder, so the path hint is authoritative — skip the filename/content
+        # conflict gating that the strict manual-upload path enforces.
+        ticker = ticker_hint
+        ticker_evidence = [*ticker_evidence, "trusted_path_hint"]
+    else:
+        if file_ticker and content_ticker and file_ticker != content_ticker:
+            return CategorizationFailure(
+                reason=f"ticker_conflict:filename={file_ticker} content={content_ticker}",
+                text_sample=text[:600],
+                ticker_guess=file_ticker,
+            )
+        ticker = file_ticker or content_ticker
+        if ticker is None and ticker_hint is not None:
+            if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
+                ticker = ticker_hint
+                ticker_evidence = ticker_evidence + ["path_hint"]
+        if ticker is None:
+            return CategorizationFailure(
+                reason="ticker_unidentified",
+                text_sample=text[:600],
+            )
 
     doc_type, doc_ev = _detect_doc_type(text, ext, path.name)
     if doc_type is None:
@@ -952,7 +967,19 @@ def classify_ir_file(
             ticker_guess=ticker,
         )
 
-    cal = _calendar_for(ticker)
+    # Registered ticker → its registry calendar (most authoritative). Otherwise
+    # fall back to the auto-fetch calendar_override; with neither, fail cleanly.
+    try:
+        cal = _calendar_for(ticker)
+    except ValueError:
+        if calendar_override is None:
+            return CategorizationFailure(
+                reason=f"no_calendar_for:{ticker}",
+                text_sample=text[:600],
+                ticker_guess=ticker,
+                doc_type_guess=doc_type,
+            )
+        cal = calendar_override
 
     # IR_EVENT (investor day, broker conference, capital markets day) is keyed
     # by event date, not fiscal quarter. Pull the first explicit date out of
