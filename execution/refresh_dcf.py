@@ -273,9 +273,13 @@ def refresh_one(
     )
 
     live = live_price_mod.read_live_price(repo_root, ticker)
+    # over/under is undefined for a non-positive fair value (a GAAP-unprofitable
+    # name whose forecast assumptions imply negative FCF) — persist the (negative)
+    # NPV but leave over_under None rather than crash. The user models a path to
+    # profitability in the Forecast inputs to lift it back above zero.
     over_under = (
         valuation_mod.over_under_pct(live.price, pv.fair_value_per_share)
-        if live is not None
+        if (live is not None and pv.fair_value_per_share > 0)
         else None
     )
 
