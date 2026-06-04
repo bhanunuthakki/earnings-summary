@@ -2,10 +2,12 @@
 
 `ir_pipeline.transcript` fetches the company's OWN earnings-call transcript from
 its results-center (the timeliest source) and `aggregator_sources` wires it in
-as the FIRST link of the fetch chain. The network/Playwright path can't run in
-CI, so these tests pin the pure helpers (text normalization, filename-quarter
-parsing, Q&A-segment split) and the orchestration logic via monkeypatch — never
-hitting the network.
+as the FIRST link of the fetch chain. It locates the URL through the shared
+IR-document discovery (`ir_pipeline.discover` + the persisted URL manifest), so a
+single crawl serves both pipelines. The network/Playwright path can't run in CI,
+so these tests pin the pure helpers (text normalization, filename-quarter
+parsing, Q&A-segment split, transcript selection) and the discovery/orchestration
+logic via monkeypatch — never hitting the network.
 """
 
 from __future__ import annotations
@@ -18,13 +20,20 @@ import aggregator_sources
 from aggregator_sources import AggregatorHit, AggregatorSource
 from ir_pipeline import transcript
 from ir_pipeline.config import IrConfig
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.manifest import ManifestEntry
 from ir_pipeline.transcript import (
     IrTranscriptHit,
-    _normalize,  # pyright: ignore[reportPrivateUsage]  # testing internal seams
+    _locate_transcript,  # pyright: ignore[reportPrivateUsage]  # testing internal seams
+    _match_transcript,  # pyright: ignore[reportPrivateUsage]
+    _normalize,  # pyright: ignore[reportPrivateUsage]
     _qa_segment,  # pyright: ignore[reportPrivateUsage]
     _quarter_of,  # pyright: ignore[reportPrivateUsage]
     fetch_ir_transcript,
 )
+
+_MZ_CFG = IrConfig(ticker="NU", platform="mz", results_center_url="https://ir.example/rc/")
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers
@@ -77,10 +86,106 @@ def test_qa_segment_returns_whole_text_without_marker() -> None:
 
 
 # ---------------------------------------------------------------------------
-# fetch_ir_transcript orchestration (monkeypatched — no network)
+# _match_transcript — selects the right candidate by host-advertised filename
 # ---------------------------------------------------------------------------
 
-_MZ_CFG = IrConfig(ticker="NU", platform="mz", results_center_url="https://ir.example/rc/")
+
+def test_match_transcript_picks_requested_quarter() -> None:
+    names = {"u_old": "Transcript 4Q25.pdf", "u_new": "Transcript 1Q26.pdf"}
+
+    def _name(url: str) -> str:
+        return names[url]
+
+    assert _match_transcript(["u_old", "u_new"], 2026, 1, _name) == ("u_new", "Transcript 1Q26.pdf")
+
+
+def test_match_transcript_none_when_quarter_absent() -> None:
+    def _name(_url: str) -> str:
+        return "Transcript 1Q26.pdf"
+
+    assert _match_transcript(["u"], 2024, 2, _name) is None
+
+
+def test_match_transcript_skips_non_transcript_files() -> None:
+    # A spreadsheet for the right quarter is not a transcript → no match.
+    def _name(_url: str) -> str:
+        return "Historical Data 1Q26.xlsx"
+
+    assert _match_transcript(["u"], 2026, 1, _name) is None
+
+
+def test_match_transcript_skips_unprobeable_link() -> None:
+    # The first link's header probe fails; the second (a real transcript) wins.
+    def _name(url: str) -> str:
+        if url == "bad":
+            raise OSError("header probe failed")
+        return "Transcript 1Q26.pdf"
+
+    assert _match_transcript(["bad", "good"], 2026, 1, _name) == ("good", "Transcript 1Q26.pdf")
+
+
+# ---------------------------------------------------------------------------
+# _locate_transcript — manifest-first, live hybrid crawl only on a miss
+# ---------------------------------------------------------------------------
+
+
+def test_locate_prefers_manifest_over_live_crawl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _manifest(_root: Path, _ticker: str) -> list[ManifestEntry]:
+        return [ManifestEntry(ticker="NU", doc_type="transcript", url="man_url")]
+
+    def _name(_url: str) -> str:
+        return "Transcript 1Q26.pdf"
+
+    def _must_not_crawl(**_kw: object) -> list[CandidateDoc]:
+        raise AssertionError("hybrid crawl must not run when the manifest already has it")
+
+    monkeypatch.setattr(transcript, "load_manifest", _manifest)
+    monkeypatch.setattr(transcript, "filename_for_url", _name)
+    monkeypatch.setattr(transcript, "discover_history_hybrid", _must_not_crawl)
+
+    assert _locate_transcript(_MZ_CFG, "NU", 2026, 1, tmp_path) == (
+        "man_url",
+        "Transcript 1Q26.pdf",
+    )
+
+
+def test_locate_falls_back_to_hybrid_when_manifest_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _empty(_root: Path, _ticker: str) -> list[ManifestEntry]:
+        return []
+
+    def _name(_url: str) -> str:
+        return "Transcript 1Q26.pdf"
+
+    def _crawl(**_kw: object) -> list[CandidateDoc]:
+        return [
+            CandidateDoc(
+                url="hyb_url",
+                link_text="",
+                filename_hint="",
+                doc_type_guess="transcript",
+                year_guess=2026,
+                quarter_guess=1,
+                source_page="",
+            )
+        ]
+
+    monkeypatch.setattr(transcript, "load_manifest", _empty)
+    monkeypatch.setattr(transcript, "filename_for_url", _name)
+    monkeypatch.setattr(transcript, "discover_history_hybrid", _crawl)
+
+    assert _locate_transcript(_MZ_CFG, "NU", 2026, 1, tmp_path) == (
+        "hyb_url",
+        "Transcript 1Q26.pdf",
+    )
+
+
+# ---------------------------------------------------------------------------
+# fetch_ir_transcript orchestration (monkeypatched — no network)
+# ---------------------------------------------------------------------------
 
 
 class _FakeResp:
@@ -91,14 +196,6 @@ class _FakeResp:
 
 def _cfg_nu(_ticker: str, _repo: Path | None = None) -> IrConfig:
     return _MZ_CFG
-
-
-def _discover_1q26(_url: str, **_kw: object) -> tuple[str, str]:
-    return ("https://files/abc", "Transcript 1Q26.pdf")
-
-
-def _discover_none(_url: str, **_kw: object) -> tuple[str, str] | None:
-    return None
 
 
 def test_fetch_returns_none_for_unconfigured_ticker() -> None:
@@ -112,11 +209,14 @@ def test_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     def _get(*_a: object, **_k: object) -> _FakeResp:
         return _FakeResp(b"%PDF-bytes")
 
+    def _located(*_a: object, **_k: object) -> tuple[str, str]:
+        return ("https://files/abc", "Transcript 1Q26.pdf")
+
     def _extract(_content: bytes) -> str:
         return body
 
     monkeypatch.setattr(transcript, "get_config", _cfg_nu)
-    monkeypatch.setattr(transcript, "_discover_transcript_url", _discover_1q26)
+    monkeypatch.setattr(transcript, "_locate_transcript", _located)
     monkeypatch.setattr(transcript.requests, "get", _get)
     monkeypatch.setattr(transcript, "_extract_pdf_text", _extract)
 
@@ -128,17 +228,12 @@ def test_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Prepared remarks" not in hit.qa_text
 
 
-def test_fetch_quarter_mismatch_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Results-center shows the latest quarter (1Q26); a request for an OLDER
-    # quarter must miss so the caller falls through to the aggregators.
-    monkeypatch.setattr(transcript, "get_config", _cfg_nu)
-    monkeypatch.setattr(transcript, "_discover_transcript_url", _discover_1q26)
-    assert fetch_ir_transcript("NU", 2025, 4) is None
+def test_fetch_returns_none_when_no_transcript_located(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _located(*_a: object, **_k: object) -> tuple[str, str] | None:
+        return None
 
-
-def test_fetch_returns_none_when_no_transcript_discovered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(transcript, "get_config", _cfg_nu)
-    monkeypatch.setattr(transcript, "_discover_transcript_url", _discover_none)
+    monkeypatch.setattr(transcript, "_locate_transcript", _located)
     assert fetch_ir_transcript("NU", 2026, 1) is None
 
 
