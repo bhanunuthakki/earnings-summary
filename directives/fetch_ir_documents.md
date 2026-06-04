@@ -17,6 +17,33 @@ The IR pipeline as a whole is **optional** on the broader project: when neither 
 yields any documents for a ticker, the rest of the analysis (FMP, SEC, transcripts) runs
 without IR data — IR rows simply don't appear in `documents` for that ticker.
 
+## Auto-fetch coverage (validated live 2026-06-04, full portfolio + evaluation list)
+
+The headless crawler was empirically validated against every tracked portfolio +
+evaluation IR site. URLs live in `src/ir_pipeline/ir_url_overrides.py`.
+
+**25 of 32 auto-fetch multi-quarter IR docs** (✓): AMZN, GOOG, META, MELI, NU, NVO, BN,
+RBRK, VEEV, WIX (portfolio) + V, ORCL, FCX, BKNG, UBER, ABNB, NTDOY, SOFI, NTRA, TMO,
+CGEH, CRWV, DLO, NSP, NBIS (evaluation). Mostly q4cdn / Investis / mz platforms; the
+crawler walks the IR landing → quarterly/financials page and harvests the PDFs.
+
+**7 of 32 do NOT auto-fetch — documented reason: issuer IR site employs bot-protection /
+anti-headless measures** (verified by direct probe; we respect it, no evasion):
+
+| Ticker | Probe result | Reason |
+|---|---|---|
+| NOW (ServiceNow) | HTTP **403** to headless | `investors.servicenow.com` blocks automated requests |
+| LLY (Lilly) | load-stall / timeout | IR site never completes load under headless chromium |
+| TEM (Tempus) | HTTP2 error + timeout | server mis-negotiates + stalls headless |
+| WGS (GeneDx) | timeout | anti-headless stall |
+| FIGR (Figure) | timeout | anti-headless stall |
+| FRVO (Fervo) | timeout | anti-headless stall (recent IPO) |
+| BHP | timeout | foreign (half-yearly) + anti-headless stall |
+
+For these 7, financial data still flows via the existing **FMP/SEC pipeline** (the IR
+auto-fetch is an optional enhancement). Evading bot-protection (stealth browsers, proxies)
+is deliberately out of scope. Re-validate periodically — sites change their protections.
+
 ## Target Holdings & IR Pages
 
 | Ticker | IR URL | Notes |
