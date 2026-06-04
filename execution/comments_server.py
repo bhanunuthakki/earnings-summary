@@ -197,6 +197,13 @@ def create_app(
 
             return Response(render_portfolio_panel(db_path), mimetype="text/html")
 
+        if name == "ir_coverage":
+            # Per-name IR auto-fetch coverage: which portfolio/eval names have
+            # auto-fetched IR docs vs. which need a manual pull (+ why).
+            from pipeline.ir_coverage_panel import render_ir_coverage_panel
+
+            return Response(render_ir_coverage_panel(db_path), mimetype="text/html")
+
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,
             render_panel_fragment,

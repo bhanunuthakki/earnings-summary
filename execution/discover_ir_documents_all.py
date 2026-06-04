@@ -54,6 +54,7 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import ir_fetch_status  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
 
 # Roster = the "briefed" active universe (portfolio + evaluation). Hardcoded to
@@ -72,7 +73,7 @@ class TickerStatus(StrEnum):
 
 
 @dataclass(slots=True)
-class _TickerResult:
+class TickerResult:
     ticker: str
     status: TickerStatus
     discovered: int | None
@@ -170,10 +171,10 @@ def _json_field(stdout: str, key: str) -> object:
     return cast("dict[str, object]", obj).get(key)
 
 
-def _fail(ticker: str, reason: str, elapsed: float) -> _TickerResult:
+def _fail(ticker: str, reason: str, elapsed: float) -> TickerResult:
     sys.stderr.write(f"\n!!! [{ticker}] FAILED - {reason}\n")
     sys.stdout.write(f"[{ticker}] FAILED - {reason} ({elapsed}s)\n")
-    return _TickerResult(ticker, TickerStatus.FAILED, None, None, elapsed, error=reason)
+    return TickerResult(ticker, TickerStatus.FAILED, None, None, elapsed, error=reason)
 
 
 def _run_child(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess[str]:
@@ -256,7 +257,7 @@ def _run_one(
     process: bool = True,
     summaries: bool = False,
     process_timeout: int = 600,
-) -> _TickerResult:
+) -> TickerResult:
     """Discover then fetch one ticker, subprocess-isolated. Never raises."""
     sys.stdout.write(f"\n{'=' * 72}\n=== IR-document discovery - {ticker}\n{'=' * 72}\n")
     sys.stdout.flush()
@@ -293,11 +294,11 @@ def _run_one(
     discovered_n = discovered if isinstance(discovered, int) else None
     if status == "no_ir_url":
         sys.stdout.write(f"[{ticker}] SKIPPED - no resolvable IR URL\n")
-        return _TickerResult(ticker, TickerStatus.SKIPPED, 0, 0, _elapsed(t0))
+        return TickerResult(ticker, TickerStatus.SKIPPED, 0, 0, _elapsed(t0))
 
     if skip_download:
         sys.stdout.write(f"[{ticker}] OK (discovered={discovered_n}, download skipped)\n")
-        return _TickerResult(ticker, TickerStatus.OK, discovered_n, None, _elapsed(t0))
+        return TickerResult(ticker, TickerStatus.OK, discovered_n, None, _elapsed(t0))
 
     # --- Stage 2: fetch + categorize ---
     calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
@@ -346,7 +347,7 @@ def _run_one(
         f"[{ticker}] OK (discovered={discovered_n}, downloaded={downloaded_n}, "
         f"processed={processed}, {elapsed}s)\n"
     )
-    return _TickerResult(
+    return TickerResult(
         ticker, TickerStatus.OK, discovered_n, downloaded_n, elapsed, processed=processed
     )
 
@@ -356,7 +357,7 @@ def _elapsed(t0: float) -> float:
 
 
 def _summarize(
-    results: list[_TickerResult], *, skipped_not_in_roster: list[str], elapsed_seconds: float
+    results: list[TickerResult], *, skipped_not_in_roster: list[str], elapsed_seconds: float
 ) -> dict[str, object]:
     return {
         "tickers": [
@@ -382,6 +383,64 @@ def _summarize(
     }
 
 
+def _reason_for(result: TickerResult) -> str | None:
+    """Human-readable why-this-name-has-no-docs, for the status log + dashboard."""
+    if result.status is TickerStatus.FAILED:
+        return result.error
+    if result.status is TickerStatus.SKIPPED:
+        return "no resolvable IR URL"
+    if result.status is TickerStatus.OK and not result.downloaded:
+        return "crawl found no new documents (site may be bot-protected)"
+    return None
+
+
+def run_ticker(
+    ticker: str,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    quarters: int = _DEFAULT_QUARTERS,
+    discover_timeout: int = _DEFAULT_DISCOVER_TIMEOUT_S,
+    download_timeout: int = _DEFAULT_DOWNLOAD_TIMEOUT_S,
+    skip_download: bool = False,
+    process: bool = True,
+    summaries: bool = False,
+    process_timeout: int = 600,
+    record_status: bool = True,
+) -> TickerResult:
+    """Full single-ticker IR chain (discover → fetch+register → process), then
+    persist the crawl outcome to ``ir_fetch_status``.
+
+    The public entry reused by the batch loop AND by onboarding — so a freshly
+    added name is crawled, registered, queued for ``--enable-llm`` (brief_dirty),
+    and recorded on day one without waiting for the weekly roster sweep. Never
+    raises (wraps the subprocess-isolated ``_run_one``); status bookkeeping is
+    best-effort.
+    """
+    result = _run_one(
+        ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        quarters=quarters,
+        discover_timeout=discover_timeout,
+        download_timeout=download_timeout,
+        skip_download=skip_download,
+        process=process,
+        summaries=summaries,
+        process_timeout=process_timeout,
+    )
+    if record_status:
+        ir_fetch_status.record_attempt(
+            db_path,
+            ticker,
+            status=result.status.value,
+            discovered=result.discovered,
+            downloaded=result.downloaded,
+            reason=_reason_for(result),
+        )
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     repo_root = cast("Path", args.repo_root)
@@ -393,6 +452,16 @@ def main(argv: list[str] | None = None) -> int:
     for t in skipped_not_in_roster:
         sys.stdout.write(f"[{t}] not in the portfolio/evaluation roster — skipped\n")
 
+    if cast("bool", args.only_failing):
+        gaps = set(ir_fetch_status.gap_tickers(db_path, selected))
+        dropped = [t for t in selected if t not in gaps]
+        selected = [t for t in selected if t in gaps]
+        if dropped:
+            sys.stdout.write(
+                f"--only-failing: {len(dropped)} name(s) already have IR docs, "
+                f"rescanning {len(selected)} gap(s): {selected}\n"
+            )
+
     if not selected:
         summary = _summarize(
             [], skipped_not_in_roster=skipped_not_in_roster, elapsed_seconds=_elapsed(t0)
@@ -403,7 +472,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sys.stdout.write(f"IR-document discovery for {len(selected)} ticker(s): {selected}\n")
     results = [
-        _run_one(
+        run_ticker(
             t,
             repo_root=repo_root,
             db_path=db_path,
@@ -434,6 +503,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--discover-timeout", type=int, default=_DEFAULT_DISCOVER_TIMEOUT_S)
     p.add_argument("--download-timeout", type=int, default=_DEFAULT_DOWNLOAD_TIMEOUT_S)
     p.add_argument("--skip-download", action="store_true", help="Discover + write manifests only")
+    p.add_argument(
+        "--only-failing",
+        action="store_true",
+        help=(
+            "Rescan only roster names with ZERO registered IR docs (the periodic "
+            "retry of bot-protected / failed crawlers — see the failing-crawler cron)"
+        ),
+    )
     p.add_argument(
         "--no-process",
         action="store_true",

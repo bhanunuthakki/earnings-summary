@@ -59,7 +59,6 @@ from industry_classifier import (  # noqa: E402
     classify_ticker,
     load_template,
 )
-from ir_uploads import calendar_id_from_fye  # noqa: E402
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     index_fmp_files_for_ticker,
@@ -79,8 +78,6 @@ _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _FMP_SCRIPT = PROJECT_ROOT / "execution" / "save_fmp_data.py"
 _BACKFILL_SCRIPT = PROJECT_ROOT / "execution" / "backfill_transcripts.py"
-_DISCOVER_IR_SCRIPT = PROJECT_ROOT / "execution" / "discover_ir_documents.py"
-_FETCH_IR_SCRIPT = PROJECT_ROOT / "execution" / "fetch_ir_documents.py"
 
 # Mapping from list_type → processing tier. Used by the template applier when
 # it sets tracked_companies.processing_tier. Mirrors the rules in migration
@@ -388,46 +385,28 @@ def _run_transcript_backfill(ticker: str) -> int:
     return proc.returncode
 
 
-def _ir_calendar(ticker: str) -> str:
-    """Fiscal-calendar id for the IR auto-fetch, from tracked_companies.fiscal_year_end."""
-    try:
-        conn = sqlite3.connect(str(_DB_PATH))
-        try:
-            row = conn.execute(
-                "SELECT fiscal_year_end FROM tracked_companies WHERE ticker = ? LIMIT 1",
-                (ticker,),
-            ).fetchone()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return calendar_id_from_fye(None)
-    return calendar_id_from_fye(row[0] if row and row[0] else None)
-
-
 def _run_ir_documents(ticker: str) -> int:
-    """Discover + fetch + register IR documents for a single ticker.
+    """Discover + fetch + register + process IR documents for a single ticker.
 
-    Best-effort day-one coverage on onboard (the weekly cron keeps it current).
+    Best-effort day-one coverage on onboard via the SHARED single-ticker chain
+    (the same ``run_ticker`` entry the weekly batch + failing-crawler rescan use):
+    headless-crawl the IR site, download + content-classify + register the docs,
+    feed them into the ``--enable-llm`` pipeline (ir_narrative anchor + brief_dirty),
+    and record the outcome in ``ir_fetch_status`` so the dashboard surfaces a freshly
+    onboarded name immediately — no wait for the weekly roster sweep. The shared
+    chain derives the fiscal calendar from ``fiscal_year_end`` itself.
+
     Needs the optional ``ir`` extra for the headless crawl; a missing extra just
-    makes the discover child exit non-zero, which the caller tolerates.
+    makes the discover child exit non-zero, which the shared chain tolerates
+    (returns a FAILED result rather than raising). Bounded by the chain's per-stage
+    timeouts, so a hung browser cannot stall the onboard indefinitely.
     """
-    disc = subprocess.run(
-        [sys.executable, str(_DISCOVER_IR_SCRIPT), "--ticker", ticker],
-        cwd=str(PROJECT_ROOT),
-    )
-    fetch = subprocess.run(
-        [
-            sys.executable,
-            str(_FETCH_IR_SCRIPT),
-            "--ticker",
-            ticker,
-            "--categorize",
-            "--calendar",
-            _ir_calendar(ticker),
-        ],
-        cwd=str(PROJECT_ROOT),
-    )
-    return disc.returncode or fetch.returncode
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from execution.discover_ir_documents_all import TickerStatus, run_ticker
+
+    result = run_ticker(ticker, repo_root=PROJECT_ROOT, db_path=_DB_PATH, process=True)
+    return 0 if result.status is not TickerStatus.FAILED else 1
 
 
 # ---------------------------------------------------------------------------
