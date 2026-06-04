@@ -1,25 +1,21 @@
-"""DCF subsystem.
+"""DCF subsystem (redesigned model).
 
-Phase 3 implementation. The canonical DCF workbook lives at
-`dcf/<TICKER>.xlsx` — user-maintained, hybrid round-trip:
-  - User edits forecast assumptions, model formulas, segment cells in Excel.
-  - System reads the FCF stream and diluted-shares cells from the Valuation
-    sheet and re-computes PV/share at the per-ticker WACC (from
-    `holdings/<TICKER>.json`).
-  - PV / live-price comparison drives the trim/sell triggers per the design
-    (>10% over → trim, >20% over → sell).
+The canonical DCF for each ticker is the redesigned 9-sheet workbook at
+`dcf/<TICKER>.xlsx` — formula-driven and Google-Sheets-native (Cover · Dashboard ·
+Color Code · WACC · Model · Financials · Consensus · Valuation · Monte Carlo).
 
-Phase 3e (this PR) adds automated Historicals lifecycle:
-  - On a missing workbook, `seeder` copies an example template and writes
-    20 quarters of standardized FMP financials into a new Historicals sheet.
-  - On an existing workbook, `refresher` rewrites ONLY the Historicals sheet
-    — Forecast / Model / Valuation cells round-trip byte-identical.
+Lifecycle:
+  - `execution/build_redesigned_dcf.py` builds the workbook from FMP data and the
+    per-name Opus assumption pass (`data/dcf_assumptions/<T>.json`).
+  - `execution/refresh_dcf.py` (`refresh_one`) rebuilds it from the latest FMP,
+    preserves the user-owned Dashboard inputs (the yellow assumption cells), and
+    recomputes the value-of-record into `dcf_runs` (which briefs read from).
 
 Modules:
-  seeder          — copy template + populate Historicals (new workbook)
-  refresher       — rewrite Historicals only (existing workbook)
-  workbook_reader — extract FCF stream + diluted shares from an .xlsx
-  valuation       — PV math (sum FCF_t/(1+wacc)^t + terminal * multiple/(1+wacc)^N)
-  live_price      — pull current market price from FMP profile.json cache
-  persist         — upsert dcf_runs row with all derived fields
+  redesign   — read a workbook's inputs + recompute fair value; capture/inject
+               Dashboard inputs for edit-preservation (the live reader/engine)
+  valuation  — the Damodaran engine: FCFF → operating value → equity bridge →
+               value/share, with an EV exit multiple + implied price multiples
+  live_price — current market price from the multi-source stack (`sources.price`)
+  persist    — upsert the `dcf_runs` row briefs read from
 """

@@ -420,9 +420,9 @@ def _section_valuation_seed(out: StringIO, payload: dict[str, object]) -> None:
     out.write("\n")
     out.write(
         "> _Your turn:_ at this multiple, what 5y growth + margin profile is the "
-        "market pricing in? Build your own DCF (`dcf/{ticker}.xlsx` — see "
-        "examples in `examples/dcf/`), run `python execution/refresh_dcf.py "
-        "--ticker {ticker}` to surface PV/share + over-under % in the brief.\n\n"
+        "market pricing in? Refresh the redesigned DCF (`dcf/{ticker}.xlsx`) with "
+        "`python execution/refresh_dcf.py --ticker {ticker}` to surface PV/share "
+        "+ over-under % in the brief.\n\n"
     )
 
 
@@ -433,7 +433,10 @@ def _section_next_steps(out: StringIO, ticker: str) -> None:
         f"- [ ] Listen to latest 2 earnings calls (or run "
         f"`fetch_audio_transcripts.py --ticker {ticker} --year YYYY --quarter Q`)\n"
     )
-    out.write(f"- [ ] Build DCF workbook at `dcf/{ticker}.xlsx` (copy from `examples/dcf/`)\n")
+    out.write(
+        f"- [ ] Build the DCF at `dcf/{ticker}.xlsx` "
+        f"(run `python execution/refresh_dcf.py --ticker {ticker}`)\n"
+    )
     out.write(
         f"- [ ] Draft thesis at `micro_thesis/holdings/{ticker}.json` "
         f"(WACC, MoS bar, tier-1 KPIs, break_rules_hard)\n"
