@@ -42,7 +42,6 @@ from report.renderers.etf_markdown import render as render_etf_markdown  # noqa:
 from report.renderers.html import render as render_html  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
-from report.renderers.workbook import render as render_workbook  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
 from report.sections import financials as financials_section_mod  # noqa: E402
 from report.sections import snapshot as snapshot_section_mod  # noqa: E402
@@ -322,7 +321,10 @@ def _build_one(
     workspace_html_path = out_dir / f"{today}_workspace.html"
     md_path = out_dir / f"{today}_report.md"
     json_path = out_dir / f"{today}_sections.json"
-    xlsx_path = out_dir / f"{today}_dcf.xlsx"
+    # The DCF model is the canonical redesigned workbook at dcf/<T>.xlsx (refreshed
+    # by execution/refresh_dcf.py). The brief references it rather than re-rendering
+    # a per-date copy here; the dashboard serves it via the /dcf/<T> route.
+    canonical_dcf = repo_root / "dcf" / f"{ticker}.xlsx"
 
     _sync_db_to_repo(repo_root)
 
@@ -359,7 +361,7 @@ def _build_one(
     spec = build_report(
         ticker=ticker,
         repo_root=repo_root,
-        model_link=xlsx_path.name,
+        model_link=f"dcf/{ticker}.xlsx",
         enable_llm=enable_llm,
         news_days=news_days,
         news_cache_ttl_days=news_cache_ttl_days,
@@ -384,9 +386,6 @@ def _build_one(
 
     json_path.write_text(render_sections_json(spec), encoding="utf-8")
     _emit("wrote_sections_json", {"ticker": ticker, "path": str(json_path)})
-
-    render_workbook(spec, xlsx_path)
-    _emit("wrote_workbook", {"ticker": ticker, "path": str(xlsx_path)})
 
     sections_status = {
         "snapshot": spec.snapshot.status.value,
@@ -426,7 +425,7 @@ def _build_one(
         "workspace_html": str(workspace_html_path) if renderer in ("workspace", "both") else None,
         "report_md": str(md_path),
         "sections_json": str(json_path),
-        "dcf_xlsx": str(xlsx_path),
+        "dcf_xlsx": str(canonical_dcf),
         "section_status": sections_status,
     }
 

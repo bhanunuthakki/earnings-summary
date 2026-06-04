@@ -20,7 +20,6 @@ import sys
 from pathlib import Path
 from typing import cast
 
-import openpyxl
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -28,9 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import dcf_sheets  # noqa: E402
-import refresh_dcf  # noqa: E402
 
-from dcf import seeder  # noqa: E402
 from integrations import gsheets  # noqa: E402
 
 
@@ -342,28 +339,6 @@ def _write_fmp(fmp_dir: Path, ticker: str) -> None:
     (fmp_dir / f"{ticker}_cash_flow_quarterly.json").write_text(json.dumps(cashflow))
 
 
-def _read_dcf_npv(repo_root: Path, ticker: str) -> float | None:
-    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
-    try:
-        row = conn.execute(
-            "SELECT npv_per_share FROM dcf_runs WHERE ticker = ?", (ticker,)
-        ).fetchone()
-    finally:
-        conn.close()
-    return float(row[0]) if row and row[0] is not None else None
-
-
-def _set_forecast_input(workbook_path: Path, label: str, value: float) -> None:
-    """Edit a Forecast assumption-grid cell (FY1 forecast column = column 3)."""
-    wb = openpyxl.load_workbook(str(workbook_path))
-    ws = wb[seeder.FORECAST_SHEET]
-    for r in range(1, 30):
-        if ws.cell(row=r, column=1).value == label:
-            ws.cell(row=r, column=3, value=value)
-            break
-    wb.save(str(workbook_path))
-
-
 @pytest.fixture
 def reingest_repo(tmp_path: Path) -> Path:
     """A repo_root with FMP fixtures, a WACC'd holdings JSON, and a dcf_runs DB."""
@@ -388,52 +363,6 @@ def reingest_repo(tmp_path: Path) -> Path:
     conn.commit()
     conn.close()
     return tmp_path
-
-
-def test_reingest_file_persists_and_reflects_input_edit(reingest_repo: Path) -> None:
-    repo = reingest_repo
-    fmp = repo / "data" / "historical" / "fmp"
-    downloaded = repo / "downloaded_TEST.xlsx"  # stand-in for the pulled Sheet
-    seeder.seed_workbook("TEST", fmp, downloaded, base_year=2026)
-
-    rc = dcf_sheets.main(
-        [
-            "import",
-            "--ticker",
-            "TEST",
-            "--file",
-            str(downloaded),
-            "--repo-root",
-            str(repo),
-            "--valuation-year",
-            "2026",
-        ]
-    )
-    assert rc == 0
-    base_npv = _read_dcf_npv(repo, "TEST")
-    assert base_npv is not None and base_npv > 0
-    # The pulled workbook is placed at the canonical path the /dcf route serves.
-    assert (repo / "dcf" / "TEST.xlsx").exists()
-
-    # Simulate a user bumping Y1 growth in the Sheet, then re-ingesting.
-    _set_forecast_input(downloaded, "Revenue Growth %", 0.40)
-    rc2 = dcf_sheets.main(
-        [
-            "import",
-            "--ticker",
-            "TEST",
-            "--file",
-            str(downloaded),
-            "--repo-root",
-            str(repo),
-            "--valuation-year",
-            "2026",
-        ]
-    )
-    assert rc2 == 0
-    new_npv = _read_dcf_npv(repo, "TEST")
-    assert new_npv is not None
-    assert new_npv > base_npv  # higher Y1 growth must raise the persisted fair value
 
 
 def test_reingest_file_not_found(reingest_repo: Path) -> None:
@@ -470,51 +399,3 @@ def test_reingest_missing_db(tmp_path: Path) -> None:
         ]
     )
     assert rc == 2
-
-
-class _FakeLive:
-    price = 50.0
-    fetched_at = None
-
-
-def test_refresh_one_persists_negative_fair_value_without_crashing(
-    reingest_repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A GAAP-unprofitable forecast (opex above gross margin every year) yields a
-    negative Valuation FCF and a negative fair value. refresh_one must persist it
-    with over_under None rather than crash on the over/under calc (which rejects
-    a non-positive fair value)."""
-    repo = reingest_repo
-    fmp = repo / "data" / "historical" / "fmp"
-    wb = repo / "dcf" / "TEST.xlsx"
-    seeder.seed_workbook("TEST", fmp, wb, base_year=2026)
-
-    # Force every forecast year unprofitable: R&D + SG&A exceed gross margin.
-    book = openpyxl.load_workbook(str(wb))
-    ws = book[seeder.FORECAST_SHEET]
-    for label, val in (
-        ("Gross Margin %", 0.20),
-        ("R&D % of Revenue", 0.40),
-        ("SG&A % of Revenue", 0.40),
-    ):
-        for r in range(1, 30):
-            if ws.cell(row=r, column=1).value == label:
-                for col in range(3, 9):
-                    if ws.cell(row=r, column=col).value is not None:
-                        ws.cell(row=r, column=col, value=val)
-                break
-    book.save(str(wb))
-
-    # A live price is present, so the guard (fair value > 0) is what nulls over_under.
-    def _fake_read(_repo: object, _t: object) -> _FakeLive:
-        return _FakeLive()
-
-    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
-
-    result = refresh_dcf.refresh_one(
-        "TEST", repo, repo / "data" / "portfolio.db", valuation_year=2026
-    )
-    assert result["status"] == "ok"  # did not crash
-    fv = result["fair_value_per_share"]
-    assert isinstance(fv, float) and fv < 0
-    assert result["over_under_pct"] is None

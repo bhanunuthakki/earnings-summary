@@ -47,7 +47,7 @@ def build(
                 stage="INGEST(holdings) + COMPUTE(dcf)",
                 fix_command=(
                     f"create micro_thesis/holdings/{ticker.upper()}.json "
-                    f"and run: python execution/run_dcf.py --ticker {ticker.upper()} ..."
+                    f"and run: python execution/refresh_dcf.py --ticker {ticker.upper()}"
                 ),
             ),
             ticker=ticker.upper(),

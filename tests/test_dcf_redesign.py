@@ -32,6 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import dcf_sheets  # noqa: E402
 import refresh_dcf  # noqa: E402
 
 from dcf import redesign  # noqa: E402
@@ -500,3 +501,48 @@ def test_refresh_redesign_negative_fair_value_nulls_over_under(
     fv = res["fair_value_per_share"]
     assert isinstance(fv, float) and fv < 0
     assert res["over_under_pct"] is None
+
+
+def test_gsheets_reingest_carries_dashboard_edit_to_dcf_runs(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Google-Sheets re-ingest path (dcf_sheets import --file -> refresh_one)
+    carries a Dashboard edit on the pulled workbook through to the persisted
+    dcf_runs value — the user edits in Sheets, pulls down, re-ingests."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    repo = refresh_repo
+    # A redesign workbook standing in for the pulled Sheet; bump terminal margin.
+    downloaded = repo / "downloaded_TESTCO.xlsx"
+    _build(repo, "TESTCO", downloaded)
+    base = redesign.read_and_value(downloaded)
+    assert base is not None
+    wb = openpyxl.load_workbook(str(downloaded))
+    wb["Dashboard"].cell(row=30, column=2, value=0.40)  # terminal op margin up
+    wb.save(str(downloaded))
+    wb.close()
+    edited = redesign.read_and_value(downloaded)
+    assert edited is not None and edited.value_per_share_usd > base.value_per_share_usd
+
+    rc = dcf_sheets.main(
+        [
+            "import",
+            "--ticker",
+            "TESTCO",
+            "--file",
+            str(downloaded),
+            "--repo-root",
+            str(repo),
+            "--valuation-year",
+            "2026",
+        ]
+    )
+    assert rc == 0
+    assert (repo / "dcf" / "TESTCO.xlsx").exists()  # placed at the canonical path
+
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    row = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()
+    conn.close()
+    assert row is not None and row[0] is not None
+    # The persisted value reflects the edited (higher) terminal margin.
+    assert float(row[0]) == pytest.approx(edited.value_per_share_usd, rel=0.05)
+    assert float(row[0]) > base.value_per_share_usd
