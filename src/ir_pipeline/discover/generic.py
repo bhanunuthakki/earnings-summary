@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 import time
 import urllib.parse
+import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
 
@@ -40,11 +41,13 @@ _DOC_HREF_RX = re.compile(
     re.IGNORECASE,
 )
 
-# Nav links worth following one hop to reach historical quarters.
+# Nav links worth following to reach the doc-bearing page (bare "Financials",
+# "Quarterly Earnings", "SEC filings", "Investor news", "Events & presentations",
+# etc.). Generous on purpose — same-host + page cap + period-stop bound the walk.
 _HISTORY_NAV_RX = re.compile(
-    r"quarterly[-\s]?results|financial[-\s]?(?:results|reports|information)|"
-    r"\bearnings\b|results[-\s]?center|press[-\s]?releases?|presentations?|"
-    r"events?[-\s]?(?:and[-\s]?)?presentations?|archive|annual[-\s]?reports?|webcasts?",
+    r"quarter|\bfinanc(?:e|ial|ials)\b|\bearnings\b|\bresults\b|press[-\s]?releas|"
+    r"presentation|\barchive\b|annual[-\s]?report|webcast|sec[-\s]?filing|"
+    r"\binvestors?\b|investor[-\s]?relation|financial[-\s]?(?:information|results|reports?)",
     re.IGNORECASE,
 )
 
@@ -65,7 +68,9 @@ _DOCTYPE_ALIAS: dict[str, str] = {
 }
 
 _DEFAULT_RATE_LIMIT_S = 0.5
-_MAX_NAV_PAGES = 8  # follow at most this many history sub-links (depth 1)
+_MAX_PAGES = 8  # total pages rendered per crawl (seed + nav hops)
+_MAX_DEPTH = 2  # homepage → IR landing → doc-bearing page
+_DEFAULT_TIME_BUDGET_S = 240.0  # wall-clock cap; return partials before the subprocess timeout
 
 
 def discover_document_history(
@@ -77,18 +82,23 @@ def discover_document_history(
     fetch_filename: FilenameFetcher | None = None,
     rate_limit_s: float = _DEFAULT_RATE_LIMIT_S,
     check_robots: bool = True,
+    time_budget_s: float = _DEFAULT_TIME_BUDGET_S,
 ) -> list[CandidateDoc]:
     """Crawl ``ir_url`` (+ one hop of history links); return up to ``max_quarters`` of docs.
 
     ``render`` is injectable for tests (default: the lazy-Playwright renderer).
     Never raises on a dead page / empty site — returns whatever it found (``[]``
-    is a valid, expected result). Candidates are deduped by URL (first win).
+    is a valid, expected result). Candidates are deduped by URL (first win). Stops
+    following nav links once ``time_budget_s`` elapses, so a slow site returns the
+    docs found so far instead of timing the subprocess out to a null result.
     """
     if not ir_url:
         return []
+    t0 = time.monotonic()
     do_render = render or _playwright_render
     do_fetch = fetch_filename or _safe_filename_for_url
-    allows = _robots_checker(ir_url) if check_robots else _allow_all
+    allows, robots_delay = _robots_policy(ir_url) if check_robots else (_allow_all, 0.0)
+    effective_delay = max(rate_limit_s, robots_delay)  # honor robots Crawl-delay
 
     visited: set[str] = set()
     candidates: dict[str, CandidateDoc] = {}
@@ -104,27 +114,44 @@ def discover_document_history(
         for href, text in anchors:
             if href and _DOC_HREF_RX.search(href) and href not in candidates:
                 candidates[href] = _to_candidate(href, text, page_url, do_fetch)
-        if rate_limit_s > 0:
-            time.sleep(rate_limit_s)
+        if effective_delay > 0:
+            time.sleep(effective_delay)
         return anchors
 
-    start_anchors = harvest(ir_url)
+    def _distinct_periods() -> int:
+        return len({(c.year_guess, c.quarter_guess) for c in candidates.values() if c.year_guess})
 
-    # Follow up to _MAX_NAV_PAGES same-host history links (depth 1).
+    # Bounded breadth-first walk: render the seed, then follow same-host nav links
+    # (Financials / Quarterly / Earnings / Investor Relations / …) up to _MAX_DEPTH
+    # hops to reach the doc-bearing page — handles IR landing pages AND company
+    # homepages (so a homepage seed can navigate Home → Investors → Financials).
+    # Stops early once enough history is found, the page budget is hit, or the time
+    # budget elapses (a slow site returns partials instead of timing out to null).
     base_host = _host(ir_url)
-    nav_followed = 0
-    for href, text in start_anchors:
-        if nav_followed >= _MAX_NAV_PAGES:
+    frontier: list[tuple[str, int]] = [(ir_url, 0)]
+    rendered = 0
+    while frontier:
+        if (
+            rendered >= _MAX_PAGES
+            or _distinct_periods() >= max_quarters
+            or (time.monotonic() - t0) > time_budget_s
+        ):
             break
-        if not href or _DOC_HREF_RX.search(href):
+        page_url, depth = frontier.pop(0)
+        if page_url in visited or not allows(page_url):
             continue
-        if not _HISTORY_NAV_RX.search(f"{href} {text}"):
+        anchors = harvest(page_url)
+        rendered += 1
+        if depth >= _MAX_DEPTH:
             continue
-        target = urllib.parse.urljoin(ir_url, href)
-        if _host(target) != base_host or target in visited:
-            continue
-        nav_followed += 1
-        harvest(target)
+        for href, text in anchors:
+            if not href or _DOC_HREF_RX.search(href):
+                continue
+            if not _HISTORY_NAV_RX.search(f"{href} {text}"):
+                continue
+            target = urllib.parse.urljoin(page_url, href)
+            if _host(target) == base_host and target not in visited:
+                frontier.append((target, depth + 1))
 
     return _truncate_to_quarters(list(candidates.values()), max_quarters)
 
@@ -241,19 +268,33 @@ def _allow_all(_url: str) -> bool:
     return True
 
 
-def _robots_checker(url: str) -> Callable[[str], bool]:
-    """Return a ``can_fetch`` predicate for ``url``'s origin.
+_ROBOTS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+_MAX_CRAWL_DELAY_S = 12.0
 
-    A missing / unreachable robots.txt is treated as "allowed" (best-effort on
-    public IR pages), matching urllib's own default behavior.
+
+def _robots_policy(url: str) -> tuple[Callable[[str], bool], float]:
+    """Return ``(can_fetch predicate, crawl_delay seconds)`` for ``url``'s origin.
+
+    robots.txt is fetched with a browser User-Agent on purpose: many corporate
+    IR sites 403 a bare ``urllib`` request, and ``RobotFileParser.read()`` treats
+    a 403 on robots.txt as *disallow-all* — which would falsely block sites that
+    actually permit crawling (e.g. Visa/Oracle publish ``Allow: /``). A missing /
+    unreachable robots.txt means "no rules" → allow. We honor a published
+    ``Crawl-delay`` (capped) so the crawl stays polite.
     """
     parsed = urllib.parse.urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     rp = urllib.robotparser.RobotFileParser()
-    rp.set_url(f"{parsed.scheme}://{parsed.netloc}/robots.txt")
     try:
-        rp.read()
-    except Exception:
-        return _allow_all
+        req = urllib.request.Request(robots_url, headers={"User-Agent": _ROBOTS_UA})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+        rp.parse(raw.splitlines())
+    except Exception:  # missing / unreachable robots.txt → no rules → allow
+        return _allow_all, 0.0
+
+    raw_delay = rp.crawl_delay("*")
+    delay_s = min(float(raw_delay), _MAX_CRAWL_DELAY_S) if raw_delay else 0.0
 
     def _can(u: str) -> bool:
         try:
@@ -261,7 +302,7 @@ def _robots_checker(url: str) -> Callable[[str], bool]:
         except Exception:
             return True
 
-    return _can
+    return _can, delay_s
 
 
 def _safe_filename_for_url(href: str) -> str:
@@ -276,22 +317,43 @@ def _safe_filename_for_url(href: str) -> str:
         return ""
 
 
-def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
-    """Render ``url`` headlessly; return [(href, text)] for every VISIBLE anchor.
+# CSS selector for the document-link patterns — used to wait for JS to inject
+# the earnings docs (q4cdn / Investis / mz file hosts) before harvesting.
+_DOC_LINK_SELECTOR = (
+    "a[href*='q4cdn'], a[href*='mzfilemanager'], a[href*='/files/'], "
+    "a[href$='.pdf'], a[href*='.pdf?'], a[href$='.xlsx'], a[href$='.xls']"
+)
+_DOC_WAIT_MS = 6000  # wait up to this for JS-injected doc links to attach
+_SETTLE_FALLBACK_MS = 2000  # no doc link appeared (nav/landing page) — settle, then harvest anyway
 
-    Lazy import of the optional ``ir`` extra (Playwright), mirroring ``mz.py``.
+
+def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
+    """Render ``url`` headlessly; return [(href, text)] for every anchor on the page.
+
+    Lazy import of the optional ``ir`` extra (Playwright). Two hard-won choices:
+
+    * ``wait_until="domcontentloaded"`` (NOT ``networkidle``) — ad/tracker/chat-heavy
+      commercial IR sites never reach network-idle, so ``networkidle`` times out and
+      yields nothing. After the DOM loads we explicitly wait for the JS-injected
+      document links to attach (capped), falling back to a short settle delay.
+    * Harvest **all** anchors, not just visible ones — earnings PDFs on q4cdn /
+      Investis sites are collapsed inside year tabs/accordions (``offsetParent`` is
+      null) until clicked; ``_DOC_HREF_RX`` filters out the non-document links.
     """
     from playwright.sync_api import sync_playwright
 
-    js = (
-        "els => els.filter(a => a.offsetParent !== null)"
-        ".map(a => [a.href, (a.textContent || '').trim()])"
-    )
+    js = "els => els.map(a => [a.href, (a.textContent || '').trim()])"
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        # --disable-http2: some IR servers mis-negotiate HTTP/2 with headless
+        # chromium (net::ERR_HTTP2_PROTOCOL_ERROR); forcing HTTP/1.1 is robust.
+        browser = pw.chromium.launch(headless=True, args=["--disable-http2"])
         try:
             page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.wait_for_selector(_DOC_LINK_SELECTOR, timeout=_DOC_WAIT_MS, state="attached")
+            except Exception:  # no doc link surfaced — a nav/landing page; harvest its links
+                page.wait_for_timeout(_SETTLE_FALLBACK_MS)
             raw = page.eval_on_selector_all("a[href]", js)
         finally:
             browser.close()

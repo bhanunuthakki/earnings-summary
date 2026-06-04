@@ -171,6 +171,15 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
         log.error({"event": "download_failed", "url": url, "error": str(e)})
         return None
 
+    # Some IR doc links serve an HTML error/redirect page (with a .pdf
+    # Content-Disposition). Don't stage HTML as a .pdf — it just fails pypdf
+    # downstream and clutters the quarantine.
+    if dest.suffix in {".pdf", ".xlsx", ".xls"} and data[:512].lstrip()[:15].lower().startswith(
+        (b"<!doctype", b"<html", b"<?xml")
+    ):
+        log.warning({"event": "html_not_document", "url": url})
+        return None
+
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
     log.info({"event": "downloaded", "dest": str(dest), "size_kb": len(data) // 1024})

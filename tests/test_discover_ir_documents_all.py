@@ -133,7 +133,38 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun, roster: list[
 
 
 def _argv(tmp_path: Path, extra: list[str] | None = None) -> list[str]:
-    return ["--repo-root", str(tmp_path), "--db", str(tmp_path / "x.db"), *(extra or [])]
+    # The resilience tests isolate the discover/fetch stages with --no-process;
+    # the post-registration stage gets its own dedicated tests below.
+    return [
+        "--repo-root",
+        str(tmp_path),
+        "--db",
+        str(tmp_path / "x.db"),
+        "--no-process",
+        *(extra or []),
+    ]
+
+
+def _script_of(argv: list[str]) -> str:
+    for tok in argv:
+        if tok.endswith(".py"):
+            return Path(tok).name
+    return ""
+
+
+def _make_tracked_db(db: Path, ticker: str) -> None:
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT,"
+        " fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0)"
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) VALUES (?, 'portfolio', '12-31')",
+        (ticker,),
+    )
+    conn.commit()
+    conn.close()
 
 
 def test_all_roster_tickers_succeed(
@@ -243,3 +274,51 @@ def test_roster_filter_uses_real_db(
     assert set(cast("list[str]", s["skipped_not_in_roster"])) == {"XYZ", "FOO"}
     ran = {t for t, _ in fake.stages}
     assert ran == {"NU"}  # only the portfolio/evaluation match ran
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 — post-registration processing into the --enable-llm pipeline
+# ---------------------------------------------------------------------------
+
+
+def test_process_stage_runs_anchor_and_flags_brief_dirty(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    fake = _RecordingRun(downloaded={"NU": 3})
+    _install(monkeypatch, fake, ["NU"])
+    rc = batch.main(["--repo-root", str(tmp_path), "--db", str(db)])  # process ON, summaries off
+    assert rc == 0
+    scripts = [_script_of(c) for c in fake.calls]
+    assert "ir_narrative.py" in scripts  # anchor refresh ran (cheap)
+    assert "process_ir_documents.py" not in scripts  # LLM summaries are opt-in
+    conn = sqlite3.connect(str(db))
+    val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
+    conn.close()
+    assert val == 1  # queued for the daily --enable-llm rebuild
+    assert _summary(capsys.readouterr().out)["processed"] == 1
+
+
+def test_summaries_flag_runs_process_ir_documents(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    fake = _RecordingRun(downloaded={"NU": 2})
+    _install(monkeypatch, fake, ["NU"])
+    batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
+    assert "process_ir_documents.py" in [_script_of(c) for c in fake.calls]
+
+
+def test_no_process_skips_stage3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    fake = _RecordingRun(downloaded={"NU": 2})
+    _install(monkeypatch, fake, ["NU"])
+    batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--no-process"])
+    assert "ir_narrative.py" not in [_script_of(c) for c in fake.calls]
+    conn = sqlite3.connect(str(db))
+    val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
+    conn.close()
+    assert val == 0  # untouched
