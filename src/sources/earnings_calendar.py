@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 
 from sources.registry import CallStatus, log_call
 
@@ -40,7 +41,7 @@ class NextEarnings:
 
     expected_date: date
     source_name: str  # "fmp_cache" | "yfinance"
-    confirmed: bool   # True if the source treats it as confirmed (vs estimated)
+    confirmed: bool  # True if the source treats it as confirmed (vs estimated)
 
 
 def next_earnings_date(repo_root: Path, ticker: str) -> NextEarnings | None:
@@ -50,6 +51,89 @@ def next_earnings_date(repo_root: Path, ticker: str) -> NextEarnings | None:
     if fmp is not None:
         return fmp
     return _try_yfinance(ticker)
+
+
+def last_earnings_date(repo_root: Path, ticker: str) -> date | None:
+    """Most recent PAST earnings date (<= today) from the FMP calendar cache.
+
+    The mirror of `next_earnings_date`, for the post-earnings transcript scan:
+    the max date <= today in `data/historical/fmp/<T>_earnings_calendar.json`, or
+    None when the cache is missing / unparseable / has no past date. yfinance
+    isn't consulted — its `calendar` is future-oriented and omits past reports.
+    """
+    ticker = ticker.upper()
+    started = time.monotonic()
+    path = repo_root / "data" / "historical" / "fmp" / f"{ticker}_earnings_calendar.json"
+    if not path.exists():
+        log_call(
+            source_name="fmp_cache",
+            kind="earnings_calendar_last",
+            ticker=ticker,
+            status=CallStatus.NOT_FOUND,
+            notes="earnings_calendar.json missing",
+        )
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        log_call(
+            source_name="fmp_cache",
+            kind="earnings_calendar_last",
+            ticker=ticker,
+            status=CallStatus.ERROR,
+            notes=f"{type(e).__name__}: {e}"[:256],
+        )
+        return None
+
+    if not isinstance(payload, list):
+        log_call(
+            source_name="fmp_cache",
+            kind="earnings_calendar_last",
+            ticker=ticker,
+            status=CallStatus.NOT_FOUND,
+            notes="payload not a list",
+        )
+        return None
+
+    today = date.today()
+    past: list[date] = []
+    for item in cast("list[object]", payload):
+        if not isinstance(item, dict):
+            continue
+        rec = cast("dict[str, object]", item)
+        ds = rec.get("date") or rec.get("fiscalDateEnding")
+        if not isinstance(ds, str):
+            continue
+        try:
+            d = date.fromisoformat(ds[:10])
+        except ValueError:
+            continue
+        if d <= today:
+            past.append(d)
+
+    if not past:
+        log_call(
+            source_name="fmp_cache",
+            kind="earnings_calendar_last",
+            ticker=ticker,
+            status=CallStatus.NOT_FOUND,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            notes="no past dates in cache",
+        )
+        return None
+
+    last = max(past)
+    log_call(
+        source_name="fmp_cache",
+        kind="earnings_calendar_last",
+        ticker=ticker,
+        status=CallStatus.OK,
+        latency_ms=int((time.monotonic() - started) * 1000),
+        record_count=1,
+        notes=f"date={last.isoformat()}",
+    )
+    return last
 
 
 def _try_fmp_cache(repo_root: Path, ticker: str) -> NextEarnings | None:
@@ -164,7 +248,7 @@ def _try_yfinance(ticker: str) -> NextEarnings | None:
                     for v in row:
                         if isinstance(v, datetime):
                             candidates.append(v.date())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         today = date.today()
@@ -192,7 +276,7 @@ def _try_yfinance(ticker: str) -> NextEarnings | None:
         )
         # yfinance dates can be estimates pre-confirmation; flag as unconfirmed.
         return NextEarnings(expected_date=nxt, source_name="yfinance", confirmed=False)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log_call(
             source_name="yfinance",
             kind="earnings_calendar",
