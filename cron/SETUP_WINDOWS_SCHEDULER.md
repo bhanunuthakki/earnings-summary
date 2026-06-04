@@ -17,18 +17,21 @@ Thirteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06
 | `earnings-summary\refresh_cache` | Daily 03:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (defaults to `basic` = 250/day) and drains the highest-priority stale endpoints up to the cap. Failed endpoints (403 / Legacy Endpoint) get a 30-day retry window so a downgrade builds a backlog automatically; an upgrade catches up across following days. See `## Switching FMP tier` below. |
 | `earnings-summary\refresh_dirty_artifacts` | Daily 04:00 | `refresh_dirty_artifacts.task.xml` | `run_refresh_dirty_artifacts.bat` | **LLM artifact cache drain.** Picks up every `llm_artifacts` row with `dirty=1` (upstream-fact trigger) or `expires_at < now` (per-purpose TTL elapsed — see `_DEFAULT_TTL_DAYS` in `src/llm_artifact_store.py`). For each (ticker, purpose), shells out to the regenerator script defined in `execution/refresh_dirty_artifacts._PURPOSE_TO_REGENERATOR`. Halts gracefully (exit 0) once accumulated `llm_calls.cost_estimate_usd` for this run reaches `--max-cost-usd 5`. |
 | `earnings-summary\run_morning_pipeline` | Daily 04:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | **Personal CIO morning pipeline.** One orchestrated run chaining three subprocess stages: (1) `run_triggers.py` fans registered triggers across the portfolio + watchlist + evaluation list, persisting fresh alerts + drafted actions (cost-capped at `--max-cost-usd 10`); (2) `build_morning_digest.py` rebuilds today's digest HTML (`data/dashboard/morning/`); (3) `build_alert_feed.py` rebuilds the chronological feed HTML (`data/dashboard/feed.html`). Never aborts early — a trigger-stage failure/timeout still rebuilds the read-only digest + feed over existing alerts. Process exit code = count of failed stages. **Supersedes the standalone `run_triggers` cron from PR #172**: the digest/feed are now rebuilt in the same run that fires the alerts, so a 07:00 read is never stale. |
+| `earnings-summary\scan_ir_transcripts` | Daily 04:15 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | **Post-earnings IR-transcript scan.** For each active-universe ticker within 14 days of its last earnings date (`sources.earnings_calendar.last_earnings_date`), re-checks the issuer's OWN IR site (the `issuer_ir` source — `ir_pipeline.transcript`) for the latest reported quarter's transcript and fetches + ingests it. Idempotent on `transcripts/processed/<T>_Q<n>_<Y>.txt` — stops once that quarter is ingested. A tighter, windowed companion to `backfill_transcripts` that catches the issuer's official transcript days-to-weeks before the aggregators index it. |
 | `earnings-summary\backfill_transcripts` | Daily 04:30 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | For every active-universe ticker (`db.ACTIVE_LIST_TYPES`), fetches the last 6 fiscal quarters of Q&A from the free aggregator chain, runs ingest, extracts commitments. Idempotent — re-running with no missing quarters is a no-op. |
 | `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker. On `basic` tier this 403s and logs noise — the `next_earnings_date` adapter in `src/sources/earnings_calendar.py` falls back to yfinance. |
 | `earnings-summary\backfill_earnings_surprises` | Daily 06:15 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | For every active-universe ticker, merges `<TICKER>_earnings_calendar.json` (FMP primary, full EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Idempotent. Revenue surprise degrades to NULL when FMP coverage lapses. |
 | `earnings-summary\daily_fetch_and_brief` | Daily 06:30 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Drains `tracked_companies.brief_dirty` with three gates: **A** tier cadence (P1 daily, P2 if >7d old, P3 if >30d old), **B** material-change hash (skip if content unchanged AND last build < 7d), **C** evaluation cadence (skip if list_type=evaluation AND last build < 7d). For un-skipped tickers, runs thesis evaluator + DCF refresh + brief regen with `--enable-llm` so §8/§9 populate via the Claude CLI (Gemini fallback). |
 
-The five daily crons run as a chain: refresh_cache (03:00) drains the FMP
-priority queue under the configured tier, backfill_transcripts (04:30) pulls
+The daily fetch/brief crons run as a chain: refresh_cache (03:00) drains the
+FMP priority queue under the configured tier, scan_ir_transcripts (04:15)
+catches the latest issuer-published transcript for any ticker inside its 14-day
+post-earnings window, backfill_transcripts (04:30) pulls
 fresh Q&A transcripts + commitments, fetch_fmp_earnings_calendar (05:45)
 refreshes the calendar JSON cache, backfill_earnings_surprises (06:15) writes
 the merged EPS/Revenue beat-rate cache + DB, and daily_fetch_and_brief (06:30)
 drains `brief_dirty=1` and regenerates briefs (gated by content-change + eval
-cadence). The 90/75/30/15-min gaps absorb slow aggregator/FMP responses and
+cadence). The staggered gaps absorb slow aggregator/FMP responses and
 let each step's writes commit before the next reads.
 
 ### Hourly catch-up
@@ -154,6 +157,10 @@ schtasks /create /tn "earnings-summary\run_morning_pipeline" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_morning_pipeline.task.xml" ^
   /ru "%USERNAME%"
 
+schtasks /create /tn "earnings-summary\scan_ir_transcripts" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\scan_ir_transcripts.task.xml" ^
+  /ru "%USERNAME%"
+
 schtasks /create /tn "earnings-summary\backfill_transcripts" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\backfill_transcripts.task.xml" ^
   /ru "%USERNAME%"
@@ -235,6 +242,12 @@ Then check:
   table + new rows in `management_commitments` for the freshly-ingested
   transcripts. The JSON summary at the end of the log lists per-ticker
   fetched/skipped/miss counts.
+- For `scan_ir_transcripts`: for any ticker inside its 14-day post-earnings
+  window, a new `transcripts/raw/<TICKER>_Q<n>_<YYYY>.txt` (promoted to
+  `processed/` by the ingest step) once the issuer posts its transcript. The
+  JSON summary's `status_counts` breaks down the run (out_of_window /
+  already_ingested / fetched / not_published_yet / pending_ingest / error). An
+  all-`out_of_window`/`already_ingested` run is the steady-state no-op.
 - For `fetch_fmp_earnings_calendar`: file mtimes on
   `data/historical/fmp/*_earnings_calendar.json` updated to the run time.
 - For `backfill_earnings_surprises`: new/refreshed
