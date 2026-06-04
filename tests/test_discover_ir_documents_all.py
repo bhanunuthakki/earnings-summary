@@ -322,3 +322,60 @@ def test_no_process_skips_stage3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
     conn.close()
     assert val == 0  # untouched
+
+
+# ---------------------------------------------------------------------------
+# Status persistence + the --only-failing rescan
+# ---------------------------------------------------------------------------
+
+
+def _add_status_table(db: Path) -> None:
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE ir_fetch_status (ticker TEXT PRIMARY KEY, last_attempt_at TEXT, "
+        "last_status TEXT, discovered INTEGER, downloaded INTEGER, reason TEXT, updated_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_run_ticker_records_status_row(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    _add_status_table(db)
+    fake = _RecordingRun(downloaded={"NU": 3})
+    _install(monkeypatch, fake, ["NU"])
+    batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--no-process"])
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT last_status, downloaded FROM ir_fetch_status WHERE ticker='NU'"
+    ).fetchone()
+    conn.close()
+    assert row == ("ok", 3)  # the attempt outcome is persisted for the dashboard + rescan
+
+
+def test_only_failing_rescans_only_zero_doc_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT,"
+        " fiscal_year_end TEXT, brief_dirty INTEGER DEFAULT 0)"
+    )
+    conn.execute(
+        "CREATE TABLE documents (id INTEGER PRIMARY KEY, ticker TEXT, source_type TEXT,"
+        " period_end TEXT, fetched_at TEXT)"
+    )
+    # NU already has an auto-fetched IR doc; NOW has none (the gap to rescan).
+    conn.execute("INSERT INTO documents (ticker, source_type) VALUES ('NU', 'ir_doc')")
+    conn.commit()
+    conn.close()
+    fake = _RecordingRun(downloaded={"NOW": 2})
+    _install(monkeypatch, fake, ["NU", "NOW"])
+    rc = batch.main(
+        ["--repo-root", str(tmp_path), "--db", str(db), "--only-failing", "--no-process"]
+    )
+    assert rc == 0
+    ran = {t for t, _ in fake.stages}
+    assert ran == {"NOW"}  # NU already has docs → excluded from the failing-only rescan

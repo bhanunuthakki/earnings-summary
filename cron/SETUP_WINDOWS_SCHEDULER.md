@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Thirteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the four weekly + one monthly run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus.
+Fourteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating).
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -67,7 +67,13 @@ Runs Sunday 01:00 — ahead of `weekly_p2_lens_refresh` (02:00) and the Sunday-n
 |---|---|---|---|---|
 | `earnings-summary\discover_ir_documents` | Weekly, Sunday 01:30 | `discover_ir_documents.task.xml` | `run_discover_ir_documents.bat` | **IR-document corpus refresh.** Runs `execution/discover_ir_documents_all.py`, which reads the active-universe roster from the DB (`tracked_companies.list_type` in `portfolio`/`evaluation`) and, per ticker, shells out to two subprocess-isolated stages: (1) `discover_ir_documents.py --ticker <T>` headless-crawls the issuer's IR site (curated override → `ir_config` → `tracked_companies.ir_url`) and writes its URL manifest (`.tmp/ir_url_manifest/<T>_urls.json`); (2) `fetch_ir_documents.py --ticker <T> --categorize --calendar <id>` downloads the manifest's documents into staging and registers them at the canonical path (`documents` table, `source_type='ir_doc'` + the ir_narrative-visible layout). **Roster is read at run time, so newly-added evaluation companies are auto-included.** Subprocess-isolated per ticker with per-stage timeouts; never aborts on one ticker's failure; a ticker with no resolvable IR URL is `SKIPPED` (not a failure); exit code = count of FAILED tickers. Idempotent: a URL already in `documents.source_url` is skipped, and the append-only manifest accumulates history across weekly runs (mz JS-widget sites like NU expose only the current quarter, so history builds up over time). **Requires the optional `ir` extra** (headless browser) — same as `refresh_ir_kpis`. |
 
-Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before `weekly_p2_lens_refresh` (02:00) — so freshly-registered IR documents (and their `ir_narrative` anchors) precede the lens/synthesis reads. To change the cadence, edit the trigger in `discover_ir_documents.task.xml`. The same per-ticker fetch also runs best-effort on onboard (`execution/onboard_ticker.py`, `--skip-ir` to disable), so a newly-tracked name gets day-one coverage and the weekly run keeps it current.
+Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before `weekly_p2_lens_refresh` (02:00) — so freshly-registered IR documents (and their `ir_narrative` anchors) precede the lens/synthesis reads. To change the cadence, edit the trigger in `discover_ir_documents.task.xml`. The same per-ticker chain also runs best-effort on onboard (`execution/onboard_ticker.py`, `--skip-ir` to disable) via the shared `run_ticker` entry, so a newly-tracked name gets day-one coverage — discover → fetch+register → `ir_narrative` anchor + `brief_dirty` (so it flows into the next `--enable-llm` brief) → recorded in `ir_fetch_status` — and the weekly run keeps it current.
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\discover_ir_failing` | Twice weekly, Wed + Sat 02:30 | `discover_ir_failing.task.xml` | `run_discover_ir_failing.bat` | **Failing-crawler rescan.** Runs `execution/discover_ir_documents_all.py --only-failing`, which reads the live document store (`documents.source_type='ir_doc'`), computes the portfolio/evaluation names with **zero** registered IR docs, and runs just those through the normal discover → fetch+register → process chain. Catches a previously bot-protected (HTTP 403), HTTP/2-broken, or load-stalled IR site that starts cooperating — days sooner than the Sunday full sweep, at a fraction of the cost (only the gaps). A name that succeeds drops out of the gap set; one that keeps failing stays surfaced in the dashboard's **IR Docs** coverage tab with its last crawl reason. Idempotent; never aborts on one ticker's failure; exit code = count of FAILED tickers. **Requires the optional `ir` extra** (headless browser). |
+
+The failing-only rescan is the cheap mid-week companion to the Sunday full sweep: the full sweep re-checks every name weekly, this re-checks only the still-failing ones on Wednesday + Saturday so a recovered site is picked up within ~3 days. Coverage + each name's last crawl outcome are visible in the command center's **IR Docs** tab (`GET /api/panel/ir_coverage`), which also shows where to drop a manually-pulled file for the names that stay blocked.
 
 ## Switching FMP tier
 
@@ -199,6 +205,10 @@ schtasks /create /tn "earnings-summary\refresh_ir_kpis" ^
 
 schtasks /create /tn "earnings-summary\discover_ir_documents" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_documents.task.xml" ^
+  /ru "%USERNAME%"
+
+schtasks /create /tn "earnings-summary\discover_ir_failing" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_failing.task.xml" ^
   /ru "%USERNAME%"
 ```
 
