@@ -79,6 +79,7 @@ class _TickerResult:
     downloaded: int | None
     elapsed_seconds: float
     error: str | None = None
+    processed: bool = False  # post-registration stage ran (anchor + summaries + brief_dirty)
 
 
 def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[str], list[str]]:
@@ -135,6 +136,25 @@ def _ticker_fye(db_path: Path, ticker: str) -> str | None:
     return str(val) if val else None
 
 
+def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
+    """Flag the ticker for the daily ``--enable-llm`` rebuild (best-effort)."""
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute(
+                "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?",
+                (ticker.upper(),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    return True
+
+
 def _json_field(stdout: str, key: str) -> object:
     """Pull ``key`` from the last balanced top-level JSON object in ``stdout``."""
     s = stdout.strip()
@@ -169,6 +189,61 @@ def _run_child(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess[s
     )
 
 
+def _run_tolerant(argv: list[str], timeout_s: int, label: str) -> bool:
+    """Run a best-effort sub-step; echo output, log+swallow any failure. Returns ok."""
+    try:
+        proc = _run_child(argv, timeout_s)
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        sys.stderr.write(f"{label} FAILED: {exc} (tolerated)\n")
+        return False
+    if proc.stdout:
+        sys.stdout.write(proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n")
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    if proc.returncode != 0:
+        sys.stderr.write(f"{label} rc={proc.returncode} (tolerated)\n")
+        return False
+    return True
+
+
+def _run_process_stage(
+    ticker: str, *, repo_root: Path, db_path: Path, summaries: bool, timeout_s: int
+) -> bool:
+    """Feed newly-registered docs into the LLM pipeline. Best-effort; never raises.
+
+    Always: ``ir_narrative.py`` (cheap pypdf extraction → ``data/ir_narrative/<T>/``,
+    the IR anchor every ``--enable-llm`` prompt reads) + flip ``brief_dirty`` so the
+    daily brief rebuild surfaces the docs. With ``summaries``: also
+    ``process_ir_documents.py`` (LLM per-doc summaries feeding the press-release /
+    transcript sections — the cost step, opt-in).
+    """
+    nar = _run_tolerant(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
+            "--ticker",
+            ticker,
+            "--repo-root",
+            str(repo_root),
+        ],
+        timeout_s,
+        f"[{ticker}] ir_narrative",
+    )
+    if summaries:
+        _run_tolerant(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "execution" / "process_ir_documents.py"),
+                "--ticker",
+                ticker,
+            ],
+            timeout_s,
+            f"[{ticker}] process_ir_documents",
+        )
+    dirty = _set_brief_dirty(db_path, ticker)
+    return nar and dirty
+
+
 def _run_one(
     ticker: str,
     *,
@@ -178,6 +253,9 @@ def _run_one(
     discover_timeout: int,
     download_timeout: int,
     skip_download: bool,
+    process: bool = True,
+    summaries: bool = False,
+    process_timeout: int = 600,
 ) -> _TickerResult:
     """Discover then fetch one ticker, subprocess-isolated. Never raises."""
     sys.stdout.write(f"\n{'=' * 72}\n=== IR-document discovery - {ticker}\n{'=' * 72}\n")
@@ -251,11 +329,26 @@ def _run_one(
 
     downloaded = _json_field(fetch.stdout, "downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else None
+
+    # --- Stage 3: feed new docs into the LLM pipeline (anchor + brief_dirty [+ summaries]) ---
+    processed = False
+    if process and downloaded_n:
+        processed = _run_process_stage(
+            ticker,
+            repo_root=repo_root,
+            db_path=db_path,
+            summaries=summaries,
+            timeout_s=process_timeout,
+        )
+
     elapsed = _elapsed(t0)
     sys.stdout.write(
-        f"[{ticker}] OK (discovered={discovered_n}, downloaded={downloaded_n}, {elapsed}s)\n"
+        f"[{ticker}] OK (discovered={discovered_n}, downloaded={downloaded_n}, "
+        f"processed={processed}, {elapsed}s)\n"
     )
-    return _TickerResult(ticker, TickerStatus.OK, discovered_n, downloaded_n, elapsed)
+    return _TickerResult(
+        ticker, TickerStatus.OK, discovered_n, downloaded_n, elapsed, processed=processed
+    )
 
 
 def _elapsed(t0: float) -> float:
@@ -272,6 +365,7 @@ def _summarize(
                 "status": r.status.value,
                 "discovered": r.discovered,
                 "downloaded": r.downloaded,
+                "processed": r.processed,
                 "elapsed_seconds": r.elapsed_seconds,
                 "error": r.error,
             }
@@ -283,6 +377,7 @@ def _summarize(
         "failed": sum(1 for r in results if r.status is TickerStatus.FAILED),
         "discovered": sum(r.discovered or 0 for r in results),
         "downloaded": sum(r.downloaded or 0 for r in results),
+        "processed": sum(1 for r in results if r.processed),
         "elapsed_seconds": elapsed_seconds,
     }
 
@@ -316,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
             discover_timeout=cast("int", args.discover_timeout),
             download_timeout=cast("int", args.download_timeout),
             skip_download=cast("bool", args.skip_download),
+            process=not cast("bool", args.no_process),
+            summaries=cast("bool", args.summaries),
+            process_timeout=cast("int", args.process_timeout),
         )
         for t in selected
     ]
@@ -336,6 +434,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--discover-timeout", type=int, default=_DEFAULT_DISCOVER_TIMEOUT_S)
     p.add_argument("--download-timeout", type=int, default=_DEFAULT_DOWNLOAD_TIMEOUT_S)
     p.add_argument("--skip-download", action="store_true", help="Discover + write manifests only")
+    p.add_argument(
+        "--no-process",
+        action="store_true",
+        help="Skip the post-registration stage (no ir_narrative anchor refresh / brief_dirty)",
+    )
+    p.add_argument(
+        "--summaries",
+        action="store_true",
+        help="Also run process_ir_documents.py (LLM per-doc summaries — the cost step)",
+    )
+    p.add_argument(
+        "--process-timeout",
+        type=int,
+        default=600,
+        help="Per-step timeout for the process stage (s)",
+    )
     p.add_argument(
         "--db", type=Path, help="portfolio.db path (default: <repo-root>/data/portfolio.db)"
     )
