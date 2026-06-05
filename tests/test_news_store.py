@@ -17,6 +17,7 @@ Two contracts:
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,35 @@ def test_newsrow_accepts_canonical_utc() -> None:
 def test_newsrow_rejects_noncanonical(bad: str) -> None:
     with pytest.raises(ValidationError):
         _row(published_at=bad)
+
+
+def test_newsrow_rejects_implausible_dates() -> None:
+    """A correctly-shaped but absurd ``published_at`` (pre-2000 epoch artifact, or
+    a future-dated story that would fire material_news immediately) is rejected by
+    the plausibility gate — the format check alone would let these through."""
+    # Pre-2000 floor: a 1970 epoch artifact.
+    with pytest.raises(ValidationError):
+        _row(published_at="1970-01-01 00:00:00")
+    with pytest.raises(ValidationError):
+        _row(published_at="1999-12-31 23:59:59")
+    # Future ceiling: a story dated well beyond the small clock-skew tolerance.
+    far_future = (datetime.now(UTC).replace(tzinfo=None) + timedelta(days=30)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    with pytest.raises(ValidationError):
+        _row(published_at=far_future)
+
+
+def test_newsrow_accepts_recent_and_just_now() -> None:
+    """A real just-published story (now, within the skew tolerance) still passes —
+    the plausibility gate is a sanity bound, not a recency filter."""
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
+    just_now = now_naive.strftime("%Y-%m-%d %H:%M:%S")
+    assert _row(published_at=just_now).published_at == just_now
+    recent = (now_naive - timedelta(hours=6)).strftime("%Y-%m-%d %H:%M:%S")
+    assert _row(published_at=recent).published_at == recent
+    # Year-2000 floor boundary is admitted.
+    assert _row(published_at="2000-01-01 00:00:00").published_at == "2000-01-01 00:00:00"
 
 
 def test_newsrow_forbids_extra_fields() -> None:

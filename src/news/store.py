@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -30,6 +30,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # seconds. NewsRow's validator is the code-side enforcer the TEXT column cannot
 # be.
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+# Plausibility bounds for ``published_at``. A feed that emits a garbage timestamp
+# — an epoch-conversion overflow (1970 / a wild future year) or a genuinely
+# future-dated story — passes the *format* check above and then skews the
+# material_news trigger's lexical 24h recency window: a future date sorts at the
+# top and fires the alert immediately. The floor rejects pre-2000 garbage; the
+# ceiling rejects anything more than a small skew ahead of "now" (tolerating
+# feed/zone clock drift), so a real just-published story still passes while
+# 2050 does not. Bounds are intentionally wide — this is a sanity gate, not a
+# recency filter (the trigger owns recency).
+_MIN_PUBLISHED_YEAR = 2000
+_FUTURE_SKEW_DAYS = 2
 
 # `source_feed` provenance tags — which ingester wrote the row. Defined here so
 # both feeds and the dedup tests reference one spelling, not scattered literals.
@@ -63,7 +75,8 @@ class NewsRow(BaseModel):
     @field_validator("published_at")
     @classmethod
     def _utc_fixed_format(cls, v: str) -> str:
-        """Reject any value that isn't EXACTLY UTC 'YYYY-MM-DD HH:MM:SS'.
+        """Reject any value that isn't EXACTLY UTC 'YYYY-MM-DD HH:MM:SS' *and*
+        within a plausible date range.
 
         Raises (rejecting the row) rather than coercing — a malformed timestamp
         is a feed bug, and a wrongly-shaped value would silently skew the
@@ -75,9 +88,27 @@ class NewsRow(BaseModel):
         be the wrong *width* and so sort incorrectly under the trigger's lexical
         compare. A value is canonical iff re-emitting it via the same format
         reproduces it byte-for-byte — the airtight form of the §2.3 invariant.
+
+        Finally, a *plausibility* gate (see ``_MIN_PUBLISHED_YEAR`` /
+        ``_FUTURE_SKEW_DAYS``): a correctly-shaped but absurd timestamp (a 1970
+        epoch artifact, or a 2050 future-dated story that would fire
+        material_news immediately) is rejected here, where every persisted row
+        is funneled, rather than silently corrupting the recency window.
         """
-        if datetime.strptime(v, _DATETIME_FORMAT).strftime(_DATETIME_FORMAT) != v:
+        parsed = datetime.strptime(v, _DATETIME_FORMAT)
+        if parsed.strftime(_DATETIME_FORMAT) != v:
             raise ValueError(f"published_at must be canonical UTC '{_DATETIME_FORMAT}': {v!r}")
+        if parsed.year < _MIN_PUBLISHED_YEAR:
+            raise ValueError(
+                f"published_at year {parsed.year} predates {_MIN_PUBLISHED_YEAR} "
+                f"(implausible / epoch artifact): {v!r}"
+            )
+        now_utc = datetime.now(UTC).replace(tzinfo=None)
+        if parsed > now_utc + timedelta(days=_FUTURE_SKEW_DAYS):
+            raise ValueError(
+                f"published_at {v!r} is more than {_FUTURE_SKEW_DAYS}d in the future "
+                f"(feed clock bug; would skew the trigger's recency window)"
+            )
         return v
 
 
