@@ -11,10 +11,13 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 import sources.registry as registry
 from sources.registry import (
     CallStatus,
     PendingSourceCall,
+    cache_effectiveness_overview,
     log_calls_batch,
     summarize_source_calls,
 )
@@ -150,3 +153,83 @@ def test_since_filters_by_called_at(tmp_path: Path) -> None:
     out = summarize_source_calls(since="2026-05-01", db_path=db)
     assert len(out) == 1
     assert out[0].total == 2  # the April row is excluded
+
+
+# ---------------------------------------------------------------------------
+# Cost / savings dimension + the cross-source overview (v6 Smart caching)
+# ---------------------------------------------------------------------------
+
+
+def test_calls_saved_equals_skips_and_cost_zero_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``calls_saved`` is the network calls the cache avoided; with no configured
+    per-call cost (flat-rate sources), ``cost_saved_usd`` is 0.0."""
+    monkeypatch.delenv("SOURCE_COST_PER_CALL_USD", raising=False)
+    db = tmp_path / "portfolio.db"
+    _seed(
+        db,
+        [
+            ("fmp", "statements", "2026-05-10", 100, "ok", 5),
+            ("fmp", "statements", "2026-05-11", None, "skipped", None),
+            ("fmp", "statements", "2026-05-12", None, "skipped", None),
+        ],
+    )
+    (s,) = summarize_source_calls(db_path=db)
+    assert s.calls_saved == 2
+    assert s.cost_saved_usd == 0.0
+
+
+def test_cost_saved_uses_env_per_call_cost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``SOURCE_COST_PER_CALL_USD`` translates avoided calls into dollars."""
+    monkeypatch.setenv("SOURCE_COST_PER_CALL_USD", "0.01")
+    db = tmp_path / "portfolio.db"
+    _seed(
+        db,
+        [
+            ("fmp", "statements", "2026-05-10", 100, "ok", 5),
+            ("fmp", "statements", "2026-05-11", None, "skipped", None),
+            ("fmp", "statements", "2026-05-12", None, "skipped", None),
+            ("fmp", "statements", "2026-05-13", None, "skipped", None),
+        ],
+    )
+    (s,) = summarize_source_calls(db_path=db)
+    assert s.calls_saved == 3
+    assert s.cost_saved_usd == pytest.approx(0.03)
+
+
+def test_cache_effectiveness_overview_aggregates_across_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cross-source rollup sums calls / saved / errors and the dollar value."""
+    monkeypatch.setenv("SOURCE_COST_PER_CALL_USD", "0.10")
+    db = tmp_path / "portfolio.db"
+    _seed(
+        db,
+        [
+            # fmp:statements — 4 calls: 2 ok, 1 skip, 1 error
+            ("fmp", "statements", "2026-05-10", 100, "ok", 5),
+            ("fmp", "statements", "2026-05-11", 100, "ok", 5),
+            ("fmp", "statements", "2026-05-12", None, "skipped", None),
+            ("fmp", "statements", "2026-05-13", 900, "error", None),
+            # yfinance:price — 2 calls: 1 skip, 1 ok
+            ("yfinance", "price", "2026-05-10", 50, "ok", 1),
+            ("yfinance", "price", "2026-05-11", None, "skipped", None),
+        ],
+    )
+    ov = cache_effectiveness_overview(db_path=db)
+    assert ov.total_calls == 6
+    assert ov.calls_saved == 2  # one skip per source
+    assert ov.network_calls == 4
+    assert ov.cache_skip_rate == pytest.approx(2 / 6)
+    assert ov.error_rate == pytest.approx(1 / 6)
+    assert ov.cost_saved_usd == pytest.approx(0.20)  # 2 saved * $0.10
+    assert len(ov.by_source) == 2
+
+
+def test_overview_empty_db_is_all_zero(tmp_path: Path) -> None:
+    ov = cache_effectiveness_overview(db_path=tmp_path / "nope.db")
+    assert ov.total_calls == 0
+    assert ov.calls_saved == 0
+    assert ov.cache_skip_rate == 0.0
+    assert ov.by_source == []
