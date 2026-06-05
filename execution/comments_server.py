@@ -221,6 +221,25 @@ def create_app(
         since = request.args.get("since") or None
         return asdict(cache_effectiveness_overview(since=since, db_path=db_path))
 
+    @app.route("/export/cio", methods=["GET"])
+    def export_cio():
+        """Download the Personal-CIO substrate (alerts / queued actions / thesis
+        ledger) as an .xlsx workbook. Previously this existed only as the
+        ``export_cio_xlsx`` CLI — unreachable from the :7421 app (v6 re-grade,
+        Richness). ``?user_id=`` scopes the export. Built to a stable path under
+        data/dashboard and streamed as an attachment."""
+        from dashboard.cio_export import export_cio_workbook
+
+        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        out_path = repo_root / "data" / "dashboard" / "cio_export.xlsx"
+        written = export_cio_workbook(out_path, user_id=user_id, db_path=db_path)
+        return send_file(
+            written,
+            as_attachment=True,
+            download_name="cio_export.xlsx",
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     @app.route("/api/panel/<name>", methods=["GET"])
     def panel_fragment(name: str):
         """One analytical panel as a head/foot-less HTML fragment, for the lazy
@@ -249,6 +268,17 @@ def create_app(
             from pipeline.source_calls_panel import render_source_calls_panel
 
             return Response(render_source_calls_panel(db_path), mimetype="text/html")
+
+        if name == "thesis_ledger":
+            # The append-only history of every accepted, alert-driven thesis edit
+            # (thesis_ledger_entries) — the populated decision history that was
+            # reachable only via the /digest route (v6 re-grade, Richness).
+            from pipeline.thesis_ledger_panel import render_thesis_ledger_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_thesis_ledger_panel(db_path, user_id=user_id), mimetype="text/html"
+            )
 
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,

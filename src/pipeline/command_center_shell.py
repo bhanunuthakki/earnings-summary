@@ -52,6 +52,7 @@ _TABS: tuple[tuple[str, str, str | None, bool, bool], ...] = (
     ("insiders", "Insiders", "/api/panel/insiders", True, False),
     ("predictions", "Predictions", "/api/panel/predictions", False, False),
     ("decisions", "Decisions", "/api/panel/decisions", False, False),
+    ("thesis_ledger", "Thesis Ledger", "/api/panel/thesis_ledger", False, False),
     ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
     ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
     ("budget", "LLM Spend", "/api/panel/budget", False, False),
