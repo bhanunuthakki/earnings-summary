@@ -231,3 +231,103 @@ def test_grade_pending_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert tally["graded"] == 1  # counted...
     hist = {p.id: p for p in predictions_store.history(ticker="AMAT", limit=10, db_path=db)}
     assert hist[pid].outcome == "pending"  # ...but nothing written
+
+
+_CALIBRATION_SCHEMA = """
+CREATE TABLE prompt_calibration_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    purpose TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    ticker TEXT,
+    score REAL NOT NULL,
+    reason TEXT,
+    scored_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    scored_by TEXT,
+    artifact_id INTEGER
+);
+"""
+
+
+def test_grade_pending_records_extraction_calibration(tmp_path: Path) -> None:
+    """``record_calibration=True`` writes one calibration row for the run tagged
+    ``management_prediction`` @ the registry version, with the gradeable fraction
+    as the score. Two gradeable + one malformed (no_kpi) -> 2/3; no_fact excluded."""
+    data = tmp_path / "data"
+    data.mkdir()
+    db = data / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(_SCHEMA + _CALIBRATION_SCHEMA)
+    conn.commit()
+    conn.close()
+
+    made = datetime(2025, 1, 1, tzinfo=UTC)
+    # Two gradeable (1 missed, 1 met) ...
+    predictions_store.record(
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="grow 10%+",
+        made_at=made,
+        target_period=datetime(2025, 10, 26, tzinfo=UTC),
+        kpi_name="Revenue YoY Growth (USD)",
+        comparator="ge",
+        target_value=10.0,
+        target_unit="percent",
+        db_path=db,
+    )
+    predictions_store.record(
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="guide 48.4%",
+        made_at=made,
+        target_period=datetime(2025, 7, 27, tzinfo=UTC),
+        kpi_name="Gross Margin (GAAP)",
+        comparator="eq",
+        target_value=48.4,
+        target_unit="percent",
+        db_path=db,
+    )
+    # ... and one malformed extraction (unresolvable KPI -> skipped_no_kpi).
+    predictions_store.record(
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="mystery",
+        made_at=made,
+        target_period=datetime(2025, 3, 1, tzinfo=UTC),
+        kpi_name="Totally Unknown KPI",
+        comparator="ge",
+        target_value=5.0,
+        target_unit="percent",
+        db_path=db,
+    )
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        INSERT INTO kpi_definitions (id, ticker, name)
+            VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)'), (2, 'AMAT', 'Gross Margin (GAAP)');
+        INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id, confidence)
+            VALUES ('AMAT','2025-10-26','Q4',1,-3.48,'percent',101,0.9),
+                   ('AMAT','2025-07-27','Q3',2,48.5,'percent',102,0.9);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    tally = grade_predictions.grade_pending(
+        tmp_path, record_calibration=True, as_of=datetime(2026, 6, 1, tzinfo=UTC)
+    )
+    assert tally["graded"] == 2
+    assert tally["skipped_no_kpi"] == 1
+
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT purpose, prompt_version, score, scored_by FROM prompt_calibration_scores"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    purpose, version, score, scored_by = rows[0]
+    assert purpose == "management_prediction"
+    assert version == "v1"
+    assert scored_by == "grade_predictions"
+    assert score == pytest.approx(2 / 3)

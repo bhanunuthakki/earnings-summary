@@ -68,6 +68,7 @@ from llm.anchors import (
     load_ir_anchor,
     load_thesis_anchor,
 )
+from llm.prompt_versions import prompt_version_for
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -125,9 +126,10 @@ _NEWS_SELECT_SQL = (
 # entry in ``llm_artifact_store.FACT_DEPENDENT_PURPOSES`` so a fact-side
 # restatement participates in the existing mark-dirty chain.
 _ARTIFACT_PURPOSE = "material_news_classification"
-# Prompt-version key for the cache. Bump when the classification prompt body
-# changes materially.
-_PROMPT_VERSION = "v1"
+# Prompt-version key for the cache + the calibration A/B dimension, sourced from
+# the central registry (the single bump-point). Bump the entry there when the
+# classification prompt body changes materially.
+_PROMPT_VERSION = prompt_version_for(_ARTIFACT_PURPOSE)
 
 # queued_actions.action_kind values this trigger emits. Material news is
 # informational — it never proposes a bear_append or sizing_update; the user

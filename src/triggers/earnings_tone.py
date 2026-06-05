@@ -55,6 +55,7 @@ from llm.anchors import (
     load_ir_anchor,
     load_thesis_anchor,
 )
+from llm.prompt_versions import prompt_version_for
 from llm.style import NUMBER_FORMATTING_BLOCK
 from llm_artifact_store import (
     UpsertRequest,
@@ -101,10 +102,11 @@ _ARTIFACT_PURPOSE = "earnings_tone_diff"
 # {summary, shifts[], no_material_shifts_detected} shape.
 _PROMPT_TEMPLATE_PATH = Path(__file__).parent / "_prompts" / "earnings_tone_diff.txt"
 
-# Prompt-version key for the cache. Bump when the template body
-# changes materially (re-using ``compute_input_sha256`` would be too
-# fragile — minor whitespace tweaks would invalidate the cache).
-_PROMPT_VERSION = "v1"
+# Prompt-version key for the cache + the calibration A/B dimension, sourced from
+# the central registry (the single bump-point). Bump the entry there when the
+# template body changes materially (re-using ``compute_input_sha256`` would be
+# too fragile — minor whitespace tweaks would invalidate the cache).
+_PROMPT_VERSION = prompt_version_for(_ARTIFACT_PURPOSE)
 
 # Direction values that warrant promoting a shift to a ``thesis_update``
 # action. Pure ``ambiguous``-typed shifts don't pass the bar — they go
