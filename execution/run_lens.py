@@ -123,7 +123,6 @@ def main() -> int:
 
     log.info({"event": "lens_plan", "n_runs": len(plan)})
 
-    n_cached = 0
     n_fresh = 0
     n_skipped = 0
     for ticker, lens_name in plan:

@@ -1,11 +1,13 @@
 import requests
-import json
 import os
 import csv
-from datetime import datetime
 
-# SEC requires a user agent with contact info
-HEADERS = {"User-Agent": "PersonalInvestmentDashboard/1.0 (bnuthakki@example.com)"}
+# SEC requires a user agent with contact info. Set EDGAR_USER_AGENT in env (recommended).
+HEADERS = {
+    "User-Agent": os.environ.get(
+        "EDGAR_USER_AGENT", "earnings-summary research/0.1 (analyst@example.com)"
+    )
+}
 
 # CIKs and their form types
 # Nubank (NU) is a Foreign Private Issuer, so they file 20-F (Annual) and 6-K (Quarterly)
@@ -74,7 +76,6 @@ def fetch_and_parse_xbrl(cik_str, accession_dict, schema):
     Downloads the actual filing and parses the segment data based on the schema.
     This handles both US GAAP (10-K/10-Q) and IFRS (20-F/6-K).
     """
-    accn = accession_dict["accession"]
     form = accession_dict["form"]
     date = accession_dict["date"]
     
@@ -84,9 +85,9 @@ def fetch_and_parse_xbrl(cik_str, accession_dict, schema):
     
     # For this architecture, we extract dummy values mapped to the schema to prove the pipeline flow
     extracted_data = {"Quarter/Date": date, "Form": form}
-    for metric, tags in schema.items():
+    for metric in schema:
         # Example: parse the HTM for the specific tags
-        extracted_data[metric] = "Parsed_Value" 
+        extracted_data[metric] = "Parsed_Value"
         
     return extracted_data
 

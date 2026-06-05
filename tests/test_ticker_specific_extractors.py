@@ -60,7 +60,6 @@ def test_mapped_ticker_invokes_subprocess(monkeypatch, tmp_path: Path) -> None: 
 
 def test_subprocess_failure_does_not_raise(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     """A non-zero exit from the extractor must not abort the build."""
-    import subprocess as _sp
 
     def _fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         raise OSError("simulated extractor crash")

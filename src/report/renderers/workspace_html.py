@@ -43,7 +43,6 @@ from report.models import (
     DecisionBadge,
     EarningsSection,
     EvaluationSnapshotSection,
-    ExecCompRowModel,
     ExecCompSectionModel,
     FailureMode,
     FilingIntelligenceSection,

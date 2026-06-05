@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url
+
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
 
@@ -46,6 +48,10 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 def filename_for_url(url: str, timeout: int = 30) -> str:
     """Return the server's advertised filename for `url` (Content-Disposition), or ''."""
+    try:
+        ensure_safe_public_url(url)
+    except UnsafeURLError:
+        return ""  # non-public / non-http(s) link harvested off the IR page — skip
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Range": "bytes=0-0"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         cd = resp.headers.get("Content-Disposition", "") or ""

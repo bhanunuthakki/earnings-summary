@@ -18,7 +18,7 @@ To enforce a standardized, deterministic directory hierarchy for data flow and s
 | `micro_thesis/` | Thesis tracker module: `holdings/` (per-ticker JSON KPI specs), `sources/` (per-ticker document drop folders), and periodic tracker notes. | Working data for the micro-thesis tracking module. |
 | `ir_documents/` | Canonical store for IR PDFs and user-intaked transcripts: `ir_documents/<TICKER>/<YYYY-MM-DD>/ir_<doctype>__<sha8>.<ext>`. Populated by `fetch_ir_documents.py` (downloads) and `intake_documents.py` (user drops). | Long-term storage. Gitignored (large binaries). |
 | `ir_documents/_events/` | Non-quarterly IR artifacts (investor days, AGMs, capital markets days, conference decks): `ir_documents/_events/<TICKER>/<event_date>/ir_event__<sha8>.<ext>`. Indexed in `document_index.json` under the `{TICKER}_event_{event_date}_{sha8}` keyspace. | Long-term storage. Gitignored. |
-| `examples/` | Example artifacts and templates (e.g., `examples/dcf/` containing sample Excel DCF models). | Reference material. |
+| `examples/` | Example artifacts and seed data (e.g., `seed_ir_urls.sql`). | Reference material. |
 | `src/` | Core application code: DB, LLM client, parser, brief generator (`src/report/`), DCF subsystem (`src/dcf/`), compute modules (`src/compute/`), pipeline orchestration (`src/pipeline/`), Pydantic schemas (`src/models/`). | Source code. |
 
 ## Rules

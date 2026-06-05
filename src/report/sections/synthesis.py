@@ -39,7 +39,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
     try:
         from llm_artifact_store import read_current  # type: ignore[import-not-found]
-        from synthesis_lenses import list_lenses_for_ticker, LENSES  # type: ignore[import-not-found]
+        from synthesis_lenses import list_lenses_for_ticker  # type: ignore[import-not-found]
     except ImportError as exc:
         log.warning({"event": "synthesis_imports_failed", "error": str(exc)})
         return SynthesisSection(status=SectionStatus.MISSING_DATA, ticker=ticker)

@@ -29,7 +29,6 @@ import argparse
 import datetime as _dt
 import sys
 from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -42,7 +41,6 @@ sys.path.append(str(SRC_DIR))
 from aggregator_sources import (  # noqa: E402
     SOURCES,
     AggregatorHit,
-    AggregatorSource,
     fetch_qa_with_fallback,
 )
 from alias_manager import resolve_ticker  # noqa: E402

@@ -17,7 +17,6 @@ Usage:
     python execution/process_ir_documents.py --dry-run --all
 """
 
-import os
 import sys
 import time
 import json

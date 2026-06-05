@@ -95,7 +95,6 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `micro_thesis/sources/` | Per-ticker drop folders for review documents |
 | `micro_thesis/diligence/` | P2 diligence markdown per evaluation candidate |
 | `dcf/` | Canonical per-ticker DCF workbooks (`<TICKER>.xlsx`, user-edited; system refreshes historicals only) |
-| `examples/dcf/` | Reference DCF templates seeded from AMZN/GOOG/META |
 | `data/ticker_specific/<TICKER>/` | Per-ticker custom research feeds (e.g. NVO patent timeline) consumed by §10 Bear Case prompt |
 | `data/historical/fmp/` | FMP JSON cache (per ticker × endpoint) — gitignored, reproducible |
 | `data/sec/` | SEC XBRL cache |

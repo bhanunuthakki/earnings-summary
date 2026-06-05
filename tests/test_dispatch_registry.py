@@ -47,7 +47,7 @@ def test_start_uppercases_ticker():
 
 def test_start_conflict_when_same_slot_still_running():
     r = Registry()
-    job1 = _quick_job(r)
+    _quick_job(r)
     with pytest.raises(RegistryConflict, match="job already running"):
         _quick_job(r)
     # Different kind for the same ticker is allowed.
@@ -121,7 +121,6 @@ def test_stream_yields_start_log_done_in_order():
     _force_complete(job, lines=["third"], exit_code=0)
     t.join(timeout=2.0)
 
-    joined = "".join(captured)
     assert '"event": "start"' in captured[0]
     assert any('"line": "first"' in f for f in captured)
     assert any('"line": "second"' in f for f in captured)
