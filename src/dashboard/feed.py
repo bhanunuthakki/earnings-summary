@@ -17,10 +17,11 @@ from pathlib import Path
 from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
 from dashboard._card import render_alert_card
 from dashboard._styles import CSS
+from identity import DEFAULT_USER_ID
 
 
 def render_alert_feed(
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     limit: int = 200,
     ticker: str | None = None,
     trigger_kind: str | None = None,

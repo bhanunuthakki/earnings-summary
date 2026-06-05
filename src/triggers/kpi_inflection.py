@@ -44,6 +44,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from alerts.store import compute_signature_sha
+from identity import DEFAULT_USER_ID
 from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
@@ -77,7 +78,7 @@ log = logging.getLogger(__name__)
 
 # Owner of the registry rows + alerts. Single-user today; mirrors the default
 # baked into the user_state CRUD and the morning driver.
-_USER_ID = "bhanu"
+_USER_ID = DEFAULT_USER_ID
 
 # Series window fed to the detector. detect_inflection needs >= 8 observations;
 # we trim to the most recent 12 quarters so the changepoint search reflects the

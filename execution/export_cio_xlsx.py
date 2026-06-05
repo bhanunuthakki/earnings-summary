@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dashboard.cio_export import export_cio_workbook  # noqa: E402
+from identity import DEFAULT_USER_ID  # noqa: E402
 
 
 def _default_out(repo_root: Path) -> Path:
@@ -33,8 +34,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--user-id",
-        default="bhanu",
-        help="user_id to scope the export to. Defaults to 'bhanu'.",
+        default=DEFAULT_USER_ID,
+        help="user_id to scope the export to. Defaults to $CIO_USER_ID or 'bhanu'.",
     )
     parser.add_argument(
         "--db-path",

@@ -69,6 +69,7 @@ import ticker_settings  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
+from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
@@ -282,7 +283,7 @@ def create_app(
             # Malformed ?date= falls back to today rather than 500-ing.
             with contextlib.suppress(ValueError):
                 render_date = date.fromisoformat(date_arg)
-        user_id = request.args.get("user_id", "bhanu")
+        user_id = request.args.get("user_id", DEFAULT_USER_ID)
         html_text = render_morning_digest(date=render_date, user_id=user_id, db_path=db_path)
         return Response(html_text, mimetype="text/html")
 
@@ -295,7 +296,7 @@ def create_app(
         except ValueError:
             limit = 200
         html_text = render_alert_feed(
-            user_id=request.args.get("user_id", "bhanu"),
+            user_id=request.args.get("user_id", DEFAULT_USER_ID),
             ticker=request.args.get("ticker"),
             trigger_kind=request.args.get("trigger_kind"),
             status=request.args.get("status"),

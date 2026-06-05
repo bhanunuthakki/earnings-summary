@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from identity import DEFAULT_USER_ID
 from user_state._db import now_iso, open_conn, parse_dt
 
 
@@ -38,7 +39,7 @@ class ThesisLedgerEntryRow:
 
 def append_entry(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     entry_kind: str,
     body: str,
@@ -74,7 +75,7 @@ def append_entry(
 
 def list_entries(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     entry_kind: str | None = None,
     limit: int = 100,
@@ -116,7 +117,7 @@ def list_entries(
 
 def list_recent_entries(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     limit: int = 20,
     db_path: Path | str | None = None,
 ) -> list[ThesisLedgerEntryRow]:

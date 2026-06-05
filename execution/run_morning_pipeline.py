@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -62,7 +63,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DEFAULT_USER_ID = "bhanu"
+DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
 
 # Per-stage wall-clock caps. Stage 1 fans LLM-backed sensors across the whole

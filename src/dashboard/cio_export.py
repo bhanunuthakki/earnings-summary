@@ -22,6 +22,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
+from identity import DEFAULT_USER_ID
 from user_state.ledger import list_recent_entries
 
 
@@ -61,7 +62,7 @@ def _payload_str(payload: object) -> str:
 def export_cio_workbook(
     output_path: Path,
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     db_path: Path | None = None,
     alert_limit: int = 500,
     ledger_limit: int = 500,
