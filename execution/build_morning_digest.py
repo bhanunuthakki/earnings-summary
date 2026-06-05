@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 from dashboard import render_morning_digest  # noqa: E402
+from identity import DEFAULT_USER_ID  # noqa: E402
 
 
 def _default_out(repo_root: Path, render_date: date) -> Path:
@@ -48,8 +49,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--user-id",
-        default="bhanu",
-        help="user_id to scope the digest to. Defaults to 'bhanu'.",
+        default=DEFAULT_USER_ID,
+        help="user_id to scope the digest to. Defaults to $CIO_USER_ID or 'bhanu'.",
     )
     parser.add_argument(
         "--repo-root",

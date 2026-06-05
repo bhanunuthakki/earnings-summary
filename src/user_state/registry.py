@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from identity import DEFAULT_USER_ID
 from user_state._db import now_iso, open_conn, parse_dt
 
 
@@ -48,7 +49,7 @@ class UserKpiRegistryRow:
 
 def upsert_kpi(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     kpi_name: str,
     threshold_direction: str | None = None,
@@ -130,7 +131,7 @@ def upsert_kpi(
 
 
 def list_kpis(
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     db_path: Path | str | None = None,
 ) -> list[UserKpiRegistryRow]:
@@ -159,7 +160,7 @@ def list_kpis(
 
 
 def get_thesis_breakers(
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     db_path: Path | str | None = None,
 ) -> list[UserKpiRegistryRow]:

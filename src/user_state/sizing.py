@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from identity import DEFAULT_USER_ID
 from user_state._db import now_iso, open_conn, parse_dt
 
 
@@ -37,7 +38,7 @@ class PositionSizingIntentRow:
 
 def append_intent(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     intent_kind: str,
     intent_value: float | None = None,
@@ -71,7 +72,7 @@ def append_intent(
 
 
 def list_intents(
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     db_path: Path | str | None = None,
 ) -> list[PositionSizingIntentRow]:
@@ -100,7 +101,7 @@ def list_intents(
 
 def latest_intent(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     intent_kind: str,
     db_path: Path | str | None = None,

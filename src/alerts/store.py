@@ -35,6 +35,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from identity import DEFAULT_USER_ID
+
 ALERT_STATUS_PENDING = "pending"
 ALERT_STATUS_APPROVED = "approved"
 ALERT_STATUS_DISMISSED = "dismissed"
@@ -139,7 +141,7 @@ def compute_signature_sha(
 
 def fire_alert(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str,
     trigger_kind: str,
     fired_at: datetime,
@@ -188,7 +190,7 @@ def fire_alert(
 
 def find_by_signature(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     signature_sha: str,
     db_path: Path | str | None = None,
 ) -> AlertRow | None:
@@ -217,7 +219,7 @@ def find_by_signature(
 
 def list_pending_alerts(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     since: datetime | None = None,
     db_path: Path | str | None = None,
@@ -234,7 +236,7 @@ def list_pending_alerts(
 
 def list_alerts(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     ticker: str | None = None,
     status: str | None = None,
     since: datetime | None = None,
@@ -408,7 +410,7 @@ def list_queued_actions_for_alert(
 
 def list_pending_actions(
     *,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     limit: int = 200,
     db_path: Path | str | None = None,
 ) -> list[QueuedActionRow]:

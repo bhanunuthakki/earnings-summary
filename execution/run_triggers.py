@@ -50,6 +50,7 @@ from alerts.store import (  # noqa: E402
     fire_alert,
     queue_action,
 )
+from identity import DEFAULT_USER_ID  # noqa: E402
 from triggers.base import (  # noqa: E402
     AlertDraft,
     Trigger,
@@ -62,7 +63,6 @@ from user_state.sizing import list_intents  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-DEFAULT_USER_ID = "bhanu"
 DEFAULT_MAX_COST_USD = 10.0
 DISMISSED_LOOKBACK_DAYS = 90
 

@@ -35,12 +35,13 @@ from alerts import (
 )
 from dashboard._card import render_alert_card, render_queued_action
 from dashboard._styles import CSS
+from identity import DEFAULT_USER_ID
 from user_state.ledger import list_recent_entries
 
 
 def render_morning_digest(
     date: date,
-    user_id: str = "bhanu",
+    user_id: str = DEFAULT_USER_ID,
     db_path: Path | None = None,
 ) -> str:
     """Return the full HTML string for the morning digest of ``date``.

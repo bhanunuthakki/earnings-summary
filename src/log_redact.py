@@ -1,35 +1,57 @@
-"""Redact credentials from strings before logging.
+"""Redact credentials and PII from strings before logging.
 
 `requests.HTTPError` (and most connection errors) embed the full URL —
 including the query string — in their message. Any code path that does
-``print(f"... {exc}")`` or ``log.error(error=str(exc))`` will therefore
-write the API key to stderr / disk logs. Route exception strings (and
-any other untrusted text that may contain a URL) through `redact()`
-before logging.
+``print(f"... {exc}")`` or ``log.error(error=str(exc))`` will therefore write
+the API key to stderr / disk logs. Route exception strings (and any other
+untrusted text that may contain a URL, an auth header, or a JSON body) through
+`redact()` before logging.
 
-The regex covers the credential-bearing query params we know are in use
-across the codebase plus the most common variants seen in third-party
-APIs — apikey, api_key, access_token, auth_token, password, secret —
-case-insensitive. Add new param names here when integrating a new
-provider; the redactor is the single source of truth.
+What gets masked:
+  - credential-bearing URL query params (``?apikey=…``, ``&access_token=…``);
+  - ``Authorization: Bearer <token>`` / bare ``Bearer <token>``;
+  - JSON-body secrets (``"api_key": "…"``, ``"token"``, ``"secret"``,
+    ``"password"``, ``"access_token"``, ``"auth_token"``);
+  - email addresses — the identifying local part is masked, the domain kept
+    for triage (``bhanu@gmail.com`` → ``***@gmail.com``).
+
+Add new credential param/key names below when integrating a new provider; the
+redactor is the single source of truth.
 """
 
 from __future__ import annotations
 
 import re
 
+# ?apikey=… / &access_token=… in a URL query string.
 _CRED_RE = re.compile(
     r"(?P<param>apikey|api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)=(?P<val>[^&\s]+)",
     re.IGNORECASE,
 )
 
+# Authorization: Bearer <token> (or a bare "Bearer <token>"). The {8,} length
+# floor avoids masking the English word "bearer" followed by a short word.
+_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}")
+
+# JSON / dict body: "api_key": "…", "token": "…", etc. Masks the quoted value.
+_JSON_SECRET_RE = re.compile(
+    r'(?i)("(?:apikey|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)"'
+    r'\s*:\s*")[^"]*(")'
+)
+
+# Email address — mask the identifying local part, keep the domain for triage.
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+(@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
+
 
 def redact(text: object) -> str:
-    """Mask credential-bearing query params in ``text``.
+    """Mask credentials and PII in ``text`` before it is logged.
 
-    Returns the input (coerced via ``str()``) with any
-    ``<param>=<value>`` pair replaced by ``<param>=***`` for known
-    credential parameter names. Safe to call on strings, exceptions, or
-    anything else — non-strings go through ``str()`` first.
+    Coerces ``text`` via ``str()`` then masks credential query params, Bearer
+    tokens, JSON-body secrets, and email local-parts. Safe to call on strings,
+    exceptions, or anything else — non-strings go through ``str()`` first.
     """
-    return _CRED_RE.sub(lambda m: f"{m.group('param')}=***", str(text))
+    s = str(text)
+    s = _CRED_RE.sub(lambda m: f"{m.group('param')}=***", s)
+    s = _BEARER_RE.sub(lambda m: f"{m.group(1)}***", s)
+    s = _JSON_SECRET_RE.sub(lambda m: f"{m.group(1)}***{m.group(2)}", s)
+    return _EMAIL_RE.sub(lambda m: f"***{m.group(1)}", s)
