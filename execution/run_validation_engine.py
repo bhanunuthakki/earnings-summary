@@ -49,10 +49,19 @@ def halt_issue_count(conn: sqlite3.Connection, run_id: str) -> int:
     return int(row[0]) if row else 0
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to one ticker (default: all)")
-    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
+    parser.add_argument(
+        "--db",
+        "--db-path",
+        dest="db",
+        default=str(PROJECT_ROOT / "data" / "portfolio.db"),
+        help=(
+            "Portfolio DB path. ``--db-path`` is an accepted alias so the morning"
+            "-pipeline orchestrator can forward the DB to every stage uniformly."
+        ),
+    )
     parser.add_argument(
         "--gate",
         action="store_true",
@@ -61,7 +70,11 @@ def main() -> int:
             "so a scheduled/CI step can fail on egregious data."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     conn = open_db(args.db)
     try:
