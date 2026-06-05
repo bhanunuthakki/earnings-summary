@@ -32,7 +32,6 @@ from report.models import (
     SegmentSeries,
     SegmentsSection,
     SegmentWeighting,
-    SignalRow,
     SignalsSection,
     SnapshotSection,
     SoftRuleEvaluation,

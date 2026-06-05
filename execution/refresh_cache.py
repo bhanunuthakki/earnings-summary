@@ -45,7 +45,6 @@ import os
 import sqlite3
 import subprocess
 import sys
-import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path

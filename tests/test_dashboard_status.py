@@ -9,13 +9,11 @@ import json
 import os
 import sqlite3
 import time
-from datetime import date
 from pathlib import Path
 
 import pytest
 
 from pipeline.dashboard_status import (
-    DashboardRow,
     TranscriptStatus,
     build_dashboard_rows,
 )

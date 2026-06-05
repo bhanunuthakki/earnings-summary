@@ -17,12 +17,12 @@ Usage:
     python execution/comments_server.py
     python execution/comments_server.py --port 7421 --repo-root /path/to/repo
 
-CORS is wide-open (`Access-Control-Allow-Origin: *`) only when the request
-Host is localhost — the workspace HTML opens via file:// so the browser
-origin is `null`, which would be rejected by any non-`*` policy. If you
-bind to 0.0.0.0 or another interface, set `COMMENTS_SERVER_CORS_WHITELIST`
-to a comma-separated list of allowed Origins; the server echoes the
-request's Origin back only when it matches.
+CORS: the server never emits `Access-Control-Allow-Origin: *`. It echoes back
+only the file:// renderer's `null` Origin and loopback Origins — so the local
+dashboard works while a cross-site Origin gets no CORS header (CSRF defense).
+If you bind to 0.0.0.0 or another interface, set `COMMENTS_SERVER_CORS_WHITELIST`
+to a comma-separated list of allowed Origins; the server echoes a request's
+Origin back only when it matches.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import json
 import os
 import queue
 import sys
+import urllib.parse
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -89,6 +90,33 @@ _MAINTENANCE_ACTIONS: dict[str, list[str]] = {
 }
 
 
+def _cors_allow_origin(origin: str) -> str | None:
+    """Return the ``Access-Control-Allow-Origin`` value to echo for ``origin``, or None.
+
+    Allows the file:// workspace renderer (Origin ``"null"``) and any loopback
+    origin so the local dashboard keeps working; a cross-site origin gets no
+    CORS header, so the browser blocks its preflighted state-changing request
+    (CSRF defense). For a non-loopback bind, an explicit comma-separated
+    ``COMMENTS_SERVER_CORS_WHITELIST`` of allowed origins is honored.
+    """
+    if not origin:
+        return None  # same-origin / non-browser caller needs no CORS header
+    if origin == "null":
+        return "null"
+    try:
+        hostname = urllib.parse.urlparse(origin).hostname or ""
+    except ValueError:
+        return None
+    if hostname in ("127.0.0.1", "localhost", "::1"):
+        return origin
+    whitelist = [
+        o.strip()
+        for o in os.environ.get("COMMENTS_SERVER_CORS_WHITELIST", "").split(",")
+        if o.strip()
+    ]
+    return origin if origin in whitelist else None
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -115,23 +143,19 @@ def create_app(
 
     @app.after_request
     def add_cors_headers(response):
-        # file:// renders the HTML so the browser origin is `null`. `*` is
-        # the only Allow-Origin value that satisfies a null origin, so we
-        # emit it for localhost only — if someone runs --host 0.0.0.0 a
-        # wide-open header becomes a footgun. For non-localhost hosts,
-        # echo back the Origin only when it's in the whitelist env var.
-        host = (request.host or "").split(":", 1)[0]
-        if host in ("127.0.0.1", "localhost", "[::1]"):
-            response.headers["Access-Control-Allow-Origin"] = "*"
-        else:
-            whitelist = [
-                o.strip()
-                for o in os.environ.get("COMMENTS_SERVER_CORS_WHITELIST", "").split(",")
-                if o.strip()
-            ]
-            origin = request.headers.get("Origin", "")
-            if origin and origin in whitelist:
-                response.headers["Access-Control-Allow-Origin"] = origin
+        # The workspace report HTML opens via file://, so its browser Origin is
+        # the literal string "null"; pages served by this server carry a
+        # loopback Origin. Echo back ONLY those — never "*". A wildcard let any
+        # site the user happened to be visiting drive state-changing POSTs
+        # (refresh/onboard jobs, comment writes, the chat-apply file write)
+        # against this unauthenticated localhost server: those routes require a
+        # JSON content-type, which forces a CORS preflight that "*" answered.
+        # Withholding the header makes the preflight fail, so the cross-site
+        # request never fires. (See _cors_allow_origin for the whitelist path.)
+        allowed = _cors_allow_origin(request.headers.get("Origin", ""))
+        if allowed is not None:
+            response.headers["Access-Control-Allow-Origin"] = allowed
+            response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response

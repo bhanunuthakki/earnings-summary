@@ -24,9 +24,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -257,7 +257,10 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument(
         "--user-agent",
-        default="EarningsSummary/1.0 (bhanumufcpraneeth@gmail.com)",
+        default=os.environ.get(
+            "EDGAR_USER_AGENT", "earnings-summary research/0.1 (analyst@example.com)"
+        ),
+        help="SEC EDGAR User-Agent. Set EDGAR_USER_AGENT in env (recommended).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()

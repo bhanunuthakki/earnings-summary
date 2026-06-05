@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from llm_artifact_store import (
-    Artifact,
     UpsertRequest,
     compute_input_sha256,
     drain_dirty,

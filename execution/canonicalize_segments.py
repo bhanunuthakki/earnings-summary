@@ -45,7 +45,6 @@ import db  # noqa: E402
 
 from entity_store import (  # noqa: E402
     record_alias,
-    resolve_entity,
     upsert_entity,
     upsert_relationship,
 )

@@ -25,7 +25,6 @@ import argparse
 import json
 import logging
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

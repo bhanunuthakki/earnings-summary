@@ -25,11 +25,11 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -342,8 +342,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--user-agent",
-        default="EarningsSummary/1.0 (bhanumufcpraneeth@gmail.com)",
-        help="SEC EDGAR User-Agent.",
+        default=os.environ.get(
+            "EDGAR_USER_AGENT", "earnings-summary research/0.1 (analyst@example.com)"
+        ),
+        help="SEC EDGAR User-Agent. Set EDGAR_USER_AGENT in env (recommended).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()

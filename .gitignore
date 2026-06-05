@@ -3,6 +3,8 @@ venv/
 .env
 credentials.json
 token.json
+# Never commit a secrets/ dir (OAuth tokens land under data/secrets/) — belt-and-suspenders
+**/secrets/
 
 # Python
 __pycache__/
@@ -14,6 +16,7 @@ __pycache__/
 .cache/
 cache/
 logs/
+*.log
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
 # from execution/save_fmp_data.py and alembic migrations)
@@ -40,9 +43,6 @@ ir_documents/
 
 # User intake drop folder (any user-supplied artifact lands here for sorting)
 _inbox/
-
-# Large binary examples (keep xlsx tracked via LFS or exclude)
-# examples/dcf/  # Uncomment if you don't want to track example workbooks
 
 # OS junk
 Thumbs.db

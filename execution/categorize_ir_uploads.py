@@ -52,7 +52,6 @@ if _PROJECT_ROOT_OVERRIDE:
 import index_manager
 from ir_uploads import (
     CategorizationFailure,
-    CategorizationResult,
     canonical_path,
     classify_ir_file,
     iter_uncategorized_files,

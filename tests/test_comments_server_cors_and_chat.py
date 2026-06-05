@@ -1,8 +1,11 @@
 """Tests for two reviewer-flagged issues in execution/comments_server.py:
 
-1. CORS — `Access-Control-Allow-Origin: *` must only be emitted for
-   localhost-bound requests. For other hosts, the header is set to the
-   request's Origin iff it appears in `COMMENTS_SERVER_CORS_WHITELIST`.
+1. CORS — the server never emits `Access-Control-Allow-Origin: *`. It echoes
+   back only the file:// renderer's `null` Origin and loopback Origins (so the
+   local dashboard works); a cross-site Origin gets no CORS header even when the
+   server is bound to localhost (CSRF defense). For a non-loopback bind, the
+   header is set to the request's Origin iff it is in
+   `COMMENTS_SERVER_CORS_WHITELIST`.
 
 2. Concurrent chat — the LLM subprocess is now dispatched to a dedicated
    thread pool, so two concurrent `/chat/<ticker>` requests proceed in
@@ -45,16 +48,41 @@ def client(app_repo: Path):
 # --- CORS ---------------------------------------------------------------
 
 
-def test_cors_wildcard_for_localhost(client):
-    """Default base_url is http://localhost — `*` is required because the
-    workspace HTML opens via file:// (origin `null`)."""
+def test_cors_null_origin_allowed_for_file_renderer(client):
+    """The workspace HTML opens via file://, so its browser Origin is the
+    literal string "null". That must be echoed back (never `*`)."""
+    resp = client.get("/healthz", headers={"Origin": "null"})
+    assert resp.headers.get("Access-Control-Allow-Origin") == "null"
+
+
+def test_cors_echoes_loopback_origin(client):
+    """A page served by the dashboard itself carries a loopback Origin, which
+    is echoed back so same-tool fetches keep working."""
+    resp = client.get(
+        "/healthz",
+        base_url="http://127.0.0.1:7421",
+        headers={"Origin": "http://127.0.0.1:7421"},
+    )
+    assert resp.headers.get("Access-Control-Allow-Origin") == "http://127.0.0.1:7421"
+
+
+def test_cors_blocks_cross_site_origin_even_on_localhost(client):
+    """CSRF defense: a cross-site Origin gets NO CORS header even though the
+    server is bound to localhost — so the browser blocks its preflighted,
+    state-changing request. (Previously this path returned `*`.)"""
+    resp = client.get(
+        "/healthz",
+        base_url="http://127.0.0.1:7421",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert "Access-Control-Allow-Origin" not in resp.headers
+
+
+def test_cors_no_header_when_no_origin(client):
+    """A same-origin / non-browser caller sends no Origin; no CORS header is
+    needed and none is emitted."""
     resp = client.get("/healthz")
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
-
-
-def test_cors_wildcard_for_127_0_0_1(client):
-    resp = client.get("/healthz", base_url="http://127.0.0.1:7421")
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+    assert "Access-Control-Allow-Origin" not in resp.headers
 
 
 def test_cors_no_wildcard_for_non_localhost(client):
