@@ -16,7 +16,10 @@ from log_redact import redact  # noqa: E402
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("https://api.fmp.com/v3/quote/NU?apikey=SECRET123", "https://api.fmp.com/v3/quote/NU?apikey=***"),
+        (
+            "https://api.fmp.com/v3/quote/NU?apikey=SECRET123",
+            "https://api.fmp.com/v3/quote/NU?apikey=***",
+        ),
         ("https://x.com/p?api_key=ABC&page=2", "https://x.com/p?api_key=***&page=2"),
         ("https://x.com/p?access_token=ABC", "https://x.com/p?access_token=***"),
         ("https://x.com/p?auth_token=ABC", "https://x.com/p?auth_token=***"),
@@ -70,7 +73,9 @@ def test_email_in_user_agent_header_masked() -> None:
 
 def test_non_string_input_coerced() -> None:
     # exceptions and other objects go through str() first
-    assert redact(ValueError("failed: https://x.com?apikey=KEY")) == "failed: https://x.com?apikey=***"
+    assert (
+        redact(ValueError("failed: https://x.com?apikey=KEY")) == "failed: https://x.com?apikey=***"
+    )
 
 
 def test_clean_text_unchanged() -> None:
