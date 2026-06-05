@@ -16,6 +16,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 from grade_bear_cases import _aggregate_to_calibration_score  # noqa: E402
 from grade_decisions import _decisions_calibration_score  # noqa: E402
+from grade_predictions import extraction_quality_score  # noqa: E402
+
+
+def _pred_tally(
+    *, graded: int = 0, unstructured: int = 0, no_kpi: int = 0, bad_comparator: int = 0, no_fact: int = 0
+) -> dict[str, int]:
+    return {
+        "graded": graded,
+        "skipped_unstructured": unstructured,
+        "skipped_no_kpi": no_kpi,
+        "skipped_bad_comparator": bad_comparator,
+        "skipped_no_fact": no_fact,
+    }
 
 
 def test_bear_case_perfect_run_scores_one_point_zero() -> None:
@@ -71,3 +84,31 @@ def test_decision_score_none_when_only_skipped_no_price() -> None:
         {"correct": 0, "wrong": 0, "mixed": 0, "skipped_no_price": 5, "graded": 0}
     )
     assert score is None
+
+
+# ---------------------------------------------------------------------------
+# Management-prediction EXTRACTION quality (grade_predictions)
+# ---------------------------------------------------------------------------
+
+
+def test_extraction_quality_all_gradeable_scores_one() -> None:
+    """Every due prediction was well-formed enough to grade → 1.0. The 3 no_fact
+    rows (clean extraction, realized value just not in yet) are excluded."""
+    assert extraction_quality_score(_pred_tally(graded=5, no_fact=3)) == 1.0
+
+
+def test_extraction_quality_all_malformed_scores_zero() -> None:
+    """Unstructured target / unresolvable KPI / bad comparator are extraction
+    defects → 0.0 (none of the attemptable predictions were gradeable)."""
+    assert extraction_quality_score(_pred_tally(unstructured=2, no_kpi=1, bad_comparator=1)) == 0.0
+
+
+def test_extraction_quality_partial_credit() -> None:
+    """graded=2, malformed=2 → 2 / 4 = 0.5. The met-vs-missed verdict is not part
+    of the score (that measures management, not the extraction prompt)."""
+    assert extraction_quality_score(_pred_tally(graded=2, no_kpi=1, bad_comparator=1)) == 0.5
+
+
+def test_extraction_quality_none_when_nothing_attemptable() -> None:
+    """Only no_fact rows → no extraction signal in either direction → None."""
+    assert extraction_quality_score(_pred_tally(no_fact=4)) is None

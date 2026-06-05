@@ -29,3 +29,28 @@ def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> N
     assert prompt_version_for("bear_case") == "v2"
     # Other purposes are unaffected.
     assert prompt_version_for("decision_audit") == "v1"
+
+
+def test_trigger_and_prediction_purposes_registered() -> None:
+    """The four trigger artifact purposes + the prediction-extraction purpose are
+    registered (so a bump is one place) and default to v1."""
+    for purpose in (
+        "earnings_tone_diff",
+        "kpi_inflection_context",
+        "material_news_classification",
+        "saydo_due_context",
+        "management_prediction",
+    ):
+        assert purpose in prompt_versions.registered_purposes()
+        assert prompt_version_for(purpose) == "v1"
+
+
+def test_triggers_source_prompt_version_from_registry() -> None:
+    """Each trigger sensor's artifact ``_PROMPT_VERSION`` is sourced from the
+    registry keyed by its own ``_ARTIFACT_PURPOSE`` — not a hardcoded literal —
+    so a single registry bump moves both the cache key and the calibration tag
+    (the v6 re-grade gap: triggers hardcoded ``"v1"`` and bypassed the registry)."""
+    from triggers import earnings_tone, kpi_inflection, material_news, saydo_due
+
+    for mod in (earnings_tone, kpi_inflection, material_news, saydo_due):
+        assert prompt_version_for(mod._ARTIFACT_PURPOSE) == mod._PROMPT_VERSION

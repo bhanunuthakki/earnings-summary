@@ -67,6 +67,7 @@ from llm.anchors import (
     load_ir_anchor,
     load_thesis_anchor,
 )
+from llm.prompt_versions import prompt_version_for
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -158,9 +159,10 @@ _ACTION_THESIS_UPDATE = "thesis_update"
 # in llm_artifact_store.FACT_DEPENDENT_PURPOSES so a fact-side restatement marks
 # the cached context dirty via the existing chain.
 _ARTIFACT_PURPOSE = "saydo_due_context"
-# Prompt-version key for the cache. Bump when the context prompt body changes
-# materially.
-_PROMPT_VERSION = "v1"
+# Prompt-version key for the cache + the calibration A/B dimension, sourced from
+# the central registry (the single bump-point). Bump the entry there when the
+# context prompt body changes materially.
+_PROMPT_VERSION = prompt_version_for(_ARTIFACT_PURPOSE)
 
 
 # --------------------------------------------------------------------------

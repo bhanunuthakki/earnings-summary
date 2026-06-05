@@ -62,8 +62,15 @@ def _sync_db_path(repo_root: Path) -> None:
 
 import predictions_store  # noqa: E402
 from compute.kpi_resolver import resolve_kpi_definition_name  # noqa: E402
+from llm.calibration import CalibrationScore, record_score  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
 
 log = logging.getLogger("grade_predictions")
+
+# Calibration purpose for the management-prediction EXTRACTION prompt. The
+# signal is the fraction of due predictions the extraction left well-formed
+# enough to grade — see ``_record_extraction_calibration``.
+_CALIBRATION_PURPOSE = "management_prediction"
 
 
 def grade_comparison(
@@ -136,6 +143,58 @@ def _realized_value(
     return (float(row["value"]), str(row["period_end"]), row["doc_id"])
 
 
+def extraction_quality_score(tally: dict[str, int]) -> float | None:
+    """The management-prediction EXTRACTION quality for this run, in ``[0, 1]``,
+    or ``None`` when no prediction was attemptable.
+
+    Measures how often the extraction prompt produced a prediction well-formed
+    enough to *grade against realized data* — the fraction
+    ``graded / (graded + malformed)`` where "malformed" is the extraction's own
+    fault (unstructured target, an unresolvable KPI name, or an unknown
+    comparator). ``skipped_no_fact`` is excluded: a clean prediction whose
+    realized value simply isn't in yet is a data-availability gap, not an
+    extraction defect. The verdict (met vs missed) is deliberately NOT part of
+    the score — that measures management, not the LLM. A rewritten extraction
+    prompt that produces more gradeable predictions scores higher, which is
+    exactly the calibration A/B question.
+    """
+    malformed = (
+        tally["skipped_unstructured"] + tally["skipped_no_kpi"] + tally["skipped_bad_comparator"]
+    )
+    attemptable = tally["graded"] + malformed
+    if attemptable == 0:
+        return None
+    return tally["graded"] / attemptable
+
+
+def _record_extraction_calibration(
+    tally: dict[str, int], *, ticker: str | None, db_path: Path
+) -> None:
+    """Best-effort: record one calibration row for this prediction-grading run,
+    tagged with the central registry's version for the extraction purpose. A
+    no-op when nothing was attemptable or the calibration table is absent."""
+    score = extraction_quality_score(tally)
+    if score is None:
+        return
+    malformed = (
+        tally["skipped_unstructured"] + tally["skipped_no_kpi"] + tally["skipped_bad_comparator"]
+    )
+    record_score(
+        CalibrationScore(
+            purpose=_CALIBRATION_PURPOSE,
+            prompt_version=prompt_version_for(_CALIBRATION_PURPOSE),
+            score=score,
+            ticker=ticker,
+            reason=(
+                f"extraction gradeable fraction {tally['graded']}/"
+                f"{tally['graded'] + malformed} due predictions well-formed enough to grade"
+            ),
+            scored_by="grade_predictions",
+        ),
+        db_path=db_path,
+    )
+
+
 def grade_pending(
     repo_root: Path,
     *,
@@ -146,9 +205,15 @@ def grade_pending(
     eq_abs_tol_pct: float = _EQ_ABS_TOL_PCT,
     eq_rel_tol: float = _EQ_REL_TOL,
     as_of: datetime | None = None,
+    record_calibration: bool = False,
 ) -> dict[str, int]:
     """Grade every past-due pending prediction we can confidently match against
-    a realized fact. Returns a tally; leaves un-matchable rows pending."""
+    a realized fact. Returns a tally; leaves un-matchable rows pending.
+
+    When ``record_calibration`` is set (and not a dry run), one calibration
+    score for the extraction prompt is recorded for the run — see
+    ``extraction_quality_score``. Off by default so existing callers/tests are
+    unchanged; the scheduled grader opts in."""
     db_path = repo_root / "data" / "portfolio.db"
     pending = predictions_store.pending_for_grading(
         ticker=ticker, as_of=as_of, limit=limit, db_path=db_path
@@ -221,6 +286,10 @@ def grade_pending(
             )
     finally:
         conn.close()
+    if record_calibration and not dry_run:
+        # After the read/grade connection is closed, so the calibration write
+        # uses its own connection without contending with this run's grading.
+        _record_extraction_calibration(tally, ticker=ticker, db_path=db_path)
     return tally
 
 
@@ -236,6 +305,11 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument(
         "--dry-run", action="store_true", help="Compute outcomes but do not write them."
+    )
+    parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help="Do not record the extraction-quality calibration score for this run.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -255,6 +329,7 @@ def main() -> int:
         dry_run=args.dry_run,
         eq_abs_tol_pct=args.eq_abs_tol_pct,
         eq_rel_tol=args.eq_rel_tol,
+        record_calibration=not args.no_calibration,
     )
     prefix = "[dry-run] " if args.dry_run else ""
     print(
