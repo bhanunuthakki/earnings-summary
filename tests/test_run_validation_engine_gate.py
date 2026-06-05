@@ -60,3 +60,14 @@ def test_gate_failure_exit_is_distinct_non_one() -> None:
     # A distinct non-1 exit so a scheduler tells "data failed validation" from
     # "the script crashed".
     assert rve.GATE_FAILURE_EXIT == 2
+
+
+def test_db_path_is_accepted_as_alias_for_db() -> None:
+    """The morning-pipeline orchestrator forwards --db-path to every stage; the
+    validation engine must accept it as an alias for --db (both land on .db)."""
+    parser = rve.build_parser()
+    assert parser.parse_args(["--db-path", "/tmp/x.db"]).db == "/tmp/x.db"
+    assert parser.parse_args(["--db", "/tmp/y.db"]).db == "/tmp/y.db"
+    # --gate stays a flag and defaults off.
+    assert parser.parse_args([]).gate is False
+    assert parser.parse_args(["--gate"]).gate is True

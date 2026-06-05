@@ -1,4 +1,4 @@
-"""Orchestrate the morning dashboard pipeline: news -> triggers -> digest -> feed.
+"""Orchestrate the morning pipeline: news -> triggers -> digest -> feed -> validate.
 
 The daily trigger driver (``run_triggers.py``) fires alerts and persists them;
 the dashboard renderers (``build_morning_digest.py`` + ``build_alert_feed.py``)
@@ -7,7 +7,7 @@ driver runs at 04:00 via cron, but the digest HTML is only rebuilt when
 manually invoked, so a 07:00 read shows stale HTML. This orchestrator chains
 the stages into one scheduled run.
 
-Four stages run in sequence as subprocess-isolated children:
+Five stages run in sequence as subprocess-isolated children:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
      ``news`` table so the material_news trigger has stories to classify;
@@ -16,6 +16,10 @@ Four stages run in sequence as subprocess-isolated children:
      across the portfolio, cost-capped via ``--max-cost-usd``).
   2. digest   -- ``build_morning_digest.py`` for today.
   3. feed     -- ``build_alert_feed.py``.
+  4. validate -- ``run_validation_engine.py --gate`` (LAST so it never blocks a
+     render): runs the population-level data checks and makes a HALT-severity
+     result a failed stage, so egregious data lands in the pipeline exit code
+     for monitoring. The standing machinery that *runs* the validation gate.
 
 Resilience contract (the load-bearing behavior):
 
@@ -74,6 +78,10 @@ _RENDER_TIMEOUT_S = 300
 # Stage 0 (news) is fast on the FMP path, but an `auto`/`websearch` run can make
 # one Opus web call per fallback ticker, so it gets more headroom than a render.
 _NEWS_TIMEOUT_S = 600
+# Stage 4 (data validation) runs population-level range / magnitude-jump /
+# source-disagreement checks across every tracked ticker — a SQLite-bound sweep;
+# 10 min is generous.
+_VALIDATE_TIMEOUT_S = 600
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -81,7 +89,8 @@ STAGE_NEWS = "stage_0_news"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_DIGEST = "stage_2_digest"
 STAGE_FEED = "stage_3_feed"
-_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_DIGEST, STAGE_FEED)
+STAGE_VALIDATE = "stage_4_validate"
+_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_DIGEST, STAGE_FEED, STAGE_VALIDATE)
 
 # News ingestion source for Stage 0. Default `auto` (self-healing): FMP first,
 # falling back to WebSearch+Opus per ticker on refusal — so the material_news
@@ -210,6 +219,35 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
             timeout_s=_RENDER_TIMEOUT_S,
         )
     )
+
+    # Stage 4 -- data validation GATE, LAST so a HALT verdict never blocks the
+    # renders. ``run_validation_engine.py --gate`` runs the population-level
+    # range / magnitude-jump / source-disagreement checks and exits non-zero
+    # when this run records a HALT-severity issue (a 10x unit error, a >1000x
+    # range violation). ``_run_stage`` turns that non-zero exit into a FAILED
+    # stage, so egregious data surfaces in the pipeline exit code (which cron /
+    # monitoring already watches) WITHOUT aborting the run or mutating anything
+    # beyond the engine's own audit rows. This is the standing machinery that
+    # *runs* the gate -- the validation engine was otherwise never invoked
+    # outside its CLI / tests (v6 re-grade, Quality enforcement). The engine
+    # takes neither --user-id nor --max-cost-usd, so its argv is built directly
+    # (only --db-path is forwarded, when set). Skipped on the re-render-only path
+    # (--skip-triggers: fact data did not change) and by --skip-validation.
+    if not args.skip_triggers and not args.skip_validation:
+        validate_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_VALIDATE,
+                label="Stage 4 - data validation gate (run_validation_engine.py --gate)",
+                argv=[
+                    py,
+                    str(exec_dir / "run_validation_engine.py"),
+                    "--gate",
+                    *validate_db_args,
+                ],
+                timeout_s=_VALIDATE_TIMEOUT_S,
+            )
+        )
     return stages
 
 
@@ -351,6 +389,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Skip stage 0 (news fetch) only — triggers still run over whatever "
         "news rows already exist.",
+    )
+    parser.add_argument(
+        "--skip-validation",
+        action="store_true",
+        help="Skip stage 4 (the data-validation gate). The gate runs the "
+        "validation engine and makes a HALT-severity result a failed stage "
+        "(non-zero pipeline exit) so monitoring catches egregious data; skip it "
+        "to run the pipeline without the data check.",
     )
     return parser.parse_args(argv)
 

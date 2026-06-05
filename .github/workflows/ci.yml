@@ -187,9 +187,16 @@ jobs:
           head_n=$(pyright --outputjson 2>/dev/null | errcount || echo 0)
           base="${{ steps.base.outputs.ref }}"
           wt="$RUNNER_TEMP/base-pyright"
+          # Clear any stale worktree path from a retried job, then REQUIRE the
+          # base checkout to succeed. A broken ratchet must BLOCK (exit 1), never
+          # silently pass: the previous `exit 0` here was an escape hatch that
+          # disabled the type gate on a transient infra hiccup (v6 re-grade,
+          # Quality enforcement). fetch-depth:0 + the base fetch above make a
+          # genuine failure exceptional, so failing closed is safe.
+          rm -rf "$wt" 2>/dev/null || true
           if ! git worktree add --quiet --detach "$wt" "$base" 2>/dev/null; then
-            echo "::warning::could not check out base ($base) for the pyright ratchet — skipping (not blocking)."
-            exit 0
+            echo "::error::could not check out base ($base) for the pyright ratchet — failing the type gate (a broken ratchet must block, not silently pass)."
+            exit 1
           fi
           base_n=$( (cd "$wt" && pyright --outputjson 2>/dev/null | errcount) || echo 0 )
           git worktree remove --force "$wt" 2>/dev/null || true

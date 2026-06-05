@@ -29,6 +29,7 @@ NEWS_SCRIPT = "fetch_news.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 DIGEST_SCRIPT = "build_morning_digest.py"
 FEED_SCRIPT = "build_alert_feed.py"
+VALIDATE_SCRIPT = "run_validation_engine.py"
 
 
 class _FakeCompleted:
@@ -129,7 +130,13 @@ def test_all_stages_succeed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 0
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "ok"
@@ -157,7 +164,13 @@ def test_stage1_failure_still_runs_digest_and_feed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -175,7 +188,13 @@ def test_stage2_failure_still_runs_feed(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "ok"
@@ -193,7 +212,13 @@ def test_all_stages_fail_exit_code_counts_failures(
     rc = run_morning_pipeline.main([])
 
     assert rc == 3
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -218,7 +243,13 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
     rc = run_morning_pipeline.main([])
 
     assert rc == 1
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_1_triggers"] == "failed"
@@ -253,6 +284,93 @@ def test_skip_triggers_runs_only_renders(
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_2_digest"] == "ok"
     assert summary["stage_3_feed"] == "ok"
+    # --skip-triggers (re-render only) also skips the validation gate.
+    assert summary["stage_4_validate"] == "skipped"
+    assert VALIDATE_SCRIPT not in fake.scripts
+
+
+# ---------------------------------------------------------------------------
+# Stage 4 — data validation gate (runs last; HALT -> failed stage; skippable)
+# ---------------------------------------------------------------------------
+
+
+def test_validation_gate_runs_last_with_gate_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stage 4 runs the validation engine AFTER the renders and passes --gate, so
+    egregious data is checked once the day's data is in place."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 0
+    assert fake.scripts[-1] == VALIDATE_SCRIPT  # last, after feed
+
+    validate_argv = next(c for c in fake.calls if _script_of(c) == VALIDATE_SCRIPT)
+    assert "--gate" in validate_argv
+    # The gate takes neither --user-id nor --max-cost-usd.
+    assert "--user-id" not in validate_argv
+    assert "--max-cost-usd" not in validate_argv
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_4_validate"] == "ok"
+
+
+def test_validation_halt_counts_as_failed_stage_after_renders(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A HALT verdict (the engine exits 2) is a FAILED stage — it raises the
+    pipeline exit code for monitoring but the renders already ran and are not
+    affected (the gate is last)."""
+    fake = _RecordingRun(returncodes={VALIDATE_SCRIPT: 2})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the validation stage failed
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_2_digest"] == "ok"
+    assert summary["stage_3_feed"] == "ok"
+    assert summary["stage_4_validate"] == "failed"
+
+
+def test_skip_validation_removes_only_stage4(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--skip-validation drops stage 4 but keeps news + triggers + the renders."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main(["--skip-validation"])
+    assert rc == 0
+    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert VALIDATE_SCRIPT not in fake.scripts
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_4_validate"] == "skipped"
+
+
+def test_validation_gate_receives_db_path_when_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """--db-path is forwarded to the validation gate too (the engine accepts it as
+    an alias for --db), so an alternate DB flows through the whole pipeline."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+    db_path = tmp_path / "alt.db"
+
+    rc = run_morning_pipeline.main(["--db-path", str(db_path)])
+    assert rc == 0
+
+    validate_argv = next(c for c in fake.calls if _script_of(c) == VALIDATE_SCRIPT)
+    assert _has_flag(validate_argv, "--db-path", str(db_path))
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +468,14 @@ def test_skip_news_removes_only_stage0(
 
     rc = run_morning_pipeline.main(["--skip-news"])
     assert rc == 0
-    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT, VALIDATE_SCRIPT]
     assert NEWS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
     assert summary["stage_1_triggers"] == "ok"
+    # --skip-news keeps the data-validation gate (stage 4).
+    assert summary["stage_4_validate"] == "ok"
 
 
 def test_news_source_forwarded_to_stage0(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -380,7 +500,13 @@ def test_news_failure_does_not_stop_triggers(
 
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the news stage failed
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, DIGEST_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        NEWS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        DIGEST_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "failed"
