@@ -207,6 +207,20 @@ def create_app(
         payload["tier_coverage"] = tier_coverage_summary(repo_root)
         return payload
 
+    @app.route("/api/source-calls", methods=["GET"])
+    def source_calls_api():
+        """Data-fetch cache effectiveness as JSON: the cross-source headline
+        rollup (skip rate, calls avoided, dollars saved) + per-(source, kind)
+        detail. Previously reachable only from the show_source_calls CLI; this
+        makes cache effectiveness measurable from the app (v6 re-grade, Smart
+        caching). ``?since=YYYY-MM-DD`` bounds the window."""
+        from dataclasses import asdict
+
+        from sources.registry import cache_effectiveness_overview
+
+        since = request.args.get("since") or None
+        return asdict(cache_effectiveness_overview(since=since, db_path=db_path))
+
     @app.route("/api/panel/<name>", methods=["GET"])
     def panel_fragment(name: str):
         """One analytical panel as a head/foot-less HTML fragment, for the lazy
@@ -228,6 +242,13 @@ def create_app(
             from pipeline.ir_coverage_panel import render_ir_coverage_panel
 
             return Response(render_ir_coverage_panel(db_path), mimetype="text/html")
+
+        if name == "source_calls":
+            # Data-fetch cache effectiveness: per-source skip rate / calls avoided
+            # / dollars saved, read from the source_calls provenance log.
+            from pipeline.source_calls_panel import render_source_calls_panel
+
+            return Response(render_source_calls_panel(db_path), mimetype="text/html")
 
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,

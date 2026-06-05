@@ -96,6 +96,13 @@ pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
+# Flask registers route handlers via the @app.route decorator as a side effect,
+# so pyright sees every nested route function as "never accessed" — ~30 false
+# positives across execution/comments_server.py alone. The rule is pure noise for
+# this codebase's decorator-driven web layer, so disable it (same spirit as the
+# two report* relaxations above). Genuinely-dead module-level code is still
+# caught by ruff's F401/F811.
+reportUnusedFunction = false
 
 [tool.basedpyright]
 include = ["src", "execution", "tests"]

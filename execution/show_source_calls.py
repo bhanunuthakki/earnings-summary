@@ -54,12 +54,17 @@ def _render(rows: list[SourceCallSummary]) -> str:
     total_calls = sum(r.total for r in rows)
     total_skips = sum(r.skipped for r in rows)
     total_errs = sum(r.errors for r in rows)
+    total_cost_saved = sum(r.cost_saved_usd for r in rows)
     lines.append("-" * len(header))
     lines.append(
         f"{'TOTAL':<16} {'':<22} {total_calls:>6} {'':>5} "
         f"{_fmt_pct(total_skips / total_calls if total_calls else 0.0):>6} "
         f"{_fmt_pct(total_errs / total_calls if total_calls else 0.0):>5}"
     )
+    saved_line = f"cache avoided {total_skips} of {total_calls} network call(s)"
+    if total_cost_saved > 0:
+        saved_line += f" · ${total_cost_saved:,.2f} saved (SOURCE_COST_PER_CALL_USD)"
+    lines.append(saved_line)
     return "\n".join(lines)
 
 

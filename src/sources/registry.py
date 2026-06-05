@@ -42,11 +42,26 @@ Usage from an adapter:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
+
+
+# Marginal $/call estimate, used only to translate the cache-skip COUNT into a
+# "cost avoided" figure. FMP/SEC are flat-rate and yfinance is free, so the true
+# marginal cost is ~0 and this defaults to 0.0 — the HONEST primary metric is
+# ``calls_saved`` (network calls the cache avoided). Set ``SOURCE_COST_PER_CALL_USD``
+# to your amortized per-call price (monthly_fee / calls_per_month) to also value
+# caching in dollars on the dashboard / CLI.
+def _cost_per_call_usd() -> float:
+    try:
+        return max(0.0, float(os.environ.get("SOURCE_COST_PER_CALL_USD", "0") or "0"))
+    except ValueError:
+        return 0.0
+
 
 # Module-level DB path; overridable for tests via `set_db_path()`.
 # Defaults to <project_root>/data/portfolio.db. We resolve project_root from
@@ -218,6 +233,10 @@ class SourceCallSummary:
     p50_latency_ms: int | None
     p95_latency_ms: int | None
     total_records: int
+    # Network calls the cache avoided (== skipped) and their dollar value at the
+    # configured marginal per-call cost (0.0 unless SOURCE_COST_PER_CALL_USD set).
+    calls_saved: int
+    cost_saved_usd: float
 
 
 def _empty_int_list() -> list[int]:
@@ -292,6 +311,7 @@ def summarize_source_calls(
         if latency_ms is not None:
             acc.latencies.append(int(latency_ms))
 
+    cost_per_call = _cost_per_call_usd()
     summaries = [
         SourceCallSummary(
             source_name=source_name,
@@ -306,8 +326,56 @@ def summarize_source_calls(
             p50_latency_ms=_percentile(sorted(acc.latencies), 0.50),
             p95_latency_ms=_percentile(sorted(acc.latencies), 0.95),
             total_records=acc.records,
+            calls_saved=acc.skipped,
+            cost_saved_usd=acc.skipped * cost_per_call,
         )
         for (source_name, kind), acc in groups.items()
     ]
     summaries.sort(key=lambda s: s.total, reverse=True)
     return summaries
+
+
+@dataclass(frozen=True, slots=True)
+class CacheEffectivenessOverview:
+    """Cross-(source, kind) rollup of cache effectiveness — the headline numbers
+    a dashboard / CLI shows: how much external-fetch work the cache avoided.
+
+    ``calls_saved`` is the network calls the cache skipped; ``network_calls`` is
+    what still hit the wire (total − saved). ``cost_saved_usd`` values the saved
+    calls at the configured marginal cost (0.0 unless ``SOURCE_COST_PER_CALL_USD``
+    is set). ``by_source`` carries the per-(source, kind) detail for a table.
+    """
+
+    total_calls: int
+    network_calls: int
+    calls_saved: int
+    cache_skip_rate: float
+    error_rate: float
+    cost_saved_usd: float
+    by_source: list[SourceCallSummary]
+
+
+def cache_effectiveness_overview(
+    *,
+    since: str | None = None,
+    db_path: Path | None = None,
+) -> CacheEffectivenessOverview:
+    """Aggregate ``summarize_source_calls`` into the cross-source headline rollup.
+
+    Best-effort: a missing DB / table yields an all-zero overview (empty
+    ``by_source``) rather than raising, so a dashboard panel degrades cleanly.
+    """
+    rows = summarize_source_calls(since=since, db_path=db_path)
+    total = sum(r.total for r in rows)
+    saved = sum(r.calls_saved for r in rows)
+    errors = sum(r.errors for r in rows)
+    cost_saved = sum(r.cost_saved_usd for r in rows)
+    return CacheEffectivenessOverview(
+        total_calls=total,
+        network_calls=total - saved,
+        calls_saved=saved,
+        cache_skip_rate=(saved / total) if total else 0.0,
+        error_rate=(errors / total) if total else 0.0,
+        cost_saved_usd=cost_saved,
+        by_source=rows,
+    )
