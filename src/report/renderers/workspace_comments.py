@@ -65,6 +65,100 @@ JS = r"""
   }
 
   // ---------------------------------------------------------------
+  // Outbox — when a POST fails (server down, network blip), the
+  // payload is queued in localStorage and retried on a timer / focus
+  // / online event until it lands. Distinct from draft autosave:
+  // drafts are unposted text the user is still composing; outbox
+  // entries are *posts the user already committed to* that we owe
+  // them durability for. See test_workspace_comments_outbox.py.
+  // ---------------------------------------------------------------
+  var OUTBOX_KEY = 'cmt-outbox';
+  var OUTBOX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;  // drop entries older than 7d
+  var OUTBOX_FLUSH_INTERVAL_MS = 15000;
+  var outboxFlushing = false;
+
+  function loadOutbox() {
+    try { return JSON.parse(localStorage.getItem(OUTBOX_KEY) || '[]') || []; }
+    catch (e) { return []; }
+  }
+  function saveOutbox(items) {
+    try { localStorage.setItem(OUTBOX_KEY, JSON.stringify(items)); }
+    catch (e) { /* quota / disabled — silent */ }
+  }
+  function enqueueOutbox(payload) {
+    var items = loadOutbox();
+    items.push({
+      id: 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      payload: payload,
+      ts: Date.now()
+    });
+    saveOutbox(items);
+    updateOutboxBadge();
+  }
+  function updateOutboxBadge() {
+    var badge = document.getElementById('cmt-outbox-badge');
+    if (!badge) return;
+    var n = loadOutbox().length;
+    badge.textContent = n ? ('Queued: ' + n) : '';
+    badge.style.display = n ? 'inline-block' : 'none';
+  }
+
+  // Sequentially POST queued entries. Stops on the first failure so
+  // ordering is preserved and we don't hammer a still-down server.
+  // Re-entrancy guard (outboxFlushing) keeps the timer + focus event
+  // from doubling up on the same in-flight flush.
+  function flushOutbox() {
+    if (outboxFlushing) return Promise.resolve();
+    outboxFlushing = true;
+    return (async function() {
+      try {
+        var items = loadOutbox();
+        var now = Date.now();
+        var fresh = items.filter(function(it) {
+          return (now - (it.ts || 0)) < OUTBOX_MAX_AGE_MS;
+        });
+        if (fresh.length !== items.length) {
+          console.warn('cmt-outbox: dropped ' + (items.length - fresh.length) + ' expired entries');
+          saveOutbox(fresh);
+        }
+        for (var i = 0; i < fresh.length; i++) {
+          var it = fresh[i];
+          var r;
+          try {
+            r = await fetch(SERVER_URL + '/comments', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(it.payload)
+            });
+          } catch (err) {
+            break;  // still offline — leave the remainder for the next tick
+          }
+          if (!r.ok) break;  // server-side error — don't drop, retry later
+          var created = await r.json();
+          commentStore.comments.push(created);
+          var remaining = loadOutbox().filter(function(x) { return x.id !== it.id; });
+          saveOutbox(remaining);
+          clearDraft(it.payload.anchor);
+        }
+        updateOutboxBadge();
+        renderList();
+        renderPins();
+      } finally {
+        outboxFlushing = false;
+      }
+    })();
+  }
+
+  // Wake-up triggers. setInterval keeps a steady cadence; focus + online
+  // catch the user-driven recovery moments. window.__flushOutbox is exposed
+  // for the health-pill module (Fix 3) to call on detected server recovery
+  // without needing to know our internals.
+  setInterval(flushOutbox, OUTBOX_FLUSH_INTERVAL_MS);
+  window.addEventListener('online', flushOutbox);
+  window.addEventListener('focus', flushOutbox);
+  window.__flushOutbox = flushOutbox;
+
+  // ---------------------------------------------------------------
   // Pin rendering — annotate each [data-commentable] element with a
   // pin button + count of open comments.
   // ---------------------------------------------------------------
@@ -126,6 +220,19 @@ JS = r"""
       draftArea.addEventListener('input', function() {
         saveDraft(currentAnchor, draftArea.value);
       });
+    }
+    // Inject the outbox-status badge into the sidebar header. Server-
+    // rendered shell stays minimal; the badge is dynamic anyway. Hidden
+    // when empty so it doesn't clutter the header in the happy path.
+    var head = sidebar.querySelector('.cmt-sidebar-head');
+    if (head && !document.getElementById('cmt-outbox-badge')) {
+      var badge = document.createElement('span');
+      badge.id = 'cmt-outbox-badge';
+      badge.className = 'cmt-outbox-badge';
+      badge.style.display = 'none';
+      badge.title = 'Comments queued locally — will retry until the server is back.';
+      head.appendChild(badge);
+      updateOutboxBadge();
     }
   }
 
@@ -260,9 +367,15 @@ JS = r"""
       renderPins();
       hint('Posted.');
     }).catch(function(err) {
-      // Keep the draft on disk — text stays in the textarea AND is
-      // restored if the user reloads or reopens the same anchor.
-      hint('Server unreachable — draft saved locally. Start: python execution/comments_server.py --ticker ' + TICKER);
+      // Server-down path: park the payload in the outbox so the timer
+      // / focus / online flush will keep retrying without losing it.
+      // Clear the draft + textarea so the user gets visual confirmation
+      // the post is "in flight" — the Queued badge is the live status.
+      enqueueOutbox(payload);
+      clearDraft(anchorAtSubmit);
+      form.reset();
+      renderList();
+      hint('Queued — will retry when server is back. (' + loadOutbox().length + ' total)');
       console.warn(err);
     });
   }
@@ -562,6 +675,21 @@ CSS = r"""
   font-size: 22px; line-height: 1; padding: 0 6px; cursor: pointer;
 }
 .cmt-close:hover { color: var(--ink); }
+
+/* Outbox status badge — shown in the sidebar header when the local
+   queue is non-empty. Amber to signal "pending recovery", not error. */
+.cmt-outbox-badge {
+  display: inline-block;
+  margin: 2px 8px 0 auto;
+  padding: 2px 8px;
+  font-size: 10.5px; font-weight: 600;
+  font-family: var(--font-mono);
+  background: rgba(255, 196, 0, 0.16);
+  color: #ffc400;
+  border: 1px solid rgba(255, 196, 0, 0.45);
+  border-radius: 10px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
 
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
 .cmt-empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
