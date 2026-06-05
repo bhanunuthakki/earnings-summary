@@ -20,7 +20,12 @@ from grade_predictions import extraction_quality_score  # noqa: E402
 
 
 def _pred_tally(
-    *, graded: int = 0, unstructured: int = 0, no_kpi: int = 0, bad_comparator: int = 0, no_fact: int = 0
+    *,
+    graded: int = 0,
+    unstructured: int = 0,
+    no_kpi: int = 0,
+    bad_comparator: int = 0,
+    no_fact: int = 0,
 ) -> dict[str, int]:
     return {
         "graded": graded,
@@ -32,24 +37,18 @@ def _pred_tally(
 
 
 def test_bear_case_perfect_run_scores_one_point_zero() -> None:
-    score = _aggregate_to_calibration_score(
-        {"met": 5, "missed": 0, "mixed": 0, "unfalsifiable": 0}
-    )
+    score = _aggregate_to_calibration_score({"met": 5, "missed": 0, "mixed": 0, "unfalsifiable": 0})
     assert score == 1.0
 
 
 def test_bear_case_zero_when_all_missed() -> None:
-    score = _aggregate_to_calibration_score(
-        {"met": 0, "missed": 5, "mixed": 0, "unfalsifiable": 0}
-    )
+    score = _aggregate_to_calibration_score({"met": 0, "missed": 5, "mixed": 0, "unfalsifiable": 0})
     assert score == 0.0
 
 
 def test_bear_case_half_credit_on_mixed() -> None:
     """met=2, missed=2, mixed=2 → 2 + 1 (half-credit) = 3 / 6 = 0.5"""
-    score = _aggregate_to_calibration_score(
-        {"met": 2, "missed": 2, "mixed": 2, "unfalsifiable": 0}
-    )
+    score = _aggregate_to_calibration_score({"met": 2, "missed": 2, "mixed": 2, "unfalsifiable": 0})
     assert score == 0.5
 
 
@@ -63,9 +62,7 @@ def test_bear_case_unfalsifiable_dropped_from_denominator() -> None:
 
 
 def test_bear_case_returns_none_when_zero_falsifiable() -> None:
-    score = _aggregate_to_calibration_score(
-        {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 7}
-    )
+    score = _aggregate_to_calibration_score({"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 7})
     assert score is None
 
 

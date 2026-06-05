@@ -263,20 +263,41 @@ def test_grade_pending_records_extraction_calibration(tmp_path: Path) -> None:
     made = datetime(2025, 1, 1, tzinfo=UTC)
     # Two gradeable (1 missed, 1 met) ...
     predictions_store.record(
-        ticker="AMAT", source_kind="mgmt_commitment", prediction_md="grow 10%+", made_at=made,
-        target_period=datetime(2025, 10, 26, tzinfo=UTC), kpi_name="Revenue YoY Growth (USD)",
-        comparator="ge", target_value=10.0, target_unit="percent", db_path=db,
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="grow 10%+",
+        made_at=made,
+        target_period=datetime(2025, 10, 26, tzinfo=UTC),
+        kpi_name="Revenue YoY Growth (USD)",
+        comparator="ge",
+        target_value=10.0,
+        target_unit="percent",
+        db_path=db,
     )
     predictions_store.record(
-        ticker="AMAT", source_kind="mgmt_commitment", prediction_md="guide 48.4%", made_at=made,
-        target_period=datetime(2025, 7, 27, tzinfo=UTC), kpi_name="Gross Margin (GAAP)",
-        comparator="eq", target_value=48.4, target_unit="percent", db_path=db,
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="guide 48.4%",
+        made_at=made,
+        target_period=datetime(2025, 7, 27, tzinfo=UTC),
+        kpi_name="Gross Margin (GAAP)",
+        comparator="eq",
+        target_value=48.4,
+        target_unit="percent",
+        db_path=db,
     )
     # ... and one malformed extraction (unresolvable KPI -> skipped_no_kpi).
     predictions_store.record(
-        ticker="AMAT", source_kind="mgmt_commitment", prediction_md="mystery", made_at=made,
-        target_period=datetime(2025, 3, 1, tzinfo=UTC), kpi_name="Totally Unknown KPI",
-        comparator="ge", target_value=5.0, target_unit="percent", db_path=db,
+        ticker="AMAT",
+        source_kind="mgmt_commitment",
+        prediction_md="mystery",
+        made_at=made,
+        target_period=datetime(2025, 3, 1, tzinfo=UTC),
+        kpi_name="Totally Unknown KPI",
+        comparator="ge",
+        target_value=5.0,
+        target_unit="percent",
+        db_path=db,
     )
     conn = sqlite3.connect(str(db))
     conn.executescript(
