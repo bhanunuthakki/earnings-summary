@@ -89,6 +89,7 @@ from report.renderers.workspace_data import (
     PrintVsGuideRow,
     WorkspaceP3Panels,
     filter_important_print_vs_guide,
+    format_ledger_value,
     kpi_is_stale,
     kpi_trend_delta,
     load_workspace_p3_panels,
@@ -2230,7 +2231,7 @@ def _kpi_ledger_row(body: StringIO, r: KpiLedgerRow, report_date: date | None) -
     stale = False
     if r.history:
         period_label, value = r.history[-1]
-        latest_text = f"{value:.2f}".rstrip("0").rstrip(".") if value is not None else "—"
+        latest_text = format_ledger_value(value, r.unit, r.name) if value is not None else "—"
         latest_html = (
             f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
         )

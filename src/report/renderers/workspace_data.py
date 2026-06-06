@@ -535,6 +535,21 @@ def _fmt_strip_delta(magnitude: float, kind: str) -> str:
     return f"${body}" if kind == "money" else body
 
 
+def format_ledger_value(value: float, unit: str | None, name: str) -> str:
+    """Latest-value cell for the §2 KPI ledger table.
+
+    Money / count levels humanize to a compact figure (``$364.0B`` / ``118.0M``)
+    so a raw level like ``364000000000`` no longer renders as a bare integer.
+    Percent / ratio / bps keep a trimmed number — the ledger's own Unit column
+    already carries their suffix, so re-adding it here would double it
+    (``42.3 %``, ``1.23 ratio``)."""
+    kind = _kpi_strip_kind(unit, name)
+    if kind in ("pct", "bps", "ratio"):
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    body = fmt_compact(value)
+    return f"${body}" if kind == "money" else body
+
+
 def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]:
     """Pick up-to-N tier-1 KPIs with enough history for a sparkline.
 
@@ -829,6 +844,7 @@ __all__ = [
     "NewsTile",
     "PrintVsGuideRow",
     "WorkspaceP3Panels",
+    "format_ledger_value",
     "load_workspace_p3_panels",
     "parse_print_vs_guide",
     "quarter_short",
