@@ -205,8 +205,11 @@ def _model_for(purpose: str) -> str:
 # Default per-call timeout (seconds). Long-context thesis prompts can take
 # a few minutes on Sonnet; the cap protects against runaway hangs. 20 min
 # leaves headroom for the heaviest cases (4-quarter ticker x dense schema)
-# while still catching CLI hangs in a reasonable wall time.
-DEFAULT_TIMEOUT_SECONDS = 1200
+# while still catching CLI hangs in a reasonable wall time. Override via the
+# CLAUDE_CLI_TIMEOUT_SECONDS env var for the rare mega-cap big-prompt names
+# (e.g. COST/TSM/MSFT-class bear_case) whose generation legitimately exceeds
+# 1200s; unset, behavior is identical to the prior hardcoded default.
+DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("CLAUDE_CLI_TIMEOUT_SECONDS", "1200"))
 
 # Web-search-enabled call: same subprocess as _call_claude but with the
 # Claude CLI's --allowedTools flag turned on so the model can run WebSearch
