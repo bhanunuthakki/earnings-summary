@@ -32,7 +32,12 @@ Public surface (consumed by:
 from __future__ import annotations
 
 import json
+import os
 import secrets
+import tempfile
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -63,7 +68,7 @@ IntentType = Literal[
     "drop_kpi",
     "edit_thesis",
     "edit_structured",  # mutate structured fields (break_rules, tier_*_kpis, etc.)
-    "extract_kpi",      # supply a KPI value (with quote/source) via comment text
+    "extract_kpi",  # supply a KPI value (with quote/source) via comment text
     "ask_question",
     "fix_data",
     "rewrite_section",
@@ -131,7 +136,7 @@ def extract_intent_from_text(text: str) -> tuple[str | None, str]:
     if not m:
         return (None, text)
     keyword = m.group(1).lower()
-    cleaned = text[m.end():].lstrip()
+    cleaned = text[m.end() :].lstrip()
     return (_KEYWORD_TO_INTENT[keyword], cleaned)
 
 
@@ -218,8 +223,93 @@ def load_store(repo_root: Path, ticker: str, report_date: date) -> CommentStore:
 
 
 def save_store(repo_root: Path, store: CommentStore) -> None:
+    """Persist the store atomically.
+
+    Writes to a sibling tempfile in the same directory (so the rename is on
+    the same filesystem), fsyncs, then ``os.replace`` swaps it in. A reader
+    will see either the prior store or the new one, never a partial file —
+    matters when two threads of the Flask dev server (``threaded=True``)
+    race on the same path. The threading lock from :func:`store_lock`
+    composes on top: atomic-write protects against torn writes; the lock
+    protects against lost updates.
+
+    Windows quirk: on Win32 ``os.replace`` raises ``PermissionError`` if
+    another handle (typically a concurrent ``load_store`` reader on a GET)
+    has the destination open. The retry loop covers that microsecond race —
+    POSIX behavior is unaffected because the first attempt always succeeds.
+    """
     path = _store_path(repo_root, store.ticker, store.report_date)
-    path.write_text(store.model_dump_json(indent=2), encoding="utf-8")
+    payload = store.model_dump_json(indent=2)
+    # delete=False so we control the lifecycle — os.replace handles the swap.
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # Up to ~250ms of retry covers concurrent-reader windows on Windows.
+        # Backoff doubles from 2ms so a long-held reader doesn't busy-loop.
+        delay = 0.002
+        for _ in range(7):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                threading.Event().wait(delay)
+                delay *= 2
+        else:
+            os.replace(tmp, path)  # final attempt; propagate if it still fails
+    except BaseException:
+        # Clean up the tempfile on failure; missing_ok in case mkstemp itself
+        # raised before creating the file (very rare).
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Concurrency — Flask runs threaded=True (see execution/comments_server.py),
+# so two POST/PATCH/DELETE requests against the same (ticker, report_date)
+# can interleave their load-mutate-save sequences. The store JSON is rewritten
+# whole on each save, so without a lock the second writer wins and the first
+# writer's update is silently lost.
+#
+# A process-wide dict of per-path locks lets concurrent updates on DIFFERENT
+# tickers/dates proceed in parallel while serialising updates on the same
+# file. The guard lock is tiny — held only long enough to look up / create
+# the per-path lock.
+# ---------------------------------------------------------------------------
+
+_PATH_LOCKS: dict[str, threading.Lock] = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path: Path) -> threading.Lock:
+    """Return the lock for ``path``, creating it on first access."""
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager  # pyright: ignore[reportDeprecated]  # false-positive in pyright 1.1.409
+def store_lock(repo_root: Path, ticker: str, report_date: date) -> Iterator[None]:
+    """Serialise read-modify-write on a single comments file.
+
+    Use around every mutating sequence: ``load_store → mutate → save_store``.
+    A new lock per ``(ticker, report_date)`` lets unrelated stores update
+    concurrently; same-store updates queue.
+    """
+    lock = _path_lock(_store_path(repo_root, ticker, report_date))
+    with lock:
+        yield
 
 
 def list_comments(
@@ -254,17 +344,18 @@ def append_comment(
         if keyword_intent is not None:
             intent = cast("IntentType", keyword_intent)
             text = cleaned
-    store = load_store(repo_root, ticker, report_date)
-    comment = Comment(
-        id=_next_id(report_date),
-        anchor=anchor,
-        selected_text=selected_text,
-        comment=text,
-        intent=intent,
-    )
-    store.comments.append(comment)
-    save_store(repo_root, store)
-    return comment
+    with store_lock(repo_root, ticker, report_date):
+        store = load_store(repo_root, ticker, report_date)
+        comment = Comment(
+            id=_next_id(report_date),
+            anchor=anchor,
+            selected_text=selected_text,
+            comment=text,
+            intent=intent,
+        )
+        store.comments.append(comment)
+        save_store(repo_root, store)
+        return comment
 
 
 def update_comment(
@@ -279,46 +370,47 @@ def update_comment(
     intent: IntentType = None,
 ) -> Comment | None:
     """In-place update. Returns updated Comment or None if id not found."""
-    store = load_store(repo_root, ticker, report_date)
-    for c in store.comments:
-        if c.id == comment_id:
-            if status is not None:
-                c.status = status
-                if status == "addressed":
-                    c.addressed_at = datetime.now(UTC)
-            if resolution_note is not None:
-                c.resolution_note = resolution_note
-            if append_thread is not None:
-                c.follow_up_thread.append(append_thread)
-            if intent is not None:
-                c.intent = intent
-            save_store(repo_root, store)
-            return c
-    return None
+    with store_lock(repo_root, ticker, report_date):
+        store = load_store(repo_root, ticker, report_date)
+        for c in store.comments:
+            if c.id == comment_id:
+                if status is not None:
+                    c.status = status
+                    if status == "addressed":
+                        c.addressed_at = datetime.now(UTC)
+                if resolution_note is not None:
+                    c.resolution_note = resolution_note
+                if append_thread is not None:
+                    c.follow_up_thread.append(append_thread)
+                if intent is not None:
+                    c.intent = intent
+                save_store(repo_root, store)
+                return c
+        return None
 
 
-def delete_comment(
-    repo_root: Path, ticker: str, report_date: date, comment_id: str
-) -> bool:
+def delete_comment(repo_root: Path, ticker: str, report_date: date, comment_id: str) -> bool:
     """Hard-delete a single comment. Returns True if removed."""
-    store = load_store(repo_root, ticker, report_date)
-    before = len(store.comments)
-    store.comments = [c for c in store.comments if c.id != comment_id]
-    if len(store.comments) == before:
-        return False
-    save_store(repo_root, store)
-    return True
+    with store_lock(repo_root, ticker, report_date):
+        store = load_store(repo_root, ticker, report_date)
+        before = len(store.comments)
+        store.comments = [c for c in store.comments if c.id != comment_id]
+        if len(store.comments) == before:
+            return False
+        save_store(repo_root, store)
+        return True
 
 
 def clear_addressed(repo_root: Path, ticker: str, report_date: date) -> int:
     """Drop all addressed + dismissed comments. Returns count removed."""
-    store = load_store(repo_root, ticker, report_date)
-    before = len(store.comments)
-    store.comments = [c for c in store.comments if c.status == "open"]
-    removed = before - len(store.comments)
-    if removed > 0:
-        save_store(repo_root, store)
-    return removed
+    with store_lock(repo_root, ticker, report_date):
+        store = load_store(repo_root, ticker, report_date)
+        before = len(store.comments)
+        store.comments = [c for c in store.comments if c.status == "open"]
+        removed = before - len(store.comments)
+        if removed > 0:
+            save_store(repo_root, store)
+        return removed
 
 
 def to_json_payload(store: CommentStore) -> dict[str, object]:
