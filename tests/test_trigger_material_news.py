@@ -519,6 +519,10 @@ def test_draft_actions_thesis_update_and_earnings_prep_only() -> None:
     prep = by_kind["earnings_prep_append"]
     assert prep["news_id"] == 7
     assert "Acme acquires Beta for $2B" in prep["body"]
+    # The user tracks management's RESPONSES to analyst Q&A, not their own
+    # questions — the prep action must say "watch the Q&A", never "ask management".
+    assert "Q&A" in prep["body"]
+    assert "ask management" not in prep["body"].lower()
 
 
 # ---------------------------------------------------------------------------
