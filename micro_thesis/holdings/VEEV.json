@@ -155,7 +155,8 @@
   "mos_bar": 0.2,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": 22.0
+    "terminal_multiple": 22.0,
+    "gsheet_id": "1QNdAkQ_r7FXs8K5XhaMwW9cCSRlqD4eDJqeMZBC7E1s"
   },
   "segments": [],
   "operational_kpis": [],

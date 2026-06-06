@@ -261,6 +261,29 @@ def test_cli_export_missing_workbook(tmp_path: Path) -> None:
     assert rc == 2
 
 
+def test_set_gsheet_id_preserves_non_ascii(tmp_path: Path) -> None:
+    # Writing the Sheet id must not escape non-ASCII narrative text (em-dashes,
+    # accents) to \\uXXXX — that would churn the holdings diff far beyond the one
+    # added key. The literal characters must survive byte-for-byte.
+    holdings = tmp_path / "TEST.json"
+    holdings.write_text(
+        json.dumps(
+            {"ticker": "TEST", "thesis": "Revenue declining — contraction."},
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    assert dcf_sheets._set_gsheet_id(holdings, "SHEET42") is True
+    text = holdings.read_text(encoding="utf-8")
+    assert "—" in text  # literal em-dash preserved
+    assert "\\u2014" not in text  # not escaped
+    data = json.loads(text)
+    assert data["dcf_defaults"]["gsheet_id"] == "SHEET42"
+    assert data["thesis"] == "Revenue declining — contraction."
+
+
 # --------------------------------------------------------------------------- #
 # dcf_sheets.py — re-ingest (--file) END-TO-END, no credentials
 # --------------------------------------------------------------------------- #
