@@ -15,7 +15,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from report.models import KpiLedgerRow  # noqa: E402
-from report.renderers.workspace_data import KpiStripTile, select_kpi_strip  # noqa: E402
+from report.renderers.workspace_data import (  # noqa: E402
+    KpiStripTile,
+    format_ledger_value,
+    select_kpi_strip,
+)
 
 _TWO_Q = ["2025-12-31", "2026-03-31"]
 _TIMES = chr(0x00D7)  # ratio multiplier; chr() keeps the source ASCII (RUF001)
@@ -126,3 +130,38 @@ def test_rows_with_under_two_observations_are_skipped() -> None:
         history=[("2026-03-31", 1.0e9), ("2025-12-31", None)],
     )
     assert select_kpi_strip([row]) == []
+
+
+# --- §2 ledger value cell (format_ledger_value) ----------------------------
+# The ledger has a separate Unit column, so money/count levels humanize (with
+# a $ for money) while percent/ratio/bps keep a trimmed number (no double suffix).
+
+
+def test_ledger_money_level_humanizes() -> None:
+    # The RPO regression: raw 364e9 (unit resolves to None after the def-unit
+    # fix) must not render as a bare 12-digit integer.
+    assert (
+        format_ledger_value(364_000_000_000.0, None, "AWS Remaining Performance Obligations")
+        == "$364.0B"
+    )
+    assert format_ledger_value(28_500_000_000.0, "USD", "Net revenue") == "$28.5B"
+
+
+def test_ledger_count_humanizes_without_dollar() -> None:
+    assert format_ledger_value(118_000_000.0, "count", "Total customers") == "118.0M"
+
+
+def test_ledger_percent_keeps_trimmed_number_no_suffix() -> None:
+    # Unit column carries the "%"; value cell stays a bare trimmed number.
+    assert format_ledger_value(42.30, "%", "Operating margin") == "42.3"
+
+
+def test_ledger_ratio_and_bps_keep_trimmed_number() -> None:
+    assert format_ledger_value(1.23, "ratio", "Coverage ratio") == "1.23"
+    assert format_ledger_value(150.0, "bps", "Risk-adj NIM change") == "150"
+
+
+def test_ledger_huge_low_base_percent_is_not_compacted() -> None:
+    # A real (if low-base-distorted) percentage of 26.3M% must stay a percent
+    # number, NOT get mis-humanized to "26.3M" — guards against a magnitude rule.
+    assert format_ledger_value(26_300_000.0, "%", "Operating Cash Flow YoY Growth") == "26300000"
