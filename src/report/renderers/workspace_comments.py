@@ -34,6 +34,37 @@ JS = r"""
   window.__workspaceCommentStore = commentStore;
 
   // ---------------------------------------------------------------
+  // Draft autosave — survive tab close / refresh / server-down with
+  // unposted text. Drafts are keyed by (ticker, report_date, anchor)
+  // and cleared on a successful POST. localStorage only — no server
+  // round-trip. See test_workspace_comments_drafts.py.
+  // ---------------------------------------------------------------
+  function draftKey(anchor) {
+    if (!anchor) return null;
+    return 'cmt-draft:' + TICKER + ':' + REPORT_DATE
+         + ':' + anchor.type + ':' + (anchor.key || '');
+  }
+  function saveDraft(anchor, text) {
+    var k = draftKey(anchor);
+    if (!k) return;
+    try {
+      if (text && text.length) localStorage.setItem(k, text);
+      else localStorage.removeItem(k);
+    } catch (e) { /* quota / disabled — silent */ }
+  }
+  function loadDraft(anchor) {
+    var k = draftKey(anchor);
+    if (!k) return '';
+    try { return localStorage.getItem(k) || ''; }
+    catch (e) { return ''; }
+  }
+  function clearDraft(anchor) {
+    var k = draftKey(anchor);
+    if (!k) return;
+    try { localStorage.removeItem(k); } catch (e) { /* silent */ }
+  }
+
+  // ---------------------------------------------------------------
   // Pin rendering — annotate each [data-commentable] element with a
   // pin button + count of open comments.
   // ---------------------------------------------------------------
@@ -88,6 +119,14 @@ JS = r"""
   if (sidebar) {
     sidebar.querySelector('.cmt-close').addEventListener('click', closeSidebar);
     sidebar.querySelector('#cmt-form').addEventListener('submit', onSubmit);
+    // Autosave the draft on every keystroke so a tab close / refresh /
+    // server-down outage doesn't lose typed-but-unposted text.
+    var draftArea = sidebar.querySelector('#cmt-form [name="comment"]');
+    if (draftArea) {
+      draftArea.addEventListener('input', function() {
+        saveDraft(currentAnchor, draftArea.value);
+      });
+    }
   }
 
   // Single entry point — pins call with a humanAnchor label, floater /
@@ -102,6 +141,14 @@ JS = r"""
     document.documentElement.style.setProperty('--sidebar-open-width', '380px');
     document.getElementById('cmt-anchor-label').textContent = label;
     renderList();
+    // Rehydrate the draft for this anchor (if any). Hint that a draft
+    // is restored so the user knows where the text came from.
+    var area = sidebar.querySelector('#cmt-form [name="comment"]');
+    if (area) {
+      var draft = loadDraft(anchor);
+      area.value = draft;
+      hint(draft ? 'Draft restored.' : '');
+    }
   }
 
   function openSidebar(type, key, anchorNode) {
@@ -197,6 +244,10 @@ JS = r"""
       comment: text,
       intent: intent
     };
+    // Snapshot the anchor at submit-time so a late-arriving response
+    // clears the correct draft even if the user has since opened a
+    // different anchor in the sidebar.
+    var anchorAtSubmit = currentAnchor;
     fetch(SERVER_URL + '/comments', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -204,11 +255,14 @@ JS = r"""
     }).then(function(r) { return r.json(); }).then(function(created) {
       commentStore.comments.push(created);
       form.reset();
+      clearDraft(anchorAtSubmit);
       renderList();
       renderPins();
       hint('Posted.');
     }).catch(function(err) {
-      hint('Server unreachable — start with: python execution/comments_server.py --ticker ' + TICKER);
+      // Keep the draft on disk — text stays in the textarea AND is
+      // restored if the user reloads or reopens the same anchor.
+      hint('Server unreachable — draft saved locally. Start: python execution/comments_server.py --ticker ' + TICKER);
       console.warn(err);
     });
   }
