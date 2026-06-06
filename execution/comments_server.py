@@ -118,6 +118,29 @@ def _cors_allow_origin(origin: str) -> str | None:
     return origin if origin in whitelist else None
 
 
+def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None]:
+    """The ``(sheet_id, edit_url)`` of the Google Sheet linked to a ticker's DCF,
+    or ``(None, None)`` when no ``dcf_defaults.gsheet_id`` is set in the holdings
+    JSON. Shared by the ``/dcf/<T>`` redirect and the ``/api/dcf-sheet/<T>``
+    endpoint so the two never diverge on how a Sheet link is resolved."""
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None, None
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(raw, dict):
+        return None, None
+    dd = cast("dict[str, object]", raw).get("dcf_defaults")
+    if not isinstance(dd, dict):
+        return None, None
+    gid = cast("dict[str, object]", dd).get("gsheet_id")
+    if isinstance(gid, str) and gid:
+        return gid, f"https://docs.google.com/spreadsheets/d/{gid}/edit"
+    return None, None
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -471,11 +494,16 @@ def create_app(
 
     @app.route("/dcf/<ticker>", methods=["GET"])
     def latest_dcf_for_ticker(ticker: str):
-        """Serve the live DCF workbook (``dcf/<TICKER>.xlsx``), falling back to the
-        most recent dated workbook under ``output/research/<T>/``. A served page
-        can't open a ``file://`` path, so the command-center Holding tab links here.
-        404 if no workbook exists."""
+        """Open the ticker's DCF model. When a Google Sheet is linked (holdings
+        ``dcf_defaults.gsheet_id``, set by ``dcf_sheets.py export``), 302-redirect
+        to the live Sheet so the brief's DCF link opens the editable model in the
+        browser instead of downloading an ``.xlsx``. Otherwise stream the live
+        workbook (``dcf/<TICKER>.xlsx``), falling back to the most recent dated
+        workbook under ``output/research/<T>/``. 404 if neither exists."""
         t = ticker.upper()
+        _sid, sheet_url = _linked_gsheet(repo_root, t)
+        if sheet_url:
+            return redirect(sheet_url, code=302)
         live = repo_root / "dcf" / f"{t}.xlsx"
         if live.exists():
             return send_file(live)
@@ -510,20 +538,7 @@ def create_app(
         ``{"ticker", "sheet_id", "url"}`` (sheet_id/url null when unlinked). Read
         from holdings ``dcf_defaults.gsheet_id``, which an `export` populates."""
         t = ticker.upper()
-        path = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
-        sheet_id: str | None = None
-        if path.exists():
-            try:
-                raw: object = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                raw = None
-            if isinstance(raw, dict):
-                dd = cast("dict[str, object]", raw).get("dcf_defaults")
-                if isinstance(dd, dict):
-                    gid = cast("dict[str, object]", dd).get("gsheet_id")
-                    if isinstance(gid, str) and gid:
-                        sheet_id = gid
-        url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit" if sheet_id else None
+        sheet_id, url = _linked_gsheet(repo_root, t)
         return {"ticker": t, "sheet_id": sheet_id, "url": url}
 
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
