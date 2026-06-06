@@ -249,7 +249,10 @@ def _set_gsheet_id(path: Path, sheet_id: str) -> bool:
         return False
     dd["gsheet_id"] = sheet_id
     data["dcf_defaults"] = dd
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    # ensure_ascii=False so non-ASCII narrative text (em-dashes etc.) stays
+    # literal — otherwise every "—" rewrites to "—", churning the diff far
+    # beyond the one key we added.
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return True
 
 
