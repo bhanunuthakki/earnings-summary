@@ -151,12 +151,79 @@ JS = r"""
 
   // Wake-up triggers. setInterval keeps a steady cadence; focus + online
   // catch the user-driven recovery moments. window.__flushOutbox is exposed
-  // for the health-pill module (Fix 3) to call on detected server recovery
+  // for the health-pill (just below) to call on detected server recovery
   // without needing to know our internals.
   setInterval(flushOutbox, OUTBOX_FLUSH_INTERVAL_MS);
   window.addEventListener('online', flushOutbox);
   window.addEventListener('focus', flushOutbox);
   window.__flushOutbox = flushOutbox;
+
+  // ---------------------------------------------------------------
+  // Health pill — periodic GET /healthz tells the user up-front
+  // whether the server is reachable, instead of finding out only
+  // when they click Post. Drives the green/red pill in the sidebar
+  // header and an inline "offline" banner above the textarea.
+  //
+  // On the offline → online edge we kick a flushOutbox() rather than
+  // waiting for the next 15s tick — the user sees the queue drain
+  // moments after the server is back. See test_workspace_comments_health.py.
+  // ---------------------------------------------------------------
+  var HEALTH_POLL_MS = 10000;
+  var healthState = 'unknown';  // 'online' | 'offline' | 'unknown'
+
+  function setHealthState(next) {
+    var prev = healthState;
+    if (next === prev) return;
+    healthState = next;
+    renderHealthPill();
+    renderOfflineBanner();
+    // Edge: offline → online → drain the queue immediately.
+    if (prev === 'offline' && next === 'online' && typeof window.__flushOutbox === 'function') {
+      window.__flushOutbox();
+    }
+  }
+
+  function renderHealthPill() {
+    var pill = document.getElementById('cmt-health-pill');
+    if (!pill) return;
+    pill.className = 'cmt-health-pill cmt-health-' + healthState;
+    pill.title = healthState === 'online'
+      ? 'Server reachable.'
+      : healthState === 'offline'
+        ? 'Server unreachable — new comments will queue locally and sync on recovery.'
+        : 'Checking server status…';
+    pill.textContent = healthState === 'online' ? '● Online'
+                      : healthState === 'offline' ? '● Offline'
+                      : '○ …';
+  }
+
+  function renderOfflineBanner() {
+    var banner = document.getElementById('cmt-offline-banner');
+    if (!banner) return;
+    banner.style.display = healthState === 'offline' ? 'block' : 'none';
+  }
+
+  function pollHealth() {
+    // cache:no-store so a stale 200 doesn't mask a server that died
+    // between the last poll and now. Manual AbortController timeout
+    // keeps an unresponsive socket from blocking the next tick.
+    // Returns the underlying promise so callers (Fix 3 tests, manual
+    // debug) can await state-settling, instead of fire-and-forget.
+    var ctrl = new AbortController();
+    var killer = setTimeout(function() { ctrl.abort(); }, 5000);
+    return fetch(SERVER_URL + '/healthz', {cache: 'no-store', signal: ctrl.signal})
+      .then(function(r) {
+        clearTimeout(killer);
+        setHealthState(r.ok ? 'online' : 'offline');
+      })
+      .catch(function() {
+        clearTimeout(killer);
+        setHealthState('offline');
+      });
+  }
+  setInterval(pollHealth, HEALTH_POLL_MS);
+  window.addEventListener('focus', pollHealth);
+  window.__pollCommentHealth = pollHealth;  // for Fix 3 tests + manual debug
 
   // ---------------------------------------------------------------
   // Pin rendering — annotate each [data-commentable] element with a
@@ -234,6 +301,34 @@ JS = r"""
       head.appendChild(badge);
       updateOutboxBadge();
     }
+    // Health pill (Fix 3) — same header, sits left of the close button
+    // so the user sees server status at a glance whenever the sidebar
+    // is open.
+    if (head && !document.getElementById('cmt-health-pill')) {
+      var pill = document.createElement('span');
+      pill.id = 'cmt-health-pill';
+      pill.className = 'cmt-health-pill cmt-health-unknown';
+      pill.textContent = '○ …';
+      // Insert before the close button so it sits at the right edge
+      // of the header content, not after the close glyph.
+      var closeBtn = head.querySelector('.cmt-close');
+      if (closeBtn) head.insertBefore(pill, closeBtn);
+      else head.appendChild(pill);
+    }
+    // Offline banner — above the textarea, shown only when health is
+    // 'offline'. Tells the user their next submit will queue (not lose).
+    var formEl = sidebar.querySelector('#cmt-form');
+    if (formEl && !document.getElementById('cmt-offline-banner')) {
+      var banner = document.createElement('div');
+      banner.id = 'cmt-offline-banner';
+      banner.className = 'cmt-offline-banner';
+      banner.style.display = 'none';
+      banner.textContent = 'Server offline — your comment will queue locally and sync on recovery.';
+      formEl.insertBefore(banner, formEl.firstChild);
+    }
+    // Fire the first poll right away so the user doesn't wait 10s for
+    // the initial state to populate.
+    if (typeof pollHealth === 'function') pollHealth();
   }
 
   // Single entry point — pins call with a humanAnchor label, floater /
@@ -689,6 +784,45 @@ CSS = r"""
   border: 1px solid rgba(255, 196, 0, 0.45);
   border-radius: 10px;
   text-transform: uppercase; letter-spacing: 0.04em;
+}
+
+/* Health pill — server reachability indicator in the sidebar header.
+   Green when /healthz responds, red when it doesn't, muted while the
+   first poll is still in flight. */
+.cmt-health-pill {
+  display: inline-block;
+  margin: 2px 6px 0 6px;
+  padding: 2px 8px;
+  font-size: 10.5px; font-weight: 600;
+  font-family: var(--font-mono);
+  border-radius: 10px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-muted);
+}
+.cmt-health-pill.cmt-health-online {
+  color: #3cc878;
+  background: rgba(60, 200, 120, 0.12);
+  border-color: rgba(60, 200, 120, 0.4);
+}
+.cmt-health-pill.cmt-health-offline {
+  color: #ff7070;
+  background: rgba(255, 80, 80, 0.14);
+  border-color: rgba(255, 80, 80, 0.45);
+}
+
+/* Offline banner inside the form — telegraphs the failure mode BEFORE
+   the user submits, instead of after the click. */
+.cmt-offline-banner {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: #ffc8a0;
+  background: rgba(255, 130, 60, 0.10);
+  border: 1px solid rgba(255, 130, 60, 0.4);
+  border-radius: 4px;
+  line-height: 1.4;
 }
 
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
