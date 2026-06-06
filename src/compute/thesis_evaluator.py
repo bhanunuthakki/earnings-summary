@@ -32,6 +32,7 @@ from compute.soft_rule_evaluator import (
 )
 from models.facts import Unit
 from models.kpis import BreachStatus
+from models.unit_convert import convert_unit
 
 
 class Comparator(StrEnum):
@@ -258,52 +259,16 @@ def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool
     raise ValueError(f"Unhandled comparator: {comparator}")
 
 
-# Unit reconciliation ------------------------------------------------------
-#
-# A rule's `threshold` is expressed in the rule's declared `unit`; the kpi_facts
-# that satisfy it may be stored in a DIFFERENT unit, because the LLM extractor
-# picks a per-call unit independent of the rule (e.g. net-new ARR stored as raw
-# dollars `unit=actual` while the rule threshold is `<80` in `millions`).
-# Comparing the bare numbers then silently misfires: `115_000_000 < 80` is always
-# False, so the rule can never breach. We reconcile every observation to the
-# rule's unit before comparing — and before persisting it as evidence, so the §2
-# brief panel shows the value in the same unit as the threshold.
-#
-# Two convertible families. Within a family a value is rescaled by the ratio of
-# magnitudes. ACROSS families (a money magnitude vs a proportion vs a count)
-# there is no dimensionally-valid conversion — the rule is left unevaluable
-# rather than compared on mismatched dimensions.
-_MAGNITUDE_SCALE: dict[Unit, Decimal] = {
-    Unit.ACTUAL: Decimal(1),
-    Unit.THOUSANDS: Decimal(1_000),
-    Unit.MILLIONS: Decimal(1_000_000),
-    Unit.BILLIONS: Decimal(1_000_000_000),
-}
-# Scale to a common "ratio" base: 1 ratio = 100 percent = 10_000 bps.
-_PROPORTION_SCALE: dict[Unit, Decimal] = {
-    Unit.RATIO: Decimal(1),
-    Unit.PERCENT: Decimal("0.01"),
-    Unit.BPS: Decimal("0.0001"),
-}
-
-
-def convert_unit(value: Decimal, from_unit: Unit, to_unit: Unit) -> Decimal | None:
-    """Express ``value`` (currently in ``from_unit``) in ``to_unit``.
-
-    Same unit is the identity (exact — Decimal, no float drift). A money/count
-    magnitude (actual/thousands/millions/billions) rescales by the ratio of its
-    powers of ten; a proportion (ratio/percent/bps) rescales through a common
-    fraction base. Returns ``None`` when the two units belong to different
-    families (e.g. a money magnitude vs a percentage, or anything vs a raw
-    count) — no dimensionally-valid conversion exists, so the caller must treat
-    the rule as unevaluable rather than compare blindly.
-    """
-    if from_unit is to_unit:
-        return value
-    for scale in (_MAGNITUDE_SCALE, _PROPORTION_SCALE):
-        if from_unit in scale and to_unit in scale:
-            return value * scale[from_unit] / scale[to_unit]
-    return None
+# Unit reconciliation: a rule's threshold is in the rule's declared `unit`, but the
+# kpi_facts that satisfy it may be stored in a different unit (the LLM extractor's
+# per-call guess), so comparing the bare numbers misfires — `115_000_000 < 80` (raw
+# dollars vs a `<80` millions threshold) could never breach. `evaluate_rule`
+# reconciles every observation to the rule's unit via the shared `convert_unit`
+# (imported above) before comparing, and persists the reconciled value so the §2
+# brief panel reads in the threshold's unit. That same helper runs at persist time in
+# `pipeline.kpi_persistence`, so a fact's stored unit and the unit it's compared in
+# can't drift. Cross-family pairs (a money magnitude vs a proportion vs a raw count)
+# have no valid conversion → the rule is surfaced UNRESOLVED, not mis-compared.
 
 
 def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) -> RuleEvaluation:

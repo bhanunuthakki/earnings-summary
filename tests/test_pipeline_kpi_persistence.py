@@ -15,12 +15,12 @@ from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     PersistResult,
+    _reconcile_unit,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     find_or_create_kpi_definition,
     persist_manifest,
     purge_duplicate_kpi_facts,
     record_validation_issue,
 )
-
 
 _KPI_FACTS_LOGICAL_UNIQUE = (
     "CREATE UNIQUE INDEX uq_kpi_facts_logical "
@@ -362,6 +362,189 @@ def test_purge_duplicate_kpi_facts_is_idempotent(conn: sqlite3.Connection) -> No
 
     assert purge_duplicate_kpi_facts(conn) == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+
+
+# --- Canonical-unit reconciliation (source-side unit fix) -------------------
+#
+# `KpiExtractionManifest.canonical_units` carries the authoritative unit a metric
+# should be stored in (the holding's break-rule unit). persist_manifest reconciles
+# the extracted value/unit to it so kpi_facts stops being stored in the LLM's
+# per-call unit guess — the root cause of the RBRK "115_000_000 actual vs <80
+# millions" dead break-rule.
+
+
+def test_reconcile_unit_passthrough_and_rescale_and_mismatch() -> None:
+    """The helper: passthrough when no/equal canonical, rescale within a family,
+    keep-original-and-flag across families."""
+    # No canonical → unchanged.
+    assert _reconcile_unit(Decimal("5"), Unit.ACTUAL, None) == (Decimal("5"), Unit.ACTUAL, False)
+    # Canonical equals extracted → unchanged (no needless conversion).
+    assert _reconcile_unit(Decimal("17.8"), Unit.PERCENT, Unit.PERCENT) == (
+        Decimal("17.8"),
+        Unit.PERCENT,
+        False,
+    )
+    # Same family, different unit → rescaled into the canonical unit.
+    assert _reconcile_unit(Decimal("115000000"), Unit.ACTUAL, Unit.MILLIONS) == (
+        Decimal("115"),
+        Unit.MILLIONS,
+        False,
+    )
+    # Cross family → original kept, flagged.
+    assert _reconcile_unit(Decimal("123456"), Unit.ACTUAL, Unit.PERCENT) == (
+        Decimal("123456"),
+        Unit.ACTUAL,
+        True,
+    )
+
+
+def test_persist_manifest_reconciles_actual_to_canonical_millions(conn: sqlite3.Connection) -> None:
+    """The RBRK case: the LLM reports net-new ARR as the full figure in `actual`,
+    but the break-rule threshold is in `millions`. The fact must land in millions
+    (115), and the freshly-created definition must carry `millions` too."""
+    manifest = KpiExtractionManifest(
+        ticker="RBRK",
+        period_end=datetime(2027, 1, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=7140,
+        primary_source=SourceType.LLM_EXTRACTED,
+        canonical_units={"Net new subscription ARR ($)": Unit.MILLIONS},
+        values=[
+            KpiValue(
+                name="Net new subscription ARR ($)", value=Decimal("115000000"), unit=Unit.ACTUAL
+            )
+        ],
+    )
+    result = persist_manifest(conn, run_id="r1", manifest=manifest)
+    assert result.inserted == 1
+    assert result.validation_issues == 0
+
+    fact = conn.execute("SELECT value, unit FROM kpi_facts").fetchone()
+    assert Decimal(str(dict(fact)["value"])) == Decimal("115")
+    assert dict(fact)["unit"] == "millions"
+    definition = conn.execute("SELECT unit FROM kpi_definitions").fetchone()
+    assert dict(definition)["unit"] == "millions"
+
+
+def test_persist_manifest_corrects_existing_wrong_definition_unit(conn: sqlite3.Connection) -> None:
+    """NU's "Capital adequacy ratio" def is `ratio` in prod though every fact and
+    the break-rule are `percent`. An authoritative canonical corrects the
+    definition's unit WITHOUT corrupting the (already-correct) percent value —
+    the danger of naively reconciling to the existing definition unit instead."""
+    name = "Capital adequacy ratio (CET1 / Basel III total)"
+    wrong_def_id = find_or_create_kpi_definition(
+        conn,
+        ticker="NU",
+        name=name,
+        unit=Unit.RATIO,
+        primary_source=SourceType.IR_DOC,
+    )
+    conn.commit()
+
+    manifest = KpiExtractionManifest(
+        ticker="NU",
+        period_end=datetime(2026, 3, 31),
+        fiscal_period_type=FiscalPeriodType.Q1,
+        source_doc_id=10,
+        primary_source=SourceType.LLM_EXTRACTED,
+        canonical_units={name: Unit.PERCENT},
+        values=[KpiValue(name=name, value=Decimal("17.8"), unit=Unit.PERCENT)],
+    )
+    result = persist_manifest(conn, run_id="r2", manifest=manifest)
+    assert result.inserted == 1
+    assert result.validation_issues == 0
+
+    fact = conn.execute("SELECT value, unit FROM kpi_facts").fetchone()
+    assert Decimal(str(dict(fact)["value"])) == Decimal("17.8")  # value untouched
+    assert dict(fact)["unit"] == "percent"
+    corrected = conn.execute(
+        "SELECT unit FROM kpi_definitions WHERE id = ?", (wrong_def_id,)
+    ).fetchone()
+    assert dict(corrected)["unit"] == "percent"  # ratio -> percent
+
+
+def test_persist_manifest_flags_cross_family_canonical_and_keeps_original(
+    conn: sqlite3.Connection,
+) -> None:
+    """A canonical unit in a different family than the extracted unit can't be
+    applied: the value is persisted as-extracted (never rescaled across
+    dimensions) and a UNIT_MISMATCH validation issue is recorded."""
+    manifest = KpiExtractionManifest(
+        ticker="XX",
+        period_end=datetime(2026, 3, 31),
+        fiscal_period_type=FiscalPeriodType.Q1,
+        source_doc_id=1,
+        primary_source=SourceType.LLM_EXTRACTED,
+        canonical_units={"Some Margin": Unit.PERCENT},
+        values=[KpiValue(name="Some Margin", value=Decimal("123456"), unit=Unit.ACTUAL)],
+    )
+    result = persist_manifest(conn, run_id="r3", manifest=manifest)
+    assert result.inserted == 1
+    assert result.validation_issues == 1
+
+    fact = conn.execute("SELECT value, unit FROM kpi_facts").fetchone()
+    assert dict(fact)["unit"] == "actual"  # kept original, NOT rescaled to percent
+    issue = conn.execute("SELECT rule, ticker FROM validation_issues").fetchone()
+    assert dict(issue)["rule"] == ValidationRule.UNIT_MISMATCH.value
+    # A different-family def is NOT authoritative: it must not overwrite the def.
+    definition = conn.execute("SELECT unit FROM kpi_definitions").fetchone()
+    assert dict(definition)["unit"] == "actual"
+
+
+def test_persist_manifest_no_canonical_is_unchanged_passthrough(conn: sqlite3.Connection) -> None:
+    """Generic callers (IR spreadsheet / PDF) pass no canonical_units — the
+    extracted value/unit are stored verbatim, exactly as before this change."""
+    manifest = KpiExtractionManifest(
+        ticker="YY",
+        period_end=datetime(2026, 3, 31),
+        fiscal_period_type=FiscalPeriodType.Q1,
+        source_doc_id=1,
+        primary_source=SourceType.IR_DOC,
+        values=[KpiValue(name="GMV", value=Decimal("5000000000"), unit=Unit.ACTUAL)],
+    )
+    result = persist_manifest(conn, run_id="r4", manifest=manifest)
+    assert result.inserted == 1
+    assert result.validation_issues == 0
+    fact = conn.execute("SELECT value, unit FROM kpi_facts").fetchone()
+    assert Decimal(str(dict(fact)["value"])) == Decimal("5000000000")
+    assert dict(fact)["unit"] == "actual"
+
+
+def test_find_or_create_definition_authoritative_flag_gates_unit_correction(
+    conn: sqlite3.Connection,
+) -> None:
+    """The unit of an EXISTING definition is only rewritten when the caller
+    declares the new unit authoritative; the default leaves it first-writer-wins."""
+    def_id = find_or_create_kpi_definition(
+        conn,
+        ticker="ZZ",
+        name="Metric",
+        unit=Unit.RATIO,
+        primary_source=SourceType.IR_DOC,
+    )
+    # Non-authoritative lookup with a different unit must NOT change the row.
+    same = find_or_create_kpi_definition(
+        conn,
+        ticker="ZZ",
+        name="Metric",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
+    )
+    assert same == def_id
+    row = conn.execute("SELECT unit FROM kpi_definitions WHERE id = ?", (def_id,)).fetchone()
+    assert dict(row)["unit"] == "ratio"
+    # Authoritative lookup reconciles the row to the canonical unit.
+    again = find_or_create_kpi_definition(
+        conn,
+        ticker="ZZ",
+        name="Metric",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
+        authoritative=True,
+    )
+    assert again == def_id
+    row = conn.execute("SELECT unit FROM kpi_definitions WHERE id = ?", (def_id,)).fetchone()
+    assert dict(row)["unit"] == "percent"
 
 
 def test_persist_manifest_falls_back_on_legacy_logical_unique(

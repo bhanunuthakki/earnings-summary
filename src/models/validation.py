@@ -23,6 +23,11 @@ class ValidationRule(StrEnum):
     PLAUSIBLE_RANGE = "plausible_range"
     CURRENCY_REQUIRED = "currency_required"
     UNIT_REQUIRED = "unit_required"
+    # An extracted value's unit can't be reconciled to the KPI's canonical
+    # (break-rule-declared) unit because the two belong to different dimensional
+    # families — a likely extraction error or rule misconfiguration. The value is
+    # persisted as-extracted and flagged rather than rescaled across dimensions.
+    UNIT_MISMATCH = "unit_mismatch"
     PERIOD_ORDER = "period_order"
     FISCAL_YEAR_MISMATCH = "fiscal_year_mismatch"
     MAGNITUDE_JUMP = "magnitude_jump"

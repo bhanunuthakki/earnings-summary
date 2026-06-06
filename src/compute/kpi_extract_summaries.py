@@ -39,7 +39,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import cast
 
+from compute.kpi_resolver import normalize_kpi_name
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
@@ -155,6 +157,7 @@ def extract_for_ticker(
     if not tier_1_names:
         log.error = "holdings JSON has no tier_1_kpis"
         return _close_log(log, t0)
+    canonical_units = _canonical_units_from_holdings(holdings, tier_1_names)
 
     for quarter, year, source_path, spec in sources:
         period_end = _period_end(ticker, quarter, year)
@@ -180,7 +183,12 @@ def extract_for_ticker(
             if not extracted:
                 continue
             manifest = _build_manifest(
-                ticker, period_end, FiscalPeriodType(f"Q{quarter}"), doc_id, extracted
+                ticker,
+                period_end,
+                FiscalPeriodType(f"Q{quarter}"),
+                doc_id,
+                extracted,
+                canonical_units,
             )
             run_id = start_run(
                 conn,
@@ -235,6 +243,49 @@ def _tier_1_names(holdings: dict[str, object]) -> list[str]:
             name = str(k.get("name", "")).strip()
             if name:
                 out.append(name)
+    return out
+
+
+def _canonical_units_from_holdings(
+    holdings: dict[str, object], kpi_names: list[str]
+) -> dict[str, Unit]:
+    """Map each extraction KPI name to its break-rule's declared Unit.
+
+    The break-rules (`break_rules` + `business_model_rules`) declare the unit each
+    threshold is expressed in — the authoritative unit the metric should be stored
+    in, which `persist_manifest` reconciles the LLM's per-call unit to. They're
+    keyed by their own `kpi_name`, which may spell the metric differently from the
+    tier_1 label the extractor pulls ("Net New Subscription ARR (USD millions)" vs
+    "Net new subscription ARR ($)"); both normalize to the same key, so we match on
+    the parenthetical-insensitive normalized name. Only real `Unit` values are
+    kept — a rule unit outside the enum (e.g. a derived "percent_decel" transform)
+    has no dimensional meaning here and is skipped.
+    """
+    rule_unit_by_norm: dict[str, Unit] = {}
+    for key in ("break_rules", "business_model_rules"):
+        raw = holdings.get(key)
+        if not isinstance(raw, list):
+            continue
+        for entry in cast("list[object]", raw):
+            if not isinstance(entry, dict):
+                continue
+            rule = cast("dict[str, object]", entry)
+            rule_name = str(rule.get("kpi_name", "")).strip()
+            rule_unit = str(rule.get("unit", "")).strip()
+            if not rule_name or not rule_unit:
+                continue
+            try:
+                unit = Unit(rule_unit)
+            except ValueError:
+                continue
+            # First rule wins per metric; break_rules precede business_model_rules,
+            # matching the evaluator's universal-then-business-model ordering.
+            rule_unit_by_norm.setdefault(normalize_kpi_name(rule_name), unit)
+    out: dict[str, Unit] = {}
+    for name in kpi_names:
+        unit = rule_unit_by_norm.get(normalize_kpi_name(name))
+        if unit is not None:
+            out[name] = unit
     return out
 
 
@@ -342,8 +393,14 @@ def _llm_extract(
 The document is one of: an LLM-summarised earnings call (sections: Financial Highlights table, Operational Highlights, Management Outlook, Q&A), an LLM-summarised IR press release (Headline Results table, Key Business Metrics, Guidance, Capital Allocation), or an LLM-distilled presentation brief (Management Narrative, Highlighted Metrics, Strategic Initiatives, Forward-Looking Slides). Whichever it is, current-quarter actuals live in the headline table / metrics section; *guidance* for the NEXT quarter or full year is reported separately and is NOT what we want here.
 
 For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not guidance for next quarter). Return a JSON object keyed by the EXACT name I gave you. Values:
-  - "value": numeric (no units; e.g. 12.5 not "12.5%"). Convert as needed (e.g. "$1.2 billion" → 1200000000, "+15%" → 15.0).
-  - "unit": one of "percent" / "usd" / "ratio" / "count" / "ratio_per_unit" / "actual"
+  - "value": numeric only, no unit symbols (e.g. 12.5 not "12.5%").
+  - "unit": EXACTLY ONE of these tokens — "percent", "actual", "count", "ratio", "bps":
+      * "percent"  — rates, margins, growth, retention (e.g. NRR 120% → value 120; NIM 17.8% → 17.8). Drop the % sign; do NOT divide by 100.
+      * "actual"   — ALL monetary amounts. Report the FULL figure in the issuer's base currency units, NEVER pre-scaled. "$1.2 billion" → value 1200000000; "$115M net new ARR" → 115000000; ARPAC "$11.20" → 11.20. Never use a currency code or a scaled token as the unit — always expand to the whole number with unit "actual".
+      * "count"    — headcount / customers / subscribers / accounts, as the full integer (e.g. "12.5 million customers" → 12500000).
+      * "ratio"    — unitless multiples reported with an "x" (e.g. coverage 1.8x → 1.8).
+      * "bps"      — only when the document states the metric in basis points.
+    Use only those five tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
   - "confidence": float 0.0–1.0; lower if you had to estimate from context
 
 If a KPI is not disclosed in the document, OMIT IT from the response. Do not guess.
@@ -394,6 +451,7 @@ def _build_manifest(
     fpt: FiscalPeriodType,
     doc_id: int,
     extracted: dict[str, dict[str, object]],
+    canonical_units: dict[str, Unit] | None = None,
 ) -> KpiExtractionManifest:
     values: list[KpiValue] = []
     for name, payload in extracted.items():
@@ -419,6 +477,7 @@ def _build_manifest(
         source_doc_id=doc_id,
         primary_source=SourceType.LLM_EXTRACTED,
         model_name=FAST_CLASSIFIER_MODEL,
+        canonical_units=canonical_units or {},
         values=values,
     )
 
