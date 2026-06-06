@@ -582,6 +582,10 @@ def test_draft_actions_missed_adds_bear_append() -> None:
     by_kind = {a.action_kind: a.payload for a in actions}
     assert by_kind["earnings_prep_append"]["kpi_name"] == "Revenue YoY Growth"
     assert by_kind["bear_append"]["kpi_name"] == "Revenue YoY Growth"
+    # Track management's Q&A response, not the user's own question (no "follow up").
+    prep_body = by_kind["earnings_prep_append"]["body"]
+    assert "Q&A" in prep_body
+    assert "follow up" not in prep_body.lower()
     assert by_kind["thesis_update"]["outcome"] == Verdict.MISSED.value
 
 

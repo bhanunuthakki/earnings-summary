@@ -8,8 +8,9 @@ gradeable: did management keep its word? This sensor surfaces each such
 verdict exactly once, the moment it comes due.
 
 This is the slice closest to a "Management Promise & Delivery Ledger": it turns
-the say/do record into actionable alerts (follow up on the call, append to the
-bear case when management missed, update the thesis with the verdict).
+the say/do record into actionable alerts (watch the next call's Q&A on it,
+append to the bear case when management missed, update the thesis with the
+verdict).
 
 CRITICAL contract (mirrors ``kpi_inflection``, the inverse of ``earnings_tone``)
 -------------------------------------------------------------------------------
@@ -537,8 +538,8 @@ class SayDoDueTrigger:
     ) -> list[QueuedActionDraft]:
         """Propose downstream mutations.
 
-        Always an ``earnings_prep_append`` (follow up on the call) and a
-        ``thesis_update`` (record the verdict). When management missed or only
+        Always an ``earnings_prep_append`` (watch the next call's Q&A on it) and
+        a ``thesis_update`` (record the verdict). When management missed or only
         partially delivered (MISSED / MIXED), add a ``bear_append`` so the
         broken promise lands in the bear case.
         """
@@ -562,8 +563,8 @@ class SayDoDueTrigger:
                 action_kind=_ACTION_EARNINGS_PREP,
                 payload={
                     "body": (
-                        f"Follow up on the {kpi_name} commitment outcome "
-                        f"({outcome}) on the next call."
+                        f"Next call Q&A: track management's read on the "
+                        f"{kpi_name} commitment ({outcome})."
                     ),
                     "kpi_name": kpi_name,
                 },

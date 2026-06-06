@@ -627,7 +627,8 @@ class MaterialNewsTrigger:
         Material news is informational — it never proposes a ``bear_append`` or
         ``sizing_update`` (the user decides direction). Emits a
         ``thesis_update`` (incorporate the development) and an
-        ``earnings_prep_append`` (ask management about it next call).
+        ``earnings_prep_append`` (watch management's Q&A handling of it next call
+        — the user tracks management's responses to analysts, not their own).
         """
         _ = alert
         evidence = candidate.evidence
@@ -657,7 +658,7 @@ class MaterialNewsTrigger:
             QueuedActionDraft(
                 action_kind=_ACTION_EARNINGS_PREP,
                 payload={
-                    "body": f"Ask management about: '{headline}' on the next call.",
+                    "body": f"Next call Q&A: watch how management addresses '{headline}'.",
                     "news_id": news_id,
                 },
             ),
