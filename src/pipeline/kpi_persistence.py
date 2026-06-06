@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
 from models.kpis import ThesisTier
+from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
@@ -57,6 +58,15 @@ class KpiExtractionManifest(BaseModel):
     # 'llm[:model]' tag; deterministic sources (e.g. IR-spreadsheet parsing) set
     # an explicit tag like 'ir_spreadsheet' so audits don't mislabel them as LLM.
     extracted_by: str | None = None
+    # Authoritative per-KPI unit, keyed by KpiValue.name. Populated by callers
+    # that know the canonical unit a metric SHOULD be stored in — the LLM path
+    # fills it from each holding's break-rule `unit` (the unit its threshold is
+    # expressed in). When a name is present here, persist_manifest reconciles the
+    # extracted value/unit to it (see `_reconcile_unit`) rather than trusting the
+    # LLM's per-call unit guess, and treats the unit as authoritative for the
+    # kpi_definitions row. Absent name → the extracted unit is used unchanged, so
+    # generic callers (IR spreadsheet/PDF) keep their existing behavior.
+    canonical_units: dict[str, Unit] = Field(default_factory=dict)
     values: list[KpiValue]
 
 
@@ -105,14 +115,65 @@ def find_or_create_kpi_definition(
     name: str,
     unit: Unit,
     primary_source: SourceType,
+    authoritative: bool = False,
 ) -> int:
-    """Lookup-or-insert kpi_definitions for (ticker, name); returns the id."""
+    """Lookup-or-insert kpi_definitions for (ticker, name); returns the id.
+
+    Unit on the row is otherwise first-writer-wins: whichever extraction created
+    the definition stamped its (possibly wrong) unit, and later extractions never
+    correct it, so the definition's unit drifts from the metric's true unit
+    (e.g. NU "Capital adequacy ratio" stamped ``ratio`` though every fact and the
+    break-rule are ``percent``). When ``authoritative`` is set the caller has a
+    trusted canonical unit (the holding's break-rule unit) — reconcile the
+    existing row to it so the definition's metadata stops drifting. ``unit`` is
+    used verbatim for a brand-new row regardless of the flag.
+    """
     existing = _find_kpi_definition(conn, ticker, name)
     if existing is not None:
+        if authoritative:
+            _reconcile_definition_unit(conn, existing, unit)
         return existing
     return _create_kpi_definition(
         conn, ticker=ticker, name=name, unit=unit, primary_source=primary_source
     )
+
+
+def _reconcile_definition_unit(
+    conn: sqlite3.Connection, kpi_definition_id: int, unit: Unit
+) -> None:
+    """Correct an existing definition's unit to the authoritative ``unit``.
+
+    Idempotent: the ``unit != ?`` guard makes it a no-op when the row already
+    carries the canonical unit, so the common (already-correct) path writes
+    nothing.
+    """
+    conn.execute(
+        "UPDATE kpi_definitions SET unit = ? WHERE id = ? AND unit != ?",
+        (unit.value, kpi_definition_id, unit.value),
+    )
+
+
+def _reconcile_unit(
+    value: Decimal, extracted_unit: Unit, canonical: Unit | None
+) -> tuple[Decimal, Unit, bool]:
+    """Reconcile an extracted (value, unit) to the KPI's canonical unit.
+
+    Returns ``(value, unit, mismatch)``:
+
+    - No canonical, or canonical already equals the extracted unit → the value
+      and unit pass through unchanged, ``mismatch=False``.
+    - Canonical differs and is dimensionally compatible (same family) → the value
+      is rescaled into the canonical unit and returned with it, ``mismatch=False``.
+    - Canonical differs across families (no valid conversion) → the *original*
+      value/unit pass through (never rescaled across dimensions) and
+      ``mismatch=True`` so the caller can flag it for review.
+    """
+    if canonical is None or canonical is extracted_unit:
+        return value, extracted_unit, False
+    converted = convert_unit(value, extracted_unit, canonical)
+    if converted is None:
+        return value, extracted_unit, True
+    return converted, canonical, False
 
 
 def _insert_kpi_fact(
@@ -245,7 +306,29 @@ def persist_manifest(
     )
 
     for kpi in manifest.values:
-        ok, reason = _validate_value_range(kpi.value, kpi.unit)
+        # Reconcile the extracted value/unit to the KPI's canonical unit (the
+        # holding's break-rule unit) BEFORE validating/storing, so kpi_facts is
+        # written in the unit its threshold is compared against — not the LLM's
+        # per-call guess. A cross-family canonical can't be applied: keep the
+        # value as-extracted and flag it rather than rescale across dimensions.
+        canonical = manifest.canonical_units.get(kpi.name)
+        value, unit, unit_mismatch = _reconcile_unit(kpi.value, kpi.unit, canonical)
+        if unit_mismatch:
+            record_validation_issue(
+                conn,
+                run_id=run_id,
+                source_doc_id=manifest.source_doc_id,
+                ticker=manifest.ticker,
+                severity=Severity.WARN,
+                rule=ValidationRule.UNIT_MISMATCH,
+                raw_value=f"{kpi.name}={kpi.value} {kpi.unit.value}",
+                expected=(
+                    f"unit convertible to {canonical.value}" if canonical is not None else None
+                ),
+            )
+            issues += 1
+
+        ok, reason = _validate_value_range(value, unit)
         if not ok:
             record_validation_issue(
                 conn,
@@ -254,7 +337,7 @@ def persist_manifest(
                 ticker=manifest.ticker,
                 severity=Severity.WARN,
                 rule=ValidationRule.PLAUSIBLE_RANGE,
-                raw_value=f"{kpi.name}={kpi.value} {kpi.unit.value}",
+                raw_value=f"{kpi.name}={value} {unit.value}",
                 expected=reason,
             )
             issues += 1
@@ -264,8 +347,12 @@ def persist_manifest(
             conn,
             ticker=manifest.ticker,
             name=kpi.name,
-            unit=kpi.unit,
+            unit=unit,
             primary_source=manifest.primary_source,
+            # A successfully-applied canonical is authoritative for the
+            # definition's unit too; a cross-family mismatch is not (we kept the
+            # extracted unit), so don't let it overwrite the definition.
+            authoritative=canonical is not None and not unit_mismatch,
         )
         was_inserted = _insert_kpi_fact(
             conn,
@@ -273,8 +360,8 @@ def persist_manifest(
             period_end=manifest.period_end,
             fiscal_period_type=manifest.fiscal_period_type,
             kpi_definition_id=kpi_def_id,
-            value=kpi.value,
-            unit=kpi.unit,
+            value=value,
+            unit=unit,
             source_doc_id=manifest.source_doc_id,
             confidence=kpi.confidence,
             extracted_by=extracted_by,
