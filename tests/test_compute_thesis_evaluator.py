@@ -18,6 +18,7 @@ from compute.thesis_evaluator import (
     ThesisVerdict,
     _fetch_kpi_history,
     _rollup_status,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    convert_unit,
     evaluate_rule,
     evaluate_ticker_thesis,
     load_holdings_spec,
@@ -117,8 +118,12 @@ def _seed_kpi(
 def test_evaluate_rule_ok_when_no_observations() -> None:
     """No observations -> OK with detail noting no data."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("20"), unit=Unit.PERCENT, consecutive_periods=1,
+        rule_id="r1",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("20"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
         narrative="X < 20",
     )
     result = evaluate_rule(rule, [])
@@ -180,11 +185,17 @@ def test_rollup_status_unresolved_never_sets_overall() -> None:
 def test_evaluate_rule_ok_when_value_above_threshold() -> None:
     """Single observation 30 vs threshold-lt-20 -> OK (no match)."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("20"), unit=Unit.PERCENT, consecutive_periods=1,
+        rule_id="r1",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("20"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
         narrative="X < 20",
     )
-    obs = [KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("30"), unit=Unit.PERCENT)]
+    obs = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("30"), unit=Unit.PERCENT)
+    ]
     result = evaluate_rule(rule, obs)
     assert result.status == BreachStatus.OK
 
@@ -192,11 +203,17 @@ def test_evaluate_rule_ok_when_value_above_threshold() -> None:
 def test_evaluate_rule_breach_single_period() -> None:
     """consecutive_periods=1 + matching observation -> BREACH."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("20"), unit=Unit.PERCENT, consecutive_periods=1,
+        rule_id="r1",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("20"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
         narrative="X < 20",
     )
-    obs = [KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("15"), unit=Unit.PERCENT)]
+    obs = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("15"), unit=Unit.PERCENT)
+    ]
     result = evaluate_rule(rule, obs)
     assert result.status == BreachStatus.BREACH
     assert "breach" in result.detail.lower()
@@ -205,8 +222,12 @@ def test_evaluate_rule_breach_single_period() -> None:
 def test_evaluate_rule_warn_when_only_one_of_two_matches() -> None:
     """consecutive_periods=2: only newest matches -> WARN, not BREACH."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("20"), unit=Unit.PERCENT, consecutive_periods=2,
+        rule_id="r1",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("20"),
+        unit=Unit.PERCENT,
+        consecutive_periods=2,
         narrative="X < 20 for 2 quarters",
     )
     obs = [
@@ -220,8 +241,12 @@ def test_evaluate_rule_warn_when_only_one_of_two_matches() -> None:
 def test_evaluate_rule_breach_when_both_consecutive_match() -> None:
     """Both newest obs match the rule -> BREACH."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="X", comparator=Comparator.LT,
-        threshold=Decimal("20"), unit=Unit.PERCENT, consecutive_periods=2,
+        rule_id="r1",
+        kpi_name="X",
+        comparator=Comparator.LT,
+        threshold=Decimal("20"),
+        unit=Unit.PERCENT,
+        consecutive_periods=2,
         narrative="X < 20 for 2 quarters",
     )
     obs = [
@@ -235,11 +260,17 @@ def test_evaluate_rule_breach_when_both_consecutive_match() -> None:
 def test_evaluate_rule_supports_gt_comparator() -> None:
     """Comparator.GT: value > threshold fires the rule."""
     rule = BreakRule(
-        rule_id="r1", kpi_name="NPL", comparator=Comparator.GT,
-        threshold=Decimal("7"), unit=Unit.PERCENT, consecutive_periods=1,
+        rule_id="r1",
+        kpi_name="NPL",
+        comparator=Comparator.GT,
+        threshold=Decimal("7"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
         narrative="NPL > 7",
     )
-    obs = [KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("8.5"), unit=Unit.PERCENT)]
+    obs = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("8.5"), unit=Unit.PERCENT)
+    ]
     result = evaluate_rule(rule, obs)
     assert result.status == BreachStatus.BREACH
 
@@ -350,20 +381,28 @@ def test_evaluate_ticker_thesis_end_to_end(conn: sqlite3.Connection, tmp_path: P
         "thesis": "growth compounder",
         "break_rules": [
             {
-                "rule_id": "rev_below_20", "kpi_name": "Revenue Growth (FXN)",
-                "comparator": "lt", "threshold": 20, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "Revenue < 20",
+                "rule_id": "rev_below_20",
+                "kpi_name": "Revenue Growth (FXN)",
+                "comparator": "lt",
+                "threshold": 20,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Revenue < 20",
             },
             {
-                "rule_id": "gmv_below_15", "kpi_name": "GMV Growth (FXN)",
-                "comparator": "lt", "threshold": 15, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "GMV < 15",
+                "rule_id": "gmv_below_15",
+                "kpi_name": "GMV Growth (FXN)",
+                "comparator": "lt",
+                "threshold": 15,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "GMV < 15",
             },
         ],
     }
     (tmp_path / "MELI.json").write_text(json.dumps(payload), encoding="utf-8")
     _seed_kpi(conn, "MELI", "Revenue Growth (FXN)", [("2024-12-31", 96)])  # 96 > 20 -> OK
-    _seed_kpi(conn, "MELI", "GMV Growth (FXN)", [("2024-12-31", 56)])      # 56 > 15 -> OK
+    _seed_kpi(conn, "MELI", "GMV Growth (FXN)", [("2024-12-31", 56)])  # 56 > 15 -> OK
 
     verdict = evaluate_ticker_thesis(conn, ticker="MELI", holdings_dir=tmp_path)
     assert isinstance(verdict, ThesisVerdict)
@@ -379,9 +418,13 @@ def test_evaluate_ticker_thesis_bubbles_breach(conn: sqlite3.Connection, tmp_pat
         "thesis": "...",
         "break_rules": [
             {
-                "rule_id": "npl_above_7", "kpi_name": "NPL 90d+",
-                "comparator": "gt", "threshold": 7, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "NPL > 7",
+                "rule_id": "npl_above_7",
+                "kpi_name": "NPL 90d+",
+                "comparator": "gt",
+                "threshold": 7,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "NPL > 7",
             },
         ],
     }
@@ -429,12 +472,18 @@ def test_persist_verdict_appends_to_thesis_evaluations(
     conn.commit()
 
     v1 = ThesisVerdict(
-        ticker="TEST", thesis="t", overall_status=BreachStatus.OK,
-        rule_evaluations=(), evaluated_at=datetime(2026, 4, 1, 12, 0, 0),
+        ticker="TEST",
+        thesis="t",
+        overall_status=BreachStatus.OK,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 4, 1, 12, 0, 0),
     )
     v2 = ThesisVerdict(
-        ticker="TEST", thesis="t", overall_status=BreachStatus.BREACH,
-        rule_evaluations=(), evaluated_at=datetime(2026, 5, 1, 12, 0, 0),
+        ticker="TEST",
+        thesis="t",
+        overall_status=BreachStatus.BREACH,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 5, 1, 12, 0, 0),
     )
     persist_verdict(conn, v1, run_id="r1")
     persist_verdict(conn, v2, run_id="r2")
@@ -466,15 +515,20 @@ def test_evaluate_ticker_thesis_iterates_both_arrays(
             {
                 "rule_id": "universal_revenue_decline",
                 "kpi_name": "Revenue YoY Growth (USD)",
-                "comparator": "lt", "threshold": 0, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "Revenue declining YoY",
+                "comparator": "lt",
+                "threshold": 0,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Revenue declining YoY",
             },
         ],
         "business_model_rules": [
             {
                 "rule_id": "rbrk_sub_arr_growth_below_25",
                 "kpi_name": "Sub ARR YoY Growth",
-                "comparator": "lt", "threshold": 25, "unit": "percent",
+                "comparator": "lt",
+                "threshold": 25,
+                "unit": "percent",
                 "consecutive_periods": 1,
                 "narrative": "Sub ARR YoY growth below 25% — deceleration",
             },
@@ -502,17 +556,23 @@ def test_persist_verdict_serializes_rule_evaluations(
     )
     conn.commit()
     rule = BreakRule(
-        rule_id="r1", kpi_name="NPL", comparator=Comparator.GT,
-        threshold=Decimal("7"), unit=Unit.PERCENT, consecutive_periods=1,
-        narrative="NPL > 7", tier=RuleTier.BUSINESS_MODEL,
+        rule_id="r1",
+        kpi_name="NPL",
+        comparator=Comparator.GT,
+        threshold=Decimal("7"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="NPL > 7",
+        tier=RuleTier.BUSINESS_MODEL,
     )
-    obs = KpiObservation(
-        period_end=datetime(2025, 12, 31), value=Decimal("8.5"), unit=Unit.PERCENT
-    )
+    obs = KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("8.5"), unit=Unit.PERCENT)
     eval_result = evaluate_rule(rule, [obs])
     verdict = ThesisVerdict(
-        ticker="NU", thesis="t", overall_status=BreachStatus.BREACH,
-        rule_evaluations=(eval_result,), evaluated_at=datetime(2026, 5, 1),
+        ticker="NU",
+        thesis="t",
+        overall_status=BreachStatus.BREACH,
+        rule_evaluations=(eval_result,),
+        evaluated_at=datetime(2026, 5, 1),
     )
     persist_verdict(conn, verdict, run_id="x")
 
@@ -531,8 +591,12 @@ def test_break_rule_rejects_zero_consecutive_periods() -> None:
     """consecutive_periods must be >= 1 (Pydantic enforces)."""
     with pytest.raises(ValueError):
         BreakRule(
-            rule_id="x", kpi_name="X", comparator=Comparator.LT,
-            threshold=Decimal("1"), unit=Unit.PERCENT, consecutive_periods=0,
+            rule_id="x",
+            kpi_name="X",
+            comparator=Comparator.LT,
+            threshold=Decimal("1"),
+            unit=Unit.PERCENT,
+            consecutive_periods=0,
             narrative="x",
         )
 
@@ -679,10 +743,14 @@ def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
     (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
     # 12 quarters: baseline year ~100, growth year +50%, then 3Q of decelerating growth.
     periods = [
-        ("2022-03-31", 100.0), ("2022-06-30", 100.0),
-        ("2022-09-30", 100.0), ("2022-12-31", 100.0),
-        ("2023-03-31", 150.0), ("2023-06-30", 150.0),
-        ("2023-09-30", 150.0), ("2023-12-31", 150.0),
+        ("2022-03-31", 100.0),
+        ("2022-06-30", 100.0),
+        ("2022-09-30", 100.0),
+        ("2022-12-31", 100.0),
+        ("2023-03-31", 150.0),
+        ("2023-06-30", 150.0),
+        ("2023-09-30", 150.0),
+        ("2023-12-31", 150.0),
         ("2024-03-31", 170.0),  # 13.3% YoY
         ("2024-06-30", 155.0),  # 3.3% YoY — decel 1000bps
         ("2024-09-30", 148.0),  # -1.3% YoY — decel 460bps
@@ -705,9 +773,13 @@ def test_evaluate_ticker_thesis_hard_breach_outranks_soft_yellow(
         "thesis": "...",
         "break_rules": [
             {
-                "rule_id": "rev_decline", "kpi_name": "Revenue YoY Growth (USD)",
-                "comparator": "lt", "threshold": 0, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "Revenue YoY < 0",
+                "rule_id": "rev_decline",
+                "kpi_name": "Revenue YoY Growth (USD)",
+                "comparator": "lt",
+                "threshold": 0,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Revenue YoY < 0",
             },
         ],
         "break_rules_soft": [
@@ -715,7 +787,12 @@ def test_evaluate_ticker_thesis_hard_breach_outranks_soft_yellow(
                 "name": "any_soft",
                 "predicate": {
                     "type": "series_below",
-                    "params": {"metric": "fcf_margin", "source": "kpi", "threshold": 100, "periods": 1},
+                    "params": {
+                        "metric": "fcf_margin",
+                        "source": "kpi",
+                        "threshold": 100,
+                        "periods": 1,
+                    },
                 },
             }
         ],
@@ -875,9 +952,13 @@ def test_evaluate_ticker_thesis_resolves_short_break_rule_label(
         "thesis": "...",
         "business_model_rules": [
             {
-                "rule_id": "arpac_below_20", "kpi_name": "Monthly ARPAC",
-                "comparator": "lt", "threshold": 20, "unit": "percent",
-                "consecutive_periods": 1, "narrative": "Monthly ARPAC < 20",
+                "rule_id": "arpac_below_20",
+                "kpi_name": "Monthly ARPAC",
+                "comparator": "lt",
+                "threshold": 20,
+                "unit": "percent",
+                "consecutive_periods": 1,
+                "narrative": "Monthly ARPAC < 20",
             }
         ],
     }
@@ -889,3 +970,174 @@ def test_evaluate_ticker_thesis_resolves_short_break_rule_label(
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     assert verdict.overall_status == BreachStatus.BREACH
     assert verdict.rule_evaluations[0].observations[0].value == Decimal("11")
+
+
+# ---------------------------------------------------------------------------
+# Unit reconciliation — a rule's threshold is in the rule's declared unit, but
+# the kpi_facts may be stored in a different one (the LLM extractor picks a unit
+# per call). evaluate_rule reconciles each observation to the rule's unit before
+# comparing, so a money KPI stored as raw dollars (unit=actual) is still checked
+# against a `<80` threshold in millions. Without this the bare-number compare
+# `115_000_000 < 80` is always False and the rule can never fire.
+# ---------------------------------------------------------------------------
+
+
+def test_convert_unit_identity_is_exact() -> None:
+    """Same unit returns the value unchanged (no float drift — Decimal in/out)."""
+    assert convert_unit(Decimal("42.5"), Unit.PERCENT, Unit.PERCENT) == Decimal("42.5")
+
+
+def test_convert_unit_rescales_within_magnitude_family() -> None:
+    """actual/thousands/millions/billions rescale by powers of ten."""
+    assert convert_unit(Decimal("115000000"), Unit.ACTUAL, Unit.MILLIONS) == Decimal("115")
+    assert convert_unit(Decimal("80"), Unit.MILLIONS, Unit.ACTUAL) == Decimal("80000000")
+    assert convert_unit(Decimal("2.5"), Unit.BILLIONS, Unit.MILLIONS) == Decimal("2500")
+    assert convert_unit(Decimal("5000"), Unit.THOUSANDS, Unit.MILLIONS) == Decimal("5")
+
+
+def test_convert_unit_rescales_within_proportion_family() -> None:
+    """ratio/percent/bps rescale through a common fraction base."""
+    assert convert_unit(Decimal("0.30"), Unit.RATIO, Unit.PERCENT) == Decimal("30")
+    assert convert_unit(Decimal("25"), Unit.PERCENT, Unit.RATIO) == Decimal("0.25")
+    assert convert_unit(Decimal("5"), Unit.PERCENT, Unit.BPS) == Decimal("500")
+    assert convert_unit(Decimal("250"), Unit.BPS, Unit.PERCENT) == Decimal("2.5")
+
+
+def test_convert_unit_returns_none_across_families() -> None:
+    """A money magnitude and a proportion (or a raw count) share no dimension —
+    no conversion, so the caller treats the rule as unevaluable."""
+    assert convert_unit(Decimal("100"), Unit.ACTUAL, Unit.PERCENT) is None
+    assert convert_unit(Decimal("5"), Unit.MILLIONS, Unit.RATIO) is None
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.PERCENT) is None
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.MILLIONS) is None
+
+
+def test_convert_unit_count_only_converts_to_itself() -> None:
+    """count is dimensionless-but-not-a-proportion: identity only."""
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.COUNT) == Decimal("2805")
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.ACTUAL) is None
+
+
+def test_evaluate_rule_reconciles_magnitude_units_before_compare() -> None:
+    """The RBRK net-new-ARR class: facts stored as raw dollars (unit=actual)
+    against a rule threshold in millions. Pre-fix `115_000_000 < 80` was always
+    False, so the rule could never fire; reconciliation compares 115 (millions)
+    vs 80 — and a real $50M reading now correctly breaches."""
+    rule = BreakRule(
+        rule_id="rbrk_net_new_sub_arr_below_80m",
+        kpi_name="Net New Subscription ARR (USD millions)",
+        comparator=Comparator.LT,
+        threshold=Decimal("80"),
+        unit=Unit.MILLIONS,
+        consecutive_periods=1,
+        narrative="net new sub ARR < $80M",
+    )
+    healthy = [
+        KpiObservation(
+            period_end=datetime(2027, 1, 31), value=Decimal("115000000"), unit=Unit.ACTUAL
+        )
+    ]
+    result = evaluate_rule(rule, healthy)
+    assert result.status == BreachStatus.OK
+    # Persisted evidence reads in the rule's unit, not raw dollars — so the §2
+    # brief panel shows "115 millions" against a "<80" threshold, not "115000000".
+    assert result.observations[0].value == Decimal("115")
+    assert result.observations[0].unit == Unit.MILLIONS
+
+    broken = [
+        KpiObservation(
+            period_end=datetime(2027, 1, 31), value=Decimal("50000000"), unit=Unit.ACTUAL
+        )
+    ]
+    breach = evaluate_rule(rule, broken)
+    assert breach.status == BreachStatus.BREACH  # 50 < 80 — the rule can finally fire
+    assert breach.observations[0].value == Decimal("50")
+
+
+def test_evaluate_rule_reconciles_proportion_units_before_compare() -> None:
+    """A rule in percent whose KPI was stored as a ratio (0.28) must compare as
+    28 vs the percent threshold, not 0.28 — otherwise a healthy 28% ROE would
+    read as a breach of a `<25%` rule."""
+    rule = BreakRule(
+        rule_id="roe_below_25",
+        kpi_name="ROE",
+        comparator=Comparator.LT,
+        threshold=Decimal("25"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="ROE < 25%",
+    )
+    obs = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("0.28"), unit=Unit.RATIO)
+    ]
+    result = evaluate_rule(rule, obs)
+    assert result.status == BreachStatus.OK  # 28% > 25%, not a breach
+    assert result.observations[0].value == Decimal("28")
+    assert result.observations[0].unit == Unit.PERCENT
+
+
+def test_evaluate_rule_unresolved_on_cross_family_unit_mismatch() -> None:
+    """A rule declared in percent whose KPI resolved to a raw count can't be
+    compared on mismatched dimensions — UNRESOLVED (not a blind compare), with
+    the raw observation preserved as evidence so the data gap stays visible."""
+    rule = BreakRule(
+        rule_id="large_customer_growth_below_15",
+        kpi_name="Customers >$100K ARR YoY Growth",
+        comparator=Comparator.LT,
+        threshold=Decimal("15"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="large-customer growth < 15%",
+    )
+    obs = [KpiObservation(period_end=datetime(2027, 1, 31), value=Decimal("2805"), unit=Unit.COUNT)]
+    result = evaluate_rule(rule, obs)
+    assert result.status == BreachStatus.UNRESOLVED
+    assert "convertible" in result.detail
+    # Raw evidence preserved (not reconciled) so the mismatch is inspectable.
+    assert result.observations[0].value == Decimal("2805")
+    assert result.observations[0].unit == Unit.COUNT
+
+
+def test_evaluate_ticker_thesis_reconciles_units_end_to_end(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """End-to-end: a rule in millions against a kpi_fact stored as raw dollars
+    (unit=actual) evaluates correctly and persists evidence in the rule's unit."""
+    payload = {
+        "ticker": "RBRK",
+        "thesis": "...",
+        "business_model_rules": [
+            {
+                "rule_id": "rbrk_net_new_sub_arr_below_80m",
+                "kpi_name": "Net new subscription ARR ($)",
+                "comparator": "lt",
+                "threshold": 80,
+                "unit": "millions",
+                "consecutive_periods": 1,
+                "narrative": "net new sub ARR < $80M",
+            }
+        ],
+    }
+    (tmp_path / "RBRK.json").write_text(json.dumps(payload), encoding="utf-8")
+    # Stored as raw dollars with unit=actual — exactly how the LLM extractor
+    # persists "$50M" (it converts the figure but labels it actual).
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES ('RBRK', 'Net new subscription ARR ($)', 'actual', 'llm_extracted')"
+    )
+    kpi_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='RBRK' AND name='Net new subscription ARR ($)'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+        "kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES ('RBRK', '2027-01-31', 'Q4', ?, '50000000', 'actual', 1)",
+        (kpi_id,),
+    )
+    conn.commit()
+
+    verdict = evaluate_ticker_thesis(conn, ticker="RBRK", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.BREACH  # $50M < $80M
+    obs = verdict.rule_evaluations[0].observations[0]
+    assert obs.value == Decimal("50")  # reconciled to millions
+    assert obs.unit == Unit.MILLIONS
