@@ -18,6 +18,7 @@ from compute.thesis_evaluator import (
     ThesisVerdict,
     _fetch_kpi_history,
     _rollup_status,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    convert_unit,
     evaluate_rule,
     evaluate_ticker_thesis,
     load_holdings_spec,
@@ -969,3 +970,174 @@ def test_evaluate_ticker_thesis_resolves_short_break_rule_label(
     verdict = evaluate_ticker_thesis(conn, ticker="NU", holdings_dir=tmp_path)
     assert verdict.overall_status == BreachStatus.BREACH
     assert verdict.rule_evaluations[0].observations[0].value == Decimal("11")
+
+
+# ---------------------------------------------------------------------------
+# Unit reconciliation — a rule's threshold is in the rule's declared unit, but
+# the kpi_facts may be stored in a different one (the LLM extractor picks a unit
+# per call). evaluate_rule reconciles each observation to the rule's unit before
+# comparing, so a money KPI stored as raw dollars (unit=actual) is still checked
+# against a `<80` threshold in millions. Without this the bare-number compare
+# `115_000_000 < 80` is always False and the rule can never fire.
+# ---------------------------------------------------------------------------
+
+
+def test_convert_unit_identity_is_exact() -> None:
+    """Same unit returns the value unchanged (no float drift — Decimal in/out)."""
+    assert convert_unit(Decimal("42.5"), Unit.PERCENT, Unit.PERCENT) == Decimal("42.5")
+
+
+def test_convert_unit_rescales_within_magnitude_family() -> None:
+    """actual/thousands/millions/billions rescale by powers of ten."""
+    assert convert_unit(Decimal("115000000"), Unit.ACTUAL, Unit.MILLIONS) == Decimal("115")
+    assert convert_unit(Decimal("80"), Unit.MILLIONS, Unit.ACTUAL) == Decimal("80000000")
+    assert convert_unit(Decimal("2.5"), Unit.BILLIONS, Unit.MILLIONS) == Decimal("2500")
+    assert convert_unit(Decimal("5000"), Unit.THOUSANDS, Unit.MILLIONS) == Decimal("5")
+
+
+def test_convert_unit_rescales_within_proportion_family() -> None:
+    """ratio/percent/bps rescale through a common fraction base."""
+    assert convert_unit(Decimal("0.30"), Unit.RATIO, Unit.PERCENT) == Decimal("30")
+    assert convert_unit(Decimal("25"), Unit.PERCENT, Unit.RATIO) == Decimal("0.25")
+    assert convert_unit(Decimal("5"), Unit.PERCENT, Unit.BPS) == Decimal("500")
+    assert convert_unit(Decimal("250"), Unit.BPS, Unit.PERCENT) == Decimal("2.5")
+
+
+def test_convert_unit_returns_none_across_families() -> None:
+    """A money magnitude and a proportion (or a raw count) share no dimension —
+    no conversion, so the caller treats the rule as unevaluable."""
+    assert convert_unit(Decimal("100"), Unit.ACTUAL, Unit.PERCENT) is None
+    assert convert_unit(Decimal("5"), Unit.MILLIONS, Unit.RATIO) is None
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.PERCENT) is None
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.MILLIONS) is None
+
+
+def test_convert_unit_count_only_converts_to_itself() -> None:
+    """count is dimensionless-but-not-a-proportion: identity only."""
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.COUNT) == Decimal("2805")
+    assert convert_unit(Decimal("2805"), Unit.COUNT, Unit.ACTUAL) is None
+
+
+def test_evaluate_rule_reconciles_magnitude_units_before_compare() -> None:
+    """The RBRK net-new-ARR class: facts stored as raw dollars (unit=actual)
+    against a rule threshold in millions. Pre-fix `115_000_000 < 80` was always
+    False, so the rule could never fire; reconciliation compares 115 (millions)
+    vs 80 — and a real $50M reading now correctly breaches."""
+    rule = BreakRule(
+        rule_id="rbrk_net_new_sub_arr_below_80m",
+        kpi_name="Net New Subscription ARR (USD millions)",
+        comparator=Comparator.LT,
+        threshold=Decimal("80"),
+        unit=Unit.MILLIONS,
+        consecutive_periods=1,
+        narrative="net new sub ARR < $80M",
+    )
+    healthy = [
+        KpiObservation(
+            period_end=datetime(2027, 1, 31), value=Decimal("115000000"), unit=Unit.ACTUAL
+        )
+    ]
+    result = evaluate_rule(rule, healthy)
+    assert result.status == BreachStatus.OK
+    # Persisted evidence reads in the rule's unit, not raw dollars — so the §2
+    # brief panel shows "115 millions" against a "<80" threshold, not "115000000".
+    assert result.observations[0].value == Decimal("115")
+    assert result.observations[0].unit == Unit.MILLIONS
+
+    broken = [
+        KpiObservation(
+            period_end=datetime(2027, 1, 31), value=Decimal("50000000"), unit=Unit.ACTUAL
+        )
+    ]
+    breach = evaluate_rule(rule, broken)
+    assert breach.status == BreachStatus.BREACH  # 50 < 80 — the rule can finally fire
+    assert breach.observations[0].value == Decimal("50")
+
+
+def test_evaluate_rule_reconciles_proportion_units_before_compare() -> None:
+    """A rule in percent whose KPI was stored as a ratio (0.28) must compare as
+    28 vs the percent threshold, not 0.28 — otherwise a healthy 28% ROE would
+    read as a breach of a `<25%` rule."""
+    rule = BreakRule(
+        rule_id="roe_below_25",
+        kpi_name="ROE",
+        comparator=Comparator.LT,
+        threshold=Decimal("25"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="ROE < 25%",
+    )
+    obs = [
+        KpiObservation(period_end=datetime(2025, 12, 31), value=Decimal("0.28"), unit=Unit.RATIO)
+    ]
+    result = evaluate_rule(rule, obs)
+    assert result.status == BreachStatus.OK  # 28% > 25%, not a breach
+    assert result.observations[0].value == Decimal("28")
+    assert result.observations[0].unit == Unit.PERCENT
+
+
+def test_evaluate_rule_unresolved_on_cross_family_unit_mismatch() -> None:
+    """A rule declared in percent whose KPI resolved to a raw count can't be
+    compared on mismatched dimensions — UNRESOLVED (not a blind compare), with
+    the raw observation preserved as evidence so the data gap stays visible."""
+    rule = BreakRule(
+        rule_id="large_customer_growth_below_15",
+        kpi_name="Customers >$100K ARR YoY Growth",
+        comparator=Comparator.LT,
+        threshold=Decimal("15"),
+        unit=Unit.PERCENT,
+        consecutive_periods=1,
+        narrative="large-customer growth < 15%",
+    )
+    obs = [KpiObservation(period_end=datetime(2027, 1, 31), value=Decimal("2805"), unit=Unit.COUNT)]
+    result = evaluate_rule(rule, obs)
+    assert result.status == BreachStatus.UNRESOLVED
+    assert "convertible" in result.detail
+    # Raw evidence preserved (not reconciled) so the mismatch is inspectable.
+    assert result.observations[0].value == Decimal("2805")
+    assert result.observations[0].unit == Unit.COUNT
+
+
+def test_evaluate_ticker_thesis_reconciles_units_end_to_end(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """End-to-end: a rule in millions against a kpi_fact stored as raw dollars
+    (unit=actual) evaluates correctly and persists evidence in the rule's unit."""
+    payload = {
+        "ticker": "RBRK",
+        "thesis": "...",
+        "business_model_rules": [
+            {
+                "rule_id": "rbrk_net_new_sub_arr_below_80m",
+                "kpi_name": "Net new subscription ARR ($)",
+                "comparator": "lt",
+                "threshold": 80,
+                "unit": "millions",
+                "consecutive_periods": 1,
+                "narrative": "net new sub ARR < $80M",
+            }
+        ],
+    }
+    (tmp_path / "RBRK.json").write_text(json.dumps(payload), encoding="utf-8")
+    # Stored as raw dollars with unit=actual — exactly how the LLM extractor
+    # persists "$50M" (it converts the figure but labels it actual).
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
+        "VALUES ('RBRK', 'Net new subscription ARR ($)', 'actual', 'llm_extracted')"
+    )
+    kpi_id = conn.execute(
+        "SELECT id FROM kpi_definitions WHERE ticker='RBRK' AND name='Net new subscription ARR ($)'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+        "kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES ('RBRK', '2027-01-31', 'Q4', ?, '50000000', 'actual', 1)",
+        (kpi_id,),
+    )
+    conn.commit()
+
+    verdict = evaluate_ticker_thesis(conn, ticker="RBRK", holdings_dir=tmp_path)
+    assert verdict.overall_status == BreachStatus.BREACH  # $50M < $80M
+    obs = verdict.rule_evaluations[0].observations[0]
+    assert obs.value == Decimal("50")  # reconciled to millions
+    assert obs.unit == Unit.MILLIONS

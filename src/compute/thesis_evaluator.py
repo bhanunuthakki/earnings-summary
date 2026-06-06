@@ -258,12 +258,66 @@ def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool
     raise ValueError(f"Unhandled comparator: {comparator}")
 
 
+# Unit reconciliation ------------------------------------------------------
+#
+# A rule's `threshold` is expressed in the rule's declared `unit`; the kpi_facts
+# that satisfy it may be stored in a DIFFERENT unit, because the LLM extractor
+# picks a per-call unit independent of the rule (e.g. net-new ARR stored as raw
+# dollars `unit=actual` while the rule threshold is `<80` in `millions`).
+# Comparing the bare numbers then silently misfires: `115_000_000 < 80` is always
+# False, so the rule can never breach. We reconcile every observation to the
+# rule's unit before comparing — and before persisting it as evidence, so the §2
+# brief panel shows the value in the same unit as the threshold.
+#
+# Two convertible families. Within a family a value is rescaled by the ratio of
+# magnitudes. ACROSS families (a money magnitude vs a proportion vs a count)
+# there is no dimensionally-valid conversion — the rule is left unevaluable
+# rather than compared on mismatched dimensions.
+_MAGNITUDE_SCALE: dict[Unit, Decimal] = {
+    Unit.ACTUAL: Decimal(1),
+    Unit.THOUSANDS: Decimal(1_000),
+    Unit.MILLIONS: Decimal(1_000_000),
+    Unit.BILLIONS: Decimal(1_000_000_000),
+}
+# Scale to a common "ratio" base: 1 ratio = 100 percent = 10_000 bps.
+_PROPORTION_SCALE: dict[Unit, Decimal] = {
+    Unit.RATIO: Decimal(1),
+    Unit.PERCENT: Decimal("0.01"),
+    Unit.BPS: Decimal("0.0001"),
+}
+
+
+def convert_unit(value: Decimal, from_unit: Unit, to_unit: Unit) -> Decimal | None:
+    """Express ``value`` (currently in ``from_unit``) in ``to_unit``.
+
+    Same unit is the identity (exact — Decimal, no float drift). A money/count
+    magnitude (actual/thousands/millions/billions) rescales by the ratio of its
+    powers of ten; a proportion (ratio/percent/bps) rescales through a common
+    fraction base. Returns ``None`` when the two units belong to different
+    families (e.g. a money magnitude vs a percentage, or anything vs a raw
+    count) — no dimensionally-valid conversion exists, so the caller must treat
+    the rule as unevaluable rather than compare blindly.
+    """
+    if from_unit is to_unit:
+        return value
+    for scale in (_MAGNITUDE_SCALE, _PROPORTION_SCALE):
+        if from_unit in scale and to_unit in scale:
+            return value * scale[from_unit] / scale[to_unit]
+    return None
+
+
 def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) -> RuleEvaluation:
     """Classify one rule given its observations.
 
+    Observations are first reconciled to the rule's declared unit (see
+    ``convert_unit``) so the comparison runs on the same dimension as the
+    threshold and the persisted evidence reads in the threshold's unit.
+
     UNRESOLVED: ``observations is None`` — the rule's KPI didn't resolve to any
-                kpi_facts definition, so the breaker can't be evaluated. Kept
-                distinct from OK so an unevaluable breaker isn't read as passing.
+                kpi_facts definition; OR an observation's stored unit can't be
+                converted to the rule's unit (cross-family mismatch). Either way
+                the breaker can't be evaluated — kept distinct from OK so an
+                unevaluable breaker isn't read as passing.
     BREACH: have >= consecutive_periods observations and ALL match the rule.
     WARN:   any observation matches but not all consecutive_periods of them.
     OK:     no observation matches the rule (incl. resolved-but-no-rows-yet).
@@ -285,6 +339,30 @@ def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) ->
             observations=(),
             detail="resolved, but no observations on file yet",
         )
+    # Reconcile each observation to the rule's declared unit so the comparison
+    # — and the evidence we persist for the §2 brief panel — is dimensionally
+    # consistent with the threshold. A cross-family unit (e.g. a money magnitude
+    # where the rule expects a percentage) has no valid conversion: surface it as
+    # UNRESOLVED rather than compare blindly, keeping the raw observations as
+    # evidence so the data gap is visible.
+    reconciled: list[KpiObservation] = []
+    for obs in observations:
+        converted = convert_unit(obs.value, obs.unit, rule.unit)
+        if converted is None:
+            return RuleEvaluation(
+                rule=rule,
+                status=BreachStatus.UNRESOLVED,
+                observations=tuple(observations),
+                detail=(
+                    f"unresolved: observation unit {obs.unit.value!r} is not "
+                    f"convertible to rule unit {rule.unit.value!r} — fix the "
+                    f"rule's declared unit or the KPI's stored unit"
+                ),
+            )
+        reconciled.append(
+            KpiObservation(period_end=obs.period_end, value=converted, unit=rule.unit)
+        )
+    observations = reconciled
     matches = [_compare(obs.value, rule.comparator, rule.threshold) for obs in observations]
     matching_count = sum(matches)
     obs_tuple = tuple(observations)
