@@ -31,6 +31,28 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 DB_PATH = os.path.join(DATA_DIR, "portfolio.db")
 FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
+
+def set_db_path(db_path: str | os.PathLike[str]) -> None:
+    """Re-point the module's data globals at an explicit portfolio DB.
+
+    A CLI that accepts ``--db-path`` MUST call this, because not every writer
+    threads an explicit ``db_path``: some resolve their DB from ``db.DB_PATH``
+    (notably the LLM call ledger, ``src/llm_call_ledger.py``, and anything that
+    falls back to it). Without this sync an explicit ``--db-path`` reaches only
+    the stores that take a ``db_path`` parameter, while the ledger silently
+    writes to the *default* DB — the "no such table: llm_calls" symptom seen
+    when running a trigger/news CLI from a worktree against the prod DB.
+
+    Re-derives ``DATA_DIR`` / ``FMP_DIR`` from the DB's parent so DB-adjacent
+    data resolves consistently. ``PROJECT_ROOT`` is left untouched: code,
+    templates, and holdings/micro_thesis files still resolve from the running
+    checkout even when the DB lives elsewhere.
+    """
+    global DB_PATH, DATA_DIR, FMP_DIR
+    DB_PATH = os.fspath(db_path)
+    DATA_DIR = os.path.dirname(DB_PATH)
+    FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
+
 # Tickers that share FMP files under an alternate name (canonical → file prefix)
 _FMP_ALIASES: dict[str, list[str]] = {
     "GOOG": ["GOOG", "GOOGL"],

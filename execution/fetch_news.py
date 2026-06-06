@@ -165,6 +165,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     db_path = cast("str", args.db_path) if args.db_path else DB_PATH
+    if args.db_path:
+        # Sync the global so the WebSearch+Opus path's LLM call ledger writes to
+        # the SAME DB as the news rows (it resolves from db.DB_PATH, which the
+        # explicit --db-path would otherwise bypass).
+        import db
+
+        db.set_db_path(db_path)
     tickers = (
         [t.upper() for t in cast("list[str]", args.tickers)]
         if args.tickers
