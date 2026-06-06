@@ -62,17 +62,23 @@ def test_draft_cleared_on_successful_post() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Server-down failure path keeps the draft on disk.
+# Server-down failure path doesn't silently lose the user's text. Originally
+# (Fix 1 alone) this was guaranteed by keeping the draft in localStorage.
+# With Fix 2 layered on, the outbox takes over: the catch branch enqueues
+# the payload and clears the draft (the outbox is now the source of truth).
+# The invariant tested here — "the user's text survives a server outage" —
+# is unchanged; only the mechanism moves up a layer.
 # ---------------------------------------------------------------------------
 
 
-def test_server_unreachable_keeps_draft_and_says_so() -> None:
-    # The .catch() branch must NOT call clearDraft — that would discard
-    # the user's text exactly when they most need to recover it.
+def test_server_unreachable_preserves_payload_via_outbox() -> None:
     catch_block = COMMENTS_JS.split(".catch(function(err)")[1].split("});")[0]
-    assert "clearDraft" not in catch_block, "server-down branch must not clear the draft"
-    # The hint should tell the user their text is safe on disk.
-    assert "draft saved locally" in COMMENTS_JS
+    # The text the user submitted is now durable via the outbox enqueue.
+    assert "enqueueOutbox(payload)" in catch_block, (
+        "server-down branch must enqueue the post into the outbox"
+    )
+    # And the user sees a "Queued" hint instead of "lost".
+    assert "Queued" in catch_block
 
 
 # ---------------------------------------------------------------------------
