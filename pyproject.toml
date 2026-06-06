@@ -103,6 +103,13 @@ reportUnknownMemberType = false
 # two report* relaxations above). Genuinely-dead module-level code is still
 # caught by ruff's F401/F811.
 reportUnusedFunction = false
+# Uppercase module-level paths (db.DB_PATH/DATA_DIR/FMP_DIR, registry._DB_PATH, …)
+# are intentionally MUTABLE — re-pointed by setter functions (db.set_db_path,
+# sources.registry.set_db_path) so a CLI's --db-path/--repo-root reaches writers
+# that resolve from the global. pyright's "all-caps == constant" heuristic
+# false-flags every such setter (12 instances repo-wide). Disable it (same spirit
+# as the relaxations above); accidental redefinition is still caught in review.
+reportConstantRedefinition = false
 
 [tool.basedpyright]
 include = ["src", "execution", "tests"]

@@ -77,22 +77,30 @@ def _emit(event: dict[str, object]) -> None:
 # --------------------------------------------------------------------------
 
 
-def _resolve_db_path(override: Path | None) -> Path:
+def resolve_db_path(override: Path | None) -> Path:
     """Resolve the portfolio DB path, preferring an explicit override.
 
     Falls back to ``db.DB_PATH`` (which lives at
     ``data/portfolio.db`` under the project root). Raises if neither
     resolves to an existing file — the driver is a primary-write path
     and a missing DB is a hard error, not a silent skip.
+
+    When an explicit override is given, it is also synced into ``db.DB_PATH``
+    via ``db.set_db_path`` so writers that resolve their DB from the global
+    (above all the LLM call ledger) write to the SAME DB as the alert/user_state
+    stores — otherwise an LLM-backed trigger's cost rows land in the default DB.
     """
+    import db
+
     if override is not None:
         path = override
+        if not path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {path}")
+        db.set_db_path(path)
     else:
-        from db import DB_PATH
-
-        path = Path(DB_PATH)
-    if not path.exists():
-        raise FileNotFoundError(f"SQLite DB does not exist: {path}")
+        path = Path(db.DB_PATH)
+        if not path.exists():
+            raise FileNotFoundError(f"SQLite DB does not exist: {path}")
     return path
 
 
@@ -653,7 +661,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _parse_args(argv)
 
-    db_path = _resolve_db_path(args.db_path)
+    db_path = resolve_db_path(args.db_path)
 
     ticker_list = _split_csv(args.tickers)
     tickers = (
