@@ -290,3 +290,28 @@ def test_api_dcf_sheet_linked_returns_url(client, tmp_path):
     body = client.get("/api/dcf-sheet/TEST").get_json()
     assert body["sheet_id"] == "SHEET99"
     assert body["url"] == "https://docs.google.com/spreadsheets/d/SHEET99/edit"
+
+
+def test_dcf_route_redirects_to_sheet_when_linked(client, tmp_path):
+    # A linked Sheet wins over a local .xlsx: the brief's /dcf/<T> link opens the
+    # editable Google Sheet instead of downloading the workbook.
+    holdings = tmp_path / "micro_thesis" / "holdings" / "TEST.json"
+    holdings.parent.mkdir(parents=True, exist_ok=True)
+    holdings.write_text(json.dumps({"ticker": "TEST", "dcf_defaults": {"gsheet_id": "SHEET99"}}))
+    dcf_dir = tmp_path / "dcf"
+    dcf_dir.mkdir()
+    (dcf_dir / "TEST.xlsx").write_bytes(
+        b"PK\x03\x04 fake xlsx bytes"
+    )  # present but should be bypassed
+    resp = client.get("/dcf/TEST")  # Flask test client does not follow redirects
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "https://docs.google.com/spreadsheets/d/SHEET99/edit"
+
+
+def test_dcf_route_streams_xlsx_when_unlinked(client, tmp_path):
+    # No gsheet_id → fall back to streaming the local workbook (200, no redirect).
+    dcf_dir = tmp_path / "dcf"
+    dcf_dir.mkdir()
+    (dcf_dir / "TEST.xlsx").write_bytes(b"PK\x03\x04 fake xlsx bytes")
+    resp = client.get("/dcf/TEST")
+    assert resp.status_code == 200
