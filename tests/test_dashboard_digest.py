@@ -9,6 +9,7 @@ production creates them. Mirrors the pattern in
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -57,6 +58,56 @@ def test_empty_db_renders_quiet_message(db_path: Path) -> None:
     assert "Upcoming this week" in html
     assert "Recent thesis changes" in html
     assert "No thesis-ledger entries yet" in html
+
+
+def _seed_calendar(db_path: Path) -> None:
+    """Create + seed tracked_companies + earnings_surprises (init_db tables not in
+    the stamp-at-0059 fixture) for the upcoming-earnings estimate."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            "CREATE TABLE IF NOT EXISTS tracked_companies (ticker TEXT, name TEXT, "
+            "list_type TEXT, archived_at TEXT, fiscal_year_end TEXT);"
+            "CREATE TABLE IF NOT EXISTS earnings_surprises (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ticker TEXT, release_date TEXT, eps_estimate REAL, eps_actual REAL);"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) VALUES (?,?,?,?)",
+            [
+                ("NU", "Nu Holdings", "portfolio", None),
+                ("ORCL", "Oracle", "evaluation", None),
+                ("ZZ", "Watch Co", "watchlist", None),  # excluded by list_type
+            ],
+        )
+        # NU: last release 80d before TODAY -> est +91 = TODAY+11 (within 14d) -> shown.
+        # ORCL: last release 5d before TODAY -> est +91 ~ TODAY+86 (beyond horizon) -> hidden.
+        # ZZ: within horizon but a watchlist name -> hidden.
+        conn.executemany(
+            "INSERT INTO earnings_surprises (ticker, release_date) VALUES (?,?)",
+            [
+                ("NU", (TODAY - timedelta(days=80)).isoformat()),
+                ("ORCL", (TODAY - timedelta(days=5)).isoformat()),
+                ("ZZ", (TODAY - timedelta(days=80)).isoformat()),
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None:
+    """The 'Upcoming this week' section surfaces tracked names whose estimated next
+    earnings (latest release + ~1 quarter) land within the horizon — and excludes
+    far-out estimates and non-portfolio/evaluation names."""
+    _seed_calendar(db_path)
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert "est. next earnings" in html
+    assert "NU" in html
+    assert (TODAY - timedelta(days=80) + timedelta(days=91)).isoformat() in html  # est date
+    # ORCL is beyond the horizon; ZZ is a watchlist name — neither appears as upcoming.
+    assert "est. next earnings</span></li>" in html
+    # Exactly one upcoming item (NU).
+    assert html.count("upcoming-item") == 1
 
 
 # ----------------------------------------------------------------------------

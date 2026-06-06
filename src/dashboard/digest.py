@@ -5,7 +5,7 @@ One self-contained HTML page per day with five sections:
   1. Header                     — date + "what's new since yesterday" label
   2. What's new (last 24h)      — pending alerts fired in the window
   3. Outstanding queued actions — pending actions whose alert is outside (2)
-  4. Upcoming this week         — honest stub ("no calendar integration yet"):
+  4. Upcoming this week         — estimated next-earnings for tracked names
                                    no upcoming-earnings data source is persisted
                                    (earnings_surprises holds only past releases)
   5. Recent thesis changes      — the cross-holding thesis-ledger panel: the
@@ -76,7 +76,7 @@ def render_morning_digest(
     _render_header(body, date)
     _render_whats_new(body, pending_alerts, actions_per_alert)
     _render_outstanding(body, outstanding_actions)
-    _render_upcoming_stub(body)
+    _render_upcoming(body, date, db_path)
     _render_thesis_ledger(body, user_id, db_path)
     _render_footer(body, date)
     body.write("</div>")
@@ -163,17 +163,85 @@ def _render_outstanding(body: StringIO, actions: list[QueuedActionRow]) -> None:
     body.write("</section>")
 
 
-def _render_upcoming_stub(body: StringIO) -> None:
+# There is no future-earnings calendar table; estimate each tracked name's next
+# report as its latest known release + one quarter, and surface those landing in
+# the next two weeks. Honest approximation (labelled "est."), built from the
+# earnings_surprises history that already exists — no new fetch / cron.
+_NEXT_EARNINGS_GAP_DAYS = 91
+_UPCOMING_HORIZON_DAYS = 14
+
+
+def _upcoming_earnings(
+    db_path: Path | None, today: date, *, horizon_days: int = _UPCOMING_HORIZON_DAYS
+) -> list[tuple[str, date]]:
+    """Estimated next-earnings dates within the horizon for tracked names.
+
+    Best-effort: a missing DB / table yields ``[]`` so the digest degrades to an
+    empty-state rather than raising. Read-only.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        rows = conn.execute(
+            """
+            SELECT es.ticker, MAX(es.release_date) AS last_release
+            FROM earnings_surprises es
+            JOIN tracked_companies tc
+              ON tc.ticker = es.ticker
+             AND tc.archived_at IS NULL
+             AND tc.list_type IN ('portfolio', 'evaluation')
+            WHERE es.release_date IS NOT NULL
+            GROUP BY es.ticker
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    horizon_end = today + timedelta(days=horizon_days)
+    out: list[tuple[str, date]] = []
+    for ticker, last_release in rows:
+        try:
+            last = date.fromisoformat(str(last_release)[:10])
+        except (ValueError, TypeError):
+            continue
+        est = last + timedelta(days=_NEXT_EARNINGS_GAP_DAYS)
+        if today <= est <= horizon_end:
+            out.append((str(ticker), est))
+    out.sort(key=lambda t: (t[1], t[0]))
+    return out
+
+
+def _render_upcoming(body: StringIO, render_date: date, db_path: Path | None) -> None:
+    """'Upcoming this week' — tracked names whose ESTIMATED next earnings (latest
+    release + ~1 quarter) land within the next two weeks. Replaces the old
+    no-calendar stub with a real, data-backed (if approximate) forward look."""
+    upcoming = _upcoming_earnings(db_path, render_date)
     body.write('<section class="dash-section dash-upcoming">')
     body.write('<div class="dash-section-header">')
     body.write('<div class="dash-section-title">Upcoming this week</div>')
+    body.write(f'<div class="dash-section-count">{len(upcoming)} est.</div>')
     body.write("</div>")
-    body.write(
-        '<div class="empty-state">'
-        "No calendar integration yet — earnings dates and SayDo verdicts "
-        "will surface here once a later PR wires the source."
-        "</div>"
-    )
+    if not upcoming:
+        body.write(
+            '<div class="empty-state">No estimated earnings in the next two weeks for '
+            "tracked names.</div>"
+        )
+        body.write("</section>")
+        return
+    body.write('<ul class="upcoming-list">')
+    for ticker, est in upcoming:
+        body.write(
+            '<li class="upcoming-item">'
+            f'<span class="up-ticker">{_esc(ticker)}</span> '
+            f'<span class="up-date">~{_esc(est.isoformat())}</span> '
+            '<span class="up-note">est. next earnings</span></li>'
+        )
+    body.write("</ul>")
     body.write("</section>")
 
 
