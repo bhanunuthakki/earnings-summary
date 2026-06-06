@@ -41,6 +41,7 @@ from report.models import (
     RecentDevelopmentsSection,
     SayDoCard,
 )
+from report.renderers.charts_v2 import fmt_compact
 
 # Editorial-typography characters hoisted to module constants so the call
 # sites don't trip ruff's RUF001 (ambiguous unicode in code). Built via chr()
@@ -162,9 +163,7 @@ def filter_important_print_vs_guide(
     if cached is None:
         try:
             quarter_label = f"{card.current_quarter} {card.current_year}"
-            raw = generate_saydo_filter(
-                ticker, quarter_label, payload, anchor_block=anchor_block
-            )
+            raw = generate_saydo_filter(ticker, quarter_label, payload, anchor_block=anchor_block)
             cached = _parse_saydo_filter_response(raw)
             _save_saydo_filter_cache(repo_root, ticker, cache_key, cached)
         except Exception:
@@ -464,14 +463,86 @@ class KpiStripTile:
 
 _PCT_HINT_RX = re.compile(r"%|margin|growth|rate|share", re.IGNORECASE)
 _RATIO_HINT_RX = re.compile(r"ratio|multiple|coverage", re.IGNORECASE)
+# Names denoting a *count* of things (members, not money) so the strip
+# humanizes them without a "$" prefix. Checked only after the percent/ratio
+# hints, so "customer growth rate" still reads as a percentage.
+_COUNT_HINT_RX = re.compile(
+    r"\b(?:customers?|subscribers?|members?|users?|accounts?|merchants?|"
+    r"stores?|seats?|employees?|headcount|units?)\b",
+    re.IGNORECASE,
+)
+# Unit strings (post-`_unit_label` normalization, plus raw holdings-JSON units)
+# decisive enough to classify a value ahead of the name hints.
+_STRIP_PCT_UNITS = frozenset({"%", "percent", "pct", "pp"})
+_STRIP_RATIO_UNITS = frozenset({"ratio", "x", _TIMES, "multiple"})
+_STRIP_MONEY_UNITS = frozenset({"usd", "$", "dollar", "dollars"})
+
+
+def _kpi_strip_kind(unit: str | None, name: str) -> str:
+    """Classify a strip KPI's value: ``'pct'`` | ``'bps'`` | ``'ratio'`` |
+    ``'count'`` | ``'money'``.
+
+    A decisive unit wins; otherwise the name hints decide. Anything that isn't
+    a percent, ratio, or count falls through to ``'money'`` — the common case
+    for a tier-1 headline KPI (revenue, FCF, RPO, backlog), so a raw level like
+    ``364000000000.0`` humanizes to ``$364.0B`` instead of rendering as a bare
+    twelve-digit float."""
+    u = (unit or "").strip().lower()
+    if u == "bps":
+        return "bps"
+    if u in _STRIP_PCT_UNITS or "%" in u or "margin" in u:
+        return "pct"
+    if u in _STRIP_RATIO_UNITS:
+        return "ratio"
+    if u == "count":
+        return "count"
+    if u in _STRIP_MONEY_UNITS:
+        return "money"
+    # No decisive unit — read the name. Percent/ratio hints first so a
+    # "customer growth rate" reads as a percentage, not a head count.
+    if _PCT_HINT_RX.search(name) and not _RATIO_HINT_RX.search(name):
+        return "pct"
+    if _RATIO_HINT_RX.search(name):
+        return "ratio"
+    if _COUNT_HINT_RX.search(name):
+        return "count"
+    return "money"
+
+
+def _fmt_strip_value(v: float, kind: str) -> str:
+    """Humanize a strip KPI's latest level for its kind."""
+    if kind == "pct":
+        return f"{v:.0f}%"
+    if kind == "bps":
+        return f"{v:.0f} bps"
+    if kind == "ratio":
+        return f"{v:.2f}{_TIMES}"
+    body = fmt_compact(v)
+    return f"${body}" if kind == "money" else body
+
+
+def _fmt_strip_delta(magnitude: float, kind: str) -> str:
+    """Humanize the absolute quarter-over-quarter move (the caller renders the
+    arrow). Levels show the compact absolute change (``$120.0B``); rates show
+    points; ratios show the bare absolute move."""
+    if kind == "pct":
+        return f"{magnitude:.1f}pp"
+    if kind == "bps":
+        return f"{magnitude:.0f} bps"
+    if kind == "ratio":
+        return f"{magnitude:.2f}"
+    body = fmt_compact(magnitude)
+    return f"${body}" if kind == "money" else body
 
 
 def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]:
     """Pick up-to-N tier-1 KPIs with enough history for a sparkline.
 
-    Drops rows that have ``None`` in every history slot. Formatting heuristic:
-    percent for KPIs whose name mentions margin/growth/rate, ratio multiplier
-    for KPIs containing ratio/multiple, otherwise raw with one decimal.
+    Drops rows whose history is entirely ``None``. Values are humanized by kind
+    (see ``_kpi_strip_kind``): percent (``42%``), ratio (``1.23×``), or a
+    compact currency / count level (``$364.0B``, ``118.0M``) — never a bare
+    multi-digit float. The delta is the absolute quarter-over-quarter move,
+    formatted in the same kind.
     """
     tiles: list[KpiStripTile] = []
     for row in rows:
@@ -482,19 +553,11 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
             continue
         values = [v for _, v in history]
         labels = [d for d, _ in history]
-        is_pct = bool(_PCT_HINT_RX.search(row.name)) and not _RATIO_HINT_RX.search(row.name)
-        is_ratio = bool(_RATIO_HINT_RX.search(row.name))
-
-        def _fmt(v: float, *, _pct: bool = is_pct, _ratio: bool = is_ratio) -> str:
-            if _ratio:
-                return f"{v:.2f}{_TIMES}"
-            if _pct:
-                return f"{v:.0f}%"
-            return f"{v:.1f}"
+        kind = _kpi_strip_kind(row.unit, row.name)
 
         latest = values[-1]
         prev = values[-2] if len(values) >= 2 else None
-        latest_display = _fmt(latest)
+        latest_display = _fmt_strip_value(latest, kind)
         delta_display: str | None = None
         delta_sign = ""
         if prev is not None:
@@ -502,7 +565,7 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
             if abs(d) > 1e-9:
                 delta_sign = "pos" if d > 0 else "neg"
                 arrow = "↑" if d > 0 else "↓"
-                delta_display = f"{arrow} {abs(d):.1f}"
+                delta_display = f"{arrow} {_fmt_strip_delta(abs(d), kind)}"
         tiles.append(
             KpiStripTile(
                 name=row.name.split("(")[0].strip(),
