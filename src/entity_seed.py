@@ -341,6 +341,7 @@ WATCHLIST_BIZ_MODELS: dict[str, dict[str, str]] = {
     "BEPC": {"name": "Brookfield Renewable Corporation", "display": "BEPC", "sector": "Utilities"},
     "BIPC": {"name": "Brookfield Infrastructure Corp.", "display": "BIPC", "sector": "Utilities"},
     "BRK-B": {"name": "Berkshire Hathaway Inc.", "display": "Berkshire", "sector": "Financials"},
+    "CDNS": {"name": "Cadence Design Systems, Inc.", "display": "Cadence Design Systems", "sector": "Technology"},
     "CFLT": {"name": "Confluent, Inc.", "display": "Confluent", "sector": "Technology"},
     "CIEN": {"name": "Ciena Corporation", "display": "Ciena", "sector": "Technology"},
     "COHR": {"name": "Coherent Corp.", "display": "Coherent", "sector": "Technology"},
