@@ -22,6 +22,10 @@ dev = [
 # Install with `pip install -e .[ir] && playwright install chromium`.
 ir = [
     "playwright>=1.40",
+    # curl_cffi replays a real Chrome TLS/HTTP2 fingerprint for the document
+    # downloader — some issuer hosts (e.g. investor.lilly.com) tarpit any client
+    # whose fingerprint isn't a browser's. See fetch_ir_documents._fetch_curl_cffi.
+    "curl_cffi>=0.7",
 ]
 # DCF <-> Google Sheets round-trip (execution/dcf_sheets.py export/import): pushes
 # the DCF workbook to a Google Sheet and pulls the edited Sheet back to recompute.

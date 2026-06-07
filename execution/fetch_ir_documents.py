@@ -157,10 +157,56 @@ def _registered_source_urls(db_path: Path, ticker: str) -> set[str]:
     return {str(r[0]) for r in rows if r[0]}
 
 
-def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
-    """GET ``url`` into ``dest_dir/<base_name><ext>``; ext from response headers.
+# curl_cffi impersonation target — the rolling "latest Chrome" alias replays a
+# real Chrome JA3/HTTP2 fingerprint, which is what the tarpit hosts check for.
+_IMPERSONATE = "chrome"
 
-    Returns the written Path, or None on any network/HTTP error (logged, skipped).
+
+def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
+    """Fetch ``url`` impersonating Chrome's full TLS/HTTP2 fingerprint.
+
+    Some issuer hosts (e.g. ``investor.lilly.com``) tarpit any client whose TLS
+    fingerprint isn't a real browser's — they accept the connection but never
+    respond, so a plain urllib GET stalls until timeout, while a real Chrome is
+    served instantly. ``curl_cffi`` replays Chrome's JA3/HTTP2 fingerprint, which
+    clears the tarpit. Optional dep (the ``ir`` extra); a missing dep or any fetch
+    failure degrades to a logged skip, never a crash.
+
+    Returns ``(data, content_disposition, content_type)`` or None.
+    """
+    try:
+        from curl_cffi import requests as cc
+    except ImportError:
+        log.error({"event": "curl_cffi_unavailable", "url": url})
+        return None
+    try:
+        resp = cc.get(
+            url,
+            impersonate=_IMPERSONATE,
+            headers={
+                "Accept": "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*"
+            },
+            timeout=_CONNECT_READ_TIMEOUT,
+        )
+    except Exception as e:  # broad on purpose: curl_cffi's error tree is wide; degrade, never crash
+        log.error({"event": "curl_cffi_failed", "url": url, "error": str(e)[:120]})
+        return None
+    if resp.status_code != 200:
+        log.error({"event": "curl_cffi_http", "url": url, "status": resp.status_code})
+        return None
+    cd = resp.headers.get("Content-Disposition", "") or ""
+    ct = resp.headers.get("Content-Type", "") or ""
+    return resp.content, cd, ct
+
+
+def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
+    """``(data, content_disposition, content_type)`` for ``url``, or None.
+
+    A plain browser-UA urllib GET first (fast, no extra dep for the ~95% of CDNs
+    that serve cleanly); on a connection/timeout failure — the signature of a
+    TLS-fingerprint tarpit — fall back to a Chrome-impersonating ``curl_cffi`` GET.
+    An explicit HTTP error (403/404) is a real refusal, not a tarpit, so it is NOT
+    retried.
     """
     req = urllib.request.Request(
         url,
@@ -173,20 +219,36 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
     )
     try:
         with urllib.request.urlopen(req, timeout=_CONNECT_READ_TIMEOUT) as resp:
-            cd = resp.headers.get("Content-Disposition", "") or ""
-            ct = resp.headers.get("Content-Type", "") or ""
-            ext = _ext_from_headers(url, cd, ct)
-            dest = dest_dir / f"{base_name}{ext}"
-            if dest.exists():
-                log.info({"event": "already_staged", "path": str(dest)})
-                return dest
-            data = resp.read()
+            return (
+                resp.read(),
+                resp.headers.get("Content-Disposition", "") or "",
+                resp.headers.get("Content-Type", "") or "",
+            )
     except urllib.error.HTTPError as e:
         log.error({"event": "http_error", "url": url, "status": e.code})
         return None
     except (urllib.error.URLError, OSError, ValueError) as e:
-        log.error({"event": "download_failed", "url": url, "error": str(e)})
+        # Connection refused / DNS / read-timeout (the tarpit signature) → try the
+        # TLS-impersonating client before giving up.
+        log.warning({"event": "urllib_failed_trying_curl", "url": url, "error": str(e)[:120]})
+        return _fetch_curl_cffi(url)
+
+
+def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
+    """GET ``url`` into ``dest_dir/<base_name><ext>``; ext from response headers.
+
+    Returns the written Path, or None on any network/HTTP error (logged, skipped).
+    Falls back to a Chrome-TLS-impersonating client for hosts that tarpit urllib.
+    """
+    fetched = _fetch_bytes(url)
+    if fetched is None:
         return None
+    data, cd, ct = fetched
+    ext = _ext_from_headers(url, cd, ct)
+    dest = dest_dir / f"{base_name}{ext}"
+    if dest.exists():
+        log.info({"event": "already_staged", "path": str(dest)})
+        return dest
 
     # Some IR doc links serve an HTML error/redirect page (with a .pdf
     # Content-Disposition). Don't stage HTML as a .pdf — it just fails pypdf
