@@ -14,7 +14,7 @@ from decimal import Decimal
 import pytest
 
 from models.facts import Unit
-from models.unit_convert import convert_unit
+from models.unit_convert import convert_unit, same_family
 
 
 def test_identity_is_exact() -> None:
@@ -56,3 +56,18 @@ def test_cross_family_returns_none(from_unit: Unit, to_unit: Unit) -> None:
 def test_count_only_converts_to_itself() -> None:
     assert convert_unit(Decimal("5"), Unit.COUNT, Unit.COUNT) == Decimal("5")
     assert convert_unit(Decimal("5"), Unit.COUNT, Unit.ACTUAL) is None
+
+
+def test_same_family_true_within_family_and_identity() -> None:
+    assert same_family(Unit.PERCENT, Unit.PERCENT)  # identity
+    assert same_family(Unit.ACTUAL, Unit.MILLIONS)  # money magnitudes
+    assert same_family(Unit.PERCENT, Unit.BPS)  # proportions
+    assert same_family(Unit.COUNT, Unit.COUNT)
+
+
+def test_same_family_false_across_families() -> None:
+    # The level-vs-rate distinction the canonical-unit guard relies on.
+    assert not same_family(Unit.ACTUAL, Unit.PERCENT)
+    assert not same_family(Unit.MILLIONS, Unit.BPS)
+    assert not same_family(Unit.COUNT, Unit.ACTUAL)
+    assert not same_family(Unit.COUNT, Unit.PERCENT)

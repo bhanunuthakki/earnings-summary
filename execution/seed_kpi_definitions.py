@@ -33,7 +33,6 @@ import json
 import sqlite3
 import sys
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
@@ -43,7 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from models.documents import SourceType  # noqa: E402
 from models.facts import Unit  # noqa: E402
 from models.kpis import ThesisTier  # noqa: E402
-from models.unit_convert import convert_unit  # noqa: E402
+from models.unit_convert import same_family  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 _TIER_MAP: dict[str, ThesisTier] = {
@@ -170,17 +169,6 @@ def _dominant_fact_unit(conn: sqlite3.Connection, ticker: str, name: str) -> Uni
         return None
 
 
-def _same_unit_family(a: Unit, b: Unit) -> bool:
-    """True when two units are dimensionally convertible (same family).
-
-    Reuses the persist/compare path's single source of truth: ``convert_unit``
-    returns None precisely when no dimensionally-valid conversion exists (money
-    magnitude vs proportion vs raw count). A cross-family def-vs-fact disagreement
-    is the exact bug shape this seeder must heal — a dollar LEVEL stamped a RATE.
-    """
-    return a is b or convert_unit(Decimal(1), a, b) is not None
-
-
 def collect_kpis_from_holdings(
     repo_root: Path, ticker: str
 ) -> list[tuple[str, Unit, SourceType, ThesisTier]]:
@@ -292,7 +280,7 @@ def seed_for_ticker(
         if (
             fact_unit is not None
             and existing_unit is not None
-            and not _same_unit_family(existing_unit, fact_unit)
+            and not same_family(existing_unit, fact_unit)
         ):
             healed += 1
             healed_names.append(name)

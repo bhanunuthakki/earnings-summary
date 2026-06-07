@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import sqlite3
 import time
@@ -45,6 +46,7 @@ from compute.kpi_resolver import normalize_kpi_name
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
+from models.unit_convert import same_family
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
@@ -52,6 +54,10 @@ from pipeline.kpi_persistence import (
 )
 from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import start_run
+
+# Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
+# locals named `log` throughout this module.
+logger = logging.getLogger("kpi_extract_summaries")
 
 # Per-source filename matchers + the documents.doc_type label written for each.
 # Earnings: per-quarter call summary (canonical) + the MELI/NU investor-update variant.
@@ -157,7 +163,10 @@ def extract_for_ticker(
     if not tier_1_names:
         log.error = "holdings JSON has no tier_1_kpis"
         return _close_log(log, t0)
-    canonical_units = _canonical_units_from_holdings(holdings, tier_1_names)
+    # Veto a break-rule's *comparison* unit (a YoY-growth percent on a dollar
+    # LEVEL) using the metric's recorded fact unit before it becomes canonical.
+    fact_units = _fact_units_by_name(conn, ticker, tier_1_names)
+    canonical_units = _canonical_units_from_holdings(holdings, tier_1_names, fact_units=fact_units)
 
     for quarter, year, source_path, spec in sources:
         period_end = _period_end(ticker, quarter, year)
@@ -246,8 +255,38 @@ def _tier_1_names(holdings: dict[str, object]) -> list[str]:
     return out
 
 
+def _fact_units_by_name(conn: sqlite3.Connection, ticker: str, names: list[str]) -> dict[str, Unit]:
+    """Dominant recorded ``kpi_facts`` unit per metric, for names that have facts.
+
+    The recorded fact unit is the metric's true reported-value unit — used to
+    veto a break-rule's *comparison* unit (a YoY-growth ``percent`` declared for
+    a dollar LEVEL) from being adopted as the metric's canonical unit. Names with
+    no facts, or a stored unit outside the :class:`Unit` enum, are omitted.
+    Returns the modal unit per name (ties broken by the latest period).
+    """
+    out: dict[str, Unit] = {}
+    for name in names:
+        row = conn.execute(
+            "SELECT f.unit FROM kpi_facts f "
+            "JOIN kpi_definitions d ON d.id = f.kpi_definition_id "
+            "WHERE d.ticker = ? AND d.name = ? AND f.unit IS NOT NULL "
+            "GROUP BY f.unit ORDER BY COUNT(*) DESC, MAX(f.period_end) DESC LIMIT 1",
+            (ticker.upper(), name),
+        ).fetchone()
+        if row is None or row[0] is None:
+            continue
+        try:
+            out[name] = Unit(str(row[0]))
+        except ValueError:
+            continue
+    return out
+
+
 def _canonical_units_from_holdings(
-    holdings: dict[str, object], kpi_names: list[str]
+    holdings: dict[str, object],
+    kpi_names: list[str],
+    *,
+    fact_units: dict[str, Unit] | None = None,
 ) -> dict[str, Unit]:
     """Map each extraction KPI name to its break-rule's declared Unit.
 
@@ -260,7 +299,17 @@ def _canonical_units_from_holdings(
     the parenthetical-insensitive normalized name. Only real `Unit` values are
     kept — a rule unit outside the enum (e.g. a derived "percent_decel" transform)
     has no dimensional meaning here and is skipped.
+
+    A rule's unit equals the metric's reported-value unit ONLY for a direct
+    level/rate threshold — NOT for a YoY-growth or deceleration rule, whose unit
+    is ``percent`` while the metric itself is a dollar LEVEL (the AWS RPO shape).
+    When ``fact_units`` supplies a metric's recorded value unit and the rule unit
+    is in a DIFFERENT dimensional family, the rule unit is a *comparison* unit and
+    is dropped — the metric keeps its real value unit. A same-family rule unit is
+    still adopted (the ratio→percent / dollar→millions normalization #320 added).
+    Without a fact unit (first extraction) the rule unit is used as before.
     """
+    fact_units = fact_units or {}
     rule_unit_by_norm: dict[str, Unit] = {}
     for key in ("break_rules", "business_model_rules"):
         raw = holdings.get(key)
@@ -284,8 +333,23 @@ def _canonical_units_from_holdings(
     out: dict[str, Unit] = {}
     for name in kpi_names:
         unit = rule_unit_by_norm.get(normalize_kpi_name(name))
-        if unit is not None:
-            out[name] = unit
+        if unit is None:
+            continue
+        fact_unit = fact_units.get(name)
+        if fact_unit is not None and not same_family(unit, fact_unit):
+            # The rule's threshold is a *change* of the metric (e.g. YoY growth in
+            # percent), not its level (dollars). Don't let it override the real
+            # value unit; the LLM's extracted unit is used unchanged downstream.
+            logger.info(
+                {
+                    "event": "canonical_unit_dropped_cross_family",
+                    "kpi_name": name,
+                    "rule_unit": unit.value,
+                    "fact_unit": fact_unit.value,
+                }
+            )
+            continue
+        out[name] = unit
     return out
 
 

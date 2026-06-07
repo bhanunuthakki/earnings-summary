@@ -11,6 +11,7 @@ must degrade at the per-KPI scope (skip the value, keep extracting).
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from decimal import Decimal
 
@@ -20,6 +21,7 @@ import compute.kpi_extract_summaries as kes
 from compute.kpi_extract_summaries import (
     _build_manifest,
     _canonical_units_from_holdings,
+    _fact_units_by_name,
     _llm_extract,
     parse_decimal_value,
 )
@@ -150,6 +152,119 @@ def test_canonical_units_reads_both_rule_arrays_and_ignores_unlisted_names() -> 
     )
     assert out == {"Gross margin": Unit.PERCENT, "Monthly ARPAC": Unit.ACTUAL}
     assert "Untracked KPI" not in out
+
+
+def test_canonical_units_drops_cross_family_rule_unit_vs_facts() -> None:
+    """A break-rule on a dollar LEVEL phrased as a YoY-growth `percent` (the AWS
+    RPO shape) must NOT become the metric's canonical value unit when the facts
+    say it is a `actual` dollar magnitude. The rule unit is a *comparison* unit
+    and is dropped; the LLM's extracted unit is used unchanged downstream."""
+    holdings = _holdings(
+        break_rules=[
+            {
+                "rule_id": "deposits_growth",
+                "kpi_name": "Total deposits",
+                "comparator": "lt",
+                "threshold": 10,
+                "unit": "percent",  # "deposits growth < 10%" — a rate on a $ level
+                "narrative": "x",
+            }
+        ]
+    )
+    out = _canonical_units_from_holdings(
+        holdings, ["Total deposits"], fact_units={"Total deposits": Unit.ACTUAL}
+    )
+    assert out == {}
+
+
+def test_canonical_units_keeps_same_family_rule_unit_with_facts() -> None:
+    """Within-family rule units are still adopted even when facts are present —
+    the #320 normalization (raw dollars -> the rule's `millions`) must survive."""
+    holdings = _holdings(
+        break_rules=[
+            {
+                "rule_id": "r1",
+                "kpi_name": "Net New Subscription ARR (USD millions)",
+                "comparator": "lt",
+                "threshold": 80,
+                "unit": "millions",
+                "narrative": "x",
+            }
+        ]
+    )
+    out = _canonical_units_from_holdings(
+        holdings,
+        ["Net new subscription ARR ($)"],
+        fact_units={"Net new subscription ARR ($)": Unit.ACTUAL},
+    )
+    assert out == {"Net new subscription ARR ($)": Unit.MILLIONS}
+
+
+def test_canonical_units_without_facts_adopts_rule_unit() -> None:
+    """First extraction (no facts yet): the rule unit is adopted as before, so a
+    genuine direct-threshold rule still normalizes the metric. The fact-based
+    veto only kicks in once a recorded value unit exists."""
+    holdings = _holdings(
+        break_rules=[
+            {
+                "rule_id": "deposits_growth",
+                "kpi_name": "Total deposits",
+                "comparator": "lt",
+                "threshold": 10,
+                "unit": "percent",
+                "narrative": "x",
+            }
+        ]
+    )
+    out = _canonical_units_from_holdings(holdings, ["Total deposits"])
+    assert out == {"Total deposits": Unit.PERCENT}
+
+
+def _facts_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE kpi_definitions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, name TEXT, unit TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE kpi_facts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, kpi_definition_id INTEGER, "
+        "unit TEXT, value REAL, period_end TEXT)"
+    )
+    return conn
+
+
+def test_fact_units_by_name_returns_modal_unit_and_feeds_the_veto() -> None:
+    conn = _facts_db()
+    conn.execute(
+        "INSERT INTO kpi_definitions (id, ticker, name, unit) "
+        "VALUES (1, 'NU', 'Total deposits', 'actual')"
+    )
+    for v in (9.0e10, 1.0e11):
+        conn.execute(
+            "INSERT INTO kpi_facts (kpi_definition_id, unit, value, period_end) "
+            "VALUES (1, 'actual', ?, '2026-03-31')",
+            (v,),
+        )
+
+    fact_units = _fact_units_by_name(conn, "NU", ["Total deposits", "No facts metric"])
+    assert fact_units == {"Total deposits": Unit.ACTUAL}
+
+    holdings = _holdings(
+        break_rules=[
+            {
+                "rule_id": "deposits_growth",
+                "kpi_name": "Total deposits",
+                "comparator": "lt",
+                "threshold": 10,
+                "unit": "percent",
+                "narrative": "x",
+            }
+        ]
+    )
+    out = _canonical_units_from_holdings(holdings, ["Total deposits"], fact_units=fact_units)
+    assert out == {}
 
 
 def test_build_manifest_threads_canonical_units_onto_manifest() -> None:
