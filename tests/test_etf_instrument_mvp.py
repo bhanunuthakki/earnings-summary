@@ -768,3 +768,58 @@ def test_build_artifacts_dispatches_to_etf_path(
     md = md_path.read_text(encoding="utf-8")
     assert "iShares Semiconductor ETF" in md
     assert "## §5 Holdings" in md
+
+
+# ---------------------------------------------------------------------------
+# 8. Credential redaction (security regression)
+#
+# _fmp_get sends the FMP key as a ?apikey=<key> URL query param. On a network
+# error, requests/urllib3 embed the fully-resolved URL — key included — in the
+# exception string (e.g. "Max retries exceeded with url: /stable/...?apikey=KEY").
+# That string must never reach the raised RuntimeError / logs unredacted.
+# GEMINI.md: never log a URL that may contain credentials.
+# ---------------------------------------------------------------------------
+
+
+def test_fmp_get_does_not_leak_api_key_on_network_error() -> None:
+    """A RequestException whose string embeds the resolved ``?apikey=<key>`` URL
+    must not surface the key in the RuntimeError ``_fmp_get`` raises, nor in any
+    exception chained onto it."""
+    import requests
+
+    from execution.fetch_etf_data import _fmp_get  # pyright: ignore[reportPrivateUsage]
+
+    secret = "FMPKEY_SUPERSECRET_9f8e7d6c5b4a"
+
+    class _LeakySession:
+        """Raises the urllib3-style error that embeds the fully-resolved URL —
+        including the apikey query param requests appends to ``params`` — which
+        is the exact leak vector this regression guards against."""
+
+        def get(
+            self,
+            url: str,
+            params: dict[str, str] | None = None,
+            timeout: tuple[int, int] | None = None,
+        ) -> object:
+            key = (params or {}).get("apikey", "")
+            resolved = f"{url}?apikey={key}"
+            raise requests.exceptions.ConnectionError(
+                f"HTTPSConnectionPool(host='financialmodelingprep.com', port=443): "
+                f"Max retries exceeded with url: {resolved} "
+                f"(Caused by NewConnectionError('Failed to establish a new connection'))"
+            )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _fmp_get(cast("requests.Session", _LeakySession()), secret, "SOXX", "etf/info")
+
+    raised = excinfo.value
+    # The secret must not appear anywhere reachable from the raised exception:
+    # not the message, and not a chained __cause__/__context__ whose own str()
+    # would otherwise re-expose the unredacted URL.
+    leak_surface = " ".join(str(p) for p in (raised, raised.__cause__, raised.__context__))
+    assert secret not in leak_surface
+    # Positively confirm the redactor ran (key masked, not merely truncated off).
+    assert "apikey=***" in str(raised)
+    # `from None`: no original RequestException is chained onto the RuntimeError.
+    assert raised.__cause__ is None
