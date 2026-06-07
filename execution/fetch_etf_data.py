@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from instrument_store import upsert_etf_holdings, upsert_etf_profile  # noqa: E402
+from log_redact import redact as _redact  # noqa: E402
 from models.instruments import EtfHolding, EtfProfile  # noqa: E402
 
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
@@ -231,12 +232,18 @@ def _fmp_get(
         try:
             r = session.get(base, params={"apikey": api_key}, timeout=(10, 60))
         except requests.RequestException as e:
-            last_err = f"{base}: {e}"
+            # requests/urllib3 embed the fully-resolved URL — including the
+            # ?apikey=<key> query param — in the exception string; redact it
+            # before it reaches last_err / the RuntimeError / logs.
+            last_err = _redact(f"{base}: {e}")
             continue
         if r.status_code == 200:
             return cast("object", r.json())
         last_err = f"{base}: HTTP {r.status_code}"
-    raise RuntimeError(f"FMP fetch failed for {ticker} {path}: {last_err}")
+    # `from None` drops the original RequestException context as defense-in-depth:
+    # its traceback also embeds the unredacted URL, so it must never be chained
+    # onto the RuntimeError (last_err itself is already redacted above).
+    raise RuntimeError(f"FMP fetch failed for {ticker} {path}: {last_err}") from None
 
 
 # ---------------------------------------------------------------------------
