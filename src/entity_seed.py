@@ -384,6 +384,7 @@ WATCHLIST_BIZ_MODELS: dict[str, dict[str, str]] = {
     "SCCO": {"name": "Southern Copper Corporation", "display": "Southern Copper", "sector": "Materials"},
     "SE": {"name": "Sea Limited", "display": "Sea", "sector": "Communication Services"},
     "SNOW": {"name": "Snowflake Inc.", "display": "Snowflake", "sector": "Technology"},
+    "SNPS": {"name": "Synopsys, Inc.", "display": "Synopsys", "sector": "Technology"},
     "STNE": {"name": "StoneCo Ltd.", "display": "StoneCo", "sector": "Technology"},
     "TDG": {"name": "TransDigm Group Incorporated", "display": "TransDigm", "sector": "Industrials"},
     "TECK": {"name": "Teck Resources Limited", "display": "Teck", "sector": "Materials"},
