@@ -15,6 +15,7 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -99,3 +100,39 @@ def test_downloader_skips_on_http_403(tmp_path: Path, monkeypatch: pytest.Monkey
     summary = fid.process_ticker("ZZ", root=root, db_path=tmp_path / "p.db", categorize=False)
     assert summary["downloaded"] == 0
     assert summary["failed"] == 1
+
+
+class _CurlResp:
+    """Minimal curl_cffi response stand-in."""
+
+    status_code = 200
+    content = b"%PDF-1.4 lilly press release"
+    headers: ClassVar[dict[str, str]] = {"Content-Type": "application/pdf"}
+
+
+def test_downloader_falls_back_to_curl_cffi_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A urllib read-timeout (the TLS-tarpit signature) falls back to curl_cffi.
+
+    investor.lilly.com tarpits any non-browser TLS fingerprint — urllib stalls to
+    timeout, but a Chrome-impersonating curl_cffi GET is served. A 403 is NOT a
+    tarpit, so it is not retried (covered above).
+    """
+    ccr = pytest.importorskip("curl_cffi.requests")
+    root = tmp_path
+    _write_manifest(root, "LLY", "https://investor.lilly.com/static-files/uuid-1")
+    monkeypatch.setattr("execution.fetch_ir_documents._registered_source_urls", _no_registered_urls)
+
+    def _timeout_urlopen(req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:
+        _ = (req, timeout)
+        raise TimeoutError("tarpit: the read operation timed out")
+
+    def _cc_get(url: str, **_kw: object) -> _CurlResp:
+        _ = url
+        return _CurlResp()
+
+    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.urlopen", _timeout_urlopen)
+    monkeypatch.setattr(ccr, "get", _cc_get)
+    summary = fid.process_ticker("LLY", root=root, db_path=tmp_path / "p.db", categorize=False)
+    assert summary["downloaded"] == 1  # recovered via curl_cffi after urllib stalled
