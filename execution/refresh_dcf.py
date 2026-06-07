@@ -281,10 +281,15 @@ def _refresh_redesign(
     )
     if result_line is not None and result_line.startswith("SKIP"):
         _unlink(tmp)
+        # Surface the builder's own reason (SKIP\t<T>\t<reason>\t<detail>). This
+        # branch only fires for data-insufficiency SKIPs — true dcf_applicable=false
+        # names return earlier via `_dcf_not_applicable`, before the builder runs.
+        skip_parts = result_line.split("\t")
+        skip_reason = skip_parts[2] if len(skip_parts) > 2 else "dcf not applicable"
         return {
             "ticker": ticker,
             "status": "skipped",
-            "reason": "builder SKIP (dcf not applicable)",
+            "reason": f"builder SKIP ({skip_reason})",
         }
     if result_line is None or proc.returncode != 0 or not tmp.exists():
         _unlink(tmp)
