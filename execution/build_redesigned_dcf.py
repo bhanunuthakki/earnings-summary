@@ -147,6 +147,14 @@ fy_cols = defaultdict(list)
 for pos, (y, p) in enumerate(keys):
     fy_cols[y].append(2 + pos)
 _full = sorted(y for y, cs in fy_cols.items() if len(cs) == 4)
+if not _full:
+    # Too little FMP history to anchor a forecast — e.g. a name that IPO'd in the
+    # last few quarters, for which FMP returns no/partial quarterly statements
+    # (FRVO). Emit a clean SKIP like the dcf_applicable=false path below instead
+    # of indexing into an empty list.
+    _reason = "no quarterly FMP history" if not keys else "no complete fiscal year yet"
+    print(f"SKIP\t{T}\t{_reason}\t(insufficient history for a DCF)")
+    raise SystemExit(0)
 full_fys = [_full[-1]]  # consecutive run ending at the latest full FY (no gap years)
 for _y in reversed(_full[:-1]):
     if _y == full_fys[0] - 1:
@@ -167,8 +175,19 @@ GEO = sorted(
     (s for s, v in _latest_g.items() if isinstance(v, (int, float))), key=lambda s: -_latest_g[s]
 )
 # Fallback for names without usable FMP product-segment data: model one revenue
-# line (the whole company) instead of a per-segment build.
-SINGLE_SEG = len(PROD) < 2
+# line (the whole company) instead of a per-segment build. Trigger on <2 segments
+# in the latest quarter, OR when the reported segments carry no revenue for the
+# base fiscal year: FMP sometimes drops segment disclosure for a stretch of years
+# (e.g. LITE reports Components/Systems only for older + the newest quarters,
+# leaving FY2025 at zero), which would otherwise collapse the whole forecast to 0.
+_base_fy = full_fys[-1]
+_seg_base_total = sum(
+    v
+    for p in ("Q1", "Q2", "Q3", "Q4")
+    for v in ((pseg_i.get((_base_fy, p)) or {}).get(s) for s in PROD)
+    if isinstance(v, (int, float))
+)
+SINGLE_SEG = len(PROD) < 2 or _seg_base_total <= 0
 if SINGLE_SEG:
     PROD = ["Total company"]
 
@@ -189,6 +208,11 @@ def fy_sum_raw(records_i, field, y):
 
 ly = full_fys[-1]
 rev_ly = fy_sum_raw(inc_i, "revenue", ly)
+if rev_ly <= 0:
+    # Base-year revenue missing/zero (broken or empty FMP income data): every ratio
+    # below divides by it. SKIP cleanly rather than crash through the ratio block.
+    print(f"SKIP\t{T}\tbase-year revenue is zero\t(insufficient data for a DCF)")
+    raise SystemExit(0)
 ratios_ly = {
     "cogs": fy_sum_raw(inc_i, "costOfRevenue", ly) / rev_ly,
     "rnd": fy_sum_raw(inc_i, "researchAndDevelopmentExpenses", ly) / rev_ly,
@@ -204,9 +228,6 @@ other_ly = (
     - fy_sum_raw(inc_i, "sellingGeneralAndAdministrativeExpenses", ly)
     - oi_ly
 ) / rev_ly
-capex_da_ly = abs(fy_sum_raw(cf_i, "capitalExpenditure", ly)) / fy_sum_raw(
-    cf_i, "depreciationAndAmortization", ly
-)
 
 
 def fade(a, b, n=N_FC):
@@ -436,12 +457,14 @@ full_value = (
 )
 
 ann_rev = [fy_sum_raw(inc_i, "revenue", y) for y in full_fys]
-ann_g = [ann_rev[i] / ann_rev[i - 1] - 1 for i in range(1, len(ann_rev))]
-ann_oim = [
-    fy_sum_raw(inc_i, "operatingIncome", y) / fy_sum_raw(inc_i, "revenue", y) for y in full_fys
-]
+ann_g = [ann_rev[i] / ann_rev[i - 1] - 1 for i in range(1, len(ann_rev)) if ann_rev[i - 1]]
+ann_oim = []
+for _y in full_fys:
+    _rev = fy_sum_raw(inc_i, "revenue", _y)
+    if _rev:
+        ann_oim.append(fy_sum_raw(inc_i, "operatingIncome", _y) / _rev)
 cagr0 = (rev_p[-1] / rev_ly) ** (1 / N_FC) - 1
-mT0 = oi_p[-1] / rev_p[-1]
+mT0 = oi_p[-1] / rev_p[-1] if rev_p[-1] else margin_term_def
 SIG = {
     "cagr": float(min(max(np.std(ann_g) * 0.5, 0.012), 0.03)),
     "margin": float(min(max(np.std(ann_oim), 0.015), 0.03)),
