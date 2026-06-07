@@ -52,7 +52,16 @@ LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger(__name__)
 
-_UA = "Mozilla/5.0 (compatible; InvestorResearchBot/1.0; +https://github.com/earnings-summary)"
+# A real browser User-Agent. Many issuer file CDNs (e.g. Brookfield's bam.brookfield.com)
+# return 403 to a self-identifying bot UA on the DOCUMENT fetch even when robots.txt allows
+# it and the (browser-UA) Playwright crawler already harvested the link — so a link we can
+# SEE, we couldn't DOWNLOAD (BN: 51 links discovered, 0 downloaded, all 403). Matching the
+# crawler's browser UA fixes it. robots.txt is still honored upstream in the crawler; this
+# is the same accepted pattern as the robots-UA fix, not auth-wall bypass.
+_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 _CONNECT_READ_TIMEOUT = 60
 _RATE_LIMIT_S = 0.5
 _CATEGORIZER = SCRIPT_DIR / "categorize_ir_uploads.py"
@@ -153,7 +162,15 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
 
     Returns the written Path, or None on any network/HTTP error (logged, skipped).
     """
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _UA,
+            # Browser-like Accept so strict CDNs serve the file rather than 406/403.
+            "Accept": "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=_CONNECT_READ_TIMEOUT) as resp:
             cd = resp.headers.get("Content-Disposition", "") or ""

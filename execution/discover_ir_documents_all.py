@@ -63,7 +63,13 @@ from ir_uploads import calendar_id_from_fye  # noqa: E402
 _ROSTER_LIST_TYPES_SQL = "('portfolio', 'evaluation')"
 _DEFAULT_QUARTERS = 8
 _DEFAULT_DISCOVER_TIMEOUT_S = 300  # headless browser render
-_DEFAULT_DOWNLOAD_TIMEOUT_S = 300  # download + content-classify + register
+# Download + content-classify + register. Generous on purpose: deep-history names (AMZN, V,
+# WIX) have 50-100 docs to pull, and the old 300s timed them out mid-download → 0 registered
+# (AMZN recovered 0->49 once given room). A light or bot-blocked name returns fast (nothing
+# to download), so a high cap is harmless — it only bites when there is genuinely a lot to
+# fetch. The automated full-sweep + failing-rescan crons inherit this default, so AMZN-class
+# names now self-heal instead of timing out on every scheduled run.
+_DEFAULT_DOWNLOAD_TIMEOUT_S = 1200
 
 
 class TickerStatus(StrEnum):
