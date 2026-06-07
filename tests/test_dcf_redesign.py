@@ -464,19 +464,37 @@ def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
 def test_refresh_skips_dcf_not_applicable(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A name Opus flagged dcf_applicable=false skips before any build."""
+    """A non-bank financial (asset-manager/insurer) Opus flagged dcf_applicable=
+    false skips before any build — only credit banks route to the bank model."""
     assumptions = refresh_repo / "data" / "dcf_assumptions"
     assumptions.mkdir(parents=True, exist_ok=True)
     (assumptions / "TESTCO.json").write_text(
-        json.dumps({"redesign": {"dcf_applicable": False, "business_model": "bank"}}),
+        json.dumps({"redesign": {"dcf_applicable": False, "business_model": "asset_manager"}}),
         encoding="utf-8",
     )
     monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
     db = refresh_repo / "data" / "portfolio.db"
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     assert res["status"] == "skipped"
-    assert "bank" in str(res["reason"])
+    assert "asset_manager" in str(res["reason"])
     assert not (refresh_repo / "dcf" / "TESTCO.xlsx").exists()  # never built
+
+
+def test_refresh_bank_dispatches_to_bank_model(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A credit bank (business_model=bank) is routed to the equity-side bank
+    model (`_refresh_bank`), NOT skipped — it returns format='bank'."""
+    assumptions = refresh_repo / "data" / "dcf_assumptions"
+    assumptions.mkdir(parents=True, exist_ok=True)
+    (assumptions / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"dcf_applicable": False, "business_model": "bank"}}),
+        encoding="utf-8",
+    )
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] != "skipped"  # dispatched to the bank builder
+    assert res["format"] == "bank"  # (status is 'failed' here — no TESTCO FMP fixture data)
 
 
 def test_refresh_redesign_negative_fair_value_nulls_over_under(

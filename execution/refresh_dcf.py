@@ -54,6 +54,7 @@ from dcf import valuation as valuation_mod  # noqa: E402
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
 _BUILDER_SCRIPT = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
+_BANK_BUILDER = PROJECT_ROOT / "execution" / "build_bank_dcf.py"
 
 
 def main() -> int:
@@ -159,6 +160,11 @@ def refresh_one(
     """
     not_applicable = _dcf_not_applicable(repo_root, ticker)
     if not_applicable is not None:
+        # Credit banks (an FCFF DCF is wrong, but they ARE valuable) get the
+        # equity-side excess-return bank model instead of being skipped. Asset
+        # managers / insurers stay skipped — they need their own model shape.
+        if not_applicable == "bank":
+            return _refresh_bank(ticker, repo_root)
         return {
             "ticker": ticker.upper(),
             "status": "skipped",
@@ -196,6 +202,29 @@ def _dcf_not_applicable(repo_root: Path, ticker: str) -> str | None:
         bm = redesign_data.get("business_model")
         return bm if isinstance(bm, str) else "not applicable"
     return None
+
+
+def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
+    """Build the equity-side bank credit model (``execution/build_bank_dcf.py``)
+    to ``dcf/<T>.xlsx``. The builder computes the value-of-record and upserts
+    ``dcf_runs`` itself, so this just drives it env-style like the FCFF builder."""
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    proc = subprocess.run(
+        [sys.executable, str(_BANK_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if line is None:
+        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        return {"ticker": t, "status": "failed", "format": "bank", "reason": reason}
+    return {"ticker": t, "status": "ok", "format": "bank", "workbook": str(dest), "result": line}
 
 
 def _run_builder(ticker: str, repo_root: Path, dest: Path) -> subprocess.CompletedProcess[str]:
