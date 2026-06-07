@@ -54,3 +54,16 @@ def convert_unit(value: Decimal, from_unit: Unit, to_unit: Unit) -> Decimal | No
         if from_unit in scale and to_unit in scale:
             return value * scale[from_unit] / scale[to_unit]
     return None
+
+
+def same_family(a: Unit, b: Unit) -> bool:
+    """True when ``a`` and ``b`` admit a dimensionally-valid conversion.
+
+    Equivalent to ``convert_unit(x, a, b) is not None`` for any ``x``: two units
+    share a family when a value can be rescaled between them (money/count
+    magnitudes; or proportions). Crossing a family means they measure
+    dimensionally different things — a dollar LEVEL vs a percentage RATE, or
+    anything vs a raw ``count`` — which is the signal a break-rule's threshold
+    unit is a *comparison* unit, not the metric's own reported-value unit.
+    """
+    return convert_unit(Decimal(1), a, b) is not None
