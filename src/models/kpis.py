@@ -23,6 +23,27 @@ class ThesisTier(StrEnum):
     TIER_2_MONITOR = "tier_2_monitor"
 
 
+class ReportingCadence(StrEnum):
+    """A KPI's native reporting frequency — the authoritative declaration of how
+    often the issuer discloses it.
+
+    Most KPIs are ``QUARTERLY`` (every 10-Q/earnings release). Some are disclosed
+    ONLY ``ANNUAL``ly — bank regulatory capital ratios (NU's Basel III CET1/CAR in
+    the 20-F), other 10-K/20-F-only figures — and must not be shoehorned onto the
+    quarterly axis (gappy chart, mis-counted "consecutive periods"). ``TTM`` is
+    admitted to the vocabulary for forward-compat but is treated like quarterly
+    until a consumer special-cases it.
+
+    Stored on ``kpi_definitions.reporting_cadence`` (migration 0072). Annual facts
+    are additionally tagged ``fiscal_period_type='FY'`` with a fiscal-year-end
+    ``period_end`` (see ``compute.kpi_resolver.ANNUAL_FACT_PERIOD_TYPES``).
+    """
+
+    QUARTERLY = "quarterly"
+    ANNUAL = "annual"
+    TTM = "ttm"
+
+
 class BreachStatus(StrEnum):
     OK = "ok"
     WARN = "warn"
@@ -48,3 +69,8 @@ class KpiDefinition(BaseModel):
     threshold_low: float | None
     threshold_high: float | None
     notes: str | None
+    # Native reporting frequency. Defaults to QUARTERLY for every existing
+    # definition; set ANNUAL for issuer-annual-only metrics (bank capital ratios)
+    # so rendering / break-rule period-counting / DCF reads switch to the annual
+    # axis. See migration 0072.
+    reporting_cadence: ReportingCadence = ReportingCadence.QUARTERLY

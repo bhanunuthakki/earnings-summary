@@ -32,6 +32,13 @@ from collections.abc import Sequence
 # period_types=None so "most observations" is measured over the rows they read.
 QUARTERLY_FACT_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
 
+# kpi_facts.fiscal_period_type values that denote an annual (fiscal-year-end)
+# observation — the cadence-aware twin of QUARTERLY_FACT_PERIOD_TYPES. Matches the
+# financials annual set (report.sections._common.ANNUAL_PERIOD_TYPES) so an annual
+# KPI series aligns with the annual line-item axis. Consumers select these rows
+# when a definition's reporting_cadence is 'annual' (see reporting_cadence_for).
+ANNUAL_FACT_PERIOD_TYPES: tuple[str, ...] = ("FY", "annual")
+
 # Trailing "(...)" qualifier on a stored KPI name, e.g. "Monthly ARPAC (USD)" or
 # "ROE (annualized, consolidated)". Stripped when matching a requested label to a
 # stored definition.
@@ -121,3 +128,37 @@ def resolve_kpi_definition_name(
             best_rank = rank
             best_name = stored
     return best_name
+
+
+def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str) -> str:
+    """Return the reporting_cadence ('quarterly' | 'annual' | 'ttm') for the
+    definition best matching ``requested``, defaulting to ``'quarterly'``.
+
+    Matching is *fact-independent* (a tracked-but-empty annual KPI still
+    resolves): exact name, then a parenthetical-insensitive normalized name. When
+    several definitions normalize-match, an ``'annual'`` marker wins over
+    ``'quarterly'`` so a sparse fragmented duplicate can't mask the annual
+    cadence. Defensive: returns ``'quarterly'`` when the column is absent
+    (pre-0072 / minimal test DBs) or no definition matches — so every caller can
+    treat the result as authoritative without re-checking the schema.
+
+    Requires ``conn.row_factory = sqlite3.Row`` (every consumer sets it).
+    """
+    cols = {c["name"] for c in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()}
+    if "reporting_cadence" not in cols:
+        return "quarterly"
+    want = normalize_kpi_name(requested)
+    best = "quarterly"
+    found = False
+    for row in conn.execute(
+        "SELECT name, reporting_cadence FROM kpi_definitions WHERE ticker = ?",
+        (ticker.upper(),),
+    ):
+        stored = str(row["name"])
+        if stored == requested or normalize_kpi_name(stored) == want:
+            found = True
+            cadence = str(row["reporting_cadence"] or "quarterly")
+            if cadence == "annual":
+                return "annual"
+            best = cadence
+    return best if found else "quarterly"

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
-from models.kpis import ThesisTier
+from models.kpis import ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
@@ -67,6 +67,14 @@ class KpiExtractionManifest(BaseModel):
     # kpi_definitions row. Absent name → the extracted unit is used unchanged, so
     # generic callers (IR spreadsheet/PDF) keep their existing behavior.
     canonical_units: dict[str, Unit] = Field(default_factory=dict)
+    # Authoritative per-KPI reporting cadence, keyed by KpiValue.name. Populated
+    # by callers that know a metric's native frequency — an annual-only 20-F/10-K
+    # figure (bank capital ratios) sets ANNUAL so the definition is marked
+    # cadence-aware (see `find_or_create_kpi_definition`). Absent name → the
+    # definition keeps its cadence (defaults to QUARTERLY for a brand-new row).
+    # When a value IS annual, the caller must also set `fiscal_period_type=FY`
+    # (with a fiscal-year-end `period_end`) so the fact lands on the annual axis.
+    cadences: dict[str, ReportingCadence] = Field(default_factory=dict)
     values: list[KpiValue]
 
 
@@ -116,6 +124,7 @@ def find_or_create_kpi_definition(
     unit: Unit,
     primary_source: SourceType,
     authoritative: bool = False,
+    reporting_cadence: ReportingCadence | None = None,
 ) -> int:
     """Lookup-or-insert kpi_definitions for (ticker, name); returns the id.
 
@@ -127,15 +136,25 @@ def find_or_create_kpi_definition(
     trusted canonical unit (the holding's break-rule unit) — reconcile the
     existing row to it so the definition's metadata stops drifting. ``unit`` is
     used verbatim for a brand-new row regardless of the flag.
+
+    ``reporting_cadence`` (when provided) is likewise authoritative: a caller that
+    knows a metric is annual-only (a 20-F/10-K capital ratio) stamps ANNUAL so the
+    definition is marked cadence-aware whether it already existed or is created
+    here. A brand-new row otherwise defaults to QUARTERLY (the column default).
     """
     existing = _find_kpi_definition(conn, ticker, name)
     if existing is not None:
         if authoritative:
             _reconcile_definition_unit(conn, existing, unit)
+        if reporting_cadence is not None:
+            _reconcile_definition_cadence(conn, existing, reporting_cadence)
         return existing
-    return _create_kpi_definition(
+    new_id = _create_kpi_definition(
         conn, ticker=ticker, name=name, unit=unit, primary_source=primary_source
     )
+    if reporting_cadence is not None:
+        _reconcile_definition_cadence(conn, new_id, reporting_cadence)
+    return new_id
 
 
 def _reconcile_definition_unit(
@@ -150,6 +169,34 @@ def _reconcile_definition_unit(
     conn.execute(
         "UPDATE kpi_definitions SET unit = ? WHERE id = ? AND unit != ?",
         (unit.value, kpi_definition_id, unit.value),
+    )
+
+
+def _kpi_definitions_has_column(conn: sqlite3.Connection, column: str) -> bool:
+    """True iff PRAGMA reports ``column`` on kpi_definitions. Used to no-op the
+    cadence reconcile on a pre-0072 / minimal test DB that lacks the column."""
+    return any(
+        str(r["name"] if hasattr(r, "keys") else r[1]) == column
+        for r in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()
+    )
+
+
+def _reconcile_definition_cadence(
+    conn: sqlite3.Connection, kpi_definition_id: int, cadence: ReportingCadence
+) -> None:
+    """Set an existing definition's reporting_cadence to the authoritative
+    ``cadence``.
+
+    Idempotent (the ``reporting_cadence != ?`` guard no-ops when already correct)
+    and schema-defensive: silently skips when the column is absent (pre-0072 or a
+    minimal test DB) so persistence stays runnable on a stale schema, mirroring
+    the restatement detector's column-tolerance.
+    """
+    if not _kpi_definitions_has_column(conn, "reporting_cadence"):
+        return
+    conn.execute(
+        "UPDATE kpi_definitions SET reporting_cadence = ? WHERE id = ? AND reporting_cadence != ?",
+        (cadence.value, kpi_definition_id, cadence.value),
     )
 
 
@@ -353,6 +400,9 @@ def persist_manifest(
             # definition's unit too; a cross-family mismatch is not (we kept the
             # extracted unit), so don't let it overwrite the definition.
             authoritative=canonical is not None and not unit_mismatch,
+            # Mark the definition's native frequency when the caller declared it
+            # (annual-only 20-F/10-K metrics). Absent → cadence left as-is.
+            reporting_cadence=manifest.cadences.get(kpi.name),
         )
         was_inserted = _insert_kpi_fact(
             conn,
