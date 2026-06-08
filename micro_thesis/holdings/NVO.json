@@ -1,11 +1,11 @@
 {
   "ticker": "NVO",
   "name": "Novo Nordisk",
-  "last_updated": "2026-06-01",
-  "thesis": "Held under a REVISED thesis (the original 20%+ GLP-1 growth thesis broke on US pricing). The bet now: 2026 revenue decline comes in BETTER than the -4% to -12% CER guide and better than Street, on solid pricing and/or volume - driven by oral Wegovy (genuinely market-expansionary; beating at launch), international expansion, share defense in select segments, next-gen pipeline (CagriSema NDA, amycretin), and a stable insulin base. View: the 2026 reset is a price-driven trough, not the structural top. This is explicitly a VOLUME + orals-expansion bet that must clear a falling-net-price curve (Medicare IRA cuts ~70% from list effective 2027).",
+  "last_updated": "2026-06-08",
+  "thesis": "Held under a REVISED thesis (the original 20%+ GLP-1 growth thesis broke on US pricing). The bet now: 2026 revenue decline comes in BETTER than the -4% to -12% CER guide and better than Street, on solid pricing and/or volume - driven by oral Wegovy (genuinely market-expansionary; beating at launch), international expansion, share defense in select segments, next-gen pipeline (CagriSema NDA, amycretin), and a stable insulin base. View: the 2026 reset is a price-driven trough, not the structural top. This is explicitly a VOLUME + orals-expansion bet that must clear a falling-net-price curve (Medicare IRA cuts ~70% from list effective 2027). WHAT'S PRICED IN (2026-06): at ~10x and -40-50% off the $81 high with FY26 guided to an outright sales+profit DECLINE, NVO is priced as a challenged loser - so much of the patent + competition fear is already discounted (a CONTRARIAN value setup, not a momentum name). The patent cliff is BIFURCATED and NOT the near-term risk: the high-margin US pool is protected to ~2031 patent / ~2032 practical generics (EU ~2031-33), while the 2026 EM LOEs (CN/IN/BR/CA) are low-margin with a slow generic ramp. The live, less-priced variable is the COMPETITIVE trajectory vs Lilly - and the bar is low (NVO need only stop bleeding US share). Trap-vs-turn turns on the 2027 guide returning to growth + US share stabilization + the CagriSema/amycretin pipeline. ROLE: the cheap, asymmetric leg of a long-GLP-1 book - hold/don't capitulate at the trough; diversify the THEME (Roche/AZN/Amgen for pipeline breadth, or LLY on a pullback) rather than double the obesity bet.",
   "verdict": "Watch (held under revised thesis; original GLP-1-growth thesis broke on pricing)",
   "verdict_color": "yellow",
-  "key_driver": "Global GLP-1 script volume vs price decline + patent extensions in EM + share defense vs Lilly",
+  "key_driver": "Whether 2026 is the price-driven trough: the 2027 CER guide returning to growth + US share stabilization vs Lilly + volume (oral Wegovy / amycretin) clearing the falling net-price curve",
   "chart_priorities": [
     "Revenue",
     "Operating income",
@@ -22,6 +22,15 @@
       "status": "Yellow",
       "break_condition": "Actual CER revenue worse than the guidance midpoint AND/OR worse than consensus (the thesis is to BEAT the lowered bar)",
       "source": "annual report + guidance + consensus"
+    },
+    {
+      "name": "2027 CER guide — return to growth (THE trap-vs-turn signpost)",
+      "current": "FY26 guided to DECLINE -4% to -12% CER (a 'reset year'); the 2027 outlook is the key tell on whether the trough is single-cycle pricing or a structural slide",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "2027 guided to another decline / fails to return to growth -> confirms a structural slide (value trap), not a single-cycle reset",
+      "source": "FY26 results + 2027 guidance"
     },
     {
       "name": "Oral Wegovy (oral semaglutide 25mg) uptake",
@@ -69,22 +78,31 @@
       "source": "external scrape (IQVIA / sell-side notes / Symphony)"
     },
     {
-      "name": "Patent extension wins in 2026 LOE markets (CN, IN, BR, CA)",
-      "current": "Patents expiring 2026 in CN/IN/BR/CA — extension status TBV",
+      "name": "Patent cliff — BIFURCATED (US/EU distant & high-margin vs 2026 EM LOE low-margin)",
+      "current": "High-margin US protected to ~2031 patent / ~2032 practical generics; EU ~2031-33. 2026 LOEs (CN/IN/BR/CA) are LOW-margin + slow ramp (no China generics ~1mo post-expiry). Material US cliff is ~6yrs out and largely priced at ~10x.",
       "prior": null,
       "yoy": null,
-      "status": "Yellow",
-      "break_condition": "LOE proceeds without successful extension in any 2 of the 4 markets",
+      "status": "Green-ish (mostly priced; distant)",
+      "break_condition": "A 2026 EM LOE is immaterial (low-margin); the real watch is a US/EU challenge that PULLS FORWARD the ~2031-32 cliff, OR EM erosion proving faster/larger than the low-margin assumption",
       "source": "annual report IP disclosures + jurisdiction patent registers (see directives/nvo_external_sources.md)"
     },
     {
       "name": "CagriSema regulatory milestones",
-      "current": "NDA filed with FDA; Redefine 1: 91.9% achieved >=5% weight loss vs 31.5% placebo",
+      "current": "NDA filed; PDUFA ~Oct 2026. REDEFINE 1 weight loss 22.7%; head-to-head vs Zepbound 20.4% vs ~24% (missed clean superiority). Higher-dose Ph3 H2'26; REDEFINE-11 data H1'27.",
       "prior": null,
       "yoy": null,
       "status": "Yellow",
       "break_condition": "NDA rejected, label restricted, or follow-on trial readouts disappoint",
       "source": "FDA approval calendar + Novo press releases"
+    },
+    {
+      "name": "Amycretin / zenagamtide Phase 3 (AMAZE) — next-gen GLP-1/amylin",
+      "current": "SC + oral amycretin (rebranded zenagamtide) entered Phase 3 AMAZE Q1'26; the long-term franchise-defense asset vs Lilly retatrutide/orforglipron",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "AMAZE delays, or efficacy/tolerability disappoints vs Lilly's next-gen -> erodes the pipeline pillar of the hold",
+      "source": "Novo pipeline updates + ADA / clinical readouts"
     }
   ],
   "tier_2_kpis": [
@@ -112,14 +130,24 @@
   "nuance": {
     "bear_case": "It is a PRICE problem more than a volume problem: 2026 guide is -4% to -12% sales, US -11% in Q1 on price, and Medicare IRA cuts Ozempic/Wegovy ~70% from list effective 2027 (MFN/net-price pressure on top). Share is also moving the wrong way in the US - Mounjaro 23.4% vs Wegovy 16.5% of GLP-1 TRx, Zepbound US +79% while Novo US fell - and Lilly's oral orforglipron (no food/water restrictions, likely cheaper small molecule) threatens to cap Novo's oral first-mover window to ~12-18 months. CagriSema's REDEFINE 1 landed at 22.7% weight loss, short of the ~25% bar the market wanted for clear superiority over tirzepatide. The CEO departed under duress after the ~50% drawdown and the board is reconstituting. 'Too draconian' requires being right on net PRICE, not just volume.",
     "adversarial_take": "CagriSema is 12-18 months from meaningful revenue under optimistic timelines, AND Lilly retatrutide could pre-empt any clean CagriSema launch window. Holding requires conviction that the 2026 trough is single-cycle pricing, not the start of a multi-year volume-share-price compression spiral.",
-    "stress_test": "If 2026 actuals come in worse than -13% CER guide AND Wegovy Q-over-Q volumes decelerate AND Lilly retatrutide approval comes through, the position may need to be cut even before CagriSema readouts."
+    "stress_test": "If 2026 actuals come in worse than -13% CER guide AND Wegovy Q-over-Q volumes decelerate AND Lilly retatrutide approval comes through, the position may need to be cut even before CagriSema readouts.",
+    "valuation_whats_priced_in": "At ~$43 / ~10x earnings, down ~40% over 12mo (~50% from the $81 high) with FY26 guided to an outright sales+profit DECLINE (-4% to -12% CER), NVO is priced as a challenged loser, not a compounder - so much of the patent + competition fear is already discounted (target dispersion $40-175 = genuine debate; Goldman $41 bear vs Cantor $160 bull). Patent cliff is bifurcated: the material US pool is protected to ~2031 patent / ~2032 practical generics (EU ~2031-33), so at 10x you barely pay for post-2031 - the cliff is well-discounted; the 2026 EM LOEs (CN/IN/BR/CA) are low-margin with a slow generic ramp. The genuinely-unresolved variable is the competitive / deceleration trajectory: is 2026 THE trough (stabilize -> re-rate) or the start of a structural slide (value trap)? The bar is LOW - NVO need only stop bleeding US share. PORTFOLIO ROLE: the cheap, asymmetric leg of a long-GLP-1-theme book - hold / don't capitulate to chase Lilly at its high; diversify the THEME (Roche/AZN/Amgen for pipeline breadth, or LLY on a pullback) rather than concentrate the obesity bet.",
+    "signposts_trap_vs_turn": [
+      "2027 CER guide returns to growth (the single most important tell)",
+      "US Rx-share stabilizing vs Lilly (stop the bleed)",
+      "CagriSema PDUFA ~Oct'26 + launch trajectory",
+      "Oral Wegovy/Ozempic US ramp (oral Ozempic T2D cleared; 25mg decision end-2026)",
+      "Amycretin/zenagamtide AMAZE Phase 3 progress",
+      "Realized net-price / margin trend under IRA (~70% off list 2027) + MFN"
+    ]
   },
   "data_note": "Novo reports in DKK at constant exchange rates (CER); the universal USD-based break rules are FX-distorted - judge the thesis on CER growth vs guide/consensus, not USD.",
   "competitive_watchlist": [
-    "Eli Lilly (tirzepatide / retatrutide / orforglipron)",
-    "Pfizer (oral GLP-1 candidates)",
-    "Amgen (MariTide)",
-    "Roche (CT-388)"
+    "Eli Lilly — the share winner: Foundayo (oral orforglipron) approved Apr'26; retatrutide TRIUMPH-1 28.3%; Zepbound outgrowing Wegovy",
+    "Roche — deepest non-leader pipeline: CT-388/enicepatide dual GIP/GLP-1 (Ph2 22.5% placebo-adj @48wk) + petrelintide (amylin, via Zealand)",
+    "AstraZeneca — elecoglipron (oral GLP-1, Ph3 H2'26) + AZD6234 (amylin) + AZD9550; CSPC deal",
+    "Pfizer — acquired Metsera ($4.9B, beat Novo): MET-097i monthly GLP-1 + MET-233i amylin + orals",
+    "Amgen — MariTide (monthly GLP-1/GIP, Ph3 MARITIME ongoing; Ph2 ~16-20% but GI tolerability/discontinuation risk)"
   ],
   "thesis_breakers_qualitative": [
     "Two consecutive Qs of CER revenue worse than -13% guide",
