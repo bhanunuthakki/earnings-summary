@@ -136,9 +136,11 @@
   "schema_version": 2,
   "wacc": null,
   "mos_bar": null,
+  "valuation_model": "bank_excess_return",
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null
+    "terminal_multiple": null,
+    "gsheet_id": "1HQPRZB_vp80Y-QLx3CzeCsrn59-OWyZcslXJvfrSZKM"
   },
   "flags": [
     "DCF_PARAMS_PENDING"

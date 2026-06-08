@@ -109,9 +109,11 @@
   "schema_version": 2,
   "wacc": null,
   "mos_bar": null,
+  "valuation_model": "fintech_sotp",
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null
+    "terminal_multiple": null,
+    "gsheet_id": "1WLuAfFdjecmUVDhawFRzTH0wQsYUfJPXDNSTzgPBSbY"
   },
   "flags": [
     "DCF_PARAMS_PENDING"

@@ -14,7 +14,9 @@ Layers (the locked logic):
                  (+ fees)(− opex)(− tax) → Net income → ÷ equity = ROE   (OUTPUT)
     Equity compounds by retained earnings; required capital = capital-ratio × book
     Value = BookEquity + Σ PV[(ROE − Ke) × Equity_{t-1}] + PV(terminal)   @ Ke
-    Terminal = Equity_T × (ROE_term − g)/(Ke − g)   (justified P/B; exit-PE cross-check)
+    Terminal = (ROE_term − Ke) × Equity_T / (Ke − g)   (continuing residual income;
+        NOT the full justified-P/B price Equity_T×(ROE_term−g)/(Ke−g), which would
+        double-count PV(terminal book equity); exit-PE is a cross-check only)
 
 Env (like build_redesigned_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT.
 Prints a RESULT line; the Python mirror is the value-of-record (openpyxl can't
@@ -96,35 +98,58 @@ class Actuals:
     price: float
 
 
-def load_actuals(ticker: str) -> Actuals:
+def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) -> Actuals:
+    """Y0 actuals from FMP, in REPORTING-CURRENCY millions.
+
+    FMP's bank line-items are unreliable for some filers: an Indian 20-F filer's
+    loan book lands in ``totalInvestments`` (``netReceivables`` is zeroed), share
+    counts can be mis-scaled, and a fresh fiscal-year record may be partly
+    unpopulated. So every field can be overridden by the ``actuals`` block of
+    ``data/bank_assumptions/<T>.json`` — give the override in reporting-currency
+    MILLIONS (FMP raw values are divided by 1e6 to match). Earning assets default
+    to NII / the Y0 NIM (``s.nim_y0``; NU = 17%) when not overridden, so the
+    divisor is no longer hard-coded to NU's spread.
+    """
+    ov = override or {}
     inc = _rows(_load(f"{ticker}_income_statement_annual.json"))
     bal = _rows(_load(f"{ticker}_balance_sheet_annual.json"))
     prof = _load(f"{ticker}_profile.json")
     if isinstance(prof, list):
         prof = prof[0] if prof else {}
     i0, b0, b1 = inc[0], bal[0], bal[1]
-    nii = i0["netInterestIncome"]
-    fees = i0["revenue"] - i0["interestIncome"]
-    opex = i0["operatingExpenses"]
-    pretax = i0["incomeBeforeTax"]
-    credit_cost = (nii + fees) - opex - pretax  # plug that ties to actual pretax
-    tax = i0["incomeTaxExpense"]
-    book = b0["netReceivables"]
     m = 1e6
+
+    def pick(key: str, fmp_millions: float) -> float:
+        v = ov.get(key)
+        return float(v) if isinstance(v, (int, float)) else fmp_millions
+
+    nii = pick("nii", i0["netInterestIncome"] / m)
+    fees = pick("fees", (i0["revenue"] - i0["interestIncome"]) / m)
+    opex = pick("opex", i0["operatingExpenses"] / m)
+    pretax = pick("pretax", i0["incomeBeforeTax"] / m)
+    # Credit book: override -> net receivables (when FMP populates it) ->
+    # total investments (where FMP buckets some banks' loan books) -> 0.
+    nr = (b0.get("netReceivables") or 0) / m
+    ti = (b0.get("totalInvestments") or 0) / m
+    book = pick("book", nr if nr > 0 else ti)
+    ea = pick("ea", nii / s.nim_y0)
+    credit_cost = pick("credit_cost", (nii + fees) - opex - pretax)  # plug to pretax
+    tax_paid = i0["incomeTaxExpense"] / m
+    tax_rate = pick("tax_rate", (tax_paid / pretax) if pretax else 0.25)
     return Actuals(
-        book=book / m,
-        ea=nii / 0.17 / m,
-        nii=nii / m,
-        fees=fees / m,
-        opex=opex / m,
-        credit_cost=credit_cost / m,
-        pretax=pretax / m,
-        tax_rate=tax / pretax,
-        ni=i0["netIncome"] / m,
-        equity=b0["totalStockholdersEquity"] / m,
-        equity_prior=b1["totalStockholdersEquity"] / m,
-        shares=i0["weightedAverageShsOutDil"] / m,
-        price=float(prof.get("price") or 0.0),
+        book=book,
+        ea=ea,
+        nii=nii,
+        fees=fees,
+        opex=opex,
+        credit_cost=credit_cost,
+        pretax=pretax,
+        tax_rate=tax_rate,
+        ni=pick("ni", i0["netIncome"] / m),
+        equity=pick("equity", b0["totalStockholdersEquity"] / m),
+        equity_prior=pick("equity_prior", b1["totalStockholdersEquity"] / m),
+        shares=pick("shares", i0["weightedAverageShsOutDil"] / m),
+        price=pick("price", float(prof.get("price") or 0.0)),
     )
 
 
@@ -227,6 +252,15 @@ class Assum:
     g_terminal: float = 0.07
     exit_pe: float = 18.0
     years: int = 10
+    # Y0 NIM used to back earning assets out of NII when ``actuals.ea`` isn't
+    # given (NU = 17%); no longer hard-coded to NU's spread in load_actuals.
+    nim_y0: float = 0.17
+    # currency / ADR translation (NU default: USD reporter, 1 ADR = 1 share).
+    # For an INR filer with a USD ADR, fx_to_usd = USD per 1 INR and
+    # adr_ratio = ordinary shares per ADR, so the per-share output is comparable
+    # to the traded ADR price.
+    fx_to_usd: float = 1.0
+    adr_ratio: float = 1.0
 
     @property
     def ke(self) -> float:
@@ -260,7 +294,8 @@ class MirrorRow:
 class Mirror:
     rows: list[MirrorRow] = field(default_factory=list)
     value: float = 0.0
-    vps: float = 0.0
+    vps: float = 0.0  # reporting-currency value per ordinary share
+    vps_usd: float = 0.0  # USD value per traded unit (ADR)
     pv_excess: float = 0.0
     pv_tv: float = 0.0
     roe_term: float = 0.0
@@ -323,10 +358,18 @@ def mirror(a: Actuals, s: Assum) -> Mirror:
     m.roe_term = last.roe
     eq_t = last.equity
     df_n = 1 / (1 + ke) ** n
-    tv = eq_t * (m.roe_term - s.g_terminal) / (ke - s.g_terminal)
+    # Terminal = PV of the CONTINUING residual income stream beyond year n,
+    # (ROE_term - Ke) * Equity_T / (Ke - g). NOT the full justified-P/B equity
+    # price Equity_T*(ROE_term-g)/(Ke-g): that price already equals
+    # Equity_T + PV(future residual income), so adding it on top of
+    # a.equity + PV(excess) -- which by the clean-surplus identity already
+    # embeds PV(Equity_T) -- would double-count PV(terminal book equity) and
+    # overstate value by ~40%+.
+    tv = (m.roe_term - ke) * eq_t / (ke - s.g_terminal)
     m.pv_tv = tv * df_n
     m.value = a.equity + m.pv_excess + m.pv_tv
-    m.vps = m.value / a.shares
+    m.vps = m.value / a.shares  # reporting-currency per ordinary share
+    m.vps_usd = m.vps * s.adr_ratio * s.fx_to_usd  # per traded ADR, in USD
     return m
 
 
@@ -384,6 +427,50 @@ R = {
     "pe2": 38,
     "roet": 39,
 }
+
+
+def render_generic_guardrails(
+    dash: Worksheet, kpis: dict[str, float], holdings: dict[str, Any]
+) -> None:
+    """Thesis-driven guardrails for any bank (non-NU): each holdings break rule
+    (``break_rules`` + ``business_model_rules``) shown vs its latest value from
+    ``kpi_facts``. Bank KPIs not yet extracted into kpi_facts (NIM, NPA, CAR for
+    HDB/SOFI) render 'n/a' — honest about coverage, never silently 'OK'. Reference
+    only (blue); not part of the formula-linked valuation engine."""
+    rules: list[dict[str, Any]] = []
+    for key in ("break_rules", "business_model_rules"):
+        rr = holdings.get(key)
+        if isinstance(rr, list):
+            rules.extend(r for r in rr if isinstance(r, dict))
+    if not rules:
+        return
+    _hdr(dash, "D2", "GUARDRAILS — thesis break rules vs latest KPI")
+    dash["D3"], dash["E3"], dash["F3"], dash["G3"] = "KPI", "Latest", "Break rule", "Status"
+    for cc in ("D3", "E3", "F3", "G3"):
+        dash[cc].font = SUB_FONT
+    r = 4
+    for rule in rules:
+        name = str(rule.get("kpi_name") or "")
+        comp = str(rule.get("comparator") or "")
+        thr = rule.get("threshold")
+        value = _kpi(kpis, name)
+        dash.cell(row=r, column=4, value=name[:46]).font = Font(color="374151")
+        vc = dash.cell(
+            row=r, column=5, value=round(value, 2) if isinstance(value, (int, float)) else "n/a"
+        )
+        vc.font = BLUE_FONT
+        periods = rule.get("consecutive_periods")
+        rule_txt = f"{comp} {thr}" + (f" / {periods}Q" if isinstance(periods, int) else "")
+        dash.cell(row=r, column=6, value=rule_txt).font = Font(size=9, color="6B7280")
+        status = "—"
+        if isinstance(value, (int, float)) and isinstance(thr, (int, float)):
+            breached = (value < thr) if comp == "lt" else (value > thr) if comp == "gt" else False
+            status = "BREACH" if breached else "OK"
+        sc = dash.cell(row=r, column=7, value=status)
+        sc.font = Font(bold=True, color="B91C1C" if status == "BREACH" else "15803D")
+        r += 1
+    for col, w in (("D", 32), ("E", 12), ("F", 16), ("G", 9)):
+        dash.column_dimensions[col].width = w
 
 
 def render_guardrails(dash: Worksheet, a: Actuals, kpis: dict[str, float]) -> None:
@@ -582,8 +669,8 @@ def build(
     # outputs (link from Valuation)
     _hdr(dash, "A33", "OUTPUT")
     for rr, lab, ref, fmt in (
-        (R["val"], "Value of equity ($M)", "Valuation!$B$8", USD0),
-        (R["vps"], "Value per share ($)", "Valuation!$B$9", NUM2),
+        (R["val"], "Value of equity (reporting, M)", "Valuation!$B$8", USD0),
+        (R["vps"], "Value per share / ADR (USD)", "Valuation!$B$14", NUM2),
         (R["up"], "Upside vs price", "Valuation!$B$10", PCT),
         (R["pb"], "Implied P/B", "Valuation!$B$11", MULT),
         (R["pe2"], "Implied P/E (fwd)", "Valuation!$B$12", MULT),
@@ -595,8 +682,12 @@ def build(
         oc.font = Font(bold=True)
     dash.column_dimensions["A"].width = 36
     dash.column_dimensions["B"].width = 14
-    if kpis:
+    # NU has the bespoke ARPAC/activity/NPL panel; other banks get a generic
+    # panel driven by their holdings break rules vs latest kpi_facts.
+    if kpis and _kpi(kpis, "Monthly ARPAC", "Activity Rate") is not None:
         render_guardrails(dash, a, kpis)
+    elif holdings:
+        render_generic_guardrails(dash, kpis or {}, holdings)
 
     # ---------- Model (formula-first engine) ----------
     _hdr(mod, "A1", f"{T} — Credit Model (formula-first; $M)")
@@ -707,20 +798,21 @@ def build(
     # ---------- Valuation ----------
     _hdr(val, "A1", f"{T} — Valuation (excess-return / residual income, $M)")
     cN = cl(last_col)
+    tv_label = "Terminal value (continuing residual income)"
+    vps_rep_label = "Value per share (reporting ccy)"
     vrows = [
         ("Book equity (Y0)", f"={D}!$B${R['eq0']}", USD0),
         ("PV of excess returns", f"=SUM(Model!{cl(col0 + 1)}32:{cN}32)", USD0),
         ("Terminal equity (Y" + str(n) + ")", f"=Model!{cN}25", USD0),
         ("Terminal ROE", f"=Model!{cN}27", PCT),
-        (
-            "Terminal value (justified P/B)",
-            f"=B4*(B5-{D}!$B${R['g']})/({KE}-{D}!$B${R['g']})",
-            USD0,
-        ),
+        # Continuing residual income (ROE_term-Ke)*Equity_T/(Ke-g) -- NOT the full
+        # justified-P/B price, which would double-count PV(terminal book equity).
+        (tv_label, f"=(B5-{KE})*B4/({KE}-{D}!$B${R['g']})", USD0),
         ("PV of terminal value", f"=B6*Model!{cN}31", USD0),
         ("Value of equity", "=B2+B3+B7", USD0),
-        ("Value per share ($)", f"=B8/{D}!$B${R['sh']}", NUM2),
-        ("Upside vs price", f"=B9/{D}!$B${R['px']}-1", PCT),
+        (vps_rep_label, f"=B8/{D}!$B${R['sh']}", NUM2),
+        # Upside compares the USD-per-ADR value (B14) to the USD ADR price.
+        ("Upside vs price", f"=B14/{D}!$B${R['px']}-1", PCT),
         ("Implied P/B", f"=B8/{D}!$B${R['eq0']}", MULT),
         ("Implied P/E (fwd)", f"=B8/Model!{cl(col0 + 1)}22", MULT),
         (
@@ -736,10 +828,10 @@ def build(
         "PV of excess returns": 3,
         "Terminal equity (Y" + str(n) + ")": 4,
         "Terminal ROE": 5,
-        "Terminal value (justified P/B)": 6,
+        tv_label: 6,
         "PV of terminal value": 7,
         "Value of equity": 8,
-        "Value per share ($)": 9,
+        vps_rep_label: 9,
         "Upside vs price": 10,
         "Implied P/B": 11,
         "Implied P/E (fwd)": 12,
@@ -754,7 +846,25 @@ def build(
         vc.number_format = fmt
         if r in (8, 9):
             vc.font = Font(bold=True)
-    val.column_dimensions["A"].width = 30
+    # Currency / ADR translation: per-ordinary-share (reporting) -> per-ADR (USD).
+    # For a USD reporter with no ADR these are 1.0 and B14 == B9. These are
+    # reference cells (blue): the bank model recomputes from bank_assumptions, not
+    # from edited sheet cells, so editing them here won't round-trip.
+    val.cell(row=15, column=1, value="ADR ratio (ordinary shares / ADR)").font = Font(
+        color="374151"
+    )
+    c = val.cell(row=15, column=2, value=s.adr_ratio)
+    c.number_format = NUM2
+    c.font = BLUE_FONT
+    val.cell(row=16, column=1, value="FX (reporting ccy -> USD)").font = Font(color="374151")
+    c = val.cell(row=16, column=2, value=s.fx_to_usd)
+    c.number_format = "0.00000"
+    c.font = BLUE_FONT
+    val.cell(row=14, column=1, value="Value per share / ADR (USD)").font = SUB_FONT
+    c = val.cell(row=14, column=2, value="=B9*B15*B16")
+    c.number_format = NUM2
+    c.font = Font(bold=True)
+    val.column_dimensions["A"].width = 32
     val.column_dimensions["B"].width = 14
 
     # ---------- Sensitivity (Ke × terminal-ROE proxy via terminal NIM) ----------
@@ -766,10 +876,14 @@ def build(
     wb.save(dest)
 
 
-def load_assumptions(ticker: str) -> Assum:
+def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
     """Assum defaults overridden by data/bank_assumptions/<T>.json if present —
-    per-ticker calibration, the bank analog of data/dcf_assumptions."""
+    per-ticker calibration, the bank analog of data/dcf_assumptions. Top-level
+    numeric keys override ``Assum`` fields (rf/nim_near/cap_ratio/fx_to_usd/...);
+    a nested ``actuals`` block overrides the Y0 statement actuals (see
+    ``load_actuals``). Returns ``(Assum, actuals_override)``."""
     s = Assum()
+    actuals_ov: dict[str, Any] = {}
     p = REPO / "data" / "bank_assumptions" / f"{ticker}.json"
     if p.exists():
         try:
@@ -777,10 +891,14 @@ def load_assumptions(ticker: str) -> Assum:
         except (OSError, json.JSONDecodeError):
             ov = {}
         if isinstance(ov, dict):
-            for k, v in cast("dict[str, Any]", ov).items():
+            ovd = cast("dict[str, Any]", ov)
+            for k, v in ovd.items():
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
-    return s
+            raw_act = ovd.get("actuals")
+            if isinstance(raw_act, dict):
+                actuals_ov = cast("dict[str, Any]", raw_act)
+    return s, actuals_ov
 
 
 def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
@@ -789,17 +907,27 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
     db = REPO / "data" / "portfolio.db"
     if persist_mod is None or not db.exists():
         return False
-    over_under = round((m.vps / a.price - 1) * 100, 2) if a.price else None
+    # Persist in USD so the brief's over/under compares like-for-like against the
+    # (USD) ADR price: vps_usd is per ADR, npv is the equity value in USD, and the
+    # share count is the ADR-equivalent (ordinary / adr_ratio). For a USD reporter
+    # with no ADR (fx=1, adr=1) these collapse to the reporting values unchanged.
+    npv_usd = m.value * s.fx_to_usd
+    shares_traded = a.shares / s.adr_ratio if s.adr_ratio else a.shares
+    over_under = round((m.vps_usd / a.price - 1) * 100, 2) if a.price else None
     mos = load_breaks(T).get("mos_bar")
     snap = json.dumps(
         {
             "model": "bank_excess_return",
             "ke": s.ke,
             "roe_terminal": m.roe_term,
-            "value_per_share_usd": m.vps,
+            "value_per_share_usd": m.vps_usd,
+            "value_per_share_reporting": m.vps,
+            "fx_to_usd": s.fx_to_usd,
+            "adr_ratio": s.adr_ratio,
             "pv_excess_m": m.pv_excess,
             "pv_terminal_m": m.pv_tv,
             "book_equity_m": a.equity,
+            "value_equity_reporting_m": m.value,
             "workbook": str(DEST),
         },
         indent=2,
@@ -809,9 +937,9 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
         valuation_date=date.today(),
         horizon_years=s.years,
         wacc=s.ke,
-        npv=m.value,
-        npv_per_share=m.vps,
-        shares_outstanding=a.shares * 1e6,
+        npv=npv_usd,
+        npv_per_share=m.vps_usd,
+        shares_outstanding=shares_traded * 1e6,
         currency="USD",
         live_price=a.price or None,
         live_price_at=None,
@@ -826,17 +954,23 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
 
 
 def main() -> int:
-    a = load_actuals(T)
-    s = load_assumptions(T)
+    s, actuals_ov = load_assumptions(T)
+    a = load_actuals(T, s, actuals_ov)
     kpis = load_kpis(T)
+    holdings = load_breaks(T)
     m = mirror(a, s)
-    build(a, s, m, DEST, kpis=kpis)
+    build(a, s, m, DEST, kpis=kpis, holdings=holdings)
     persisted = persist_dcf_run(a, s, m)
-    up = (m.vps / a.price - 1) if a.price else 0.0
+    up = (m.vps_usd / a.price - 1) if a.price else 0.0
+    fx_note = (
+        ""
+        if s.fx_to_usd == 1.0 and s.adr_ratio == 1.0
+        else f"\tfx={s.fx_to_usd:.5f}\tadr={s.adr_ratio:.0f}:1"
+    )
     print(
-        f"RESULT\t{T}\tKe={s.ke:.1%}\tvalue/sh=${m.vps:.2f}\tprice=${a.price:.2f}"
+        f"RESULT\t{T}\tKe={s.ke:.1%}\tvalue/sh=${m.vps_usd:.2f}\tprice=${a.price:.2f}"
         f"\tupside={up:+.0%}\tP/B={m.value / a.equity:.1f}x\tROE_term={m.roe_term:.1%}"
-        f"\tdcf_runs={'ok' if persisted else 'skip'}\t-> {DEST}"
+        f"{fx_note}\tdcf_runs={'ok' if persisted else 'skip'}\t-> {DEST}"
     )
     # year-by-year so we can eyeball the engine
     print(
@@ -849,7 +983,7 @@ def main() -> int:
         )
     print(
         f"\nBook eq {a.equity:.0f} + PV(excess) {m.pv_excess:.0f} + PV(TV) {m.pv_tv:.0f} "
-        f"= {m.value:.0f}  -> ${m.vps:.2f}/sh"
+        f"= {m.value:.0f} (reporting M) -> {m.vps:.2f}/sh reporting -> ${m.vps_usd:.2f}/ADR USD"
     )
     return 0
 
