@@ -492,6 +492,16 @@ def _reduced(cagrs, mTs, waccs, exits):
 base_red = float(
     _reduced(np.array([cagr0]), np.array([mT0]), np.array([wacc0]), np.array([EXIT_MULT]))[0]
 )
+# Thin-data names (recent IPOs like CGEH/FIGR) can drive a NaN through the model:
+# a sparse/negative projected revenue base under a fractional-power CAGR, an
+# empty-history ratio, etc. An all-NaN mc_vals (which crashes np.histogram below)
+# implies base_red itself is NaN — and a non-finite base case means the headline
+# value AND the Monte Carlo calibration constant are garbage, so the whole workbook
+# is meaningless. SKIP cleanly like the insufficient-history paths above rather
+# than emit a "nan" RESULT.
+if not (np.isfinite(base_red) and np.isfinite(full_value)):
+    print(f"SKIP\t{T}\tnon-finite base valuation\t(insufficient data for a reliable DCF)")
+    raise SystemExit(0)
 kcal = full_value / base_red if base_red else 1.0
 rng = np.random.default_rng(42)
 NMC = 10000
@@ -505,18 +515,29 @@ mc_vals = (
     * kcal
 )
 PCTS = [5, 10, 25, 50, 75, 90, 95]
-mc_res = {
-    "mean": float(mc_vals.mean()),
-    "median": float(np.median(mc_vals)),
-    "std": float(mc_vals.std()),
-    "min": float(mc_vals.min()),
-    "max": float(mc_vals.max()),
-    "pcts": {p: float(np.percentile(mc_vals, p)) for p in PCTS},
-    "p_under": float((mc_vals > price).mean()),
-    "p_up20": float((mc_vals > price * 1.2).mean()),
-}
-_hc, _he = np.histogram(mc_vals, bins=18)
-mc_hist = [(float(_he[i]), float(_he[i + 1]), int(_hc[i])) for i in range(len(_hc))]
+# Drop any non-finite draws before aggregating: a wide driver distribution can push
+# an individual trial out of the model's domain (NaN/inf), and np.histogram raises
+# "autodetected range of [nan, nan] is not finite" on an all-NaN array (and
+# .min()/.max()/percentile raise on an empty one).
+mc_vals = mc_vals[np.isfinite(mc_vals)]
+if mc_vals.size:
+    _hc, _he = np.histogram(mc_vals, bins=18)
+    mc_res = {
+        "mean": float(mc_vals.mean()),
+        "median": float(np.median(mc_vals)),
+        "std": float(mc_vals.std()),
+        "min": float(mc_vals.min()),
+        "max": float(mc_vals.max()),
+        "pcts": {p: float(np.percentile(mc_vals, p)) for p in PCTS},
+        "p_under": float((mc_vals > price).mean()),
+        "p_up20": float((mc_vals > price * 1.2).mean()),
+    }
+    mc_hist = [(float(_he[i]), float(_he[i + 1]), int(_hc[i])) for i in range(len(_hc))]
+else:
+    # No finite draws survived (degenerate inputs). The in-sheet Monte Carlo is
+    # live-formula based and still works; only this unused Python snapshot is
+    # skipped, so the workbook still builds.
+    mc_res, mc_hist = {}, []
 
 # ----------------------------------------------------------------------------- Dashboard
 # Single control surface: the ~handful of cells that move the answer live here at
