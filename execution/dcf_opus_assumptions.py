@@ -56,20 +56,51 @@ def idx(records, seg=False):
     return out
 
 
+def detect_fy_periods(
+    records_i: dict[tuple[int, str], object],
+    default: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4"),
+) -> tuple[str, ...]:
+    """Canonical period labels that make up ONE fiscal year for this issuer.
+
+    Generalises the "four quarters per year" assumption to any consistent cadence
+    — e.g. a semi-annual filer (BHP) that reports only H1/H2 as Q2/Q4, which sum
+    to the fiscal year exactly as four quarters do. The cadence is the LARGEST
+    period-set that recurs across >=2 fiscal years, so a single partial year (the
+    current in-progress year, or an IPO mid-ramp) is never mistaken for it; with
+    too little history to establish one, fall back to quarterly so short-history
+    names self-skip below instead of keying off a one-off period set.
+    """
+    by_fy: dict[int, set[str]] = defaultdict(set)
+    for y, p in records_i:
+        by_fy[y].add(p)
+    counts: dict[frozenset[str], int] = defaultdict(int)
+    for s in by_fy.values():
+        if s:
+            counts[frozenset(s)] += 1
+    recurring = [s for s, n in counts.items() if n >= 2]
+    return tuple(sorted(max(recurring, key=len))) if recurring else default
+
+
 inc_i, cf_i, pseg_i = idx(inc), idx(cf), idx(pseg, True)
+PERIODS = detect_fy_periods(inc_i)  # ("Q1".."Q4") quarterly · ("Q2","Q4") semi-annual (BHP)
 fys = sorted({y for (y, p) in inc_i})
-full = [y for y in fys if sum(1 for p in ("Q1", "Q2", "Q3", "Q4") if (y, p) in inc_i) == 4]
+full = [y for y in fys if all((y, p) in inc_i for p in PERIODS)]
+if not full:
+    # No issuer-complete fiscal year (e.g. an IPO with < 2 years of history): the
+    # redesign builder will SKIP this name, so don't spend an Opus call on it.
+    print(f"SKIP\t{T}\tno complete fiscal year yet\t(insufficient history for a DCF)")
+    raise SystemExit(0)
 
 
 def fy(recs, fld, y):
-    return sum(m(recs.get((y, p), {}).get(fld)) for p in ("Q1", "Q2", "Q3", "Q4"))
+    return sum(m(recs.get((y, p), {}).get(fld)) for p in PERIODS)
 
 
 # --- context ---
 lines = [
     f"Company: {prof.get('companyName', T)} ({T})",
     f"Sector / industry: {prof.get('sector', '?')} / {prof.get('industry', '?')}",
-    f"Reported currency: {(inc_i.get((full[-1], 'Q4') or {}) or inc[0] if inc else {}).get('reportedCurrency', '?') if inc else '?'}",
+    f"Reported currency: {(inc_i.get((full[-1], PERIODS[-1]) or {}) or inc[0] if inc else {}).get('reportedCurrency', '?') if inc else '?'}",
     f"Country: {prof.get('country', '?')}  |  Beta: {prof.get('beta', '?')}  |  Current price (USD): {prof.get('price', '?')}",
     "",
 ]

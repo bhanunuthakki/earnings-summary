@@ -247,6 +247,90 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
 
 
+def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
+    """Semi-annual filer (the BHP shape): each fiscal year reports only H1/H2 as
+    Q2/Q4, which sum to the fiscal-year figure. Consensus is anchored just above the
+    last full FY (its two halves) so near-term growth stays smooth and the
+    value-of-record tracks the builder's mirror."""
+    fmp = repo / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True, exist_ok=True)
+    inc: list[dict[str, object]] = []
+    bal: list[dict[str, object]] = []
+    cf: list[dict[str, object]] = []
+    rev = 400.0
+    for year in (2022, 2023, 2024, 2025):
+        for q in ("Q2", "Q4"):  # only the two halves — never Q1/Q3
+            rev *= 1.03
+            inc.append(
+                {
+                    "fiscalYear": year,
+                    "period": q,
+                    "reportedCurrency": "USD",
+                    "date": f"{year}-06-30",
+                    "revenue": rev * 1e6,
+                    "costOfRevenue": rev * 0.50 * 1e6,
+                    "grossProfit": rev * 0.50 * 1e6,
+                    "researchAndDevelopmentExpenses": rev * 0.12 * 1e6,
+                    "sellingGeneralAndAdministrativeExpenses": rev * 0.15 * 1e6,
+                    "operatingExpenses": rev * 0.40 * 1e6,
+                    "operatingIncome": rev * 0.12 * 1e6,
+                    "netIncome": rev * 0.09 * 1e6,
+                    "weightedAverageShsOutDil": 100 * 1e6,
+                }
+            )
+            bal.append(
+                {
+                    "fiscalYear": year,
+                    "period": q,
+                    "cashAndShortTermInvestments": rev * 0.30 * 1e6,
+                    "totalCurrentAssets": rev * 0.60 * 1e6,
+                    "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
+                    "totalAssets": rev * 1.50 * 1e6,
+                    "totalCurrentLiabilities": rev * 0.30 * 1e6,
+                    "longTermDebt": rev * 0.20 * 1e6,
+                    "totalStockholdersEquity": rev * 0.80 * 1e6,
+                }
+            )
+            cf.append(
+                {
+                    "fiscalYear": year,
+                    "period": q,
+                    "depreciationAndAmortization": rev * 0.08 * 1e6,
+                    "stockBasedCompensation": rev * 0.05 * 1e6,
+                    "changeInWorkingCapital": -rev * 0.01 * 1e6,
+                    "operatingCashFlow": rev * 0.15 * 1e6,
+                    "capitalExpenditure": -rev * 0.10 * 1e6,
+                    "freeCashFlow": rev * 0.05 * 1e6,
+                }
+            )
+    (fmp / f"{ticker}_income_statement_quarterly.json").write_text(
+        json.dumps(inc), encoding="utf-8"
+    )
+    (fmp / f"{ticker}_balance_sheet_quarterly.json").write_text(json.dumps(bal), encoding="utf-8")
+    (fmp / f"{ticker}_cash_flow_quarterly.json").write_text(json.dumps(cf), encoding="utf-8")
+    (fmp / f"{ticker}_profile.json").write_text(
+        json.dumps(
+            [{"companyName": f"{ticker} Co", "beta": 1.0, "price": 50.0, "currency": "USD"}]
+        ),
+        encoding="utf-8",
+    )
+    # FY2025 actual = its two half-year revenues ($M); consensus continues ~8%/yr.
+    base_fy_m = 400.0 * (1.03**7) + 400.0 * (1.03**8)  # the FY2025 Q2 + Q4 halves
+    est = [
+        {
+            "date": f"{y}-06-30",
+            "revenueAvg": base_fy_m * (1.08 ** (y - 2025)) * 1e6,
+            "netIncomeAvg": base_fy_m * 0.09 * (1.08 ** (y - 2025)) * 1e6,
+            "ebitdaAvg": base_fy_m * 0.20 * (1.08 ** (y - 2025)) * 1e6,
+            "ebitAvg": base_fy_m * 0.12 * (1.08 ** (y - 2025)) * 1e6,
+            "sgaExpenseAvg": base_fy_m * 0.15 * 1e6,
+            "epsAvg": base_fy_m * 0.09 / 100 * (1.08 ** (y - 2025)),
+        }
+        for y in range(2026, 2031)
+    ]
+    (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
+
+
 def _build(repo: Path, ticker: str, dest: Path) -> float:
     """Run the builder as a subprocess; return its value-of-record (RESULT line)."""
     env = dict(os.environ, DCF_TICKER=ticker, DCF_REPO_ROOT=str(repo), DCF_DEST=str(dest))
@@ -312,6 +396,46 @@ def test_read_and_value_matches_builder_mirror(built_usd: tuple[Path, float]) ->
     assert rv is not None
     assert rv.value_per_share_usd == pytest.approx(builder_value, rel=0.03)
     assert rv.fx_to_usd == 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Semi-annual filer (BHP shape): H1/H2 reported as Q2/Q4, two periods per FY
+# --------------------------------------------------------------------------- #
+@pytest.fixture(scope="module")
+def built_semiannual(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float]:
+    """Build one semi-annual (Q2/Q4-only) workbook once; reader tests share it."""
+    repo = tmp_path_factory.mktemp("redesign_semi")
+    _write_fmp_semiannual(repo, "SEMICO")
+    dest = repo / "dcf" / "SEMICO.xlsx"
+    builder_value = _build(repo, "SEMICO", dest)
+    return dest, builder_value
+
+
+def test_semiannual_reader_round_trips_and_matches_builder(
+    built_semiannual: tuple[Path, float],
+) -> None:
+    """The reader must accept a semi-annual workbook — its _latest_full_fy detects
+    the Q2/Q4 cadence instead of demanding four quarters — and recompute the
+    value-of-record in line with the builder, proving the H1/H2 build round-trips."""
+    dest, builder_value = built_semiannual
+    assert redesign.is_redesign_format(dest) is True
+    rv = redesign.read_and_value(dest)
+    assert rv is not None
+    assert builder_value > 0 and rv.value_per_share_usd > 0
+    assert rv.value_per_share_usd == pytest.approx(builder_value, rel=0.04)
+
+
+def test_semiannual_reader_aggregates_two_halves_into_fy(
+    built_semiannual: tuple[Path, float],
+) -> None:
+    """Single-segment base revenue = the latest FY's two half-year columns summed
+    (Q2 + Q4), not one quarter — the same FY aggregation the builder applies."""
+    dest, _ = built_semiannual
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.segments == ("Total company",)
+    expected_fy2025 = 400.0 * (1.03**7) + 400.0 * (1.03**8)  # the two FY2025 halves
+    assert inp.base_revenue_by_segment["Total company"] == pytest.approx(expected_fy2025, rel=1e-3)
 
 
 def test_reader_reads_dashboard_and_financials(built_usd: tuple[Path, float]) -> None:

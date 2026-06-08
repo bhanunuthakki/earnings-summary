@@ -221,12 +221,31 @@ def _quarter_columns(fs: Worksheet) -> dict[int, tuple[int, int]]:
     return out
 
 
+def _detect_fy_quarters(quarters_by_year: dict[int, set[int]]) -> set[int]:
+    """The quarter numbers that make up ONE fiscal year for this issuer.
+
+    Generalises "all four quarters" to any consistent cadence — a semi-annual
+    filer (e.g. BHP) shows only ``{2, 4}``, whose two half-year columns sum to the
+    fiscal year. The cadence is the largest quarter-set recurring across >=2
+    fiscal years (so the current partial year never defines it); falls back to
+    ``{1, 2, 3, 4}`` when history is too short to establish one.
+    """
+    counts: dict[frozenset[int], int] = defaultdict(int)
+    for qs in quarters_by_year.values():
+        if qs:
+            counts[frozenset(qs)] += 1
+    recurring = [qs for qs, n in counts.items() if n >= 2]
+    return set(max(recurring, key=len)) if recurring else {1, 2, 3, 4}
+
+
 def _latest_full_fy(qcols: dict[int, tuple[int, int]]) -> int:
-    """The most recent fiscal year whose four quarters are all present."""
+    """The most recent fiscal year carrying this issuer's full period set (all four
+    quarters for a quarterly filer; both halves for a semi-annual one)."""
     quarters_by_year: dict[int, set[int]] = defaultdict(set)
     for _col, (year, q) in qcols.items():
         quarters_by_year[year].add(q)
-    full = [y for y, qs in quarters_by_year.items() if {1, 2, 3, 4} <= qs]
+    cadence = _detect_fy_quarters(quarters_by_year)
+    full = [y for y, qs in quarters_by_year.items() if cadence <= qs]
     if not full:
         raise RedesignError("Financials sheet has no complete fiscal year")
     return max(full)
@@ -242,7 +261,8 @@ def _find_row(fs: Worksheet, label: str) -> int | None:
 
 
 def _fy_sum(fs: Worksheet, row: int, fy_cols: list[int]) -> float:
-    """Sum the four fiscal-year quarter columns for a row (skipping blanks)."""
+    """Sum a fiscal year's period columns for a row (four quarters, or two halves
+    for a semi-annual filer), skipping blanks."""
     total = 0.0
     for col in fy_cols:
         v = _num(fs, row, col)

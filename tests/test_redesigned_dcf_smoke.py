@@ -331,3 +331,34 @@ def test_builder_falls_back_to_single_seg_on_base_year_segment_gap(tmp_path: Pat
     assert float(fields[2]) > 0, f"degenerate (zero) valuation: {proc.stdout}"
     assert dest.exists()
     assert openpyxl.load_workbook(str(dest)).sheetnames == SHEETS
+
+
+def test_builder_handles_semiannual_filer(tmp_path: Path) -> None:
+    """A semi-annual filer (the BHP shape) reports only H1/H2 as Q2/Q4 each fiscal
+    year — the two halves sum to the fiscal year exactly as four quarters do. The
+    builder must DETECT the 2-period cadence and build (not SKIP on 'no complete
+    fiscal year'), aggregating Q2+Q4 into each FY actual."""
+    repo = tmp_path / "repo"
+    half_years = [(y, q) for y in (2022, 2023, 2024, 2025) for q in ("Q2", "Q4")]
+    _write_quarters(repo, "SEMICO", half_years)
+    dest = tmp_path / "SEMICO.xlsx"
+    proc = _run_builder(repo, "SEMICO", dest)
+    assert proc.returncode == 0, proc.stderr
+    fields = proc.stdout.splitlines()[0].split("\t")
+    assert fields[0] == "RESULT" and fields[1] == "SEMICO", proc.stdout
+    assert float(fields[2]) > 0, f"degenerate valuation: {proc.stdout}"
+    assert dest.exists()
+    wb = openpyxl.load_workbook(str(dest))
+    assert wb.sheetnames == SHEETS
+    # the Financials history is half-yearly: Q2/Q4 columns only, never Q1/Q3
+    fs = wb["Financials"]
+    quarters = {
+        str(fs.cell(1, c).value).split()[0]
+        for c in range(2, fs.max_column + 1)
+        if isinstance(fs.cell(1, c).value, str) and str(fs.cell(1, c).value).startswith("Q")
+    }
+    assert quarters == {"Q2", "Q4"}, quarters
+    # the Model carries FY actual columns built off the half-year sums
+    md = wb["Model"]
+    fy_headers = [md.cell(1, c).value for c in range(2, md.max_column + 1)]
+    assert "FY2025A" in fy_headers and "FY2026E" in fy_headers, fy_headers

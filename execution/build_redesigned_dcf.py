@@ -136,8 +136,35 @@ def idx(records, segmode=False):
     return out
 
 
+def detect_fy_periods(
+    records_i: dict[tuple[int, str], object],
+    default: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4"),
+) -> tuple[str, ...]:
+    """Canonical period labels that make up ONE fiscal year for this issuer.
+
+    Generalises the "four quarters per year" assumption to any consistent cadence
+    — e.g. a semi-annual filer (BHP) that reports only H1/H2 as Q2/Q4, which sum
+    to the fiscal year exactly as four quarters do. The cadence is the LARGEST
+    period-set that recurs across >=2 fiscal years, so a single partial year (the
+    current in-progress year, or an IPO mid-ramp) is never mistaken for it; with
+    too little history to establish one, fall back to quarterly so short-history
+    names self-skip below instead of building on a one-off period set.
+    """
+    by_fy: dict[int, set[str]] = defaultdict(set)
+    for y, p in records_i:
+        by_fy[y].add(p)
+    counts: dict[frozenset[str], int] = defaultdict(int)
+    for s in by_fy.values():
+        if s:
+            counts[frozenset(s)] += 1
+    recurring = [s for s, n in counts.items() if n >= 2]
+    return tuple(sorted(max(recurring, key=len))) if recurring else default
+
+
 inc_i, bal_i, cf_i = idx(inc), idx(bal), idx(cf)
 pseg_i, gseg_i = idx(prod_seg, True), idx(geo_seg, True)
+PERIODS = detect_fy_periods(inc_i)  # ("Q1".."Q4") quarterly · ("Q2","Q4") semi-annual (BHP)
+NPERIODS = len(PERIODS)
 keys = sorted(inc_i, reverse=True)[:QUARTERS]
 keys.reverse()  # oldest -> newest
 qlabels = [f"{p} {y}" for (y, p) in keys]
@@ -146,7 +173,7 @@ NQ = len(keys)
 fy_cols = defaultdict(list)
 for pos, (y, p) in enumerate(keys):
     fy_cols[y].append(2 + pos)
-_full = sorted(y for y, cs in fy_cols.items() if len(cs) == 4)
+_full = sorted(y for y, cs in fy_cols.items() if len(cs) == NPERIODS)
 if not _full:
     # Too little FMP history to anchor a forecast — e.g. a name that IPO'd in the
     # last few quarters, for which FMP returns no/partial quarterly statements
@@ -183,7 +210,7 @@ GEO = sorted(
 _base_fy = full_fys[-1]
 _seg_base_total = sum(
     v
-    for p in ("Q1", "Q2", "Q3", "Q4")
+    for p in PERIODS
     for v in ((pseg_i.get((_base_fy, p)) or {}).get(s) for s in PROD)
     if isinstance(v, (int, float))
 )
@@ -198,7 +225,7 @@ def m(v):
 
 def fy_sum_raw(records_i, field, y):
     tot = 0.0
-    for p in ("Q1", "Q2", "Q3", "Q4"):
+    for p in PERIODS:
         r = records_i.get((y, p))
         v = (r or {}).get(field)
         if isinstance(v, (int, float)):
@@ -603,8 +630,14 @@ def write_yoy(target_row):
     global frow
     put(fs, frow, 1, "    % YoY")
     for i in range(NQ):
-        if i >= 4:
-            put(fs, frow, 2 + i, ie(f"{col(i)}{target_row}/{col(i - 4)}{target_row}-1"), fmt=PCT)
+        if i >= NPERIODS:  # one fiscal year back = NPERIODS columns (4 quarterly, 2 semi-annual)
+            put(
+                fs,
+                frow,
+                2 + i,
+                ie(f"{col(i)}{target_row}/{col(i - NPERIODS)}{target_row}-1"),
+                fmt=PCT,
+            )
     frow += 1
 
 
