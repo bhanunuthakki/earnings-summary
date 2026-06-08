@@ -122,16 +122,23 @@ def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
     conn.row_factory = sqlite3.Row
     try:
         result = _extract_segment_definitions(ticker, repo_root, conn)
-        _emit("segment_defs_refreshed", {
-            "ticker": ticker,
-            "fiscal_year": result.fiscal_year,
-            "definitions_found": sum(1 for v in result.definitions.values() if v),
-            "skipped": result.skipped_reason,
-        })
+        _emit(
+            "segment_defs_refreshed",
+            {
+                "ticker": ticker,
+                "fiscal_year": result.fiscal_year,
+                "definitions_found": sum(1 for v in result.definitions.values() if v),
+                "skipped": result.skipped_reason,
+            },
+        )
     except Exception as e:
-        _emit("segment_defs_error", {
-            "ticker": ticker, "error": f"{type(e).__name__}: {e}",
-        })
+        _emit(
+            "segment_defs_error",
+            {
+                "ticker": ticker,
+                "error": f"{type(e).__name__}: {e}",
+            },
+        )
     finally:
         conn.close()
 
@@ -172,6 +179,7 @@ def main() -> int:
             trigger=args.trigger,
             renderer=args.renderer,
             force_budget_bypass=args.force_budget_bypass,
+            force_refresh=args.force_refresh,
         )
         summary.append(result)
     print(json.dumps(summary, indent=2, default=str))
@@ -221,6 +229,12 @@ def _parse_args() -> argparse.Namespace:
         "--refresh-news",
         action="store_true",
         help="Force a fresh WebSearch for §8 (bypasses the cache for this build).",
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Bypass the on-disk cache for the IR-anchor LLM sections (bear case §7 + "
+        "recent developments §8) so they re-run with the latest fetched documents.",
     )
     parser.add_argument(
         "--flavor",
@@ -313,6 +327,7 @@ def _build_one(
     trigger: str = "manual",
     renderer: str = "default",
     force_budget_bypass: bool = False,
+    force_refresh: bool = False,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -368,6 +383,7 @@ def _build_one(
         refresh_news=refresh_news,
         flavor=flavor,
         force_budget_bypass=effective_bypass,
+        force_refresh=force_refresh,
     )
 
     if renderer in ("default", "both"):
@@ -403,11 +419,7 @@ def _build_one(
     # Pick the canonical artifact path: prefer workspace when rendered,
     # otherwise fall back to the long-form HTML. Provenance rows always point
     # at a real file so audit consumers can deep-link.
-    canonical_artifact = (
-        workspace_html_path
-        if renderer in ("workspace", "both")
-        else html_path
-    )
+    canonical_artifact = workspace_html_path if renderer in ("workspace", "both") else html_path
     per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root)
     _log_brief_provenance(
         repo_root=repo_root,
@@ -430,9 +442,7 @@ def _build_one(
     }
 
 
-def _collect_per_metric_provenance(
-    ticker: str, repo_root: Path
-) -> dict[str, dict[str, object]]:
+def _collect_per_metric_provenance(ticker: str, repo_root: Path) -> dict[str, dict[str, object]]:
     """Collate per-line-item provenance across the sections wired for it.
 
     Today: snapshot (DCF valuation) + financials (8 quarterly line items).
@@ -543,9 +553,7 @@ def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
         conn.close()
 
 
-def _build_etf(
-    ticker: str, repo_root: Path, md_path: Path, today: str
-) -> dict[str, object]:
+def _build_etf(ticker: str, repo_root: Path, md_path: Path, today: str) -> dict[str, object]:
     """ETF brief build path — markdown only for the MVP.
 
     HTML / workspace / xlsx renderers are equity-shaped and not adapted yet;
