@@ -55,6 +55,7 @@ DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
 _BUILDER_SCRIPT = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 _BANK_BUILDER = PROJECT_ROOT / "execution" / "build_bank_dcf.py"
+_HOLDCO_BUILDER = PROJECT_ROOT / "execution" / "build_holdco_sotp.py"
 
 
 def main() -> int:
@@ -152,23 +153,28 @@ def refresh_one(
     the dashboard `/actions/dcf-import` can drive the same recompute + `dcf_runs`
     upsert.
 
-    Order:
-      1. Skip names Opus flagged `dcf_applicable=false` (the builder also SKIPs).
-      2. Resolve the workbook (`--workbook` override, else `dcf/<TICKER>.xlsx`).
-      3. Rebuild it from the latest FMP, preserve the user's Dashboard inputs,
-         recompute the value-of-record, upsert `dcf_runs` (`_refresh_redesign`).
+    Dispatches on the ticker's `valuation_model` (see `_valuation_model`):
+      - "fcff_dcf"            -> the redesigned FCFF DCF (`_refresh_redesign`).
+      - "bank_excess_return"  -> the equity-side bank model (`_refresh_bank`).
+      - "holdco_sotp"         -> the sum-of-the-parts model (`_refresh_holdco`).
+      - "new"/"none"/unknown  -> skip, surfacing any Opus-proposed new-model spec.
     """
-    not_applicable = _dcf_not_applicable(repo_root, ticker)
-    if not_applicable is not None:
-        # Credit banks (an FCFF DCF is wrong, but they ARE valuable) get the
-        # equity-side excess-return bank model instead of being skipped. Asset
-        # managers / insurers stay skipped — they need their own model shape.
-        if not_applicable == "bank":
-            return _refresh_bank(ticker, repo_root)
+    model, suggestion = _valuation_model(repo_root, ticker)
+    if model == "bank_excess_return":
+        return _refresh_bank(ticker, repo_root)
+    if model == "holdco_sotp":
+        return _refresh_holdco(ticker, repo_root)
+    if model != "fcff_dcf":
+        # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
+        # or an unknown model string — no template to run.
+        reason = f"no valuation template ({model})"
+        if suggestion:
+            reason += f" — SUGGESTS: {suggestion}"
         return {
             "ticker": ticker.upper(),
             "status": "skipped",
-            "reason": f"dcf_applicable=false ({not_applicable})",
+            "reason": reason,
+            "valuation_model": model,
         }
 
     dest = (
@@ -204,6 +210,51 @@ def _dcf_not_applicable(repo_root: Path, ticker: str) -> str | None:
     return None
 
 
+def _valuation_model(repo_root: Path, ticker: str) -> tuple[str, str | None]:
+    """The valuation archetype to run for `ticker`, plus any Opus 'new-model'
+    suggestion. Resolution order:
+      1. holdings ``valuation_model`` override (committed, user-owned — wins),
+      2. the Opus determination in ``data/dcf_assumptions/<T>.json["redesign"]``,
+      3. a backward-compat heuristic (bank -> bank model; other dcf_applicable=false
+         -> "none"; else "fcff_dcf").
+    Returns ``(model, suggestion)`` — model is "fcff_dcf" / "bank_excess_return" /
+    "holdco_sotp" / "new" / "none" (or any explicit string the user/Opus set).
+    """
+    t = ticker.upper()
+    hp = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
+    if hp.exists():
+        try:
+            h: object = json.loads(hp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            h = None
+        if isinstance(h, dict):
+            vm = cast("dict[str, object]", h).get("valuation_model")
+            if isinstance(vm, str) and vm:
+                return vm, None
+    ap = repo_root / "data" / "dcf_assumptions" / f"{t}.json"
+    if ap.exists():
+        try:
+            raw: object = json.loads(ap.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = None
+        if isinstance(raw, dict):
+            rd = cast("dict[str, object]", raw).get("redesign")
+            if isinstance(rd, dict):
+                rdd = cast("dict[str, object]", rd)
+                vm = rdd.get("valuation_model")
+                if isinstance(vm, str) and vm:
+                    sugg = rdd.get("valuation_model_suggestion")
+                    return vm, (sugg if isinstance(sugg, str) and vm == "new" else None)
+    na = _dcf_not_applicable(repo_root, t)
+    if na == "bank":
+        return "bank_excess_return", None
+    if na is not None:
+        # a non-bank financial (asset_manager/insurer/...) with no explicit
+        # valuation_model yet: no template — surface the business model as the reason.
+        return na, None
+    return "fcff_dcf", None
+
+
 def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     """Build the equity-side bank credit model (``execution/build_bank_dcf.py``)
     to ``dcf/<T>.xlsx``. The builder computes the value-of-record and upserts
@@ -225,6 +276,35 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
         reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
         return {"ticker": t, "status": "failed", "format": "bank", "reason": reason}
     return {"ticker": t, "status": "ok", "format": "bank", "workbook": str(dest), "result": line}
+
+
+def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
+    """Build the sum-of-the-parts holdco model (``execution/build_holdco_sotp.py``)
+    to ``dcf/<T>.xlsx``; the builder computes the value-of-record and upserts
+    ``dcf_runs`` itself, like the bank/FCFF builders."""
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    proc = subprocess.run(
+        [sys.executable, str(_HOLDCO_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if line is None:
+        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        return {"ticker": t, "status": "failed", "format": "holdco_sotp", "reason": reason}
+    return {
+        "ticker": t,
+        "status": "ok",
+        "format": "holdco_sotp",
+        "workbook": str(dest),
+        "result": line,
+    }
 
 
 def _run_builder(ticker: str, repo_root: Path, dest: Path) -> subprocess.CompletedProcess[str]:

@@ -142,10 +142,28 @@ toward maintenance (capex/D&A -> ~1.0x) in the terminal year.
 
 {CONTEXT}
 
+VALUATION MODEL — FIRST decide which archetype fits {T}. The pipeline has these templates:
+  - "fcff_dcf": the 10-year FCFF DCF below. DEFAULT for operating companies (software, \
+consumer, industrial, healthcare, semis, energy, payments, etc.).
+  - "bank_excess_return": equity-side excess-return for deposit/credit BANKS — value equity as \
+book + PV[(ROE - cost of equity) x regulatory capital]. Use for spread-lending banks.
+  - "holdco_sotp": sum-of-the-parts / NAV for capital-allocator HOLDING COMPANIES that \
+consolidate non-recourse subsidiary debt + large minorities (NAV of the parts: fee business, \
+carry, insurance, invested capital, less corporate). Use for Brookfield-style holdcos.
+  - "new": NONE of the above fits well — e.g. a pure insurer needing embedded value, a REIT \
+needing NAV + FFO, a pure asset manager needing an FRE multiple, a yieldco needing a DDM, a \
+pre-revenue biotech needing risk-adjusted NPV, a commodity/royalty needing a NAV. Set \
+valuation_model="new" and put the proposed archetype + a one-sentence spec in \
+valuation_model_suggestion.
+Keep dcf_applicable consistent: true if and only if valuation_model="fcff_dcf". The FCFF drivers \
+below are only USED when valuation_model="fcff_dcf"; still fill them best-effort.
+
 Return ONLY a JSON object (no prose, no markdown fences) with EXACTLY these keys:
 {{
   "dcf_applicable": true | false,   // false for banks/insurers/asset-managers where an FCFF DCF is the wrong tool
   "business_model": "operating | bank | insurer | asset_manager | royalty | reit | other",
+  "valuation_model": "fcff_dcf | bank_excess_return | holdco_sotp | new",
+  "valuation_model_suggestion": "",  // when "new": <archetype name> - <one-sentence spec>; else ""
   "segments": {{ {", ".join(f'"{s}": {{"near_term_growth": <0-1 decimal>, "terminal_growth": <0-1 decimal>}}' for s in SEG_KEYS)} }},
   "near_term_op_margin": <0-1 decimal>,    // operating margin in the next 1-3 years
   "terminal_op_margin": <0-1 decimal>,     // mature operating margin by year 10
@@ -184,7 +202,10 @@ if data.get("narrative"):
     existing.setdefault("narrative", data["narrative"])
 cache_path.parent.mkdir(parents=True, exist_ok=True)
 cache_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+_vm = data.get("valuation_model") or ("fcff_dcf" if data.get("dcf_applicable") else "?")
+_sugg = data.get("valuation_model_suggestion")
 print(
-    f"OK\t{T}\tapplicable={data.get('dcf_applicable')}\tmodel={data.get('business_model')}\t"
+    f"OK\t{T}\tvaluation_model={_vm}\tbusiness={data.get('business_model')}\t"
     f"basis={data.get('exit_basis')}@{data.get('exit_multiple')}\tterm_margin={data.get('terminal_op_margin')}"
+    + (f"\tSUGGESTS: {_sugg}" if _vm == "new" and _sugg else "")
 )

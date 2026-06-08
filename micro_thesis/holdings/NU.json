@@ -196,6 +196,7 @@
   "schema_version": 2,
   "wacc": 0.11,
   "mos_bar": 0.25,
+  "valuation_model": "bank_excess_return",
   "dcf_defaults": {
     "forecast_years": 5,
     "terminal_multiple": 18.0,

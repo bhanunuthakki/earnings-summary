@@ -497,6 +497,57 @@ def test_refresh_bank_dispatches_to_bank_model(
     assert res["format"] == "bank"  # (status is 'failed' here — no TESTCO FMP fixture data)
 
 
+def test_valuation_model_dispatches_to_holdco(refresh_repo: Path) -> None:
+    """An explicit valuation_model='holdco_sotp' routes to the SOTP builder."""
+    assumptions = refresh_repo / "data" / "dcf_assumptions"
+    assumptions.mkdir(parents=True, exist_ok=True)
+    (assumptions / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"dcf_applicable": False, "valuation_model": "holdco_sotp"}}),
+        encoding="utf-8",
+    )
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] != "skipped"
+    assert res["format"] == "holdco_sotp"
+
+
+def test_valuation_model_holdings_override_wins(refresh_repo: Path) -> None:
+    """The holdings valuation_model override beats the dcf_assumptions one."""
+    (refresh_repo / "data" / "dcf_assumptions").mkdir(parents=True, exist_ok=True)
+    (refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"valuation_model": "holdco_sotp"}}), encoding="utf-8"
+    )
+    holdings = refresh_repo / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True, exist_ok=True)
+    (holdings / "TESTCO.json").write_text(
+        json.dumps({"ticker": "TESTCO", "valuation_model": "bank_excess_return"}), encoding="utf-8"
+    )
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["format"] == "bank"  # holdings override won over the dcf_assumptions holdco
+
+
+def test_valuation_model_new_skips_with_suggestion(refresh_repo: Path) -> None:
+    """valuation_model='new' has no template → skip, surfacing the Opus suggestion."""
+    (refresh_repo / "data" / "dcf_assumptions").mkdir(parents=True, exist_ok=True)
+    (refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json").write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "valuation_model": "new",
+                    "valuation_model_suggestion": "insurance embedded value — book + PV(in-force)",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "skipped"
+    assert res["valuation_model"] == "new"
+    assert "embedded value" in str(res["reason"])  # the suggestion is surfaced
+
+
 def test_refresh_redesign_negative_fair_value_nulls_over_under(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
