@@ -124,6 +124,7 @@
   "schema_version": 2,
   "wacc": 0.09,
   "mos_bar": 0.2,
+  "valuation_model": "holdco_sotp",
   "dcf_defaults": {
     "forecast_years": 5,
     "terminal_multiple": 15.0,
