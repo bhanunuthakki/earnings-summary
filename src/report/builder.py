@@ -46,6 +46,7 @@ def build_report(
     refresh_news: bool = False,
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
     force_budget_bypass: bool = False,
+    force_refresh: bool = False,
 ) -> ReportSpec:
     """Build the unified ReportSpec for one ticker.
 
@@ -96,7 +97,7 @@ def build_report(
         enable_llm=enable_llm,
         news_days=news_days,
         cache_ttl_days=news_cache_ttl_days,
-        force_refresh=refresh_news,
+        force_refresh=refresh_news or force_refresh,
         force_budget_bypass=force_budget_bypass,
     )
     bear_case_section = bear_case.build(
@@ -107,6 +108,7 @@ def build_report(
         financials=financials_section,
         segments=segments_section,
         earnings=earnings_section,
+        force_refresh=force_refresh,
         force_budget_bypass=force_budget_bypass,
     )
     provenance_section = provenance.build(ticker, repo_root)
