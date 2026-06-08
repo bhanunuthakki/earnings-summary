@@ -44,14 +44,28 @@ depends_on: str | Sequence[str] | None = None
 _CADENCE_VOCAB = "('quarterly', 'annual', 'ttm')"
 
 
+def _has_table(inspector: sa.Inspector, name: str) -> bool:
+    return name in inspector.get_table_names()
+
+
 def _has_column(inspector: sa.Inspector, table: str, column: str) -> bool:
+    """True iff `table` exists AND carries `column`. Table-absence-tolerant: many
+    test fixtures run `upgrade head` against a partial DB that never created
+    kpi_definitions, mirroring 0071's `_has_table` guard — a bare get_columns on a
+    missing table raises NoSuchTableError, so the existence check comes first."""
+    if not _has_table(inspector, table):
+        return False
     return any(c["name"] == column for c in inspector.get_columns(table))
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     insp = sa.inspect(bind)
-    if not _has_column(insp, "kpi_definitions", "reporting_cadence"):
+    # No-op when kpi_definitions is absent (partial test schemas) or the column
+    # already exists (idempotent re-run).
+    if _has_table(insp, "kpi_definitions") and not _has_column(
+        insp, "kpi_definitions", "reporting_cadence"
+    ):
         op.execute(
             "ALTER TABLE kpi_definitions ADD COLUMN reporting_cadence TEXT NOT NULL "
             "DEFAULT 'quarterly' CONSTRAINT ck_kpi_definitions_reporting_cadence "

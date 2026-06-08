@@ -1469,7 +1469,7 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
     body.write('<span class="panel-title">Tracked KPIs — annual</span>')
     body.write(
         f'<span class="panel-sub">{len(matrix_rows)} annual-cadence '
-        f'series · fiscal-year axis</span></div>'
+        f"series · fiscal-year axis</span></div>"
     )
     body.write('<div class="prose-pad">')
     body.write(
