@@ -443,6 +443,52 @@ def _redesign_snapshot(rv: redesign_mod.RedesignValuation, workbook_path: str) -
     return json.dumps(payload, indent=2)
 
 
+def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.RedesignInputs) -> bool:
+    """Mirror the workbook's edited numeric assumptions back into
+    ``data/dcf_assumptions/<T>.json["redesign"]`` — the from-scratch-build default.
+
+    Without this, an ``import``/refresh preserves edits in the workbook + ``dcf_runs``
+    but leaves the JSON stale, so a ``build_all_redesigned_dcf`` (which builds purely
+    from the JSON) would silently revert them. Writing the numbers back keeps the JSON
+    a true source of truth. Updates ONLY the numeric assumption fields; the Opus
+    ``narrative``/``reasoning`` and the model flags (``dcf_applicable``/``business_model``
+    /``valuation_model``) are left untouched. WACC drivers (beta/rf/ERP/cost-of-debt)
+    live on the FMP profile, not in this schema, so they are out of scope. Returns True
+    when written, False when there is no assumptions file / redesign block to update.
+    """
+    path = repo_root / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return False
+    try:
+        data = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError):
+        return False
+    block = data.get("redesign")
+    if not isinstance(block, dict):
+        return False
+    rd = cast("dict[str, object]", block)
+    rd["segments"] = {
+        seg: {
+            "near_term_growth": inp.near_growth_by_segment[seg],
+            "terminal_growth": inp.terminal_growth_by_segment[seg],
+        }
+        for seg in inp.segments
+    }
+    rd["near_term_op_margin"] = inp.near_op_margin
+    rd["terminal_op_margin"] = inp.terminal_op_margin
+    rd["tax_rate"] = inp.tax_rate
+    rd["terminal_method"] = inp.terminal_method
+    rd["exit_basis"] = inp.terminal_basis
+    rd["exit_multiple"] = inp.exit_multiple
+    rd["terminal_growth_g"] = inp.terminal_growth_g
+    rd["terminal_capex_da"] = inp.terminal_capex_da
+    try:
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def _refresh_redesign(
     ticker: str,
     repo_root: Path,
@@ -538,11 +584,21 @@ def _refresh_redesign(
     with sqlite3.connect(str(db_path)) as conn:
         persist_mod.upsert(conn, row)
 
+    # Mirror the now-deployed assumptions back to the from-scratch default so a
+    # build_all_redesigned_dcf can't silently revert user edits (single source of
+    # truth). Best-effort: a sync-write failure must never fail the refresh — the
+    # edits are already preserved in the workbook + dcf_runs.
+    synced = False
+    inp = redesign_mod.read_inputs(dest)
+    if inp is not None:
+        synced = sync_assumptions_json(repo_root, ticker, inp)
+
     return {
         "ticker": ticker,
         "status": "ok",
         "workbook": str(dest),
         "format": "redesign",
+        "assumptions_synced": synced,
         "valuation_year": valuation_year,
         "fair_value_per_share": fair_value,
         "enterprise_value_M": rv.operating_value_usd_m,
