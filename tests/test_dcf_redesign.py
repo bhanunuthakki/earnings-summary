@@ -82,6 +82,10 @@ _BASE = redesign.RedesignInputs(
     da_ratio=0.05,
     consensus_years=5,
     wacc=0.09,
+    beta=1.2,
+    risk_free_rate=0.043,
+    equity_risk_premium=0.045,
+    cost_of_debt=0.045,
     terminal_method="Exit multiple",
     terminal_basis="EV/EBITDA",
     exit_multiple=12.0,
@@ -557,6 +561,8 @@ def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> No
         terminal_op_margin=0.15,
         exit_multiple=9.0,
         terminal_growth_g=0.02,
+        beta=1.45,
+        equity_risk_premium=0.055,
     )
     assert refresh_dcf.sync_assumptions_json(tmp_path, "TESTCO", edited) is True
     out = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
@@ -566,6 +572,11 @@ def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> No
     assert rd["terminal_op_margin"] == 0.15
     assert rd["exit_multiple"] == 9.0
     assert rd["terminal_growth_g"] == 0.02
+    # WACC drivers mirrored too (edited + carried from _BASE)
+    assert rd["beta"] == 1.45
+    assert rd["equity_risk_premium"] == 0.055
+    assert rd["risk_free_rate"] == 0.043
+    assert rd["cost_of_debt"] == 0.045
     # Opus prose + model flags untouched
     assert rd["narrative"] == "REDESIGN NARRATIVE keep"
     assert rd["reasoning"] == "REASONING keep"
@@ -600,14 +611,39 @@ def test_refresh_redesign_syncs_assumptions_json(
     # Seed a workbook, then simulate the user editing the exit multiple (B45) and refresh.
     refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     wb = openpyxl.load_workbook(str(dest))
-    wb["Dashboard"].cell(row=45, column=2, value=8.0)  # exit multiple -> 8x
+    dsh = wb["Dashboard"]
+    dsh.cell(row=45, column=2, value=8.0)  # exit multiple -> 8x
+    dsh.cell(row=40, column=2, value=1.55)  # beta -> 1.55
     wb.save(str(dest))
     wb.close()
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     assert res["assumptions_synced"] is True
     rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
     assert rd["exit_multiple"] == pytest.approx(8.0)
+    assert rd["beta"] == pytest.approx(1.55)
     assert rd["narrative"] == "keep me"
+
+
+def test_builder_reads_wacc_override_from_block(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A beta/ERP override in the redesign block flows into the built workbook's WACC
+    cells — so a from-scratch rebuild reproduces the user's WACC drivers (the other
+    half of the round-trip from test_refresh_redesign_syncs_assumptions_json)."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"beta": 1.62, "equity_risk_premium": 0.055}}, indent=2),
+        encoding="utf-8",
+    )
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "ok", res
+    # The builder wrote the override into the Dashboard WACC cells (B40 beta, B39 ERP).
+    assert _dashboard_cell(dest, 40) == pytest.approx(1.62)
+    assert _dashboard_cell(dest, 39) == pytest.approx(0.055)
 
 
 def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(

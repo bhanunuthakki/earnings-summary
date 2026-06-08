@@ -119,6 +119,10 @@ class RedesignInputs:
     da_ratio: float
     consensus_years: int
     wacc: float
+    beta: float
+    risk_free_rate: float
+    equity_risk_premium: float
+    cost_of_debt: float
     terminal_method: str
     terminal_basis: str
     exit_multiple: float
@@ -461,6 +465,10 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         da_ratio=da_ratio,
         consensus_years=ncons,
         wacc=wacc,
+        beta=beta,
+        risk_free_rate=rf,
+        equity_risk_premium=erp,
+        cost_of_debt=kd,
         terminal_method=method,
         terminal_basis=basis,
         exit_multiple=exit_mult,
