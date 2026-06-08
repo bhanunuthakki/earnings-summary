@@ -649,6 +649,20 @@ def test_valuation_model_dispatches_to_fintech_sotp(refresh_repo: Path) -> None:
     assert res["format"] == "fintech_sotp"
 
 
+def test_valuation_model_dispatches_to_platform_dcf(refresh_repo: Path) -> None:
+    """An explicit valuation_model='platform_dcf' routes to the customer-driven platform DCF."""
+    assumptions = refresh_repo / "data" / "dcf_assumptions"
+    assumptions.mkdir(parents=True, exist_ok=True)
+    (assumptions / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"dcf_applicable": False, "valuation_model": "platform_dcf"}}),
+        encoding="utf-8",
+    )
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] != "skipped"
+    assert res["format"] == "platform_dcf"
+
+
 def test_valuation_model_holdings_override_wins(refresh_repo: Path) -> None:
     """The holdings valuation_model override beats the dcf_assumptions one."""
     (refresh_repo / "data" / "dcf_assumptions").mkdir(parents=True, exist_ok=True)
