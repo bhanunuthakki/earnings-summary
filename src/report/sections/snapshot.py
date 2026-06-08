@@ -32,9 +32,10 @@ def build(
     rules = load_rules(ticker, repo_root)
     company_name = _company_name(ticker, repo_root)
     mos_bar = _mos_bar(holdings)
+    sheet_url = _linked_sheet_url(holdings)
     current_price = rules.current_price_override or _latest_price(ticker, repo_root)
     valuation = _valuation_snapshot(
-        ticker, repo_root, current_price, model_link, mos_bar, held=held
+        ticker, repo_root, current_price, model_link, mos_bar, sheet_url, held=held
     )
     verdict = _verdict(ticker, repo_root)
     tier_1_strip = _tier_1_strip(holdings)
@@ -75,6 +76,23 @@ def _read_holdings(ticker: str, repo_root: Path) -> dict[str, object] | None:
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def _linked_sheet_url(holdings: dict[str, object] | None) -> str | None:
+    """The live Google Sheet URL for a ticker's DCF, from ``dcf_defaults.gsheet_id``.
+
+    Mirrors ``comments_server._linked_gsheet`` so the brief's static link and the
+    server's ``/dcf/<T>`` redirect resolve a Sheet the same way. ``None`` when no
+    Sheet is linked (the card then falls back to the ``.xlsx`` link)."""
+    if not holdings:
+        return None
+    dd = holdings.get("dcf_defaults")
+    if not isinstance(dd, dict):
+        return None
+    gid = cast("dict[str, object]", dd).get("gsheet_id")
+    if isinstance(gid, str) and gid:
+        return f"https://docs.google.com/spreadsheets/d/{gid}/edit"
+    return None
 
 
 def _company_name(ticker: str, repo_root: Path) -> str | None:
@@ -140,6 +158,7 @@ def _valuation_snapshot(
     current_price: float | None,
     model_link: str | None,
     mos_bar: float | None,
+    sheet_url: str | None = None,
     held: bool = False,
 ) -> ValuationSnapshot:
     conn = open_repo_db(repo_root)
@@ -149,6 +168,7 @@ def _valuation_snapshot(
         return ValuationSnapshot(
             current_price=current_price,
             model_link=model_link,
+            sheet_url=sheet_url,
             mos_bar=mos_bar,
         )
 
@@ -170,6 +190,7 @@ def _valuation_snapshot(
         return ValuationSnapshot(
             current_price=current_price,
             model_link=model_link,
+            sheet_url=sheet_url,
             mos_bar=mos_bar,
         )
 
@@ -197,6 +218,7 @@ def _valuation_snapshot(
         terminal_growth=row["terminal_growth"],
         valuation_date=row["valuation_date"],
         model_link=model_link,
+        sheet_url=sheet_url,
         over_under_pct=over_under,
         mos_bar=mos_bar_used,
         trigger_status=trigger,

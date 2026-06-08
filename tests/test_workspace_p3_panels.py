@@ -56,6 +56,7 @@ from report.renderers.workspace_html import (  # noqa: E402
     _strategic_targets_panel,
     _thesis_hygiene_panels,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     _thesis_tab,
+    _valuation_summary_panel,
 )
 from report.sections.p3_data import (  # noqa: E402
     CustomerConcentrationRow,
@@ -521,6 +522,54 @@ def test_peer_comp_panel_empty_state() -> None:
     assert "peers cache cold" in html
     assert "stub-label" in html
     assert "_peers.json" in html
+
+
+# ---------------------------------------------------------------------------
+# Valuation summary panel — DCF model link
+# ---------------------------------------------------------------------------
+
+
+def test_valuation_panel_links_to_google_sheet_when_linked() -> None:
+    """A linked Sheet (sheet_url set) renders an explicit, direct Google Sheets
+    link — not the generic /dcf/<T> '.xlsx' fallback."""
+    snap = SnapshotSection(
+        status=SectionStatus.OK,
+        ticker="TEST",
+        valuation=ValuationSnapshot(
+            consolidated_npv_per_share=100.0,
+            current_price=90.0,
+            model_link="dcf/TEST.xlsx",
+            sheet_url="https://docs.google.com/spreadsheets/d/abc123/edit",
+        ),
+    )
+    body = StringIO()
+    _valuation_summary_panel(body, snap)
+    html_out = body.getvalue()
+    assert "Open in Google Sheets" in html_out
+    assert "https://docs.google.com/spreadsheets/d/abc123/edit" in html_out
+    # the generic xlsx fallback must not also render when a Sheet is linked
+    assert "Open .xlsx" not in html_out
+    assert "/dcf/TEST" not in html_out
+
+
+def test_valuation_panel_falls_back_to_xlsx_when_no_sheet() -> None:
+    """No linked Sheet (sheet_url None) keeps the /dcf/<T> '.xlsx' route link."""
+    snap = SnapshotSection(
+        status=SectionStatus.OK,
+        ticker="TEST",
+        valuation=ValuationSnapshot(
+            consolidated_npv_per_share=100.0,
+            current_price=90.0,
+            model_link="dcf/TEST.xlsx",
+            sheet_url=None,
+        ),
+    )
+    body = StringIO()
+    _valuation_summary_panel(body, snap)
+    html_out = body.getvalue()
+    assert 'href="/dcf/TEST"' in html_out
+    assert "Open .xlsx" in html_out
+    assert "Google Sheets" not in html_out
 
 
 # ---------------------------------------------------------------------------

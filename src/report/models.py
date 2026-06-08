@@ -77,6 +77,7 @@ class ValuationSnapshot(BaseModel):
     terminal_growth: float | None = None
     valuation_date: date | None = None
     model_link: str | None = None  # relative path to dcf xlsx
+    sheet_url: str | None = None  # live Google Sheet URL when dcf_defaults.gsheet_id is set
 
     # Phase 3 — populated by execution/refresh_dcf.py from dcf_runs audit cols.
     over_under_pct: float | None = None  # (live - fair) / fair; positive = over
