@@ -517,6 +517,99 @@ def test_refresh_redesign_seeds_then_persists(
     assert row[1] == pytest.approx(50.0)
 
 
+def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> None:
+    """_sync_assumptions_json writes edited numeric inputs into the redesign block
+    while preserving the Opus narrative/reasoning and the model flags."""
+    adir = tmp_path / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps(
+            {
+                "ticker": "TESTCO",
+                "narrative": "TOP NARRATIVE keep",
+                "redesign": {
+                    "dcf_applicable": True,
+                    "business_model": "operating",
+                    "segments": {
+                        "Total company": {"near_term_growth": 0.10, "terminal_growth": 0.03}
+                    },
+                    "near_term_op_margin": 0.20,
+                    "terminal_op_margin": 0.25,
+                    "tax_rate": 0.24,
+                    "exit_basis": "EV/EBITDA",
+                    "terminal_method": "Exit multiple",
+                    "exit_multiple": 12.0,
+                    "terminal_growth_g": 0.03,
+                    "terminal_capex_da": 1.05,
+                    "narrative": "REDESIGN NARRATIVE keep",
+                    "reasoning": "REASONING keep",
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    edited = dataclasses.replace(
+        _BASE,
+        near_growth_by_segment={"Total company": 0.06},
+        terminal_growth_by_segment={"Total company": 0.02},
+        near_op_margin=0.05,
+        terminal_op_margin=0.15,
+        exit_multiple=9.0,
+        terminal_growth_g=0.02,
+    )
+    assert refresh_dcf.sync_assumptions_json(tmp_path, "TESTCO", edited) is True
+    out = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
+    rd = out["redesign"]
+    assert rd["segments"]["Total company"] == {"near_term_growth": 0.06, "terminal_growth": 0.02}
+    assert rd["near_term_op_margin"] == 0.05
+    assert rd["terminal_op_margin"] == 0.15
+    assert rd["exit_multiple"] == 9.0
+    assert rd["terminal_growth_g"] == 0.02
+    # Opus prose + model flags untouched
+    assert rd["narrative"] == "REDESIGN NARRATIVE keep"
+    assert rd["reasoning"] == "REASONING keep"
+    assert rd["dcf_applicable"] is True
+    assert rd["business_model"] == "operating"
+    assert out["narrative"] == "TOP NARRATIVE keep"
+
+
+def test_sync_assumptions_json_noop_when_absent(tmp_path: Path) -> None:
+    """No assumptions file or no redesign block -> returns False, writes nothing."""
+    assert refresh_dcf.sync_assumptions_json(tmp_path, "MISSING", _BASE) is False
+    adir = tmp_path / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "NOBLOCK.json").write_text(json.dumps({"ticker": "NOBLOCK"}), encoding="utf-8")
+    assert refresh_dcf.sync_assumptions_json(tmp_path, "NOBLOCK", _BASE) is False
+
+
+def test_refresh_redesign_syncs_assumptions_json(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: a Dashboard edit flows back into data/dcf_assumptions on refresh,
+    so a from-scratch rebuild would reproduce it (single source of truth)."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"exit_multiple": 12.0, "narrative": "keep me"}}, indent=2),
+        encoding="utf-8",
+    )
+    # Seed a workbook, then simulate the user editing the exit multiple (B45) and refresh.
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    wb = openpyxl.load_workbook(str(dest))
+    wb["Dashboard"].cell(row=45, column=2, value=8.0)  # exit multiple -> 8x
+    wb.save(str(dest))
+    wb.close()
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["assumptions_synced"] is True
+    rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
+    assert rd["exit_multiple"] == pytest.approx(8.0)
+    assert rd["narrative"] == "keep me"
+
+
 def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
