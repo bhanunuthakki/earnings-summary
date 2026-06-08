@@ -128,16 +128,37 @@ def load_actuals(ticker: str) -> Actuals:
     )
 
 
+# kpi_facts.fiscal_period_type values that denote an annual (fiscal-year-end)
+# observation — mirror of compute.kpi_resolver.ANNUAL_FACT_PERIOD_TYPES (inlined
+# so the builder stays import-light; the DB is opened read-only).
+_ANNUAL_FPT = frozenset({"FY", "annual"})
+
+
 def load_kpis(ticker: str) -> dict[str, float]:
-    """Latest value per KPI name from kpi_facts (read-only). Empty if no DB/data
-    — the guardrails panel then degrades to actuals-only."""
+    """Latest authoritative value per KPI name from kpi_facts (read-only). Empty if
+    no DB/data — the guardrails panel then degrades to actuals-only.
+
+    Cadence-aware: for an annual-cadence definition
+    (``kpi_definitions.reporting_cadence='annual'`` — NU's Basel III capital
+    adequacy ratio, disclosed once a year in the 20-F) only fiscal-year-end
+    (``FY``) rows are authoritative, so the guardrail reads the latest ANNUAL CAR
+    (the same value the break rule evaluates) rather than a stray interim print.
+    Quarterly KPIs keep latest-by-period_end. Falls back to the period_end rule
+    when the cadence column is absent (pre-0072 DB)."""
     db = REPO / "data" / "portfolio.db"
     if not db.exists():
         return {}
     conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     try:
+        has_cadence = any(
+            r["name"] == "reporting_cadence"
+            for r in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()
+        )
+        cadence_sel = "kd.reporting_cadence" if has_cadence else "'quarterly'"
         rows = conn.execute(
-            "SELECT kd.name, kf.value, kf.period_end FROM kpi_facts kf "
+            f"SELECT kd.name AS name, kf.value AS value, kf.fiscal_period_type AS fpt, "
+            f"{cadence_sel} AS cadence FROM kpi_facts kf "
             "JOIN kpi_definitions kd ON kf.kpi_definition_id=kd.id "
             "WHERE kf.ticker=? ORDER BY kf.period_end DESC",
             (ticker,),
@@ -147,9 +168,16 @@ def load_kpis(ticker: str) -> dict[str, float]:
     finally:
         conn.close()
     out: dict[str, float] = {}
-    for name, value, _pe in rows:
-        if name not in out and isinstance(value, (int, float)):
-            out[name] = float(value)
+    for r in rows:  # newest period_end first
+        name = str(r["name"])
+        value = r["value"]
+        if name in out or not isinstance(value, (int, float)):
+            continue
+        # An annual KPI's interim prints are not authoritative — skip them so the
+        # first row that lands is the latest fiscal-year-end value.
+        if str(r["cadence"] or "quarterly") == "annual" and str(r["fpt"] or "") not in _ANNUAL_FPT:
+            continue
+        out[name] = float(value)
     return out
 
 
@@ -383,11 +411,12 @@ def render_guardrails(dash: Worksheet, a: Actuals, kpis: dict[str, float]) -> No
             None,
         ),
         (
-            "Capital adequacy (CAR)",
+            # Annual (20-F) Basel III ratio — load_kpis serves the latest FY value.
+            "Capital adequacy (CAR, annual)",
             _kpi(kpis, "Capital adequacy"),
             PCT100,
-            f"min {car_min}% · break <12.5%",
-            12.5,
+            f"min {car_min}% · break <13%",
+            13,
             "lt",
         ),
         ("NPL 90d+", _kpi(kpis, "NPL 90d+"), PCT100, "break >7% / 2Q", 7, "gt"),

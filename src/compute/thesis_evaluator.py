@@ -22,7 +22,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from compute.kpi_resolver import resolve_kpi_definition_name
+from compute.kpi_resolver import (
+    ANNUAL_FACT_PERIOD_TYPES,
+    reporting_cadence_for,
+    resolve_kpi_definition_name,
+)
 from compute.soft_rule_evaluator import (
     SoftRule,
     SoftRuleResult,
@@ -202,6 +206,14 @@ def _fetch_kpi_history(
     fixed for the §3 chart). No resolvable definition → no observations (caller
     treats that as OK / no-data), exactly as an exact-name miss did.
 
+    **Cadence-aware**: when the resolved definition is annual-cadence (e.g. NU's
+    Basel III capital adequacy ratio, disclosed once a year in the 20-F) only
+    fiscal-year-end (``FY``) rows are read, so ``n_periods`` counts YEARS, not the
+    last N rows of mixed cadence. An annual metric with genuine interim prints
+    (NU CAR has a few) therefore evaluates "2 consecutive periods" as two annual
+    values, never a year-end value paired with an interim one. Quarterly KPIs are
+    unchanged (every period type is read, as before).
+
     Coexisting rows for one period (an LLM brief value plus the issuer's later
     IR-spreadsheet restatement) are deduped to the latest-ingested source per
     logical key — highest ``source_doc_id`` wins — matching the §3 chart loader
@@ -216,10 +228,19 @@ def _fetch_kpi_history(
         # materialized, or a metric never extracted). Signal None so the caller
         # marks the rule UNRESOLVED rather than silently OK.
         return None
+    # Annual-cadence breakers count YEARS: restrict to FY rows so the
+    # consecutive-periods window is annual, never a mix of year-end + interim.
+    period_filter = ""
+    params: list[object] = [ticker.upper(), resolved_name]
+    if reporting_cadence_for(conn, ticker, resolved_name) == "annual":
+        placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
+        period_filter = f" AND kf.fiscal_period_type IN ({placeholders})"
+        params.extend(ANNUAL_FACT_PERIOD_TYPES)
+    params.append(n_periods)
     cur = conn.execute(
         "SELECT kf.period_end, kf.value, kf.unit "
         "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-        "WHERE kf.ticker = ? AND kd.name = ? "
+        "WHERE kf.ticker = ? AND kd.name = ?" + period_filter + " "
         "  AND kf.source_doc_id = ("
         "      SELECT MAX(k2.source_doc_id) FROM kpi_facts k2 "
         "      WHERE k2.ticker = kf.ticker "
@@ -227,7 +248,7 @@ def _fetch_kpi_history(
         "        AND k2.period_end = kf.period_end "
         "        AND k2.fiscal_period_type = kf.fiscal_period_type) "
         "ORDER BY kf.period_end DESC LIMIT ?",
-        (ticker.upper(), resolved_name, n_periods),
+        params,
     )
     out: list[KpiObservation] = []
     for row in cur.fetchall():

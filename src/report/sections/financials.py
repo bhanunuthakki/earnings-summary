@@ -18,8 +18,14 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from compute.kpi_resolver import QUARTERLY_FACT_PERIOD_TYPES, resolve_kpi_definition_name
+from compute.kpi_resolver import (
+    ANNUAL_FACT_PERIOD_TYPES,
+    QUARTERLY_FACT_PERIOD_TYPES,
+    reporting_cadence_for,
+    resolve_kpi_definition_name,
+)
 from report.models import (
+    AnnualKpiSeries,
     AnnualLineItem,
     FinancialsSection,
     KpiSeries,
@@ -114,7 +120,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
     )
 
     requested_priorities = _read_chart_priorities_request(ticker, repo_root)
-    resolved_priorities, kpi_series = _resolve_priorities(
+    resolved_priorities, kpi_series, annual_kpi_series, annual_kpi_years = _resolve_priorities(
         requested_priorities, line_items, ticker, repo_root, display_labels, quarter_labels_full
     )
 
@@ -132,6 +138,8 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         annual_line_items=annual_items,
         chart_priorities=resolved_priorities,
         kpi_chart_series=kpi_series,
+        annual_kpi_chart_series=annual_kpi_series,
+        annual_kpi_years=annual_kpi_years,
         quarter_labels_full=quarter_labels_full,
         currency=currency,
     )
@@ -158,16 +166,24 @@ def _resolve_priorities(
     repo_root: Path,
     quarter_labels: list[str],
     quarter_labels_full: list[str],
-) -> tuple[list[str], list[KpiSeries]]:
+) -> tuple[list[str], list[KpiSeries], list[AnnualKpiSeries], list[int]]:
     """Resolve each requested name against line_items → kpi_facts → drop.
 
     Each name is tried first against the financials line_items (case-insensitive).
     If not found, queried against kpi_facts. If neither has data, dropped silently.
     Preserves the holdings-JSON ordering.
+
+    Cadence-aware: a name whose definition is annual-cadence
+    (``kpi_definitions.reporting_cadence='annual'``) resolves to an
+    ``AnnualKpiSeries`` on the fiscal-year axis instead of the gappy quarterly
+    series — kept out of ``kpi_chart_series`` so the quarterly heatmap never shows
+    a mostly-empty annual metric. Returns
+    ``(resolved_names, quarterly_series, annual_series, annual_years)``.
     """
     li_map = {li.line_item.lower(): li.line_item for li in line_items}
     resolved: list[str] = []
     kpi_series: list[KpiSeries] = []
+    annual_raw: list[tuple[str, str, dict[int, float]]] = []
 
     db_path = repo_root / "data" / "portfolio.db"
     conn: sqlite3.Connection | None = None
@@ -183,6 +199,12 @@ def _resolve_priorities(
                 continue
             if conn is None:
                 continue
+            if reporting_cadence_for(conn, ticker, name) == "annual":
+                annual = _annual_kpi_raw_for(conn, ticker, name)
+                if annual is not None:
+                    annual_raw.append(annual)
+                    resolved.append(annual[0])
+                continue
             series = _kpi_series_for(conn, ticker, name, quarter_labels, quarter_labels_full)
             if series is not None:
                 kpi_series.append(series)
@@ -191,7 +213,88 @@ def _resolve_priorities(
         if conn is not None:
             conn.close()
 
-    return resolved, kpi_series
+    annual_series, annual_years = _align_annual_kpis(annual_raw)
+    return resolved, kpi_series, annual_series, annual_years
+
+
+def _annual_kpi_raw_for(
+    conn: sqlite3.Connection, ticker: str, kpi_name: str
+) -> tuple[str, str, dict[int, float]] | None:
+    """Pull an annual-cadence KPI's fiscal-year-end series as ``(canonical_name,
+    pretty_unit, {fiscal_year: value})``, or None when nothing resolves.
+
+    Reads only ``FY``/``annual`` rows (``ANNUAL_FACT_PERIOD_TYPES``) so interim
+    prints on an otherwise-annual metric never pollute the annual axis; dedupes to
+    the latest-ingested source per period (highest ``source_doc_id``), matching
+    every other kpi_facts reader. ``period_end`` year is the axis key.
+    """
+    resolved_name = resolve_kpi_definition_name(
+        conn, ticker, kpi_name, period_types=ANNUAL_FACT_PERIOD_TYPES
+    )
+    if resolved_name is None:
+        return None
+    placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
+    cur = conn.cursor()
+    cur.execute(
+        f"""
+        SELECT kf.period_end, kf.value, kf.unit, kd.name
+        FROM kpi_facts kf
+        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+        WHERE kf.ticker = ?
+          AND kd.name = ?
+          AND kf.fiscal_period_type IN ({placeholders})
+          AND kf.source_doc_id = (
+              SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
+              WHERE k2.ticker = kf.ticker
+                AND k2.kpi_definition_id = kf.kpi_definition_id
+                AND k2.period_end = kf.period_end
+                AND k2.fiscal_period_type = kf.fiscal_period_type
+          )
+        ORDER BY kf.period_end ASC
+        """,
+        (ticker.upper(), resolved_name, *ANNUAL_FACT_PERIOD_TYPES),
+    )
+    rows = cur.fetchall()
+    if not rows:
+        return None
+    by_year: dict[int, float] = {}
+    canonical_name = kpi_name
+    canonical_unit = ""
+    for r in rows:
+        canonical_name = str(r["name"])
+        canonical_unit = str(r["unit"] or "")
+        try:
+            year = int(str(r["period_end"])[:4])
+            by_year[year] = float(str(r["value"]))
+        except ValueError:
+            continue
+    if not by_year:
+        return None
+    return canonical_name, _pretty_unit(canonical_unit), by_year
+
+
+def _align_annual_kpis(
+    annual_raw: list[tuple[str, str, dict[int, float]]],
+) -> tuple[list[AnnualKpiSeries], list[int]]:
+    """Build a shared fiscal-year axis (union of all series' years, newest
+    ``ANNUAL_HISTORY_YEARS``) and align each annual KPI to it. Returns
+    ``([], [])`` when there are no annual KPIs."""
+    if not annual_raw:
+        return [], []
+    all_years: set[int] = set()
+    for _name, _unit, by_year in annual_raw:
+        all_years.update(by_year)
+    years = sorted(all_years)[-ANNUAL_HISTORY_YEARS:]
+    series = [
+        AnnualKpiSeries(
+            name=name,
+            unit=unit,
+            years=years,
+            values=[by_year.get(y) for y in years],
+        )
+        for name, unit, by_year in annual_raw
+    ]
+    return series, years
 
 
 def _kpi_series_for(

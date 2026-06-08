@@ -369,6 +369,26 @@ class KpiSeries(BaseModel):
     levels_full: list[float | None] = Field(default_factory=list)
 
 
+class AnnualKpiSeries(BaseModel):
+    """A kpi_facts time series for an ANNUAL-cadence KPI, aligned to a fiscal-year
+    axis (not the quarterly axis).
+
+    Used for metrics an issuer discloses only annually (bank Basel III capital
+    ratios, other 20-F/10-K-only figures). The renderer shows these as a clean
+    annual series with year-over-year shading rather than the gappy quarterly
+    heatmap that quarterly-axis alignment would produce. ``years`` are fiscal
+    years (oldest → newest); ``values`` align to them.
+    """
+
+    name: str
+    unit: str  # "%", "ratio", etc.
+    # Plain typed defaults (not Field(default_factory=list)): pyright strict infers
+    # the empty-list default against the declared element type, so these stay
+    # strict-clean where the bare-`list` factory reads as list[Unknown].
+    years: list[int] = []
+    values: list[float | None] = []
+
+
 class FinancialsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
@@ -378,6 +398,13 @@ class FinancialsSection(BaseModel):
     annual_line_items: list[AnnualLineItem] = Field(default_factory=list)
     chart_priorities: list[str] = Field(default_factory=list)  # display names, dynamic count
     kpi_chart_series: list[KpiSeries] = Field(default_factory=list)
+    # ANNUAL-cadence KPIs (kpi_definitions.reporting_cadence='annual') resolved
+    # from chart_priorities — rendered on the fiscal-year axis below, not the
+    # quarterly heatmap. `annual_kpi_years` is the shared year axis (oldest →
+    # newest); each series' values align to it. Empty when the ticker tracks no
+    # annual KPIs.
+    annual_kpi_chart_series: list[AnnualKpiSeries] = []
+    annual_kpi_years: list[int] = []
     # Full-history quarter labels (parallel to QuarterlyLineItem.levels_full).
     # Used by the YoY matrix renderer; empty when not populated.
     quarter_labels_full: list[str] = Field(default_factory=list)

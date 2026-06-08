@@ -596,12 +596,20 @@ def yoy_heatmap_table(
     periods: list[str],
     title: str,
     display_quarters: int = 12,
-    cagr_periods: tuple[int, ...] = (4, 8, 12),  # in quarters (1y, 2y, 3y)
+    cagr_periods: tuple[int, ...] = (4, 8, 12),  # in periods (quarterly: 1y, 2y, 3y)
+    period_stride: int = 4,  # periods back for the YoY comparison (quarterly = 4)
+    periods_per_year: int = 4,  # periods per year, for CAGR annualization + labels
 ) -> str:
     """Wide YoY% matrix with heat shading + trailing CAGR columns.
 
-    Each cell shows YoY% (current quarter / 4-quarters-ago - 1). The right
-    columns show trailing 1y/2y/3y CAGR computed from absolute levels.
+    Each cell shows YoY% (current period / ``period_stride``-periods-ago - 1). The
+    right columns show trailing CAGR computed from absolute levels.
+
+    Cadence: the defaults are quarterly (``period_stride=4``,
+    ``periods_per_year=4``, ``cagr_periods`` in quarters). An ANNUAL series passes
+    ``period_stride=1``, ``periods_per_year=1`` and year-unit ``cagr_periods`` so
+    YoY compares year-end to year-end and the trailing columns annualize correctly
+    — the same renderer, cadence-parametrized.
 
     Cells are heat-shaded: green for positive growth, red for negative,
     saturation proportional to magnitude (capped at ±30%).
@@ -651,7 +659,7 @@ def yoy_heatmap_table(
     for p in display_periods:
         th.append(f'<th class="cv2-matrix-q">{html.escape(p)}</th>')
     for q in cagr_periods:
-        yrs = q / 4
+        yrs = q / periods_per_year
         th.append(f'<th class="cv2-matrix-cagr">{int(yrs) if yrs.is_integer() else yrs}y CAGR</th>')
     th.append("</tr></thead>")
 
@@ -673,8 +681,8 @@ def yoy_heatmap_table(
         for j_display, _ in enumerate(display_periods):
             j_full = start_display + j_display
             curr = row.levels[j_full]
-            base = row.levels[j_full - 4] if j_full >= 4 else None
-            pct = yoy(curr, base) if j_full >= 4 else None
+            base = row.levels[j_full - period_stride] if j_full >= period_stride else None
+            pct = yoy(curr, base) if j_full >= period_stride else None
             if level_mode:
                 # Ratio/percentage metric: show the absolute level; shade by the
                 # YoY direction of that level (YoY% of a ratio isn't meaningful).
@@ -702,7 +710,7 @@ def yoy_heatmap_table(
                 )
                 continue
             if n_total > q:
-                pct = cagr(row.levels[-1], base, q / 4)
+                pct = cagr(row.levels[-1], base, q / periods_per_year)
                 noisy = is_noisy(pct, base, latest_val)
             else:
                 pct = None

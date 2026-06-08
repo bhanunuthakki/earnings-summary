@@ -15,7 +15,12 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from compute.kpi_resolver import normalize_kpi_name, resolve_kpi_definition_name
+from compute.kpi_resolver import (
+    ANNUAL_FACT_PERIOD_TYPES,
+    normalize_kpi_name,
+    reporting_cadence_for,
+    resolve_kpi_definition_name,
+)
 from report.kpi_naming import kpi_qualifier
 from report.models import (
     BreakRuleEvaluation,
@@ -506,6 +511,12 @@ def _kpi_history_conn(
     non-null — gives the reader provenance for the headline value without
     surfacing per-period quotes. Does not close ``conn`` (the caller owns it);
     ``_build_ledger`` shares one connection across the whole ledger.
+
+    Cadence-aware: an annual-cadence KPI (e.g. NU's 20-F capital adequacy ratio)
+    reads only fiscal-year-end (``FY``) rows, so the ledger sparkline/latest-value
+    is a clean annual series and the year-over-year delta compares year-end to
+    year-end — never a year-end value against a sparse interim print. Quarterly
+    KPIs are unchanged.
     """
     if not kpi_name:
         return [], None
@@ -526,6 +537,13 @@ def _kpi_history_conn(
         for c in cursor.execute("PRAGMA table_info(kpi_facts)").fetchall()
     )
     cols = "f.period_end, f.value" + (", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt")
+    # Annual-cadence KPI → read FY rows only (clean annual sparkline + YoY).
+    period_filter = ""
+    params: list[object] = [ticker.upper(), resolved_name]
+    if reporting_cadence_for(conn, ticker, resolved_name) == "annual":
+        placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
+        period_filter = f" AND f.fiscal_period_type IN ({placeholders})"
+        params.extend(ANNUAL_FACT_PERIOD_TYPES)
     # Dedup coexisting rows for the same period (e.g. an LLM brief value plus the
     # issuer's later IR-spreadsheet restatement): keep only the latest-ingested
     # source per logical key so break-rule evaluation sees one observation per
@@ -535,7 +553,7 @@ def _kpi_history_conn(
         SELECT {cols}
         FROM kpi_facts f
         JOIN kpi_definitions d ON d.id = f.kpi_definition_id
-        WHERE d.ticker = ? AND d.name = ?
+        WHERE d.ticker = ? AND d.name = ?{period_filter}
           AND f.source_doc_id = (
               SELECT MAX(f2.source_doc_id) FROM kpi_facts f2
               WHERE f2.ticker = f.ticker
@@ -545,7 +563,7 @@ def _kpi_history_conn(
           )
         ORDER BY f.period_end ASC
         """,
-        (ticker.upper(), resolved_name),
+        params,
     )
     out: list[tuple[str, float | None]] = []
     latest_excerpt: str | None = None

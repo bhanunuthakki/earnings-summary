@@ -1313,6 +1313,11 @@ def _financials_tab(
     # the line-items axis (ARPAC, GMV growth, NIM, etc.).
     _kpi_series_yoy_panel(body, fin)
 
+    # 3c-annual) Annual-cadence KPIs (bank capital ratios, other 20-F/10-K-only
+    # metrics) on a fiscal-year axis — kept off the quarterly heatmap so they
+    # render as a clean annual series instead of a mostly-empty quarterly one.
+    _annual_kpi_series_yoy_panel(body, fin)
+
     # 3d) Junction-driven secondary-dim expansions (geography / channel /
     # customer cross-tabs of segment data). Only renders when the section
     # builder found junction rows; otherwise the panel is silently skipped.
@@ -1433,6 +1438,51 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
     body.write(f'<span class="panel-sub">{len(matrix_rows)} analyst-tracked series</span></div>')
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
+    body.write("</div></div>")
+
+
+def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
+    """YoY heatmap for ANNUAL-cadence KPIs on a fiscal-year axis.
+
+    These are metrics the issuer discloses only annually (bank Basel III capital
+    ratios, other 20-F/10-K-only figures). Rendering them on the quarterly axis
+    produced a mostly-empty 12-quarter row; here they get their own panel with a
+    fiscal-year axis and year-over-year shading (``period_stride=1``). Skipped
+    when the ticker tracks no annual KPIs.
+    """
+    series = fin.annual_kpi_chart_series
+    years = fin.annual_kpi_years
+    if not series or not years:
+        return
+    matrix_rows: list[MatrixRow] = []
+    for s in series:
+        if not s.values or all(v is None for v in s.values):
+            continue
+        matrix_rows.append(MatrixRow(name=s.name, levels=list(s.values), unit=s.unit))
+    if not matrix_rows:
+        return
+    periods = [str(y) for y in years]
+    # Trailing CAGR/Δ columns in YEARS, trimmed to the available span so a short
+    # annual history (NU CAR = 3 years) doesn't advertise an empty 3y column.
+    cagr_years = tuple(y for y in (1, 2, 3) if y < len(years))
+    body.write('<div class="panel"><div class="panel-head">')
+    body.write('<span class="panel-title">Tracked KPIs — annual</span>')
+    body.write(
+        f'<span class="panel-sub">{len(matrix_rows)} annual-cadence '
+        f"series · fiscal-year axis</span></div>"
+    )
+    body.write('<div class="prose-pad">')
+    body.write(
+        yoy_heatmap_table(
+            matrix_rows,
+            periods,
+            title="",
+            display_quarters=len(periods),
+            cagr_periods=cagr_years,
+            period_stride=1,
+            periods_per_year=1,
+        )
+    )
     body.write("</div></div>")
 
 
