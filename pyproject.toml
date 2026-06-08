@@ -83,6 +83,8 @@ ignore = [
 "execution/build_redesigned_dcf.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF003"]
 "execution/build_bank_dcf.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF003"]
 "execution/build_holdco_sotp.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF001", "RUF003"]
+"execution/build_fintech_sotp.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF001", "RUF002", "RUF003"]
+"execution/build_nu_platform_dcf.py" = ["N816", "N806", "N803", "N815", "B007", "T201", "SIM105", "SIM222", "RUF003"]
 "execution/dcf_opus_assumptions.py" = ["N816", "N806", "N803", "B007", "T201", "SIM105", "SIM222"]
 
 [tool.pyright]
@@ -91,7 +93,8 @@ include = ["src", "execution", "tests"]
 # JSON dicts) where strict typing yields ~500 unknown-type errors with no real
 # bugs caught — excluded like scratch/, the same way other dynamic scripts are.
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
-           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py", "execution/dcf_opus_assumptions.py"]
+           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
+           "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/dcf_opus_assumptions.py"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
@@ -120,7 +123,8 @@ reportConstantRedefinition = false
 [tool.basedpyright]
 include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
-           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py", "execution/dcf_opus_assumptions.py"]
+           "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
+           "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/dcf_opus_assumptions.py"]
 extraPaths = ["src", "execution", "scratch"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"

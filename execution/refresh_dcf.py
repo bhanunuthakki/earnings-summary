@@ -57,6 +57,8 @@ CURRENCY_DEFAULT = "USD"
 _BUILDER_SCRIPT = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 _BANK_BUILDER = PROJECT_ROOT / "execution" / "build_bank_dcf.py"
 _HOLDCO_BUILDER = PROJECT_ROOT / "execution" / "build_holdco_sotp.py"
+_FINTECH_BUILDER = PROJECT_ROOT / "execution" / "build_fintech_sotp.py"
+_PLATFORM_BUILDER = PROJECT_ROOT / "execution" / "build_nu_platform_dcf.py"
 
 
 def main() -> int:
@@ -171,7 +173,9 @@ def refresh_one(
     Dispatches on the ticker's `valuation_model` (see `_valuation_model`):
       - "fcff_dcf"            -> the redesigned FCFF DCF (`_refresh_redesign`).
       - "bank_excess_return"  -> the equity-side bank model (`_refresh_bank`).
-      - "holdco_sotp"         -> the sum-of-the-parts model (`_refresh_holdco`).
+      - "holdco_sotp"         -> the capital-allocator SOTP model (`_refresh_holdco`).
+      - "fintech_sotp"        -> the fintech segment SOTP (`_refresh_fintech_sotp`).
+      - "platform_dcf"        -> the customer-driven platform DCF (`_refresh_platform`).
       - "new"/"none"/unknown  -> skip, surfacing any Opus-proposed new-model spec.
     """
     model, suggestion = _valuation_model(repo_root, ticker)
@@ -179,6 +183,10 @@ def refresh_one(
         return _refresh_bank(ticker, repo_root)
     if model == "holdco_sotp":
         return _refresh_holdco(ticker, repo_root)
+    if model == "fintech_sotp":
+        return _refresh_fintech_sotp(ticker, repo_root)
+    if model == "platform_dcf":
+        return _refresh_platform(ticker, repo_root)
     if model != "fcff_dcf":
         # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
         # or an unknown model string — no template to run.
@@ -317,6 +325,70 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
         "ticker": t,
         "status": "ok",
         "format": "holdco_sotp",
+        "workbook": str(dest),
+        "result": line,
+    }
+
+
+def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
+    """Build the fintech segment sum-of-the-parts model
+    (``execution/build_fintech_sotp.py``) to ``dcf/<T>.xlsx`` — a hybrid that
+    values a fintech's lending, fee/deposit, and tech-platform segments separately
+    (the right lens when a single bank or FCFF model would crush the non-credit
+    franchises). The builder computes the value-of-record and upserts ``dcf_runs``
+    itself, like the bank/holdco/FCFF builders."""
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    proc = subprocess.run(
+        [sys.executable, str(_FINTECH_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if line is None:
+        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        return {"ticker": t, "status": "failed", "format": "fintech_sotp", "reason": reason}
+    return {
+        "ticker": t,
+        "status": "ok",
+        "format": "fintech_sotp",
+        "workbook": str(dest),
+        "result": line,
+    }
+
+
+def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
+    """Build the customer-driven platform DCF (``execution/build_nu_platform_dcf.py``)
+    to ``dcf/<T>.xlsx`` — values a fintech as a customer-acquisition + monetization
+    platform (customers x ARPAC -> Credit/Float/Fee gross profit -> FCFE), the right
+    lens when a credit-book model under-credits the non-credit franchises and the
+    user-growth flywheel. The builder computes the value-of-record and upserts
+    ``dcf_runs`` itself, like the bank/holdco/fintech/FCFF builders."""
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    proc = subprocess.run(
+        [sys.executable, str(_PLATFORM_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if line is None:
+        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        return {"ticker": t, "status": "failed", "format": "platform_dcf", "reason": reason}
+    return {
+        "ticker": t,
+        "status": "ok",
+        "format": "platform_dcf",
         "workbook": str(dest),
         "result": line,
     }
