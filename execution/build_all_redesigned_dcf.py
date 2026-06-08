@@ -23,17 +23,26 @@ from pathlib import Path
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 HERE = Path(__file__).resolve().parent
 
+# Resolve the shared universe helper from THIS checkout's src (not DCF_REPO_ROOT),
+# so the maintained set is computed from the code we're running while data is read
+# from DCF_REPO_ROOT.
+sys.path.insert(0, str(HERE.parent / "src"))
+from dcf.universe import dcf_universe  # noqa: E402
 
-def default_tickers() -> list[str]:
-    """The maintained DCF universe = the existing ``dcf/<T>.xlsx`` workbooks
-    (minus helper/sample files)."""
-    out: list[str] = []
-    for p in sorted((REPO / "dcf").glob("*.xlsx")):
+
+def default_tickers(repo: Path = REPO) -> list[str]:
+    """The maintained DCF universe: every briefed-list ticker (portfolio +
+    evaluation) from the DB, unioned with any existing ``dcf/<T>.xlsx`` workbook
+    (minus helper/sample files). Pulling the briefed lists — not just the names
+    that already have a workbook — makes evaluation-list names first-class: they
+    get built even before their first workbook exists."""
+    out: set[str] = set(dcf_universe(repo))
+    for p in sorted((repo / "dcf").glob("*.xlsx")):
         name = p.stem
         if name.startswith("_") or name.endswith("_redesign"):
             continue
-        out.append(name)
-    return out
+        out.add(name)
+    return sorted(out)
 
 
 def _run(script: str, ticker: str, dest: Path | None = None) -> tuple[str, str, int]:

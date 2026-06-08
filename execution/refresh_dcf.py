@@ -27,7 +27,7 @@ workbook's Dashboard. Live price comes from the multi-source stack
 Usage:
     python execution/refresh_dcf.py --ticker META
     python execution/refresh_dcf.py --ticker META --workbook dcf/META.xlsx
-    python execution/refresh_dcf.py --all-named  # all named holdings with WACC
+    python execution/refresh_dcf.py --all-named  # every DCF-maintained name (portfolio + evaluation)
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
+from dcf import universe as universe_mod  # noqa: E402
 from dcf import valuation as valuation_mod  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
@@ -94,7 +95,8 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument(
         "--all-named",
         action="store_true",
-        help="Refresh all holdings JSONs that have a populated `wacc` field",
+        help="Refresh every DCF-maintained name: portfolio + evaluation tracked "
+        "companies (plus any legacy holdings JSON carrying a `wacc`)",
     )
     p.add_argument(
         "--repo-root",
@@ -121,8 +123,21 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
     if args.all_named:
-        return _named_holdings_with_wacc(repo_root)
+        return dcf_maintained_universe(repo_root)
     return []
+
+
+def dcf_maintained_universe(repo_root: Path) -> list[str]:
+    """The names a DCF is maintained for (what ``--all-named`` resolves to): every
+    briefed-list ticker (portfolio + evaluation) from the DB, unioned with any
+    legacy holdings JSON that still carries a hand-seeded ``wacc``. The redesigned
+    builder computes its own WACC, so evaluation-list names qualify without a
+    seeded ``wacc`` — first-class alongside portfolio names. Non-applicable
+    financials self-skip in ``refresh_one``.
+    """
+    names = set(universe_mod.dcf_universe(repo_root))
+    names.update(_named_holdings_with_wacc(repo_root))
+    return sorted(names)
 
 
 def _named_holdings_with_wacc(repo_root: Path) -> list[str]:
