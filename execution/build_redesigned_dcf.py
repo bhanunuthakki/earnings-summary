@@ -367,6 +367,22 @@ try:
 except Exception:
     price = prof.get("price") or 255.0
 
+# Opus/user per-name assumption block, read once. The dcf_applicable skip + the
+# segment/margin/terminal overrides apply further below (after PROD is known); the
+# WACC drivers are resolved here because the Monte Carlo base WACC needs them too.
+_opus = (
+    json.loads(cache.read_text(encoding="utf-8")).get("redesign") if cache.exists() else None
+) or {}
+# WACC drivers: a block override wins over the FMP profile beta + textbook rf/ERP/Kd.
+# Resolved once and fed to BOTH the Monte Carlo base WACC and the Dashboard yellow
+# cells, so an edited beta/ERP survives a from-scratch rebuild (the round-trip is
+# closed by refresh_dcf.sync_assumptions_json writing these back to the block).
+_beta_override = _opus.get("beta")
+BETA = float(_beta_override) if _beta_override is not None else (prof.get("beta") or 1.3)
+RF = float(_opus.get("risk_free_rate", 0.043))
+ERP = float(_opus.get("equity_risk_premium", 0.045))
+KD = float(_opus.get("cost_of_debt", 0.045))
+
 # ----------------------------------------------------------------------------- Monte Carlo
 # A reduced-form model (single revenue CAGR, linear margin ramp) calibrated so the
 # base case reproduces the full workbook value, then perturbed over Opus-set driver
@@ -377,11 +393,11 @@ latest = keys[-1]
 cash_now = m(bal_i[latest].get("cashAndShortTermInvestments")) or 0.0
 debt_now = m(bal_i[latest].get("longTermDebt")) or 0.0
 shares_now = m(inc_i[latest].get("weightedAverageShsOutDil")) or 1.0
-beta = prof.get("beta") or 1.3
-ke = 0.043 + beta * 0.045
+beta = BETA
+ke = RF + beta * ERP
 mktcap = price * shares_now
 we = mktcap / (mktcap + debt_now) if (mktcap + debt_now) else 1.0
-wacc0 = we * ke + (1 - we) * 0.045 * (1 - TAX)
+wacc0 = we * ke + (1 - we) * KD * (1 - TAX)
 
 
 # Dashboard control defaults: per-segment growth collapses to 2 points (near-term
@@ -407,9 +423,6 @@ FX = {
     "CHF": 1.12,
     "SEK": 0.095,
 }.get(CURRENCY, 1.0)
-_opus = (
-    json.loads(cache.read_text(encoding="utf-8")).get("redesign") if cache.exists() else None
-) or {}
 if _opus.get("dcf_applicable") is False:
     print(f"SKIP\t{T}\t{_opus.get('business_model')}\t(FCFF DCF not the right tool)")
     raise SystemExit(0)
@@ -1486,14 +1499,14 @@ put(dsh, 35, 5, "converges to ~1.0x as build-out matures").font = SUB
 
 band(dsh, 37, "DISCOUNT RATE & TERMINAL", 5)
 put(dsh, 38, 1, "Risk-free rate (10Y)")
-put(dsh, 38, 2, 0.043, fmt=PCT, kind="in")
+put(dsh, 38, 2, RF, fmt=PCT, kind="in")
 put(dsh, 39, 1, "Equity risk premium")
-put(dsh, 39, 2, 0.045, fmt=PCT, kind="in")
+put(dsh, 39, 2, ERP, fmt=PCT, kind="in")
 put(dsh, 40, 1, "Beta (levered)")
-put(dsh, 40, 2, round(prof.get("beta") or 1.3, 3), fmt=NUM3, kind="in")
+put(dsh, 40, 2, round(BETA, 3), fmt=NUM3, kind="in")
 put(dsh, 40, 5, "FMP raw beta; Damodaran bottom-up ~1.2").font = SUB
 put(dsh, 41, 1, "Pre-tax cost of debt")
-put(dsh, 41, 2, 0.045, fmt=PCT, kind="in")
+put(dsh, 41, 2, KD, fmt=PCT, kind="in")
 put(dsh, 42, 1, "WACC (computed)", bold=True)
 put(dsh, 42, 2, f"=WACC!B{WACC_ROW}", fmt=PCT, bold=True)
 put(dsh, 43, 1, "Terminal method")

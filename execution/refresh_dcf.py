@@ -450,11 +450,11 @@ def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.Redesi
     Without this, an ``import``/refresh preserves edits in the workbook + ``dcf_runs``
     but leaves the JSON stale, so a ``build_all_redesigned_dcf`` (which builds purely
     from the JSON) would silently revert them. Writing the numbers back keeps the JSON
-    a true source of truth. Updates ONLY the numeric assumption fields; the Opus
-    ``narrative``/``reasoning`` and the model flags (``dcf_applicable``/``business_model``
-    /``valuation_model``) are left untouched. WACC drivers (beta/rf/ERP/cost-of-debt)
-    live on the FMP profile, not in this schema, so they are out of scope. Returns True
-    when written, False when there is no assumptions file / redesign block to update.
+    a true source of truth. Updates ONLY the numeric assumption fields — segment growth,
+    op margins, tax, exit multiple/basis, terminal method/g, capex-da, and the WACC
+    drivers (beta/rf/ERP/cost-of-debt); the Opus ``narrative``/``reasoning`` and the model
+    flags (``dcf_applicable``/``business_model``/``valuation_model``) are left untouched.
+    Returns True when written, False when there is no assumptions file / redesign block.
     """
     path = repo_root / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
     if not path.exists():
@@ -482,6 +482,10 @@ def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.Redesi
     rd["exit_multiple"] = inp.exit_multiple
     rd["terminal_growth_g"] = inp.terminal_growth_g
     rd["terminal_capex_da"] = inp.terminal_capex_da
+    rd["beta"] = inp.beta
+    rd["risk_free_rate"] = inp.risk_free_rate
+    rd["equity_risk_premium"] = inp.equity_risk_premium
+    rd["cost_of_debt"] = inp.cost_of_debt
     try:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except OSError:
