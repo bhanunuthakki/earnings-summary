@@ -2382,13 +2382,24 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         _val_row(body, "Trigger status", v.trigger_status.upper())
     if v.valuation_date is not None:
         _val_row(body, "Valuation date", v.valuation_date.isoformat(), muted=True)
-    if v.model_link:
-        # Link to the live /dcf/<ticker> route (served by comments_server) instead
-        # of the bare relative filename: a report served over HTTP at
-        # /reports/<ticker> can't resolve a sibling .xlsx path, so the old link
-        # 404'd in the served app. The route streams dcf/<T>.xlsx (latest dated
-        # workbook as fallback). NOTE: opening the report as a file:// page needs
-        # the server running for this link to resolve.
+    if v.sheet_url:
+        # A Google Sheet is linked (holdings dcf_defaults.gsheet_id) — point
+        # straight at it and label it as such. The direct Sheet URL resolves both
+        # served and as a file:// page (unlike the /dcf/<T> route below), and the
+        # explicit label is the visible cue that an editable model exists — the
+        # bare "Open .xlsx" gave no sign a Sheet was even there.
+        body.write(
+            '<div class="val-row muted"><span>DCF model</span>'
+            f'<strong><a href="{_esc(v.sheet_url)}" target="_blank" '
+            'rel="noopener">Open in Google Sheets ↗</a></strong></div>'
+        )
+    elif v.model_link:
+        # No linked Sheet — fall back to the live /dcf/<ticker> route (served by
+        # comments_server) instead of the bare relative filename: a report served
+        # over HTTP at /reports/<ticker> can't resolve a sibling .xlsx path, so the
+        # old link 404'd in the served app. The route streams dcf/<T>.xlsx (latest
+        # dated workbook as fallback). NOTE: opening the report as a file:// page
+        # needs the server running for this link to resolve.
         body.write(
             '<div class="val-row muted"><span>DCF workbook</span>'
             f'<strong><a href="/dcf/{_esc(snap.ticker)}">Open .xlsx</a>'
