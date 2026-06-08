@@ -1,52 +1,106 @@
 {
   "ticker": "SNOW",
   "name": "Snowflake",
-  "last_updated": "2026-05-10",
-  "thesis": "Snowflake — data SaaS. STUB: needs user-authored thesis. Default key driver: Product revenue growth + AI workload tailwind. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "Product revenue growth + AI workload tailwind",
-  "_status": "stub_for_recurring_onboard",
+  "last_updated": "2026-06-07",
+  "thesis": "Snowflake — the cloud data platform, monetized almost entirely on consumption (compute credits + storage). Same core premise as MongoDB but for analytics/AI data: as AI drives an explosion in data produced, queried, and used to train and serve models, a usage-priced platform captures it directly. The bet: (1) product revenue compounds ~25%+ (total revenue grew +29% in FY26, steady at ~29% for two years), (2) NRR holds >=120% as customers ramp consumption, (3) the ~$9.8B RPO — roughly 2x annual revenue — converts; a backlog this large is precisely the market under-modeling future consumption, (4) the model stays strongly FCF-generative (FY26 FCF margin ~24%) despite a deep GAAP operating loss that is SBC-driven BY DESIGN (SBC ~34% of revenue; non-GAAP operating margin ~9% and inflecting up). AI products (Cortex, Snowpark) are the consumption accelerant — they layer new usage on top of the core warehouse. Picks-the-platform: indifferent to which AI/analytics workloads win, as long as they run on Snowflake. Competitive reality: Databricks is the scaled, well-funded direct rival (lakehouse) and the hyperscalers (BigQuery, Redshift, Fabric) bundle competing engines — Snowflake's ease-of-use + cross-cloud governance is the moat. The GAAP loss + heavy SBC dilution is the legitimate bear; the thesis requires non-GAAP margin and FCF to keep inflecting up while consumption growth holds.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "Product (consumption) revenue growth x NRR — usage-priced capture of AI-driven data growth; RPO conversion as the forward signal",
+  "chart_priorities": [
+    "Revenue",
+    "Revenue YoY Growth (USD)",
+    "Free Cash Flow",
+    "FCF Margin (GAAP)"
+  ],
   "tier_1_kpis": [
     {
-      "name": "Revenue YoY Growth (USD)",
-      "current": "TBV from latest earnings release",
+      "name": "Product Revenue YoY Growth",
+      "current": "~26-27% (product ~95% of total; total revenue +29.2% FY26)",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<0% YoY for 2 consecutive Qs (placeholder; user to set per-ticker threshold)",
+      "status": "Green",
+      "break_condition": "<20% YoY for 2 consecutive Qs (consumption engine stalling)",
       "source": "earnings release"
     },
     {
-      "name": "Operating Margin (GAAP)",
-      "current": "TBV",
+      "name": "Total Revenue YoY Growth (USD)",
+      "current": "+29.2% FY26 ($4.68B) — steady ~29% for 2 years",
+      "prior": "+29.2% FY25",
+      "yoy": "+29.2%",
+      "status": "Green",
+      "break_condition": "<20% YoY for 2 consecutive Qs",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "Net Revenue Retention Rate (NRR)",
+      "current": "~125% (disclosed; on a gentle declining trend — backfill exact)",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
+      "status": "Green",
+      "break_condition": "<115% (consumption ramp within existing accounts stalling)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Remaining Performance Obligations (RPO)",
+      "current": "$9.80B FY26 (~2.1x revenue) — the forward-consumption signal",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "RPO declines YoY for 2 consecutive Qs (forward demand contracting)",
+      "source": "FMP / balance sheet"
+    },
+    {
+      "name": "FCF Margin (GAAP)",
+      "current": "+23.9% FY26 ($1.12B FCF) — strong despite deep GAAP op loss",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<12% for 2 consecutive Qs (consumption economics regressing)",
+      "source": "FMP / earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Operating Cash Flow",
+      "current": "$1.22B FY26 (26.1% of revenue)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "SBC / Revenue",
+      "current": "~34% FY26 (the reason GAAP op margin is -31%; the dilution watch, not 'losses')",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "Non-GAAP Operating Margin",
+      "current": "~9% and inflecting up (vs GAAP -30.6%)",
       "source": "earnings release"
     },
     {
       "name": "Gross Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
-    },
-    {
-      "name": "Net Income Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "current": "67.2% FY26",
+      "source": "FMP / earnings release"
     }
   ],
-  "tier_2_kpis": [],
   "tier_3_kpis": [],
+  "nuance": {
+    "bear_case": "Snowflake is the most SBC-heavy name of the four (~34% of revenue) with a -31% GAAP operating margin — the equity story is entirely non-GAAP/FCF and dilution is real. Databricks is a scaled, well-funded lakehouse rival increasingly winning AI-data workloads, and hyperscaler-native engines undercut on price. If AI consumption accrues to Databricks/open lakehouse formats (Iceberg) rather than Snowflake's engine, the 2x-revenue RPO converts slower than the bulls model.",
+    "adversarial_take": "29% growth and a 2x-revenue backlog are excellent, but NRR has been drifting down for years and the consumption model cuts both ways — usage optimization by customers can decelerate revenue fast. The thesis needs product growth to hold the ~mid-20s AND non-GAAP margin to keep inflecting; one without the other isn't enough.",
+    "stress_test": "If product revenue growth slips below 20% AND NRR drops below 115% in the same year, the consumption-tailwind thesis is broken — the RPO becomes a melting backlog, not a coiled spring."
+  },
+  "competitive_watchlist": [
+    "Databricks (lakehouse)",
+    "Google BigQuery",
+    "Amazon Redshift",
+    "Microsoft Fabric / Synapse",
+    "Apache Iceberg / open lakehouse formats"
+  ],
+  "thesis_breakers_qualitative": [
+    "Product revenue growth decelerates below 20% YoY for 2 consecutive Qs",
+    "NRR drops below 115%",
+    "RPO declines YoY for 2 consecutive Qs (forward consumption contracting)",
+    "FCF margin regresses below 12% or non-GAAP operating margin stops inflecting up",
+    "AI-data workloads standardize on Databricks / open lakehouse rather than Snowflake's engine"
+  ],
   "break_rules": [
     {
       "rule_id": "universal_revenue_decline",
@@ -58,58 +112,69 @@
       "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
     },
     {
-      "rule_id": "universal_operating_loss",
-      "kpi_name": "Operating Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
-    },
-    {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken (catastrophic floor; the per-ticker rule at 12% is the real watch)."
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "snow_revenue_growth_below_20",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Total revenue growth below 20% YoY for 2 consecutive Qs — the consumption/'more-data' tailwind is not materializing (FY26 ran ~29%)."
+    },
+    {
+      "rule_id": "snow_product_growth_below_20",
+      "kpi_name": "Product Revenue YoY Growth",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Product (consumption) revenue growth below 20% YoY for 2 consecutive Qs — the core engine is stalling. (UNRESOLVED until product-revenue growth is backfilled as a KPI.)"
+    },
+    {
+      "rule_id": "snow_nrr_below_115",
+      "kpi_name": "Net Revenue Retention Rate (NRR)",
+      "comparator": "lt",
+      "threshold": 115,
+      "unit": "percent",
+      "consecutive_periods": 1,
+      "narrative": "NRR below 115% — consumption ramp within existing accounts stalling. (UNRESOLVED until NRR is backfilled.)"
+    },
+    {
+      "rule_id": "snow_fcf_margin_below_12",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 12,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 12% for 2 consecutive Qs — consumption economics regressing (FY26 ran ~24%)."
+    },
+    {
+      "rule_id": "snow_gross_margin_below_60",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 60,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 60% for 2 consecutive Qs — compute pricing/cost pressure (FY26 ran ~67%)."
     }
   ],
   "schema_version": 2,
@@ -121,7 +186,8 @@
     "gsheet_id": "1rx2kpHDD2yubCrK1f7cSWXNffrhNp3S2BsB4dsGE4gA"
   },
   "flags": [
-    "DCF_PARAMS_PENDING"
+    "DCF_PARAMS_PENDING",
+    "EVAL_THESIS_AUTHORED"
   ],
   "segments": [],
   "operational_kpis": [],

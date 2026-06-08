@@ -2,51 +2,100 @@
   "ticker": "CDNS",
   "name": "Cadence Design Systems",
   "last_updated": "2026-06-07",
-  "thesis": "Cadence Design Systems — EDA software + design IP for chip and system design (one of the two EDA majors alongside Synopsys). STUB: needs user-authored thesis. Default key driver: EDA + IP revenue growth × AI/HPC design-complexity tailwind, on a recurring high-margin software model with backlog/RPO visibility. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "EDA + IP revenue growth × AI/HPC design-complexity tailwind",
-  "_status": "stub_for_recurring_onboard",
+  "thesis": "Cadence Design Systems — the other EDA major (software + design IP + system analysis), the cleaner pure-play of the duopoly with best-in-class margins. Identical picks-and-shovels logic to Synopsys: every AI chip — accelerators, custom hyperscaler silicon, chiplets, edge — is designed and verified on Cadence/Synopsys tools, regardless of which chip or model wins. The bet: as AI token consumption and the variety of models/workloads grow, chip variety and per-design complexity rise super-linearly, expanding EDA/IP intensity per design. Signals: (1) revenue compounds low-double-digit (steady ~14% for years), (2) the ~$7.8B RPO (~1.5x revenue) keeps growing as the forward design-demand signal, (3) AI-driven verification/system design and IP — the highest-complexity, highest-value layers — outgrow the core, (4) the elite margin structure holds: ~86% gross, ~31% GAAP operating, ~30% FCF margin, with SBC only ~9% of revenue (far cleaner than the consumption-SaaS names) — that margin profile IS the proof of duopoly pricing power. Cleaner than Synopsys (no Ansys-scale integration to digest). Competitive reality: rational duopoly (both win as the pie grows); the risks are customer concentration in a handful of hyperscalers/foundries and the China/export-control overhang on EDA.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "EDA + IP revenue growth and RPO/backlog expansion at elite margins — design activity x rising complexity per design",
+  "chart_priorities": [
+    "Revenue",
+    "Revenue YoY Growth (USD)",
+    "Operating income",
+    "Free Cash Flow"
+  ],
   "tier_1_kpis": [
     {
       "name": "Revenue YoY Growth (USD)",
-      "current": "TBV from latest earnings release",
+      "current": "+14.1% FY25 ($5.30B); steady mid-teens for years",
+      "prior": "+13.5% FY24",
+      "yoy": "+14.1%",
+      "status": "Green",
+      "break_condition": "<8% YoY for 2 consecutive Qs (design/chip-variety demand stalling)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "Remaining Performance Obligations (RPO)",
+      "current": "$7.8B FY25 (~1.5x revenue) — the forward design-demand signal",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<0% YoY for 2 consecutive Qs (placeholder; user to set per-ticker threshold)",
-      "source": "earnings release"
+      "status": "Green",
+      "break_condition": "RPO declines YoY for 2 consecutive Qs (customers pulling back on multi-year design commitments)",
+      "source": "FMP / balance sheet"
     },
     {
       "name": "Operating Margin (GAAP)",
-      "current": "TBV",
+      "current": "31.1% FY25 — elite; the pricing-power proof",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "status": "Green",
+      "break_condition": "<25% for 2 consecutive Qs (pricing power eroding / cost discipline slipping)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "FCF Margin (GAAP)",
+      "current": "+30.0% FY25 ($1.59B FCF) — best-in-class cash conversion",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<20% for 2 consecutive Qs (cash-conversion regression)",
+      "source": "FMP / earnings release"
     },
     {
       "name": "Gross Margin (GAAP)",
-      "current": "TBV",
+      "current": "86.4% FY25",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
-    },
-    {
-      "name": "Net Income Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "status": "Green",
+      "break_condition": "<78% for 2 consecutive Qs (mix/pricing erosion)",
+      "source": "FMP / earnings release"
     }
   ],
-  "tier_2_kpis": [],
+  "tier_2_kpis": [
+    {
+      "name": "Operating Cash Flow",
+      "current": "$1.73B FY25 (32.6% of revenue)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "R&D / Revenue",
+      "current": "~33% FY25 (the cost of staying ahead on complexity)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "SBC / Revenue",
+      "current": "~9% FY25 (notably clean — GAAP and non-GAAP are close, unlike the SaaS names)",
+      "source": "FMP / earnings release"
+    }
+  ],
   "tier_3_kpis": [],
+  "nuance": {
+    "bear_case": "Cadence trades at a rich multiple precisely because the margin/FCF profile is elite and the duopoly is understood — so the equity risk is multiple compression, not fundamentals, if AI-infra sentiment cools. EDA demand is downstream of semiconductor R&D budgets; an AI-capex digestion cycle or a hyperscaler trimming custom-silicon programs would show up in RPO first. Customer concentration (foundries + a few hyperscalers) and China/export controls are the structural overhangs.",
+    "adversarial_take": "Picks-and-shovels on AI is now consensus, and CDNS already prices it — ~14% growth is steady but not accelerating, so the thesis is 'durable compounding at a premium multiple,' not asymmetric upside. The 'increasing variety/complexity' tailwind is real but slow-moving; it protects the floor more than it lifts the ceiling.",
+    "stress_test": "If revenue growth falls below 8% AND RPO declines YoY, the 'more/more-complex chips' demand thesis is breaking; a slip in operating margin below 25% alongside would signal the duopoly pricing power is cracking."
+  },
+  "competitive_watchlist": [
+    "Synopsys (SNPS) — the rational duopoly partner",
+    "Siemens EDA (Mentor)",
+    "Hyperscaler in-house design tooling (tail risk)",
+    "China/export-control regime on EDA",
+    "Open-source EDA (long-tail, not yet a threat)"
+  ],
+  "thesis_breakers_qualitative": [
+    "Revenue growth below 8% YoY for 2 consecutive Qs",
+    "RPO declines YoY for 2 consecutive Qs (forward design demand contracting)",
+    "GAAP operating margin slips below 25% (pricing power / cost discipline cracking)",
+    "FCF margin regresses below 20% (the elite cash profile breaking)",
+    "China/export-control action or a hyperscaler in-sourcing design tooling"
+  ],
   "break_rules": [
     {
       "rule_id": "universal_revenue_decline",
@@ -64,52 +113,63 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — catastrophic for a name that runs 31% (this would mean total business breakage)."
     },
     {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 0,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
-    {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
+      "rule_id": "universal_fcf_margin_collapse",
       "kpi_name": "FCF Margin (GAAP)",
       "comparator": "lt",
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken (catastrophic floor; per-ticker watch is 20%)."
     },
     {
-      "rule_id": "ocf_decline_yoy",
+      "rule_id": "universal_ocf_decline_yoy",
       "kpi_name": "Operating Cash Flow YoY Growth (USD)",
       "comparator": "lt",
       "threshold": -10,
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "cdns_revenue_growth_below_8",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 8,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue growth below 8% YoY for 2 consecutive Qs — design/chip-variety demand stalling below the steady mid-teens run-rate."
+    },
+    {
+      "rule_id": "cdns_operating_margin_below_25",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 25,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin below 25% for 2 consecutive Qs — duopoly pricing power eroding or cost discipline slipping (FY25 ran 31%)."
+    },
+    {
+      "rule_id": "cdns_rpo_decline",
+      "kpi_name": "RPO YoY Growth",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "RPO declining YoY for 2 consecutive Qs — multi-year design backlog contracting, the leading EDA demand signal. (UNRESOLVED until an RPO-YoY transform KPI is materialized.)"
+    },
+    {
+      "rule_id": "cdns_fcf_margin_below_20",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 20% for 2 consecutive Qs — the elite cash-conversion profile (FY25 ran 30%) regressing materially."
     }
   ],
   "schema_version": 2,
@@ -120,7 +180,8 @@
     "terminal_multiple": null
   },
   "flags": [
-    "DCF_PARAMS_PENDING"
+    "DCF_PARAMS_PENDING",
+    "EVAL_THESIS_AUTHORED"
   ],
   "segments": [],
   "operational_kpis": [],
