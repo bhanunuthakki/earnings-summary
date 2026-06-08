@@ -16,7 +16,8 @@
   "mos_bar": null,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": 18.0
+    "terminal_multiple": 18.0,
+    "gsheet_id": "1pIHA8trO7-gCIwJBMYVx6SvSbtzrQG0hart9SXGGQWg"
   },
   "segments": [],
   "operational_kpis": [],

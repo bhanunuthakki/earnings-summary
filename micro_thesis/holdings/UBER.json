@@ -145,7 +145,8 @@
   "mos_bar": null,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null
+    "terminal_multiple": null,
+    "gsheet_id": "1eK-vr33U3gZKSMDApWARCnvXyVDVR4y-ka5LqCVAU6I"
   },
   "flags": [
     "DCF_PARAMS_PENDING"
