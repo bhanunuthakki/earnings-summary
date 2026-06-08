@@ -1141,3 +1141,37 @@ def test_evaluate_ticker_thesis_reconciles_units_end_to_end(
     obs = verdict.rule_evaluations[0].observations[0]
     assert obs.value == Decimal("50")  # reconciled to millions
     assert obs.unit == Unit.MILLIONS
+
+
+def test_breakrule_narrative_accepts_long_recalibration_rationale() -> None:
+    """A detailed (>500-char) recalibration narrative loads — the cap is 1000.
+
+    Mirrors NU's requirement-relative capital-cushion rule, whose ~562-char
+    rationale crashed rule loading under the original 500 cap.
+    """
+    long_narrative = "x" * 600
+    rule = BreakRule(
+        rule_id="capital_adequacy_cushion_thin",
+        kpi_name="Capital adequacy ratio",
+        comparator=Comparator.LT,
+        threshold=Decimal("12.5"),
+        unit=Unit.PERCENT,
+        consecutive_periods=2,
+        narrative=long_narrative,
+    )
+    assert len(rule.narrative) == 600
+
+
+def test_breakrule_narrative_still_capped_at_1000() -> None:
+    """The cap is raised, not removed — a runaway narrative is still rejected."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        BreakRule(
+            rule_id="r",
+            kpi_name="K",
+            comparator=Comparator.LT,
+            threshold=Decimal("1"),
+            unit=Unit.PERCENT,
+            narrative="x" * 1001,
+        )

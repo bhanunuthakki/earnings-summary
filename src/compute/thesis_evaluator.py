@@ -85,7 +85,10 @@ class BreakRule(BaseModel):
     threshold: Decimal
     unit: Unit
     consecutive_periods: int = Field(ge=1, le=12, default=1)
-    narrative: str = Field(min_length=1, max_length=500)
+    # 1000 to match the say_do narrative cap (src/compute/say_do.py): a detailed
+    # recalibration rationale (e.g. NU's requirement-relative capital-cushion
+    # narrative) runs past the original 500 and shouldn't fail rule loading.
+    narrative: str = Field(min_length=1, max_length=1000)
     tier: RuleTier = RuleTier.BUSINESS_MODEL
 
 
