@@ -77,6 +77,8 @@ class AlertRow:
     ``trigger_kind``)."""
 
     id: int
+    # Canonical tenant id — TEXT, FK to tenants.id (alembic 0073). Same str
+    # space as Company.user_id after the identity reconciliation.
     user_id: str
     ticker: str
     trigger_kind: str

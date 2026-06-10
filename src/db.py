@@ -18,6 +18,7 @@ from urllib.parse import unquote
 
 import requests
 
+from identity import DEFAULT_USER_ID
 from models.artifacts import (
     ArtifactFlags,
     ArtifactKind,
@@ -117,7 +118,11 @@ def _create_tracked_companies(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS tracked_companies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER DEFAULT 1,
+            -- Canonical tenant id (TEXT), matching the substrate tables' literal
+            -- DEFAULT 'bhanu'. alembic 0073 adds the FK to tenants; init_db is the
+            -- bootstrap fallback and owns only these 3 baseline tables, so it
+            -- can't reference tenants here.
+            user_id TEXT DEFAULT 'bhanu',
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
             list_type TEXT NOT NULL CHECK(list_type IN (
@@ -541,7 +546,7 @@ def _spawn_onboard_async(ticker: str) -> None:
         )
 
 
-def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> None:
+def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT_USER_ID) -> None:
     """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
 
     Spawns the detached `execution/onboard_ticker.py` subprocess whenever
@@ -594,7 +599,7 @@ def track_company(ticker: str, name: str, list_type: str, user_id: int = 1) -> N
         _spawn_onboard_async(ticker)
 
 
-def remove_company(ticker: str, user_id: int = 1) -> None:
+def remove_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> None:
     """Hard-delete a tracked company row (and any captured FMP/transcripts stay
     on disk; only the tracking row goes). Prefer `archive_company` for ordinary
     'I'm not watching this anymore' flows — archive preserves the row + all
@@ -611,7 +616,7 @@ def remove_company(ticker: str, user_id: int = 1) -> None:
     conn.close()
 
 
-def archive_company(ticker: str, user_id: int = 1) -> bool:
+def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     """Soft-delete: set archived_at = now. Returns True if a row was archived.
 
     Idempotent on already-archived rows (re-archiving updates the timestamp).
@@ -632,7 +637,7 @@ def archive_company(ticker: str, user_id: int = 1) -> bool:
     return archived
 
 
-def reactivate_company(ticker: str, user_id: int = 1) -> bool:
+def reactivate_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     """Clear archived_at so the cacher resumes refreshing this ticker.
 
     Returns True if a row was reactivated. No-op on rows that are already
@@ -652,7 +657,7 @@ def reactivate_company(ticker: str, user_id: int = 1) -> bool:
 
 
 def get_tracked_companies(
-    user_id: int = 1, *, include_archived: bool = False
+    user_id: str = DEFAULT_USER_ID, *, include_archived: bool = False
 ) -> list[dict[str, object]]:
     """Return tracked companies for user. Excludes archived rows by default."""
     conn = get_connection()
@@ -667,7 +672,7 @@ def get_tracked_companies(
     return [dict(r) for r in rows]
 
 
-def refresh_all_fmp_dates(user_id: int = 1) -> None:
+def refresh_all_fmp_dates(user_id: str = DEFAULT_USER_ID) -> None:
     """Re-scan FMP files for every tracked company; update fmp_data_saved/upto."""
     conn = get_connection()
     cursor = conn.cursor()

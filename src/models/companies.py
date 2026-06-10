@@ -51,7 +51,10 @@ class Company(BaseModel):
     """One tracked_companies row."""
 
     id: int
-    user_id: int
+    # Canonical tenant id — TEXT, FK to tenants.id (alembic 0073). Reconciled
+    # from the legacy INTEGER namespace onto the same str the substrate stores
+    # key on (identity.DEFAULT_USER_ID, default 'bhanu').
+    user_id: str
     ticker: str
     name: str
     list_type: ListType

@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from identity import DEFAULT_USER_ID
 from models.companies import Company, FilingRegime, InstrumentType, ListType
 from models.documents import DocType, SourceType
 
@@ -82,7 +83,7 @@ BRIEFED_LIST_TYPES: frozenset[ListType] = frozenset(
 
 def tracked_companies_for_user(
     conn: sqlite3.Connection,
-    user_id: int = 1,
+    user_id: str = DEFAULT_USER_ID,
     only_classified: bool = True,
     list_types: frozenset[ListType] = ANALYZED_LIST_TYPES,
     include_archived: bool = False,
