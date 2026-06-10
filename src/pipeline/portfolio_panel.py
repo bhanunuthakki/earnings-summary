@@ -22,6 +22,8 @@ variables, and the chart's series colors come from ``ui.tokens.CHART_SERIES``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date
 from html import escape
 from pathlib import Path
 
@@ -54,33 +56,91 @@ _ALPHA = chr(0x03B1)
 _SIGMA = chr(0x03C3)
 
 
-def render_portfolio_panel(db_path: Path, *, api_url: str | None = None) -> str:
+@dataclass(frozen=True, slots=True)
+class WindowSelection:
+    """The analytics window applied to the tracker fetch, echoed back into the
+    page's window bar so the controls reflect what is actually shown.
+    ``None`` dates mean the tracker's own defaults (snapshot-derived window
+    for /performance, trailing 365d elsewhere)."""
+
+    start_date: str | None = None
+    end_date: str | None = None
+    include_backfill: bool = False
+
+
+_DEFAULT_WINDOW = WindowSelection()
+
+
+def _valid_iso(s: str | None) -> str | None:
+    """``YYYY-MM-DD`` normalized, or None for absent/garbage input."""
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s).isoformat()
+    except ValueError:
+        return None
+
+
+def validated_window(
+    start_date: str | None, end_date: str | None, include_backfill: bool
+) -> WindowSelection:
+    """Sanitize the query-string window: ISO dates only; an inverted range
+    falls back to the tracker defaults entirely (the bar echoes what was
+    actually applied, so the fallback is visible, not silent)."""
+    s, e = _valid_iso(start_date), _valid_iso(end_date)
+    if s and e and s > e:
+        s = e = None
+    return WindowSelection(start_date=s, end_date=e, include_backfill=include_backfill)
+
+
+def render_portfolio_panel(
+    db_path: Path,
+    *,
+    api_url: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_backfill: bool = False,
+) -> str:
     """The Portfolio theme page fragment: tracker analytics (performance / risk /
-    positioning / alpha), the live positions/taxable view, then the cached
-    cross-portfolio synthesis memo."""
+    positioning / alpha) over the requested window, the live positions/taxable
+    view, then the cached cross-portfolio synthesis memo. The window args come
+    from the page's own window bar (via ``/api/panel/portfolio`` query params)
+    and pass through to the tracker verbatim after validation."""
     # Lazy imports keep the analytical builder out of this module's import graph
     # until the panel is actually requested.
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
 
-    analytics = fetch_portfolio_analytics(api_url=api_url)
+    window = validated_window(start_date, end_date, include_backfill)
+    analytics = fetch_portfolio_analytics(
+        api_url=api_url,
+        start_date=window.start_date,
+        end_date=window.end_date,
+        include_backfill=window.include_backfill,
+    )
     live = fetch_live_portfolio(api_url=api_url)
     dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
     synthesis = render_panel_fragment(dash, "portfolio") or ""
-    return compose_portfolio_page(analytics, live, synthesis)
+    return compose_portfolio_page(analytics, live, synthesis, window=window)
 
 
 def compose_portfolio_page(
-    analytics: PortfolioAnalytics, live: LivePortfolio, synthesis: str
+    analytics: PortfolioAnalytics,
+    live: LivePortfolio,
+    synthesis: str,
+    window: WindowSelection | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
-    Tracker fully down → the live section's single offline note carries the
-    start hint for the whole page (no duplicate per-section offline panels).
-    Tracker up but ALL analytics endpoints failing (e.g. an older tracker
-    build) → one quiet note instead of five dead sections.
+    The window bar always leads the page — it doubles as a retry/refresh
+    control when the tracker is down. Tracker fully down → the live section's
+    single offline note carries the start hint for the whole page (no duplicate
+    per-section offline panels). Tracker up but ALL analytics endpoints failing
+    (e.g. an older tracker build) → one quiet note instead of five dead
+    sections.
     """
-    parts: list[str] = []
+    w = window or _DEFAULT_WINDOW
+    parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
     if analytics.available:
         parts.append(render_portfolio_analytics_sections(analytics))
     elif live.available:
@@ -123,6 +183,21 @@ _ANALYTICS_CSS = """<style>
 .pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
 .pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
 .pf-degraded { font-size: 12px; }
+.pf-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 18px; font-size: 12.5px; }
+.pf-window-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted); margin-right: 4px; }
+.pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+  font-family: var(--sans); }
+.pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
+.pf-btn-apply { background: var(--accent); color: #0d1117; border: none; font-weight: 600; }
+.pf-window input[type="date"] { background: var(--paper); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font-size: 12px;
+  font-family: var(--mono); color-scheme: dark; }
+.pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
+  gap: 5px; margin-left: 6px; cursor: help; }
 </style>"""
 
 _SECTION_LABELS: dict[str, str] = {
@@ -144,10 +219,117 @@ _CHART_SPECS: tuple[tuple[str, str, float, Callable[[PerformancePoint], float | 
 )
 
 
+# Vanilla JS for the window bar: preset / custom-date / backfill refetch of
+# this panel fragment, re-executing fragment scripts on inject (the same idiom
+# as SHELL_JS's injectHtml — innerHTML alone does not run <script> tags).
+# Plain string, not an f-string: the braces are literal JS.
+_WINDOW_JS = r"""
+(function () {
+  var bar = document.getElementById('pf-window-bar');
+  if (!bar) return;
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function backfillChecked() {
+    var cb = document.getElementById('pf-backfill');
+    return !!(cb && cb.checked);
+  }
+  function refetch(start, end, backfill) {
+    var target = bar.closest('.cc-panel-body') || bar.parentElement || document.body;
+    var qs = [];
+    if (start) qs.push('start_date=' + encodeURIComponent(start));
+    if (end) qs.push('end_date=' + encodeURIComponent(end));
+    if (backfill) qs.push('include_backfill=1');
+    target.innerHTML = '<div class="cc-loading">Loading…</div>';
+    fetch('/api/panel/portfolio' + (qs.length ? '?' + qs.join('&') : ''))
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function (html) {
+        target.innerHTML = html;
+        var scripts = target.querySelectorAll('script');
+        for (var i = 0; i < scripts.length; i++) {
+          var old = scripts[i];
+          var s = document.createElement('script');
+          if (old.src) s.src = old.src; else s.textContent = old.textContent;
+          old.parentNode.replaceChild(s, old);
+        }
+      })
+      .catch(function (e) {
+        target.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+      });
+  }
+  bar.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('button[data-preset]') : null;
+    if (!btn) return;
+    var preset = btn.getAttribute('data-preset');
+    if (preset === 'default') { refetch(null, null, backfillChecked()); return; }
+    var end = new Date();
+    var start;
+    if (preset === 'ytd') {
+      start = new Date(end.getFullYear(), 0, 1);
+    } else {
+      start = new Date(end.getTime());
+      start.setMonth(start.getMonth() - parseInt(preset, 10));
+    }
+    refetch(iso(start), iso(end), backfillChecked());
+  });
+  document.getElementById('pf-apply').addEventListener('click', function () {
+    refetch(
+      document.getElementById('pf-start').value || null,
+      document.getElementById('pf-end').value || null,
+      backfillChecked()
+    );
+  });
+})();
+"""
+
+# Preset keys are months-back (parsed by the JS), plus ytd/default specials.
+_WINDOW_PRESETS: tuple[tuple[str, str], ...] = (
+    ("1", "1M"),
+    ("3", "3M"),
+    ("6", "6M"),
+    ("ytd", "YTD"),
+    ("12", "1Y"),
+    ("24", "2Y"),
+    ("default", "Default"),
+)
+
+
+def _window_bar(w: WindowSelection) -> str:
+    """The window selector: preset buttons, custom date inputs (echoing the
+    applied window), the modeled-backfill toggle, and the refetch script.
+    Always rendered — when the tracker is down it doubles as a retry control."""
+    buttons = "".join(
+        f'<button type="button" class="pf-btn" data-preset="{key}">{label}</button>'
+        for key, label in _WINDOW_PRESETS
+    )
+    checked = " checked" if w.include_backfill else ""
+    backfill_tip = (
+        "Extend /performance backward through the tracker's transaction walk-back "
+        "(up to ~24 months). Backfilled values are MODELED, not observed — they can "
+        "drift on incomplete transactions or unrecorded transfers."
+    )
+    return (
+        '<div class="pf-window" id="pf-window-bar">'
+        '<span class="pf-window-label">Window</span>'
+        f"{buttons}"
+        f'<input type="date" id="pf-start" value="{escape(w.start_date or "")}" '
+        'aria-label="window start date">'
+        '<span class="muted">→</span>'
+        f'<input type="date" id="pf-end" value="{escape(w.end_date or "")}" '
+        'aria-label="window end date">'
+        '<button type="button" class="pf-btn pf-btn-apply" id="pf-apply">Apply</button>'
+        f'<label class="pf-backfill-label" title="{escape(backfill_tip)}">'
+        f'<input type="checkbox" id="pf-backfill"{checked}> modeled backfill</label>'
+        "</div>"
+        f"<script>{_WINDOW_JS}</script>"
+    )
+
+
 def render_portfolio_analytics_sections(a: PortfolioAnalytics) -> str:
     """Every analytics section that loaded, in page order, plus one footnote
-    naming the sections that didn't (instead of five dead panels)."""
-    out: list[str] = [_ANALYTICS_CSS]
+    naming the sections that didn't (instead of five dead panels). The shared
+    ``<style>`` block is emitted by ``compose_portfolio_page`` (the bar needs
+    it even when no section loaded)."""
+    out: list[str] = []
     if a.performance is not None:
         out.append(_performance_section(a.performance, a.policy))
     if a.beta is not None:

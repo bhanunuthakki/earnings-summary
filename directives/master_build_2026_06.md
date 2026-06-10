@@ -243,3 +243,11 @@ demands it (note the split in the Decision log).
   so it is immune to either convention. Old GET-/ ops tables + their
   renderers retired with the move (dashboard_html is now just the Actions
   fragment); /api/dashboard JSON unchanged.
+- 2026-06-10 (post-P2.1 follow-up, #372): owner asked for an editable
+  analytics window on the Portfolio page. Window bar (1M/3M/6M/YTD/1Y/2Y
+  presets + custom dates + the tracker's modeled-backfill toggle) refetches
+  the panel with start/end passed to the four windowed tracker endpoints;
+  Default remains the tracker's own windows; date presets are computed in
+  the browser; tracker untouched. Window choice is session-scoped (lives in
+  the loaded panel DOM) — server-side persistence deferred until something
+  needs it.

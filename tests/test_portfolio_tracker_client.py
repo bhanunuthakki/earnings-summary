@@ -27,9 +27,11 @@ from integrations.portfolio_tracker_client import (
     tax_treatment,
 )
 from pipeline.portfolio_panel import (
+    WindowSelection,
     compose_portfolio_page,
     render_live_portfolio_section,
     render_portfolio_analytics_sections,
+    validated_window,
 )
 
 # Recorded payloads (Decimal-as-strings, mirroring the real FastAPI responses).
@@ -650,3 +652,95 @@ def test_compose_page_analytics_down_live_up_notes_quietly() -> None:
     assert "analytics endpoints aren't" in html
     assert "HTTP 404" in html
     assert "Live portfolio" in html and "NU" in html
+
+
+# ----- analytics window (editable from the Portfolio page) -----
+
+
+def test_fetch_analytics_passes_window_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        seen.append(url)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    a = fetch_portfolio_analytics(
+        api_url="http://tracker.test",
+        start_date="2026-01-01",
+        end_date="2026-06-10",
+        include_backfill=True,
+    )
+    assert a.available is True
+    by_endpoint = {u.split("?")[0].rsplit("/", 1)[-1]: u for u in seen}
+    # The four windowed endpoints get the dates; only /performance gets the
+    # backfill flag; /api/policy is window-less.
+    perf = by_endpoint["performance"]
+    assert "start_date=2026-01-01" in perf and "end_date=2026-06-10" in perf
+    assert "include_backfill=true" in perf
+    for key in ("position-alpha", "positioning", "beta"):
+        assert "start_date=2026-01-01" in by_endpoint[key]
+        assert "end_date=2026-06-10" in by_endpoint[key]
+        assert "include_backfill" not in by_endpoint[key]
+    assert "?" not in by_endpoint["policy"]
+
+
+def test_fetch_analytics_default_omits_window_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        seen.append(url)
+        return _route(url)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    fetch_portfolio_analytics(api_url="http://tracker.test")
+    # No window chosen -> the tracker's own defaults, no query strings at all.
+    assert seen and all("?" not in u for u in seen)
+
+
+def test_validated_window_sanitizes() -> None:
+    w = validated_window("2026-01-01", "2026-06-10", True)
+    assert (w.start_date, w.end_date, w.include_backfill) == ("2026-01-01", "2026-06-10", True)
+    # Garbage dates are dropped individually.
+    partial = validated_window("junk", "2026-06-10", False)
+    assert partial.start_date is None
+    assert partial.end_date == "2026-06-10"
+    # An inverted range falls back to the tracker defaults entirely.
+    inverted = validated_window("2026-06-10", "2026-01-01", False)
+    assert inverted.start_date is None and inverted.end_date is None
+    # Absent input is the default window.
+    assert validated_window(None, None, False) == WindowSelection()
+
+
+def test_compose_page_renders_window_bar_with_echoed_values() -> None:
+    analytics = PortfolioAnalytics(
+        available=False,
+        api_url="http://localhost:8000",
+        errors=dict.fromkeys(
+            ("performance", "position_alpha", "positioning", "policy", "beta"),
+            "ConnectionError: refused",
+        ),
+    )
+    live = LivePortfolio(
+        available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
+    )
+    window = WindowSelection(start_date="2026-01-01", end_date="2026-06-10", include_backfill=True)
+    html = compose_portfolio_page(analytics, live, "", window=window)
+    # The bar renders even with the tracker down (it doubles as a retry
+    # control), echoing the applied window into the inputs.
+    assert 'id="pf-window-bar"' in html
+    assert 'value="2026-01-01"' in html and 'value="2026-06-10"' in html
+    assert 'id="pf-backfill" checked' in html
+    assert 'data-preset="ytd"' in html and 'data-preset="default"' in html
+    assert "/api/panel/portfolio" in html  # the refetch script targets this panel
+    # Still exactly ONE offline note alongside the bar.
+    assert html.count("not reachable") == 1
+
+
+def test_compose_page_default_window_bar_is_unset() -> None:
+    analytics = PortfolioAnalytics(available=False, api_url="http://x", errors={})
+    live = LivePortfolio(available=False, api_url="http://x", error="down")
+    html = compose_portfolio_page(analytics, live, "")
+    assert 'id="pf-window-bar"' in html
+    assert 'id="pf-start" value=""' in html and 'id="pf-end" value=""' in html
+    assert 'id="pf-backfill">' in html  # unchecked
