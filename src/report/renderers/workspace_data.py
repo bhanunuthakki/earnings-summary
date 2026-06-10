@@ -24,7 +24,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+import sqlite3
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 from typing import cast
@@ -786,6 +787,11 @@ from report.sections.p3_data import (  # noqa: E402  (kept near use site)
     load_saydo_verdicts,
     load_strategic_targets,
 )
+from user_state.notes import AnalystNoteRow, list_notes  # noqa: E402
+
+
+def _new_open_notes() -> list[AnalystNoteRow]:
+    return []
 
 
 @dataclass(frozen=True)
@@ -804,6 +810,9 @@ class WorkspaceP3Panels:
     decision_history: DecisionHistorySummary
     saydo_verdicts: list[SayDoVerdictRow]
     peer_comp: list[PeerCompRow]
+    # P4.4: the owner's open analyst notes for this name — new builds lead
+    # with the standing watch-items (the strip under the thesis lede).
+    open_notes: list[AnalystNoteRow] = field(default_factory=_new_open_notes)
 
     @classmethod
     def empty(cls) -> WorkspaceP3Panels:
@@ -821,7 +830,22 @@ class WorkspaceP3Panels:
             ),
             saydo_verdicts=[],
             peer_comp=[],
+            open_notes=[],
         )
+
+
+def _load_open_notes_safe(ticker: str, db_path: Path) -> list[AnalystNoteRow]:
+    """Open analyst notes for the report strip — watch items + questions lead.
+
+    Best-effort like the P3 accessors: missing DB / pre-0074 schema → []."""
+    if not db_path.exists():
+        return []
+    try:
+        rows = list_notes(ticker=ticker, status="open", limit=12, db_path=db_path)
+    except sqlite3.Error:
+        return []
+    kind_rank = {"watch": 0, "question": 1}
+    return sorted(rows, key=lambda n: kind_rank.get(n.kind, 9))
 
 
 def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
@@ -839,6 +863,7 @@ def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
         decision_history=load_decision_history(ticker, db_path=db_path),
         saydo_verdicts=load_saydo_verdicts(ticker, db_path=db_path),
         peer_comp=load_peer_comp(ticker, repo_root=repo_root),
+        open_notes=_load_open_notes_safe(ticker, db_path),
     )
 
 

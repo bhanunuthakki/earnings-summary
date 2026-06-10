@@ -50,6 +50,7 @@ from report.renderers.workspace_html import (  # noqa: E402
     _eval_tab,
     _lease_ladder_panel,
     _macro_sensitivity_panel,
+    _open_items_strip,
     _peer_comp_panel,
     _saydo_tab,
     _saydo_verdicts_panel,
@@ -68,6 +69,7 @@ from report.sections.p3_data import (  # noqa: E402
     SayDoVerdictRow,
     StrategicTargetRow,
 )
+from user_state.notes import AnalystNoteRow  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Macro sensitivity panel
@@ -1078,3 +1080,46 @@ def test_workspace_p3_panels_empty_factory() -> None:
     assert empty.decision_history.rows == []
     assert empty.saydo_verdicts == []
     assert empty.peer_comp == []
+    assert empty.open_notes == []
+
+
+# ---------------------------------------------------------------------------
+# Open watch-items strip (P4.4)
+# ---------------------------------------------------------------------------
+
+
+def _note(kind: str, note_body: str) -> AnalystNoteRow:
+    return AnalystNoteRow(
+        id=1,
+        user_id="bhanu",
+        ticker="NU",
+        kind=kind,
+        status="open",
+        body=note_body,
+        anchor_type=None,
+        anchor_key=None,
+        source="manual",
+        source_ref=None,
+        supersedes_id=None,
+        resolution_note=None,
+        context=None,
+        created_at=datetime(2026, 6, 1, 10, 0),
+        updated_at=datetime(2026, 6, 1, 10, 0),
+        resolved_at=None,
+    )
+
+
+def test_open_items_strip_renders_notes() -> None:
+    out = StringIO()
+    _open_items_strip(out, [_note("watch", "Watch NIM next print.")])
+    html = out.getvalue()
+    assert "Open watch-items" in html
+    assert "Watch NIM next print." in html
+    assert "1 open · from the analyst journal" in html
+    assert 'class="panel l1-open-items" open' in html
+
+
+def test_open_items_strip_hides_when_empty() -> None:
+    out = StringIO()
+    _open_items_strip(out, [])
+    assert out.getvalue() == ""

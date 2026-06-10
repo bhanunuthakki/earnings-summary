@@ -177,6 +177,28 @@ a:hover { text-decoration: underline; }
   margin-bottom: 4px;
 }
 .evidence-summary-text { color: var(--fg-soft); font-family: var(--serif); font-size: 13.5px; }
+/* P4.4 — the owner's open notes attached to the alert's evidence. */
+.evidence-notes-list { list-style: none; margin: 0; padding: 0; }
+.evidence-notes-list li { padding: 3px 0; font-size: 12.5px; color: var(--fg-soft); }
+.evidence-note-kind, .oi-kind {
+  display: inline-block; font-family: var(--mono); font-size: 9.5px;
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 3px; padding: 0 5px; margin-right: 6px;
+}
+/* P4.4 — digest "Open items" panel + per-ticker earnings-prep notes. */
+.open-items-list, .prep-notes { list-style: none; margin: 0; padding: 0; }
+.open-item {
+  display: flex; gap: 8px; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px solid var(--hairline); font-size: 13px;
+}
+.open-item:last-child { border-bottom: 0; }
+.oi-ticker { font-family: var(--mono); font-weight: 600; }
+.oi-ticker.oi-portfolio { color: var(--muted); font-weight: 500; }
+.oi-body { flex: 1; color: var(--fg-soft); }
+.oi-when { color: var(--muted); font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.prep-notes { margin: 4px 0 2px 18px; }
+.prep-notes li { font-size: 12px; color: var(--muted); padding: 2px 0; }
 .evidence-malformed {
   padding: 10px;
   background: rgba(240, 138, 138, 0.08);

@@ -113,6 +113,7 @@ from report.sections.p3_data import (
     StrategicTargetRow,
 )
 from ui.tokens import FAVICON_LINK
+from user_state.notes import AnalystNoteRow
 
 # A tab tuple: (id, label, optional badge count, render-function-into-body).
 TabRenderFn: TypeAlias = Callable[[StringIO], None]
@@ -142,12 +143,16 @@ def render(spec: ReportSpec) -> str:
     _identity(body, spec)
     _forgone_strip(body, spec.forgone_due_to_budget)
     _thesis_strip(body, spec.snapshot, spec.thesis)
-    _kpi_strip(body, spec.thesis.kpi_ledger)
 
     # P3 panel data (macro sensitivities, strategic targets, customer
     # concentrations, lease ladder, decision history, say-do verdicts,
-    # peer comp) — pre-loaded once and threaded into the tab definitions.
+    # peer comp, open notes) — pre-loaded once; the open-notes strip leads
+    # the page (P4.4: builds lead with the owner's standing watch-items)
+    # and the rest threads into the tab definitions.
     p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
+
+    _open_items_strip(body, p3.open_notes)
+    _kpi_strip(body, spec.thesis.kpi_ledger)
 
     body.write('<div class="l1-tabs-wrap">')
     tabs = _tab_defs(spec, p3)
@@ -293,6 +298,29 @@ def _thesis_strip(body: StringIO, snap: SnapshotSection, thesis: ThesisSection) 
     body.write('<span class="thesis-label">Thesis</span>')
     body.write(f"<p>{_esc(text)}</p>")
     body.write("</div>")
+
+
+def _open_items_strip(body: StringIO, notes: list[AnalystNoteRow]) -> None:
+    """The owner's open watch-items lead every build (P4.4) — a compact
+    expanded-by-default strip under the thesis lede, fed by analyst_notes
+    at render time. Hidden entirely when the journal has nothing open."""
+    if not notes:
+        return
+    body.write(
+        '<details class="panel l1-open-items" open><summary class="panel-head">'
+        '<span class="panel-title">Open watch-items</span>'
+        '<span class="panel-meta"><span class="panel-sub">'
+        f"{len(notes)} open · from the analyst journal</span></span></summary>"
+        '<ul class="oi-strip-list">'
+    )
+    for n in notes:
+        when = _esc(n.created_at.date().isoformat())
+        body.write(
+            f'<li><span class="oi-kind">{_esc(n.kind)}</span>'
+            f'<span class="oi-body">{_esc(n.body)}</span>'
+            f'<span class="oi-when">{when}</span></li>'
+        )
+    body.write("</ul></details>")
 
 
 def _kpi_strip(body: StringIO, rows: list[KpiLedgerRow]) -> None:
