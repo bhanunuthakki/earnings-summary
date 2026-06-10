@@ -185,6 +185,8 @@ def test_to_cell_source_maps_payload() -> None:
     assert src.source == "sec_official"
     assert src.accession_number == "0001-01-000001"
     assert src.locator == '{"json_path":"x"}'
+    # source_doc_id rides through so chips can deep-link /source/<id> (P4.3).
+    assert src.doc_id == 2
     assert _to_cell_source(None) is None
 
 
@@ -246,6 +248,39 @@ def test_source_chip_html_contents_and_escaping() -> None:
     assert "open source ↗" in html_out
     assert "&quot;x&quot;" in html_out  # URL is attribute-escaped
     assert _source_hover_title(CellSource(source="fmp_normalized")) == "fmp_normalized"
+
+
+def test_source_chip_links_viewer_with_line_anchor() -> None:
+    """P4.3: a doc-id-bearing chip deep-links the in-app /source reader; a
+    transcript_line locator becomes the #L<n> anchor and the raw source_url
+    demotes to the 'original document' link."""
+    src = CellSource(
+        source="llm_extracted",
+        doc_id=5186,
+        locator='{"transcript_line":42}',
+        source_url="https://example.com/orig",
+    )
+    html_out = _source_chip_html(src)
+    assert 'href="/source/5186#L42"' in html_out
+    assert "open in viewer ↗" in html_out
+    assert "original document ↗" in html_out
+
+
+def test_source_chip_links_viewer_with_section_query() -> None:
+    src = CellSource(
+        source="sec_official",
+        doc_id=31,
+        locator='{"section":"item7_management_discussion"}',
+    )
+    html_out = _source_chip_html(src)
+    assert 'href="/source/31?section=item7_management_discussion"' in html_out
+
+
+def test_source_chip_without_doc_id_keeps_source_url_only() -> None:
+    src = CellSource(source="fmp_normalized", source_url="https://fmp.example/x")
+    html_out = _source_chip_html(src)
+    assert "/source/" not in html_out
+    assert "open source ↗" in html_out
 
 
 def test_yoy_matrix_emits_cell_titles_and_label_chip() -> None:
@@ -388,3 +423,71 @@ def test_drawer_resolves_fact_id_with_loaded_provenance(tmp_path: Path) -> None:
     out = render_evidence_drawer(_make_alert(evidence), prov)
     assert "sec_official" in out
     assert "no brief provenance" not in out
+
+
+# ----------------------------------------------------------------------------
+# P4.3 — transcript citations deep-link the /source reader
+# ----------------------------------------------------------------------------
+
+
+def _seed_transcript_docs(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE documents (id INTEGER PRIMARY KEY, ticker TEXT, doc_type TEXT, "
+        "file_path TEXT);"
+    )
+    conn.executemany(
+        "INSERT INTO documents (id, ticker, doc_type, file_path) VALUES (?, ?, ?, ?)",
+        [
+            (360, "NU", "earnings_call_transcript", "transcripts/processed/NU_Q1_2026.txt"),
+            (361, "NU", "earnings_call_transcript", "transcripts/processed/NU_Q4_2025.txt"),
+            (362, "NU", "ir_transcript", "ir_documents/NU/2026-03-31/ir_transcript__x.pdf"),
+            (363, "NU", "earnings_call_transcript", "transcripts/processed/oddly_named.txt"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_load_brief_provenance_carries_transcript_doc_map(tmp_path: Path) -> None:
+    """Even without a brief_provenance_log table, the payload carries the
+    period → transcript-doc map so transcript_line citations can link."""
+    db = tmp_path / "docs.db"
+    _seed_transcript_docs(db)
+    prov = load_brief_provenance("nu", db_path=db)
+    assert prov is not None
+    assert prov.get("transcript_docs") == {"Q1-2026": 360, "Q4-2025": 361}
+
+
+def test_drawer_links_transcript_citations_to_reader(tmp_path: Path) -> None:
+    db = tmp_path / "docs.db"
+    _seed_transcript_docs(db)
+    evidence = json.dumps(
+        {
+            "summary": "tone shift",
+            "shifts": [
+                {
+                    "citations": [
+                        {
+                            "kind": "transcript_line",
+                            "period": "Q1-2026",
+                            "line_number": 165,
+                            "excerpt": "risk-adjusted NIM came in at 9.5%",
+                        },
+                        {
+                            "kind": "transcript_line",
+                            "period": "Q3-2024",  # no transcript on file
+                            "line_number": 9,
+                            "excerpt": "older quote",
+                        },
+                    ]
+                }
+            ],
+        }
+    )
+    prov = load_brief_provenance("NU", db_path=db)
+    out = render_evidence_drawer(_make_alert(evidence), prov)
+    assert '<a href="/source/360#L165"' in out
+    assert "Q1-2026 · line 165" in out
+    # Unresolvable period stays plain text — no dead link fabricated.
+    assert "/source/" not in out.split("Q3-2024")[1][:80]

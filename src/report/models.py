@@ -349,6 +349,9 @@ class CellSource(BaseModel):
     accession_number: str | None = None
     filing_date: str | None = None
     locator: str | None = None  # raw locator JSON off the fact row
+    # documents.id of the winning row — lets the chip deep-link the in-app
+    # /source/<doc_id> viewers (P4.3) instead of only the raw source_url.
+    doc_id: int | None = None
 
 
 class QuarterlyLineItem(BaseModel):

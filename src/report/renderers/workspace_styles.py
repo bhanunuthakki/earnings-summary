@@ -482,6 +482,15 @@ details.panel > summary .panel-title::before {
 details.panel[open] > summary .panel-title::before { content: '\25BE '; }
 details.panel:not([open]) > summary.panel-head { border-bottom: 0; }
 details.panel > summary:hover { background: var(--paper); }
+/* P4.3 cross-tab links: small accent links in the panel-meta that jump to a
+   related panel on another tab (data-xtab handler in workspace_script.JS).
+   The landing panel flashes briefly so the eye finds it after the switch. */
+.panel-xlink {
+  font-size: 11px; color: var(--accent); text-decoration: none;
+  white-space: nowrap;
+}
+.panel-xlink:hover { text-decoration: underline; }
+.xlink-flash { outline: 2px solid var(--accent); outline-offset: 2px; }
 .panel-foot {
   padding: 12px var(--panel-pad-x);
   background: var(--paper);

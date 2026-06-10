@@ -16,12 +16,14 @@ faked.
 from __future__ import annotations
 
 import html
+import json
 import re
+import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from industry_classifier import (
     SECTION_CUSTOMER_CONCENTRATION,
@@ -653,6 +655,8 @@ def _earnings_themes_panel(body: StringIO, section: EarningsSection) -> None:
         _panel_head(
             "Cross-quarter themes",
             sub="last 4 quarters · what management said vs what analysts pressed on",
+            links=_xlink_html("bear", "bear case ↔", "panel-failure-modes"),
+            panel_id="panel-themes",
         )
     )
     if section.themes_note:
@@ -752,10 +756,38 @@ def _source_hover_title(src: CellSource) -> str:
     return " · ".join(parts)
 
 
+def _viewer_href(src: CellSource) -> str | None:
+    """In-app ``/source/<doc_id>`` link for a sourced cell (P4.3).
+
+    The locator JSON sharpens the destination: ``transcript_line`` becomes
+    the reader's ``#L<n>`` line anchor, ``section`` the 10-K reader's
+    ``?section=`` deep link. None when the cell carries no document id —
+    the chip then falls back to the raw source_url only.
+    """
+    if src.doc_id is None:
+        return None
+    suffix = ""
+    if src.locator:
+        try:
+            loc: object = json.loads(src.locator)
+        except (ValueError, TypeError):
+            loc = None
+        if isinstance(loc, dict):
+            loc_map = cast("dict[str, object]", loc)
+            line = loc_map.get("transcript_line")
+            section = loc_map.get("section")
+            if isinstance(line, int):
+                suffix = f"#L{line}"
+            elif isinstance(section, str) and section:
+                suffix = f"?section={urllib.parse.quote(section)}"
+    return f"/source/{src.doc_id}{suffix}"
+
+
 def _source_chip_html(src: CellSource) -> str:
     """Clickable per-number source chip: hover = tier + fetched-at; click
     opens a JS-free <details> popover with the document identity (doc type,
-    accession, filing date, sub-document locator) and the open-source link.
+    accession, filing date, sub-document locator) and the open links — the
+    in-app /source viewer (P4.3) plus the original document URL.
     """
     abbrev = _SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
     tier_slug = src.source.replace("_", "-")
@@ -770,10 +802,17 @@ def _source_chip_html(src: CellSource) -> str:
         rows.append(f'<div class="src-pop-row mono">{acc}{filed}</div>')
     if src.locator:
         rows.append(f'<div class="src-pop-row mono src-pop-locator">{_esc(src.locator)}</div>')
+    viewer = _viewer_href(src)
+    if viewer:
+        rows.append(
+            f'<div class="src-pop-row"><a href="{_esc(viewer)}" target="_blank" '
+            'rel="noopener">open in viewer ↗</a></div>'
+        )
     if src.source_url:
+        label = "original document ↗" if viewer else "open source ↗"
         rows.append(
             f'<div class="src-pop-row"><a href="{_esc(src.source_url)}" target="_blank" '
-            'rel="noopener">open source ↗</a></div>'
+            f'rel="noopener">{label}</a></div>'
         )
     return (
         '<details class="src-pop">'
@@ -1629,6 +1668,8 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
             "§3.5 Signals",
             sub=f"{len(signals.red_signals)} red · "
             f"{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green",
+            links=_xlink_html("news", "related news →"),
+            panel_id="panel-signals",
         )
     )
     if fires:
@@ -1982,6 +2023,7 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
             _panel_head(
                 "Why this multiple",
                 sub="model rationale",
+                links=_xlink_html("thesis", "thesis KPI drivers →", "panel-kpi-ledger"),
                 attrs='data-commentable="true" data-anchor-type="valuation_rationale" '
                 'data-anchor-key="valuation_rationale" data-anchor-tab="valuation"',
             )
@@ -2280,9 +2322,11 @@ def _thesis_hygiene_panels(
         if tracked_only:
             sub += f" · {len(tracked_only)} awaiting data"
         body.write(
-            '<details class="panel" open><summary class="panel-head">'
+            '<details class="panel" open id="panel-kpi-ledger"><summary class="panel-head">'
             '<span class="panel-title">KPI ledger detail</span>'
-            f'<span class="panel-meta"><span class="panel-sub">{_esc(sub)}</span></span>'
+            '<span class="panel-meta">'
+            + _xlink_html("valuation", "valuation →")
+            + f'<span class="panel-sub">{_esc(sub)}</span></span>'
             "</summary>"
             '<div class="table-scroll"><table class="tbl tbl-nowrap kpi-ledger-table"><thead><tr>'
             "<th>KPI</th><th>Tier</th><th>Unit</th>"
@@ -2659,7 +2703,14 @@ def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
         # P4.2 hide-don't-stub: the bear tab's own empty state covers the
         # nothing-at-all case; an extra per-panel stub is noise.
         return
-    body.write(_panel_head("Failure modes", sub=f"{len(bear.failure_modes)} hypotheses tracked"))
+    body.write(
+        _panel_head(
+            "Failure modes",
+            sub=f"{len(bear.failure_modes)} hypotheses tracked",
+            links=_xlink_html("earnings", "earnings themes ↔", "panel-themes"),
+            panel_id="panel-failure-modes",
+        )
+    )
     for i, fm in enumerate(bear.failure_modes):
         _failure_mode_card(body, i, fm)
     body.write("</div>")
@@ -3123,6 +3174,7 @@ def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrati
         _panel_head(
             "Customer concentration",
             sub=f"{len(rows)} customer{'s' if len(rows) != 1 else ''} ≥ 5% of revenue",
+            links=_xlink_html("bear", "bear case →", "panel-failure-modes"),
             classes="customer-concentration-panel",
         )
     )
@@ -4025,9 +4077,11 @@ def _panel_head(
     sub_html: str | None = None,
     as_of: str | None = None,
     chip: CellSource | None = None,
+    links: str = "",
     classes: str = "",
     attrs: str = "",
     title_html: str | None = None,
+    panel_id: str | None = None,
 ) -> str:
     """Canonical section-header anatomy (P4.1): title · as-of · source chip,
     with the descriptive sub on the right edge. Returns the OPENED panel —
@@ -4035,9 +4089,11 @@ def _panel_head(
     writes the panel body and the closing ``</div>``.
 
     ``title``/``sub``/``as_of`` are escaped; ``title_html``/``sub_html``/
-    ``attrs`` are emitted as-is for call sites that embed links, pills, or
-    data-anchor attributes. Hand-rolled ``panel-head`` markup should not
-    exist outside this helper (and the <summary> variants that mirror it).
+    ``attrs``/``links`` are emitted as-is for call sites that embed links,
+    pills, or data-anchor attributes. ``links`` carries cross-tab links
+    (P4.3, see ``_xlink_html``); ``panel_id`` makes the panel a cross-link
+    target. Hand-rolled ``panel-head`` markup should not exist outside this
+    helper (and the <summary> variants that mirror it).
     """
     cls = f"panel {classes}".strip()
     t = title_html if title_html is not None else _esc(title)
@@ -4046,15 +4102,28 @@ def _panel_head(
         meta.append(f'<span class="panel-asof">as of {_esc(as_of)}</span>')
     if chip is not None:
         meta.append(_source_chip_html(chip))
+    if links:
+        meta.append(links)
     if sub_html is not None:
         meta.append(sub_html)
     elif sub:
         meta.append(f'<span class="panel-sub">{_esc(sub)}</span>')
     meta_html = f'<span class="panel-meta">{"".join(meta)}</span>' if meta else ""
     attrs_s = f" {attrs}" if attrs else ""
+    id_s = f' id="{_esc(panel_id)}"' if panel_id else ""
     return (
-        f'<div class="{cls}"{attrs_s}><div class="panel-head">'
+        f'<div class="{cls}"{id_s}{attrs_s}><div class="panel-head">'
         f'<span class="panel-title">{t}</span>{meta_html}</div>'
+    )
+
+
+def _xlink_html(tab: str, label: str, anchor: str | None = None) -> str:
+    """A cross-tab link (P4.3): switches the workspace to ``tab`` and, when
+    ``anchor`` names a panel id there, scrolls it into view. Wired by the
+    ``data-xtab`` handler in workspace_script.JS."""
+    anchor_attr = f' data-anchor="{_esc(anchor)}"' if anchor else ""
+    return (
+        f'<a class="panel-xlink" href="#" data-xtab="{_esc(tab)}"{anchor_attr}>{_esc(label)}</a>'
     )
 
 

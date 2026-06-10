@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -39,14 +40,45 @@ _CITATION_KIND_LABELS: dict[str, str] = {
 }
 
 
+# Matches the processed-transcript file naming: ``..._Q1_2026.txt``.
+_TRANSCRIPT_PERIOD_RE = re.compile(r"_Q([1-4])_((?:19|20)\d{2})", re.IGNORECASE)
+
+
+def _load_transcript_doc_ids(conn: sqlite3.Connection, ticker: str) -> dict[str, int]:
+    """``{"Q1-2026": doc_id}`` for the ticker's registered call transcripts.
+
+    Keys use the citation-period shape the earnings_tone trigger writes
+    (``Q<n>-<year>``); the period is parsed from the processed-transcript
+    file path. Latest registration (highest id) wins per period.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, file_path FROM documents "
+            "WHERE UPPER(ticker) = ? AND doc_type = 'earnings_call_transcript' "
+            "ORDER BY id",
+            (ticker.upper(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[str, int] = {}
+    for doc_id, file_path in rows:
+        m = _TRANSCRIPT_PERIOD_RE.search(str(file_path or ""))
+        if m is None:
+            continue
+        out[f"Q{m.group(1)}-{m.group(2)}"] = int(doc_id)
+    return out
+
+
 def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object] | None:
     """Latest brief_provenance_log payload for `ticker`, drawer-shaped.
 
-    Returns ``{"sources_used": <parsed JSON>}`` — the row shape
-    ``render_evidence_drawer`` navigates for fact_id citation linking —
-    or None when the DB/table/row is missing or the JSON is malformed.
-    Callers (digest/feed) look this up once per ticker so fact_id
-    citations stop rendering the dead "no brief provenance" cell (P3.3).
+    Returns ``{"sources_used": <parsed JSON>, "transcript_docs": {...}}`` —
+    the shape ``render_evidence_drawer`` navigates for fact_id citation
+    linking plus the period → transcript-document map that lets
+    transcript_line citations deep-link the ``/source/<doc_id>#L<n>``
+    reader (P4.3). Either half may be absent; None only when neither is
+    available (missing DB, no rows). Callers (digest/feed/holding rail)
+    look this up once per ticker.
     """
     if not db_path.exists():
         return None
@@ -55,24 +87,29 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
     except sqlite3.Error:
         return None
     try:
-        row = conn.execute(
-            "SELECT sources_used FROM brief_provenance_log "
-            "WHERE UPPER(ticker) = ? ORDER BY generated_at DESC LIMIT 1",
-            (ticker.upper(),),
-        ).fetchone()
-    except sqlite3.Error:
-        return None
+        try:
+            row = conn.execute(
+                "SELECT sources_used FROM brief_provenance_log "
+                "WHERE UPPER(ticker) = ? ORDER BY generated_at DESC LIMIT 1",
+                (ticker.upper(),),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        transcript_docs = _load_transcript_doc_ids(conn, ticker)
     finally:
         conn.close()
-    if row is None or row[0] is None:
-        return None
-    try:
-        parsed = json.loads(row[0])
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(parsed, dict):
-        return None
-    return {"sources_used": cast("dict[str, object]", parsed)}
+
+    out: dict[str, object] = {}
+    if row is not None and row[0] is not None:
+        try:
+            parsed = json.loads(row[0])
+        except (ValueError, TypeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            out["sources_used"] = cast("dict[str, object]", parsed)
+    if transcript_docs:
+        out["transcript_docs"] = transcript_docs
+    return out or None
 
 
 def render_evidence_drawer(
@@ -118,9 +155,10 @@ def render_evidence_drawer(
         return "".join(body)
 
     per_metric = _extract_per_metric(brief_provenance)
+    transcript_docs = _extract_transcript_docs(brief_provenance)
 
     body.append(_render_summary_section(parsed))
-    body.append(_render_citations_section(parsed, per_metric))
+    body.append(_render_citations_section(parsed, per_metric, transcript_docs))
     body.append(_render_raw_section(parsed))
 
     body.append("</div></details>")
@@ -152,6 +190,7 @@ def _render_summary_section(parsed: Mapping[str, object]) -> str:
 def _render_citations_section(
     parsed: Mapping[str, object],
     per_metric: Mapping[str, object] | None,
+    transcript_docs: Mapping[str, int] | None = None,
 ) -> str:
     # Citations live at the top level for triggers that emit them there, AND
     # nested under each shift for earnings_tone (shifts[].citations). Gather
@@ -179,11 +218,18 @@ def _render_citations_section(
         kind = c.kind
         kind_label = _CITATION_KIND_LABELS.get(kind, kind)
         prov_html = _render_citation_provenance(c, per_metric)
-        # URL locators (news_url etc.) render as real links — a citation the
-        # analyst can't open is a dead end, not provenance.
+        viewer = _transcript_viewer_href(c, transcript_docs)
+        # Citations the analyst can open render as real links — URL locators
+        # (news_url etc.) directly, transcript lines into the in-app
+        # /source/<doc_id>#L<n> reader (P4.3). A citation you can't open is
+        # a dead end, not provenance.
         if c.locator.startswith(("http://", "https://")):
             locator_html = (
                 f'<a href="{_esc(c.locator)}" target="_blank" rel="noopener">{_esc(c.locator)}</a>'
+            )
+        elif viewer is not None:
+            locator_html = (
+                f'<a href="{_esc(viewer)}" target="_blank" rel="noopener">{_esc(c.locator)}</a>'
             )
         else:
             locator_html = _esc(c.locator)
@@ -197,6 +243,22 @@ def _render_citations_section(
         )
     rows.append("</tbody></table></div>")
     return "".join(rows)
+
+
+def _transcript_viewer_href(
+    citation: _Citation, transcript_docs: Mapping[str, int] | None
+) -> str | None:
+    """``/source/<doc_id>#L<n>`` for a transcript_line citation whose period
+    resolves against the ticker's registered transcripts; else None."""
+    if citation.kind != "transcript_line" or not transcript_docs:
+        return None
+    if citation.period is None:
+        return None
+    doc_id = transcript_docs.get(citation.period.upper())
+    if doc_id is None:
+        return None
+    anchor = f"#L{citation.line_number}" if citation.line_number is not None else ""
+    return f"/source/{doc_id}{anchor}"
 
 
 def _render_raw_section(parsed: Mapping[str, object]) -> str:
@@ -214,14 +276,26 @@ def _render_raw_section(parsed: Mapping[str, object]) -> str:
 
 
 class _Citation:
-    """One parsed citation entry — flat string fields, validated at parse time."""
+    """One parsed citation entry — flat string fields, validated at parse time.
 
-    __slots__ = ("excerpt", "kind", "locator")
+    ``period`` / ``line_number`` are kept structured (when the entry carries
+    them) so transcript_line citations can resolve to the /source reader."""
 
-    def __init__(self, kind: str, locator: str, excerpt: str) -> None:
+    __slots__ = ("excerpt", "kind", "line_number", "locator", "period")
+
+    def __init__(
+        self,
+        kind: str,
+        locator: str,
+        excerpt: str,
+        period: str | None = None,
+        line_number: int | None = None,
+    ) -> None:
         self.kind = kind
         self.locator = locator
         self.excerpt = excerpt
+        self.period = period
+        self.line_number = line_number
 
 
 def _normalize_citations(raw: object) -> list[_Citation]:
@@ -251,11 +325,20 @@ def _normalize_citations(raw: object) -> list[_Citation]:
             # earnings_tone cites a transcript line as {period, line_number}.
             locator_raw = _compose_locator(entry_map)
         excerpt_raw = entry_map.get("excerpt", "")
+        period_raw = entry_map.get("period")
+        line_raw = entry_map.get("line_number")
+        line_number: int | None = None
+        if isinstance(line_raw, int):
+            line_number = line_raw
+        elif isinstance(line_raw, str) and line_raw.strip().isdigit():
+            line_number = int(line_raw.strip())
         out.append(
             _Citation(
                 kind=kind_raw,
                 locator=str(locator_raw),
                 excerpt=str(excerpt_raw),
+                period=period_raw if isinstance(period_raw, str) and period_raw else None,
+                line_number=line_number,
             )
         )
     return out
@@ -366,6 +449,22 @@ def _extract_per_metric(
     if not isinstance(per_metric, dict):
         return None
     return cast("Mapping[str, object]", per_metric)
+
+
+def _extract_transcript_docs(
+    brief_provenance: Mapping[str, object] | None,
+) -> Mapping[str, int] | None:
+    """Pull the ``transcript_docs`` period → doc-id map (P4.3) when present."""
+    if brief_provenance is None:
+        return None
+    raw = brief_provenance.get("transcript_docs")
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, int] = {}
+    for key, value in cast("Mapping[str, object]", raw).items():
+        if isinstance(value, int):
+            out[str(key).upper()] = value
+    return out or None
 
 
 def _esc(text: str) -> str:
