@@ -170,7 +170,7 @@ demands it (note the split in the Decision log).
 - [x] **P3.3 Source chips + drawer.** *(#374)* Per-number source chip in Financials
   + Earnings tabs (hover: tier + fetched-at; click: excerpt + open-source
   link). Fix the alert evidence drawer's dead citation kinds.
-- [ ] **P3.4 Governance panel.** Coverage / data-quality / validation /
+- [x] **P3.4 Governance panel.** *(#375)* Coverage / data-quality / validation /
   source_calls dashboards consolidated; settings drawer (budgets, ticker
   settings, maintenance actions, job streams) replaces admin-as-tab.
 - [ ] **P3.5 Source viewers.** Transcript reader with line anchors; 10-K
