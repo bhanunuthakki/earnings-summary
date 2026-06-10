@@ -52,6 +52,7 @@ def extract_facts_from_record(
     record: FmpCashFlowRecord,
     source_doc_id: int,
     period_type_override: FiscalPeriodType | None = None,
+    record_index: int | None = None,
 ) -> list[FinancialFact]:
     """Convert one validated record to FinancialFact rows.
 
@@ -61,7 +62,11 @@ def extract_facts_from_record(
     reconciliation lives in the consumer.
     """
     return extract_facts_with_spec(
-        record, source_doc_id, _LINE_ITEM_SPEC, period_type_override=period_type_override
+        record,
+        source_doc_id,
+        _LINE_ITEM_SPEC,
+        period_type_override=period_type_override,
+        record_index=record_index,
     )
 
 
@@ -76,10 +81,13 @@ def extract_cashflow_facts(conn: sqlite3.Connection, document_id: int, project_r
     period_override = FiscalPeriodType.TTM if file_path_str.endswith("_ttm.json") else None
 
     inserted = 0
-    for rec_data in records:
+    for idx, rec_data in enumerate(records):
         rec = FmpCashFlowRecord.model_validate(rec_data)
         facts = extract_facts_from_record(
-            rec, source_doc_id=document_id, period_type_override=period_override
+            rec,
+            source_doc_id=document_id,
+            period_type_override=period_override,
+            record_index=idx,
         )
         inserted += insert_financial_facts(conn, facts, extracted_by="fmp")
     conn.commit()

@@ -141,4 +141,18 @@ Rules:
 - The typed model is `src/models/facts.py::FactLocator`; writers serialize through `FactLocator.to_json()` (an all-empty locator serializes to `None` so the column stays NULL, never `"{}"`). The fact-store insert helpers (`src/pipeline/restatement_detector.py`) take the pre-serialized JSON.
 - There is deliberately **no DB-level CHECK** on the JSON: adding one to an existing SQLite table forces a full-table rebuild of the largest tables in the DB. Validity is the write path's job.
 - A NULL locator is valid (facts predating 0075, or sources with no meaningful sub-position). Readers must treat locator as enrichment, never a join key.
-- Extractors populate locators going forward as of P3.2; the locator column itself ships with 0075 so the stores round-trip it.
+
+### Writer wiring (P3.2)
+
+| writer | locator written | source_excerpt |
+|---|---|---|
+| FMP statement extractors (`compute/income_statement`, `balance_sheet`, `cashflow`) | `json_path = "[<i>].<fmpField>"` — record index + field in the cached endpoint response | n/a (financial_facts has no excerpt column) |
+| `compute/as_reported.py` | `json_path = "[<i>].data.<xbrl_tag>"` | n/a |
+| `pipeline/sec_xbrl.py` (companyfacts) | `json_path = "facts.<ns>.<tag>.units.<unit>[<i>]"` | n/a |
+| `compute/kpi_extract_summaries.py` (LLM over quarterly summaries) | none (the source is a derived summary doc — quote is the anchor) | **yes** — the LLM returns the verbatim snippet per KPI; persisted clipped to 1024 chars |
+| `execution/extract_kpis_from_ir.py` (in-session PDF readout) | `pdf_page` via per-value `"locator"` in the manifest JSON | yes, via per-value `"source_excerpt"` |
+| `compute/fmp_derived_kpis.py` | none **by design** — derived series have no single source position; provenance is the chain of source facts | n/a |
+| `ir_pipeline/ingest.py` (IR spreadsheet) | none — spreadsheet cells have no JSON/PDF position in the contract | n/a (deterministic parse, no quote) |
+| `compute/s1_financials.py` | none — the text-region parser carries no stable line anchor; S-1 facts are provisional and superseded by real filings | n/a |
+
+Facts written before P3.2 keep NULL locators; there is no retroactive fact-locator backfill (re-extraction naturally repopulates).

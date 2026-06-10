@@ -37,7 +37,7 @@ from models.documents import (
     SourceType,
     tier_for_source_type,
 )
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FactLocator, FiscalPeriodType, Unit
 from pipeline.restatement_detector import (
     _table_has_column,
     insert_with_restatement_detection,
@@ -327,7 +327,12 @@ def insert_facts_from_companyfacts(
                     continue
                 if not isinstance(entries, list):
                     continue
+                # Manual counter instead of enumerate(): the walk is legacy
+                # untyped JSON and enumerate(<unknown>) trips the pyright
+                # strict ratchet, while typing the soup would cascade further.
+                entry_idx = -1
                 for entry in entries:
+                    entry_idx += 1
                     accn = entry.get("accn")
                     if not accn or accn not in accession_to_doc_id:
                         continue
@@ -343,6 +348,11 @@ def insert_facts_from_companyfacts(
                     if fpt is None:
                         continue  # YTD/6M/9M aggregations skipped
                     period_end = datetime.fromisoformat(end)
+                    # Exact position of the value in the companyfacts JSON the
+                    # document row's file_path points at (data_provenance.md §7).
+                    locator = FactLocator(
+                        json_path=(f"facts.{namespace}.{tag_name}.units.{unit_code}[{entry_idx}]")
+                    )
                     new_id, _ = insert_with_restatement_detection(
                         conn,
                         ticker=ticker,
@@ -355,6 +365,7 @@ def insert_facts_from_companyfacts(
                         source_doc_id=accession_to_doc_id[accn],
                         confidence=1.0,
                         extracted_by="sec_xbrl",
+                        locator=locator.to_json(),
                     )
                     if new_id is not None:
                         inserted += 1

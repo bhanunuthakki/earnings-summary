@@ -20,11 +20,15 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.kpis import ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+
+# kpi_facts.source_excerpt is VARCHAR(1024) (alembic 0033) — clip on write so
+# an over-eager extractor can't push a page of context into the column.
+_SOURCE_EXCERPT_MAX = 1024
 
 
 class KpiValue(BaseModel):
@@ -34,6 +38,12 @@ class KpiValue(BaseModel):
     value: Decimal
     unit: Unit
     confidence: float = Field(ge=0.0, le=1.0, default=0.95)
+    # Verbatim snippet from the source document that supports the value —
+    # lands in kpi_facts.source_excerpt (clipped to _SOURCE_EXCERPT_MAX).
+    source_excerpt: str | None = None
+    # Sub-document position (alembic 0075) — e.g. FactLocator(pdf_page=7) for
+    # an IR-deck extraction, or transcript_line for a transcript-anchored one.
+    locator: FactLocator | None = None
 
 
 class KpiExtractionManifest(BaseModel):
@@ -235,6 +245,8 @@ def _insert_kpi_fact(
     source_doc_id: int,
     confidence: float = 1.0,
     extracted_by: str | None = None,
+    locator: str | None = None,
+    source_excerpt: str | None = None,
 ) -> bool:
     """Insert one kpi_facts row, routed through the restatement detector.
 
@@ -260,6 +272,8 @@ def _insert_kpi_fact(
         source_doc_id=source_doc_id,
         confidence=confidence,
         extracted_by=extracted_by,
+        locator=locator,
+        source_excerpt=source_excerpt,
     )
     return new_id is not None
 
@@ -404,6 +418,7 @@ def persist_manifest(
             # (annual-only 20-F/10-K metrics). Absent → cadence left as-is.
             reporting_cadence=manifest.cadences.get(kpi.name),
         )
+        excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
         was_inserted = _insert_kpi_fact(
             conn,
             ticker=manifest.ticker,
@@ -415,6 +430,8 @@ def persist_manifest(
             source_doc_id=manifest.source_doc_id,
             confidence=kpi.confidence,
             extracted_by=extracted_by,
+            locator=kpi.locator.to_json() if kpi.locator is not None else None,
+            source_excerpt=excerpt or None,
         )
         if was_inserted:
             inserted += 1

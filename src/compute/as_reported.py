@@ -23,7 +23,7 @@ from compute._common import (
     parse_currency,
     read_records_json,
 )
-from models.facts import FinancialFact, FiscalPeriodType, Unit
+from models.facts import FactLocator, FinancialFact, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpAsReportedRecord
 
 _AS_REPORTED_DOC_TYPES: frozenset[str] = frozenset(
@@ -59,9 +59,14 @@ _XBRL_TAG_MAP: list[tuple[str, str]] = [
 
 
 def extract_facts_from_record(
-    record: FmpAsReportedRecord, source_doc_id: int
+    record: FmpAsReportedRecord, source_doc_id: int, record_index: int | None = None
 ) -> list[FinancialFact]:
-    """Walk the curated XBRL tag map; emit a FinancialFact per numeric value found."""
+    """Walk the curated XBRL tag map; emit a FinancialFact per numeric value found.
+
+    `record_index` (the record's position in the source JSON array) makes each
+    fact carry a locator pointing at the exact tag of the cached response:
+    `[<i>].data.<xbrl_tag>` (data_provenance.md §7).
+    """
     period_end = datetime.fromisoformat(record.date)
     period_type = FiscalPeriodType(record.period)
     currency = parse_currency(record.reportedCurrency)
@@ -73,6 +78,11 @@ def extract_facts_from_record(
             continue
         if not isinstance(value, (int, float)):
             continue
+        locator = (
+            FactLocator(json_path=f"[{record_index}].data.{xbrl_tag}")
+            if record_index is not None
+            else None
+        )
         facts.append(
             FinancialFact(
                 ticker=record.symbol.upper(),
@@ -84,6 +94,7 @@ def extract_facts_from_record(
                 unit=Unit.ACTUAL,
                 source_doc_id=source_doc_id,
                 confidence=1.0,
+                locator=locator,
             )
         )
     return facts
@@ -114,9 +125,9 @@ def extract_as_reported_facts(
     records = read_records_json(project_root / file_path_str)
 
     inserted = 0
-    for rec_data in records:
+    for idx, rec_data in enumerate(records):
         rec = FmpAsReportedRecord.model_validate(rec_data)
-        facts = extract_facts_from_record(rec, source_doc_id=document_id)
+        facts = extract_facts_from_record(rec, source_doc_id=document_id, record_index=idx)
         inserted += insert_financial_facts(conn, facts, extracted_by="fmp_as_reported")
     conn.commit()
     return inserted

@@ -358,6 +358,7 @@ def insert_kpi_with_restatement_detection(
     confidence: float = 1.0,
     extracted_by: str | None = None,
     locator: str | None = None,
+    source_excerpt: str | None = None,
 ) -> tuple[int | None, int | None]:
     """kpi_facts twin of `insert_with_restatement_detection`.
 
@@ -372,8 +373,9 @@ def insert_kpi_with_restatement_detection(
         replay).
 
     `locator` is the pre-serialized sub-document locator JSON (alembic 0075;
-    serialize via models.facts.FactLocator.to_json), dropped like the audit
-    columns when the schema predates it.
+    serialize via models.facts.FactLocator.to_json) and `source_excerpt` the
+    verbatim quote supporting the value (column added in 0033); both are
+    dropped like the audit columns when the schema predates them.
 
     Schema tolerance: when `kpi_facts` lacks the audit columns
     (`supersedes_id`, `extracted_by`, `confidence` — all added in 0054),
@@ -415,15 +417,27 @@ def insert_kpi_with_restatement_detection(
         and _table_has_column(conn, "kpi_facts", "extracted_by")
         and _table_has_column(conn, "kpi_facts", "confidence")
     )
-    write_locator = locator is not None and _table_has_column(conn, "kpi_facts", "locator")
+    # Optional tail columns: written only when provided AND the schema has
+    # them (locator: 0075; source_excerpt: 0033) — same drop-on-legacy
+    # tolerance as the audit columns.
+    tail_cols: list[str] = []
+    tail_vals: list[str] = []
+    if locator is not None and _table_has_column(conn, "kpi_facts", "locator"):
+        tail_cols.append("locator")
+        tail_vals.append(locator)
+    if source_excerpt is not None and _table_has_column(conn, "kpi_facts", "source_excerpt"):
+        tail_cols.append("source_excerpt")
+        tail_vals.append(source_excerpt)
     try:
-        if has_audit_cols and write_locator:
+        if has_audit_cols:
+            tail_names = "".join(f", {c}" for c in tail_cols)
+            tail_marks = ", ?" * len(tail_cols)
             cur = conn.execute(
                 "INSERT OR IGNORE INTO kpi_facts "
                 "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
-                " value, unit, source_doc_id, confidence, extracted_by, "
-                " supersedes_id, locator) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " value, unit, source_doc_id, confidence, extracted_by, supersedes_id"
+                f"{tail_names}) "
+                f"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?{tail_marks})",
                 (
                     ticker.upper(),
                     period_end,
@@ -435,26 +449,7 @@ def insert_kpi_with_restatement_detection(
                     confidence,
                     extracted_by,
                     supersedes_id,
-                    locator,
-                ),
-            )
-        elif has_audit_cols:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO kpi_facts "
-                "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
-                " value, unit, source_doc_id, confidence, extracted_by, supersedes_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    ticker.upper(),
-                    period_end,
-                    fiscal_period_type,
-                    kpi_definition_id,
-                    str(value),
-                    unit,
-                    source_doc_id,
-                    confidence,
-                    extracted_by,
-                    supersedes_id,
+                    *tail_vals,
                 ),
             )
         else:

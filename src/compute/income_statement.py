@@ -49,10 +49,15 @@ def extract_facts_from_record(
     record: FmpIncomeStatementRecord,
     source_doc_id: int,
     period_type_override: FiscalPeriodType | None = None,
+    record_index: int | None = None,
 ) -> list[FinancialFact]:
     """Convert one validated record to FinancialFact rows."""
     return extract_facts_with_spec(
-        record, source_doc_id, _LINE_ITEM_SPEC, period_type_override=period_type_override
+        record,
+        source_doc_id,
+        _LINE_ITEM_SPEC,
+        period_type_override=period_type_override,
+        record_index=record_index,
     )
 
 
@@ -71,10 +76,13 @@ def extract_income_statement_facts(
     period_override = FiscalPeriodType.TTM if file_path_str.endswith("_ttm.json") else None
 
     inserted = 0
-    for rec_data in records:
+    for idx, rec_data in enumerate(records):
         rec = FmpIncomeStatementRecord.model_validate(rec_data)
         facts = extract_facts_from_record(
-            rec, source_doc_id=document_id, period_type_override=period_override
+            rec,
+            source_doc_id=document_id,
+            period_type_override=period_override,
+            record_index=idx,
         )
         inserted += insert_financial_facts(conn, facts, extracted_by="fmp")
     conn.commit()

@@ -442,12 +442,15 @@ def _ensure_summary_document_row(
 def _llm_extract(
     ticker: str, period_label: str, kpi_names: list[str], summary_text: str
 ) -> dict[str, dict[str, object]]:
-    """Single Haiku call. Returns {kpi_name: {value, unit, confidence}}.
+    """Single Haiku call. Returns {kpi_name: {value, unit, confidence,
+    source_excerpt?}}.
 
     Prompt is generic across all three source shapes (earnings call summary /
     press release / presentation brief). Each has its own structure, but the
     extraction contract — pull the as-reported current-quarter value of each
-    named KPI — is the same.
+    named KPI — is the same. `source_excerpt` is the verbatim snippet the value
+    was read from; it lands in kpi_facts.source_excerpt so report tooltips and
+    the source drawer can show the supporting quote (P3.2).
     """
     if not kpi_names:
         return {}
@@ -466,6 +469,7 @@ For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not g
       * "bps"      — only when the document states the metric in basis points.
     Use only those five tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
   - "confidence": float 0.0–1.0; lower if you had to estimate from context
+  - "source_excerpt": the VERBATIM snippet (under 200 characters) copied character-for-character from the document that contains the reported value — the sentence or table line you read it from. Never paraphrase or reformat; if you cannot quote it exactly, omit this field.
 
 If a KPI is not disclosed in the document, OMIT IT from the response. Do not guess.
 
@@ -532,7 +536,21 @@ def _build_manifest(
             confidence = max(0.0, min(1.0, float(conf_raw)))
         except (TypeError, ValueError):
             confidence = 0.85
-        values.append(KpiValue(name=name, value=v, unit=unit, confidence=confidence))
+        excerpt_raw = payload.get("source_excerpt")
+        excerpt = (
+            excerpt_raw.strip()[:1024]
+            if isinstance(excerpt_raw, str) and excerpt_raw.strip()
+            else None
+        )
+        values.append(
+            KpiValue(
+                name=name,
+                value=v,
+                unit=unit,
+                confidence=confidence,
+                source_excerpt=excerpt,
+            )
+        )
 
     return KpiExtractionManifest(
         ticker=ticker,
