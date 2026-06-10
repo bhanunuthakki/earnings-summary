@@ -47,8 +47,10 @@ FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
 try:  # persistence is best-effort — the workbook builds without a DB
     from dcf import persist as persist_mod
+    from dcf import valuation as valuation_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+    valuation_mod = None  # type: ignore[assignment]
 
 # ---- styling (mirrors the redesign Color Code: yellow=input, blue=actual) ----
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
@@ -905,7 +907,7 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     bank model's value/share. No-op without the DB / persist module."""
     db = REPO / "data" / "portfolio.db"
-    if persist_mod is None or not db.exists():
+    if persist_mod is None or valuation_mod is None or not db.exists():
         return False
     # Persist in USD so the brief's over/under compares like-for-like against the
     # (USD) ADR price: vps_usd is per ADR, npv is the equity value in USD, and the
@@ -913,7 +915,10 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
     # with no ADR (fx=1, adr=1) these collapse to the reporting values unchanged.
     npv_usd = m.value * s.fx_to_usd
     shares_traded = a.shares / s.adr_ratio if s.adr_ratio else a.shares
-    over_under = round((m.vps_usd / a.price - 1) * 100, 2) if a.price else None
+    # dcf_runs convention (migration 0024): (live - fair) / fair as a DECIMAL ratio.
+    over_under = (
+        valuation_mod.over_under_pct(a.price, m.vps_usd) if a.price and m.vps_usd > 0 else None
+    )
     mos = load_breaks(T).get("mos_bar")
     snap = json.dumps(
         {

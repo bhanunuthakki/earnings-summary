@@ -53,8 +53,10 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 sys.path.insert(0, str(REPO / "src"))
 try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as persist_mod
+    from dcf import valuation as valuation_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+    valuation_mod = None  # type: ignore[assignment]
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -528,9 +530,10 @@ def build(s: Assum, m: Mirror, dest: Path) -> None:
 
 def persist_dcf_run(s: Assum, m: Mirror) -> bool:
     db = REPO / "data" / "portfolio.db"
-    if persist_mod is None or not db.exists() or not m.vps:
+    if persist_mod is None or valuation_mod is None or not db.exists() or not m.vps:
         return False
-    over_under = round((m.vps / s.price - 1) * 100, 2) if s.price else None
+    # dcf_runs convention (migration 0024): (live - fair) / fair as a DECIMAL ratio.
+    over_under = valuation_mod.over_under_pct(s.price, m.vps) if s.price and m.vps > 0 else None
     holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
     mos: object = None
     if holdings.exists():
