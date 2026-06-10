@@ -208,3 +208,168 @@ def _row_to_dc(row: sqlite3.Row) -> AdvisorMemoRow:
         ledger_entry_id=(None if row["ledger_entry_id"] is None else int(row["ledger_entry_id"])),
         created_at=parse_dt(row["created_at"]),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Stance scores (alembic 0078, master build P2.5)
+# --------------------------------------------------------------------------- #
+
+VERDICTS: tuple[str, ...] = (
+    "correct",
+    "wrong",
+    "mixed",
+    "screen_validated",
+    "screen_refuted",
+    "unscoreable",
+)
+BENCHMARK_BASES: tuple[str, ...] = ("tracker_spy", "absolute", "none")
+
+
+@dataclass(slots=True)
+class StanceScoreRow:
+    """One row of stance_scores, fully decoded."""
+
+    id: int
+    memo_id: int
+    user_id: str
+    verdict: str
+    benchmark_basis: str
+    horizon_days: int
+    start_date: str | None
+    end_date: str | None
+    ticker: str | None
+    counter_ticker: str | None
+    ticker_return_pct: float | None
+    benchmark_return_pct: float | None
+    excess_return_pct: float | None
+    counter_return_pct: float | None
+    detail: dict[str, object] | None
+    created_at: datetime
+
+
+def insert_stance_score(
+    *,
+    memo_id: int,
+    user_id: str = DEFAULT_USER_ID,
+    verdict: str,
+    benchmark_basis: str = "none",
+    horizon_days: int,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    ticker: str | None = None,
+    counter_ticker: str | None = None,
+    ticker_return_pct: float | None = None,
+    benchmark_return_pct: float | None = None,
+    excess_return_pct: float | None = None,
+    counter_return_pct: float | None = None,
+    detail: dict[str, object] | None = None,
+    db_path: Path | str | None = None,
+) -> int:
+    """INSERT one graded outcome; returns the row id."""
+    if verdict not in VERDICTS:
+        raise ValueError(f"verdict must be one of {VERDICTS}, got {verdict!r}")
+    if benchmark_basis not in BENCHMARK_BASES:
+        raise ValueError(f"benchmark_basis must be one of {BENCHMARK_BASES}")
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO stance_scores(
+                memo_id, user_id, verdict, benchmark_basis, horizon_days,
+                start_date, end_date, ticker, counter_ticker,
+                ticker_return_pct, benchmark_return_pct, excess_return_pct,
+                counter_return_pct, detail_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                memo_id,
+                user_id,
+                verdict,
+                benchmark_basis,
+                horizon_days,
+                start_date,
+                end_date,
+                ticker.upper() if ticker else None,
+                counter_ticker.upper() if counter_ticker else None,
+                ticker_return_pct,
+                benchmark_return_pct,
+                excess_return_pct,
+                counter_return_pct,
+                json.dumps(detail) if detail is not None else None,
+                now_iso(),
+            ),
+        )
+        row_id = int(cur.lastrowid or 0)
+        conn.commit()
+        return row_id
+    finally:
+        conn.close()
+
+
+def mark_scored(memo_id: int, *, status: str, db_path: Path | str | None = None) -> None:
+    """Flip a memo's score_status (pending -> scored/unscoreable)."""
+    if status not in SCORE_STATUSES:
+        raise ValueError(f"status must be one of {SCORE_STATUSES}, got {status!r}")
+    conn = open_conn(db_path)
+    try:
+        conn.execute("UPDATE advisor_memos SET score_status = ? WHERE id = ?", (status, memo_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_scores_for_memos(
+    memo_ids: list[int], *, db_path: Path | str | None = None
+) -> dict[int, StanceScoreRow]:
+    """Latest score per memo id (renderers join this onto memo cards)."""
+    if not memo_ids:
+        return {}
+    marks = ",".join("?" for _ in memo_ids)
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM stance_scores WHERE memo_id IN ({marks}) "
+            "ORDER BY memo_id, created_at DESC, id DESC",
+            tuple(memo_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    out: dict[int, StanceScoreRow] = {}
+    for r in rows:
+        decoded = _score_row_to_dc(r)
+        out.setdefault(decoded.memo_id, decoded)
+    return out
+
+
+def _score_row_to_dc(row: sqlite3.Row) -> StanceScoreRow:
+    raw_detail = row["detail_json"]
+    detail: dict[str, object] | None = None
+    if raw_detail:
+        try:
+            parsed = json.loads(str(raw_detail))
+            if isinstance(parsed, dict):
+                detail = cast("dict[str, object]", parsed)
+        except json.JSONDecodeError:
+            detail = None
+
+    def _opt_f(key: str) -> float | None:
+        return None if row[key] is None else float(row[key])
+
+    return StanceScoreRow(
+        id=int(row["id"]),
+        memo_id=int(row["memo_id"]),
+        user_id=str(row["user_id"]),
+        verdict=str(row["verdict"]),
+        benchmark_basis=str(row["benchmark_basis"]),
+        horizon_days=int(row["horizon_days"]),
+        start_date=(None if row["start_date"] is None else str(row["start_date"])),
+        end_date=(None if row["end_date"] is None else str(row["end_date"])),
+        ticker=(None if row["ticker"] is None else str(row["ticker"])),
+        counter_ticker=(None if row["counter_ticker"] is None else str(row["counter_ticker"])),
+        ticker_return_pct=_opt_f("ticker_return_pct"),
+        benchmark_return_pct=_opt_f("benchmark_return_pct"),
+        excess_return_pct=_opt_f("excess_return_pct"),
+        counter_return_pct=_opt_f("counter_return_pct"),
+        detail=detail,
+        created_at=parse_dt(row["created_at"]),
+    )

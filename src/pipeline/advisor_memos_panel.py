@@ -31,7 +31,7 @@ from advisor.context import (
     load_valuations,
     screen_swap_candidates,
 )
-from advisor.store import AdvisorMemoRow, list_memos
+from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
 from pipeline.analytical_dashboard_html import light_markdown_to_html
@@ -69,12 +69,17 @@ def render_advisor_memos_panel(
         memos = list_memos(user_id=user_id, limit=50, db_path=db_path)
     except (sqlite3.OperationalError, FileNotFoundError, RuntimeError):
         memos = []  # substrate predates 0077 — render the screen + run bar anyway
+    try:
+        scores = list_scores_for_memos([m.id for m in memos], db_path=db_path)
+    except (sqlite3.OperationalError, FileNotFoundError, RuntimeError):
+        scores = {}  # substrate predates 0078 — pills fall back to "scoring pending"
     return compose_memos_page(
         screen,
         memos,
         margin_pp=margin_pp,
         implausible=implausible,
         holdings=[t for t, _name in holdings],
+        scores=scores,
     )
 
 
@@ -85,6 +90,7 @@ def compose_memos_page(
     margin_pp: float = DEFAULT_MARGIN_PP,
     implausible: list[str] | None = None,
     holdings: list[str] | None = None,
+    scores: dict[int, StanceScoreRow] | None = None,
 ) -> str:
     """Pure page assembly (testable without DB)."""
     return "".join(
@@ -93,7 +99,7 @@ def compose_memos_page(
             _run_bar(holdings or []),
             _socratic_flow_section(),
             _screen_section(screen, margin_pp=margin_pp, implausible=implausible or []),
-            _memos_section(memos),
+            _memos_section(memos, scores or {}),
             f"<script>{_RUN_JS}</script>",
             f"<script>{_SOCRATIC_JS}</script>",
         ]
@@ -188,12 +194,12 @@ def _bar_cell(s: SwapCandidate) -> str:
     return '<span class="am-pill am-pill-held">discipline holds</span>'
 
 
-def _memos_section(memos: list[AdvisorMemoRow]) -> str:
+def _memos_section(memos: list[AdvisorMemoRow], scores: dict[int, StanceScoreRow]) -> str:
     head = (
         '<section class="panel"><h2>Memo record</h2>'
         '<p class="sub">Every advisor memo, newest first — each also wrote an analyst note '
-        "(and, when ticker-scoped, a decisions-timeline entry). Scoring lands with the "
-        "stance scorecard (P2.5).</p>"
+        "(and, when ticker-scoped, a decisions-timeline entry). Matured stances are graded "
+        "weekly against subsequent price (SPY-relative when the tracker is up).</p>"
     )
     if not memos:
         return (
@@ -201,11 +207,63 @@ def _memos_section(memos: list[AdvisorMemoRow]) -> str:
             '<p class="muted">No memos yet — generate the first next-dollar memo above.</p>'
             "</section>"
         )
-    cards = "".join(_memo_card(m) for m in memos)
-    return f"{head}{cards}</section>"
+    cards = "".join(_memo_card(m, scores.get(m.id)) for m in memos)
+    return f"{head}{_track_record_strip(scores)}{cards}</section>"
 
 
-def _memo_card(m: AdvisorMemoRow) -> str:
+def _track_record_strip(scores: dict[int, StanceScoreRow]) -> str:
+    """The aggregate scorecard: how the advisor's stances and screens have
+    actually graded. Hidden until something has been scored."""
+    graded = [s for s in scores.values() if s.verdict != "unscoreable"]
+    if not graded:
+        return ""
+    stances = [s for s in graded if s.verdict in ("correct", "wrong", "mixed")]
+    swaps = [s for s in graded if s.verdict in ("screen_validated", "screen_refuted")]
+    bits: list[str] = []
+    if stances:
+        correct = sum(1 for s in stances if s.verdict == "correct")
+        excesses = [s.excess_return_pct for s in stances if s.excess_return_pct is not None]
+        avg = f" · avg excess {sum(excesses) / len(excesses):+.1f}pp" if excesses else ""
+        bits.append(f"Stances: {correct}/{len(stances)} correct{avg}")
+    if swaps:
+        validated = sum(1 for s in swaps if s.verdict == "screen_validated")
+        bits.append(f"Swap screens: {validated}/{len(swaps)} validated")
+    return '<p class="am-track muted">Track record — ' + " · ".join(bits) + "</p>"
+
+
+_VERDICT_TONE: dict[str, str] = {
+    "correct": "ok",
+    "screen_validated": "ok",
+    "wrong": "bad",
+    "screen_refuted": "bad",
+    "mixed": "warn",
+    "unscoreable": "muted",
+}
+
+
+def _score_pill(score: StanceScoreRow) -> str:
+    """One memo's graded outcome, rendered beside its stance/kind."""
+    tone = _VERDICT_TONE.get(score.verdict, "muted")
+    if score.verdict in ("correct", "wrong", "mixed") and score.excess_return_pct is not None:
+        detail = f" {score.excess_return_pct:+.1f}pp vs SPY"
+    elif score.verdict in ("correct", "wrong", "mixed") and score.ticker_return_pct is not None:
+        detail = f" {score.ticker_return_pct:+.1f}% abs"
+    elif score.verdict in ("screen_validated", "screen_refuted") and score.detail:
+        margin = score.detail.get("realized_margin_pp")
+        detail = f" {float(margin):+.1f}pp realized" if isinstance(margin, (int, float)) else ""
+    else:
+        detail = ""
+    tip = (
+        f"graded {score.start_date or '?'} → {score.end_date or '?'} · "
+        f"basis {score.benchmark_basis}"
+    )
+    return (
+        f'<span class="am-pill am-verdict-{tone}" title="{escape(tip)}">'
+        f"{escape(score.verdict.replace('_', ' '))}{escape(detail)}</span>"
+    )
+
+
+def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
     kind = _KIND_LABELS.get(m.kind, m.kind)
     scope = m.ticker or "portfolio"
     if m.counter_ticker:
@@ -214,11 +272,18 @@ def _memo_card(m: AdvisorMemoRow) -> str:
     stance = ""
     if m.stance:
         horizon = f" · {m.horizon_days}d" if m.horizon_days else ""
-        # Until the P2.5 scorecard lands, the pill names the pending state —
-        # every displayed stance must carry its track record (directive).
+        # Every displayed stance carries its track record (directive): the
+        # graded verdict once scored, the pending state until then.
         stance = (
             f'<span class="am-pill am-stance" title="scoring {escape(m.score_status)}">'
             f"stance: {escape(m.stance)}{escape(horizon)}</span>"
+        )
+    if score is not None:
+        stance += _score_pill(score)
+    elif m.score_status == "pending" and m.kind == "swap_check":
+        stance += (
+            '<span class="am-pill am-verdict-muted" title="screen grades at horizon">'
+            "scoring pending</span>"
         )
     links: list[str] = []
     if m.note_id is not None:
@@ -290,6 +355,11 @@ _PANEL_CSS = """<style>
   border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 12px; }
 .soc-status { font-size: 12px; }
 .soc-saved { color: var(--ok); font-size: 13px; }
+.am-track { font-size: 12.5px; margin: 0 0 12px; font-family: var(--mono); }
+.am-verdict-ok { background: #14361f; color: #6ee7a0; }
+.am-verdict-bad { background: #3a1f1f; color: #f0a0a0; }
+.am-verdict-warn { background: #422006; color: var(--warn); }
+.am-verdict-muted { background: #2a2c30; color: var(--muted); }
 </style>"""
 
 # Run-bar wiring: POST the action, stream the job's SSE frames into the log,
