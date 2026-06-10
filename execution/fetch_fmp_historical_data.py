@@ -15,6 +15,7 @@ Usage:
 
 import os
 import sys
+import time
 import argparse
 import requests
 import json
@@ -36,20 +37,39 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
+# Retry transient FMP responses (rate-limit / upstream 5xx) with exponential
+# backoff instead of silently returning None and skipping the statement. Mirrors
+# the backoff in execution/save_fmp_data.py; the sibling fetchers already do this.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_MAX_ATTEMPTS = 3
+_BACKOFF_BASE_S = 5
+
 
 def fetch_from_fmp(path: str, params: dict) -> list | dict | None:
     params["apikey"] = FMP_API_KEY
     url = f"{FMP_BASE}/{path}"
-    try:
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, params=params, timeout=30)
+        except requests.RequestException as e:
+            print(f"  [Error] {path}: {_redact(e)}", file=sys.stderr)
+            return None
+        if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_ATTEMPTS - 1:
+            wait = _BACKOFF_BASE_S * (2**attempt)
+            print(
+                f"  [HTTP {resp.status_code} retry {attempt + 1}/{_MAX_ATTEMPTS - 1} "
+                f"in {wait}s] {path}",
+                file=sys.stderr,
+            )
+            time.sleep(wait)
+            continue
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            print(f"  [HTTP {resp.status_code}] {path}: {_redact(e)}", file=sys.stderr)
+            return None
         return resp.json()
-    except requests.HTTPError as e:
-        print(f"  [HTTP {resp.status_code}] {path}: {_redact(e)}", file=sys.stderr)
-        return None
-    except Exception as e:
-        print(f"  [Error] {path}: {_redact(e)}", file=sys.stderr)
-        return None
+    return None
 
 
 def save_data(ticker: str, data_type: str, data: list | dict) -> str:
