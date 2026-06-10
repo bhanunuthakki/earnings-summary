@@ -481,6 +481,7 @@ def fetch_portfolio_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
     include_backfill: bool = False,
+    only: set[str] | frozenset[str] | None = None,
 ) -> PortfolioAnalytics:
     """Fetch the five analytics payloads with per-endpoint fault isolation.
 
@@ -499,10 +500,18 @@ def fetch_portfolio_analytics(
     window for ``/performance``, trailing 365 days elsewhere. The window is
     passed through verbatim — date arithmetic for presets lives with the UI,
     return math stays in the tracker.
+
+    ``only`` restricts the fetch to the named sections (``performance`` /
+    ``position_alpha`` / ``positioning`` / ``policy`` / ``beta``) — callers
+    that need one payload (e.g. the sizing audit's alpha join) skip the other
+    round-trips. Skipped sections stay ``None`` without an ``errors`` entry.
     """
     base = (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
     out = PortfolioAnalytics(available=False, api_url=base)
     conn_down: str | None = None
+
+    def want(key: str) -> bool:
+        return only is None or key in only
 
     window: dict[str, str] = {}
     if start_date:
@@ -532,17 +541,22 @@ def fetch_portfolio_analytics(
             out.errors[key] = f"bad response: {exc}"
         return None
 
-    out.performance = load(
-        "performance", f"/api/portfolio/performance{q(perf_params)}", _parse_performance
-    )
-    out.position_alpha = load(
-        "position_alpha", f"/api/portfolio/position-alpha{q(window)}", _parse_position_alpha
-    )
-    out.positioning = load(
-        "positioning", f"/api/portfolio/positioning{q(window)}", _parse_positioning
-    )
-    out.policy = load("policy", "/api/policy", _parse_policy)
-    out.beta = load("beta", f"/api/portfolio/beta{q(window)}", _parse_beta)
+    if want("performance"):
+        out.performance = load(
+            "performance", f"/api/portfolio/performance{q(perf_params)}", _parse_performance
+        )
+    if want("position_alpha"):
+        out.position_alpha = load(
+            "position_alpha", f"/api/portfolio/position-alpha{q(window)}", _parse_position_alpha
+        )
+    if want("positioning"):
+        out.positioning = load(
+            "positioning", f"/api/portfolio/positioning{q(window)}", _parse_positioning
+        )
+    if want("policy"):
+        out.policy = load("policy", "/api/policy", _parse_policy)
+    if want("beta"):
+        out.beta = load("beta", f"/api/portfolio/beta{q(window)}", _parse_beta)
     out.available = any(
         section is not None
         for section in (out.performance, out.position_alpha, out.positioning, out.policy, out.beta)

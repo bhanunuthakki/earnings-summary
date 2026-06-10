@@ -45,13 +45,14 @@ def test_render_shell_three_theme_structure() -> None:
         assert f'data-theme-target="{theme}"' in html
         assert f'data-cc-theme="{theme}"' in html  # its sub-tab row exists
     # Surviving sub-tabs, each tagged with its theme. budget/actions left the
-    # nav for the settings drawer in P3.4; validation joined Governance.
+    # nav for the settings drawer in P3.4; validation joined Governance;
+    # thesis_ledger folded into the Decisions record in P2.2.
     for target in (
         "overview",
         "holding",
         "portfolio",
+        "decisions_record",
         "holdings",
-        "thesis_ledger",
         "ir_coverage",
         "source_calls",
         "validation",
@@ -70,10 +71,19 @@ def test_render_shell_three_theme_structure() -> None:
 
 def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     """Pre-reads / Insiders / Predictions / Decisions died as nav surfaces
-    (master build P1.1) and budget/actions became drawer sections (P3.4);
-    every legacy deep-link must remap client-side."""
+    (master build P1.1), budget/actions became drawer sections (P3.4), and
+    thesis_ledger folded into the Decisions record (P2.2); every legacy
+    deep-link must remap client-side."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    for killed in ("prereads", "insiders", "predictions", "decisions", "budget", "actions"):
+    for killed in (
+        "prereads",
+        "insiders",
+        "predictions",
+        "decisions",
+        "thesis_ledger",
+        "budget",
+        "actions",
+    ):
         assert f'data-tab-target="{killed}"' not in html
         assert f'data-panel="{killed}"' not in html
         # The JS REDIRECTS map carries every killed panel.
@@ -84,11 +94,15 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "insiders",
         "predictions",
         "decisions",
+        "thesis_ledger",
         "budget",
         "actions",
     }
     for new_home in _LEGACY_PANEL_REDIRECTS.values():
         assert f'data-tab-target="{new_home}"' in html
+    # The old decisions/ledger deep-links land on the allocation record.
+    assert _LEGACY_PANEL_REDIRECTS["decisions"] == "decisions_record"
+    assert _LEGACY_PANEL_REDIRECTS["thesis_ledger"] == "decisions_record"
     # The drawer-section legacy ids also auto-open the drawer on arrival.
     assert "DRAWER_OPENERS = { budget: 1, actions: 1 }" in SHELL_JS
 
@@ -135,6 +149,6 @@ def test_sub_tab_buttons_carry_their_theme() -> None:
     data-cc-theme — every sub-tab button must carry one."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-tab-target="overview" data-cc-theme="research"' in html
-    assert 'data-tab-target="thesis_ledger" data-cc-theme="portfolio"' in html
+    assert 'data-tab-target="decisions_record" data-cc-theme="portfolio"' in html
     assert 'data-tab-target="validation" data-cc-theme="governance"' in html
     assert 'data-tab-target="ir_coverage" data-cc-theme="governance"' in html

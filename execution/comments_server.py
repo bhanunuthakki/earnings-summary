@@ -340,11 +340,25 @@ def create_app(
             # The append-only history of every accepted, alert-driven thesis edit
             # (thesis_ledger_entries) — the populated decision history that was
             # reachable only via the /digest route (v6 re-grade, Richness).
+            # Folded into the Decisions tab (P2.2) but kept serving for old links.
             from pipeline.thesis_ledger_panel import render_thesis_ledger_panel
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
             return Response(
                 render_thesis_ledger_panel(db_path, user_id=user_id), mimetype="text/html"
+            )
+
+        if name == "decisions_record":
+            # The allocation-decisions record (master build P2.2): the sizing
+            # audit (stated conviction/target vs live weight vs DCF gap vs
+            # window alpha, mismatches ranked) + the merged decisions timeline
+            # (thesis ledger + sizing intents + decision notes).
+            from pipeline.allocation_decisions_panel import render_allocation_decisions_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_allocation_decisions_panel(db_path, user_id=user_id),
+                mimetype="text/html",
             )
 
         from pipeline.analytical_dashboard_html import (
@@ -504,6 +518,56 @@ def create_app(
         if not ticker_settings.set_bypass_budget(t, value, db_path=db_path):
             return ({"error": "could not persist (ticker_settings table missing?)"}, 500)
         return {"ticker": t, "bypass_budget": value}
+
+    @app.route("/api/sizing-intents", methods=["POST", "OPTIONS"])
+    def sizing_intents_api():
+        """Record a sizing-posture statement (master build P2.2). JSON body:
+        {"ticker": "NU", "conviction": 4, "target_weight_pct": 6, "narrative": "..."}
+        — at least one of conviction (1–5) / target_weight_pct (0–100). Each
+        provided kind appends its own ``position_sizing_intent`` row (append-only
+        history, never an update), sharing the optional narrative."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from user_state.sizing import append_intent
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker") or "").strip().upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        narrative_raw = body.get("narrative")
+        narrative = str(narrative_raw).strip() or None if narrative_raw is not None else None
+        user_id = str(body.get("user_id") or DEFAULT_USER_ID)
+        to_write: list[tuple[str, float]] = []
+        if (conviction := body.get("conviction")) is not None:
+            try:
+                conv_f = float(cast("str | float | int", conviction))
+            except (TypeError, ValueError):
+                return ({"error": f"conviction must be a number, got {conviction!r}"}, 400)
+            if not 1.0 <= conv_f <= 5.0:
+                return ({"error": "conviction must be between 1 and 5"}, 400)
+            to_write.append(("conviction", conv_f))
+        if (target := body.get("target_weight_pct")) is not None:
+            try:
+                target_f = float(cast("str | float | int", target))
+            except (TypeError, ValueError):
+                return ({"error": f"target_weight_pct must be a number, got {target!r}"}, 400)
+            if not 0.0 <= target_f <= 100.0:
+                return ({"error": "target_weight_pct must be between 0 and 100"}, 400)
+            to_write.append(("target_weight_pct", target_f))
+        if not to_write:
+            return ({"error": "provide conviction and/or target_weight_pct"}, 400)
+        created = [
+            append_intent(
+                user_id=user_id,
+                ticker=ticker,
+                intent_kind=kind,
+                intent_value=value_f,
+                narrative=narrative,
+                db_path=db_path,
+            ).id
+            for kind, value_f in to_write
+        ]
+        return {"ticker": ticker, "ok": True, "created_ids": created}
 
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):

@@ -70,9 +70,12 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "portfolio",
         "Portfolio",
         (
-            ("portfolio", "Live portfolio", "/api/panel/portfolio", False, False),
+            ("portfolio", "Performance", "/api/panel/portfolio", False, False),
+            # P2.2 — the allocation-decisions record: sizing audit + the merged
+            # decisions timeline (thesis ledger + sizing intents + decision
+            # notes). The standalone Thesis Ledger tab folded into it.
+            ("decisions_record", "Decisions", "/api/panel/decisions_record", False, False),
             ("holdings", "Triggers", "/api/panel/holdings", False, False),
-            ("thesis_ledger", "Thesis Ledger", "/api/panel/thesis_ledger", False, False),
         ),
     ),
     (
@@ -99,7 +102,8 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "prereads": "overview",
     "insiders": "overview",
     "predictions": "overview",
-    "decisions": "thesis_ledger",
+    "decisions": "decisions_record",
+    "thesis_ledger": "decisions_record",
     "budget": "ir_coverage",
     "actions": "ir_coverage",
 }
@@ -505,7 +509,8 @@ SHELL_JS = r"""
     prereads: 'overview',
     insiders: 'overview',
     predictions: 'overview',
-    decisions: 'thesis_ledger',
+    decisions: 'decisions_record',
+    thesis_ledger: 'decisions_record',
     budget: 'ir_coverage',
     actions: 'ir_coverage'
   };
