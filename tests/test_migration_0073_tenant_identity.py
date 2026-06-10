@@ -115,6 +115,49 @@ def db_at_prior(prior_template: Path, tmp_path: Path) -> Path:
     return db
 
 
+def _drift_tracked_user_id_to_text(db_path: Path, user_id_decl: str) -> None:
+    """Rebuild tracked_companies with a drifted ``user_id`` declaration carrying
+    TEXT ``'1'`` rows — the init_db-era production shape that bit on 2026-06-10.
+
+    The live prod table predated the alembic chain; its ``user_id`` declaration
+    carried no type affinity, so values sat physically stored as TEXT ``'1'``
+    and the original ``CASE WHEN user_id = 1`` remap matched nothing (SQLite
+    applies no conversion when neither comparand has affinity). The rebuild
+    mirrors 0073's PRAGMA dance so the 0026 brief_dirty triggers (which
+    reference tracked_companies by name) survive the rename.
+    """
+    conn = sqlite3.connect(str(db_path))
+    try:
+        ddl = _table_sql(conn, "tracked_companies")
+        body = ddl.split("(", 1)[1]
+        drifted_body = body.replace("user_id INTEGER DEFAULT 1", user_id_decl)
+        assert drifted_body != body, f"0072-era user_id declaration not found in: {ddl}"
+        cur = conn.cursor()
+        cur.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            cur.execute("CREATE TABLE tracked_companies_drift (" + drifted_body)
+            cur.execute("INSERT INTO tracked_companies_drift SELECT * FROM tracked_companies")
+            cur.execute("DROP TABLE tracked_companies")
+            cur.execute("ALTER TABLE tracked_companies_drift RENAME TO tracked_companies")
+        finally:
+            cur.execute("PRAGMA legacy_alter_table = OFF")
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id, ticker, name, list_type) "
+            "VALUES ('1', 'NU', 'Nu Holdings', 'portfolio')"
+        )
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id, ticker, name, list_type) "
+            "VALUES ('1', 'MELI', 'MercadoLibre', 'evaluation')"
+        )
+        conn.commit()
+        # The fixture must actually reproduce the miss: TEXT-stored '1' that the
+        # INTEGER comparison `user_id = 1` does not match.
+        rows = conn.execute("SELECT typeof(user_id), user_id = 1 FROM tracked_companies").fetchall()
+        assert rows and all(t == "text" and not hit for t, hit in rows), rows
+    finally:
+        conn.close()
+
+
 def _seed_legacy_rows(db_path: Path) -> None:
     """Seed the two legacy namespaces as they exist pre-0073: tracked_companies
     keyed by integer 1, the substrate keyed by 'bhanu'."""
@@ -184,6 +227,33 @@ def test_substrate_user_id_unchanged_value_but_now_text(db_at_prior: Path) -> No
             assert _user_id_affinity(conn, table) == "TEXT"
             val = conn.execute(f"SELECT user_id FROM {table} LIMIT 1").fetchone()
             assert val is not None and val[0] == "bhanu"
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "user_id_decl",
+    ["user_id DEFAULT '1'", "user_id BLOB DEFAULT '1'"],
+    ids=["no-decl", "blob-decl"],
+)
+def test_upgrade_remaps_drifted_text_user_id_rows(db_at_prior: Path, user_id_decl: str) -> None:
+    """init_db-era drift: TEXT '1' in a no-affinity user_id column (the live
+    2026-06-10 incident — every tracked_companies row missed the INTEGER-1
+    remap, landed as TEXT '1', and tracked_companies_for_user saw an empty
+    universe). The widened ``IN (1, '1')`` must put every row AND the tenants
+    seed onto the canonical 'bhanu'."""
+    _drift_tracked_user_id_to_text(db_at_prior, user_id_decl)
+    command.upgrade(_build_config(db_at_prior), NEW_HEAD)
+    conn = _connect(db_at_prior)
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT user_id, typeof(user_id) FROM tracked_companies"
+        ).fetchall()
+        assert [(str(r[0]), str(r[1])) for r in rows] == [("bhanu", "text")]
+        tenant_ids = {str(r[0]) for r in conn.execute("SELECT id FROM tenants")}
+        assert "bhanu" in tenant_ids
+        assert "1" not in tenant_ids, "seeding CASE leaked the drifted '1' as a tenant id"
+        assert conn.execute("PRAGMA foreign_key_check(tracked_companies)").fetchall() == []
     finally:
         conn.close()
 
