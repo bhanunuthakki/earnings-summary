@@ -167,7 +167,7 @@ demands it (note the split in the Decision log).
 - [x] **P3.2 Extractor wiring.** *(#371)* Fact writers populate locators going
   forward; `source_excerpt` systematically on transcript/filing-sourced
   KPI facts.
-- [ ] **P3.3 Source chips + drawer.** Per-number source chip in Financials
+- [x] **P3.3 Source chips + drawer.** *(#374)* Per-number source chip in Financials
   + Earnings tabs (hover: tier + fetched-at; click: excerpt + open-source
   link). Fix the alert evidence drawer's dead citation kinds.
 - [ ] **P3.4 Governance panel.** Coverage / data-quality / validation /
