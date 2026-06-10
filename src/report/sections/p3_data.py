@@ -26,6 +26,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -441,7 +442,13 @@ def load_decision_history(
 
 @dataclass(frozen=True)
 class PeerCompRow:
-    """One peer's TTM metrics for the evaluation-snapshot peer-comp table."""
+    """One peer's TTM metrics for the evaluation-snapshot peer-comp table.
+
+    ``match_reasons`` carries why this peer was selected (P4.2 scored
+    selection) so the renderer can show the basis instead of presenting an
+    unexplained list — e.g. ``("named rival", "same industry", "similar
+    scale")``.
+    """
 
     peer_ticker: str
     peer_name: str | None
@@ -449,100 +456,239 @@ class PeerCompRow:
     revenue_ttm_usd: float | None
     net_margin_ttm: float | None
     roic_ttm: float | None
+    match_reasons: tuple[str, ...] = ()
 
 
-def load_peer_comp(
-    ticker: str, *, repo_root: Path, max_peers: int = 6
-) -> list[PeerCompRow]:
-    """Load FMP peer companies + their TTM metrics for the eval snapshot.
-
-    Reads the cached `data/historical/fmp/{TICKER}_peers.json` for the peer
-    list, then pulls each peer's `{PEER}_profile.json` + `{PEER}_key_metrics_ttm.json`
-    for headline metrics. Best-effort — missing files → empty list. The
-    audit's gap was that the evaluation snapshot showed only the target
-    ticker's 3y baseline; this gives the screen "premium to peers" context.
-    """
+def _read_json(path: Path) -> object | None:
     import json as _json
 
-    fmp_dir = Path(repo_root) / "data" / "historical" / "fmp"
-    peers_path = fmp_dir / f"{ticker.upper()}_peers.json"
-    if not peers_path.exists():
-        return []
     try:
-        peers_raw = _json.loads(peers_path.read_text(encoding="utf-8"))
+        return _json.loads(path.read_text(encoding="utf-8"))
     except (OSError, _json.JSONDecodeError):
-        return []
+        return None
+
+
+def _profile_fields(
+    fmp_dir: Path, ticker: str
+) -> tuple[str | None, str | None, str | None, float | None]:
+    """(companyName, sector, industry, marketCap) from a cached FMP profile.
+
+    Tolerates both the stable-API key (``marketCap``) and the legacy v3 one
+    (``mktCap``).
+    """
+    raw = _read_json(fmp_dir / f"{ticker}_profile.json")
+    if not isinstance(raw, list) or not raw or not isinstance(raw[0], dict):
+        return None, None, None, None
+    rec = cast("dict[str, object]", raw[0])
+    name = str(rec["companyName"]) if rec.get("companyName") is not None else None
+    sector = str(rec["sector"]) if rec.get("sector") else None
+    industry = str(rec["industry"]) if rec.get("industry") else None
+    market_cap: float | None = None
+    for key in ("marketCap", "mktCap"):
+        mc = rec.get(key)
+        if isinstance(mc, (int, float)):
+            market_cap = float(mc)
+            break
+    return name, sector, industry, market_cap
+
+
+def _fmp_peer_pool(fmp_dir: Path, ticker: str) -> list[tuple[str, str | None, float | None]]:
+    """The raw FMP peer candidates as (symbol, name, market_cap).
+
+    Payload shapes shifted across FMP versions; tolerate the three known
+    ones. The dict shape carries companyName + mktCap per peer — kept as
+    fallbacks so candidates OUTSIDE the cached-profile universe (the common
+    case for foreign rivals like ITUB) can still be name-matched and
+    scale-scored.
+    """
+    peers_raw = _read_json(fmp_dir / f"{ticker}_peers.json")
     if not isinstance(peers_raw, list) or not peers_raw:
         return []
-
-    peer_tickers: list[str] = []
-    # FMP peer payload shapes have shifted across versions; tolerate both.
-    if isinstance(peers_raw[0], dict):
-        first = peers_raw[0]
+    pool = cast("list[object]", peers_raw)
+    if isinstance(pool[0], dict):
+        first = cast("dict[str, object]", pool[0])
         if "peersList" in first:
             raw = first.get("peersList")
             if isinstance(raw, list):
-                peer_tickers = [str(p).upper() for p in raw][:max_peers]
-        elif "symbol" in first:
-            peer_tickers = [str(p["symbol"]).upper() for p in peers_raw][:max_peers]
-    elif isinstance(peers_raw[0], str):
-        peer_tickers = [str(p).upper() for p in peers_raw][:max_peers]
+                return [(str(p).upper(), None, None) for p in cast("list[object]", raw)]
+        if "symbol" in first:
+            out: list[tuple[str, str | None, float | None]] = []
+            for entry in pool:
+                if not isinstance(entry, dict):
+                    continue
+                rec = cast("dict[str, object]", entry)
+                if rec.get("symbol") is None:
+                    continue
+                name = str(rec["companyName"]) if rec.get("companyName") is not None else None
+                cap_raw = rec.get("mktCap", rec.get("marketCap"))
+                cap = float(cap_raw) if isinstance(cap_raw, (int, float)) else None
+                out.append((str(rec["symbol"]).upper(), name, cap))
+            return out
+        return []
+    return [(str(p).upper(), None, None) for p in pool]
+
+
+def _watchlist_names(ticker: str, repo_root: Path) -> list[str]:
+    """The owner's competitive_watchlist (prose rival names) for `ticker`,
+    from the thesis JSON when one exists. Best-effort."""
+    raw = _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    if not isinstance(raw, dict):
+        return []
+    wl = cast("dict[str, object]", raw).get("competitive_watchlist")
+    if not isinstance(wl, list):
+        return []
+    return [str(n) for n in cast("list[object]", wl) if isinstance(n, str) and n.strip()]
+
+
+def _normalize_name(name: str) -> str:
+    """Accent-stripped, lowercased, alnum-only — for rival-name matching."""
+    import unicodedata
+
+    decomposed = unicodedata.normalize("NFKD", name)
+    ascii_only = decomposed.encode("ascii", "ignore").decode("ascii")
+    return "".join(ch for ch in ascii_only.lower() if ch.isalnum() or ch == " ").strip()
+
+
+def _is_named_rival(company_name: str | None, watchlist: list[str]) -> bool:
+    if not company_name or not watchlist:
+        return False
+    norm_company = _normalize_name(company_name)
+    for rival in watchlist:
+        norm_rival = _normalize_name(rival)
+        if norm_rival and (norm_rival in norm_company or norm_company in norm_rival):
+            return True
+    return False
+
+
+def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[PeerCompRow]:
+    """Scored comparable selection for the eval snapshot (P4.2).
+
+    The raw FMP peer list is a sector/market-cap screen whose alphabetical
+    head is frequently wrong (the owner flagged NU → Barclays, NOW → Applied
+    Materials). The pool usually *contains* the right names, so instead of
+    taking the first ``max_peers`` we score every candidate:
+
+      +3  named in the owner's competitive_watchlist (thesis JSON)
+      +2  same FMP industry as the target
+      +1  same FMP sector
+      +1  market cap within 0.2x – 5x of the target
+
+    and keep the top ``max_peers`` that score >= 1 — i.e. a candidate with
+    no affinity beyond appearing in FMP's screen is dropped. Each surviving
+    row carries its ``match_reasons`` so the table can show the basis.
+    Empty result (no peers file, or nothing scores) → the renderer hides
+    the panel (P4.2 hide-don't-stub).
+    """
+    fmp_dir = Path(repo_root) / "data" / "historical" / "fmp"
+    ticker = ticker.upper()
+    pool = _fmp_peer_pool(fmp_dir, ticker)
+    if not pool:
+        return []
+
+    _, target_sector, target_industry, target_cap = _profile_fields(fmp_dir, ticker)
+    watchlist = _watchlist_names(ticker, repo_root)
+
+    scored: list[tuple[float, int, str, str | None, float | None, tuple[str, ...]]] = []
+    for idx, (peer, pool_name, pool_cap) in enumerate(pool):
+        if peer == ticker:
+            continue
+        prof_name, peer_sector, peer_industry, prof_cap = _profile_fields(fmp_dir, peer)
+        # Foreign/untracked rivals usually have no cached profile — fall back
+        # to the identity the peers payload itself carries.
+        peer_name = prof_name or pool_name
+        peer_cap = prof_cap if prof_cap is not None else pool_cap
+        score = 0.0
+        reasons: list[str] = []
+        if _is_named_rival(peer_name, watchlist):
+            score += 3
+            reasons.append("named rival")
+        if target_industry and peer_industry == target_industry:
+            score += 2
+            reasons.append("same industry")
+        elif target_sector and peer_sector == target_sector:
+            score += 1
+            reasons.append("same sector")
+        if target_cap and peer_cap and 0.2 <= peer_cap / target_cap <= 5.0:
+            score += 1
+            reasons.append("similar scale")
+        if score < 1:
+            continue
+        # Tiebreak: original FMP order (idx) keeps the sort deterministic.
+        scored.append((score, idx, peer, peer_name, peer_cap, tuple(reasons)))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
 
     out: list[PeerCompRow] = []
-    for peer in peer_tickers:
-        profile_path = fmp_dir / f"{peer}_profile.json"
-        ttm_path = fmp_dir / f"{peer}_key_metrics_ttm.json"
-        peer_name: str | None = None
-        market_cap: float | None = None
-        if profile_path.exists():
-            try:
-                profile_raw = _json.loads(profile_path.read_text(encoding="utf-8"))
-                if isinstance(profile_raw, list) and profile_raw:
-                    rec = profile_raw[0]
-                    if isinstance(rec, dict):
-                        peer_name = (
-                            str(rec.get("companyName"))
-                            if rec.get("companyName") is not None
-                            else None
-                        )
-                        mc = rec.get("mktCap")
-                        if isinstance(mc, (int, float)):
-                            market_cap = float(mc)
-            except (OSError, _json.JSONDecodeError):
-                pass
-        revenue: float | None = None
-        net_margin: float | None = None
-        roic: float | None = None
-        if ttm_path.exists():
-            try:
-                ttm_raw = _json.loads(ttm_path.read_text(encoding="utf-8"))
-                if isinstance(ttm_raw, list) and ttm_raw:
-                    rec = ttm_raw[0]
-                    if isinstance(rec, dict):
-                        for revkey in ("revenueTTM", "revenuePerShareTTM"):
-                            v = rec.get(revkey)
-                            if isinstance(v, (int, float)) and revkey == "revenueTTM":
-                                revenue = float(v)
-                                break
-                        nm = rec.get("netIncomePerRevenueTTM")
-                        if isinstance(nm, (int, float)):
-                            net_margin = float(nm)
-                        rc = rec.get("roicTTM")
-                        if isinstance(rc, (int, float)):
-                            roic = float(rc)
-            except (OSError, _json.JSONDecodeError):
-                pass
+    for _score, _idx, peer, peer_name, peer_cap, row_reasons in scored[:max_peers]:
         out.append(
             PeerCompRow(
                 peer_ticker=peer,
                 peer_name=peer_name,
-                market_cap_usd=market_cap,
-                revenue_ttm_usd=revenue,
-                net_margin_ttm=net_margin,
-                roic_ttm=roic,
+                market_cap_usd=peer_cap,
+                revenue_ttm_usd=_peer_revenue_ttm(fmp_dir, peer),
+                net_margin_ttm=_peer_net_margin_ttm(fmp_dir, peer),
+                roic_ttm=_peer_roic_ttm(fmp_dir, peer),
+                match_reasons=row_reasons,
             )
         )
     return out
+
+
+def _first_record(path: Path) -> dict[str, object] | None:
+    """First record of a list-of-dicts FMP JSON; None on any other shape."""
+    raw = _read_json(path)
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        return cast("dict[str, object]", raw[0])
+    return None
+
+
+def _peer_revenue_ttm(fmp_dir: Path, peer: str) -> float | None:
+    """TTM revenue: sum of the 4 newest quarterly income-statement rows
+    (stable shape); falls back to the legacy v3 ``revenueTTM`` key."""
+    inc = _read_json(fmp_dir / f"{peer}_income_statement_quarterly.json")
+    if isinstance(inc, list) and inc:
+        vals: list[float] = []
+        for entry in cast("list[object]", inc)[:4]:
+            if not isinstance(entry, dict):
+                continue
+            rev = cast("dict[str, object]", entry).get("revenue")
+            if isinstance(rev, (int, float)):
+                vals.append(float(rev))
+        if vals:
+            return sum(vals)
+    ttm = _first_record(fmp_dir / f"{peer}_key_metrics_ttm.json")
+    if ttm is not None:
+        v = ttm.get("revenueTTM")
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def _peer_net_margin_ttm(fmp_dir: Path, peer: str) -> float | None:
+    """Net margin TTM: stable ``financial_ratios_ttm.netProfitMarginTTM``,
+    legacy v3 ``key_metrics_ttm.netIncomePerRevenueTTM`` as fallback."""
+    ratios = _first_record(fmp_dir / f"{peer}_financial_ratios_ttm.json")
+    if ratios is not None:
+        v = ratios.get("netProfitMarginTTM")
+        if isinstance(v, (int, float)):
+            return float(v)
+    ttm = _first_record(fmp_dir / f"{peer}_key_metrics_ttm.json")
+    if ttm is not None:
+        v = ttm.get("netIncomePerRevenueTTM")
+        if isinstance(v, (int, float)):
+            return float(v)
+    return None
+
+
+def _peer_roic_ttm(fmp_dir: Path, peer: str) -> float | None:
+    """ROIC TTM: stable ``returnOnInvestedCapitalTTM``, legacy ``roicTTM``."""
+    ttm = _first_record(fmp_dir / f"{peer}_key_metrics_ttm.json")
+    if ttm is not None:
+        for key in ("returnOnInvestedCapitalTTM", "roicTTM"):
+            v = ttm.get(key)
+            if isinstance(v, (int, float)):
+                return float(v)
+    return None
 
 
 def load_saydo_verdicts(

@@ -813,14 +813,8 @@ def _financial_highlights_panel(
     """
     qid = f"{card.quarter} {card.year}"
     if not line_items:
-        _empty_panel(
-            body,
-            f"{qid} — financial highlights",
-            "Quarterly fundamentals aren't aligned to this call's quarter — the "
-            "vendor's fiscal-quarter labels don't match this period. The "
-            "Financials tab carries the full series.",
-            reason="no aligned fundamentals",
-        )
+        # P4.2 hide-don't-stub: no fundamentals aligned to this quarter →
+        # no panel; the Financials tab carries the full series.
         return
     # Panel-level source chip (P4.1 header anatomy): the quarter's primary
     # provenance, taken from the first line item that carries a source for
@@ -1079,15 +1073,8 @@ def _saydo_tab(
             _saydo_print_vs_guide(
                 body, card, filtered, total_parsed=len(pvg), llm_filtered=spec.llm_enabled
             )
-        else:
-            _empty_panel(
-                body,
-                "Print vs guide",
-                "A structured print-vs-guide table couldn't be read out of this "
-                "quarter's narrative. The full Say·Do narrative below carries "
-                "the same comparison in prose.",
-                reason="not parsed — see narrative below",
-            )
+        # (No parsed print-vs-guide table → no panel; the full narrative
+        # below carries the comparison in prose. P4.2 hide-don't-stub.)
 
         body.write('<div class="grid-2col">')
         body.write(_panel_head("Thesis view", sub="Post-print read-through"))
@@ -1120,17 +1107,10 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
 
     Lays the audit-trail outcomes alongside the narrative. Rows arrive
     newest-first from ``load_saydo_verdicts``; we render them in that order.
-    Empty-state when the table has no rows for this ticker.
+    Hidden when the table has no rows for this ticker (P4.2 hide-don't-stub
+    — the Governance coverage report carries the gap).
     """
     if not rows:
-        _empty_panel(
-            body,
-            "Say·Do verdict ledger",
-            "No tracked management commitments for this name yet — the ledger "
-            "fills in as earnings transcripts are processed.",
-            reason="no commitments extracted",
-            classes="saydo-verdicts-panel",
-        )
         return
     graded = sum(1 for r in rows if r.outcome is not None)
     body.write(
@@ -2091,14 +2071,8 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
     body.write("</div></div>")
 
     if history.total == 0:
-        _empty_panel(
-            body,
-            "Decision ledger",
-            "No recommendations recorded for this name yet. Entries appear as "
-            "analyses log ADD / TRIM / HOLD / SELL calls, with outcomes graded "
-            "over time.",
-            reason="none recorded",
-        )
+        # P4.2 hide-don't-stub: the h2 above already says "No decisions
+        # recorded" — no panel needed under it.
         body.write("</div>")
         return
 
@@ -2616,18 +2590,11 @@ def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> N
 def _macro_sensitivity_panel(body: StringIO, rows: list[MacroSensitivityRow]) -> None:
     """P3-18 macro factor sensitivity table — β / R² / lookback per series.
 
-    Renders an empty-state callout instead of hiding so analysts notice when
-    the macro_sensitivities table has no rows for this ticker. Rows are
-    pre-sorted by ``|beta|`` descending by ``load_macro_sensitivities``.
+    Hidden when the table has no rows for this ticker (P4.2 hide-don't-stub
+    — the Governance coverage report carries the gap). Rows are pre-sorted
+    by ``|beta|`` descending by ``load_macro_sensitivities``.
     """
     if not rows:
-        _empty_panel(
-            body,
-            "Macro factor sensitivity",
-            "No macro-factor betas computed for this name yet.",
-            reason="no factors tracked",
-            classes="macro-sens-panel",
-        )
         return
     body.write(
         _panel_head(
@@ -2689,13 +2656,8 @@ def _macro_beta_tone(beta: float) -> str:
 
 def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
     if not bear.failure_modes:
-        _empty_panel(
-            body,
-            "Failure modes",
-            "No failure-mode hypotheses tracked on this build — they populate "
-            "with the bear-case analysis on the next full analysis build.",
-            reason="none tracked",
-        )
+        # P4.2 hide-don't-stub: the bear tab's own empty state covers the
+        # nothing-at-all case; an extra per-panel stub is noise.
         return
     body.write(_panel_head("Failure modes", sub=f"{len(bear.failure_modes)} hypotheses tracked"))
     for i, fm in enumerate(bear.failure_modes):
@@ -2803,27 +2765,20 @@ def _eval_tab(
 
 
 def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
-    """Peer comparison table for the Eval Screen — market cap, revenue,
-    net margin, ROIC. Source: cached FMP peers + per-peer key-metrics-ttm
-    JSONs under ``data/historical/fmp/``.
+    """Comparable-company table for the Eval Screen — market cap, revenue,
+    net margin, ROIC, selected by the P4.2 scored picker (named rival /
+    same industry / similar scale), with the selection basis shown per row.
 
-    Empty-state callout when the peers JSON isn't on disk yet so a cold
-    evaluation run still shows the slot.
+    Hidden entirely when nothing scores (P4.2 hide-don't-stub): an
+    unexplained or wrong peer list is worse than none — the owner flagged
+    the old alphabetical FMP slice as wrong.
     """
     if not rows:
-        _empty_panel(
-            body,
-            "Peer comparison",
-            "No peer set on file for this name yet — the comparison fills in "
-            "once peers are identified and their metrics fetched.",
-            reason="no peer set",
-            classes="peer-comp-panel",
-        )
         return
     body.write(
         _panel_head(
             "Peer comparison",
-            sub=f"{len(rows)} peer{'s' if len(rows) != 1 else ''} · TTM key metrics",
+            sub=f"{len(rows)} comparable{'s' if len(rows) != 1 else ''} · TTM key metrics",
             classes="peer-comp-panel",
         )
     )
@@ -2831,6 +2786,7 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
         '<table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Ticker</th>"
         "<th>Name</th>"
+        "<th>Why</th>"
         '<th class="num">Market cap</th>'
         '<th class="num">Revenue TTM</th>'
         '<th class="num">Net margin TTM</th>'
@@ -2841,6 +2797,8 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
         body.write("<tr>")
         body.write(f'<td><strong class="mono">{_esc(r.peer_ticker)}</strong></td>')
         body.write(f"<td>{_esc(r.peer_name or '—')}</td>")
+        why = " · ".join(r.match_reasons) if r.match_reasons else "—"
+        body.write(f'<td class="muted xsmall">{_esc(why)}</td>')
         body.write(
             f'<td class="num">{_fmt_usd_compact(r.market_cap_usd)}</td>'
             if r.market_cap_usd is not None
@@ -2942,13 +2900,14 @@ def _company_tab(
     if cd.geographic_breakdown:
         _segment_breakdown_panel(body, "Geographic breakdown", cd.geographic_breakdown)
 
-    # P3 panels (strategic targets / customer concentrations / lease ladder)
-    # render an empty-state when no rows so the analyst sees the slot rather
-    # than wondering whether the extractor ran -- UNLESS the panel is
-    # structurally irrelevant to this company's business model (e.g. a bank has
-    # no operating-lease ladder), in which case the builder lists its key in
-    # `suppressed_sections` and we omit it entirely instead of showing an empty
-    # stub. See industry_classifier.suppressed_sections_for_ticker.
+    # P3 panels (strategic targets / customer concentrations / lease ladder):
+    # P4.2 hide-don't-stub — strategic targets + lease ladder hide entirely
+    # when cold (the Governance coverage report carries the inventory of
+    # gaps); customer concentration keeps an informative empty state because
+    # "no customer ≥ 5%" is itself a disclosure fact. Panels structurally
+    # irrelevant to the business model (a bank has no operating-lease ladder)
+    # are suppressed via `suppressed_sections` regardless. See
+    # industry_classifier.suppressed_sections_for_ticker.
     suppressed: frozenset[str] = suppressed_sections or frozenset()
     if SECTION_STRATEGIC_TARGETS not in suppressed:
         _strategic_targets_panel(body, strategic_targets or [])
@@ -3103,19 +3062,10 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
 def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> None:
     """P3-20 strategic targets table — long-term mgmt commitments from decks.
 
-    Empty-state callout when the extractor hasn't seen any decks for this
-    ticker so the slot stays visible.
+    Hidden when no targets are on file for this ticker (P4.2 hide-don't-stub
+    — the Governance coverage report carries the gap).
     """
     if not rows:
-        _empty_panel(
-            body,
-            "Strategic targets",
-            "No long-term management targets on file — these come from "
-            "investor decks, none of which have been processed for this "
-            "name yet.",
-            reason="no decks extracted",
-            classes="strategic-targets-panel",
-        )
         return
     body.write(
         _panel_head(
@@ -3210,17 +3160,10 @@ def _lease_ladder_panel(body: StringIO, rows: list[LeaseLadderRow]) -> None:
     """P3-19b lease maturity ladder — Y1..Y5..Thereafter for the latest FY.
 
     Accessor pre-orders rows Y1..Thereafter then total/imputed/liability.
-    Empty-state when no rows exist for the ticker.
+    Hidden when no rows exist for the ticker (P4.2 hide-don't-stub — the
+    Governance coverage report carries the gap).
     """
     if not rows:
-        _empty_panel(
-            body,
-            "Operating lease maturity ladder",
-            "No lease-maturity ladder on file yet — it appears once the latest "
-            "annual filing's lease footnote is processed.",
-            reason="no ladder on file",
-            classes="lease-ladder-panel",
-        )
         return
     fy = rows[0].fiscal_year
     unit = rows[0].unit
@@ -3367,14 +3310,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
         body.write(
             f'<div class="prose-pad">{_render_markdown(section.alignment_narrative_md)}</div></div>'
         )
-    else:
-        _empty_panel(
-            body,
-            "Alignment read",
-            "The alignment commentary hasn't been written yet — it lands with "
-            "the next full analysis build.",
-            reason="analysis pending",
-        )
+    # (No alignment narrative → no panel; P4.2 hide-don't-stub.)
 
     # 2. Anomaly flags
     if section.anomaly_flags:
@@ -3700,13 +3636,7 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
             ("Closed decisions", pp.closed_decisions),
         ):
             if not decisions:
-                _empty_panel(
-                    body,
-                    title,
-                    f"No {title.lower()} logged for this name.",
-                    reason="none logged",
-                )
-                continue
+                continue  # P4.2 hide-don't-stub: skip the empty half
             body.write(_panel_head(title, sub=f"{len(decisions)} logged"))
             for d in decisions:
                 body.write('<div class="decision-card"><div class="decision-head">')
@@ -3888,13 +3818,7 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
 
     if not summaries:
-        _empty_panel(
-            body,
-            "Prompt quality",
-            "No calibration data yet — quality scores appear here after "
-            "grading runs against recent analyses.",
-            reason=f"last {window_days} days · none scored",
-        )
+        # P4.2 hide-don't-stub: no graded outputs in the window → no panel.
         return
 
     body.write(

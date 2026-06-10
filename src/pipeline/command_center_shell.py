@@ -85,6 +85,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "governance",
         "Governance",
         (
+            # Per-ticker section coverage (P4.2): which report sections are
+            # filled for which names — the visible counterpart of the
+            # hide-don't-stub policy (reports no longer show cold stubs).
+            ("section_coverage", "Coverage", "/api/panel/section_coverage", False, False),
             ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
             ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
             # Whole-book data-quality state over validation_issues (P3.4) —

@@ -246,16 +246,12 @@ def test_cli_purpose_and_ticker_filters_narrow_results(tmp_path: Path, capsys: C
 # ---------------------------------------------------------------------------
 
 
-def test_widget_renders_empty_state_without_breaking(tmp_path: Path) -> None:
+def test_widget_hides_when_no_data(tmp_path: Path) -> None:
     body = io.StringIO()
-    # No DB file at all — must render the panel chrome + a "no data" stub.
+    # No DB file at all → no panel (P4.2 hide-don't-stub; the Governance
+    # coverage matrix is where data gaps stay visible).
     _prompt_quality_panel(body, tmp_path / "does-not-exist.db")
-    html = body.getvalue()
-    assert 'class="panel panel-empty"' in html
-    assert "Prompt quality" in html
-    assert "No calibration data yet" in html
-    # Empty branch must not emit an empty table — verified by absence of a tbody.
-    assert "<tbody>" not in html
+    assert body.getvalue() == ""
 
 
 def test_widget_renders_table_with_populated_db(tmp_path: Path) -> None:

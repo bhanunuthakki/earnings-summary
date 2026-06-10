@@ -336,6 +336,18 @@ def create_app(
 
             return Response(render_validation_panel(db_path), mimetype="text/html")
 
+        if name == "section_coverage":
+            # Per-ticker section coverage (P4.2): the visible counterpart of
+            # the hide-don't-stub policy — reports hide cold sections, this
+            # matrix is where the gaps stay accountable.
+            from pipeline.section_coverage_panel import render_section_coverage_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_section_coverage_panel(db_path, repo_root, user_id=user_id),
+                mimetype="text/html",
+            )
+
         if name == "ticker_settings":
             # Settings-drawer section (P3.4): per-ticker persistent overrides
             # (bypass_budget) listed + editable via /api/ticker-settings/<T>.

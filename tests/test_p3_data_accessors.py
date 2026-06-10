@@ -315,7 +315,10 @@ def test_peer_comp_returns_empty_when_files_missing(tmp_path: Path) -> None:
 
 
 def test_peer_comp_loads_from_fmp_cache(tmp_path: Path) -> None:
-    """Happy path: peers JSON + profile + key-metrics-ttm cached on disk."""
+    """Happy path under the P4.2 scored selection: a same-industry peer with
+    cached profile + legacy v3 key-metrics keys resolves with full metrics;
+    pool members with nothing to score on (no profile, no payload identity)
+    are dropped rather than returned as unexplained rows."""
     import json
 
     fmp = tmp_path / "data" / "historical" / "fmp"
@@ -325,27 +328,47 @@ def test_peer_comp_loads_from_fmp_cache(tmp_path: Path) -> None:
         json.dumps([{"symbol": "GOOG", "peersList": ["META", "MSFT", "AAPL"]}]),
         encoding="utf-8",
     )
-    (fmp / "META_profile.json").write_text(
-        json.dumps([{"companyName": "Meta Platforms Inc.", "mktCap": 1_200_000_000_000}]),
-        encoding="utf-8",
-    )
+    profile_goog = [
+        {
+            "companyName": "Alphabet Inc.",
+            "sector": "Communication Services",
+            "industry": "Internet Content & Information",
+            "mktCap": 2_000_000_000_000,
+        }
+    ]
+    profile_meta = [
+        {
+            "companyName": "Meta Platforms Inc.",
+            "sector": "Communication Services",
+            "industry": "Internet Content & Information",
+            "mktCap": 1_200_000_000_000,
+        }
+    ]
+    (fmp / "GOOG_profile.json").write_text(json.dumps(profile_goog), encoding="utf-8")
+    (fmp / "META_profile.json").write_text(json.dumps(profile_meta), encoding="utf-8")
     (fmp / "META_key_metrics_ttm.json").write_text(
-        json.dumps([{"revenueTTM": 165_000_000_000, "netIncomePerRevenueTTM": 0.30, "roicTTM": 0.22}]),
+        json.dumps(
+            [{"revenueTTM": 165_000_000_000, "netIncomePerRevenueTTM": 0.30, "roicTTM": 0.22}]
+        ),
         encoding="utf-8",
     )
-    # MSFT / AAPL have no profile or ttm — still returned as rows with Nones.
     out = load_peer_comp("GOOG", repo_root=tmp_path)
-    assert [r.peer_ticker for r in out] == ["META", "MSFT", "AAPL"]
-    meta = next(r for r in out if r.peer_ticker == "META")
+    # MSFT / AAPL carry no profile, and the peersList payload shape has no
+    # name/cap fallback -> zero affinity -> dropped.
+    assert [r.peer_ticker for r in out] == ["META"]
+    meta = out[0]
     assert meta.peer_name == "Meta Platforms Inc."
     assert meta.market_cap_usd == 1_200_000_000_000
     assert meta.revenue_ttm_usd == 165_000_000_000
     assert meta.net_margin_ttm == 0.30
     assert meta.roic_ttm == 0.22
+    assert "same industry" in meta.match_reasons
+    assert "similar scale" in meta.match_reasons
 
 
 def test_peer_comp_caps_at_max_peers(tmp_path: Path) -> None:
-    """FMP peers responses can carry 20+ tickers; cap at max_peers."""
+    """FMP peers responses can carry 20+ tickers; cap at max_peers (equal
+    scores keep the original pool order as the tiebreak)."""
     import json
 
     fmp = tmp_path / "data" / "historical" / "fmp"
@@ -355,6 +378,10 @@ def test_peer_comp_caps_at_max_peers(tmp_path: Path) -> None:
         json.dumps([{"symbol": "GOOG", "peersList": big_peer_list}]),
         encoding="utf-8",
     )
+    profile = [{"companyName": "X", "sector": "Technology", "industry": "Software"}]
+    (fmp / "GOOG_profile.json").write_text(json.dumps(profile), encoding="utf-8")
+    for p in big_peer_list:
+        (fmp / f"{p}_profile.json").write_text(json.dumps(profile), encoding="utf-8")
     out = load_peer_comp("GOOG", repo_root=tmp_path, max_peers=4)
     assert len(out) == 4
     assert [r.peer_ticker for r in out] == big_peer_list[:4]
