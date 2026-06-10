@@ -546,6 +546,28 @@ def _spawn_onboard_async(ticker: str) -> None:
         )
 
 
+def _sync_issuer_registry_safe(ticker: str, *, removed: bool) -> None:
+    """Keep the IR-categorizer issuer registry in step with the tracked list.
+
+    Best-effort trigger: a failure here must never break add/remove/archive. The
+    lazy import keeps ir_uploads' heavy pypdf/openpyxl deps out of db's import
+    graph; execution/sync_issuer_registry.py is the drift-safety reconcile behind
+    these triggers.
+    """
+    try:
+        import issuer_registry
+
+        repo_root = os.path.dirname(DATA_DIR)  # DATA_DIR == <repo_root>/data
+        if removed:
+            issuer_registry.deregister_issuer(repo_root, ticker.upper())
+        else:
+            issuer_registry.register_issuer(repo_root, ticker.upper(), db_path=DB_PATH)
+    except Exception as exc:  # never break tracking on a registry hiccup
+        import logging
+
+        logging.getLogger(__name__).warning("issuer_registry sync failed for %s: %s", ticker, exc)
+
+
 def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT_USER_ID) -> None:
     """Upsert a tracked company; SEC-validate, find IR URL, sync artifacts.
 
@@ -591,6 +613,7 @@ def track_company(ticker: str, name: str, list_type: str, user_id: str = DEFAULT
     conn.close()
 
     scan_and_sync_artifacts(ticker)
+    _sync_issuer_registry_safe(ticker, removed=False)
 
     became_onboardable = list_type in _TRACKED_LIST_TYPES_FOR_ONBOARD and (
         prior_list_type is None or prior_list_type not in _TRACKED_LIST_TYPES_FOR_ONBOARD
@@ -614,6 +637,7 @@ def remove_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> None:
     )
     conn.commit()
     conn.close()
+    _sync_issuer_registry_safe(ticker, removed=True)
 
 
 def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
@@ -634,6 +658,8 @@ def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     archived = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    if archived:
+        _sync_issuer_registry_safe(ticker, removed=True)
     return archived
 
 
@@ -653,6 +679,8 @@ def reactivate_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     reactivated = cursor.rowcount > 0
     conn.commit()
     conn.close()
+    if reactivated:
+        _sync_issuer_registry_safe(ticker, removed=False)
     return reactivated
 
 
