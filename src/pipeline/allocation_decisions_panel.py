@@ -373,7 +373,7 @@ def _safe_rows(
     return cur.fetchall()
 
 
-def _portfolio_holdings(conn: sqlite3.Connection) -> list[tuple[str, str | None]]:
+def portfolio_holdings(conn: sqlite3.Connection) -> list[tuple[str, str | None]]:
     rows = _safe_rows(
         conn,
         "SELECT ticker, name FROM tracked_companies "
@@ -382,7 +382,7 @@ def _portfolio_holdings(conn: sqlite3.Connection) -> list[tuple[str, str | None]
     return [(str(r["ticker"]), str(r["name"]) if r["name"] else None) for r in rows]
 
 
-def _latest_verdicts(conn: sqlite3.Connection) -> dict[str, str]:
+def latest_verdicts(conn: sqlite3.Connection) -> dict[str, str]:
     rows = _safe_rows(
         conn,
         "SELECT ticker, overall_status FROM thesis_evaluations ORDER BY ticker, evaluated_at DESC",
@@ -415,8 +415,8 @@ def render_allocation_decisions_panel(
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        holdings = _portfolio_holdings(conn)
-        verdicts = _latest_verdicts(conn)
+        holdings = portfolio_holdings(conn)
+        verdicts = latest_verdicts(conn)
         dcf_gaps = latest_dcf_runs(conn)
     finally:
         conn.close()

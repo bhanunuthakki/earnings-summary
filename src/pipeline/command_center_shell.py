@@ -75,6 +75,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # decisions timeline (thesis ledger + sizing intents + decision
             # notes). The standalone Thesis Ledger tab folded into it.
             ("decisions_record", "Decisions", "/api/panel/decisions_record", False, False),
+            # P2.3 — advisor memos: next-dollar + swap-discipline runs, the
+            # deterministic swap screen, and the durable memo record.
+            ("advisor_memos", "Memos", "/api/panel/advisor_memos", False, False),
             ("holdings", "Triggers", "/api/panel/holdings", False, False),
         ),
     ),

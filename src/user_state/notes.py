@@ -45,7 +45,9 @@ if TYPE_CHECKING:
 
 NOTE_KINDS: tuple[str, ...] = ("question", "decision", "watch", "assumption", "observation")
 NOTE_STATUSES: tuple[str, ...] = ("open", "resolved", "superseded", "archived")
-NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual")
+# 'advisor' (0077): notes written by advisor memo runs — honest provenance for
+# the priors anchor, distinct from anything the analyst typed themselves.
+NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual", "advisor")
 
 # Comment intents → note kinds. Action routes collapse onto semantics:
 # every thesis/KPI mutation directive is a *decision*; data-quality and
