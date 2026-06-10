@@ -74,6 +74,7 @@ from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
+from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
     render_holding_fragment,
@@ -192,14 +193,15 @@ def create_app(
 
     @app.route("/", methods=["GET"])
     def dashboard_page():
-        """Unified tabbed command center. Overview (portfolio/evaluation status
-        tables + tier-coverage strip + IR-KPI/maintenance actions) is
-        server-inlined for instant first paint; every other tab lazy-loads from
-        ``GET /api/panel/<name>`` on first activation. The standalone
-        ``/analytical`` and ``/ticker/<t>`` pages remain as deep-link targets."""
+        """Unified tabbed command center. Overview — the Research cockpit
+        (one attention-ranked row per holding: thesis health · valuation ·
+        events) + the tier-coverage strip — is server-inlined for instant
+        first paint; every other tab lazy-loads from ``GET /api/panel/<name>``
+        on first activation. The standalone ``/analytical`` and ``/ticker/<t>``
+        pages remain as deep-link targets."""
         conn = _open_db()
         try:
-            rows = build_dashboard_rows(conn, repo_root)
+            rows = build_cockpit_rows(conn, repo_root)
         finally:
             conn.close()
         coverage = tier_coverage_summary(repo_root)
@@ -291,6 +293,15 @@ def create_app(
             from pipeline.source_calls_panel import render_source_calls_panel
 
             return Response(render_source_calls_panel(db_path), mimetype="text/html")
+
+        if name == "actions":
+            # The IR-KPI refresh + repo-maintenance blocks, relocated from the
+            # Overview tab to Governance → Actions (master build P1.2). Their
+            # inline <script> wiring re-executes on injection (the shell's
+            # injectHtml re-creates script tags).
+            from pipeline.dashboard_html import render_actions_panel
+
+            return Response(render_actions_panel(), mimetype="text/html")
 
         if name == "thesis_ledger":
             # The append-only history of every accepted, alert-driven thesis edit

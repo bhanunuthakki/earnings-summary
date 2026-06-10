@@ -6,9 +6,11 @@ into a single dark-themed app with a horizontal tab bar.
 
 Design — thin shell + lazy panels:
 
-* **Overview is server-inlined** (instant first paint): the tier-coverage strip,
-  the IR-KPI + maintenance action blocks, and the portfolio/evaluation status
-  tables — all reused verbatim from ``dashboard_html`` / ``analytical_dashboard_html``.
+* **Overview is server-inlined** (instant first paint): the Research cockpit
+  (one attention-ranked row per holding — thesis health · valuation · events,
+  master build P1.2) followed by the tier-coverage strip. The IR-KPI +
+  maintenance action blocks moved to the Governance theme's Actions tab
+  (``/api/panel/actions``) — Overview is for reading, not operating.
 * **Every other tab lazy-loads its HTML on first activation** via
   ``GET /api/panel/<name>`` (the head/foot-less fragments from PR 5), then caches
   it in the DOM. Inline ``<script>`` blocks inside a fragment (e.g. the budget
@@ -36,7 +38,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html import escape
 
-from pipeline.dashboard_status import DashboardRow
+from pipeline.research_cockpit import CockpitRow
 from ui.tokens import FAVICON_LINK, palette_css
 
 # Three-theme information architecture (master build P1.1): a primary theme
@@ -80,6 +82,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
             ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
             ("budget", "LLM Spend", "/api/panel/budget", False, False),
+            # The IR-KPI refresh + maintenance blocks, moved out of Overview
+            # (P1.2). Parked here until the P3.4 settings drawer exists.
+            ("actions", "Actions", "/api/panel/actions", False, False),
         ),
     ),
 )
@@ -95,16 +100,17 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
 
 
 def render_overview_panel(
-    rows_by_list: dict[str, list[DashboardRow]],
+    rows_by_list: dict[str, list[CockpitRow]],
     coverage: dict[str, dict[str, int]] | None,
 ) -> str:
-    """The inlined Overview tab: tier-coverage strip + IR-KPI/maintenance actions
-    + the portfolio & evaluation status tables. Reuses the existing public seams
-    so there is no second code path for any of this content."""
+    """The inlined Overview tab: the Research cockpit (the landing answer to
+    "which holding needs my attention today?") with the tier-coverage strip
+    below it. Reuses the existing public seams so there is no second code path
+    for any of this content."""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
-    from pipeline.dashboard_html import render_status_overview
+    from pipeline.research_cockpit import render_research_cockpit
 
-    return render_tier_coverage_strip(coverage or {}) + render_status_overview(rows_by_list)
+    return render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
 
 
 def render_shell(
