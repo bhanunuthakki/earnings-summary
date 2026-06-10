@@ -38,6 +38,10 @@ log = logging.getLogger(__name__)
 # model to try_gemini_fallback if needed.
 GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 
+# Cap the fallback call so a hung Gemini request can't block an unattended
+# pipeline (e.g. a scheduled job) forever. Override via GEMINI_TIMEOUT_S; 120s default.
+GEMINI_REQUEST_TIMEOUT_S = float(os.environ.get("GEMINI_TIMEOUT_S", "120"))
+
 
 def is_fallback_disabled() -> bool:
     """Returns True when the operator has explicitly disabled the Gemini
@@ -110,7 +114,12 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     )
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
-    response = model_obj.generate_content(prompt)
+    # request_options={"timeout": ...} is the deprecated google-generativeai
+    # mechanism; on a future migration to google-genai translate this to the
+    # client's request timeout. Without it a hung call blocks forever.
+    response = model_obj.generate_content(
+        prompt, request_options={"timeout": GEMINI_REQUEST_TIMEOUT_S}
+    )
     text = (response.text or "").strip() if hasattr(response, "text") else ""
     if not text:
         raise RuntimeError(
