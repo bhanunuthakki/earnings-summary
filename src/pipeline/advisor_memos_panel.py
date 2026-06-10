@@ -128,7 +128,13 @@ def _run_bar(holdings: list[str]) -> str:
 def _socratic_flow_section() -> str:
     """The think-through flow's empty shell — the JS drives it (questions form,
     then the saved memo). Shared verbatim with the standalone /socratic page."""
-    return '<section class="panel" id="soc-flow" hidden><h2>Socratic think-through</h2>'         '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '         "make you wrong — then a one-page decision memo (bull / bear / what-would-change-"         'my-mind / stance-if-forced) saved to the record and scheduled for outcome '         'scoring.</p><div id="soc-body"></div></section>'
+    return (
+        '<section class="panel" id="soc-flow" hidden><h2>Socratic think-through</h2>'
+        '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
+        "make you wrong — then a one-page decision memo (bull / bear / what-would-change-"
+        "my-mind / stance-if-forced) saved to the record and scheduled for outcome "
+        'scoring.</p><div id="soc-body"></div></section>'
+    )
 
 
 def _screen_section(
@@ -507,7 +513,7 @@ def render_socratic_page(ticker: str) -> str:
         '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{t} · think-through</title>"
         f"{FAVICON_LINK}"
-        f'<style>{palette_css("dark")}{_SOCRATIC_PAGE_CSS}</style>'
+        f"<style>{palette_css('dark')}{_SOCRATIC_PAGE_CSS}</style>"
         f"{_PANEL_CSS}"
         "</head><body><main>"
         f"<h1>Socratic think-through · {t}</h1>"
