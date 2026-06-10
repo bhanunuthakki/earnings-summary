@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 from dispatch_registry import Registry  # noqa: E402
-from pipeline.dashboard_html import render_status_overview  # noqa: E402
+from pipeline.dashboard_html import render_actions_panel  # noqa: E402
 
 
 class _NonSpawningRegistry(Registry):
@@ -72,8 +72,10 @@ def test_unknown_action_rejected(client) -> None:
     assert "unknown action" in resp.get_json()["error"]
 
 
-def test_dashboard_renders_maintenance_panel() -> None:
-    html = render_status_overview({"portfolio": [], "evaluation": []})
+def test_actions_panel_renders_maintenance_controls() -> None:
+    """The maintenance block lives in the Governance → Actions fragment now
+    (P1.2 moved it out of Overview)."""
+    html = render_actions_panel()
     assert "Maintenance" in html
     assert 'data-action="seed_kpis"' in html
     assert "/actions/maintenance" in html

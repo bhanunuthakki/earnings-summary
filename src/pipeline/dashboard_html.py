@@ -1,145 +1,21 @@
-"""Server-side HTML renderer for the dashboard.
+"""Operator action blocks for the command center (IR-KPI refresh + maintenance).
 
-Pure function: takes the rows dict produced by `dashboard_status.build_dashboard_rows`
-and returns a full HTML document. Carries one piece of client JS — the "Refresh
-IR KPIs" control, which POSTs to `/actions/refresh-ir` and streams the job's
-output back via an EventSource on `/actions/stream/<job_id>`. Style is minimal
-and self-contained (no external CSS / fonts) so the page renders identically
-whether the user has the workspace report open elsewhere or not.
+The ops-status tables that used to live here were superseded by the Research
+cockpit (``pipeline.research_cockpit``, master build P1.2); what remains is the
+two streamed action blocks, which moved out of Overview and now ship as the
+Governance theme's Actions fragment (``GET /api/panel/actions``) — the proper
+settings drawer is P3.4. Each block POSTs to its ``/actions/<name>`` endpoint
+and streams the job's output back via an EventSource on
+``/actions/stream/<job_id>``; both carry their own ``<style>``/``<script>`` so
+they work inlined or injected (the shell re-executes scripts on injection).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from html import escape
 
-from pipeline.dashboard_status import DashboardRow, TranscriptStatus
-
-_BREACH_BADGE_COLOR: dict[str, str] = {
-    "intact": "#3a8a3a",
-    "watch": "#b88a1f",
-    "broken": "#b04040",
-    "pending": "#7a7a7a",
-}
-
-
-def render_status_overview(rows_by_list: dict[str, list[DashboardRow]]) -> str:
-    """Overview-tab body for the command-center shell: the IR-KPI + maintenance
-    action blocks followed by the portfolio + evaluation status tables.
-
-    A public seam over the same private renderers the standalone dashboard page
-    uses, so the shell's inlined Overview and ``GET /``'s old page share one code
-    path (the privates stay internal — no cross-module private access)."""
-    portfolio_rows = rows_by_list.get("portfolio", [])
-    evaluation_rows = rows_by_list.get("evaluation", [])
-    return "".join(
-        [
-            _ACTIONS_BLOCK,
-            _MAINTENANCE_BLOCK,
-            _render_section("Portfolio", portfolio_rows, empty_msg="No portfolio tickers."),
-            _render_section("Evaluation", evaluation_rows, empty_msg="No evaluation tickers."),
-        ]
-    )
-
-
-def _render_section(title: str, rows: list[DashboardRow], *, empty_msg: str) -> str:
-    body = _render_table(rows) if rows else f"<p class='empty'>{escape(empty_msg)}</p>"
-    return f"""
-<section class="list-section">
-  <h2>{escape(title)} <span class="count">({len(rows)})</span></h2>
-  {body}
-</section>
-""".strip()
-
-
-def _render_table(rows: list[DashboardRow]) -> str:
-    head = (
-        "<thead><tr>"
-        "<th>Ticker</th>"
-        "<th>Last FMP</th>"
-        "<th>Last transcript</th>"
-        "<th>Last build</th>"
-        "<th>Comments</th>"
-        "<th>Breach</th>"
-        "<th>Open</th>"
-        "</tr></thead>"
-    )
-    body_rows = "\n".join(_render_row(r) for r in rows)
-    return f"<table>{head}<tbody>{body_rows}</tbody></table>"
-
-
-def _render_row(row: DashboardRow) -> str:
-    transcript_cell = _format_transcript(row.last_transcript)
-    build_cell = _format_relative_time(row.last_build_at)
-    comments_cell = _format_comments_count(row.open_comments_count)
-    breach_cell = _format_breach(row.breach_status)
-    fmp_cell = _format_relative_time(row.fmp_last_pulled)
-    open_cell = (
-        f"<a class='open-link' href='/reports/{escape(row.ticker)}'>Open↗</a>"
-        if row.last_build_at
-        else "<span class='muted'>—</span>"
-    )
-    return (
-        "<tr>"
-        f"<td class='ticker'><a href='/ticker/{escape(row.ticker)}'>{escape(row.ticker)}</a></td>"
-        f"<td>{fmp_cell}</td>"
-        f"<td>{transcript_cell}</td>"
-        f"<td>{build_cell}</td>"
-        f"<td>{comments_cell}</td>"
-        f"<td>{breach_cell}</td>"
-        f"<td>{open_cell}</td>"
-        "</tr>"
-    )
-
-
-def _format_transcript(t: TranscriptStatus | None) -> str:
-    if t is None or t.period_end is None:
-        return "<span class='muted'>—</span>"
-    qa_marker = ""
-    if t.has_qa_section is True:
-        qa_marker = " <span class='qa-yes' title='Has Q&amp;A section'>Q&amp;A</span>"
-    elif t.has_qa_section is False:
-        qa_marker = " <span class='qa-no' title='Prepared remarks only'>no Q&amp;A</span>"
-    return f"{escape(t.period_end)}{qa_marker}"
-
-
-def _format_relative_time(iso: str | None) -> str:
-    if iso is None:
-        return "<span class='muted'>—</span>"
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return escape(iso)
-    now = datetime.now(UTC)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    delta = now - dt
-    seconds = int(delta.total_seconds())
-    if seconds < 0:
-        return escape(iso[:10])
-    if seconds < 3600:
-        label = f"{seconds // 60}m ago"
-    elif seconds < 86400:
-        label = f"{seconds // 3600}h ago"
-    elif seconds < 86400 * 30:
-        label = f"{seconds // 86400}d ago"
-    else:
-        label = f"{seconds // (86400 * 30)}mo ago"
-    return f"<span title='{escape(iso)}'>{escape(label)}</span>"
-
-
-def _format_comments_count(n: int) -> str:
-    if n == 0:
-        return "<span class='muted'>—</span>"
-    plural = "" if n == 1 else "s"
-    return f"<span class='comments-open'>{n} open comment{plural}</span>"
-
-
-def _format_breach(status: str | None) -> str:
-    if status is None:
-        return "<span class='muted'>—</span>"
-    color = _BREACH_BADGE_COLOR.get(status, "#7a7a7a")
-    return f"<span class='breach-badge' style='background:{escape(color)}'>{escape(status)}</span>"
+def render_actions_panel() -> str:
+    """The Governance → Actions fragment: IR-KPI refresh + repo maintenance."""
+    return _ACTIONS_BLOCK + _MAINTENANCE_BLOCK
 
 
 # The "Refresh IR KPIs" control. Rendered into the page via a `{actions_block}`

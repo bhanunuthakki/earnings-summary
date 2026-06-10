@@ -117,7 +117,7 @@ def client(app_repo: Path):
 
 def test_dashboard_page_returns_shell(client):
     """GET / now serves the unified tabbed command-center shell, with the
-    Overview tab server-inlined (portfolio + evaluation tables) for first paint
+    Overview tab server-inlined (the Research cockpit, P1.2) for first paint
     and the other tabs as lazy placeholders."""
     resp = client.get("/")
     assert resp.status_code == 200
@@ -131,17 +131,31 @@ def test_dashboard_page_returns_shell(client):
     # Other tabs lazy-load from /api/panel/<name>.
     assert 'data-endpoint="/api/panel/holdings"' in body
     assert 'data-endpoint="/api/panel/budget"' in body
-    # Overview is inlined → the seeded tickers appear on first paint.
+    # Overview is inlined → the seeded tickers appear on first paint, as
+    # cockpit rows (this minimal schema lacks the enrichment tables — the
+    # cockpit degrades to base fields rather than 500-ing).
+    assert "cockpit-section" in body
     assert "NU" in body
     assert "MELI" in body
+    # The seeded thesis verdict renders as a badge.
+    assert "cockpit-badge" in body
 
 
-def test_dashboard_shell_inlines_ir_kpi_form(client):
-    """The IR-KPI refresh form (+ its SSE wiring) is inlined in Overview so it
-    streams on first paint without a lazy fetch."""
+def test_dashboard_overview_excludes_action_blocks(client):
+    """P1.2 moved the IR-KPI + maintenance blocks out of Overview; they serve
+    from the Governance → Actions fragment instead."""
     body = client.get("/").get_data(as_text=True)
+    assert 'id="refresh-ir-form"' not in body
+    assert 'data-endpoint="/api/panel/actions"' in body
+
+
+def test_actions_panel_fragment_serves_ir_form(client):
+    resp = client.get("/api/panel/actions")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
     assert 'id="refresh-ir-form"' in body
     assert "/actions/refresh-ir" in body
+    assert "/actions/maintenance" in body
 
 
 def test_dashboard_api_returns_grouped_json(client):

@@ -20,16 +20,16 @@ from pipeline.command_center_shell import (
 )
 
 
-def test_overview_panel_reuses_existing_renderers() -> None:
-    """Empty rows still render both section headers (via dashboard_html's
-    _render_section) plus the IR-KPI + maintenance action blocks."""
+def test_overview_panel_is_the_research_cockpit() -> None:
+    """Overview = the cockpit + the tier strip. The IR-KPI + maintenance
+    action blocks moved to Governance → Actions (P1.2) and must NOT inline."""
     html = render_overview_panel({"portfolio": [], "evaluation": []}, coverage={})
     assert "Portfolio" in html
     assert "Evaluation" in html
     assert "No portfolio tickers." in html
-    # The IR-KPI + maintenance action blocks are inlined.
-    assert 'id="refresh-ir-form"' in html
-    assert "/actions/maintenance" in html
+    assert "cockpit-section" in html
+    assert 'id="refresh-ir-form"' not in html
+    assert "/actions/maintenance" not in html
 
 
 def test_render_shell_three_theme_structure() -> None:
@@ -44,7 +44,8 @@ def test_render_shell_three_theme_structure() -> None:
     for theme in ("research", "portfolio", "governance"):
         assert f'data-theme-target="{theme}"' in html
         assert f'data-cc-theme="{theme}"' in html  # its sub-tab row exists
-    # Surviving sub-tabs, each tagged with its theme.
+    # Surviving sub-tabs, each tagged with its theme ("actions" hosts the
+    # relocated IR-KPI + maintenance blocks, P1.2).
     for target in (
         "overview",
         "holding",
@@ -54,6 +55,7 @@ def test_render_shell_three_theme_structure() -> None:
         "ir_coverage",
         "source_calls",
         "budget",
+        "actions",
     ):
         assert f'data-tab-target="{target}"' in html
     # Overview is inlined verbatim and marked loaded.
@@ -84,6 +86,7 @@ def test_render_shell_lazy_endpoints_and_pickers() -> None:
     # Lazy panels carry their fetch endpoint and start unloaded.
     assert 'data-endpoint="/api/panel/holdings"' in html
     assert 'data-endpoint="/api/panel/budget"' in html
+    assert 'data-endpoint="/api/panel/actions"' in html
     assert 'data-loaded="0"' in html
     # Only the per-ticker Holding drill-down is dropdown-driven now.
     assert html.count('class="cc-picker"') == 1
@@ -106,3 +109,4 @@ def test_sub_tab_buttons_carry_their_theme() -> None:
     assert 'data-tab-target="overview" data-cc-theme="research"' in html
     assert 'data-tab-target="thesis_ledger" data-cc-theme="portfolio"' in html
     assert 'data-tab-target="budget" data-cc-theme="governance"' in html
+    assert 'data-tab-target="actions" data-cc-theme="governance"' in html
