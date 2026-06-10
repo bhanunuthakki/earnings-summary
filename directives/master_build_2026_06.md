@@ -145,7 +145,7 @@ demands it (note the split in the Decision log).
 - [x] **P2.2 Allocation-decisions record.** *(#377)* Sizing-audit view (conviction
   vs weight vs valuation gap vs alpha, mismatches ranked); the decisions
   ledger + position-sizing intents fold in as the decisions timeline.
-- [ ] **P2.3 Advisor memos.** Next-dollar allocation memo (on demand +
+- [x] **P2.3 Advisor memos.** *(#381)* Next-dollar allocation memo (on demand +
   monthly cron) and swap-discipline checks (holding's expected return vs
   watchlist alternative by margin → swap memo). Memos read priors + facts
   + tracker context; persist as notes + ledger entries; rendered under
@@ -243,6 +243,17 @@ demands it (note the split in the Decision log).
   so it is immune to either convention. Old GET-/ ops tables + their
   renderers retired with the move (dashboard_html is now just the Actions
   fragment); /api/dashboard JSON unchanged.
+- 2026-06-10 (P2.3, #381): conviction stays the advisor's INPUT, never its
+  output — both memo prompts hard-forbid directives; a swap memo concluding
+  "the bar isn't cleared" is documented as a successful outcome. The swap
+  screen gained a +100% upside plausibility ceiling after prod data showed
+  currency-artifact watchlist DCFs (TSM +3570%, STNE +519%) dominating every
+  row; excluded names render as a data-quality footnote. Deviation from "persist
+  as notes + ledger entries": the portfolio-level next-dollar memo writes a
+  note only — thesis_ledger_entries is ticker-keyed by schema (0062), so
+  ledger entries are written for ticker-scoped memos (swap checks, Socratic).
+  advisor_memos (0077) ships score_status='pending' dormant for P2.5; the
+  monthly cron XML ships in-repo and registers at the deploy boundary.
 - 2026-06-10 (P2.2, #377): conviction is *recorded, never inferred* — the
   audit's conviction/target columns read only `position_sizing_intent` (empty
   in prod at ship time; the panel's inline editor + `POST /api/sizing-intents`
