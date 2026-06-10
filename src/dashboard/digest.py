@@ -39,6 +39,7 @@ from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from ui.tokens import FAVICON_LINK
 from user_state.ledger import list_recent_entries
+from user_state.notes import AnalystNoteRow, list_notes
 
 
 def render_morning_digest(
@@ -77,8 +78,9 @@ def render_morning_digest(
     body.write('<div class="l1-shell">')
     _render_header(body, date)
     _render_whats_new(body, pending_alerts, actions_per_alert, db_path)
+    _render_open_items(body, user_id, db_path)
     _render_outstanding(body, outstanding_actions)
-    _render_upcoming(body, date, db_path)
+    _render_upcoming(body, date, db_path, user_id=user_id)
     _render_thesis_ledger(body, user_id, db_path)
     _render_footer(body, date)
     body.write("</div>")
@@ -142,6 +144,62 @@ def _render_whats_new(
             brief_provenance=prov_cache[alert.ticker],
         )
     body.write("</section>")
+
+
+# Lead kinds for the open-items panel + the per-ticker earnings-prep lists
+# (P4.4): the owner's watch items and unanswered questions come first.
+_OPEN_ITEM_KIND_RANK = {"watch": 0, "question": 1}
+_OPEN_ITEMS_LIMIT = 30
+_PREP_NOTES_PER_TICKER = 3
+
+
+def _open_notes(
+    db_path: Path | None, user_id: str, *, ticker: str | None = None
+) -> list[AnalystNoteRow]:
+    """Open analyst notes, lead-kinds first — best-effort ([] on any miss)."""
+    if db_path is None or not Path(db_path).exists():
+        return []
+    try:
+        rows = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
+    except sqlite3.Error:
+        return []
+    return sorted(rows, key=lambda n: _OPEN_ITEM_KIND_RANK.get(n.kind, 9))
+
+
+def _render_open_items(body: StringIO, user_id: str, db_path: Path | None) -> None:
+    """'Open items' (P4.4) — the owner's standing watch items, questions, and
+    other open notes from the analyst journal, so the digest carries what the
+    owner already said to look for alongside what's new."""
+    notes = _open_notes(db_path, user_id)[:_OPEN_ITEMS_LIMIT]
+    body.write('<section class="dash-section dash-open-items">')
+    body.write('<div class="dash-section-header">')
+    body.write('<div class="dash-section-title">Open items</div>')
+    body.write(f'<div class="dash-section-count">{len(notes)} open</div>')
+    body.write("</div>")
+    if not notes:
+        body.write(
+            '<div class="empty-state">No open items in the analyst journal — '
+            "notes arrive from report comments, chat, and alert reviews.</div>"
+        )
+        body.write("</section>")
+        return
+    body.write('<ul class="open-items-list">')
+    for n in notes:
+        ticker_html = (
+            f'<span class="oi-ticker">{_esc(n.ticker)}</span>'
+            if n.ticker
+            else '<span class="oi-ticker oi-portfolio">PORTFOLIO</span>'
+        )
+        when = _esc(n.created_at.date().isoformat())
+        body.write(
+            '<li class="open-item">'
+            f'<span class="oi-kind">{_esc(n.kind)}</span>'
+            f"{ticker_html}"
+            f'<span class="oi-body">{_esc(n.body)}</span>'
+            f'<span class="oi-when">{when}</span>'
+            "</li>"
+        )
+    body.write("</ul></section>")
 
 
 def _render_outstanding(body: StringIO, actions: list[QueuedActionRow]) -> None:
@@ -229,10 +287,17 @@ def _upcoming_earnings(
     return out
 
 
-def _render_upcoming(body: StringIO, render_date: date, db_path: Path | None) -> None:
+def _render_upcoming(
+    body: StringIO,
+    render_date: date,
+    db_path: Path | None,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+) -> None:
     """'Upcoming this week' — tracked names whose ESTIMATED next earnings (latest
-    release + ~1 quarter) land within the next two weeks. Replaces the old
-    no-calendar stub with a real, data-backed (if approximate) forward look."""
+    release + ~1 quarter) land within the next two weeks. Each name leads with
+    the owner's open watch items / questions (P4.4) so earnings prep starts
+    from what the owner already said to look for."""
     upcoming = _upcoming_earnings(db_path, render_date)
     body.write('<section class="dash-section dash-upcoming">')
     body.write('<div class="dash-section-header">')
@@ -252,8 +317,19 @@ def _render_upcoming(body: StringIO, render_date: date, db_path: Path | None) ->
             '<li class="upcoming-item">'
             f'<span class="up-ticker">{_esc(ticker)}</span> '
             f'<span class="up-date">~{_esc(est.isoformat())}</span> '
-            '<span class="up-note">est. next earnings</span></li>'
+            '<span class="up-note">est. next earnings</span>'
         )
+        prep_notes = _open_notes(db_path, user_id, ticker=ticker)
+        if prep_notes:
+            shown = prep_notes[:_PREP_NOTES_PER_TICKER]
+            body.write('<ul class="prep-notes">')
+            for n in shown:
+                body.write(f'<li><span class="oi-kind">{_esc(n.kind)}</span> {_esc(n.body)}</li>')
+            overflow = len(prep_notes) - len(shown)
+            if overflow > 0:
+                body.write(f'<li class="muted">+{overflow} more open item(s)</li>')
+            body.write("</ul>")
+        body.write("</li>")
     body.write("</ul>")
     body.write("</section>")
 

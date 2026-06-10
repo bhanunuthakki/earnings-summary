@@ -491,6 +491,25 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .panel-xlink:hover { text-decoration: underline; }
 .xlink-flash { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* P4.4 — the open watch-items strip under the thesis lede: every build
+   leads with what the owner already said to watch for. */
+.l1-open-items { margin: 0 var(--pad-x) 8px; }
+.oi-strip-list { list-style: none; margin: 0; padding: 6px var(--panel-pad-x) 10px; }
+.oi-strip-list li {
+  display: flex; gap: 8px; align-items: baseline;
+  padding: 4px 0; font-size: 12.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.oi-strip-list li:last-child { border-bottom: 0; }
+.oi-kind {
+  font-family: var(--mono); font-size: 9.5px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 3px; padding: 0 5px; flex: none;
+}
+.oi-body { flex: 1; color: var(--fg-soft); }
+.oi-when { color: var(--muted); font-family: var(--mono); font-size: 10.5px; flex: none; }
 .panel-foot {
   padding: 12px var(--panel-pad-x);
   background: var(--paper);

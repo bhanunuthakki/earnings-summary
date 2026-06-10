@@ -491,3 +491,43 @@ def test_drawer_links_transcript_citations_to_reader(tmp_path: Path) -> None:
     assert "Q1-2026 · line 165" in out
     # Unresolvable period stays plain text — no dead link fabricated.
     assert "/source/" not in out.split("Q3-2024")[1][:80]
+
+
+# ----------------------------------------------------------------------------
+# P4.4 — alerts attach the owner's open notes to their evidence
+# ----------------------------------------------------------------------------
+
+
+def test_drawer_attaches_open_notes(tmp_path: Path) -> None:
+    db = tmp_path / "notes.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE analyst_notes (id INTEGER PRIMARY KEY, user_id TEXT, ticker TEXT, "
+        "kind TEXT, status TEXT, body TEXT, created_at TEXT);"
+    )
+    conn.executemany(
+        "INSERT INTO analyst_notes (user_id, ticker, kind, status, body, created_at) "
+        "VALUES ('bhanu', 'NU', ?, ?, ?, ?)",
+        [
+            ("observation", "open", "Credit mix shifting to secured.", "2026-06-01 10:00:00"),
+            ("watch", "open", "Watch NIM trajectory next print.", "2026-05-20 09:00:00"),
+            ("watch", "resolved", "Old resolved item.", "2026-04-01 09:00:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    prov = load_brief_provenance("NU", db_path=db)
+    assert prov is not None
+    out = render_evidence_drawer(_make_alert(json.dumps({"summary": "s"})), prov)
+    assert "Related notes" in out
+    assert "Watch NIM trajectory next print." in out
+    assert "Credit mix shifting to secured." in out
+    # Watch items lead; resolved notes never attach.
+    assert out.index("Watch NIM trajectory") < out.index("Credit mix shifting")
+    assert "Old resolved item." not in out
+
+
+def test_drawer_without_notes_renders_no_notes_section(tmp_path: Path) -> None:
+    out = render_evidence_drawer(_make_alert(json.dumps({"summary": "s"})), None)
+    assert "Related notes" not in out

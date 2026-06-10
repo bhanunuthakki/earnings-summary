@@ -43,6 +43,39 @@ _CITATION_KIND_LABELS: dict[str, str] = {
 # Matches the processed-transcript file naming: ``..._Q1_2026.txt``.
 _TRANSCRIPT_PERIOD_RE = re.compile(r"_Q([1-4])_((?:19|20)\d{2})", re.IGNORECASE)
 
+# How many open notes ride along on an alert's evidence (P4.4) — watch items
+# and questions lead, then the rest, newest first within each bucket.
+_RELATED_NOTES_LIMIT = 5
+_NOTE_KIND_RANK = {"watch": 0, "question": 1}
+
+
+def _load_open_notes(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
+    """The ticker's open analyst notes, lead-kinds first (P4.4).
+
+    Returns lightweight dict rows ({id, kind, body, created_at}) — the
+    drawer is a renderer; it doesn't need the full AnalystNoteRow."""
+    try:
+        rows = conn.execute(
+            "SELECT id, kind, body, created_at FROM analyst_notes "
+            "WHERE UPPER(ticker) = ? AND status = 'open' "
+            "ORDER BY created_at DESC, id DESC",
+            (ticker.upper(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    ordered = sorted(
+        rows, key=lambda r: _NOTE_KIND_RANK.get(str(r[1]), 9)
+    )  # stable: keeps newest-first within each kind bucket
+    return [
+        {
+            "id": int(r[0]),
+            "kind": str(r[1]),
+            "body": str(r[2]),
+            "created_at": str(r[3] or ""),
+        }
+        for r in ordered[:_RELATED_NOTES_LIMIT]
+    ]
+
 
 def _load_transcript_doc_ids(conn: sqlite3.Connection, ticker: str) -> dict[str, int]:
     """``{"Q1-2026": doc_id}`` for the ticker's registered call transcripts.
@@ -72,13 +105,14 @@ def _load_transcript_doc_ids(conn: sqlite3.Connection, ticker: str) -> dict[str,
 def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object] | None:
     """Latest brief_provenance_log payload for `ticker`, drawer-shaped.
 
-    Returns ``{"sources_used": <parsed JSON>, "transcript_docs": {...}}`` —
-    the shape ``render_evidence_drawer`` navigates for fact_id citation
-    linking plus the period → transcript-document map that lets
-    transcript_line citations deep-link the ``/source/<doc_id>#L<n>``
-    reader (P4.3). Either half may be absent; None only when neither is
-    available (missing DB, no rows). Callers (digest/feed/holding rail)
-    look this up once per ticker.
+    Returns ``{"sources_used": <parsed JSON>, "transcript_docs": {...},
+    "open_notes": [...]}`` — the shape ``render_evidence_drawer`` navigates
+    for fact_id citation linking, the period → transcript-document map that
+    lets transcript_line citations deep-link the ``/source/<doc_id>#L<n>``
+    reader (P4.3), and the ticker's open analyst notes so alerts surface
+    the owner's standing watch-items next to their evidence (P4.4). Any
+    part may be absent; None only when none is available (missing DB, no
+    rows). Callers (digest/feed/holding rail) look this up once per ticker.
     """
     if not db_path.exists():
         return None
@@ -96,6 +130,7 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
         except sqlite3.Error:
             row = None
         transcript_docs = _load_transcript_doc_ids(conn, ticker)
+        open_notes = _load_open_notes(conn, ticker)
     finally:
         conn.close()
 
@@ -109,6 +144,8 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
             out["sources_used"] = cast("dict[str, object]", parsed)
     if transcript_docs:
         out["transcript_docs"] = transcript_docs
+    if open_notes:
+        out["open_notes"] = open_notes
     return out or None
 
 
@@ -158,6 +195,7 @@ def render_evidence_drawer(
     transcript_docs = _extract_transcript_docs(brief_provenance)
 
     body.append(_render_summary_section(parsed))
+    body.append(_render_related_notes_section(brief_provenance))
     body.append(_render_citations_section(parsed, per_metric, transcript_docs))
     body.append(_render_raw_section(parsed))
 
@@ -185,6 +223,39 @@ def _render_summary_section(parsed: Mapping[str, object]) -> str:
         f'<div class="evidence-summary-text">{_esc(str(raw_summary))}</div>'
         "</div>"
     )
+
+
+def _render_related_notes_section(brief_provenance: Mapping[str, object] | None) -> str:
+    """The owner's open notes for this ticker, attached to the evidence
+    (P4.4) — watch items and questions lead so an alert lands next to what
+    the analyst already said to watch for. Renders nothing when the payload
+    carries no notes (cold ticker / pre-0074 DB)."""
+    if brief_provenance is None:
+        return ""
+    raw = brief_provenance.get("open_notes")
+    if not isinstance(raw, list):
+        return ""
+    notes = [
+        cast("Mapping[str, object]", n) for n in cast("list[object]", raw) if isinstance(n, dict)
+    ]
+    if not notes:
+        return ""
+    rows: list[str] = [
+        '<div class="evidence-section evidence-notes">'
+        '<div class="evidence-section-title">Related notes</div>'
+        '<ul class="evidence-notes-list">'
+    ]
+    for n in notes:
+        kind = str(n.get("kind", "note"))
+        note_body = str(n.get("body", ""))
+        created = str(n.get("created_at", ""))[:10]
+        created_html = f' <span class="muted">({_esc(created)})</span>' if created else ""
+        rows.append(
+            f'<li><span class="evidence-note-kind">{_esc(kind)}</span> '
+            f"{_esc(note_body)}{created_html}</li>"
+        )
+    rows.append("</ul></div>")
+    return "".join(rows)
 
 
 def _render_citations_section(

@@ -111,6 +111,68 @@ def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None
 
 
 # ----------------------------------------------------------------------------
+# Open items (P4.4)
+# ----------------------------------------------------------------------------
+
+
+def test_open_items_panel_leads_with_watch_items(db_path: Path) -> None:
+    """The digest's 'Open items' panel surfaces the owner's open notes,
+    watch items + questions before everything else."""
+    from user_state.notes import create_note
+
+    create_note(
+        ticker="NU",
+        kind="observation",
+        body="Brazil credit cycle worth re-reading quarterly.",
+        db_path=db_path,
+    )
+    create_note(
+        ticker="NU",
+        kind="watch",
+        body="Watch risk-adjusted NIM trajectory back above 10%.",
+        db_path=db_path,
+    )
+    create_note(
+        ticker=None,
+        kind="question",
+        body="What is the policy-mix drift this quarter?",
+        db_path=db_path,
+    )
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert "Open items" in html
+    assert "3 open" in html
+    assert "Watch risk-adjusted NIM trajectory" in html
+    assert "policy-mix drift" in html
+    # Portfolio-level note (ticker=None) labelled as such.
+    assert "PORTFOLIO" in html
+    # Lead ordering: the watch item renders before the observation.
+    assert html.index("Watch risk-adjusted NIM") < html.index("Brazil credit cycle")
+
+
+def test_open_items_panel_empty_state(db_path: Path) -> None:
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert "Open items" in html
+    assert "No open items in the analyst journal" in html
+
+
+def test_upcoming_earnings_leads_with_prep_notes(db_path: Path) -> None:
+    """Each upcoming-earnings row carries the owner's open watch items for
+    that name (P4.4: earnings prep starts from the owner's own questions)."""
+    from user_state.notes import create_note
+
+    _seed_calendar(db_path)
+    create_note(
+        ticker="NU",
+        kind="watch",
+        body="Ask about deposit franchise costs on the call.",
+        db_path=db_path,
+    )
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert "prep-notes" in html
+    assert "Ask about deposit franchise costs" in html
+
+
+# ----------------------------------------------------------------------------
 # Populated DB
 # ----------------------------------------------------------------------------
 
