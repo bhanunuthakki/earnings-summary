@@ -466,9 +466,7 @@ _PRIORS_KIND_ORDER: tuple[tuple[str, str], ...] = (
 )
 
 
-def load_priors_anchor(
-    repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCHOR_CHAR_CAP
-) -> str:
+def load_priors_anchor(repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCHOR_CHAR_CAP) -> str:
     """Compose the analyst-priors anchor from OPEN analyst_notes rows.
 
     Reads the durable notes table (alembic 0074; populated by the comment
