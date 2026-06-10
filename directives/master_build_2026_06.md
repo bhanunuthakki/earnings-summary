@@ -173,7 +173,7 @@ demands it (note the split in the Decision log).
 - [x] **P3.4 Governance panel.** *(#375)* Coverage / data-quality / validation /
   source_calls dashboards consolidated; settings drawer (budgets, ticker
   settings, maintenance actions, job streams) replaces admin-as-tab.
-- [ ] **P3.5 Source viewers.** Transcript reader with line anchors; 10-K
+- [x] **P3.5 Source viewers.** *(#376)* Transcript reader with line anchors; 10-K
   section reader over the parsed form_10k JSONs; restatement "was X, now Y"
   view on superseded facts.
 

@@ -319,6 +319,14 @@ def create_app(
 
             return Response(render_ticker_settings_panel(db_path), mimetype="text/html")
 
+        if name == "restatements":
+            # "was X, now Y" over the supersede chains (P3.5) — every place a
+            # later filing changed an already-reported number, linking both
+            # documents into the /source/<doc_id> viewers.
+            from pipeline.restatements_panel import render_restatements_panel
+
+            return Response(render_restatements_panel(db_path), mimetype="text/html")
+
         if name == "actions":
             # The IR-KPI refresh + repo-maintenance blocks, relocated from the
             # Overview tab to Governance → Actions (master build P1.2). Their
@@ -496,6 +504,35 @@ def create_app(
         if not ticker_settings.set_bypass_budget(t, value, db_path=db_path):
             return ({"error": "could not persist (ticker_settings table missing?)"}, 500)
         return {"ticker": t, "bypass_budget": value}
+
+    @app.route("/source/<int:doc_id>", methods=["GET"])
+    def source_viewer(doc_id: int):
+        """In-app source viewers (P3.5). Routes by doc_type: processed
+        transcripts get the numbered-line reader (#L<n> anchors for
+        transcript_line locators/citations), parsed 10-K/10-Q JSONs the
+        section reader (?section= for FactLocator.section); everything else
+        302s to the document's source_url, falling back to a registry-
+        metadata page so a /source link is never a dead end."""
+        from pipeline.source_viewers import (
+            load_document,
+            render_fallback_page,
+            render_form10k_page,
+            render_transcript_page,
+        )
+
+        html = render_transcript_page(repo_root, db_path, doc_id)
+        if html is None:
+            html = render_form10k_page(repo_root, db_path, doc_id, request.args.get("section"))
+        if html is not None:
+            return Response(html, mimetype="text/html")
+        doc = load_document(db_path, doc_id)
+        if (
+            doc is not None
+            and doc.source_url
+            and doc.source_url.startswith(("http://", "https://"))
+        ):
+            return redirect(doc.source_url, code=302)
+        return Response(render_fallback_page(db_path, doc_id), mimetype="text/html")
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
