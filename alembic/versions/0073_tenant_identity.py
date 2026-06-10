@@ -40,6 +40,16 @@ The four substrate tables carry only *named* CHECKs and a partial-unique index,
 all of which reflection round-trips faithfully, so they take a far smaller
 ``batch_alter_table`` FK-add.
 
+Value remaps match ``user_id IN (1, '1')`` rather than ``= 1``: init_db-era
+production DBs (the live table predates the alembic chain) have carried ``'1'``
+physically stored as TEXT in a column whose declaration had no type affinity,
+and SQLite converts nothing when neither comparand has affinity — so
+``user_id = 1`` matched no row, every value CAST-copied through as TEXT ``'1'``,
+and the canonical-id filter saw an empty universe (live incident 2026-06-10).
+The widened predicate is total across every declaration the column has
+historically had: INTEGER affinity coerces ``'1'`` → ``1``, TEXT affinity
+coerces ``1`` → ``'1'``, and no-affinity compares the TEXT member directly.
+
 Every table op is guarded so the migration is a no-op on a DB that predates a
 given table (test fixtures stamp partial schemas).
 
@@ -147,11 +157,11 @@ def _recreate_tracked(user_id_def: str, user_id_select: str) -> None:
     conn = op.get_bind()
     conn.execute(sa.text("PRAGMA legacy_alter_table = ON"))
     try:
-        conn.execute(sa.text(f"CREATE TABLE tracked_companies_new ({_tracked_table_body(user_id_def)})"))
-        insert_cols = ", ".join(_TRACKED_COLS)
-        select_cols = ", ".join(
-            user_id_select if c == "user_id" else c for c in _TRACKED_COLS
+        conn.execute(
+            sa.text(f"CREATE TABLE tracked_companies_new ({_tracked_table_body(user_id_def)})")
         )
+        insert_cols = ", ".join(_TRACKED_COLS)
+        select_cols = ", ".join(user_id_select if c == "user_id" else c for c in _TRACKED_COLS)
         conn.execute(
             sa.text(
                 f"INSERT INTO tracked_companies_new ({insert_cols}) "
@@ -202,7 +212,8 @@ def upgrade() -> None:
 
     # 2. Seed the canonical tenant + (defensively) every distinct legacy id that
     #    already exists, so no row is orphaned when the FKs go on. Substrate ids
-    #    copy as-is; tracked_companies' integer 1 maps onto the canonical id.
+    #    copy as-is; tracked_companies' legacy 1 — whether stored as INTEGER or
+    #    as drifted TEXT '1' — maps onto the canonical id.
     op.execute(
         f"INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('{CANONICAL_TENANT}', '{now}')"
     )
@@ -215,16 +226,16 @@ def upgrade() -> None:
     if _has_table(insp, "tracked_companies"):
         op.execute(
             f"INSERT OR IGNORE INTO tenants (id, created_at) "
-            f"SELECT DISTINCT CASE WHEN user_id = 1 THEN '{CANONICAL_TENANT}' "
+            f"SELECT DISTINCT CASE WHEN user_id IN (1, '1') THEN '{CANONICAL_TENANT}' "
             f"ELSE CAST(user_id AS TEXT) END, '{now}' FROM tracked_companies"
         )
 
-    # 3. tracked_companies: INTEGER → TEXT + FK, remapping 1 → 'bhanu'.
+    # 3. tracked_companies: INTEGER → TEXT + FK, remapping 1 / drifted '1' → 'bhanu'.
     if _has_table(insp, "tracked_companies"):
         _recreate_tracked(
             user_id_def=f"user_id TEXT DEFAULT '{CANONICAL_TENANT}' REFERENCES tenants(id)",
             user_id_select=(
-                f"CASE WHEN user_id = 1 THEN '{CANONICAL_TENANT}' "
+                f"CASE WHEN user_id IN (1, '1') THEN '{CANONICAL_TENANT}' "
                 "ELSE CAST(user_id AS TEXT) END"
             ),
         )
@@ -273,8 +284,7 @@ def downgrade() -> None:
         _recreate_tracked(
             user_id_def="user_id INTEGER DEFAULT 1",
             user_id_select=(
-                f"CASE WHEN user_id = '{CANONICAL_TENANT}' THEN 1 "
-                "ELSE CAST(user_id AS INTEGER) END"
+                f"CASE WHEN user_id = '{CANONICAL_TENANT}' THEN 1 ELSE CAST(user_id AS INTEGER) END"
             ),
         )
 
