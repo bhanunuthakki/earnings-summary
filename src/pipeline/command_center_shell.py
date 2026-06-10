@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from pipeline.dashboard_status import DashboardRow
+from ui.tokens import FAVICON_LINK, palette_css
 
 # Tab order. Each entry: (panel_id, label, endpoint, is_picker, picker_required).
 # ``overview`` is inlined (no endpoint). The picker tabs re-fetch ``endpoint?ticker=``
@@ -146,30 +147,24 @@ def _render_panels(
     return "".join(out)
 
 
-# The workspace `:root` vars (--accent/--ink/--panel/--hairline/...) are defined
-# here too so any later-inlined comment/chat CSS resolves against the dark theme.
-SHELL_CSS = """
+# Palette comes from the shared token source (src/ui/tokens.py); the alias
+# block below maps this surface's legacy var names onto the canonical ones so
+# its rules — and any later-inlined comment/chat CSS — resolve unchanged.
+SHELL_CSS = (
+    palette_css("dark")
+    + """
 :root {
-  --bg: #0c0d10;
-  --panel: #16171a;
-  --panel-alt: #1f2125;
-  --bg-card: #16171a;
-  --bg-elev: #1f2125;
-  --border: #2a2c30;
-  --hairline: #2a2c30;
-  --row-hover: #1f2125;
-  --ink: #e5e5e2;
-  --fg: #e5e5e2;
-  --ink-muted: #aaa;
-  --fg-muted: #888;
-  --muted: #888;
-  --link: #6ea8fe;
-  --accent: #6db3ff;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --bad: #f87171;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --panel: var(--surface);
+  --panel-alt: var(--paper);
+  --bg-card: var(--surface);
+  --bg-elev: var(--paper);
+  --row-hover: var(--paper);
+  --ink: var(--fg);
+  --ink-muted: var(--muted);
+  --fg-muted: var(--muted);
+  --link: var(--accent);
+  --font-mono: var(--mono);
+  --font-body: var(--sans);
 }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 0; font-family: var(--font-body); background: var(--bg);
@@ -367,7 +362,8 @@ td.ticker a:hover { text-decoration: underline; }
 .cc-report-embed { padding-bottom: 8px; }
 .cc-report-frame { width: 100%; height: calc(100vh - 220px); min-height: 560px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-top: 6px; }
-""".strip()
+"""
+).strip()
 
 
 # Tab switching + lazy panel loading + cc-picker + hash deep-linking. Vanilla JS,
@@ -521,11 +517,15 @@ SHELL_JS = r"""
 """.strip()
 
 
-_DOC_HEAD = """<!doctype html>
+_DOC_HEAD = (
+    """<!doctype html>
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portfolio · command center</title>
+"""
+    + FAVICON_LINK
+    + """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -533,5 +533,6 @@ _DOC_HEAD = """<!doctype html>
 </head>
 <body>
 """.replace("{css}", SHELL_CSS)
+)
 
 _DOC_FOOT = "</body></html>"

@@ -18,6 +18,7 @@ from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
 from dashboard._card import render_alert_card
 from dashboard._styles import CSS
 from identity import DEFAULT_USER_ID
+from ui.tokens import FAVICON_LINK
 
 
 def render_alert_feed(
@@ -148,7 +149,8 @@ def _document(body: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Alert feed</title>
+<title>Portfolio · alert feed</title>
+{FAVICON_LINK}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">

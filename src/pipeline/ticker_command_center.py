@@ -23,6 +23,7 @@ from typing import cast
 
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
+from ui.tokens import FAVICON_LINK
 
 _DEFAULT_TRACKER_URL = "http://localhost:5173"
 
@@ -875,11 +876,15 @@ def _size(n: int | None) -> str:
     return f"{n} B"
 
 
-_PAGE_HEAD = """<!doctype html>
+_PAGE_HEAD = (
+    """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{ticker} · command center</title>
+"""
+    + FAVICON_LINK
+    + """
 <style>
   body {{ margin: 0; padding: 24px; font-family: 'Inter', -apple-system, sans-serif; background: #0c0d10; color: #e5e5e2; line-height: 1.5; font-size: 14px; }}
   header {{ margin-bottom: 20px; border-bottom: 1px solid #2a2c30; padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
@@ -920,5 +925,6 @@ _PAGE_HEAD = """<!doctype html>
 <body>
 <div class="stamp" style="display:none">{generated_at}</div>
 """
+)
 
 _PAGE_FOOT = "</body></html>"

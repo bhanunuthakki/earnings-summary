@@ -64,6 +64,7 @@ from report.renderers.charts_v2 import (
     yoy_heatmap_table,
 )
 from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
+from ui.tokens import FAVICON_LINK
 
 _BOLD_RX = re.compile(r"\*\*(.+?)\*\*")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
@@ -101,13 +102,14 @@ def render(spec: ReportSpec) -> str:
 
 
 def _document(spec: ReportSpec, body: str) -> str:
-    title = f"{spec.ticker} — research report"
+    title = f"{spec.ticker} · research report"
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)}</title>
+{FAVICON_LINK}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>{_CSS}</style>
@@ -128,7 +130,7 @@ _CSS = (
   --fg: #111827;
   --muted: #6b7280;
   --border: #e5e7eb;
-  --accent: #2563eb;
+  --accent: #1d4ed8; /* canonical light accent — src/ui/tokens.py */
   --header-bg: #1f2937;
   --header-fg: #ffffff;
   --subheader-bg: #f3f4f6;

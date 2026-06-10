@@ -16,15 +16,12 @@ import html
 import math
 from dataclasses import dataclass
 
-# 6-color colorblind-safe palette (Okabe-Ito ordering, adjusted).
-PALETTE = [
-    "#0173b2",  # blue
-    "#de8f05",  # orange
-    "#029e73",  # green
-    "#cc78bc",  # purple
-    "#ca9161",  # tan
-    "#949494",  # grey
-]
+from ui.tokens import CHART_SERIES
+
+# 6-color colorblind-safe palette (Okabe-Ito ordering) — values owned by the
+# shared token source (src/ui/tokens.py) so the next palette decision happens
+# in one place.
+PALETTE = list(CHART_SERIES)
 POS_COLOR = "#029e73"  # green
 NEG_COLOR = "#cb4d4d"  # red
 NEUTRAL_COLOR = "#5a6b78"

@@ -25,6 +25,7 @@ from pipeline.analytical_dashboard import (
     PredictionOutcomeRow,
     TriggerLadderRow,
 )
+from ui.tokens import FAVICON_LINK
 
 _TRIGGER_TONE: dict[str, str] = {
     "sell": "tone-sell",
@@ -665,11 +666,15 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
     return "".join(out)
 
 
-_PAGE_HEAD = """<!doctype html>
+_PAGE_HEAD = (
+    """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portfolio · analytical dashboard</title>
+"""
+    + FAVICON_LINK
+    + """
 <style>
   body {{ margin: 0; padding: 24px; font-family: 'Inter', -apple-system, sans-serif; background: #0c0d10; color: #e5e5e2; line-height: 1.5; font-size: 14px; }}
   h1 {{ font-size: 24px; margin: 0 0 8px; font-weight: 600; }}
@@ -774,5 +779,6 @@ _PAGE_HEAD = """<!doctype html>
 <h1>Portfolio · analytical dashboard</h1>
 <div class="stamp">generated {generated_at}</div>
 """
+)
 
 _PAGE_FOOT = "</body></html>"
