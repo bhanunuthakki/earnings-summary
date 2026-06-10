@@ -202,9 +202,7 @@ def test_get_documents_for_ticker_includes_processed_docs(
     # The default summary-pipeline accessor excludes the processed doc ...
     assert index_manager.get_unprocessed_documents("UBER") == []
     # ... but get_documents_for_ticker (what the fix reuses) returns it.
-    all_docs = cast(
-        "list[dict[str, object]]", index_manager.get_documents_for_ticker("UBER")
-    )
+    all_docs = cast("list[dict[str, object]]", index_manager.get_documents_for_ticker("UBER"))
     assert [d["doc_type"] for d in all_docs] == ["transcript"]
     assert all_docs[0]["processed"] is True
 
