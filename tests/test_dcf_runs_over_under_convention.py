@@ -1,22 +1,33 @@
-"""Regression: bespoke dcf_runs writers must store over_under_pct as the
-documented DECIMAL RATIO (live_price - npv_per_share) / npv_per_share.
+"""Regression: dcf_runs.over_under_pct must obey the documented convention --
+(live_price - npv_per_share) / npv_per_share as a DECIMAL ratio (alembic 0024,
+src/dcf/valuation.over_under_pct). The analytical dashboard's trigger ladder
+reads the STORED column (> 0.20 -> 'sell', > 0.10 -> 'trim', < -mos_bar ->
+initiate candidate).
 
-Convention: alembic/versions/0024_dcf_runs_extras.py + src/dcf/valuation.py
-over_under_pct(). The analytical dashboard's trigger ladder reads the STORED
-column (> 0.20 -> 'sell', > 0.10 -> 'trim', < -mos_bar -> initiate candidate).
+Incident (#368): four bespoke builders (bank credit / holdco SOTP / fintech
+SOTP / platform DCF) hand-rolled percent UPSIDE, (fair/price - 1) * 100 --
+wrong sign AND scale -- so deeply under-valued NU (+79.82) / BN (+26.56)
+classified 'sell' while over-valued HDB / SOFI escaped the ladder.
 
-The bank / holdco-SOTP / fintech-SOTP / platform-DCF builders originally
-persisted percent UPSIDE, (fair / price - 1) * 100 -- wrong sign AND scale --
-which made deeply UNDER-valued names (NU +79.82, BN +26.56) classify as 'sell'.
-Each test drives the real persist_dcf_run with an under-valued fixture and
-asserts the stored row is self-consistent under the ratio convention: negative,
-decimal-scale, and exactly (live - fair) / fair.
+The fix is structural, three layers, each pinned here:
+  1. DcfRunRow carries NO over_under_pct field -- writers cannot supply one.
+  2. persist.upsert() derives it centrally (persist.derive_over_under is the
+     only producer), including the #291 non-positive-fair-value -> NULL guard.
+  3. Migration 0076 adds a DB CHECK so even raw SQL cannot persist an
+     inconsistent value (real-chain round-trip in
+     test_migration_0076_over_under_check.py; the schema below mirrors it).
+
+The four writer tests drive each bespoke builder's real persist_dcf_run with
+an under-valued fixture and assert the stored row is self-consistent: negative,
+decimal-scale, exactly (live - fair) / fair.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 import sys
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -30,6 +41,11 @@ import build_fintech_sotp as fintech  # noqa: E402
 import build_holdco_sotp as holdco  # noqa: E402
 import build_nu_platform_dcf as platform_dcf  # noqa: E402
 
+from dcf import persist  # noqa: E402
+
+# Mirrors the production table post-0076: the named CHECK is the migration's
+# _RATIO_CHECK verbatim, so the raw-insert test below exercises the same
+# predicate prod enforces.
 _DCF_RUNS_SCHEMA = """
 CREATE TABLE dcf_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +56,13 @@ CREATE TABLE dcf_runs (
     currency TEXT, notes TEXT, run_id TEXT,
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
-    revenue_growths_json TEXT, fcf_margin REAL
+    revenue_growths_json TEXT, fcf_margin REAL,
+    CONSTRAINT ck_dcf_runs_over_under_ratio CHECK (
+        over_under_pct IS NULL
+        OR live_price IS NULL OR npv_per_share IS NULL
+        OR live_price <= 0 OR npv_per_share <= 0
+        OR ABS(over_under_pct - (1.0 * live_price / npv_per_share - 1.0)) <= 0.005
+    )
 );
 """
 
@@ -76,6 +98,93 @@ def _assert_ratio_convention(live: float, fair: float, stored: float) -> None:
     assert live < fair
     assert stored < 0
     assert abs(stored) < 1.0
+
+
+# --------------------------------------------------------------------------- #
+# Layer 1 + 2: the persist chokepoint derives over_under_pct; writers can't.
+# --------------------------------------------------------------------------- #
+
+
+def _row(live_price: float | None = 10.0, npv_per_share: float = 20.0) -> persist.DcfRunRow:
+    return persist.DcfRunRow(
+        ticker="ZZT",
+        valuation_date=date(2026, 6, 10),
+        horizon_years=5,
+        wacc=0.10,
+        npv=1000.0,
+        npv_per_share=npv_per_share,
+        shares_outstanding=5.0e7,
+        currency="USD",
+        live_price=live_price,
+        live_price_at=None,
+        mos_bar_used=None,
+        assumption_snapshot_json="{}",
+    )
+
+
+def test_dcf_run_row_has_no_over_under_field() -> None:
+    """Writers cannot supply over_under_pct at all -- reintroducing the field
+    would re-open the hand-rolled-convention hole #368 closed."""
+    assert "over_under_pct" not in {f.name for f in dataclasses.fields(persist.DcfRunRow)}
+
+
+def test_upsert_derives_ratio_centrally(repo_root: Path) -> None:
+    with sqlite3.connect(str(repo_root / "data" / "portfolio.db")) as conn:
+        persist.upsert(conn, _row(live_price=10.0, npv_per_share=20.0))
+    live, fair, stored = _stored(repo_root, "ZZT")
+    assert stored == pytest.approx(-0.5)
+    _assert_ratio_convention(live, fair, stored)
+
+
+@pytest.mark.parametrize(
+    ("live_price", "npv_per_share"),
+    [(None, 20.0), (10.0, 0.0), (10.0, -3.0)],
+)
+def test_upsert_stores_null_when_over_under_undefined(
+    repo_root: Path, live_price: float | None, npv_per_share: float
+) -> None:
+    """No live price, or a non-positive fair value (the #291 case) -> NULL."""
+    with sqlite3.connect(str(repo_root / "data" / "portfolio.db")) as conn:
+        persist.upsert(conn, _row(live_price=live_price, npv_per_share=npv_per_share))
+        row = conn.execute("SELECT over_under_pct FROM dcf_runs WHERE ticker = 'ZZT'").fetchone()
+    assert row is not None
+    assert row[0] is None
+
+
+def test_derive_over_under_matches_convention() -> None:
+    assert persist.derive_over_under(12.29, 22.10) == pytest.approx(-0.4439, abs=1e-4)  # NU
+    assert persist.derive_over_under(15.71, 9.66) == pytest.approx(0.6263, abs=1e-4)  # SOFI
+    assert persist.derive_over_under(None, 20.0) is None
+    assert persist.derive_over_under(0.0, 20.0) is None
+    assert persist.derive_over_under(10.0, 0.0) is None
+    assert persist.derive_over_under(10.0, -3.0) is None
+
+
+# --------------------------------------------------------------------------- #
+# Layer 3: the 0076 CHECK blocks raw SQL that bypasses persist.upsert.
+# --------------------------------------------------------------------------- #
+
+
+def test_check_constraint_rejects_percent_scale_raw_insert(repo_root: Path) -> None:
+    """The exact +79.82 shape of the NU incident, written without going through
+    the chokepoint, must die at the DB."""
+    with (
+        sqlite3.connect(str(repo_root / "data" / "portfolio.db")) as conn,
+        pytest.raises(sqlite3.IntegrityError, match="ck_dcf_runs_over_under_ratio"),
+    ):
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, wacc,"
+            " terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
+            " live_price, over_under_pct, assumption_snapshot_json,"
+            " revenue_growths_json, fcf_margin)"
+            " VALUES ('ZZB', '2026-06-09', 10, 0.125, 0, 1.0, 22.10, 1.0, 'USD',"
+            " 12.29, 79.82, '{}', '[]', 0)"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end: each bespoke builder's real persist_dcf_run stores the ratio.
+# --------------------------------------------------------------------------- #
 
 
 def test_bank_writer_stores_decimal_ratio(monkeypatch: pytest.MonkeyPatch, repo_root: Path) -> None:
