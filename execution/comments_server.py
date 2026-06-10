@@ -304,6 +304,21 @@ def create_app(
 
             return Response(render_source_calls_panel(db_path), mimetype="text/html")
 
+        if name == "validation":
+            # Whole-book data-quality state over validation_issues (P3.4) —
+            # range violations, magnitude jumps, source disagreement, unit
+            # mismatches, previously visible only per-ticker in reports.
+            from pipeline.validation_issues_panel import render_validation_panel
+
+            return Response(render_validation_panel(db_path), mimetype="text/html")
+
+        if name == "ticker_settings":
+            # Settings-drawer section (P3.4): per-ticker persistent overrides
+            # (bypass_budget) listed + editable via /api/ticker-settings/<T>.
+            from pipeline.ticker_settings_panel import render_ticker_settings_panel
+
+            return Response(render_ticker_settings_panel(db_path), mimetype="text/html")
+
         if name == "actions":
             # The IR-KPI refresh + repo-maintenance blocks, relocated from the
             # Overview tab to Governance → Actions (master build P1.2). Their
