@@ -44,8 +44,8 @@ def test_render_shell_three_theme_structure() -> None:
     for theme in ("research", "portfolio", "governance"):
         assert f'data-theme-target="{theme}"' in html
         assert f'data-cc-theme="{theme}"' in html  # its sub-tab row exists
-    # Surviving sub-tabs, each tagged with its theme ("actions" hosts the
-    # relocated IR-KPI + maintenance blocks, P1.2).
+    # Surviving sub-tabs, each tagged with its theme. budget/actions left the
+    # nav for the settings drawer in P3.4; validation joined Governance.
     for target in (
         "overview",
         "holding",
@@ -54,10 +54,11 @@ def test_render_shell_three_theme_structure() -> None:
         "thesis_ledger",
         "ir_coverage",
         "source_calls",
-        "budget",
-        "actions",
+        "validation",
     ):
         assert f'data-tab-target="{target}"' in html
+    for drawered in ("budget", "actions"):
+        assert f'data-tab-target="{drawered}"' not in html
     # Overview is inlined verbatim and marked loaded.
     assert "OVERVIEW" in html
     assert 'data-panel="overview" data-loaded="1"' in html
@@ -68,25 +69,34 @@ def test_render_shell_three_theme_structure() -> None:
 
 def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     """Pre-reads / Insiders / Predictions / Decisions died as nav surfaces
-    (master build P1.1); their legacy deep-links must remap client-side."""
+    (master build P1.1) and budget/actions became drawer sections (P3.4);
+    every legacy deep-link must remap client-side."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    for killed in ("prereads", "insiders", "predictions", "decisions"):
+    for killed in ("prereads", "insiders", "predictions", "decisions", "budget", "actions"):
         assert f'data-tab-target="{killed}"' not in html
         assert f'data-panel="{killed}"' not in html
         # The JS REDIRECTS map carries every killed panel.
         assert f"{killed}:" in SHELL_JS.replace("'", "")
     # Python-side map mirrors the JS one (keep-in-sync contract).
-    assert set(_LEGACY_PANEL_REDIRECTS) == {"prereads", "insiders", "predictions", "decisions"}
+    assert set(_LEGACY_PANEL_REDIRECTS) == {
+        "prereads",
+        "insiders",
+        "predictions",
+        "decisions",
+        "budget",
+        "actions",
+    }
     for new_home in _LEGACY_PANEL_REDIRECTS.values():
         assert f'data-tab-target="{new_home}"' in html
+    # The drawer-section legacy ids also auto-open the drawer on arrival.
+    assert "DRAWER_OPENERS = { budget: 1, actions: 1 }" in SHELL_JS
 
 
 def test_render_shell_lazy_endpoints_and_pickers() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     # Lazy panels carry their fetch endpoint and start unloaded.
     assert 'data-endpoint="/api/panel/holdings"' in html
-    assert 'data-endpoint="/api/panel/budget"' in html
-    assert 'data-endpoint="/api/panel/actions"' in html
+    assert 'data-endpoint="/api/panel/validation"' in html
     assert 'data-loaded="0"' in html
     # Only the per-ticker Holding drill-down is dropdown-driven now.
     assert html.count('class="cc-picker"') == 1
@@ -94,6 +104,23 @@ def test_render_shell_lazy_endpoints_and_pickers() -> None:
     # The shell JS + CSS are inlined.
     assert SHELL_JS[:30] in html
     assert SHELL_CSS[:30] in html
+
+
+def test_settings_drawer_structure() -> None:
+    """P3.4: admin is a drawer, not a tab — the topbar toggle, the drawer
+    chrome, and the three lazy sections (budget / ticker settings /
+    maintenance) reusing the existing panel endpoints."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'id="cc-settings-toggle"' in html
+    assert 'id="cc-drawer"' in html
+    assert 'id="cc-drawer-close"' in html
+    # Drawer sections lazy-load the SAME fragments the old tabs served.
+    assert 'class="cc-drawer-sec" open data-endpoint="/api/panel/budget"' in html
+    assert 'data-endpoint="/api/panel/ticker_settings"' in html
+    assert 'data-endpoint="/api/panel/actions"' in html
+    # The drawer endpoints are sections, not nav panels.
+    assert '<section class="cc-panel" data-panel="budget"' not in html
+    assert '<section class="cc-panel" data-panel="actions"' not in html
 
 
 def test_render_shell_overview_not_a_lazy_endpoint() -> None:
@@ -108,5 +135,5 @@ def test_sub_tab_buttons_carry_their_theme() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-tab-target="overview" data-cc-theme="research"' in html
     assert 'data-tab-target="thesis_ledger" data-cc-theme="portfolio"' in html
-    assert 'data-tab-target="budget" data-cc-theme="governance"' in html
-    assert 'data-tab-target="actions" data-cc-theme="governance"' in html
+    assert 'data-tab-target="validation" data-cc-theme="governance"' in html
+    assert 'data-tab-target="ir_coverage" data-cc-theme="governance"' in html

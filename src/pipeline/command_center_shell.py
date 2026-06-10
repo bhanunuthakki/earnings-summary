@@ -81,21 +81,24 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         (
             ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
             ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
-            ("budget", "LLM Spend", "/api/panel/budget", False, False),
-            # The IR-KPI refresh + maintenance blocks, moved out of Overview
-            # (P1.2). Parked here until the P3.4 settings drawer exists.
-            ("actions", "Actions", "/api/panel/actions", False, False),
+            # Whole-book data-quality state over validation_issues (P3.4) —
+            # previously reachable only per-ticker inside workspace reports.
+            ("validation", "Validation", "/api/panel/validation", False, False),
         ),
     ),
 )
 
 # Old tab deep-links keep working: killed panels 302 (client-side) onto their
 # new homes. Mirrored verbatim into SHELL_JS's REDIRECTS map — keep in sync.
+# budget/actions became settings-drawer sections in P3.4: their hashes land on
+# Governance and the JS auto-opens the drawer (see DRAWER_OPENERS in SHELL_JS).
 _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "prereads": "overview",
     "insiders": "overview",
     "predictions": "overview",
     "decisions": "thesis_ledger",
+    "budget": "ir_coverage",
+    "actions": "ir_coverage",
 }
 
 
@@ -135,15 +138,42 @@ def render_shell(
             f'<a href="/digest">Morning digest</a>'
             f'<a href="/feed">Alert feed</a>'
             f"</nav>"
+            f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
+            f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
             f'<span class="cc-stamp">generated {escape(stamp)}</span></div>',
             _render_tab_bar(themes),
             '<main class="cc-panels">',
             _render_panels(flat_tabs, overview_html),
             "</main>",
+            _SETTINGS_DRAWER_HTML,
             f"<script>{SHELL_JS}</script>",
             _DOC_FOOT,
         ]
     )
+
+
+# The settings drawer (P3.4): admin stops being a tab. Each <details> section
+# lazy-loads an existing panel fragment on first open through the same
+# injectHtml used for tabs, so the budget Save buttons and the maintenance
+# blocks' SSE wiring keep working unchanged inside the drawer.
+_SETTINGS_DRAWER_HTML = (
+    '<div class="cc-drawer-scrim" id="cc-drawer-scrim" hidden></div>'
+    '<aside class="cc-drawer" id="cc-drawer" hidden aria-label="Settings">'
+    '<div class="cc-drawer-head"><span>Settings &amp; maintenance</span>'
+    '<button class="cc-drawer-close" id="cc-drawer-close" type="button" '
+    'aria-label="Close">&times;</button></div>'
+    '<div class="cc-drawer-body">'
+    '<details class="cc-drawer-sec" open data-endpoint="/api/panel/budget" data-loaded="0">'
+    "<summary>LLM budgets</summary>"
+    '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
+    '<details class="cc-drawer-sec" data-endpoint="/api/panel/ticker_settings" data-loaded="0">'
+    "<summary>Ticker settings</summary>"
+    '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
+    '<details class="cc-drawer-sec" data-endpoint="/api/panel/actions" data-loaded="0">'
+    "<summary>Maintenance actions &amp; job streams</summary>"
+    '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
+    "</div></aside>"
+)
 
 
 def _render_tab_bar(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
@@ -422,6 +452,32 @@ td.ticker a:hover { text-decoration: underline; }
 .cc-theme-tab { font-size: 14.5px; font-weight: 600; letter-spacing: 0.01em; }
 .cc-subtabs { z-index: 19; }
 .cc-subtabs .cc-tab { font-size: 12.5px; }
+
+/* Settings drawer (P3.4): admin-as-drawer instead of admin-as-tab. */
+.cc-settings-btn { background: var(--panel-alt); color: var(--ink); border: 1px solid var(--border);
+  border-radius: 6px; padding: 5px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  font-family: var(--font-body); margin-right: 14px; }
+.cc-settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 38; }
+.cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 92vw);
+  background: var(--bg); border-left: 1px solid var(--border); z-index: 39;
+  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35); }
+.cc-drawer[hidden], .cc-drawer-scrim[hidden] { display: none; }
+.cc-drawer-head { display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
+.cc-drawer-close { background: transparent; border: none; color: var(--muted);
+  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+.cc-drawer-close:hover { color: var(--ink); }
+.cc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }
+.cc-drawer-sec { margin-bottom: 14px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--panel); }
+.cc-drawer-sec > summary { cursor: pointer; list-style: none; padding: 11px 14px;
+  font-size: 13.5px; font-weight: 600; }
+.cc-drawer-sec > summary::-webkit-details-marker { display: none; }
+.cc-drawer-sec > summary::before { content: '▸ '; color: var(--muted); font-family: var(--font-mono); }
+.cc-drawer-sec[open] > summary::before { content: '▾ '; }
+.cc-drawer-sec-body { padding: 0 14px 12px; }
+.cc-drawer-sec-body .panel { margin-bottom: 0; border: none; padding: 0; background: transparent; }
 """
 ).strip()
 
@@ -446,8 +502,13 @@ SHELL_JS = r"""
     prereads: 'overview',
     insiders: 'overview',
     predictions: 'overview',
-    decisions: 'thesis_ledger'
+    decisions: 'thesis_ledger',
+    budget: 'ir_coverage',
+    actions: 'ir_coverage'
   };
+  // Legacy panels that became settings-drawer sections (P3.4): their old
+  // deep-links also auto-open the drawer after landing on Governance.
+  var DRAWER_OPENERS = { budget: 1, actions: 1 };
 
   function firstPanelOfTheme(tid) {
     for (var i = 0; i < tabs.length; i++) {
@@ -572,8 +633,63 @@ SHELL_JS = r"""
 
   function onHashChange() {
     var p = parseHash();
+    var wasDrawerPanel = !!DRAWER_OPENERS[p.panel];
     if (REDIRECTS[p.panel]) { p = { panel: REDIRECTS[p.panel], ticker: null }; }
     activate(p.panel, p.ticker);
+    if (wasDrawerPanel) openDrawer();
+  }
+
+  // ----- Settings drawer (P3.4) -----
+  var drawer = document.getElementById('cc-drawer');
+  var drawerScrim = document.getElementById('cc-drawer-scrim');
+
+  function loadDrawerSection(sec) {
+    if (!sec || sec.getAttribute('data-loaded') === '1') return;
+    var ep = sec.getAttribute('data-endpoint');
+    var body = sec.querySelector('.cc-drawer-sec-body');
+    if (!ep || !body) return;
+    sec.setAttribute('data-loaded', '1');
+    fetch(ep).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (html) {
+      injectHtml(body, html);
+    }).catch(function (e) {
+      sec.setAttribute('data-loaded', '0');
+      body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+    });
+  }
+
+  function openDrawer() {
+    if (!drawer) return;
+    drawer.hidden = false;
+    if (drawerScrim) drawerScrim.hidden = false;
+    var secs = drawer.querySelectorAll('.cc-drawer-sec[open]');
+    for (var i = 0; i < secs.length; i++) loadDrawerSection(secs[i]);
+  }
+
+  function closeDrawer() {
+    if (drawer) drawer.hidden = true;
+    if (drawerScrim) drawerScrim.hidden = true;
+  }
+
+  var settingsBtn = document.getElementById('cc-settings-toggle');
+  if (settingsBtn) settingsBtn.addEventListener('click', function () {
+    if (drawer && drawer.hidden) openDrawer(); else closeDrawer();
+  });
+  var drawerClose = document.getElementById('cc-drawer-close');
+  if (drawerClose) drawerClose.addEventListener('click', closeDrawer);
+  if (drawerScrim) drawerScrim.addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') closeDrawer();
+  });
+  if (drawer) {
+    var allSecs = drawer.querySelectorAll('.cc-drawer-sec');
+    for (var di = 0; di < allSecs.length; di++) {
+      allSecs[di].addEventListener('toggle', function (ev) {
+        if (ev.target.open) loadDrawerSection(ev.target);
+      });
+    }
   }
 
   tabs.forEach(function (t) {
