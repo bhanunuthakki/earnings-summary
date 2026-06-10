@@ -324,9 +324,7 @@ def _render_upcoming(
             shown = prep_notes[:_PREP_NOTES_PER_TICKER]
             body.write('<ul class="prep-notes">')
             for n in shown:
-                body.write(
-                    f'<li><span class="oi-kind">{_esc(n.kind)}</span> {_esc(n.body)}</li>'
-                )
+                body.write(f'<li><span class="oi-kind">{_esc(n.kind)}</span> {_esc(n.body)}</li>')
             overflow = len(prep_notes) - len(shown)
             if overflow > 0:
                 body.write(f'<li class="muted">+{overflow} more open item(s)</li>')

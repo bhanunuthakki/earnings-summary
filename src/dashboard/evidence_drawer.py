@@ -235,7 +235,9 @@ def _render_related_notes_section(brief_provenance: Mapping[str, object] | None)
     raw = brief_provenance.get("open_notes")
     if not isinstance(raw, list):
         return ""
-    notes = [cast("Mapping[str, object]", n) for n in cast("list[object]", raw) if isinstance(n, dict)]
+    notes = [
+        cast("Mapping[str, object]", n) for n in cast("list[object]", raw) if isinstance(n, dict)
+    ]
     if not notes:
         return ""
     rows: list[str] = [
