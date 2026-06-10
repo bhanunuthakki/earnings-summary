@@ -409,6 +409,60 @@ def _run_ir_documents(ticker: str) -> int:
     return 0 if result.status is not TickerStatus.FAILED else 1
 
 
+def _lookup_list_type(ticker: str) -> str | None:
+    """Return tracked_companies.list_type for the ticker, or None if absent.
+
+    Mirrors the list_type read in `_set_processing_tier`. Used to gate the
+    Say-Do onboarding step to evaluation-list names.
+    """
+    if not _DB_PATH.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(_DB_PATH), timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT list_type FROM tracked_companies WHERE ticker = ? LIMIT 1",
+            (ticker,),
+        ).fetchone()
+        conn.close()
+        return row["list_type"] if row is not None else None
+    except sqlite3.Error as exc:
+        log.warning({"event": "lookup_list_type_failed", "ticker": ticker, "error": str(exc)})
+        return None
+
+
+def _run_saydo(ticker: str) -> int:
+    """Generate per-quarter transcript summaries + Say-Do pairs for a ticker.
+
+    Closes the gap that leaves §6 Say-Do empty for freshly-onboarded names:
+    transcripts are registered processed=True at ingest without a summary ever
+    being written, so the normal pipeline never summarizes them. This runs
+    `process_ir_documents.py --regenerate-missing` (cache-aware — only writes
+    summaries that are absent, never re-bills existing ones) then
+    `build_saydo_pairs.py` to pair consecutive quarters into the §6 cards.
+
+    Returns the first non-zero subprocess exit code, or 0 on success.
+    """
+    process_ir = PROJECT_ROOT / "execution" / "process_ir_documents.py"
+    build_saydo = PROJECT_ROOT / "execution" / "build_saydo_pairs.py"
+    rc = subprocess.run(
+        [sys.executable, str(process_ir), "--ticker", ticker, "--regenerate-missing"],
+        cwd=str(PROJECT_ROOT),
+    ).returncode
+    if rc != 0:
+        return rc
+    return subprocess.run(
+        [sys.executable, str(build_saydo), "--ticker", ticker],
+        cwd=str(PROJECT_ROOT),
+    ).returncode
+
+
+def _saydo_should_run(list_type: str | None, *, force: bool) -> bool:
+    """Say-Do generation runs for evaluation-list names (the gap this closes)
+    or for any name when forced (e.g. backfilling an already-onboarded ticker)."""
+    return force or list_type == "evaluation"
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -431,6 +485,17 @@ def main() -> int:
         "--skip-ir",
         action="store_true",
         help="Skip the IR-document discover+fetch step (e.g. no `ir` extra installed)",
+    )
+    ap.add_argument(
+        "--skip-saydo",
+        action="store_true",
+        help="Skip the Say-Do step (per-quarter transcript summaries + pairwise cards).",
+    )
+    ap.add_argument(
+        "--force-saydo",
+        action="store_true",
+        help="Run the Say-Do step regardless of list_type (default: evaluation "
+        "names only). Useful for backfilling an already-onboarded name.",
     )
     ap.add_argument(
         "--industry-template",
@@ -554,6 +619,28 @@ def main() -> int:
             print(
                 f"[onboard] {ticker} ir_documents returned rc={ir_rc}; "
                 f"continuing (IR discovery is best-effort)",
+                flush=True,
+            )
+
+    # Say-Do: per-quarter transcript summaries + pairwise §6 cards. Gated to
+    # evaluation-list names (per onboarding policy) unless --force-saydo. Runs
+    # after transcripts are ingested + registered so --regenerate-missing finds
+    # them. Best-effort — LLM-bound and tolerant of coverage gaps.
+    if not args.skip_saydo:
+        list_type = _lookup_list_type(ticker)
+        if _saydo_should_run(list_type, force=args.force_saydo):
+            print(f"[onboard] {ticker} stage=saydo (list_type={list_type})", flush=True)
+            saydo_rc = _run_saydo(ticker)
+            if saydo_rc != 0:
+                print(
+                    f"[onboard] {ticker} saydo returned rc={saydo_rc}; "
+                    f"continuing (Say-Do generation is best-effort)",
+                    flush=True,
+                )
+        else:
+            print(
+                f"[onboard] {ticker} stage=saydo SKIPPED "
+                f"(list_type={list_type}, not evaluation; use --force-saydo to override)",
                 flush=True,
             )
 

@@ -23,6 +23,7 @@ import json
 import argparse
 import logging
 from pathlib import Path
+from typing import Any, cast
 
 # Paths
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -200,9 +201,29 @@ def run_for_ticker(
     quarter: str | None = None,
     year: str | None = None,
     dry_run: bool = False,
+    regenerate_missing: bool = False,
 ) -> None:
     ticker = resolve_ticker(ticker).upper()
-    docs = index_manager.get_unprocessed_documents(ticker)
+    if regenerate_missing:
+        # Self-heal: re-include every registered quarterly doc regardless of its
+        # `processed` flag. A transcript registered processed=True at ingest
+        # (index_manager.register_transcript) whose `_summary.txt` was never
+        # written is otherwise skipped forever by get_unprocessed_documents —
+        # the gap that leaves §6 Say-Do empty for freshly-onboarded names.
+        # process_document early-returns on cache-hit, so docs that already have
+        # a summary are skipped (no re-billing); only missing artifacts regenerate.
+        docs = [
+            d
+            for d in cast(
+                list[dict[str, Any]],
+                index_manager.get_documents_for_ticker(ticker),
+            )
+            if d.get("doc_type") in DOC_TYPE_CONFIG
+            and d.get("doc_type") != "event"
+            and d.get("local_path")
+        ]
+    else:
+        docs = index_manager.get_unprocessed_documents(ticker)
 
     if quarter:
         docs = [d for d in docs if d["quarter"].upper() == quarter.upper()]
@@ -211,7 +232,8 @@ def run_for_ticker(
 
     # Events: include unless the caller filtered by quarter (events have no quarter).
     # `--year` filters events by event_date year so users can scope to a specific period.
-    if not quarter:
+    # regenerate_missing intentionally scopes to quarterly docs (the Say-Do inputs).
+    if not quarter and not regenerate_missing:
         events = index_manager.get_unprocessed_events(ticker)
         if year:
             events = [e for e in events if e.get("event_date", "").startswith(str(year))]
@@ -239,6 +261,15 @@ def main() -> None:
     parser.add_argument("--quarter", type=str, help="Filter to a specific quarter (e.g. Q3)")
     parser.add_argument("--year", type=str, help="Filter to a specific year (e.g. 2025)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be processed without calling LLM")
+    parser.add_argument(
+        "--regenerate-missing",
+        action="store_true",
+        help="Re-include every registered quarterly doc whose summary cache file "
+        "is absent, even if marked processed. Self-heals transcripts registered "
+        "processed=True without a summary ever being written (the gap that leaves "
+        "§6 Say-Do empty). Never re-bills a doc that already has a cached summary. "
+        "Intended with --ticker.",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -251,9 +282,9 @@ def main() -> None:
             print("No unprocessed documents found.")
             return
         for t in tickers:
-            run_for_ticker(t, args.quarter, args.year, args.dry_run)
+            run_for_ticker(t, args.quarter, args.year, args.dry_run, args.regenerate_missing)
     else:
-        run_for_ticker(args.ticker, args.quarter, args.year, args.dry_run)
+        run_for_ticker(args.ticker, args.quarter, args.year, args.dry_run, args.regenerate_missing)
 
 
 if __name__ == "__main__":

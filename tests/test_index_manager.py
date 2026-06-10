@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -169,6 +170,41 @@ def test_legacy_transcript_index_filepath_also_canonicalized(
     legacy = json.loads(Path(index_manager.TRANSCRIPT_INDEX_PATH).read_text())
     entry = legacy["MELI_2026_Q1"]
     assert entry["filepath"] == "transcripts/processed/MELI_Q1_2026.txt"
+
+
+def test_get_documents_for_ticker_includes_processed_docs(
+    isolated_indexes: Path,
+) -> None:
+    """get_documents_for_ticker returns docs regardless of the `processed` flag.
+
+    Transcripts are mirrored into document_index with processed=True at ingest
+    ('legacy flow already processed'). The --regenerate-missing summary path
+    relies on THIS accessor to re-find them — get_unprocessed_documents excludes
+    them, which is exactly why their `_summary.txt` (and §6 Say-Do) never gets
+    generated for freshly-onboarded names.
+    """
+    f = isolated_indexes / "transcripts" / "processed" / "UBER_Q1_2026.txt"
+    f.write_text("body", encoding="utf-8")
+    index_manager.register_transcript(
+        ticker="UBER",
+        year=2026,
+        quarter="Q1",
+        source="MANUAL",
+        filepath="UBER_Q1_2026.txt",
+    )
+
+    doc = cast(
+        "dict[str, object] | None",
+        index_manager.has_document("UBER", 2026, "Q1", "transcript"),
+    )
+    assert doc is not None and doc["processed"] is True
+
+    # The default summary-pipeline accessor excludes the processed doc ...
+    assert index_manager.get_unprocessed_documents("UBER") == []
+    # ... but get_documents_for_ticker (what the fix reuses) returns it.
+    all_docs = cast("list[dict[str, object]]", index_manager.get_documents_for_ticker("UBER"))
+    assert [d["doc_type"] for d in all_docs] == ["transcript"]
+    assert all_docs[0]["processed"] is True
 
 
 def test_canonicalize_helper_uses_forward_slashes_cross_platform(
