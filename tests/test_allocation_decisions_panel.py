@@ -36,10 +36,10 @@ from integrations.portfolio_tracker_client import (  # noqa: E402
 )
 from pipeline.allocation_decisions_panel import (  # noqa: E402
     SizingAuditRow,
-    score_row,
     build_decisions_timeline,
     build_sizing_audit_rows,
     compose_decisions_page,
+    score_row,
 )
 from user_state.ledger import append_entry  # noqa: E402
 from user_state.notes import create_note  # noqa: E402
