@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
-from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from models.facts import Currency, FactLocator, FinancialFact, FiscalPeriodType, Unit
 from pipeline.restatement_detector import insert_with_restatement_detection
 
 
@@ -43,6 +43,7 @@ def extract_facts_with_spec(
     source_doc_id: int,
     line_item_spec: list[tuple[str, str, Unit]],
     period_type_override: FiscalPeriodType | None = None,
+    record_index: int | None = None,
 ) -> list[FinancialFact]:
     """Convert a record to FinancialFact rows using a (fmp_field, canonical, unit) spec.
 
@@ -53,6 +54,10 @@ def extract_facts_with_spec(
     the TTM extractor path: FMP's `_ttm.json` files have period='Q1'/'Q3'/etc
     (the latest quarter ending the trailing window) but the value is TTM —
     callers detect that via file_path and pass FiscalPeriodType.TTM here.
+
+    `record_index`: the record's position in the source JSON array. When given,
+    each fact carries a `FactLocator(json_path="[<i>].<fmp_field>")` pointing at
+    the exact cell of the cached endpoint response (data_provenance.md §7).
     """
     period_end = datetime.fromisoformat(record.date)
     period_type = period_type_override if period_type_override is not None else FiscalPeriodType(record.period)
@@ -63,6 +68,11 @@ def extract_facts_with_spec(
         value = getattr(record, fmp_field)
         if value is None:
             continue
+        locator = (
+            FactLocator(json_path=f"[{record_index}].{fmp_field}")
+            if record_index is not None
+            else None
+        )
         facts.append(
             FinancialFact(
                 ticker=record.symbol.upper(),
@@ -74,6 +84,7 @@ def extract_facts_with_spec(
                 unit=unit,
                 source_doc_id=source_doc_id,
                 confidence=1.0,
+                locator=locator,
             )
         )
     return facts

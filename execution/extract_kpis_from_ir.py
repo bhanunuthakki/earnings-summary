@@ -21,12 +21,19 @@ Manifest JSON shape:
           "source_doc_id": 13123,
           "values": [
             {"name": "Revenue Growth (FXN)", "value": "0.34",
-             "unit": "ratio", "confidence": 0.95},
+             "unit": "ratio", "confidence": 0.95,
+             "source_excerpt": "FX-neutral revenue grew 34% YoY",
+             "locator": {"pdf_page": 7}},
             ...
           ]
         }
       ]
     }
+
+`source_excerpt` (verbatim quote supporting the value) and `locator`
+(sub-document position, e.g. the PDF page the value was read from — see
+data_provenance.md §7) are optional per value; populate them when reading
+the PDF so the persisted kpi_facts rows carry P3.2 provenance.
 """
 
 from __future__ import annotations

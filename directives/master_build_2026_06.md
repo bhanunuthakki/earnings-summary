@@ -164,7 +164,7 @@ demands it (note the split in the Decision log).
   filing_date (backfilled where derivable); fact tables += nullable
   `locator` JSON (10-K section key, transcript line ids, PDF page, FMP JSON
   path). Migration + backfill CLI.
-- [ ] **P3.2 Extractor wiring.** Fact writers populate locators going
+- [x] **P3.2 Extractor wiring.** *(#371)* Fact writers populate locators going
   forward; `source_excerpt` systematically on transcript/filing-sourced
   KPI facts.
 - [ ] **P3.3 Source chips + drawer.** Per-number source chip in Financials
