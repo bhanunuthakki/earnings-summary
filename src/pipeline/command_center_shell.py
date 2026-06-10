@@ -14,12 +14,14 @@ Design — thin shell + lazy panels:
   it in the DOM. Inline ``<script>`` blocks inside a fragment (e.g. the budget
   Save-button wiring) are re-executed after injection — ``innerHTML`` alone does
   not run them.
-* **Pre-reads + Insiders are dropdown-driven** (``cc-picker``): the panel ships an
-  "All holdings" view and re-fetches ``endpoint?ticker=<T>`` server-side on change
-  (rereads are ~8 KB each and the insider scan is heavy, so client-side filtering
-  would defeat the lazy shell). The same pattern serves the per-ticker Holding tab.
-* **Deep-linkable** via ``location.hash`` — ``#holdings``, ``#prereads=NU``,
-  ``#holding=NU`` — with ``hashchange`` driving back/forward.
+* **Three-theme IA (master build P1.1)**: a primary theme row — Research /
+  Portfolio / Governance — with a sub-tab row per theme. Pre-reads, Insiders,
+  Predictions, and the Decisions tab were removed from the nav; their legacy
+  hashes remap (see ``_LEGACY_PANEL_REDIRECTS``).
+* **The Holding drill-down is dropdown-driven** (``cc-picker``): re-fetches
+  ``endpoint?ticker=<T>`` server-side on change.
+* **Deep-linkable** via ``location.hash`` — ``#holdings``, ``#holding=NU`` —
+  with ``hashchange`` driving back/forward; killed-panel hashes redirect.
 
 The standalone ``/analytical`` and ``/ticker/<t>`` pages remain as working
 deep-link targets (zero rewrite); this shell is purely additive.
@@ -37,27 +39,59 @@ from html import escape
 from pipeline.dashboard_status import DashboardRow
 from ui.tokens import FAVICON_LINK, palette_css
 
-# Tab order. Each entry: (panel_id, label, endpoint, is_picker, picker_required).
-# ``overview`` is inlined (no endpoint). The picker tabs re-fetch ``endpoint?ticker=``
-# on dropdown change; ``picker_required`` panels (the per-ticker Holding drill-down)
-# show a "pick a holding" prompt until one is chosen, while filter pickers
-# (prereads, insiders) default to the cross-ticker "All" view. The trigger-ladder
-# tab keeps panel id ``holdings`` (matching ``/api/panel/holdings``) but is labelled
-# "Triggers" so it reads distinctly from the singular "Holding" drill-down.
-_TABS: tuple[tuple[str, str, str | None, bool, bool], ...] = (
-    ("overview", "Overview", None, False, False),
-    ("portfolio", "Portfolio", "/api/panel/portfolio", False, False),
-    ("holdings", "Triggers", "/api/panel/holdings", False, False),
-    ("holding", "Holding", "/api/panel/holding", True, True),
-    ("prereads", "Pre-reads", "/api/panel/prereads", True, False),
-    ("insiders", "Insiders", "/api/panel/insiders", True, False),
-    ("predictions", "Predictions", "/api/panel/predictions", False, False),
-    ("decisions", "Decisions", "/api/panel/decisions", False, False),
-    ("thesis_ledger", "Thesis Ledger", "/api/panel/thesis_ledger", False, False),
-    ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
-    ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
-    ("budget", "LLM Spend", "/api/panel/budget", False, False),
+# Three-theme information architecture (master build P1.1): a primary theme
+# row (Research / Portfolio / Governance) with a sub-tab row per theme.
+# Sub-tab entries keep the original shape — (panel_id, label, endpoint,
+# is_picker, picker_required) — so the lazy-panel renderer and the JS
+# activation contract are unchanged. ``overview`` is inlined (no endpoint);
+# ``picker_required`` panels (the per-ticker Holding drill-down) show a
+# "pick a holding" prompt until one is chosen. The trigger-ladder sub-tab
+# keeps panel id ``holdings`` (matching ``/api/panel/holdings``) but is
+# labelled "Triggers" so it reads distinctly from the singular "Holding".
+#
+# Killed as nav surfaces per the directive: Pre-reads, Insiders, Predictions,
+# and the Decisions tab (their legacy deep-links remap — see
+# _LEGACY_PANEL_REDIRECTS; insider signals remain inside the per-ticker
+# report's Exec-Comp section, and the decisions record folds into the
+# Portfolio theme in P2.2).
+_SubTab = tuple[str, str, str | None, bool, bool]
+_THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
+    (
+        "research",
+        "Research",
+        (
+            ("overview", "Overview", None, False, False),
+            ("holding", "Holding", "/api/panel/holding", True, True),
+        ),
+    ),
+    (
+        "portfolio",
+        "Portfolio",
+        (
+            ("portfolio", "Live portfolio", "/api/panel/portfolio", False, False),
+            ("holdings", "Triggers", "/api/panel/holdings", False, False),
+            ("thesis_ledger", "Thesis Ledger", "/api/panel/thesis_ledger", False, False),
+        ),
+    ),
+    (
+        "governance",
+        "Governance",
+        (
+            ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
+            ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
+            ("budget", "LLM Spend", "/api/panel/budget", False, False),
+        ),
+    ),
 )
+
+# Old tab deep-links keep working: killed panels 302 (client-side) onto their
+# new homes. Mirrored verbatim into SHELL_JS's REDIRECTS map — keep in sync.
+_LEGACY_PANEL_REDIRECTS: dict[str, str] = {
+    "prereads": "overview",
+    "insiders": "overview",
+    "predictions": "overview",
+    "decisions": "thesis_ledger",
+}
 
 
 def render_overview_panel(
@@ -77,15 +111,16 @@ def render_shell(
     *,
     overview_html: str,
     generated_at: datetime | None = None,
-    tabs: tuple[tuple[str, str, str | None, bool, bool], ...] = _TABS,
+    themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = _THEMES,
 ) -> str:
     """Render the full command-center document.
 
     ``overview_html`` is the pre-built Overview panel (see ``render_overview_panel``)
-    inlined for first paint; every other tab is an empty placeholder that
+    inlined for first paint; every other sub-tab is an empty placeholder that
     lazy-loads from its ``/api/panel/<name>`` endpoint on first activation.
     """
     stamp = (generated_at or datetime.now(UTC)).isoformat(timespec="seconds")
+    flat_tabs = tuple(t for _tid, _tlabel, subs in themes for t in subs)
     return "".join(
         [
             _DOC_HEAD,
@@ -95,9 +130,9 @@ def render_shell(
             f'<a href="/feed">Alert feed</a>'
             f"</nav>"
             f'<span class="cc-stamp">generated {escape(stamp)}</span></div>',
-            _render_tab_bar(tabs),
+            _render_tab_bar(themes),
             '<main class="cc-panels">',
-            _render_panels(tabs, overview_html),
+            _render_panels(flat_tabs, overview_html),
             "</main>",
             f"<script>{SHELL_JS}</script>",
             _DOC_FOOT,
@@ -105,14 +140,26 @@ def render_shell(
     )
 
 
-def _render_tab_bar(tabs: tuple[tuple[str, str, str | None, bool, bool], ...]) -> str:
-    out = ['<nav class="cc-tabs" role="tablist">']
-    for pid, label, _endpoint, _picker, _required in tabs:
+def _render_tab_bar(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
+    """Primary theme row + one sub-tab row per theme (hidden until its theme is
+    active; the JS toggles visibility). Sub-tab buttons keep the exact
+    ``cc-tab``/``data-tab-target`` contract the activation JS has always used."""
+    out = ['<nav class="cc-tabs cc-theme-row" role="tablist">']
+    for tid, tlabel, _subs in themes:
         out.append(
-            f'<button class="cc-tab" type="button" role="tab" '
-            f'data-tab-target="{escape(pid)}">{escape(label)}</button>'
+            f'<button class="cc-tab cc-theme-tab" type="button" role="tab" '
+            f'data-theme-target="{escape(tid)}">{escape(tlabel)}</button>'
         )
     out.append("</nav>")
+    for tid, _tlabel, subs in themes:
+        out.append(f'<nav class="cc-tabs cc-subtabs" data-cc-theme="{escape(tid)}" hidden>')
+        for pid, label, _endpoint, _picker, _required in subs:
+            out.append(
+                f'<button class="cc-tab" type="button" role="tab" '
+                f'data-tab-target="{escape(pid)}" data-cc-theme="{escape(tid)}">'
+                f"{escape(label)}</button>"
+            )
+        out.append("</nav>")
     return "".join(out)
 
 
@@ -362,6 +409,13 @@ td.ticker a:hover { text-decoration: underline; }
 .cc-report-embed { padding-bottom: 8px; }
 .cc-report-frame { width: 100%; height: calc(100vh - 220px); min-height: 560px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-top: 6px; }
+
+/* Three-theme nav (master build P1.1): primary theme row + per-theme sub-tab
+   rows. Sub-tab rows reuse .cc-tab styling at a smaller size. */
+.cc-theme-row { padding-top: 2px; }
+.cc-theme-tab { font-size: 14.5px; font-weight: 600; letter-spacing: 0.01em; }
+.cc-subtabs { z-index: 19; }
+.cc-subtabs .cc-tab { font-size: 12.5px; }
 """
 ).strip()
 
@@ -372,8 +426,31 @@ td.ticker a:hover { text-decoration: underline; }
 SHELL_JS = r"""
 (function () {
   var TICKERS = null;  // cached /api/tickers payload
-  var tabs = Array.prototype.slice.call(document.querySelectorAll('.cc-tab'));
+  // Sub-tab buttons only — theme buttons share .cc-tab styling but carry
+  // data-theme-target instead of data-tab-target.
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.cc-tab[data-tab-target]'));
+  var themeTabs = Array.prototype.slice.call(document.querySelectorAll('.cc-theme-tab'));
+  var subnavs = Array.prototype.slice.call(document.querySelectorAll('.cc-subtabs'));
   var panels = Array.prototype.slice.call(document.querySelectorAll('.cc-panel'));
+  var lastPanelByTheme = {};  // remember each theme's last-active sub-tab
+
+  // Killed nav surfaces (P1.1) — legacy hashes land on their new homes.
+  // Kept in sync with _LEGACY_PANEL_REDIRECTS in the Python module.
+  var REDIRECTS = {
+    prereads: 'overview',
+    insiders: 'overview',
+    predictions: 'overview',
+    decisions: 'thesis_ledger'
+  };
+
+  function firstPanelOfTheme(tid) {
+    for (var i = 0; i < tabs.length; i++) {
+      if (tabs[i].getAttribute('data-cc-theme') === tid) {
+        return tabs[i].getAttribute('data-tab-target');
+      }
+    }
+    return null;
+  }
 
   function panelById(id) {
     for (var i = 0; i < panels.length; i++) {
@@ -446,9 +523,21 @@ SHELL_JS = r"""
     var panel = panelById(panelId);
     if (!panel) { panel = panelById('overview'); panelId = 'overview'; ticker = null; }
     panels.forEach(function (p) { p.hidden = (p !== panel); });
+    var activeTheme = null;
     tabs.forEach(function (t) {
-      t.classList.toggle('active', t.getAttribute('data-tab-target') === panelId);
+      var on = t.getAttribute('data-tab-target') === panelId;
+      t.classList.toggle('active', on);
+      if (on) activeTheme = t.getAttribute('data-cc-theme');
     });
+    if (activeTheme) {
+      themeTabs.forEach(function (t) {
+        t.classList.toggle('active', t.getAttribute('data-theme-target') === activeTheme);
+      });
+      subnavs.forEach(function (n) {
+        n.hidden = (n.getAttribute('data-cc-theme') !== activeTheme);
+      });
+      lastPanelByTheme[activeTheme] = panelId;
+    }
     var isPicker = panel.getAttribute('data-picker') === '1';
     var loaded = panel.getAttribute('data-loaded') === '1';
     if (isPicker) {
@@ -477,12 +566,21 @@ SHELL_JS = r"""
 
   function onHashChange() {
     var p = parseHash();
+    if (REDIRECTS[p.panel]) { p = { panel: REDIRECTS[p.panel], ticker: null }; }
     activate(p.panel, p.ticker);
   }
 
   tabs.forEach(function (t) {
     t.addEventListener('click', function () {
       location.hash = '#' + t.getAttribute('data-tab-target');
+    });
+  });
+
+  themeTabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      var tid = t.getAttribute('data-theme-target');
+      var target = lastPanelByTheme[tid] || firstPanelOfTheme(tid);
+      if (target) location.hash = '#' + target;
     });
   });
 
