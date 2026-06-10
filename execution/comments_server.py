@@ -56,6 +56,7 @@ except ImportError:  # pragma: no cover - install hint
 
 import sqlite3  # noqa: E402
 
+from approve_queued_action import approve_and_apply, dismiss_action  # noqa: E402
 from process_report_comments import (  # noqa: E402
     _resolve_latest_report_date,
     preview_thesis_edits,
@@ -117,6 +118,29 @@ def _cors_allow_origin(origin: str) -> str | None:
         if o.strip()
     ]
     return origin if origin in whitelist else None
+
+
+def _referer_back_path(referer: str) -> str | None:
+    """The relative ``path?query`` an ``/approve`` click bounces back to,
+    derived from its Referer — or None when the Referer is absent,
+    unparseable, or cross-site (judged by the same loopback/whitelist rule
+    as CORS, via ``_cors_allow_origin``). Scheme and host never survive into
+    the redirect target (and ``//host``-style paths are rejected), so a
+    crafted Referer can't turn ``/approve`` into an open redirect."""
+    if not referer:
+        return None
+    try:
+        parsed = urllib.parse.urlparse(referer)
+    except ValueError:
+        return None
+    if (parsed.scheme or parsed.netloc) and _cors_allow_origin(
+        f"{parsed.scheme}://{parsed.netloc}"
+    ) is None:
+        return None
+    path = parsed.path or "/"
+    if not path.startswith("/") or path[1:2] in ("/", "\\"):
+        return None
+    return path + (f"?{parsed.query}" if parsed.query else "")
 
 
 def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None]:
@@ -442,6 +466,44 @@ def create_app(
         """Alias for the alert feed (the alerts surface), preserving any filters."""
         qs = request.query_string.decode()
         return redirect("/feed" + (f"?{qs}" if qs else ""))
+
+    @app.route("/approve", methods=["GET"])
+    def approve_or_dismiss_action():
+        """One-click approve / dismiss for the queued-action cards (digest,
+        feed, Holding rail). ``?action_id=N`` approves — writes the downstream
+        thesis-ledger / sizing-intent row, then marks the action applied, via
+        the same shared core as the approve CLI; ``&dismiss=1`` cancels
+        instead (no ledger write). 303-redirects back to the surface the
+        click came from (Referer path, else /feed) so the re-rendered card
+        shows its new status pill.
+
+        A state-changing GET (the cards are plain ``<a>`` links), so it
+        carries the same-site guard the JSON-POST CORS defense can't provide
+        for top-level navigations: a cross-site Referer or
+        ``Sec-Fetch-Site: cross-site`` gets 403, while no-Referer requests
+        (address bar, curl) stay usable."""
+        raw_id = request.args.get("action_id", "")
+        try:
+            action_id = int(raw_id)
+        except ValueError:
+            return ({"error": f"action_id must be an integer, got {raw_id!r}"}, 400)
+        referer = request.headers.get("Referer", "")
+        back = _referer_back_path(referer)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (referer and back is None):
+            return ({"error": "cross-site approve/dismiss rejected"}, 403)
+        try:
+            if request.args.get("dismiss") in ("1", "true", "True"):
+                dismiss_action(action_id, db_path=db_path)
+            else:
+                approve_and_apply(action_id, db_path=db_path)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        except (ValueError, KeyError) as exc:
+            # Status conflict (stale or double-clicked link) or a malformed
+            # payload — 409 either way; the message says which. The CLI hint
+            # on the card remains the fallback path.
+            return ({"error": str(exc)}, 409)
+        return redirect(back or "/feed", code=303)
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
 

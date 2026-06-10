@@ -284,3 +284,14 @@ demands it (note the split in the Decision log).
   source chips wired where provenance already flows (financial highlights);
   remaining panels join as their data acquires locators (P4.3). Renderer
   diff is net-negative (-65 lines) despite the two new helpers.
+- 2026-06-10 (/approve follow-up, #380): the dead approve/dismiss links
+  noted at P1.3 are live — GET /approve on comments_server calls the
+  approve CLI's newly-extracted shared core (approve_and_apply /
+  dismiss_action: same ledger/sizing side effects, one code path), then
+  303s back to the Referer surface (path+query only) or /feed; card hrefs
+  made absolute so all three surfaces resolve identically. State-changing
+  GET ⇒ the route carries its own same-site guard (cross-site Referer /
+  Sec-Fetch-Site → 403; no-Referer stays usable). Fixed en route: a stale
+  double-approve no longer appends a duplicate row to the append-only
+  ledger (status pre-check before the downstream dispatch — latent in the
+  CLI). P4.4/P6.1 no longer owe this.

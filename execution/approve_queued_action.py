@@ -1,8 +1,10 @@
 """One-click approve / dismiss for queued actions and their parent alerts.
 
-The dashboard renders ``<a href="approve?...">`` style links plus a
-"copy and run this" CLI hint; this script is the server-side path the
-hint invokes. Static-HTML dashboard today, real web server much later.
+The dashboard's queued-action cards render ``<a href="/approve?...">``
+links plus a "copy and run this" CLI hint. This module is both halves:
+the CLI the hint invokes, and the shared core (``approve_and_apply`` /
+``dismiss_action``) behind the live server's ``GET /approve`` route
+(execution/comments_server.py) — one code path, identical semantics.
 
 Modes (mutually exclusive — pass exactly one selector):
 
@@ -42,6 +44,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 from alerts import (  # noqa: E402
+    ACTION_STATUS_PENDING,
     QueuedActionRow,
     apply_action,
     cancel_action,
@@ -124,12 +127,15 @@ def main() -> int:
 
 
 # ----------------------------------------------------------------------------
-# Mode handlers
+# Shared core — called by the CLI handlers below AND by the dashboard's
+# GET /approve route (execution/comments_server.py), so the web links and
+# the CLI hint can never diverge on semantics.
 # ----------------------------------------------------------------------------
 
 
-def _do_approve_action(action_id: int, db_path: Path | None) -> int:
-    """Approve, apply, and write the downstream user-state row.
+def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
+    """Approve queued_action ``action_id``: write its downstream user-state
+    row, then mark it 'applied'. Returns a one-line summary.
 
     Order of operations:
       1. Fetch the queued_action (raises LookupError if missing).
@@ -138,37 +144,75 @@ def _do_approve_action(action_id: int, db_path: Path | None) -> int:
          apply_action so a downstream-write failure leaves the queued
          action 'pending' (the user can retry).
       3. Mark the queued_action 'applied' via apply_action.
+
+    Raises LookupError (unknown id), ValueError (already applied/cancelled,
+    or unsupported action_kind), KeyError (malformed payload).
     """
     qa = _fetch_action_or_raise(action_id, db_path)
+
+    if qa.status != ACTION_STATUS_PENDING:
+        # Surface the status conflict BEFORE the downstream dispatch. The
+        # ledger / sizing tables are append-only, so writing first would turn
+        # a stale double-click into a duplicate downstream row that
+        # apply_action's own conflict check can no longer prevent.
+        raise ValueError(
+            f"queued_actions id={qa.id} status is {qa.status!r}, "
+            f"cannot transition (expected {ACTION_STATUS_PENDING!r})"
+        )
 
     if qa.action_kind == "sizing_update":
         intent = _write_sizing_intent(qa, db_path)
         applied = apply_action(action_id, db_path=db_path)
-        _print_sizing_summary(applied, intent)
-        return 0
+        return (
+            f"Approved queued_action id={applied.id} (action_kind=sizing_update). "
+            f"position_sizing_intent id={intent.id} written: "
+            f"{intent.ticker} · {intent.intent_kind} · "
+            f"value={intent.intent_value}."
+        )
 
     if qa.action_kind in _ACTION_TO_ENTRY_KIND:
         entry = _write_ledger_entry(qa, db_path)
         applied = apply_action(action_id, db_path=db_path)
-        _print_ledger_summary(applied, entry)
-        return 0
+        return (
+            f"Approved queued_action id={applied.id} (action_kind={applied.action_kind!r}). "
+            f"Ledger entry id={entry.id} written: "
+            f"{entry.ticker} · {entry.entry_kind} · "
+            f"source_alert_id={entry.source_alert_id}."
+        )
 
-    _err(
+    raise ValueError(
         f"queued_action id={action_id} has unsupported action_kind="
         f"{qa.action_kind!r}; expected one of: "
         f"{sorted({'sizing_update', *_ACTION_TO_ENTRY_KIND.keys()})}"
     )
-    return 1
+
+
+def dismiss_action(action_id: int, db_path: Path | None = None) -> str:
+    """Cancel queued_action ``action_id`` (the card's 'dismiss' link / the
+    CLI's ``--dismiss``). No downstream row is written. Returns a one-line
+    summary. Raises LookupError (unknown id) / ValueError (already
+    applied/cancelled)."""
+    qa_before = _fetch_action_or_raise(action_id, db_path)
+    cancelled = cancel_action(action_id, db_path=db_path)
+    return (
+        f"Cancelled queued_action id={cancelled.id} "
+        f"(was {qa_before.status!r}, now {cancelled.status!r}). "
+        "No ledger entry written."
+    )
+
+
+# ----------------------------------------------------------------------------
+# Mode handlers
+# ----------------------------------------------------------------------------
+
+
+def _do_approve_action(action_id: int, db_path: Path | None) -> int:
+    sys.stdout.write(approve_and_apply(action_id, db_path=db_path) + "\n")
+    return 0
 
 
 def _do_cancel_action(action_id: int, db_path: Path | None) -> int:
-    qa_before = _fetch_action_or_raise(action_id, db_path)
-    cancelled = cancel_action(action_id, db_path=db_path)
-    sys.stdout.write(
-        f"Cancelled queued_action id={cancelled.id} "
-        f"(was {qa_before.status!r}, now {cancelled.status!r}). "
-        "No ledger entry written.\n"
-    )
+    sys.stdout.write(dismiss_action(action_id, db_path=db_path) + "\n")
     return 0
 
 
@@ -312,28 +356,6 @@ def _require_str(payload: dict[str, object], key: str, qa: QueuedActionRow) -> s
 # ----------------------------------------------------------------------------
 # Output
 # ----------------------------------------------------------------------------
-
-
-def _print_ledger_summary(
-    qa: QueuedActionRow, entry: ThesisLedgerEntryRow
-) -> None:
-    sys.stdout.write(
-        f"Approved queued_action id={qa.id} (action_kind={qa.action_kind!r}). "
-        f"Ledger entry id={entry.id} written: "
-        f"{entry.ticker} · {entry.entry_kind} · "
-        f"source_alert_id={entry.source_alert_id}.\n"
-    )
-
-
-def _print_sizing_summary(
-    qa: QueuedActionRow, intent: PositionSizingIntentRow
-) -> None:
-    sys.stdout.write(
-        f"Approved queued_action id={qa.id} (action_kind=sizing_update). "
-        f"position_sizing_intent id={intent.id} written: "
-        f"{intent.ticker} · {intent.intent_kind} · "
-        f"value={intent.intent_value}.\n"
-    )
 
 
 def _err(msg: str) -> None:

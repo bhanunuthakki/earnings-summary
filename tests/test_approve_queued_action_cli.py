@@ -449,6 +449,10 @@ def test_approving_already_applied_action_exits_1(
     assert "approve_queued_action: error" in captured.err
     assert "cannot transition" in captured.err
 
+    # And the conflict must NOT have appended a duplicate ledger row — the
+    # status pre-check fires before the downstream dispatch.
+    assert len(list_entries(ticker="GOOG", db_path=db_path)) == 1
+
 
 def test_approving_missing_action_id_exits_1(
     cli: Any,
