@@ -181,7 +181,7 @@ demands it (note the split in the Decision log).
 - [x] **P4.1 Section chrome.** *(#379)* One header anatomy (title · as-of · source
   chip), analyst-language empty states (no alembic/CLI text in reports),
   empties collapse, one table class, one collapse idiom.
-- [ ] **P4.2 Coverage fill-or-hide.** Per-ticker section coverage report;
+- [x] **P4.2 Coverage fill-or-hide.** *(#382)* Per-ticker section coverage report;
   hide-don't-stub policy; peer-comp fix (better comparable selection or
   drop the panel — owner flagged the current peers as wrong).
 - [ ] **P4.3 Cross-links.** Earnings themes ↔ bear case; valuation ↔
@@ -306,3 +306,16 @@ demands it (note the split in the Decision log).
   double-approve no longer appends a duplicate row to the append-only
   ledger (status pre-check before the downstream dispatch — latent in the
   CLI). P4.4/P6.1 no longer owe this.
+- 2026-06-11 (P4.2, #382): hide-don't-stub drew the line at *informative
+  absence* — cold-data panels (macro β, targets, leases, verdict ledger,
+  prompt quality, alignment, unparsed print-vs-guide, unaligned highlights)
+  hide outright, while absences that ARE facts keep the collapsed empty
+  state (customer concentration "none ≥ 5%", Q&A quarter not parsed,
+  validation cannot-tie, budget-forgone). The Governance → Coverage matrix
+  (sections sidecar + live table probes, suppressed = n/a) is where hidden
+  gaps stay accountable. Peer comp: kept the panel (not dropped) but
+  selection is now scored — thesis-watchlist rival > industry > sector,
+  ± scale, zero-affinity dropped, basis shown per row; payload-identity
+  fallback covers rivals outside the cached-profile universe (ITUB). Also
+  repaired stable-API field drift (mktCap/revenueTTM/roicTTM v3 keys) that
+  had been blanking every peer metric since the FMP cutover.

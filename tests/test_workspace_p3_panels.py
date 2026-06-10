@@ -111,17 +111,12 @@ def test_macro_sensitivity_panel_renders_rows() -> None:
     assert '<td class="num">+0.30</td>' in html or '<td class="num ">+0.30</td>' in html
 
 
-def test_macro_sensitivity_panel_empty_state() -> None:
+def test_macro_sensitivity_panel_hides_when_empty() -> None:
+    """P4.2 hide-don't-stub: no rows → no panel at all (the Governance
+    coverage matrix carries the gap)."""
     out = StringIO()
     _macro_sensitivity_panel(out, [])
-    html = out.getvalue()
-    assert "Macro factor sensitivity" in html
-    assert "no factors tracked" in html
-    assert "panel-empty" in html
-    # Analyst language only — no migration / CLI / pipeline internals (P4.1).
-    assert "alembic" not in html
-    # No table rows
-    assert "<tbody>" not in html
+    assert out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -155,14 +150,10 @@ def test_strategic_targets_panel_renders_rows() -> None:
     assert "500.0" in html
 
 
-def test_strategic_targets_panel_empty_state() -> None:
+def test_strategic_targets_panel_hides_when_empty() -> None:
     out = StringIO()
     _strategic_targets_panel(out, [])
-    html = out.getvalue()
-    assert "Strategic targets" in html
-    assert "no decks extracted" in html
-    assert "panel-empty" in html
-    assert "<tbody>" not in html
+    assert out.getvalue() == ""
 
 
 def test_strategic_targets_panel_handles_null_value() -> None:
@@ -306,13 +297,10 @@ def test_lease_ladder_panel_emphasizes_summary_rows() -> None:
     assert "Lease liability" in html
 
 
-def test_lease_ladder_panel_empty_state() -> None:
+def test_lease_ladder_panel_hides_when_empty() -> None:
     out = StringIO()
     _lease_ladder_panel(out, [])
-    html = out.getvalue()
-    assert "Operating lease maturity ladder" in html
-    assert "no ladder on file" in html
-    assert "panel-empty" in html
+    assert out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +338,10 @@ def test_decisions_tab_empty_state() -> None:
     _decisions_tab(out, history)
     html = out.getvalue()
     assert "No decisions recorded" in html
-    assert "panel-empty" in html
-    assert "none recorded" in html
-    # Tab body wraps both the missing callout and the eyebrow
+    # P4.2 hide-don't-stub: the h2 carries the empty state; no extra panel.
+    assert "panel-empty" not in html
+    assert "Decision ledger" not in html
+    # Tab body wraps the eyebrow + headline
     assert 'class="tab-body"' in html
 
 
@@ -466,13 +455,10 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     assert "MISS" in html
 
 
-def test_saydo_verdicts_panel_empty_state() -> None:
+def test_saydo_verdicts_panel_hides_when_empty() -> None:
     out = StringIO()
     _saydo_verdicts_panel(out, [])
-    html = out.getvalue()
-    assert "Say·Do verdict ledger" in html
-    assert "no commitments extracted" in html
-    assert "panel-empty" in html
+    assert out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +489,7 @@ def test_peer_comp_panel_renders_rows() -> None:
     _peer_comp_panel(out, rows)
     html = out.getvalue()
     assert "Peer comparison" in html
-    assert "2 peers" in html
+    assert "2 comparables" in html
     assert "META" in html
     assert "Meta Platforms Inc." in html
     # Market cap compact format ($1.2T)
@@ -515,15 +501,12 @@ def test_peer_comp_panel_renders_rows() -> None:
     assert "muted" in html
 
 
-def test_peer_comp_panel_empty_state() -> None:
+def test_peer_comp_panel_hides_when_empty() -> None:
+    """P4.2: an unexplained/wrong peer list is worse than none — nothing
+    scored → no panel."""
     out = StringIO()
     _peer_comp_panel(out, [])
-    html = out.getvalue()
-    assert "Peer comparison" in html
-    assert "no peer set" in html
-    assert "panel-empty" in html
-    # No file paths / CLI text in the analyst-facing empty state (P4.1).
-    assert "_peers.json" not in html
+    assert out.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------
@@ -618,14 +601,13 @@ def _empty_ir_docs() -> IrDocsSection:
     return IrDocsSection(status=SectionStatus.OK)
 
 
-def test_thesis_tab_emits_macro_sensitivity_section() -> None:
-    """The Thesis tab must always emit the macro sensitivity panel, even with
-    no macro rows (empty-state per the audit-pass contract)."""
+def test_thesis_tab_hides_macro_sensitivity_when_cold() -> None:
+    """P4.2 hide-don't-stub: no macro rows → the panel doesn't render inside
+    the Thesis tab (the Governance coverage matrix carries the gap)."""
     out = StringIO()
     _thesis_tab(out, _empty_snapshot(), _empty_thesis(), _empty_bear(), [])
     html = out.getvalue()
-    assert "Macro factor sensitivity" in html
-    assert "no factors tracked" in html
+    assert "Macro factor sensitivity" not in html
 
 
 def test_thesis_tab_emits_macro_panel_with_rows() -> None:
@@ -750,9 +732,10 @@ def test_thesis_tab_forwards_report_date_to_ledger() -> None:
     assert "ledger-stale" in html  # the 2023 row flagged once the date reaches the ledger
 
 
-def test_company_tab_emits_all_three_p3_panels_empty() -> None:
-    """Company tab always emits strategic / concentration / lease panels —
-    each with empty-state when given empty lists."""
+def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
+    """P4.2 hide-don't-stub: cold strategic-targets / lease panels disappear;
+    customer concentration keeps its informative empty state because "no
+    customer ≥ 5%" is itself a disclosure fact."""
     out = StringIO()
     _company_tab(
         out,
@@ -764,11 +747,10 @@ def test_company_tab_emits_all_three_p3_panels_empty() -> None:
         [],
     )
     html = out.getvalue()
-    assert "Strategic targets" in html
+    assert "Strategic targets" not in html
+    assert "Operating lease maturity ladder" not in html
     assert "Customer concentration" in html
-    assert "Operating lease maturity ladder" in html
-    # All three should collapse to the empty-state anatomy
-    assert html.count("panel-empty") >= 3
+    assert html.count('<details class="panel panel-empty') == 1
 
 
 def test_company_tab_emits_panels_with_data() -> None:
@@ -859,11 +841,12 @@ def test_company_tab_suppresses_listed_sections() -> None:
     html = out.getvalue()
     assert "Operating lease maturity ladder" not in html
     assert "Customer concentration" not in html
-    # Strategic targets is not suppressed -> still rendered (empty-state).
-    assert "Strategic targets" in html
+    # Strategic targets is not suppressed, but it's also cold -> hidden by
+    # the P4.2 hide-don't-stub policy rather than stubbed.
+    assert "Strategic targets" not in html
 
 
-def test_company_tab_shows_all_panels_when_suppressed_empty() -> None:
+def test_company_tab_shows_panels_when_suppressed_empty() -> None:
     out = StringIO()
     _company_tab(
         out,
@@ -876,9 +859,11 @@ def test_company_tab_shows_all_panels_when_suppressed_empty() -> None:
         suppressed_sections=frozenset(),
     )
     html = out.getvalue()
+    # Lease ladder has data -> renders; customer concentration keeps its
+    # informative empty state; cold strategic targets hides (P4.2).
     assert "Operating lease maturity ladder" in html
     assert "Customer concentration" in html
-    assert "Strategic targets" in html
+    assert "Strategic targets" not in html
 
 
 def test_company_tab_omits_bank_lease_ladder_end_to_end() -> None:
@@ -997,7 +982,8 @@ def test_eval_tab_includes_peer_comp_panel() -> None:
     assert "Alt Co" in html
 
 
-def test_eval_tab_renders_empty_peer_panel_when_no_peers() -> None:
+def test_eval_tab_hides_peer_panel_when_no_peers() -> None:
+    """P4.2 hide-don't-stub: nothing scored → no peer panel in the screen."""
     eval_snap = EvaluationSnapshotSection(
         status=SectionStatus.OK,
         ticker="TEST",
@@ -1007,8 +993,7 @@ def test_eval_tab_renders_empty_peer_panel_when_no_peers() -> None:
     out = StringIO()
     _eval_tab(out, eval_snap, [])
     html = out.getvalue()
-    assert "Peer comparison" in html
-    assert "no peer set" in html
+    assert "Peer comparison" not in html
 
 
 # ---------------------------------------------------------------------------
