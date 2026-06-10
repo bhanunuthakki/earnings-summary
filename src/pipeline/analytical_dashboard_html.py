@@ -406,7 +406,7 @@ def _portfolio_synthesis_section(content_md: str | None) -> str:
             "</section>"
         )
     # Render markdown minimally — preserve headers + bold + bullets
-    rendered = _light_markdown_to_html(content_md)
+    rendered = light_markdown_to_html(content_md)
     return (
         '<section class="panel synthesis-panel">'
         "<h2>Portfolio synthesis</h2>"
@@ -438,7 +438,7 @@ def _per_ticker_reread_section(rows: list[PortfolioLensRow]) -> str:
 def _reread_card(r: PortfolioLensRow) -> str:
     """One collapsible 5-min-reread card. Extracted so the grid panel and the
     dropdown-driven Holding tab (PR 8) render an identical card from one place."""
-    rendered = _light_markdown_to_html(r.content_md[:8000])
+    rendered = light_markdown_to_html(r.content_md[:8000])
     return (
         f'<details class="reread-card"><summary>'
         f'<a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a>'
@@ -449,10 +449,11 @@ def _reread_card(r: PortfolioLensRow) -> str:
     )
 
 
-def _light_markdown_to_html(md: str) -> str:
+def light_markdown_to_html(md: str) -> str:
     """Cheap markdown subset: ##/### headers, **bold**, bullets, paragraphs.
     Avoids a full markdown library so the dashboard stays dependency-free.
-    Handles enough to render lens outputs faithfully."""
+    Handles enough to render lens outputs faithfully. Public: the advisor
+    Memos panel (P2.3) renders memo bodies through the same subset."""
     import re
 
     lines = md.splitlines()

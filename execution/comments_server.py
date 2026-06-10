@@ -385,6 +385,18 @@ def create_app(
                 mimetype="text/html",
             )
 
+        if name == "advisor_memos":
+            # Advisor memos (master build P2.3): run bar (next-dollar / swap
+            # checks via the jobs SSE machinery) + the deterministic
+            # swap-discipline screen + the durable memo record.
+            from pipeline.advisor_memos_panel import render_advisor_memos_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_advisor_memos_panel(db_path, user_id=user_id),
+                mimetype="text/html",
+            )
+
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,
             render_panel_fragment,
@@ -950,6 +962,41 @@ def create_app(
         argv = [sys.executable, str(repo_root / "execution" / parts[0]), *parts[1:]]
         try:
             job = job_registry.start(ticker=slot_ticker, kind=kind, argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/advisor-memo", methods=["POST", "OPTIONS"])
+    def start_advisor_memo():
+        """Run an advisor memo generation (master build P2.3) as a streamed
+        single-flight job: {"kind": "next_dollar" | "swap_checks" | "all"}.
+        Runs execution/run_advisor_memos.py; the Memos panel consumes the
+        SSE stream and refetches itself on success."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        memo_kind = str(body.get("kind", ""))
+        if memo_kind not in ("next_dollar", "swap_checks", "all"):
+            return ({"error": "kind must be next_dollar | swap_checks | all"}, 400)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "run_advisor_memos.py"),
+            "--kind",
+            memo_kind,
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
         return (

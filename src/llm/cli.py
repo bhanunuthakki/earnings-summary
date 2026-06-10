@@ -177,6 +177,13 @@ LLM_MODELS: dict[str, str] = {
     # practice — Opus's wider knowledge + instruction-following matter. One call
     # per ticker, cached on disk, run rarely — cost bounded. Latest Opus.
     "dcf_assumptions": "claude-opus-4-8",
+    # Advisor memos (master build P2.3). The next-dollar memo is the flagship
+    # cross-portfolio judgment artifact — same tier as cross_portfolio_synthesis
+    # (Opus: wider sector knowledge + instruction-following on "evidence, never
+    # directives"). Swap checks are per-pair and run several at a time after a
+    # deterministic screen; Sonnet keeps the marginal cost proportionate.
+    "advisor_next_dollar": "claude-opus-4-7",
+    "advisor_swap_check": DEFAULT_MODEL,
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
