@@ -11,6 +11,13 @@ to upsert.
 Audit columns from migration 0024 (live_price, live_price_at,
 over_under_pct, mos_bar_used, assumption_snapshot_json) are populated;
 they're the whole point of this write.
+
+over_under_pct is NOT a caller-supplied field: it is derived here, at the
+single write chokepoint, from live_price + npv_per_share (see
+derive_over_under). Four bespoke builders once hand-rolled it as percent
+UPSIDE — wrong sign and scale, fixed in #368 — so writers no longer get to
+supply their own value, and migration 0076 adds a DB CHECK enforcing the
+same self-consistency on any raw write.
 """
 
 from __future__ import annotations
@@ -20,10 +27,17 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from dcf import valuation
+
 
 @dataclass(frozen=True)
 class DcfRunRow:
-    """Fields the Phase 3 refresh writes to dcf_runs."""
+    """Fields the Phase 3 refresh writes to dcf_runs.
+
+    over_under_pct is deliberately absent — upsert() derives it from
+    live_price + npv_per_share so no caller can persist a value that
+    violates the documented ratio convention.
+    """
 
     ticker: str
     valuation_date: date
@@ -35,11 +49,19 @@ class DcfRunRow:
     currency: str
     live_price: float | None
     live_price_at: datetime | None
-    over_under_pct: float | None
     mos_bar_used: float | None
     assumption_snapshot_json: str
     notes: str | None = None
     run_id: str | None = None
+
+
+def derive_over_under(live_price: float | None, npv_per_share: float) -> float | None:
+    """(live - fair) / fair as a decimal ratio (the migration-0024 convention),
+    or None when undefined: no live price, or a non-positive fair value (the
+    #291 guard). The only producer of dcf_runs.over_under_pct values."""
+    if live_price is None or live_price <= 0 or npv_per_share <= 0:
+        return None
+    return valuation.over_under_pct(live_price, npv_per_share)
 
 
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
@@ -77,7 +99,7 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             "run_id": row.run_id,
             "live_price": row.live_price,
             "live_price_at": row.live_price_at.isoformat() if row.live_price_at else None,
-            "over_under_pct": row.over_under_pct,
+            "over_under_pct": derive_over_under(row.live_price, row.npv_per_share),
             "mos_bar_used": row.mos_bar_used,
             "assumption_snapshot_json": row.assumption_snapshot_json,
         },

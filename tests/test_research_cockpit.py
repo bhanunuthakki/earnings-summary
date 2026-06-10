@@ -159,14 +159,16 @@ def _seed(c: sqlite3.Connection) -> None:
     fact(roe_id, "2026-03-31 00:00:00", 26.5, "percent")
     fact(tier2_id, "2025-12-31 00:00:00", 5.0, "count")
     fact(tier2_id, "2026-03-31 00:00:00", 50.0, "count")
-    # DCF (one row per ticker — uq_dcf_runs_ticker): the stored over_under_pct
-    # is GARBAGE (the bank/holdco writers used a different convention than the
-    # documented ratio) — the cockpit must recompute from price + FV.
+    # DCF (one row per ticker — uq_dcf_runs_ticker): stored over_under_pct is
+    # NULL. The 0076 substrate CHECK forbids the old inconsistent garbage (the
+    # bank/holdco percent-upside writes) from existing at all, so NULL is the
+    # untrustworthy shape that remains — the cockpit must still recompute the
+    # gap from price + FV rather than read the stored column.
     c.execute(
         "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, revenue_growths_json, "
-        "fcf_margin, wacc, terminal_growth, npv, npv_per_share, live_price, over_under_pct, "
+        "fcf_margin, wacc, terminal_growth, npv, npv_per_share, live_price, "
         "created_at) VALUES ('NU', '2026-06-09', 10, '[]', 0.2, 0.1, 0.025, 1000, 20.0, 10.0, "
-        "79.82, ?)",
+        "?)",
         (_iso(NOW - timedelta(days=1)),),
     )
     c.execute(  # FV missing -> no gap

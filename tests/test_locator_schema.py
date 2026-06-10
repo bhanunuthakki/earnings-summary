@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 
 from alembic import command
@@ -218,7 +219,9 @@ def test_upgrade_noops_when_fact_tables_absent(tmp_path: Path) -> None:
         conn.close()
     assert "documents" not in tables
     assert "financial_facts" not in tables
-    assert version == "0075_locator_schema"
+    # The chain must run through to the CURRENT head — not a hardcoded
+    # revision, which broke on the first migration added after 0075.
+    assert version == ScriptDirectory.from_config(_alembic_cfg(db)).get_current_head()
 
 
 def test_upgrade_idempotent_on_partially_applied_schema(tmp_path: Path) -> None:

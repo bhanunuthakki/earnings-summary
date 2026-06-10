@@ -50,7 +50,6 @@ from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
-from dcf import valuation as valuation_mod  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
@@ -561,13 +560,10 @@ def _refresh_redesign(
 
     fair_value = rv.value_per_share_usd
     # over/under is undefined for a non-positive fair value (a forecast whose
-    # assumptions imply negative FCF) — persist the value, leave over_under None
-    # rather than crash (the #291 guard).
-    over_under = (
-        valuation_mod.over_under_pct(live.price, fair_value)
-        if (live is not None and fair_value > 0)
-        else None
-    )
+    # assumptions imply negative FCF) — the central derivation returns None
+    # rather than crash (the #291 guard). upsert() re-derives the same value
+    # for the persisted row; this local copy only feeds the result payload.
+    over_under = persist_mod.derive_over_under(live.price if live else None, fair_value)
 
     row = persist_mod.DcfRunRow(
         ticker=ticker,
@@ -580,7 +576,6 @@ def _refresh_redesign(
         currency=CURRENCY_DEFAULT,
         live_price=live.price if live else None,
         live_price_at=live.fetched_at if live else None,
-        over_under_pct=over_under,
         mos_bar_used=mos_bar_f,
         assumption_snapshot_json=_redesign_snapshot(rv, str(dest)),
         notes=f"workbook={dest.name} (redesigned)",
