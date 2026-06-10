@@ -134,7 +134,7 @@ demands it (note the split in the Decision log).
   surface beside the report.
 
 ### Wave 2 — Portfolio theme (the advisor's home)
-- [ ] **P2.1 Tracker integration v2.** Expand the tracker client to consume
+- [x] **P2.1 Tracker integration v2.** *(#367)* Expand the tracker client to consume
   /performance, /position-alpha, /positioning, /beta, /policy; Portfolio
   page v1: TWR vs SPY/QQQ/policy, allocation by account type/sector,
   concentration, per-position alpha. Degrades gracefully when the tracker
@@ -221,3 +221,12 @@ demands it (note the split in the Decision log).
   Decisions tab; whole app re-centered on the three themes.
 - 2026-06-10: D1 (#356) and D2 (#357) shipped before this directive; D3/D4
   appear here as P4.4/P4.5.
+- 2026-06-10 (P2.1, #367): landed while P1.2 was still in flight (#366) —
+  waves interleaved per the phase-plan rule; zero file overlap (P2.1 touches
+  only the tracker client + portfolio_panel; the shell was deliberately left
+  untouched). The Portfolio sub-tab keeps its "Live portfolio" label for now
+  — rename, if wanted, belongs with P2.2's reorganization. Policy weights
+  come from `GET /api/policy` (the tracker has no `/policy/weights` route).
+  Positioning's per-ticker correlation/beta rows are parsed-over in v1 (only
+  the book-level weighted-avg-correlation is consumed); a per-position beta
+  column in the alpha table is a P2.2+ candidate.
