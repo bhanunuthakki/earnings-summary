@@ -56,6 +56,7 @@ from ir_uploads import (
     classify_ir_file,
     iter_uncategorized_files,
     parse_canonical_path,
+    set_runtime_registry,
     sha256_of,
     ticker_hint_from_path,
 )
@@ -443,6 +444,13 @@ def main() -> int:
         "Omit for the strict manual-upload behavior.",
     )
     args = parser.parse_args()
+
+    # Install the effective registry (curated ISSUER_REGISTRY + the
+    # tracked-companies-synced data/issuer_registry.json) so eval/portfolio
+    # tickers categorize without a code edit. No-op when the store is absent.
+    import issuer_registry
+
+    set_runtime_registry(issuer_registry.effective_entries(PROJECT_ROOT))
 
     src_dir: Path = args.source_dir.resolve()
     if not src_dir.exists():

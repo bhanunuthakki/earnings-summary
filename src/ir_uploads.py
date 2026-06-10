@@ -17,7 +17,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -109,6 +109,24 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("CRWV", _CAL_CALENDAR, ("CoreWeave, Inc.", "CoreWeave Inc", "CoreWeave")),
     ("NBIS", _CAL_CALENDAR, ("Nebius Group", "Nebius Group N.V.", "Nebius")),
 ]
+
+
+# The registry the classifier actually consults. Defaults to the curated
+# ISSUER_REGISTRY above; the auto-fetch categorizer overrides it per-run with
+# `curated + data/issuer_registry.json` (see issuer_registry.effective_entries)
+# so eval/portfolio tickers stay in sync with tracked_companies without a code
+# edit. None resets to the curated list.
+_RUNTIME_REGISTRY: list[tuple[str, str, tuple[str, ...]]] | None = None
+
+
+def set_runtime_registry(entries: list[tuple[str, str, tuple[str, ...]]] | None) -> None:
+    """Install the effective registry for this process (None resets to curated)."""
+    global _RUNTIME_REGISTRY
+    _RUNTIME_REGISTRY = entries
+
+
+def _effective_registry() -> list[tuple[str, str, tuple[str, ...]]]:
+    return _RUNTIME_REGISTRY if _RUNTIME_REGISTRY is not None else ISSUER_REGISTRY
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +441,26 @@ def _period_end_for(ticker_calendar: str, year: int, q: int) -> date:
             date(year, 2, 28),
             date(year, 5, 31),
         ][q - 1]
+    if ticker_calendar.startswith("fye_"):
+        # Generic non-December FYE derived from tracked_companies.fiscal_year_end.
+        # 'fye_MM' = the fiscal year ENDS in month MM (year N); Q4 ends that
+        # month-end and earlier quarters step back 3 months each. Curated entries
+        # above override this for 52/53-week names whose ends aren't month-ends.
+        try:
+            fy_month = int(ticker_calendar[4:6])
+        except ValueError:
+            raise ValueError(f"Unknown calendar id: {ticker_calendar!r}") from None
+        end_month, end_year = fy_month - 3 * (4 - q), year
+        while end_month <= 0:
+            end_month, end_year = end_month + 12, end_year - 1
+        if end_month == 12:
+            return date(end_year, 12, 31)
+        return date(end_year, end_month + 1, 1) - timedelta(days=1)
     raise ValueError(f"Unknown calendar id: {ticker_calendar!r}")
 
 
 def _calendar_for(ticker: str) -> str:
-    for tk, cal, _ in ISSUER_REGISTRY:
+    for tk, cal, _ in _effective_registry():
         if tk == ticker:
             return cal
     raise ValueError(f"No calendar registered for ticker {ticker!r}")
@@ -450,9 +483,18 @@ def calendar_id_from_fye(mmdd: str | None) -> str:
     ``ISSUER_REGISTRY`` (the crawl supplies the ticker; the FYE supplies the
     calendar). Unknown / missing FYE falls back to the Dec-31 calendar. NVO's
     H1/9M/FY labeling can't be inferred from the FYE alone (it shares calendar's
-    Dec-31), so NVO stays registry-only.
+    Dec-31), so NVO stays registry-only. An exact curated-table match wins (e.g.
+    01-31 → veeva); any other non-December month falls back to the generic
+    ``fye_MM`` calendar; December / missing / unparseable uses the Dec-31 calendar.
     """
-    return _FYE_TO_CALENDAR.get((mmdd or "").strip(), _CAL_CALENDAR)
+    key = (mmdd or "").strip()
+    if key in _FYE_TO_CALENDAR:
+        return _FYE_TO_CALENDAR[key]
+    try:
+        month = int(key.split("-")[0])
+    except (ValueError, IndexError):
+        return _CAL_CALENDAR
+    return f"fye_{month:02d}" if 1 <= month <= 11 else _CAL_CALENDAR
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +560,7 @@ def sha256_of(path: Path) -> str:
 
 def _detect_ticker(text: str) -> tuple[str | None, list[str]]:
     """Substring-match against the issuer registry. Returns (ticker, evidence)."""
-    for ticker, _cal, names in ISSUER_REGISTRY:
+    for ticker, _cal, names in _effective_registry():
         for name in names:
             if name in text:
                 return ticker, [f"issuer_name:{name!r}"]
@@ -950,7 +992,7 @@ def classify_ir_file(
             )
         ticker = file_ticker or content_ticker
         if ticker is None and ticker_hint is not None:
-            if any(t == ticker_hint for t, *_ in ISSUER_REGISTRY):
+            if any(t == ticker_hint for t, *_ in _effective_registry()):
                 ticker = ticker_hint
                 ticker_evidence = ticker_evidence + ["path_hint"]
         if ticker is None:
