@@ -1,7 +1,7 @@
 """
 src/llm/anchors.py
 ------------------
-Anchor block builders — shared context for analytical prompts. Three flavors:
+Anchor block builders — shared context for analytical prompts. Four flavors:
 
   - THESIS anchor:  analyst's own framing from `micro_thesis/holdings/<T>.json`
                     (thesis statement, tier-1 KPIs, business-model break rules,
@@ -12,23 +12,32 @@ Anchor block builders — shared context for analytical prompts. Three flavors:
                     `data/ir_narrative/<T>/` — what management says about
                     itself. Prefixed with a bias-framing header so the LLM
                     treats it as company spin rather than ground truth.
+  - PRIORS anchor:  the analyst's OPEN notes from the durable analyst_notes
+                    table (alembic 0074) — open questions, watch-items,
+                    assumptions, standing decisions. Framed as "engage,
+                    don't re-litigate": answer a question when the data
+                    permits, flag confirmation/contradiction of watch-items.
 
-The three anchors compose into a single block via `compose_anchor_block`. The
+The anchors compose into a single block via `compose_anchor_block`. The
 prompts that promise "thesis-anchored analysis" (per-quarter summary, pairwise
 SayDo, recent developments, SayDo filter, event brief, company description,
-bear case) now ground in all three.
+bear case) now ground in them.
 
-All loaders are tolerant: missing files → empty string, so watchlist /
-evaluation / recently-IPO'd tickers still build without anchor sections.
+All loaders are tolerant: missing files / DB / table → empty string, so
+watchlist / evaluation / recently-IPO'd tickers still build without anchor
+sections.
 
 Public API:
     load_thesis_anchor(repo_root, ticker) -> str
     load_bear_anchor(repo_root, ticker) -> str
     load_ir_anchor(repo_root, ticker, char_cap=IR_ANCHOR_CHAR_CAP) -> str
-    compose_anchor_block(thesis_anchor, bear_anchor, ir_anchor="") -> str
+    load_priors_anchor(repo_root, ticker, char_cap=PRIORS_ANCHOR_CHAR_CAP) -> str
+    compose_anchor_block(thesis_anchor, bear_anchor, ir_anchor="",
+                         priors_anchor="") -> str
     ANCHOR_BLOCK_CHAR_CAP    — hard cap on thesis / bear blocks (3500).
     IR_ANCHOR_CHAR_CAP        — hard cap on IR block (2000, deliberately
                                 downweighted vs analyst-authored anchors).
+    PRIORS_ANCHOR_CHAR_CAP    — hard cap on the priors block (2000).
 """
 
 from __future__ import annotations
@@ -50,6 +59,11 @@ ANCHOR_BLOCK_CHAR_CAP = 3500
 # company-biased framing, so we want it present in the context but downweighted
 # relative to the analyst's own thesis + bear blocks.
 IR_ANCHOR_CHAR_CAP = 2000
+
+# Priors anchor (open analyst notes) — compact by design: the anchor stack
+# already carries thesis + bear + IR on most prompts, and the highest-value
+# priors are short (a question, a watch-item). Newest notes win under the cap.
+PRIORS_ANCHOR_CHAR_CAP = 2000
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
 _BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
@@ -430,21 +444,105 @@ def load_ir_anchor(repo_root: Path, ticker: str, char_cap: int = IR_ANCHOR_CHAR_
     return f"{_IR_BIAS_HEADER}\n{tag_line}{body}"
 
 
-def compose_anchor_block(thesis_anchor: str, bear_anchor: str, ir_anchor: str = "") -> str:
-    """Join thesis + bear + IR anchors with separators, omitting empties.
-    Returns "" when all three are empty so the caller can conditionally insert.
+# Fixed framing header — the priors block tells the model how to USE the
+# analyst's open notes, not just what they are. Kept tight; every char counts
+# against PRIORS_ANCHOR_CHAR_CAP.
+_PRIORS_HEADER = """## ANALYST PRIORS (the analyst's own open notes — engage, don't re-litigate)
 
-    `ir_anchor` is a keyword-defaulted positional arg so the legacy 2-arg call
-    sites that pre-date the IR layer keep working unchanged. New callers should
-    pass all three; the conventional builder pattern is
+These are questions, watch-items, assumptions, and standing decisions the
+analyst has already recorded. Treat them as the analyst's current state of
+mind: answer an open question when the data at hand permits (and say which
+question you are answering), call out explicitly when evidence confirms or
+contradicts a watch-item or assumption, and do not re-explain or argue
+against a standing decision."""
+
+# Render order: actionable items first. Labels are the prompt-facing names.
+_PRIORS_KIND_ORDER: tuple[tuple[str, str], ...] = (
+    ("question", "Open questions"),
+    ("watch", "Watch-items"),
+    ("assumption", "Assumptions"),
+    ("decision", "Standing decisions"),
+    ("observation", "Observations"),
+)
+
+
+def load_priors_anchor(repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCHOR_CHAR_CAP) -> str:
+    """Compose the analyst-priors anchor from OPEN analyst_notes rows.
+
+    Reads the durable notes table (alembic 0074; populated by the comment
+    reconciler and manual capture). Open notes only — resolved/archived
+    history belongs to the report surfaces, not to every prompt.
+
+    Returns "" when the DB or table is absent, the substrate predates 0074,
+    or there are simply no open notes — and never raises: like the other
+    loaders, dozens of prompts depend on anchor assembly staying unkillable.
+
+    Cache-stability invariant: several LLM caches key on the composed anchor
+    text, so every rendered element must be stable until the notes actually
+    change — lines carry the note's creation DATE, never a relative age.
+    """
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return ""
+    try:
+        from user_state.notes import list_notes
+
+        rows = list_notes(ticker=ticker, status="open", limit=40, db_path=db_path)
+    except Exception as exc:  # missing table / locked DB / anything — degrade
+        log.debug({"event": "priors_anchor_load_failed", "ticker": ticker, "error": str(exc)})
+        return ""
+    if not rows:
+        return ""
+
+    by_kind: dict[str, list[str]] = {}
+    for r in rows:
+        body = " ".join(r.body.split())
+        if len(body) > 240:
+            body = body[:237].rstrip() + "..."
+        where = (
+            f" [{r.anchor_key}]"
+            if r.anchor_key and r.anchor_type not in (None, "free_text")
+            else ""
+        )
+        by_kind.setdefault(r.kind, []).append(
+            f"- {body}{where} (since {r.created_at.date().isoformat()})"
+        )
+
+    parts: list[str] = [_PRIORS_HEADER]
+    for kind, label in _PRIORS_KIND_ORDER:
+        lines = by_kind.get(kind)
+        if lines:
+            parts.append(f"\n**{label}:**")
+            parts.extend(lines)
+    if len(parts) == 1:
+        return ""
+
+    assembled = "\n".join(parts).strip()
+    if len(assembled) > char_cap:
+        assembled = assembled[:char_cap].rstrip() + "\n[...truncated]"
+    return assembled
+
+
+def compose_anchor_block(
+    thesis_anchor: str, bear_anchor: str, ir_anchor: str = "", priors_anchor: str = ""
+) -> str:
+    """Join thesis + bear + IR + priors anchors with separators, omitting
+    empties. Returns "" when all are empty so the caller can conditionally
+    insert.
+
+    `ir_anchor` and `priors_anchor` are keyword-defaulted positional args so
+    legacy 2- and 3-arg call sites that pre-date those layers keep working
+    unchanged. New callers should pass all four; the conventional builder
+    pattern is
 
         compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
             load_ir_anchor(repo_root, ticker),
+            load_priors_anchor(repo_root, ticker),
         )
     """
-    blocks = [b for b in (thesis_anchor, bear_anchor, ir_anchor) if b.strip()]
+    blocks = [b for b in (thesis_anchor, bear_anchor, ir_anchor, priors_anchor) if b.strip()]
     if not blocks:
         return ""
     return "\n\n---\n\n".join(blocks) + "\n\n---\n\n"

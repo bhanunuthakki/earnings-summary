@@ -24,6 +24,7 @@ from llm_client import (
     is_hard_stop,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from report.models import (
@@ -87,6 +88,7 @@ def build(
         load_thesis_anchor(repo_root, ticker),
         load_bear_anchor(repo_root, ticker),
         load_ir_anchor(repo_root, ticker),
+        load_priors_anchor(repo_root, ticker),
     )
     try:
         content_md = generate_recent_developments(

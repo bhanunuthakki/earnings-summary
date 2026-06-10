@@ -66,6 +66,7 @@ from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
@@ -669,21 +670,23 @@ class MaterialNewsTrigger:
     # ------------------------------------------------------------------
 
     def _load_anchor(self, ticker: str) -> str:
-        """Best-effort composed anchor markdown (thesis + bear + IR), or "" on
-        any failure.
+        """Best-effort composed anchor markdown (thesis + bear + IR + analyst
+        priors), or "" on any failure.
 
         The anchor frames the materiality judgment; its absence is fine (the
         prompt falls back to generic framing) so a load failure must never sink
         the scan. The bear case + IR narrative are included so a story that
         validates a bear hypothesis — or undercuts management's IR framing —
-        scores material; compose_anchor_block omits whichever blocks are
-        absent."""
+        scores material; the priors block does the same for a story that
+        answers an open analyst question or hits a watch-item.
+        compose_anchor_block omits whichever blocks are absent."""
         try:
             repo_root = _repo_root()
             return compose_anchor_block(
                 load_thesis_anchor(repo_root, ticker),
                 load_bear_anchor(repo_root, ticker),
                 load_ir_anchor(repo_root, ticker),
+                load_priors_anchor(repo_root, ticker),
             )
         except Exception as exc:  # anchor is optional; never block classification
             log.debug(

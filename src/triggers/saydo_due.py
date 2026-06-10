@@ -66,6 +66,7 @@ from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
@@ -619,14 +620,16 @@ class SayDoDueTrigger:
         db_path = _db_path()
 
         try:
-            # Compose the full 3-block anchor (thesis + bear + IR) so the
-            # "what it means for the thesis" line can weigh a met/missed
-            # commitment against the bear case and management's IR framing;
+            # Compose the full 4-block anchor (thesis + bear + IR + analyst
+            # priors) so the "what it means for the thesis" line can weigh a
+            # met/missed commitment against the bear case, management's IR
+            # framing, and the analyst's open watch-items;
             # compose_anchor_block omits whichever blocks are absent.
             anchor_block = compose_anchor_block(
                 load_thesis_anchor(repo_root, ticker),
                 load_bear_anchor(repo_root, ticker),
                 load_ir_anchor(repo_root, ticker),
+                load_priors_anchor(repo_root, ticker),
             )
         except Exception as exc:  # anchor is optional; never block the memo
             log.debug(
