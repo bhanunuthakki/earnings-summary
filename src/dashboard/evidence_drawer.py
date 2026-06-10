@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import html
 import json
+import sqlite3
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 
 from alerts import AlertRow
@@ -35,6 +37,42 @@ _CITATION_KIND_LABELS: dict[str, str] = {
     "filing_section": "Filing section",
     "dcf_run": "DCF run",
 }
+
+
+def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object] | None:
+    """Latest brief_provenance_log payload for `ticker`, drawer-shaped.
+
+    Returns ``{"sources_used": <parsed JSON>}`` — the row shape
+    ``render_evidence_drawer`` navigates for fact_id citation linking —
+    or None when the DB/table/row is missing or the JSON is malformed.
+    Callers (digest/feed) look this up once per ticker so fact_id
+    citations stop rendering the dead "no brief provenance" cell (P3.3).
+    """
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT sources_used FROM brief_provenance_log "
+            "WHERE UPPER(ticker) = ? ORDER BY generated_at DESC LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if row is None or row[0] is None:
+        return None
+    try:
+        parsed = json.loads(row[0])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {"sources_used": cast("dict[str, object]", parsed)}
 
 
 def render_evidence_drawer(
@@ -133,10 +171,18 @@ def _render_citations_section(
         kind = c.kind
         kind_label = _CITATION_KIND_LABELS.get(kind, kind)
         prov_html = _render_citation_provenance(c, per_metric)
+        # URL locators (news_url etc.) render as real links — a citation the
+        # analyst can't open is a dead end, not provenance.
+        if c.locator.startswith(("http://", "https://")):
+            locator_html = (
+                f'<a href="{_esc(c.locator)}" target="_blank" rel="noopener">{_esc(c.locator)}</a>'
+            )
+        else:
+            locator_html = _esc(c.locator)
         rows.append(
             "<tr>"
             f'<td class="cite-kind">{_esc(kind_label)}</td>'
-            f'<td class="cite-locator mono">{_esc(c.locator)}</td>'
+            f'<td class="cite-locator mono">{locator_html}</td>'
             f'<td class="cite-excerpt">{_esc(c.excerpt)}</td>'
             f'<td class="cite-prov">{prov_html}</td>'
             "</tr>"

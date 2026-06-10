@@ -586,6 +586,12 @@ class MatrixRow:
     levels: list[float | None]    # absolute values aligned to `periods`
     unit: str = ""                # display hint
     tooltip: str = ""             # if set, name gets a 📖 mark + title= attribute
+    # Per-cell hover text aligned to `levels` (P3.3 source chips: "tier ·
+    # fetched <date>"). None entries render plain cells.
+    cell_titles: list[str | None] | None = None
+    # Raw HTML appended after the escaped row label — the caller-built
+    # clickable source chip. Caller owns escaping of its text content.
+    label_suffix_html: str = ""
 
 
 def yoy_heatmap_table(
@@ -674,24 +680,32 @@ def yoy_heatmap_table(
             )
         else:
             label_html = html.escape(row.name)
+        if row.label_suffix_html:
+            label_html += f" {row.label_suffix_html}"
         tb.append(f'<tr><th class="cv2-matrix-label">{label_html}</th>')
         for j_display, _ in enumerate(display_periods):
             j_full = start_display + j_display
             curr = row.levels[j_full]
             base = row.levels[j_full - period_stride] if j_full >= period_stride else None
             pct = yoy(curr, base) if j_full >= period_stride else None
+            cell_title = ""
+            if row.cell_titles is not None and j_full < len(row.cell_titles):
+                t = row.cell_titles[j_full]
+                if t:
+                    cell_title = f' title="{html.escape(t)}"'
             if level_mode:
                 # Ratio/percentage metric: show the absolute level; shade by the
                 # YoY direction of that level (YoY% of a ratio isn't meaningful).
                 bg = heat_color(pct)
                 tb.append(
-                    f'<td class="cv2-matrix-cell" style="{bg}">{_fmt_level(curr, row.unit)}</td>'
+                    f'<td class="cv2-matrix-cell" style="{bg}"{cell_title}>'
+                    f"{_fmt_level(curr, row.unit)}</td>"
                 )
                 continue
             noisy = is_noisy(pct, base, latest_val)
             cls = "cv2-matrix-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cell"
             bg = "" if noisy else heat_color(pct)
-            tb.append(f'<td class="{cls}" style="{bg}">{fmt_pct(pct, 1)}</td>')
+            tb.append(f'<td class="{cls}" style="{bg}"{cell_title}>{fmt_pct(pct, 1)}</td>')
         # Trailing columns: CAGR for flows; absolute pp/bps change for ratios.
         for q in cagr_periods:
             base = row.levels[-1 - q] if n_total > q else None

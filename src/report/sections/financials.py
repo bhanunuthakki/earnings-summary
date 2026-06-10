@@ -27,6 +27,7 @@ from compute.kpi_resolver import (
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
+    CellSource,
     FinancialsSection,
     KpiSeries,
     QuarterlyLineItem,
@@ -44,7 +45,7 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
-from timeseries.loaders import load_financial_fact_provenance
+from timeseries.loaders import load_financial_cell_provenance, load_financial_fact_provenance
 
 # (metrics-view column, display name, unit, display digits)
 _LINE_ITEM_SPECS: list[tuple[str, str, str, int]] = [
@@ -57,6 +58,20 @@ _LINE_ITEM_SPECS: list[tuple[str, str, str, int]] = [
     ("free_cash_flow", "Free cash flow", "USD millions", 0),
     ("capex", "Capex", "USD millions", 0),
 ]
+
+# metrics-view column -> financial_facts.line_item, for the per-cell source
+# chips (P3.3). The view renames only capital_expenditure; everything else
+# is identity. Keep in lockstep with migration 0012's view DDL.
+_COL_TO_FACT_LINE_ITEM: dict[str, str] = {
+    "revenue": "revenue",
+    "gross_profit": "gross_profit",
+    "operating_income": "operating_income",
+    "net_income": "net_income",
+    "eps_diluted": "eps_diluted",
+    "operating_cash_flow": "operating_cash_flow",
+    "free_cash_flow": "free_cash_flow",
+    "capex": "capital_expenditure",
+}
 
 ANNUAL_HISTORY_YEARS = 10
 
@@ -94,11 +109,22 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
     quarter_labels_full = [quarter_label(r["period_end"]) for r in deduped_quarterly]
     display_labels = quarter_labels_full[-DISPLAY_QUARTERS:]
 
+    # Per-cell source provenance for the P3.3 chips — one query for every
+    # (line_item, period) pair; best-effort ({} on legacy DBs).
+    cell_prov = load_financial_cell_provenance(
+        ticker, sorted(set(_COL_TO_FACT_LINE_ITEM.values())), repo_root
+    )
+
     line_items: list[QuarterlyLineItem] = []
     for col, name, unit, digits in _LINE_ITEM_SPECS:
         full_series = [_to_display(r.get(col), col) for r in deduped_quarterly]
         if all(v is None for v in full_series):
             continue
+        prov_by_period = cell_prov.get(_COL_TO_FACT_LINE_ITEM.get(col, col), {})
+        sources_full = [
+            _to_cell_source(prov_by_period.get(_period_date_key(r.get("period_end"))))
+            for r in deduped_quarterly
+        ]
         line_items.append(
             QuarterlyLineItem(
                 line_item=name,
@@ -108,6 +134,7 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
                 values=full_series[-DISPLAY_QUARTERS:],
                 growth=compute_growth(full_series),
                 levels_full=full_series,
+                sources_full=sources_full,
             )
         )
 
@@ -142,6 +169,35 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
         annual_kpi_years=annual_kpi_years,
         quarter_labels_full=quarter_labels_full,
         currency=currency,
+    )
+
+
+def _period_date_key(raw: object) -> str:
+    """Coerce a metrics-view period_end to the YYYY-MM-DD key the cell
+    provenance map is keyed by. Tolerant: non-string/short values key to ''
+    (which simply never matches a provenance entry)."""
+    s = str(raw) if raw is not None else ""
+    return s[:10]
+
+
+def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
+    """Map one load_financial_cell_provenance payload to the report model."""
+    if prov is None:
+        return None
+
+    def _opt(key: str) -> str | None:
+        v = prov.get(key)
+        return str(v) if v is not None else None
+
+    source = prov.get("source")
+    return CellSource(
+        source=str(source) if source is not None else "unknown",
+        fetched_at=_opt("fetched_at"),
+        source_url=_opt("source_url"),
+        doc_type=_opt("doc_type"),
+        accession_number=_opt("accession_number"),
+        filing_date=_opt("filing_date"),
+        locator=_opt("locator"),
     )
 
 

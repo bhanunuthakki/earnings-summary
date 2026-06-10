@@ -10,6 +10,7 @@ re-running the CLI with different args.
 from __future__ import annotations
 
 import html
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
@@ -17,6 +18,7 @@ from pathlib import Path
 from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
 from dashboard._card import render_alert_card
 from dashboard._styles import CSS
+from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from ui.tokens import FAVICON_LINK
 
@@ -124,9 +126,24 @@ def _render_alert_list(
         body.write("</section>")
         return
 
+    # One brief-provenance lookup per ticker so fact_id citations in the
+    # evidence drawer resolve (P3.3); alerts routinely share tickers.
+    prov_cache: dict[str, Mapping[str, object] | None] = {}
     for alert in alerts:
         actions = list_queued_actions_for_alert(alert.id, db_path=db_path)
-        render_alert_card(body, alert, actions=actions, show_status_badge=True)
+        if alert.ticker not in prov_cache:
+            prov_cache[alert.ticker] = (
+                load_brief_provenance(alert.ticker, db_path=db_path)
+                if db_path is not None
+                else None
+            )
+        render_alert_card(
+            body,
+            alert,
+            actions=actions,
+            show_status_badge=True,
+            brief_provenance=prov_cache[alert.ticker],
+        )
     body.write("</section>")
 
 

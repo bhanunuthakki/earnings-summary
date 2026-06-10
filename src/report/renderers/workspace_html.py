@@ -39,6 +39,7 @@ from report.models import (
     BearCaseSection,
     BreakRuleEvaluation,
     BudgetSkip,
+    CellSource,
     CompanyDescriptionSection,
     DecisionBadge,
     EarningsSection,
@@ -738,6 +739,70 @@ def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> No
     body.write("</div>")
 
 
+_SOURCE_CHIP_ABBREV: dict[str, str] = {
+    "sec_official": "SEC",
+    "fmp_normalized": "FMP",
+    "llm_extracted": "LLM",
+    "yfinance_fallback": "YF",
+    "s1_provisional": "S-1",
+}
+
+
+def _source_hover_title(src: CellSource) -> str:
+    """Hover text for a sourced number: tier + fetched-at (P3.3 contract)."""
+    parts = [src.source]
+    if src.fetched_at:
+        parts.append(f"fetched {src.fetched_at[:10]}")
+    return " · ".join(parts)
+
+
+def _source_chip_html(src: CellSource) -> str:
+    """Clickable per-number source chip: hover = tier + fetched-at; click
+    opens a JS-free <details> popover with the document identity (doc type,
+    accession, filing date, sub-document locator) and the open-source link.
+    """
+    abbrev = _SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
+    tier_slug = src.source.replace("_", "-")
+    rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
+    if src.fetched_at:
+        rows.append(f'<div class="src-pop-row">fetched {_esc(src.fetched_at[:10])}</div>')
+    if src.doc_type:
+        rows.append(f'<div class="src-pop-row">{_esc(src.doc_type)}</div>')
+    if src.accession_number:
+        acc = _esc(src.accession_number)
+        filed = f" · filed {_esc(src.filing_date)}" if src.filing_date else ""
+        rows.append(f'<div class="src-pop-row mono">{acc}{filed}</div>')
+    if src.locator:
+        rows.append(f'<div class="src-pop-row mono src-pop-locator">{_esc(src.locator)}</div>')
+    if src.source_url:
+        rows.append(
+            f'<div class="src-pop-row"><a href="{_esc(src.source_url)}" target="_blank" '
+            'rel="noopener">open source ↗</a></div>'
+        )
+    return (
+        '<details class="src-pop">'
+        f'<summary class="src-chip src-{_esc(tier_slug)}" '
+        f'title="{_esc(_source_hover_title(src))}">{_esc(abbrev)}</summary>'
+        f'<div class="src-pop-body">{"".join(rows)}</div>'
+        "</details>"
+    )
+
+
+def _source_for_display_index(li: QuarterlyLineItem, idx: int) -> CellSource | None:
+    """CellSource for a position in ``li.values`` (the display window).
+
+    ``sources_full`` aligns to ``levels_full``; ``values`` is its tail —
+    translate the display index into full-series coordinates.
+    """
+    if not li.sources_full or idx < 0:
+        return None
+    base = len(li.levels_full) - len(li.values) if li.levels_full else 0
+    j = base + idx
+    if 0 <= j < len(li.sources_full):
+        return li.sources_full[j]
+    return None
+
+
 def _financial_highlights_panel(
     body: StringIO,
     card: QuarterlyEarningsCard,
@@ -773,8 +838,11 @@ def _financial_highlights_panel(
         if li.values and li.values[_pos_of_card(li, card)] is None:
             continue
         body.write(f"<tr><td>{_esc(li.line_item)}</td>")
-        v = li.values[_pos_of_card(li, card)]
-        body.write(f'<td class="num">{_fmt_line_value(li, v)}</td>')
+        idx = _pos_of_card(li, card)
+        v = li.values[idx]
+        src = _source_for_display_index(li, idx)
+        chip = f" {_source_chip_html(src)}" if src is not None else ""
+        body.write(f'<td class="num">{_fmt_line_value(li, v)}{chip}</td>')
         body.write(_growth_pair_cell(v, prev))
         body.write(_growth_pair_cell(v, year_ago))
         body.write("</tr>")
@@ -1685,7 +1753,27 @@ def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
         levels = li.levels_full or li.values
         if not levels or all(v is None for v in levels):
             continue
-        rows.append(MatrixRow(name=li.line_item, levels=list(levels), unit=li.unit))
+        # P3.3 source chips: hover per cell (tier + fetched-at of the
+        # current-quarter fact), click via the row-label chip (latest
+        # sourced quarter's document identity + open-source link).
+        cell_titles: list[str | None] | None = None
+        label_suffix = ""
+        if li.sources_full:
+            cell_titles = [
+                _source_hover_title(s) if s is not None else None for s in li.sources_full
+            ]
+            latest_src = next((s for s in reversed(li.sources_full) if s is not None), None)
+            if latest_src is not None:
+                label_suffix = _source_chip_html(latest_src)
+        rows.append(
+            MatrixRow(
+                name=li.line_item,
+                levels=list(levels),
+                unit=li.unit,
+                cell_titles=cell_titles,
+                label_suffix_html=label_suffix,
+            )
+        )
     if not rows:
         return
     body.write('<div class="panel"><div class="panel-head">')
