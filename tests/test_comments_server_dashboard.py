@@ -124,8 +124,9 @@ def test_dashboard_page_returns_shell(client):
     assert resp.mimetype == "text/html"
     body = resp.get_data(as_text=True)
     assert "<title>Portfolio · command center</title>" in body
-    # Tab bar + inlined Overview panel.
-    assert 'class="cc-tabs"' in body
+    # Theme row + sub-tab rows (three-theme IA, master build P1.1) + inlined Overview.
+    assert 'class="cc-tabs cc-theme-row"' in body
+    assert 'data-theme-target="research"' in body
     assert 'data-panel="overview"' in body
     # Other tabs lazy-load from /api/panel/<name>.
     assert 'data-endpoint="/api/panel/holdings"' in body
