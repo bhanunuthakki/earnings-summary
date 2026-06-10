@@ -32,8 +32,11 @@ Public surface (consumed by:
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
 import secrets
+import sqlite3
 import tempfile
 import threading
 from collections.abc import Iterator
@@ -98,8 +101,6 @@ CommentStatus = Literal["open", "addressed", "dismissed"]
 # The keyword + leading space are stripped from the stored comment text.
 # Explicit dropdown picks (caller passes `intent=...`) always override the
 # keyword, so the dropdown still wins if you set both.
-
-import re
 
 _KEYWORD_TO_INTENT: dict[str, str] = {
     "kpi": "drop_kpi",
@@ -312,6 +313,42 @@ def store_lock(repo_root: Path, ticker: str, report_date: date) -> Iterator[None
         yield
 
 
+def _sync_notes_best_effort(repo_root: Path, ticker: str, report_date: date) -> None:
+    """Mirror this report's comments into the durable analyst_notes table.
+
+    Comments die with their report build; analyst_notes (alembic 0074) is
+    the cross-build memory, reconciled from the store after every mutating
+    write here so all writers (comments server, comment processor, CLIs)
+    flow through one choke point.
+
+    Best-effort by contract: a comment write must never fail because the
+    notes substrate is absent or broken. The DB path derives from
+    ``repo_root`` exactly like execution/comments_server.py derives it, so
+    tmp-root test fixtures (no data/portfolio.db) no-op here. Set
+    ``ANALYST_NOTES_SYNC=0`` to disable explicitly.
+    """
+    if os.environ.get("ANALYST_NOTES_SYNC", "1") == "0":
+        return
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return
+    try:
+        from user_state.notes import sync_store_comments
+
+        sync_store_comments(repo_root, ticker=ticker, report_date=report_date, db_path=db_path)
+    except sqlite3.OperationalError as e:
+        # Pre-0074 schema (no analyst_notes table yet) — quiet skip; the
+        # backfill CLI catches the table up after `alembic upgrade head`.
+        logging.getLogger(__name__).debug("analyst_notes sync skipped: %s", e)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "analyst_notes sync failed for %s/%s (the comment write itself succeeded)",
+            ticker,
+            report_date,
+            exc_info=True,
+        )
+
+
 def list_comments(
     repo_root: Path, ticker: str, report_date: date, status: CommentStatus | None = None
 ) -> list[Comment]:
@@ -355,7 +392,8 @@ def append_comment(
         )
         store.comments.append(comment)
         save_store(repo_root, store)
-        return comment
+    _sync_notes_best_effort(repo_root, ticker, report_date)
+    return comment
 
 
 def update_comment(
@@ -370,6 +408,7 @@ def update_comment(
     intent: IntentType = None,
 ) -> Comment | None:
     """In-place update. Returns updated Comment or None if id not found."""
+    updated: Comment | None = None
     with store_lock(repo_root, ticker, report_date):
         store = load_store(repo_root, ticker, report_date)
         for c in store.comments:
@@ -385,24 +424,39 @@ def update_comment(
                 if intent is not None:
                     c.intent = intent
                 save_store(repo_root, store)
-                return c
-        return None
+                updated = c
+                break
+    if updated is not None:
+        _sync_notes_best_effort(repo_root, ticker, report_date)
+    return updated
 
 
 def delete_comment(repo_root: Path, ticker: str, report_date: date, comment_id: str) -> bool:
-    """Hard-delete a single comment. Returns True if removed."""
+    """Hard-delete a single comment. Returns True if removed.
+
+    The mirrored analyst_note (if any) is not deleted — the reconciler
+    archives it when it was still open, preserving the memory trail.
+    """
     with store_lock(repo_root, ticker, report_date):
         store = load_store(repo_root, ticker, report_date)
         before = len(store.comments)
         store.comments = [c for c in store.comments if c.id != comment_id]
-        if len(store.comments) == before:
-            return False
-        save_store(repo_root, store)
-        return True
+        removed = len(store.comments) != before
+        if removed:
+            save_store(repo_root, store)
+    if removed:
+        _sync_notes_best_effort(repo_root, ticker, report_date)
+    return removed
 
 
 def clear_addressed(repo_root: Path, ticker: str, report_date: date) -> int:
-    """Drop all addressed + dismissed comments. Returns count removed."""
+    """Drop all addressed + dismissed comments. Returns count removed.
+
+    Their mirrored analyst_notes are already resolved/archived by earlier
+    syncs and the reconciler never archives non-open notes — housekeeping
+    here does not erase memory. The sync below is a catch-up pass for any
+    note the substrate missed (e.g. DB absent at addressed-time).
+    """
     with store_lock(repo_root, ticker, report_date):
         store = load_store(repo_root, ticker, report_date)
         before = len(store.comments)
@@ -410,7 +464,9 @@ def clear_addressed(repo_root: Path, ticker: str, report_date: date) -> int:
         removed = before - len(store.comments)
         if removed > 0:
             save_store(repo_root, store)
-        return removed
+    if removed > 0:
+        _sync_notes_best_effort(repo_root, ticker, report_date)
+    return removed
 
 
 def to_json_payload(store: CommentStore) -> dict[str, object]:

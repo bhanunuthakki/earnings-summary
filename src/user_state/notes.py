@@ -1,0 +1,590 @@
+"""Read/write API for analyst_notes (alembic 0074) — durable analyst memory.
+
+Comments and chat threads live per (ticker, report_date) and die with the
+report build; this table is the cross-build record of the analyst's
+thinking. One row per thought, anchored to an object (ticker / report
+section / KPI / fact / alert), classified by *semantics*:
+
+  question     — something to find out (open until answered)
+  decision     — a directive or judgment ("drop this KPI", "size up on dip")
+  watch        — a watch-item to resurface on relevant events
+  assumption   — a belief the thesis rests on, checkable later
+  observation  — anything else worth remembering
+
+Lifecycle: ``open → resolved`` (answered/done), ``open → archived``
+(no longer relevant), and correction is a supersede chain — a new row with
+``supersedes_id`` pointing at the old one, never an in-place rewrite. Hard
+deletes don't exist; memory is the point.
+
+Rows arrive from three places (``source``): mirrored from report comments
+by :func:`sync_store_comments` (idempotent on ``source_ref``), captured
+from chat / alert flows (follow-on wiring), or created directly
+(``manual``). Mirrored rows keep the comment as the system of record for
+*comment-side* fields, but reconcile through watermarks stored in
+``context_json`` so a manual edit on the notes side (reclassify kind,
+resolve early) is never silently reverted by the next sync — see
+:func:`sync_store_comments`.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
+
+from identity import DEFAULT_USER_ID
+from user_state._db import now_iso, open_conn, parse_dt
+
+if TYPE_CHECKING:
+    from datetime import date
+
+    from comments import Comment, CommentStore
+
+NOTE_KINDS: tuple[str, ...] = ("question", "decision", "watch", "assumption", "observation")
+NOTE_STATUSES: tuple[str, ...] = ("open", "resolved", "superseded", "archived")
+NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual")
+
+# Comment intents → note kinds. Action routes collapse onto semantics:
+# every thesis/KPI mutation directive is a *decision*; data-quality and
+# style notes are *observations*. platform_change is deliberately absent —
+# cross-workspace bugs go to the platform backlog, not analyst memory.
+_INTENT_TO_KIND: dict[str, str] = {
+    "ask_question": "question",
+    "edit_thesis": "decision",
+    "edit_structured": "decision",
+    "drop_kpi": "decision",
+    "extract_kpi": "decision",
+    "fix_data": "observation",
+    "rewrite_section": "observation",
+}
+
+_COMMENT_STATUS_TO_NOTE: dict[str, str] = {
+    "open": "open",
+    "addressed": "resolved",
+    "dismissed": "archived",
+}
+
+
+@dataclass(slots=True)
+class AnalystNoteRow:
+    """One row of analyst_notes, fully decoded."""
+
+    id: int
+    user_id: str
+    ticker: str | None
+    kind: str
+    status: str
+    body: str
+    anchor_type: str | None
+    anchor_key: str | None
+    source: str
+    source_ref: str | None
+    supersedes_id: int | None
+    resolution_note: str | None
+    context: dict[str, object] | None
+    created_at: datetime
+    updated_at: datetime
+    resolved_at: datetime | None
+
+
+@dataclass(slots=True)
+class SyncStats:
+    """What one :func:`sync_store_comments` pass did."""
+
+    created: int = 0
+    updated: int = 0
+    archived: int = 0
+    skipped: int = 0
+
+
+def create_note(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    ticker: str | None,
+    kind: str,
+    body: str,
+    anchor_type: str | None = None,
+    anchor_key: str | None = None,
+    source: str = "manual",
+    source_ref: str | None = None,
+    context: dict[str, object] | None = None,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow:
+    """INSERT one open note. ``ticker=None`` records a portfolio-level note."""
+    _validate("kind", kind, NOTE_KINDS)
+    _validate("source", source, NOTE_SOURCES)
+    if not body.strip():
+        raise ValueError("note body must be non-empty")
+    conn = open_conn(db_path)
+    try:
+        row_id = _insert(
+            conn,
+            user_id=user_id,
+            ticker=ticker,
+            kind=kind,
+            status="open",
+            body=body,
+            anchor_type=anchor_type,
+            anchor_key=anchor_key,
+            source=source,
+            source_ref=source_ref,
+            supersedes_id=None,
+            resolution_note=None,
+            context=context,
+            resolved_at=None,
+        )
+        conn.commit()
+        return _fetch_one(conn, row_id)
+    finally:
+        conn.close()
+
+
+def get_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNoteRow | None:
+    """One note by id, or None."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        return None if row is None else _row_to_dc(row)
+    finally:
+        conn.close()
+
+
+def list_notes(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    ticker: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+    limit: int = 200,
+    db_path: Path | str | None = None,
+) -> list[AnalystNoteRow]:
+    """Newest-first notes, filtered.
+
+    ``status=None`` (the default) returns *live* notes — everything except
+    ``superseded`` and ``archived`` — which is what the priors anchor and
+    any notes panel want. Pass an explicit status to target one bucket.
+    ``ticker=None`` means all tickers (portfolio-level notes included), not
+    "only the NULL-ticker notes".
+    """
+    if status is not None:
+        _validate("status", status, NOTE_STATUSES)
+    if kind is not None:
+        _validate("kind", kind, NOTE_KINDS)
+    clauses = ["user_id = ?"]
+    params: list[object] = [user_id]
+    if ticker is not None:
+        clauses.append("ticker = ?")
+        params.append(ticker.upper())
+    if kind is not None:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status)
+    else:
+        clauses.append("status NOT IN ('superseded', 'archived')")
+    params.append(int(limit))
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM analyst_notes WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        return [_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def resolve_note(
+    note_id: int,
+    *,
+    resolution_note: str | None = None,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow | None:
+    """Mark a note resolved (answered / done). Returns the row, or None if missing."""
+    return _set_status(note_id, "resolved", resolution_note=resolution_note, db_path=db_path)
+
+
+def archive_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNoteRow | None:
+    """Mark a note archived (no longer relevant). Returns the row, or None if missing."""
+    return _set_status(note_id, "archived", resolution_note=None, db_path=db_path)
+
+
+def reclassify_note(
+    note_id: int, *, kind: str, db_path: Path | str | None = None
+) -> AnalystNoteRow | None:
+    """Change a note's kind ("this is really a watch-item"). Returns the row,
+    or None if missing. On mirrored rows this sticks across re-syncs — the
+    reconciler only rewrites kind when the comment-side intent moved."""
+    _validate("kind", kind, NOTE_KINDS)
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE analyst_notes SET kind = ?, updated_at = ? WHERE id = ?",
+            (kind, now_iso(), note_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+        return _fetch_one(conn, note_id)
+    finally:
+        conn.close()
+
+
+def supersede_note(
+    note_id: int,
+    *,
+    body: str,
+    kind: str | None = None,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow:
+    """Correct a note: INSERT a replacement chained via ``supersedes_id`` and
+    mark the original superseded. The replacement inherits ticker + anchor
+    (the object the thought is about) but is a fresh ``manual`` row — the
+    chain, not an edit, is the audit trail (same invariant as the fact
+    tables' restatement chains). Raises LookupError when ``note_id`` is gone.
+    """
+    if kind is not None:
+        _validate("kind", kind, NOTE_KINDS)
+    if not body.strip():
+        raise ValueError("note body must be non-empty")
+    conn = open_conn(db_path)
+    try:
+        old_row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        if old_row is None:
+            raise LookupError(f"analyst_notes id={note_id} not found")
+        old = _row_to_dc(old_row)
+        new_id = _insert(
+            conn,
+            user_id=old.user_id,
+            ticker=old.ticker,
+            kind=kind or old.kind,
+            status="open",
+            body=body,
+            anchor_type=old.anchor_type,
+            anchor_key=old.anchor_key,
+            source="manual",
+            source_ref=None,
+            supersedes_id=old.id,
+            resolution_note=None,
+            context=None,
+            resolved_at=None,
+        )
+        conn.execute(
+            "UPDATE analyst_notes SET status = 'superseded', updated_at = ? WHERE id = ?",
+            (now_iso(), note_id),
+        )
+        conn.commit()
+        return _fetch_one(conn, new_id)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Comment-store reconciliation
+# ---------------------------------------------------------------------------
+
+
+def sync_store_comments(
+    repo_root: Path,
+    *,
+    ticker: str,
+    report_date: date,
+    user_id: str = DEFAULT_USER_ID,
+    db_path: Path | str | None = None,
+) -> SyncStats:
+    """Reconcile one report's comment file into analyst_notes (idempotent).
+
+    Mirrors every comment (except ``platform_change`` — that's backlog, not
+    memory) as a ``source='comment'`` note keyed on
+    ``source_ref = '<TICKER>/<report_date>/<comment_id>'``, so re-running is
+    an upsert, not a duplicate.
+
+    Conflict contract for mirrored rows: the comment system stays the
+    system of record for its own fields, but only *changes* propagate —
+    ``context_json`` carries watermarks (``intent``, ``comment_status``)
+    from the last sync, and kind/status are only rewritten when the
+    comment-side value moved since then. A note the analyst reclassified
+    or resolved directly therefore survives any number of re-syncs, while
+    a comment freshly marked addressed still resolves its note.
+
+    A comment that vanished from the store (user deleted it) archives its
+    note when the note is still open; resolved/archived notes are left
+    alone — ``clear_addressed`` housekeeping must not erase memory.
+    """
+    import comments as comments_mod  # lazy: comments lazily imports us back
+
+    store = comments_mod.load_store(repo_root, ticker, report_date)
+    prefix = f"{store.ticker}/{report_date.isoformat()}/"
+    stats = SyncStats()
+    conn = open_conn(db_path)
+    try:
+        existing_rows = conn.execute(
+            "SELECT * FROM analyst_notes WHERE user_id = ? AND source = 'comment' "
+            "AND source_ref LIKE ?",
+            (user_id, prefix + "%"),
+        ).fetchall()
+        existing = {str(r["source_ref"]): _row_to_dc(r) for r in existing_rows}
+        seen: set[str] = set()
+
+        for c in store.comments:
+            ref = prefix + c.id
+            seen.add(ref)
+            note = existing.get(ref)
+            if c.intent == "platform_change":
+                # Backlog item, not memory. If an earlier sync mirrored it
+                # (the intent was classified later), retire the leftover note.
+                stats.skipped += 1
+                if note is not None and note.status == "open":
+                    _archive(conn, note.id)
+                    stats.archived += 1
+                continue
+            if note is None:
+                _insert_from_comment(conn, user_id=user_id, store=store, comment=c, ref=ref)
+                stats.created += 1
+            elif _update_from_comment(conn, note=note, comment=c, store=store):
+                stats.updated += 1
+
+        for ref, note in existing.items():
+            if ref not in seen and note.status == "open":
+                _archive(conn, note.id)
+                stats.archived += 1
+        conn.commit()
+        return stats
+    finally:
+        conn.close()
+
+
+def _kind_for_comment(intent: str | None, text: str) -> str:
+    if intent in _INTENT_TO_KIND:
+        return _INTENT_TO_KIND[intent]
+    return "question" if text.rstrip().endswith("?") else "observation"
+
+
+def _comment_context(store: CommentStore, comment: Comment) -> dict[str, object]:
+    """The mirrored note's context_json: display extras + sync watermarks.
+
+    Reconciler-owned on mirrored rows — rewritten whenever the comment side
+    changes.
+    """
+    ctx: dict[str, object] = {
+        "report_date": store.report_date.isoformat(),
+        "intent": comment.intent,
+        "comment_status": comment.status,
+    }
+    if comment.anchor.tab:
+        ctx["tab"] = comment.anchor.tab
+    if comment.selected_text:
+        ctx["selected_text"] = comment.selected_text
+    if comment.follow_up_thread:
+        ctx["thread"] = [
+            {"role": t.role, "text": t.text, "created_at": t.created_at.isoformat()}
+            for t in comment.follow_up_thread
+        ]
+    return ctx
+
+
+def _insert_from_comment(
+    conn: sqlite3.Connection, *, user_id: str, store: CommentStore, comment: Comment, ref: str
+) -> None:
+    status = _COMMENT_STATUS_TO_NOTE[comment.status]
+    resolved_at: str | None = None
+    if status == "resolved":
+        resolved_at = (
+            comment.addressed_at.isoformat() if comment.addressed_at is not None else now_iso()
+        )
+    _insert(
+        conn,
+        user_id=user_id,
+        ticker=store.ticker,
+        kind=_kind_for_comment(comment.intent, comment.comment),
+        status=status,
+        body=comment.comment,
+        anchor_type=comment.anchor.type,
+        anchor_key=comment.anchor.key,
+        source="comment",
+        source_ref=ref,
+        supersedes_id=None,
+        resolution_note=comment.resolution_note,
+        context=_comment_context(store, comment),
+        resolved_at=resolved_at,
+        created_at=comment.created_at.isoformat(),
+    )
+
+
+def _update_from_comment(
+    conn: sqlite3.Connection, *, note: AnalystNoteRow, comment: Comment, store: CommentStore
+) -> bool:
+    """Propagate comment-side *changes* onto a mirrored note. Returns True when
+    anything was written. Watermarks (see :func:`sync_store_comments`) keep
+    note-side manual edits authoritative when the comment didn't move."""
+    ctx = note.context or {}
+    new_ctx = _comment_context(store, comment)
+    sets: list[str] = []
+    params: list[object] = []
+
+    if comment.comment != note.body:
+        sets.append("body = ?")
+        params.append(comment.comment)
+    if comment.intent != ctx.get("intent"):
+        sets.append("kind = ?")
+        params.append(_kind_for_comment(comment.intent, comment.comment))
+    if comment.status != ctx.get("comment_status"):
+        status = _COMMENT_STATUS_TO_NOTE[comment.status]
+        sets.append("status = ?")
+        params.append(status)
+        if status == "resolved":
+            sets.append("resolved_at = ?")
+            params.append(comment.addressed_at.isoformat() if comment.addressed_at else now_iso())
+    if (comment.resolution_note or None) != note.resolution_note:
+        sets.append("resolution_note = ?")
+        params.append(comment.resolution_note)
+    if new_ctx != ctx:
+        sets.append("context_json = ?")
+        params.append(json.dumps(new_ctx))
+    if not sets:
+        return False
+    sets.append("updated_at = ?")
+    params.append(now_iso())
+    params.append(note.id)
+    conn.execute(f"UPDATE analyst_notes SET {', '.join(sets)} WHERE id = ?", params)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Internals
+# ---------------------------------------------------------------------------
+
+
+def _validate(field: str, value: str, allowed: tuple[str, ...]) -> None:
+    if value not in allowed:
+        raise ValueError(f"{field} must be one of {allowed}, got {value!r}")
+
+
+def _insert(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    ticker: str | None,
+    kind: str,
+    status: str,
+    body: str,
+    anchor_type: str | None,
+    anchor_key: str | None,
+    source: str,
+    source_ref: str | None,
+    supersedes_id: int | None,
+    resolution_note: str | None,
+    context: dict[str, object] | None,
+    resolved_at: str | None,
+    created_at: str | None = None,
+) -> int:
+    now = now_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO analyst_notes(
+            user_id, ticker, kind, status, body, anchor_type, anchor_key,
+            source, source_ref, supersedes_id, resolution_note, context_json,
+            created_at, updated_at, resolved_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            ticker.upper() if ticker else None,
+            kind,
+            status,
+            body,
+            anchor_type,
+            anchor_key,
+            source,
+            source_ref,
+            supersedes_id,
+            resolution_note,
+            json.dumps(context) if context is not None else None,
+            created_at or now,
+            now,
+            resolved_at,
+        ),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def _archive(conn: sqlite3.Connection, note_id: int) -> None:
+    conn.execute(
+        "UPDATE analyst_notes SET status = 'archived', updated_at = ? WHERE id = ?",
+        (now_iso(), note_id),
+    )
+
+
+def _set_status(
+    note_id: int,
+    status: str,
+    *,
+    resolution_note: str | None,
+    db_path: Path | str | None,
+) -> AnalystNoteRow | None:
+    conn = open_conn(db_path)
+    try:
+        now = now_iso()
+        if status == "resolved":
+            cur = conn.execute(
+                "UPDATE analyst_notes SET status = 'resolved', resolved_at = ?, "
+                "resolution_note = COALESCE(?, resolution_note), updated_at = ? WHERE id = ?",
+                (now, resolution_note, now, note_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE analyst_notes SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, note_id),
+            )
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+        return _fetch_one(conn, note_id)
+    finally:
+        conn.close()
+
+
+def _fetch_one(conn: sqlite3.Connection, row_id: int) -> AnalystNoteRow:
+    row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (row_id,)).fetchone()
+    if row is None:
+        raise LookupError(f"analyst_notes id={row_id} not found after write")
+    return _row_to_dc(row)
+
+
+def _row_to_dc(row: sqlite3.Row) -> AnalystNoteRow:
+    raw_ctx = row["context_json"]
+    context: dict[str, object] | None = None
+    if raw_ctx is not None:
+        try:
+            parsed: object = json.loads(str(raw_ctx))
+        except ValueError:
+            parsed = None  # corrupt context is display sugar, never fatal
+        if isinstance(parsed, dict):
+            context = cast("dict[str, object]", parsed)
+    raw_resolved = row["resolved_at"]
+    raw_supersedes = row["supersedes_id"]
+    raw_ticker = row["ticker"]
+    return AnalystNoteRow(
+        id=int(row["id"]),
+        user_id=str(row["user_id"]),
+        ticker=(None if raw_ticker is None else str(raw_ticker)),
+        kind=str(row["kind"]),
+        status=str(row["status"]),
+        body=str(row["body"]),
+        anchor_type=(None if row["anchor_type"] is None else str(row["anchor_type"])),
+        anchor_key=(None if row["anchor_key"] is None else str(row["anchor_key"])),
+        source=str(row["source"]),
+        source_ref=(None if row["source_ref"] is None else str(row["source_ref"])),
+        supersedes_id=(None if raw_supersedes is None else int(raw_supersedes)),
+        resolution_note=(None if row["resolution_note"] is None else str(row["resolution_note"])),
+        context=context,
+        created_at=parse_dt(row["created_at"]),
+        updated_at=parse_dt(row["updated_at"]),
+        resolved_at=(None if raw_resolved is None else parse_dt(raw_resolved)),
+    )
