@@ -157,7 +157,7 @@ demands it (note the split in the Decision log).
   cash-available / account-type slices land here if needed.)
 
 ### Wave 3 — Provenance & Governance
-- [ ] **P3.1 Locator schema.** `documents` += accession_number,
+- [x] **P3.1 Locator schema.** *(#365)* `documents` += accession_number,
   filing_date (backfilled where derivable); fact tables += nullable
   `locator` JSON (10-K section key, transcript line ids, PDF page, FMP JSON
   path). Migration + backfill CLI.
