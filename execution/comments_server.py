@@ -275,10 +275,20 @@ def create_app(
             # The Portfolio tab is enriched with live positions / % of book /
             # taxable breakdown from the companion tracker, layered on top of the
             # cached cross-portfolio synthesis memo. Degrades when the tracker is
-            # offline (the synthesis still renders).
+            # offline (the synthesis still renders). ``?start_date`` /
+            # ``?end_date`` / ``?include_backfill`` re-window the tracker
+            # analytics — the page's own window bar drives these.
             from pipeline.portfolio_panel import render_portfolio_panel
 
-            return Response(render_portfolio_panel(db_path), mimetype="text/html")
+            return Response(
+                render_portfolio_panel(
+                    db_path,
+                    start_date=request.args.get("start_date"),
+                    end_date=request.args.get("end_date"),
+                    include_backfill=request.args.get("include_backfill") in ("1", "true", "True"),
+                ),
+                mimetype="text/html",
+            )
 
         if name == "ir_coverage":
             # Per-name IR auto-fetch coverage: which portfolio/eval names have

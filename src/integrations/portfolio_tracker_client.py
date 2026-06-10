@@ -35,6 +35,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeVar, cast
+from urllib.parse import urlencode
 
 import requests
 
@@ -477,6 +478,9 @@ def fetch_portfolio_analytics(
     *,
     api_url: str | None = None,
     timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_backfill: bool = False,
 ) -> PortfolioAnalytics:
     """Fetch the five analytics payloads with per-endpoint fault isolation.
 
@@ -486,10 +490,31 @@ def fetch_portfolio_analytics(
     short-circuits the remaining calls — the host is down, retrying four more
     times only burns timeouts. ``api_url`` resolves like the live fetch:
     explicit arg → ``PORTFOLIO_TRACKER_API_URL`` → ``http://localhost:8000``.
+
+    ``start_date`` / ``end_date`` (ISO ``YYYY-MM-DD``) scope the four windowed
+    endpoints (``/api/policy`` is window-less); ``include_backfill`` extends
+    ``/performance`` backward through the tracker's MODELED transaction
+    walk-back (its docs caution the backfilled values are reconstructed, not
+    observed). All omitted → the tracker's own defaults: a snapshot-derived
+    window for ``/performance``, trailing 365 days elsewhere. The window is
+    passed through verbatim — date arithmetic for presets lives with the UI,
+    return math stays in the tracker.
     """
     base = (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
     out = PortfolioAnalytics(available=False, api_url=base)
     conn_down: str | None = None
+
+    window: dict[str, str] = {}
+    if start_date:
+        window["start_date"] = start_date
+    if end_date:
+        window["end_date"] = end_date
+    perf_params = dict(window)
+    if include_backfill:
+        perf_params["include_backfill"] = "true"
+
+    def q(params: dict[str, str]) -> str:
+        return f"?{urlencode(params)}" if params else ""
 
     def load(key: str, path: str, parse: Callable[[dict[str, object]], _T]) -> _T | None:
         nonlocal conn_down
@@ -507,13 +532,17 @@ def fetch_portfolio_analytics(
             out.errors[key] = f"bad response: {exc}"
         return None
 
-    out.performance = load("performance", "/api/portfolio/performance", _parse_performance)
-    out.position_alpha = load(
-        "position_alpha", "/api/portfolio/position-alpha", _parse_position_alpha
+    out.performance = load(
+        "performance", f"/api/portfolio/performance{q(perf_params)}", _parse_performance
     )
-    out.positioning = load("positioning", "/api/portfolio/positioning", _parse_positioning)
+    out.position_alpha = load(
+        "position_alpha", f"/api/portfolio/position-alpha{q(window)}", _parse_position_alpha
+    )
+    out.positioning = load(
+        "positioning", f"/api/portfolio/positioning{q(window)}", _parse_positioning
+    )
     out.policy = load("policy", "/api/policy", _parse_policy)
-    out.beta = load("beta", "/api/portfolio/beta", _parse_beta)
+    out.beta = load("beta", f"/api/portfolio/beta{q(window)}", _parse_beta)
     out.available = any(
         section is not None
         for section in (out.performance, out.position_alpha, out.positioning, out.policy, out.beta)

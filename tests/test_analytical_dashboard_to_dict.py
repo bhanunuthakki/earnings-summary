@@ -20,6 +20,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
+from flask.testing import FlaskClient  # noqa: E402
+
 from pipeline.analytical_dashboard import (  # noqa: E402
     AnalyticalDashboard,
     build_analytical_dashboard,
@@ -366,3 +368,49 @@ def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) 
     assert "<!doctype" not in body.lower()  # head/foot-less fragment
     assert "Live portfolio" in body  # the live section (offline note)
     assert "Portfolio synthesis" in body  # the cached synthesis still renders
+
+
+def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``?start_date/?end_date/?include_backfill`` on the portfolio panel route
+    must reach the analytics fetch (validated) and echo back into the window
+    bar of the rendered fragment."""
+    import pipeline.portfolio_panel as pp
+    from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalytics
+
+    captured: dict[str, object] = {}
+
+    def _fake_analytics(
+        *,
+        api_url: str | None = None,
+        timeout: float = 6.0,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        include_backfill: bool = False,
+    ) -> PortfolioAnalytics:
+        captured.update(start=start_date, end=end_date, backfill=include_backfill)
+        return PortfolioAnalytics(available=False, api_url="http://x", errors={})
+
+    def _fake_live(
+        *,
+        api_url: str | None = None,
+        timeout: float = 4.0,
+        transactions_limit: int = 25,
+    ) -> LivePortfolio:
+        return LivePortfolio(available=False, api_url="http://x", error="down")
+
+    monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
+    monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
+    resp = client.get(
+        "/api/panel/portfolio?start_date=2026-01-01&end_date=2026-06-10&include_backfill=1"
+    )
+    assert resp.status_code == 200
+    assert captured == {"start": "2026-01-01", "end": "2026-06-10", "backfill": True}
+    body = resp.get_data(as_text=True)
+    assert 'value="2026-01-01"' in body and 'value="2026-06-10"' in body
+    # Garbage dates are sanitized before the fetch (tracker defaults instead).
+    captured.clear()
+    resp = client.get("/api/panel/portfolio?start_date=garbage&end_date=2026-06-10")
+    assert resp.status_code == 200
+    assert captured == {"start": None, "end": "2026-06-10", "backfill": False}
