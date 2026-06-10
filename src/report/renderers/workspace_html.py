@@ -3957,7 +3957,10 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         "<div>"
         f'<div class="chat-title">Ask Claude about {_esc(ticker)}</div>'
         f'<div class="chat-sub">{_esc(report_date)} '
-        "&middot; streams from comments_server</div>"
+        "&middot; streams from comments_server &middot; "
+        # P2.4 entry point: stances live behind the Socratic flow, never in chat.
+        f'<a href="http://localhost:7421/socratic/{_esc(ticker)}" target="_blank" '
+        'rel="noopener">think it through &rarr;</a></div>'
         "</div>"
         '<button class="chat-close" type="button" aria-label="close">&times;</button>'
         "</header>"

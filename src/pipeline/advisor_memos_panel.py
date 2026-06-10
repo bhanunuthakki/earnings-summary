@@ -33,7 +33,9 @@ from advisor.context import (
 )
 from advisor.store import AdvisorMemoRow, list_memos
 from identity import DEFAULT_USER_ID
+from pipeline.allocation_decisions_panel import portfolio_holdings
 from pipeline.analytical_dashboard_html import light_markdown_to_html
+from ui.tokens import FAVICON_LINK, palette_css
 
 _KIND_LABELS: dict[str, str] = {
     "next_dollar": "Next dollar",
@@ -56,6 +58,7 @@ def render_advisor_memos_panel(
     conn.row_factory = sqlite3.Row
     try:
         holdings_val, candidates_val = load_valuations(conn)
+        holdings = portfolio_holdings(conn)
     finally:
         conn.close()
     screen = screen_swap_candidates(holdings_val, candidates_val, margin_pp=margin_pp)
@@ -66,7 +69,13 @@ def render_advisor_memos_panel(
         memos = list_memos(user_id=user_id, limit=50, db_path=db_path)
     except (sqlite3.OperationalError, FileNotFoundError, RuntimeError):
         memos = []  # substrate predates 0077 — render the screen + run bar anyway
-    return compose_memos_page(screen, memos, margin_pp=margin_pp, implausible=implausible)
+    return compose_memos_page(
+        screen,
+        memos,
+        margin_pp=margin_pp,
+        implausible=implausible,
+        holdings=[t for t, _name in holdings],
+    )
 
 
 def compose_memos_page(
@@ -75,20 +84,31 @@ def compose_memos_page(
     *,
     margin_pp: float = DEFAULT_MARGIN_PP,
     implausible: list[str] | None = None,
+    holdings: list[str] | None = None,
 ) -> str:
     """Pure page assembly (testable without DB)."""
     return "".join(
         [
             _PANEL_CSS,
-            _run_bar(),
+            _run_bar(holdings or []),
+            _socratic_flow_section(),
             _screen_section(screen, margin_pp=margin_pp, implausible=implausible or []),
             _memos_section(memos),
             f"<script>{_RUN_JS}</script>",
+            f"<script>{_SOCRATIC_JS}</script>",
         ]
     )
 
 
-def _run_bar() -> str:
+def _run_bar(holdings: list[str]) -> str:
+    options = "".join(f'<option value="{escape(t)}">{escape(t)}</option>' for t in holdings)
+    socratic = (
+        '<span class="am-sep"></span>'
+        f'<select id="am-soc-ticker" aria-label="holding to think through">{options}</select>'
+        '<button type="button" class="am-btn" id="am-soc-start">Think through&hellip;</button>'
+        if holdings
+        else ""
+    )
     return (
         '<div class="am-runbar" id="am-runbar">'
         '<span class="am-runbar-label">Advisor</span>'
@@ -96,11 +116,24 @@ def _run_bar() -> str:
         "Generate next-dollar memo</button>"
         '<button type="button" class="am-btn" data-kind="swap_checks">'
         "Run swap checks</button>"
+        f"{socratic}"
         '<span class="muted am-note">Evidence + framing, never directives. '
-        "Each run spends LLM budget (advisor_* purposes) and lands in the record below "
-        "+ your notes.</span>"
+        "Stances exist only through the Socratic think-through. Each run spends LLM "
+        "budget (advisor_* purposes) and lands in the record below + your notes.</span>"
         '<pre class="am-log" id="am-log" hidden></pre>'
         "</div>"
+    )
+
+
+def _socratic_flow_section() -> str:
+    """The think-through flow's empty shell — the JS drives it (questions form,
+    then the saved memo). Shared verbatim with the standalone /socratic page."""
+    return (
+        '<section class="panel" id="soc-flow" hidden><h2>Socratic think-through</h2>'
+        '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
+        "make you wrong — then a one-page decision memo (bull / bear / what-would-change-"
+        "my-mind / stance-if-forced) saved to the record and scheduled for outcome "
+        'scoring.</p><div id="soc-body"></div></section>'
     )
 
 
@@ -178,6 +211,15 @@ def _memo_card(m: AdvisorMemoRow) -> str:
     if m.counter_ticker:
         scope += f" vs {m.counter_ticker}"
     body = light_markdown_to_html(m.body_md[:12000])
+    stance = ""
+    if m.stance:
+        horizon = f" · {m.horizon_days}d" if m.horizon_days else ""
+        # Until the P2.5 scorecard lands, the pill names the pending state —
+        # every displayed stance must carry its track record (directive).
+        stance = (
+            f'<span class="am-pill am-stance" title="scoring {escape(m.score_status)}">'
+            f"stance: {escape(m.stance)}{escape(horizon)}</span>"
+        )
     links: list[str] = []
     if m.note_id is not None:
         links.append(f"note #{m.note_id}")
@@ -188,6 +230,7 @@ def _memo_card(m: AdvisorMemoRow) -> str:
         f'<details class="am-card"><summary>'
         f'<span class="am-pill am-kind-{escape(m.kind)}">{escape(kind)}</span>'
         f'<span class="am-scope">{escape(scope)}</span>'
+        f"{stance}"
         f'<span class="am-title">{escape(m.title)}</span>'
         f'<span class="am-stamp">{escape(m.created_at.date().isoformat())}{link_str}</span>'
         f"</summary>"
@@ -232,6 +275,21 @@ _PANEL_CSS = """<style>
 .am-body h2, .am-body h3, .am-body h4 { color: #f5f5f0; margin: 12px 0 4px; }
 .am-body h3 { font-size: 14px; }
 .am-body ul { padding-left: 20px; }
+.am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
+.am-runbar select { background: var(--paper); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-family: var(--mono); }
+.am-stance { background: #3b2f14; color: #fbbf24; text-transform: uppercase;
+  letter-spacing: 0.4px; font-size: 10.5px; cursor: help; }
+.soc-q { margin: 12px 0; }
+.soc-q label { display: block; font-size: 13px; color: var(--fg); margin-bottom: 6px; }
+.soc-q textarea { width: 100%; background: var(--paper); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; font-size: 13px;
+  font-family: var(--sans); resize: vertical; }
+.soc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.soc-controls select { background: var(--paper); color: var(--fg);
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+.soc-status { font-size: 12px; }
+.soc-saved { color: var(--ok); font-size: 13px; }
 </style>"""
 
 # Run-bar wiring: POST the action, stream the job's SSE frames into the log,
@@ -310,3 +368,164 @@ _RUN_JS = r"""
   });
 })();
 """.strip()
+
+
+# Socratic flow wiring (P2.4): step 1 fetches the questions and renders the
+# answer form; step 2 posts the answers and renders the saved memo. Stateless
+# between steps — the questions ride the DOM. Shared verbatim by the panel
+# (button-started) and the standalone /socratic/<T> page (auto-started via
+# data-autostart). Plain string — braces are literal JS.
+_SOCRATIC_JS = r"""
+(function () {
+  var flow = document.getElementById('soc-flow');
+  if (!flow) return;
+  var body = document.getElementById('soc-body');
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
+    });
+  }
+  function setStatus(msg) {
+    var el = flow.querySelector('.soc-status');
+    if (!el) {
+      el = document.createElement('p');
+      el.className = 'soc-status muted';
+      body.appendChild(el);
+    }
+    el.textContent = msg;
+  }
+
+  function start(ticker) {
+    flow.hidden = false;
+    body.innerHTML = '';
+    setStatus('Generating pointed questions for ' + ticker + '… (15-45s)');
+    flow.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    fetch('/api/socratic/questions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: ticker })
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    }).then(function (j) {
+      renderForm(j.ticker, j.questions);
+    }).catch(function (e) {
+      setStatus('Failed to generate questions: ' + e.message + ' — pick the holding and retry.');
+    });
+  }
+
+  function renderForm(ticker, questions) {
+    var html = '<div class="soc-qa" data-ticker="' + esc(ticker) + '">';
+    questions.forEach(function (q, i) {
+      html += '<div class="soc-q"><label>' + (i + 1) + '. ' + esc(q) + '</label>' +
+        '<textarea rows="3" class="soc-answer" data-q="' + esc(q) + '" ' +
+        'placeholder="your read — short and honest beats polished"></textarea></div>';
+    });
+    html += '<div class="soc-controls">' +
+      '<span class="muted">Scoring horizon</span>' +
+      '<select class="soc-horizon">' +
+      '<option value="30">30d</option><option value="90" selected>90d</option>' +
+      '<option value="180">180d</option><option value="365">1y</option></select>' +
+      '<button type="button" class="am-btn soc-submit">Write the decision memo</button>' +
+      '<span class="soc-status muted"></span></div></div>';
+    body.innerHTML = html;
+    body.querySelector('.soc-submit').addEventListener('click', function () {
+      submit(ticker);
+    });
+  }
+
+  function submit(ticker) {
+    var answers = [], questions = [];
+    body.querySelectorAll('.soc-answer').forEach(function (ta) {
+      questions.push(ta.getAttribute('data-q'));
+      answers.push(ta.value);
+    });
+    if (!answers.some(function (a) { return a.trim(); })) {
+      setStatus('Answer at least one question — the memo is written from YOUR read.');
+      return;
+    }
+    var btn = body.querySelector('.soc-submit');
+    btn.disabled = true;
+    setStatus('Writing the decision memo… (Opus; this can take a few minutes)');
+    fetch('/api/socratic/memo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: ticker,
+        questions: questions,
+        answers: answers,
+        horizon_days: parseInt(body.querySelector('.soc-horizon').value, 10)
+      })
+    }).then(function (r) {
+      return r.json().then(function (j) {
+        if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+        return j;
+      });
+    }).then(function (j) {
+      var stance = j.stance ? ('stance: ' + j.stance + ' · ' + j.horizon_days + 'd horizon, scoring pending') : 'no stance line parsed';
+      body.innerHTML = '<p class="soc-saved">Saved as memo #' + esc(j.memo_id) + ' — ' +
+        esc(stance) + '. It is in the record below, your notes, and the decisions timeline.</p>' +
+        '<div class="am-body">' + j.body_html + '</div>';
+      body.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }).catch(function (e) {
+      btn.disabled = false;
+      setStatus('Memo failed: ' + e.message + ' — your answers are still in the form; retry.');
+    });
+  }
+
+  var startBtn = document.getElementById('am-soc-start');
+  if (startBtn) {
+    startBtn.addEventListener('click', function () {
+      var sel = document.getElementById('am-soc-ticker');
+      if (sel && sel.value) start(sel.value);
+    });
+  }
+  var auto = flow.getAttribute('data-autostart-ticker');
+  if (auto) start(auto);
+})();
+""".strip()
+
+
+_SOCRATIC_PAGE_CSS = """
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 24px 64px; font-family: var(--sans);
+  background: var(--bg); color: var(--fg); line-height: 1.55; font-size: 14px; }
+main { max-width: 860px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 0 0 6px; }
+.panel { background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 18px 20px; margin-bottom: 24px; }
+.panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+.muted { color: var(--muted); }
+"""
+
+
+def render_socratic_page(ticker: str) -> str:
+    """The standalone think-through page (``GET /socratic/<T>``) — the
+    workspace chat's entry point. Same flow shell + JS as the Memos panel,
+    auto-started for the ticker."""
+    t = escape(ticker.upper())
+    return (
+        '<!doctype html><html lang="en" data-theme="dark"><head>'
+        '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{t} · think-through</title>"
+        f"{FAVICON_LINK}"
+        f"<style>{palette_css('dark')}{_SOCRATIC_PAGE_CSS}</style>"
+        f"{_PANEL_CSS}"
+        "</head><body><main>"
+        f"<h1>Socratic think-through · {t}</h1>"
+        '<p class="muted">The only path to a stance: your read first, then the memo. '
+        f'Saved memos render under <a href="/#advisor_memos" style="color:var(--accent)">'
+        "Portfolio &rarr; Memos</a>.</p>"
+        f'<section class="panel" id="soc-flow" data-autostart-ticker="{t}">'
+        "<h2>Think it through</h2>"
+        '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
+        "make you wrong — then a one-page decision memo (bull / bear / "
+        "what-would-change-my-mind / stance-if-forced), saved and scheduled for outcome "
+        "scoring.</p>"
+        '<div id="soc-body"></div></section>'
+        f"</main><script>{_SOCRATIC_JS}</script></body></html>"
+    )

@@ -1022,6 +1022,91 @@ def create_app(
             201,
         )
 
+    # ----- SOCRATIC THINK-THROUGH (master build P2.4) -----
+    # The only path to a per-holding stance (locked advisor posture). Both
+    # calls run SYNCHRONOUSLY in the request — the owner is sitting in front
+    # of the form, localhost has no proxy timeout, and the UI shows progress;
+    # the jobs/SSE machinery stays for fire-and-forget runs.
+
+    @app.route("/api/socratic/questions", methods=["POST", "OPTIONS"])
+    def socratic_questions():
+        """Step 1: 3-5 pointed questions for the owner, grounded in the
+        holding's numbers. Body: {"ticker": "NU"}. Returns the questions +
+        the context block they cite. 502 on an LLM/parse failure (the owner
+        retries from the form)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from advisor.socratic import generate_questions
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker") or "").strip().upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        try:
+            prelude = generate_questions(repo_root, ticker)
+        except Exception as exc:  # surface to the form; owner-driven retry
+            return ({"error": f"{type(exc).__name__}: {exc}"}, 502)
+        return {
+            "ticker": prelude.ticker,
+            "questions": prelude.questions,
+            "context_block": prelude.context_block,
+        }
+
+    @app.route("/api/socratic/memo", methods=["POST", "OPTIONS"])
+    def socratic_memo():
+        """Step 2: the decision memo from the owner's answers. Body:
+        {"ticker", "questions": [...], "answers": [...], "horizon_days"}.
+        Persists kind='socratic' (stance + horizon, P2.5-scoreable) and
+        returns the memo id + stance + rendered body HTML."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from advisor.socratic import generate_decision_memo
+        from advisor.store import get_memo
+        from pipeline.analytical_dashboard_html import light_markdown_to_html
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker") or "").strip().upper()
+        raw_q, raw_a = body.get("questions"), body.get("answers")
+        if not ticker or not isinstance(raw_q, list) or not isinstance(raw_a, list):
+            return ({"error": "ticker, questions[] and answers[] required"}, 400)
+        questions = [str(q) for q in cast("list[object]", raw_q)]
+        answers = [str(a) for a in cast("list[object]", raw_a)]
+        try:
+            horizon_days = int(cast("int | str | float", body.get("horizon_days") or 90))
+        except (TypeError, ValueError):
+            return ({"error": "horizon_days must be an integer"}, 400)
+        try:
+            result = generate_decision_memo(
+                repo_root,
+                ticker,
+                questions=questions,
+                answers=answers,
+                horizon_days=horizon_days,
+            )
+        except ValueError as exc:  # length mismatch / empty answers / bad horizon
+            return ({"error": str(exc)}, 400)
+        except Exception as exc:  # hard stops surface loudly to the form
+            return ({"error": f"{type(exc).__name__}: {exc}"}, 502)
+        if not result.ok or result.memo_id is None:
+            return ({"error": result.skipped_reason or "memo generation failed"}, 502)
+        memo = get_memo(result.memo_id, db_path=db_path)
+        return {
+            "memo_id": result.memo_id,
+            "ticker": result.ticker,
+            "title": result.title,
+            "stance": memo.stance if memo else None,
+            "horizon_days": horizon_days,
+            "body_html": light_markdown_to_html(memo.body_md) if memo else "",
+        }
+
+    @app.route("/socratic/<ticker>", methods=["GET"])
+    def socratic_page(ticker: str):
+        """Standalone think-through page — the per-ticker workspace chat links
+        here (its sidebar button + the chat system prompt's pointer)."""
+        from pipeline.advisor_memos_panel import render_socratic_page
+
+        return Response(render_socratic_page(ticker.upper()), mimetype="text/html")
+
     @app.route("/actions/stream/<job_id>", methods=["GET"])
     def stream_action(job_id: str):
         job = job_registry.get(job_id)
