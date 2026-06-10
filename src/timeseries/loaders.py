@@ -465,6 +465,128 @@ def load_financial_fact_provenance(
         conn.close()
 
 
+def load_financial_cell_provenance(
+    ticker: str,
+    line_items: Iterable[str],
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+) -> dict[str, dict[str, dict[str, object]]]:
+    """Per-cell provenance for the report source chips (P3.3).
+
+    Returns ``{line_item: {"YYYY-MM-DD": prov}}`` where prov carries the
+    winning row's source identity::
+
+        {"source": "<source_quality_tier or source_type or 'unknown'>",
+         "fetched_at": "...", "source_url": ..., "doc_type": ...,
+         "accession_number": ..., "filing_date": ..., "locator": ...,
+         "fact_id": 123, "source_doc_id": 45}
+
+    Row pick deliberately matches the ``metrics`` VIEW the Financials
+    section renders from — highest ``source_doc_id`` per logical
+    (line_item, period_end) tuple, ties broken by max(id) — NOT the
+    tier-aware pick the Series loaders use, so the chip always describes
+    the number actually displayed. (The view and the tier pick agree in
+    the overwhelmingly common single-source case; where they diverge the
+    displayed number wins.)
+
+    Best-effort like every loader: ``{}`` when the DB or tables are
+    missing; columns absent on legacy schemas (locator/accession: 0075,
+    tier: 0054) come back as None.
+    """
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return {}
+    conn = _open(resolved)
+    if conn is None:
+        return {}
+    items = [li for li in line_items if li]
+    if not items:
+        conn.close()
+        return {}
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    p_marks = ",".join("?" * len(period_list))
+    li_marks = ",".join("?" * len(items))
+    try:
+        if not _has_table(conn, "financial_facts") or not _has_table(conn, "documents"):
+            return {}
+        tier_select = (
+            "d.source_quality_tier AS source"
+            if _has_column(conn, "documents", "source_quality_tier")
+            else "COALESCE(d.source_type, 'unknown') AS source"
+        )
+        locator_select = (
+            "ff.locator" if _has_column(conn, "financial_facts", "locator") else "NULL AS locator"
+        )
+        accession_select = (
+            "d.accession_number, d.filing_date"
+            if _has_column(conn, "documents", "accession_number")
+            else "NULL AS accession_number, NULL AS filing_date"
+        )
+        rows = conn.execute(
+            f"""
+            SELECT ff.id AS fact_id,
+                   ff.source_doc_id,
+                   ff.line_item,
+                   ff.period_end,
+                   {locator_select},
+                   d.fetched_at,
+                   d.source_url,
+                   d.doc_type,
+                   {accession_select},
+                   {tier_select}
+            FROM financial_facts ff
+            JOIN documents d ON d.id = ff.source_doc_id
+            WHERE ff.ticker = ?
+              AND ff.line_item IN ({li_marks})
+              AND ff.fiscal_period_type IN ({p_marks})
+              AND ff.id = (
+                SELECT ff2.id
+                FROM financial_facts ff2
+                WHERE ff2.ticker = ff.ticker
+                  AND ff2.line_item = ff.line_item
+                  AND ff2.period_end = ff.period_end
+                  AND ff2.fiscal_period_type = ff.fiscal_period_type
+                ORDER BY ff2.source_doc_id DESC, ff2.id DESC
+                LIMIT 1
+              )
+            """,
+            (ticker.upper(), *items, *period_list),
+        ).fetchall()
+        out: dict[str, dict[str, dict[str, object]]] = {}
+        for r in rows:
+            pe = _parse_period_end(r["period_end"])
+            if pe is None:
+                continue
+            prov: dict[str, object] = {
+                "source": str(r["source"]) if r["source"] is not None else "unknown",
+                "fact_id": int(r["fact_id"]),
+                "source_doc_id": int(r["source_doc_id"]),
+                "fetched_at": str(r["fetched_at"]) if r["fetched_at"] is not None else None,
+                "source_url": str(r["source_url"]) if r["source_url"] is not None else None,
+                "doc_type": str(r["doc_type"]) if r["doc_type"] is not None else None,
+                "accession_number": (
+                    str(r["accession_number"]) if r["accession_number"] is not None else None
+                ),
+                "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
+                "locator": str(r["locator"]) if r["locator"] is not None else None,
+            }
+            out.setdefault(str(r["line_item"]), {})[pe.date().isoformat()] = prov
+        return out
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_cell_provenance_failed",
+                "ticker": ticker,
+                "error": str(exc),
+            }
+        )
+        return {}
+    finally:
+        conn.close()
+
+
 def load_kpi_series(
     ticker: str,
     kpi_name: str,

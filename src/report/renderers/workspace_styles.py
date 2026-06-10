@@ -99,6 +99,36 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .pill-bad { color: var(--bad); border-color: var(--bad); background: var(--tone-neg); }
 .pill-muted { color: var(--muted-2); border-color: var(--border); }
 
+/* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny
+   tier-colored <summary class="src-chip"> badge; the open panel is an
+   absolutely-positioned popover with the document identity + source link. */
+.src-pop { display: inline-block; position: relative; vertical-align: baseline; }
+.src-pop > summary { list-style: none; cursor: pointer; }
+.src-pop > summary::-webkit-details-marker { display: none; }
+.src-chip {
+  display: inline-block; font-size: 8.5px; font-weight: 700;
+  letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px;
+  border: 1px solid var(--border-2); border-radius: 3px;
+  color: var(--muted-2); background: transparent;
+  opacity: 0.65; user-select: none;
+}
+.src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
+.src-sec-official { color: var(--ok); border-color: var(--ok); }
+.src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
+.src-llm-extracted { color: var(--warn); border-color: var(--warn); }
+.src-yfinance-fallback, .src-s1-provisional { color: var(--muted-2); }
+.src-pop-body {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
+  min-width: 220px; max-width: 340px; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--border-2);
+  border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+  font-size: 11px; text-align: left; white-space: normal;
+}
+.src-pop-row { padding: 1px 0; color: var(--fg); }
+.src-pop-row.mono { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.src-pop-locator { word-break: break-all; }
+.src-pop-row a { color: var(--accent); }
+
 .ic-btn {
   appearance: none;
   border: 1px solid var(--border);

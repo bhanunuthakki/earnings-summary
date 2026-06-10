@@ -37,6 +37,7 @@ def render_alert_card(
     alert: AlertRow,
     actions: list[QueuedActionRow],
     show_status_badge: bool,
+    brief_provenance: Mapping[str, object] | None = None,
 ) -> None:
     """Render a single alert card into ``body``.
 
@@ -44,6 +45,11 @@ def render_alert_card(
     evidence drawer (typically pending ones for the digest, all of them
     for the feed). The caller decides the filter — the renderer just
     paints whatever it's given.
+
+    ``brief_provenance`` is the ticker's latest brief_provenance_log
+    payload (see evidence_drawer.load_brief_provenance) so fact_id
+    citations resolve to (source, fetched_at) instead of the dead
+    "no brief provenance" cell.
     """
     body.write('<div class="alert-card">')
     body.write('<div class="alert-card-head">')
@@ -66,7 +72,7 @@ def render_alert_card(
             "</div>"
         )
 
-    body.write(render_evidence_drawer(alert))
+    body.write(render_evidence_drawer(alert, brief_provenance))
 
     if actions:
         body.write('<div class="queued-actions">')

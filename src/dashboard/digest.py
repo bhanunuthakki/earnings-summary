@@ -35,6 +35,7 @@ from alerts import (
 )
 from dashboard._card import render_alert_card, render_queued_action
 from dashboard._styles import CSS
+from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from ui.tokens import FAVICON_LINK
 from user_state.ledger import list_recent_entries
@@ -75,7 +76,7 @@ def render_morning_digest(
     body = StringIO()
     body.write('<div class="l1-shell">')
     _render_header(body, date)
-    _render_whats_new(body, pending_alerts, actions_per_alert)
+    _render_whats_new(body, pending_alerts, actions_per_alert, db_path)
     _render_outstanding(body, outstanding_actions)
     _render_upcoming(body, date, db_path)
     _render_thesis_ledger(body, user_id, db_path)
@@ -106,6 +107,7 @@ def _render_whats_new(
     body: StringIO,
     alerts: list[AlertRow],
     actions_per_alert: Mapping[int, list[QueuedActionRow]],
+    db_path: Path | None = None,
 ) -> None:
     body.write('<section class="dash-section dash-whats-new">')
     body.write('<div class="dash-section-header">')
@@ -122,12 +124,22 @@ def _render_whats_new(
         body.write("</section>")
         return
 
+    # One brief-provenance lookup per ticker so fact_id citations in the
+    # evidence drawer resolve (P3.3); alerts routinely share tickers.
+    prov_cache: dict[str, Mapping[str, object] | None] = {}
     for alert in alerts:
+        if alert.ticker not in prov_cache:
+            prov_cache[alert.ticker] = (
+                load_brief_provenance(alert.ticker, db_path=db_path)
+                if db_path is not None
+                else None
+            )
         render_alert_card(
             body,
             alert,
             actions=list(actions_per_alert.get(alert.id, [])),
             show_status_badge=False,
+            brief_provenance=prov_cache[alert.ticker],
         )
     body.write("</section>")
 

@@ -332,6 +332,25 @@ class GrowthMetrics(BaseModel):
     cagr_3y_ttm: float | None = None  # (TTM(0..-3)/TTM(-12..-15))^(1/3) - 1
 
 
+class CellSource(BaseModel):
+    """Per-number provenance for the source chip (P3.3).
+
+    Mirrors timeseries.loaders.load_financial_cell_provenance's per-cell
+    payload: the tier (or source_type fallback) of the document the
+    displayed value came from, when it was fetched, and the document
+    identity needed to open the source (URL, EDGAR accession, sub-document
+    locator JSON from 0075).
+    """
+
+    source: str  # source_quality_tier value, or source_type, or "unknown"
+    fetched_at: str | None = None
+    source_url: str | None = None
+    doc_type: str | None = None
+    accession_number: str | None = None
+    filing_date: str | None = None
+    locator: str | None = None  # raw locator JSON off the fact row
+
+
 class QuarterlyLineItem(BaseModel):
     line_item: str  # e.g. "revenue", "operating_income"
     unit: str  # "USD millions" / "%" / etc
@@ -343,6 +362,12 @@ class QuarterlyLineItem(BaseModel):
     # 3y-CAGR base periods (i.e. up to 24 quarters). Empty when not populated
     # (older built reports / non-quarterly contexts).
     levels_full: list[float | None] = Field(default_factory=list)
+    # Per-period source provenance aligned to levels_full (P3.3 source
+    # chips). Empty on older built reports; None entries where the period
+    # has no matching provenance row. Plain [] default (pydantic copies it
+    # per instance) — Field(default_factory=list) infers list[Unknown] here
+    # and trips the pyright strict ratchet.
+    sources_full: list[CellSource | None] = []
 
 
 class AnnualLineItem(BaseModel):
