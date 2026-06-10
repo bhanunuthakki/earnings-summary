@@ -63,6 +63,7 @@ from report.renderers.charts_v2 import (
     stacked_area,
     yoy_heatmap_table,
 )
+from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
 
 _BOLD_RX = re.compile(r"\*\*(.+?)\*\*")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
@@ -922,17 +923,6 @@ def _fmt_metric(v: float | None, unit: str, digits: int) -> str:
     if unit == "%":
         return f"{v * 100:.{digits}f}%"
     return f"{v:,.{digits}f}"
-
-
-def _fmt_compact_usd(v: float) -> str:
-    """Compact USD format: $123B / $45M / $678K."""
-    if abs(v) >= 1e9:
-        return f"{v / 1e9:.1f}B"
-    if abs(v) >= 1e6:
-        return f"{v / 1e6:.0f}M"
-    if abs(v) >= 1e3:
-        return f"{v / 1e3:.0f}K"
-    return f"{v:,.0f}"
 
 
 def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:

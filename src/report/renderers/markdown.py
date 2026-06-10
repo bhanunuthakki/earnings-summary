@@ -40,6 +40,7 @@ from report.models import (
     TranscriptEntry,
     ValuationSnapshot,
 )
+from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
 
 
 def render(spec: ReportSpec) -> str:
@@ -335,16 +336,6 @@ def _fmt_metric_md(v: float | None, unit: str, digits: int) -> str:
     if unit == "%":
         return f"{v * 100:.{digits}f}%"
     return f"{v:,.{digits}f}"
-
-
-def _fmt_compact_usd(v: float) -> str:
-    if abs(v) >= 1e9:
-        return f"{v / 1e9:.1f}B"
-    if abs(v) >= 1e6:
-        return f"{v / 1e6:.0f}M"
-    if abs(v) >= 1e3:
-        return f"{v / 1e3:.0f}K"
-    return f"{v:,.0f}"
 
 
 def _company_description(out: StringIO, s: CompanyDescriptionSection) -> None:
