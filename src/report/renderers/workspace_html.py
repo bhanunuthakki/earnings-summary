@@ -4122,9 +4122,7 @@ def _xlink_html(tab: str, label: str, anchor: str | None = None) -> str:
     ``anchor`` names a panel id there, scrolls it into view. Wired by the
     ``data-xtab`` handler in workspace_script.JS."""
     anchor_attr = f' data-anchor="{_esc(anchor)}"' if anchor else ""
-    return (
-        f'<a class="panel-xlink" href="#" data-xtab="{_esc(tab)}"{anchor_attr}>{_esc(label)}</a>'
-    )
+    return f'<a class="panel-xlink" href="#" data-xtab="{_esc(tab)}"{anchor_attr}>{_esc(label)}</a>'
 
 
 def _empty_panel(
