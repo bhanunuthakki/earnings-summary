@@ -150,7 +150,7 @@ demands it (note the split in the Decision log).
   watchlist alternative by margin → swap memo). Memos read priors + facts
   + tracker context; persist as notes + ledger entries; rendered under
   Portfolio.
-- [ ] **P2.4 Socratic think-through.** Chat-initiated flow: 3–5 questions
+- [x] **P2.4 Socratic think-through.** *(#383)* Chat-initiated flow: 3–5 questions
   to the owner first, then the decision memo (template above), saved +
   scheduled for outcome scoring. Entry points: Portfolio page + per-ticker
   workspace chat.
@@ -243,6 +243,16 @@ demands it (note the split in the Decision log).
   so it is immune to either convention. Old GET-/ ops tables + their
   renderers retired with the move (dashboard_html is now just the Actions
   fragment); /api/dashboard JSON unchanged.
+- 2026-06-10 (P2.4, #383): the flow is stateless two-step (questions ride
+  the form; no session table) with SYNC endpoints — the owner is at the form
+  on localhost, so the jobs/SSE machinery stays for fire-and-forget runs.
+  "Chat-initiated" lands as: the workspace chat header links to
+  /socratic/<T> AND the chat system prompt now declines in-chat stance
+  requests, pointing to the flow — keeping stances on-request-only and
+  scoreable rather than leaking unsccored stances through chat prose. The
+  forced STANCE line parses into advisor_memos.stance + horizon_days
+  (score_status pending); a missing stance still persists the memo as
+  recorded-but-direction-unscoreable.
 - 2026-06-10 (P2.3, #381): conviction stays the advisor's INPUT, never its
   output — both memo prompts hard-forbid directives; a swap memo concluding
   "the bar isn't cleared" is documented as a successful outcome. The swap
