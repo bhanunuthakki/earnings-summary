@@ -122,11 +122,14 @@ demands it (note the split in the Decision log).
   Pre-reads / Insiders / Predictions / Decisions panels removed from nav
   (code paths retired or folded; insider signals stay inside the per-ticker
   Exec-Comp section).
-- [ ] **P1.2 Research cockpit.** Landing rows per holding: thesis health
+- [x] **P1.2 Research cockpit.** *(#366; P0.1b numfmt helpers folded in;
+  next-earnings reads the FMP calendar cache — the expected_earnings table
+  was dropped in 0031)* Landing rows per holding: thesis health
   (verdict, breach/watch, tier-1 KPI deltas), valuation (price & day move,
   DCF gap/MoS, PEG), events (next earnings from expected_earnings,
   unreviewed alerts count, new docs since last build). Evaluation list gets
-  a thinner variant. Ops freshness shrinks to a dot.
+  a thinner variant. Ops freshness shrinks to a dot. IR/maintenance actions
+  parked under Governance → Actions until the P3.4 settings drawer.
   *Accept:* "which holding needs my attention today?" answered by the
   landing screen alone.
 - [ ] **P1.3 Holding drill-in.** Per-ticker command center + report iframe
@@ -230,3 +233,13 @@ demands it (note the split in the Decision log).
   Positioning's per-ticker correlation/beta rows are parsed-over in v1 (only
   the book-level weighted-avg-correlation is consumed); a per-position beta
   column in the alpha table is a P2.2+ candidate.
+- 2026-06-10 (P1.2, #366): cockpit surfaced two latent data bugs, both fixed
+  same-day in spun-off PRs: prod tracked_companies.user_id was TEXT '1'
+  (0073's INTEGER-only remap missed it → empty company universe on current
+  main; repaired + migration hardened, #369), and the bank/holdco DCF
+  writers stored over_under_pct as percent-upside instead of the documented
+  ratio (Triggers ladder misread NU/BN as sell; writers normalized, #368).
+  The cockpit recomputes the FV gap from each run's own price + fair value,
+  so it is immune to either convention. Old GET-/ ops tables + their
+  renderers retired with the move (dashboard_html is now just the Actions
+  fragment); /api/dashboard JSON unchanged.
