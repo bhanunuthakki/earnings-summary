@@ -84,6 +84,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # Whole-book data-quality state over validation_issues (P3.4) —
             # previously reachable only per-ticker inside workspace reports.
             ("validation", "Validation", "/api/panel/validation", False, False),
+            # "was X, now Y" over the supersede chains (P3.5), linking both
+            # filings into the /source/<doc_id> viewers.
+            ("restatements", "Restatements", "/api/panel/restatements", False, False),
         ),
     ),
 )

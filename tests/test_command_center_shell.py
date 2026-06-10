@@ -55,6 +55,7 @@ def test_render_shell_three_theme_structure() -> None:
         "ir_coverage",
         "source_calls",
         "validation",
+        "restatements",
     ):
         assert f'data-tab-target="{target}"' in html
     for drawered in ("budget", "actions"):
