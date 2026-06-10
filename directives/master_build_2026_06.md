@@ -107,7 +107,7 @@ interleave when blocked. A phase may split into at most two PRs if the diff
 demands it (note the split in the Decision log).
 
 ### Wave 0 — Foundation
-- [ ] **P0.1 Design tokens + formatting.** One shared token module (palette
+- [x] **P0.1 Design tokens + formatting.** *(#361; formatting-module extensions fold into P1.2)* One shared token module (palette
   with a single semantic good/bad pair, type scale, spacing) consumed by
   every HTML surface (workspace_styles, dashboard _styles, command-center
   shell, analytical inline CSS, digest/feed, calendar); one formatting
@@ -117,7 +117,7 @@ demands it (note the split in the Decision log).
   changes any color/format; chart palette keys off tokens.
 
 ### Wave 1 — Three-theme shell + Research
-- [ ] **P1.1 Three-theme shell.** Nav = Research / Portfolio / Governance
+- [x] **P1.1 Three-theme shell.** *(#363)* Nav = Research / Portfolio / Governance
   (+ settings drawer). Old tab deep-links 302 into the new homes.
   Pre-reads / Insiders / Predictions / Decisions panels removed from nav
   (code paths retired or folded; insider signals stay inside the per-ticker
