@@ -154,7 +154,7 @@ demands it (note the split in the Decision log).
   to the owner first, then the decision memo (template above), saved +
   scheduled for outcome scoring. Entry points: Portfolio page + per-ticker
   workspace chat.
-- [ ] **P2.5 Stance scorecard.** Scoring job grades past memos/stances
+- [x] **P2.5 Stance scorecard.** *(#385)* Scoring job grades past memos/stances
   against subsequent prints and price (configurable horizon); every
   rendered stance shows its track record. (Tracker-side mini-PRs for
   cash-available / account-type slices land here if needed.)
@@ -243,6 +243,17 @@ demands it (note the split in the Decision log).
   so it is immune to either convention. Old GET-/ ops tables + their
   renderers retired with the move (dashboard_html is now just the Actions
   fragment); /api/dashboard JSON unchanged.
+- 2026-06-10 (P2.5, #385): scoring grades against PRICE (div-adjusted FMP
+  caches) with the SPY benchmark taken from the tracker's /performance
+  series (benchmark math stays with the tracker) and an honest 'absolute'
+  fallback basis when it's down; "subsequent prints" grading (KPI deltas vs
+  the memo's claims) is deferred — price is the unambiguous scoreable unit
+  at this memo volume. Hold stances fail only below -5pp (a hold is a
+  decision NOT to trim). Swap checks grade the screen (realized margin),
+  not an imputed stance; next-dollar memos are unscoreable v1. No
+  tracker-side mini-PR was needed (the optional cash-available /
+  account-type slices weren't required by any shipped surface). Wave 2 is
+  complete.
 - 2026-06-10 (P2.4, #383): the flow is stateless two-step (questions ride
   the form; no session table) with SYNC endpoints — the owner is at the form
   on localhost, so the jobs/SSE machinery stays for fire-and-forget runs.
