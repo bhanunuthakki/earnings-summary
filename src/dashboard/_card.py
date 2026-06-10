@@ -106,9 +106,12 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
             f'<span class="qa-status-cancelled">cancelled {_esc(_iso(qa.cancelled_at))}</span>'
         )
     else:
+        # Absolute hrefs: the card renders on /, /digest, AND /feed, where a
+        # relative "approve?..." would resolve to a different (dead) path per
+        # surface. The live route is GET /approve (comments_server.py).
         body.write(
-            f'<a href="approve?action_id={qa.id}">approve</a>'
-            f'<a href="approve?action_id={qa.id}&dismiss=1">dismiss</a>'
+            f'<a href="/approve?action_id={qa.id}">approve</a>'
+            f'<a href="/approve?action_id={qa.id}&dismiss=1">dismiss</a>'
             '<span class="qa-cli">CLI: '
             "<code>python execution/approve_queued_action.py "
             f"--action-id {qa.id}</code></span>"
