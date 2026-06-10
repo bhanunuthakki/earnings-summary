@@ -1,52 +1,116 @@
 {
   "ticker": "AVGO",
   "name": "Broadcom",
-  "last_updated": "2026-05-10",
-  "thesis": "Broadcom — semiconductors + software. STUB: needs user-authored thesis. Default key driver: AI custom-silicon + VMware monetization. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "AI custom-silicon + VMware monetization",
-  "_status": "stub_for_recurring_onboard",
+  "last_updated": "2026-06-09",
+  "thesis": "Broadcom is two businesses fused by Hock Tan's capital discipline: a custom-silicon + AI-networking franchise selling the 'anti-NVIDIA' pick-and-shovel to hyperscalers, and a high-margin infrastructure-software annuity (VMware) being repriced to subscription. The bet: hyperscalers who refuse to pay NVIDIA's gross margin co-design their own XPUs with the one vendor that has the SerDes/packaging/networking IP to build them — Google (7 TPU generations since 2014), Meta (locked through 2029), plus Anthropic and OpenAI. AI semi revenue hit $10.8B in Q2 FY26 (+143% YoY) and management guides ~$56B for FY26 with 'line of sight' to >$100B in 2027 against a $73B+ backlog. What the market under-models: networking is now ~40% of AI revenue — stickier, higher-margin, and far less contestable than the accelerator die itself; the franchise is a multi-customer, multi-generation TAM, not a single-socket bet. What's PRICED IN: at ~$1.84T and a ~24x forward P/E (64x trailing), the stock already discounts near-flawless execution toward that $100B number — there is little margin for error. The key risk is the mirror image of the bull case: AI revenue leans on ~3-6 customers, so any single hyperscaler program slip (Google or Meta) moves the whole growth line, on top of semi cyclicality, a $52B net-debt load still deleveraging post-VMware, and VMware price-hike churn. Right business, demanding price.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "AI semiconductor revenue growth (custom XPUs + AI networking) sustaining toward the $100B-in-2027 trajectory, with consolidated margin and post-VMware deleveraging intact — concentration in ~3-6 hyperscaler customers is the offsetting fragility.",
+  "chart_priorities": [
+    "Revenue",
+    "Revenue YoY Growth (USD)",
+    "Operating Margin (GAAP)",
+    "Free Cash Flow",
+    "Net Debt"
+  ],
   "tier_1_kpis": [
     {
-      "name": "Revenue YoY Growth (USD)",
-      "current": "TBV from latest earnings release",
+      "name": "AI Semiconductor Revenue (Quarterly)",
+      "current": "$10.8B Q2 FY26 (+143% YoY); guided $16.0B Q3 (+200%+ YoY) and ~$56B FY26; networking ~40% of the mix",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<0% YoY for 2 consecutive Qs (placeholder; user to set per-ticker threshold)",
-      "source": "earnings release"
+      "status": "Green",
+      "break_condition": "AI semi revenue declines YoY (any quarter) or grows <40% YoY for 2 consecutive Qs — the entire thesis is this line decelerating",
+      "source": "earnings release / 8-K"
+    },
+    {
+      "name": "Total Revenue YoY Growth (USD)",
+      "current": "+48% YoY Q2 FY26 ($22.2B); +29% Q1 FY26 ($19.3B); Q3 guided $29.4B (+84%)",
+      "prior": "+29.5% Q1 FY26",
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "<10% YoY for 2 consecutive Qs (AI ramp exhausted, no software offset)",
+      "source": "FMP / earnings release"
     },
     {
       "name": "Operating Margin (GAAP)",
-      "current": "TBV",
+      "current": "~45% Q1 FY26 ($8.68B op income on $19.3B); non-GAAP op margin guided ~67%",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "status": "Green",
+      "break_condition": "<35% GAAP for 2 consecutive Qs (mix shift to lower-margin volume or software stall)",
+      "source": "FMP / earnings release"
     },
     {
       "name": "Gross Margin (GAAP)",
-      "current": "TBV",
+      "current": "~65.6% Q1 FY26 ($12.66B GP on $19.3B); software-heavy mix supports it",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs (placeholder)",
+      "status": "Green",
+      "break_condition": "<58% for 2 consecutive Qs (custom-ASIC volume diluting blended margin faster than software lifts it)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "Free Cash Flow (TTM)",
+      "current": "~$28.9B TTM (Q1 FY26 FCF $8.0B, 41% of revenue); funds dividend + deleveraging",
+      "prior": null,
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "FCF margin <25% for 2 consecutive Qs (cash conversion eroding despite growth)",
+      "source": "FMP / earnings release"
+    },
+    {
+      "name": "Net Debt / Deleveraging",
+      "current": "$51.9B net debt Q1 FY26 (~1.6x annualized FCF), declining since VMware close Nov-2023",
+      "prior": "$57.3B Q1 FY25",
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "Net debt rises YoY for 2 consecutive Qs while FCF flat/down (deleveraging stalls or re-levers for M&A)",
+      "source": "FMP / balance sheet"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Infrastructure Software Revenue (VMware)",
+      "current": "~$6.8B Q1 FY26 (+1.4% YoY consolidated; VMware sub-line +13%, ARR +19%) — the annuity offset to semi cyclicality",
+      "source": "earnings release / 8-K"
+    },
+    {
+      "name": "AI Bookings / Backlog",
+      "current": ">$30B AI semi bookings in Q2 FY26; $73B+ disclosed AI backlog — the forward-visibility signal",
+      "source": "earnings call"
+    },
+    {
+      "name": "Non-GAAP Operating Margin",
+      "current": "~67% (guided Q3 FY26); Adj. EBITDA ~68-69% of revenue",
       "source": "earnings release"
     },
     {
-      "name": "Net Income Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "name": "Net Income (GAAP, Quarterly)",
+      "current": "$7.35B Q1 FY26 (vs $5.50B Q1 FY25, +34% YoY); non-GAAP $10.2B",
+      "source": "FMP / earnings release"
     }
   ],
-  "tier_2_kpis": [],
   "tier_3_kpis": [],
+  "nuance": {
+    "bear_case": "AI revenue is concentrated in roughly three-to-six hyperscaler customers (Google, Meta, plus Anthropic/OpenAI), so a single custom-XPU program slip, in-sourcing decision, or design-win loss at Google or Meta moves the entire AI growth line — there is no diversification cushion at the magnitude that matters. Layered on top: semiconductors remain cyclical and the AI capex cycle can roll over hard; the stock at ~$1.84T / ~24x forward already discounts the $100B-2027 outcome, so even a deceleration (not a decline) compresses the multiple violently; VMware's aggressive price hikes and bundle-only licensing are driving customer churn and goodwill damage that could cap the software annuity; and $52B of net debt, while deleveraging, limits flexibility if the cycle turns.",
+    "adversarial_take": "143% AI growth and a $73B backlog are spectacular, but 'line of sight to $100B in 2027' is a management aspiration the market has fully capitalized — buying here is paying a flawless-execution price for a business whose growth depends on a handful of customers' capex budgets. Backlog is bookings, not recognized revenue; hyperscaler in-sourcing (Google's own TPU competence, Meta's MTIA) is exactly the capability AVGO sells, so the long-run question is whether the customer becomes the competitor. The right posture is to want the business at a price that respects the concentration tail, not the current one.",
+    "stress_test": "If AI semiconductor revenue growth drops below 40% YoY for two consecutive quarters AND a major customer (Google or Meta) publicly reduces or in-sources a custom-silicon program, the concentration thesis breaks: the backlog becomes a forward-guidance liability rather than a coiled spring, and a ~24x-forward multiple on decelerating, customer-dependent growth re-rates toward a cyclical semi multiple."
+  },
+  "competitive_watchlist": [
+    "NVIDIA (merchant GPU — the margin AVGO's custom-ASIC pitch undercuts)",
+    "Marvell (the direct custom-ASIC / AI-silicon rival)",
+    "Hyperscaler in-sourcing (Google TPU team, Meta MTIA, Amazon Trainium/Annapurna)",
+    "Arista / NVIDIA networking (the AI-networking ~40%-of-revenue front)",
+    "Nutanix / Red Hat / Microsoft (VMware virtualization-stack churn destinations)"
+  ],
+  "thesis_breakers_qualitative": [
+    "AI semiconductor revenue declines YoY in any quarter, or grows <40% YoY for 2 consecutive Qs (the AI ramp is the thesis)",
+    "A top custom-silicon customer (Google or Meta) reduces, in-sources, or loses a multi-generation XPU program — concentration risk realized",
+    "Consolidated gross margin falls below ~58% for 2 consecutive Qs (custom-ASIC volume diluting blended margin without software offset)",
+    "Net debt rises YoY for 2 consecutive Qs while FCF is flat/down — deleveraging stalls or AVGO re-levers for a large dilutive acquisition",
+    "VMware churn accelerates such that infrastructure-software revenue declines YoY — the annuity offset to semi cyclicality erodes"
+  ],
   "break_rules": [
     {
       "rule_id": "universal_revenue_decline",
@@ -74,42 +138,53 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
+    }
+  ],
+  "business_model_rules": [
     {
-      "rule_id": "universal_net_loss",
-      "kpi_name": "Net Income Margin (GAAP)",
+      "rule_id": "avgo_ai_semi_growth_below_40",
+      "kpi_name": "AI Semiconductor Revenue (Quarterly)",
       "comparator": "lt",
-      "threshold": 0,
+      "threshold": 40,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+      "narrative": "AI semiconductor revenue growing <40% YoY for 2 consecutive Qs — the custom-XPU + networking ramp (ran +106% Q1, +143% Q2 FY26) is decelerating toward exhaustion; this is the central thesis line. (UNRESOLVED until AI-semi revenue is backfilled as a KPI series.)"
     },
     {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
+      "rule_id": "avgo_revenue_growth_below_10",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Total revenue growth below 10% YoY for 2 consecutive Qs — AI ramp exhausted with no software offset (FY26 ran +29% to +48%+ per quarter)."
+    },
+    {
+      "rule_id": "avgo_operating_margin_below_35",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin below 35% for 2 consecutive Qs — mix shift to lower-margin ASIC volume or a software stall (ran ~45% Q1 FY26)."
+    },
+    {
+      "rule_id": "avgo_gross_margin_below_58",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 58,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Consolidated gross margin below 58% for 2 consecutive Qs — custom-ASIC volume diluting the blended margin faster than high-margin software lifts it (ran ~65-66% in FY26)."
+    },
+    {
+      "rule_id": "avgo_fcf_margin_below_25",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
       "threshold": 25,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
-      "kpi_name": "FCF Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 5,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
-    },
-    {
-      "rule_id": "ocf_decline_yoy",
-      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
-      "comparator": "lt",
-      "threshold": -10,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+      "narrative": "FCF margin below 25% for 2 consecutive Qs — cash conversion eroding despite growth, threatening dividend + deleveraging capacity (Q1 FY26 FCF was 41% of revenue)."
     }
   ],
   "schema_version": 2,
@@ -121,6 +196,7 @@
     "gsheet_id": "162cVDWrdKzHk50gnIrgMdBctJF5xaLlvIwf-7XJgEQA"
   },
   "flags": [
+    "EVAL_THESIS_AUTHORED",
     "DCF_PARAMS_PENDING"
   ],
   "segments": [],
