@@ -117,8 +117,9 @@ def test_macro_sensitivity_panel_empty_state() -> None:
     html = out.getvalue()
     assert "Macro factor sensitivity" in html
     assert "no factors tracked" in html
-    assert "stub-label" in html
-    assert "cold ticker" in html
+    assert "panel-empty" in html
+    # Analyst language only — no migration / CLI / pipeline internals (P4.1).
+    assert "alembic" not in html
     # No table rows
     assert "<tbody>" not in html
 
@@ -160,7 +161,7 @@ def test_strategic_targets_panel_empty_state() -> None:
     html = out.getvalue()
     assert "Strategic targets" in html
     assert "no decks extracted" in html
-    assert "stub-label" in html
+    assert "panel-empty" in html
     assert "<tbody>" not in html
 
 
@@ -227,8 +228,8 @@ def test_customer_concentration_panel_empty_state() -> None:
     _customer_concentration_panel(out, [])
     html = out.getvalue()
     assert "Customer concentration" in html
-    assert "none" in html
-    assert "no material concentration" in html
+    assert "none ≥ 5% reported" in html
+    assert "genuinely diversified" in html
     assert "<tbody>" not in html
 
 
@@ -311,7 +312,7 @@ def test_lease_ladder_panel_empty_state() -> None:
     html = out.getvalue()
     assert "Operating lease maturity ladder" in html
     assert "no ladder on file" in html
-    assert "stub-label" in html
+    assert "panel-empty" in html
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +350,8 @@ def test_decisions_tab_empty_state() -> None:
     _decisions_tab(out, history)
     html = out.getvalue()
     assert "No decisions recorded" in html
-    assert "stub-label" in html
-    assert "cold ticker" in html
+    assert "panel-empty" in html
+    assert "none recorded" in html
     # Tab body wraps both the missing callout and the eyebrow
     assert 'class="tab-body"' in html
 
@@ -471,7 +472,7 @@ def test_saydo_verdicts_panel_empty_state() -> None:
     html = out.getvalue()
     assert "Say·Do verdict ledger" in html
     assert "no commitments extracted" in html
-    assert "stub-label" in html
+    assert "panel-empty" in html
 
 
 # ---------------------------------------------------------------------------
@@ -519,9 +520,10 @@ def test_peer_comp_panel_empty_state() -> None:
     _peer_comp_panel(out, [])
     html = out.getvalue()
     assert "Peer comparison" in html
-    assert "peers cache cold" in html
-    assert "stub-label" in html
-    assert "_peers.json" in html
+    assert "no peer set" in html
+    assert "panel-empty" in html
+    # No file paths / CLI text in the analyst-facing empty state (P4.1).
+    assert "_peers.json" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -719,7 +721,7 @@ def test_thesis_ledger_enriches_rows_and_collapses_empty_tier23() -> None:
     assert "Tracked, no data yet" in html
     assert "Cost of risk" in html
     assert "Credit exposure" in html
-    assert "3 tracked, 1 awaiting data" in html
+    assert "3 tracked · 1 awaiting data" in html
 
 
 def test_thesis_ledger_omits_stale_flag_without_report_date() -> None:
@@ -765,8 +767,8 @@ def test_company_tab_emits_all_three_p3_panels_empty() -> None:
     assert "Strategic targets" in html
     assert "Customer concentration" in html
     assert "Operating lease maturity ladder" in html
-    # All three should show stub labels (empty-state)
-    assert html.count("stub-label") >= 3
+    # All three should collapse to the empty-state anatomy
+    assert html.count("panel-empty") >= 3
 
 
 def test_company_tab_emits_panels_with_data() -> None:
@@ -1006,7 +1008,7 @@ def test_eval_tab_renders_empty_peer_panel_when_no_peers() -> None:
     _eval_tab(out, eval_snap, [])
     html = out.getvalue()
     assert "Peer comparison" in html
-    assert "peers cache cold" in html
+    assert "no peer set" in html
 
 
 # ---------------------------------------------------------------------------

@@ -142,17 +142,16 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 }
 .ic-btn:hover { color: var(--fg); border-color: var(--border-2); }
 
-.stub {
-  padding: 14px var(--panel-pad-x);
-  font-size: 12.5px; color: var(--muted);
+/* P4.1 empty-state anatomy: empty sections collapse to a single muted
+   summary line (<details class="panel panel-empty">) that expands to an
+   analyst-language explanation. Replaces the old full-height .stub blocks. */
+.panel-empty .panel-title { color: var(--muted); font-weight: 500; }
+.panel-empty-body {
+  padding: 12px var(--panel-pad-x);
+  font-size: 12.5px; color: var(--muted); line-height: 1.55;
   background: var(--paper);
-  border-top: 1px solid var(--hairline);
 }
-.stub-label {
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--warn); margin-right: 8px;
-}
+.panel-budget { border-left: 3px solid var(--warn); }
 
 /* ============================================================
    Workspace shell
@@ -459,6 +458,30 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   color: var(--fg);
 }
 .panel-sub { font-size: 11.5px; color: var(--muted); }
+/* P4.1 canonical header anatomy: title (left) · as-of · source chip · sub
+   (right edge, grouped in .panel-meta). Built by workspace_html._panel_head —
+   hand-rolled heads should not exist outside that helper. */
+.panel-meta {
+  display: flex; align-items: baseline; gap: 10px;
+  min-width: 0; text-align: right;
+}
+.panel-asof {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted-2);
+  white-space: nowrap;
+}
+/* P4.1 canonical collapse idiom: <details class="panel"> with
+   <summary class="panel-head">. The ▸/▾ affordance rides on .panel-title.
+   (The financials line-item drill-down stays a JS row toggle — <tr> can't
+   nest inside <details>.) */
+details.panel > summary { cursor: pointer; user-select: none; list-style: none; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary .panel-title::before {
+  content: '\25B8 ';
+  font-family: var(--mono); font-size: 11px; color: var(--muted);
+}
+details.panel[open] > summary .panel-title::before { content: '\25BE '; }
+details.panel:not([open]) > summary.panel-head { border-bottom: 0; }
+details.panel > summary:hover { background: var(--paper); }
 .panel-foot {
   padding: 12px var(--panel-pad-x);
   background: var(--paper);
@@ -500,23 +523,40 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   }
 }
 
-.metrics-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.metrics-table th {
+/* P4.1 canonical table — the ONE data-table class. Variants are modifier
+   classes alongside it (.tbl-nowrap for dense numeric grids; semantic
+   modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep
+   only their table-specific rules below). The sensitivity matrix
+   (.sens-table) is a heat grid, not a data table, and stays separate. */
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th {
   text-align: left; font-size: 10.5px; font-weight: 500;
   color: var(--muted); padding: 10px var(--panel-pad-x);
   text-transform: uppercase; letter-spacing: 0.06em;
   border-bottom: 1px solid var(--hairline);
+  white-space: nowrap;
 }
-.metrics-table th.num, .metrics-table td.num { text-align: right; }
-.metrics-table td {
+.tbl th.num, .tbl td.num {
+  text-align: right;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.tbl td {
   padding: var(--table-pad-y) var(--panel-pad-x);
   border-bottom: 1px solid var(--hairline);
+  vertical-align: top;
 }
-.metrics-table tr:last-child td { border-bottom: 0; }
-.metrics-table tr.emph td {
-  background: var(--paper); font-weight: 500;
+.tbl tr:last-child td { border-bottom: 0; }
+.tbl tr:hover td { background: var(--paper); }
+.tbl tr.emph td { background: var(--paper); font-weight: 500; }
+.tbl-nowrap td { white-space: nowrap; }
+.tbl .table-footer {
+  text-align: center;
+  padding: 8px var(--panel-pad-x);
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
 }
-.metrics-table td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 .quotes {
   padding: 6px var(--panel-pad-x) var(--panel-pad-y);
@@ -541,21 +581,26 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   font-family: var(--mono);
 }
 
+/* Q&A rows: <details class="qa-row"> per question (P4.1 — the canonical
+   <details> collapse idiom; the +/- chevron is CSS-driven). */
 .qa-list { display: flex; flex-direction: column; }
 .qa-row { border-top: 1px solid var(--hairline); }
 .qa-row:first-child { border-top: 0; }
-.qa-row.open { background: var(--paper); }
+.qa-row[open] { background: var(--paper); }
 .qa-head {
-  width: 100%; appearance: none; border: 0; background: transparent;
+  width: 100%;
   display: flex; align-items: center; gap: 14px;
   padding: 13px var(--panel-pad-x);
-  text-align: left; cursor: pointer; font: inherit;
+  text-align: left; cursor: pointer; user-select: none; list-style: none;
 }
+.qa-head::-webkit-details-marker { display: none; }
 .qa-head:hover { background: var(--paper); }
 .qa-chev {
   font-family: var(--mono); width: 14px; color: var(--muted);
   font-size: 16px; font-weight: 400;
 }
+.qa-chev::before { content: '+'; }
+.qa-row[open] .qa-chev::before { content: '-'; }
 .qa-tag {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
   padding: 3px 7px; border: 1px solid var(--accent);
@@ -568,10 +613,9 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .qa-ref { font-family: var(--mono); font-size: 10.5px; min-width: 38px; text-align: right; color: var(--muted-2); }
 .qa-body {
   padding: 0 var(--panel-pad-x) 18px 50px;
-  display: none;
+  display: flex;
   flex-direction: column; gap: 12px;
 }
-.qa-row.open .qa-body { display: flex; }
 .qa-q, .qa-a, .qa-followup { display: flex; gap: 12px; font-size: 13.5px; line-height: 1.55; }
 .qa-q { color: var(--fg-soft); }
 .qa-a { color: var(--fg); }
@@ -600,19 +644,6 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   display: flex; flex-direction: column; gap: 6px;
   align-items: flex-end;
 }
-.saydo-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.saydo-table th {
-  text-align: left; font-size: 10.5px; font-weight: 500;
-  color: var(--muted); padding: 10px var(--panel-pad-x);
-  text-transform: uppercase; letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--hairline);
-}
-.saydo-table td {
-  padding: var(--row-pad-y) var(--panel-pad-x);
-  border-bottom: 1px solid var(--hairline);
-  vertical-align: top;
-}
-.saydo-table tr:last-child td { border-bottom: 0; }
 .saydo-metric { font-weight: 500; }
 .saydo-guide { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--muted); }
 .saydo-actual { font-family: var(--mono); font-size: 12.5px; }
@@ -648,21 +679,6 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .overlay-stat .pos { font-family: var(--mono); font-size: 11px; color: var(--accent); }
 
 .table-scroll { overflow-x: auto; }
-.fin-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.fin-table th {
-  text-align: left; font-size: 10.5px; font-weight: 500;
-  color: var(--muted); padding: 11px 14px;
-  text-transform: uppercase; letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--hairline);
-  white-space: nowrap;
-}
-.fin-table th.num, .fin-table td.num {
-  text-align: right;
-  font-family: var(--mono); font-variant-numeric: tabular-nums;
-}
-.fin-table td { padding: 9px 14px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
-.fin-table tr:last-child td { border-bottom: 0; }
-.fin-table tr:hover td { background: var(--paper); }
 
 /* Thesis */
 .val-stack { display: flex; flex-direction: column; }
@@ -715,19 +731,6 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .sens-sw.below { background: var(--paper); border: 1px solid var(--border-2); }
 .sens-sw.base { background: var(--accent); }
 
-.break-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.break-table th {
-  text-align: left; font-size: 10.5px; font-weight: 500;
-  color: var(--muted); padding: 10px var(--panel-pad-x);
-  text-transform: uppercase; letter-spacing: 0.05em;
-  border-bottom: 1px solid var(--hairline);
-}
-.break-table th.num, .break-table td.num {
-  text-align: right;
-  font-family: var(--mono); font-variant-numeric: tabular-nums;
-}
-.break-table td { padding: var(--table-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
-.break-table tr:last-child td { border-bottom: 0; }
 .break-status-ok { color: var(--accent); }
 .break-status-warn { color: var(--warn); }
 .break-status-breach { color: var(--bad); }
@@ -775,24 +778,6 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   font-family: var(--mono); font-size: 10.5px; font-weight: 600;
   letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--muted); margin-bottom: 10px;
-}
-.seg-list { width: 100%; border-collapse: collapse; font-size: 13px; }
-.seg-list th {
-  text-align: left; font-size: 10.5px; font-weight: 500;
-  color: var(--muted); padding: 10px var(--panel-pad-x);
-  text-transform: uppercase; letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--hairline);
-}
-.seg-list th.num { text-align: right; }
-.seg-list td {
-  padding: var(--row-pad-y) var(--panel-pad-x);
-  border-bottom: 1px solid var(--hairline);
-  vertical-align: top;
-}
-.seg-list tr:last-child td { border-bottom: 0; }
-.seg-list .num {
-  text-align: right;
-  font-family: var(--mono); font-variant-numeric: tabular-nums;
 }
 .seg-desc { color: var(--fg-soft); font-size: 12.5px; }
 .seg-bar {
@@ -893,20 +878,9 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 /* ============================================================
    Sources tab
    ============================================================ */
-.coverage-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.coverage-table th {
-  text-align: left; font-size: 10.5px; font-weight: 500;
-  color: var(--muted); padding: 10px 12px;
-  text-transform: uppercase; letter-spacing: 0.06em;
-  border-bottom: 1px solid var(--hairline);
-}
+/* Coverage matrix modifiers on .tbl: mono cells + centered dot columns. */
 .coverage-table th.cov-cell { text-align: center; }
-.coverage-table td {
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--hairline);
-  font-family: var(--mono); font-variant-numeric: tabular-nums;
-}
-.coverage-table tr:last-child td { border-bottom: 0; }
+.coverage-table td { font-family: var(--mono); font-variant-numeric: tabular-nums; }
 .cov-cell { text-align: center; }
 .cov-yes { color: var(--accent); }
 .cov-no { color: var(--border-2); }
@@ -1157,29 +1131,6 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .thesis-list li { margin-bottom: 6px; }
 .thesis-list li:last-child { margin-bottom: 0; }
 
-.thesis-ledger-details {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  overflow: hidden;
-}
-.thesis-ledger-details summary {
-  padding: 12px var(--panel-pad-x);
-  cursor: pointer; user-select: none;
-  font-size: 13px; font-weight: 500;
-  list-style: none;
-}
-.thesis-ledger-details summary::-webkit-details-marker { display: none; }
-.thesis-ledger-details summary::before {
-  content: '\25B8';
-  font-family: var(--mono); font-size: 11px; color: var(--muted);
-  margin-right: 8px;
-  display: inline-block;
-  transition: transform .15s;
-}
-.thesis-ledger-details[open] summary::before { transform: rotate(90deg); }
-.thesis-ledger-details summary:hover { background: var(--paper); }
-
 /* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a
    muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness
    flag, and the "tracked, no data yet" footnote. */
@@ -1350,45 +1301,6 @@ a.peer:hover { background: var(--paper); }
 /* ============================================================
    Phase 5 — Executive Compensation tab
    ============================================================ */
-.comp-table, .insider-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  margin: 12px 0;
-}
-.comp-table th, .comp-table td,
-.insider-table th, .insider-table td {
-  padding: 8px 12px;
-  text-align: left;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-.comp-table th, .insider-table th {
-  font-family: var(--mono);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--muted);
-  background: var(--paper);
-  font-weight: 600;
-}
-.comp-table td.num, .insider-table td.num,
-.comp-table th.num, .insider-table th.num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-.comp-table td.pos, .insider-table td.pos { color: #3a8a3a; }
-.comp-table td.neg, .insider-table td.neg { color: #b04040; }
-.comp-table td.muted, .insider-table td.muted,
-.comp-table .muted, .insider-table .muted { color: var(--muted); }
-.comp-table .table-footer {
-  text-align: center;
-  padding: 8px 12px;
-  background: var(--paper);
-  color: var(--muted);
-  font-size: 12px;
-  font-style: italic;
-}
 .ceo-pill {
   display: inline-block;
   font-size: 10px;
@@ -1401,11 +1313,11 @@ a.peer:hover { background: var(--paper); }
   vertical-align: middle;
   letter-spacing: 0.5px;
 }
-.kpi-match { color: #3a8a3a; font-weight: 500; }
+.kpi-match { color: var(--ok); font-weight: 500; }
 
 .insider-table tr.tx-buy { background: rgba(58, 138, 58, 0.06); }
 .insider-table tr.tx-sell { background: rgba(176, 64, 64, 0.04); }
-.insider-table td.signal-strong { color: #3a8a3a; font-weight: 600; }
+.insider-table td.signal-strong { color: var(--ok); font-weight: 600; }
 .insider-table td.signal-medium { color: var(--accent); font-weight: 500; }
 .insider-table td.signal-weak { color: var(--muted); }
 
@@ -1424,9 +1336,9 @@ ul.flag-list li {
   font-size: 13px;
   line-height: 1.5;
 }
-ul.flag-list li.flag-warn { border-left-color: #b88a1f; }
+ul.flag-list li.flag-warn { border-left-color: var(--warn); }
 ul.flag-list li.flag-positive {
-  border-left-color: #3a8a3a;
+  border-left-color: var(--ok);
   background: rgba(58, 138, 58, 0.06);
 }
 
@@ -1441,32 +1353,11 @@ ul.flag-list li.flag-positive {
   padding-bottom: 4px;
 }
 .lens-panel .lens-body { padding: 14px 18px 18px; }
-.lens-panel.lens-collapsed {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-.lens-panel.lens-collapsed > summary {
-  cursor: pointer;
-  list-style: none;
-  padding: 12px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  user-select: none;
-}
-.lens-panel.lens-collapsed > summary::-webkit-details-marker { display: none; }
-.lens-panel.lens-collapsed > summary::before {
-  content: "▸ ";
-  color: var(--muted);
-  font-family: var(--mono);
-}
-.lens-panel.lens-collapsed[open] > summary::before { content: "▾ "; }
 .lens-warn {
   display: inline-block;
   font-size: 9px;
   font-family: var(--mono);
-  background: #b88a1f;
+  background: var(--warn);
   color: var(--surface);
   padding: 1px 5px;
   border-radius: 3px;
@@ -1483,16 +1374,6 @@ ul.flag-list li.flag-positive {
   border-radius: 3px;
   margin-left: 6px;
   letter-spacing: 0.5px;
-}
-.cli-hint {
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 10px 12px;
-  background: var(--paper);
-  border-radius: 4px;
-  color: var(--accent);
-  overflow-x: auto;
-  margin: 8px 0 0;
 }
 .lens-five_min_reread .lens-body h2 {
   color: var(--accent);
@@ -1622,8 +1503,8 @@ ul.flag-list li.flag-positive {
 /* ============================================================
    P3 panels (P4-A1) — macro sensitivities, strategic targets,
    customer concentrations, lease ladder, decision history full
-   ledger, say-do verdicts, peer comp. Most reuse .metrics-table /
-   .fin-table; the styles below are for the Decisions tab's
+   ledger, say-do verdicts, peer comp. Most reuse the canonical .tbl
+   class; the styles below are for the Decisions tab's
    summary-chip ribbon + small layout tweaks.
    ============================================================ */
 .macro-sens-panel,

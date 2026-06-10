@@ -345,22 +345,17 @@ def _news_tab(body: StringIO, section: RecentDevelopmentsSection) -> None:
     body.write(f'<h2 class="section-title">{_esc(title)}</h2>')
     body.write("</div></div>")
     if not by_section:
-        _missing_panel(body, section.status, section.missing)
+        _missing_panel(body, section.status, section.missing, title="News & market context")
         if section.content_md:
-            body.write('<div class="panel"><div class="panel-head">')
-            body.write('<span class="panel-title">Raw news brief</span>')
-            body.write('<span class="panel-sub">unparsed markdown</span></div>')
+            body.write(_panel_head("News brief", sub="full text"))
             body.write(f'<div class="prose-pad">{_render_markdown(section.content_md)}</div>')
             body.write("</div>")
         body.write("</div>")
         return
     for sec_title, tiles in by_section.items():
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            f'<span class="panel-title">{_esc(sec_title)}</span>'
-            f'<span class="panel-sub">{len(tiles)} item{"s" if len(tiles) != 1 else ""}</span>'
-            "</div>"
-            '<div class="news-grid news-grid-tab">'
+            _panel_head(sec_title, sub=f"{len(tiles)} item{'s' if len(tiles) != 1 else ''}")
+            + '<div class="news-grid news-grid-tab">'
         )
         for t in tiles:
             _news_tile(body, t)
@@ -574,7 +569,7 @@ def _earnings_tab(
     # table for the quarter, the LLM-summarized prepared remarks / press
     # release narrative, and the parsed Q&A roster for that same quarter.
     if not cards:
-        _missing_panel(body, section.status, section.missing)
+        _missing_panel(body, section.status, section.missing, title="Earnings calls")
     for i, card in enumerate(cards):
         display = "" if i == 0 else "display:none"
         qid = f"{card.quarter} {card.year}"
@@ -597,10 +592,11 @@ def _beat_rate_scorecard_panel(body: StringIO, scs: SurpriseScorecardCard) -> No
     misleading zeroes.
     """
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Analyst beat-rate scorecard</span>'
-        f'<span class="panel-sub">last {scs.total_quarters} reported quarters</span></div>'
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(
+            "Analyst beat-rate scorecard",
+            sub=f"last {scs.total_quarters} reported quarters",
+        )
+        + '<table class="tbl"><thead><tr>'
         "<th>Series</th>"
         '<th class="num">Beat rate</th>'
         '<th class="num">Avg surprise</th>'
@@ -654,10 +650,10 @@ def _earnings_themes_panel(body: StringIO, section: EarningsSection) -> None:
     if not has_any and not section.themes_note:
         return
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Cross-quarter themes</span>'
-        '<span class="panel-sub">last 4 quarters · what management said vs what analysts pressed on</span>'
-        "</div>"
+        _panel_head(
+            "Cross-quarter themes",
+            sub="last 4 quarters · what management said vs what analysts pressed on",
+        )
     )
     if section.themes_note:
         body.write(f'<p class="muted theme-note">{_esc(section.themes_note)}</p>')
@@ -719,10 +715,6 @@ def _ws_period_sort_key(period: str) -> tuple[int, int]:
 
 def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> None:
     qid = f"{card.quarter} {card.year}"
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write(
-        f'<span class="panel-title">{_esc(qid)} — prepared remarks &amp; key takeaways</span>'
-    )
     sub_parts = ["full" if card.is_recent else "digest"]
     if card.transcript_path:
         as_uri = card.transcript_path.replace("\\", "/")
@@ -732,8 +724,12 @@ def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> No
             f'<a href="{_esc(as_uri)}" target="_blank" rel="noopener" class="muted">'
             "transcript ↗</a>"
         )
-    body.write(f'<span class="panel-sub">{" · ".join(sub_parts)}</span>')
-    body.write("</div>")
+    body.write(
+        _panel_head(
+            f"{qid} — prepared remarks & key takeaways",
+            sub_html=f'<span class="panel-sub">{" · ".join(sub_parts)}</span>',
+        )
+    )
     md = card.summary_md or card.digest_md or ""
     body.write(f'<div class="prose-pad">{_render_markdown(md)}</div>')
     body.write("</div>")
@@ -816,18 +812,27 @@ def _financial_highlights_panel(
     legacy renderer uses, but sliced per-quarter instead of always-latest.
     """
     qid = f"{card.quarter} {card.year}"
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write(f'<span class="panel-title">{_esc(qid)} — financial highlights</span>')
-    body.write('<span class="panel-sub">FMP fundamentals · QoQ / YoY</span></div>')
     if not line_items:
-        body.write(
-            '<div class="stub"><span class="stub-label">no fmp slice</span>'
-            "FMP line items aren't aligned to this quarter; re-run the FMP "
-            "extractor or check quarter labels.</div></div>"
+        _empty_panel(
+            body,
+            f"{qid} — financial highlights",
+            "Quarterly fundamentals aren't aligned to this call's quarter — the "
+            "vendor's fiscal-quarter labels don't match this period. The "
+            "Financials tab carries the full series.",
+            reason="no aligned fundamentals",
         )
         return
+    # Panel-level source chip (P4.1 header anatomy): the quarter's primary
+    # provenance, taken from the first line item that carries a source for
+    # this card's quarter.
+    head_chip: CellSource | None = None
+    for li, _prev, _ya in line_items:
+        head_chip = _source_for_display_index(li, _pos_of_card(li, card))
+        if head_chip is not None:
+            break
+    body.write(_panel_head(f"{qid} — financial highlights", sub="QoQ / YoY", chip=head_chip))
     body.write(
-        '<table class="metrics-table"><thead><tr>'
+        '<table class="tbl"><thead><tr>'
         "<th>Metric</th>"
         f'<th class="num">{_esc(qid)}</th>'
         '<th class="num">QoQ</th>'
@@ -914,20 +919,22 @@ def _qa_roster_panel_for_quarter(
     if qa is None:
         return
     matching = _find_qa_quarter(qa, quarter, year)
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">Analyst Q&amp;A</span>')
     if matching is None:
-        body.write(
-            f'<span class="panel-sub">{_esc(quarter)} {year} call · not parsed</span></div>'
-            '<div class="stub"><span class="stub-label">no transcript</span>'
-            "No parsed transcript on file for this quarter. Older quarters often "
-            "fall out of the aggregator window — fill via "
-            f'<span class="mono">execution/fetch_audio_transcripts.py</span>.</div></div>'
+        _empty_panel(
+            body,
+            "Analyst Q&A",
+            "No parsed transcript on file for this quarter. Older calls often "
+            "drop out of the transcript window, and some quarters publish "
+            "without a Q&A session.",
+            reason=f"{quarter} {year} call · not parsed",
         )
         return
     body.write(
-        f'<span class="panel-sub">{_esc(matching.quarter)} {matching.year} call · '
-        f"{len(matching.entries)} question{'s' if len(matching.entries) != 1 else ''}</span></div>"
+        _panel_head(
+            "Analyst Q&A",
+            sub=f"{matching.quarter} {matching.year} call · "
+            f"{len(matching.entries)} question{'s' if len(matching.entries) != 1 else ''}",
+        )
     )
     body.write('<div class="qa-list">')
     for i, entry in enumerate(matching.entries):
@@ -943,15 +950,16 @@ def _find_qa_quarter(qa: QARosterSection, quarter: str, year: int) -> QARosterQu
 
 
 def _qa_row(body: StringIO, entry: QAEntry, *, is_first: bool) -> None:
-    open_cls = " open" if is_first else ""
-    chev = "-" if is_first else "+"
-    body.write(f'<div class="qa-row{open_cls}">')
-    body.write('<button class="qa-head" type="button">')
-    body.write(f'<span class="qa-chev">{chev}</span>')
+    # P4.1 canonical collapse idiom: <details> rows, first question open.
+    # The +/- chevron is CSS-driven off the [open] state.
+    open_attr = " open" if is_first else ""
+    body.write(f'<details class="qa-row"{open_attr}>')
+    body.write('<summary class="qa-head">')
+    body.write('<span class="qa-chev"></span>')
     body.write(f'<span class="qa-tag">{_esc(entry.tag)}</span>')
     body.write(f'<span class="qa-topic">{_esc(entry.topic)}</span>')
     body.write(f'<span class="qa-analysts">{_esc(entry.analysts)}</span>')
-    body.write("</button>")
+    body.write("</summary>")
     body.write('<div class="qa-body">')
     body.write(
         f'<div class="qa-q"><span class="qa-label">Q</span>'
@@ -974,7 +982,7 @@ def _qa_row(body: StringIO, entry: QAEntry, *, is_first: bool) -> None:
             '<span class="qa-followup-label">Follow-up</span>'
             f"<span>{_esc(entry.follow_up)}</span></div>"
         )
-    body.write("</div></div>")
+    body.write("</div></details>")
 
 
 def _quarter_selector(body: StringIO, labels: list[str], group: str) -> None:
@@ -1072,41 +1080,31 @@ def _saydo_tab(
                 body, card, filtered, total_parsed=len(pvg), llm_filtered=spec.llm_enabled
             )
         else:
-            body.write(
-                '<div class="panel"><div class="panel-head">'
-                '<span class="panel-title">Print vs guide</span>'
-                '<span class="panel-sub">extractor pending — see narrative below</span>'
-                "</div>"
-                '<div class="stub"><span class="stub-label">compute pending</span>'
-                "Auto-extraction of the print-vs-guide table from the saydo narrative is "
-                "not yet wired for this card's markdown shape. Full narrative renders "
-                "below.</div></div>"
+            _empty_panel(
+                body,
+                "Print vs guide",
+                "A structured print-vs-guide table couldn't be read out of this "
+                "quarter's narrative. The full Say·Do narrative below carries "
+                "the same comparison in prose.",
+                reason="not parsed — see narrative below",
             )
 
         body.write('<div class="grid-2col">')
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Thesis view</span>'
-            '<span class="panel-sub">Post-print read-through</span></div>'
-        )
+        body.write(_panel_head("Thesis view", sub="Post-print read-through"))
         body.write(
             f'<div class="prose-pad">{_render_markdown(card.thesis_view or "—")}</div></div>'
         )
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Attribution</span>'
-            '<span class="panel-sub">Execution · exogenous · luck</span></div>'
-        )
+        body.write(_panel_head("Attribution", sub="Execution · exogenous · luck"))
         body.write(
             f'<div class="prose-pad">{_render_markdown(card.attribution or "—")}</div></div>'
         )
         body.write("</div>")
 
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Full Say·Do narrative</span>'
-            f'<span class="panel-sub">{_esc(card.current_quarter)} {card.current_year}</span>'
-            "</div>"
+            _panel_head(
+                "Full Say·Do narrative",
+                sub=f"{card.current_quarter} {card.current_year}",
+            )
         )
         body.write(f'<div class="prose-pad">{_render_markdown(card.saydo_md)}</div></div>')
         body.write("</div>")
@@ -1124,27 +1122,26 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
     newest-first from ``load_saydo_verdicts``; we render them in that order.
     Empty-state when the table has no rows for this ticker.
     """
-    body.write(
-        '<div class="panel saydo-verdicts-panel"><div class="panel-head">'
-        '<span class="panel-title">Say·Do verdict ledger</span>'
-    )
-    if rows:
-        graded = sum(1 for r in rows if r.outcome is not None)
-        body.write(
-            f'<span class="panel-sub">{len(rows)} commitment'
-            f"{'s' if len(rows) != 1 else ''} · {graded} graded</span></div>"
-        )
-    else:
-        body.write('<span class="panel-sub">no commitments extracted</span></div>')
-        body.write(
-            '<div class="stub"><span class="stub-label">cold ticker</span>'
-            "No management_commitments rows yet for this ticker. Run the "
-            "Say·Do commitment extractor (alembic 0017) against the recent "
-            "earnings transcripts to populate.</div></div>"
+    if not rows:
+        _empty_panel(
+            body,
+            "Say·Do verdict ledger",
+            "No tracked management commitments for this name yet — the ledger "
+            "fills in as earnings transcripts are processed.",
+            reason="no commitments extracted",
+            classes="saydo-verdicts-panel",
         )
         return
+    graded = sum(1 for r in rows if r.outcome is not None)
     body.write(
-        '<table class="saydo-table"><thead><tr>'
+        _panel_head(
+            "Say·Do verdict ledger",
+            sub=f"{len(rows)} commitment{'s' if len(rows) != 1 else ''} · {graded} graded",
+            classes="saydo-verdicts-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl"><thead><tr>'
         "<th>Made</th>"
         "<th>Target period</th>"
         "<th>KPI</th>"
@@ -1185,10 +1182,8 @@ def _saydo_summary_table(body: StringIO, cards: list[SayDoCard]) -> None:
     historical trajectory. Cards are newest-first per the section builder.
     """
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">SayDo summary — all tracked pairs</span>'
-        f'<span class="panel-sub">{len(cards)} pairs · newest first</span></div>'
-        '<table class="saydo-table"><thead><tr>'
+        _panel_head("SayDo summary — all tracked pairs", sub=f"{len(cards)} pairs · newest first")
+        + '<table class="tbl"><thead><tr>'
         "<th>Pair</th><th>Rating</th><th>Attribution</th><th>Thesis view</th>"
         "</tr></thead><tbody>"
     )
@@ -1217,12 +1212,8 @@ def _saydo_print_vs_guide(
         sub = f"{len(rows)} of {total_parsed} commitments · LLM-judged for thesis relevance"
     else:
         sub = f"{len(rows)} commitments scored"
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Print vs guide</span>'
-        f'<span class="panel-sub">{_esc(sub)}</span></div>'
-    )
-    body.write('<table class="saydo-table"><thead><tr>')
+    body.write(_panel_head("Print vs guide", sub=sub))
+    body.write('<table class="tbl"><thead><tr>')
     body.write("<th>Metric</th>")
     body.write(f"<th>{_esc(card.prior_quarter)} {card.prior_year} actual</th>")
     body.write(f"<th>{_esc(card.current_quarter)} {card.current_year} actual</th>")
@@ -1264,11 +1255,12 @@ def _outcome_pill(outcome: str) -> str:
 def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric]) -> None:
     """Persistent guidance-outcomes ledger sourced from saydo_historical_metrics."""
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Persistent guidance outcomes ledger</span>'
-        f'<span class="panel-sub">{len(metrics)} tracked commitments · stored in database</span></div>'
+        _panel_head(
+            "Persistent guidance outcomes ledger",
+            sub=f"{len(metrics)} tracked commitments",
+        )
     )
-    body.write('<table class="saydo-table"><thead><tr>')
+    body.write('<table class="tbl"><thead><tr>')
     body.write("<th>Metric</th>")
     body.write("<th>Comparator</th>")
     body.write("<th>Guidance Target</th>")
@@ -1325,7 +1317,7 @@ def _financials_tab(
     )
 
     if fin.status != SectionStatus.OK and not fin.line_items:
-        _missing_panel(body, fin.status, fin.missing)
+        _missing_panel(body, fin.status, fin.missing, title="Financials")
         body.write("</div>")
         return
 
@@ -1438,9 +1430,7 @@ def _segments_yoy_panel_for_metric(
         )
     if not matrix_rows:
         return
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write(f'<span class="panel-title">{_esc(title)}</span>')
-    body.write(f'<span class="panel-sub">{len(matrix_rows)} rows · heat shading</span></div>')
+    body.write(_panel_head(title, sub=f"{len(matrix_rows)} rows · heat shading"))
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
     body.write("</div></div>")
@@ -1474,11 +1464,12 @@ def _segment_secondary_expansions_panel(body: StringIO, seg: SegmentsSection) ->
         if not matrix_rows:
             continue
         parent = f" — under {exp.parent_label}" if exp.parent_label else ""
-        body.write('<div class="panel"><div class="panel-head">')
         body.write(
-            f'<span class="panel-title">By {_esc(axis_label)}{_esc(parent)} · cross-tab</span>'
+            _panel_head(
+                f"By {axis_label}{parent} · cross-tab",
+                sub=f"{len(matrix_rows)} rows · junction data",
+            )
         )
-        body.write(f'<span class="panel-sub">{len(matrix_rows)} rows · junction data</span></div>')
         body.write('<div class="prose-pad">')
         body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
         body.write("</div></div>")
@@ -1503,9 +1494,7 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
         matrix_rows.append(MatrixRow(name=s.name, levels=list(levels), unit=s.unit))
     if not matrix_rows:
         return
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">Tracked KPIs</span>')
-    body.write(f'<span class="panel-sub">{len(matrix_rows)} analyst-tracked series</span></div>')
+    body.write(_panel_head("Tracked KPIs", sub=f"{len(matrix_rows)} analyst-tracked series"))
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(matrix_rows, list(periods), title="", display_quarters=12))
     body.write("</div></div>")
@@ -1535,11 +1524,11 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
     # Trailing CAGR/Δ columns in YEARS, trimmed to the available span so a short
     # annual history (NU CAR = 3 years) doesn't advertise an empty 3y column.
     cagr_years = tuple(y for y in (1, 2, 3) if y < len(years))
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">Tracked KPIs — annual</span>')
     body.write(
-        f'<span class="panel-sub">{len(matrix_rows)} annual-cadence '
-        f"series · fiscal-year axis</span></div>"
+        _panel_head(
+            "Tracked KPIs — annual",
+            sub=f"{len(matrix_rows)} annual-cadence series · fiscal-year axis",
+        )
     )
     body.write('<div class="prose-pad">')
     body.write(
@@ -1585,13 +1574,13 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
     # Align segment series to financials quarter axis. Common case: both share
     # the same labels in the same order. Bail out cleanly when they don't.
     if seg.quarter_labels != fin.quarter_labels:
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Validation: segments ↔ revenue</span>'
-            '<span class="panel-sub">quarter labels misaligned</span></div>'
-            '<div class="stub"><span class="stub-label">cannot tie</span>'
-            "Segment quarter labels don't match financials quarter labels — "
-            "segment series may be on a different fiscal calendar.</div></div>"
+        _empty_panel(
+            body,
+            "Validation: segments ↔ revenue",
+            "Segment quarter labels don't match the financials quarter labels — "
+            "the segment series may be on a different fiscal calendar, so the "
+            "tie-out can't be computed.",
+            reason="cannot tie · labels misaligned",
         )
         return
     diffs: list[tuple[str, float | None]] = []
@@ -1622,12 +1611,13 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
         status_cls = "pill-bad"
         status_text = f"DRIFT — segments off by up to {worst:.1f}%"
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Validation: segments ↔ consolidated revenue</span>'
-        f'<span class="pill {status_cls}">{_esc(status_text)}</span></div>'
+        _panel_head(
+            "Validation: segments ↔ consolidated revenue",
+            sub_html=f'<span class="pill {status_cls}">{_esc(status_text)}</span>',
+        )
     )
     # Compact per-quarter detail table — only show drift > 0.1% to keep it scannable.
-    body.write('<div class="table-scroll"><table class="fin-table"><thead><tr>')
+    body.write('<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>')
     body.write('<th>Quarter</th><th class="num">Revenue</th><th class="num">Σ segments</th>')
     body.write('<th class="num">Drift</th></tr></thead><tbody>')
     for i, lbl in enumerate(fin.quarter_labels):
@@ -1654,13 +1644,13 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
         return
     total = len(signals.red_signals) + len(signals.yellow_signals) + len(signals.green_signals)
     fires = list(signals.red_signals) + list(signals.yellow_signals)
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">§3.5 Signals</span>')
     body.write(
-        f'<span class="panel-sub">{len(signals.red_signals)} red · '
-        f"{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green</span>"
+        _panel_head(
+            "§3.5 Signals",
+            sub=f"{len(signals.red_signals)} red · "
+            f"{len(signals.yellow_signals)} yellow · {len(signals.green_signals)} green",
+        )
     )
-    body.write("</div>")
     if fires:
         body.write('<div class="signals-fires">')
         for r in fires:
@@ -1720,7 +1710,7 @@ def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
 
 def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
     body.write('<div class="prose-pad"><div class="table-scroll">')
-    body.write('<table class="metrics-table"><thead><tr>')
+    body.write('<table class="tbl"><thead><tr>')
     body.write(
         "<th>Sev</th><th>Metric</th><th>Kind</th><th>Signal</th><th>Narrative</th><th>Stat</th>"
     )
@@ -1776,9 +1766,7 @@ def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
         )
     if not rows:
         return
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">YoY% — line items</span>')
-    body.write('<span class="panel-sub">12 quarters · heat shading</span></div>')
+    body.write(_panel_head("YoY% — line items", sub="12 quarters · heat shading"))
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(rows, list(periods), title="", display_quarters=12))
     body.write("</div></div>")
@@ -1805,12 +1793,10 @@ def _segments_yoy_panel(body: StringIO, seg: SegmentsSection) -> None:
         )
     if not rows:
         return
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write('<span class="panel-title">YoY% — revenue by segment</span>')
     sub_bits = [f"{len(rows)} segments · heat shading"]
     if seg.segment_definitions_fiscal_year:
         sub_bits.append(f"definitions from FY{seg.segment_definitions_fiscal_year} (hover 📖)")
-    body.write(f'<span class="panel-sub">{_esc(" · ".join(sub_bits))}</span></div>')
+    body.write(_panel_head("YoY% — revenue by segment", sub=" · ".join(sub_bits)))
     body.write('<div class="prose-pad">')
     body.write(yoy_heatmap_table(rows, list(periods), title="", display_quarters=12))
     body.write("</div></div>")
@@ -1820,10 +1806,11 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
     """12-quarter levels table. Revenue row carries a click-to-expand
     drill-down showing the per-segment breakdown for the same quarters."""
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Line items · last 12 quarters</span>'
-        f'<span class="panel-sub">{fin.currency} millions · QoQ · YoY · 3-yr CAGR · click ▶ to drill</span></div>'
-        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        _panel_head(
+            "Line items · last 12 quarters",
+            sub=f"{fin.currency} millions · QoQ · YoY · 3-yr CAGR · click ▶ to drill",
+        )
+        + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Line item</th>"
     )
     last_labels = fin.quarter_labels[-12:]
@@ -1874,7 +1861,7 @@ def _segment_drill_table(
     body: StringIO, real_segments: list[SegmentSeries], quarter_labels: list[str]
 ) -> None:
     last_labels = quarter_labels[-12:]
-    body.write('<table class="fin-table fin-drill-table"><thead><tr>')
+    body.write('<table class="tbl tbl-nowrap fin-drill-table"><thead><tr>')
     body.write("<th>Segment</th>")
     for lbl in last_labels:
         body.write(f'<th class="num">{_esc(quarter_short(lbl))}</th>')
@@ -1937,22 +1924,24 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     body.write('<div class="eyebrow">Valuation · Opus-picked multiple · 12Q context</div>')
     if vb is None or vb.status != SectionStatus.OK:
         if vb is None:
-            body.write(
-                '<div class="stub"><span class="stub-label">no data</span>'
-                "Valuation basis section not in ReportSpec.</div>"
+            _empty_panel(
+                body,
+                "Valuation basis",
+                "No valuation multiple has been worked up for this name yet.",
             )
         else:
-            _missing_panel(body, vb.status, vb.missing)
+            _missing_panel(body, vb.status, vb.missing, title="Valuation basis")
         body.write("</div>")
         return
 
     # Headline panel: chosen multiple, current value, rich/cheap.
-    body.write('<div class="panel valuation-headline">')
-    body.write('<div class="panel-head">')
-    body.write(f'<span class="panel-title">{_esc(vb.multiple_name or "—")}</span>')
-    if vb.current_period_end:
-        body.write(f'<span class="panel-sub">as of {vb.current_period_end.isoformat()}</span>')
-    body.write("</div>")
+    body.write(
+        _panel_head(
+            vb.multiple_name or "—",
+            as_of=vb.current_period_end.isoformat() if vb.current_period_end else None,
+            classes="valuation-headline",
+        )
+    )
     body.write('<div class="valuation-headline-row">')
     body.write(
         '<div class="valuation-current">'
@@ -1964,7 +1953,7 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
         body.write(
             '<div class="valuation-band">'
             f'<div class="valuation-band-row">Range '
-            f'<span class="mono">{vb.historical_min:.1f}x</span> – '
+            f'<span class="mono">{vb.historical_min:.1f}x</span> &ndash; '
             f'<span class="mono">{vb.historical_max:.1f}x</span></div>'
             f'<div class="valuation-band-row">Median '
             f'<span class="mono">{vb.historical_median:.1f}x</span></div>'
@@ -2010,22 +1999,21 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     # Rationale panel.
     if vb.rationale:
         body.write(
-            '<div class="panel" data-commentable="true" '
-            'data-anchor-type="valuation_rationale" data-anchor-key="valuation_rationale" '
-            'data-anchor-tab="valuation"><div class="panel-head">'
-            '<span class="panel-title">Why this multiple</span>'
-            '<span class="panel-sub">Opus rationale</span></div>'
-            f'<div class="prose-pad">{_render_markdown(vb.rationale)}</div>'
+            _panel_head(
+                "Why this multiple",
+                sub="model rationale",
+                attrs='data-commentable="true" data-anchor-type="valuation_rationale" '
+                'data-anchor-key="valuation_rationale" data-anchor-tab="valuation"',
+            )
+            + f'<div class="prose-pad">{_render_markdown(vb.rationale)}</div>'
             "</div>"
         )
 
     # Target band / notes.
     if vb.notes:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Target read</span>'
-            '<span class="panel-sub">where this should trade</span></div>'
-            f'<div class="prose-pad">{_render_markdown(vb.notes)}</div>'
+            _panel_head("Target read", sub="where this should trade")
+            + f'<div class="prose-pad">{_render_markdown(vb.notes)}</div>'
             "</div>"
         )
 
@@ -2103,30 +2091,24 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
     body.write("</div></div>")
 
     if history.total == 0:
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Decision ledger</span>'
-            '<span class="panel-sub">empty</span></div>'
-            '<div class="stub"><span class="stub-label">cold ticker</span>'
-            "No decisions audit rows for this ticker. The decision-recorder "
-            "(alembic 0046) writes a row each time an LLM lens emits an "
-            "ADD/TRIM/HOLD/SELL recommendation — it will fill in on the "
-            "next pipeline run.</div></div>"
+        _empty_panel(
+            body,
+            "Decision ledger",
+            "No recommendations recorded for this name yet. Entries appear as "
+            "analyses log ADD / TRIM / HOLD / SELL calls, with outcomes graded "
+            "over time.",
+            reason="none recorded",
         )
         body.write("</div>")
         return
 
     # Headline counters: total · win-rate · by-kind chips.
-    body.write('<div class="panel decision-history-panel"><div class="panel-head">')
-    body.write('<span class="panel-title">Summary</span>')
-    if history.win_rate_overall is not None:
-        body.write(
-            f'<span class="panel-sub">{history.win_rate_overall * 100:.0f}% '
-            "win rate on graded decisions</span>"
-        )
-    else:
-        body.write('<span class="panel-sub">no graded outcomes yet</span>')
-    body.write("</div>")
+    sub = (
+        f"{history.win_rate_overall * 100:.0f}% win rate on graded decisions"
+        if history.win_rate_overall is not None
+        else "no graded outcomes yet"
+    )
+    body.write(_panel_head("Summary", sub=sub, classes="decision-history-panel"))
     body.write('<div class="decision-chips">')
     for kind, n in sorted(history.by_kind.items(), key=lambda kv: -kv[1]):
         body.write(
@@ -2150,11 +2132,11 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
 
     # Full ledger.
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Decision ledger</span>'
-        f'<span class="panel-sub">{len(history.rows)} row'
-        f"{'s' if len(history.rows) != 1 else ''} · newest first</span></div>"
-        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        _panel_head(
+            "Decision ledger",
+            sub=f"{len(history.rows)} row{'s' if len(history.rows) != 1 else ''} · newest first",
+        )
+        + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Made</th>"
         "<th>Kind</th>"
         "<th>Conviction</th>"
@@ -2214,10 +2196,8 @@ def _decision_conviction_outcome_panel(body: StringIO, history: DecisionHistoryS
     conv_order = sorted(convictions, key=lambda c: {"high": 0, "medium": 1, "low": 2}.get(c, 9))
     outcome_order = ["correct", "wrong"]
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        f'<span class="panel-title">Conviction {_TIMES} outcome</span>'
-        '<span class="panel-sub">graded decisions only</span></div>'
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(f"Conviction {_TIMES} outcome", sub="graded decisions only")
+        + '<table class="tbl"><thead><tr>'
         "<th>Conviction</th>"
     )
     for out in outcome_order:
@@ -2252,18 +2232,19 @@ def _bear_tab(body: StringIO, bear: BearCaseSection) -> None:
         '<div class="eyebrow">Bear case · structural short thesis · adversarial review</div>'
     )
     if bear.status != SectionStatus.OK:
-        _missing_panel(body, bear.status, bear.missing)
+        _missing_panel(body, bear.status, bear.missing, title="Bear case")
         body.write("</div>")
         return
     _most_underweighted_panel(body, bear)
     _failure_modes_panel(body, bear)
     if not bear.most_underweighted and not bear.failure_modes:
-        body.write(
-            '<div class="stub"><span class="stub-label">empty</span>'
-            "Bear case is empty. Re-run with <code>--enable-llm</code> to "
-            "populate failure modes and the most-underweighted callout. "
-            "Subsequent per-quarter summaries and news will then cross-"
-            "reference these named risks.</div>"
+        _empty_panel(
+            body,
+            "Bear case",
+            "No bear case has been written on this build. Failure modes and "
+            "the most-underweighted callout land with the next full analysis "
+            "build, and later summaries cross-reference those named risks.",
+            reason="not generated",
         )
     body.write("</div>")
 
@@ -2301,12 +2282,7 @@ def _thesis_hygiene_panels(
     if cards:
         body.write('<div class="grid-thesis-hygiene">')
         for title, sub, items in cards:
-            body.write(
-                '<div class="panel"><div class="panel-head">'
-                f'<span class="panel-title">{_esc(title)}</span>'
-                f'<span class="panel-sub">{_esc(sub)}</span></div>'
-                '<ul class="thesis-list">'
-            )
+            body.write(_panel_head(title, sub=sub) + '<ul class="thesis-list">')
             for item in items:
                 body.write(f"<li>{_esc(item)}</li>")
             body.write("</ul></div>")
@@ -2326,13 +2302,15 @@ def _thesis_hygiene_panels(
         # zero-fact tier-2/3 rows out of the table into the footnote.
         shown = [r for r in rows_sorted if r.tier == "tier_1" or _kpi_has_data(r)]
         tracked_only = [r for r in rows_sorted if r.tier != "tier_1" and not _kpi_has_data(r)]
-        summary = f"KPI ledger detail · {len(shown)} tracked"
+        sub = f"{len(shown)} tracked"
         if tracked_only:
-            summary += f", {len(tracked_only)} awaiting data"
+            sub += f" · {len(tracked_only)} awaiting data"
         body.write(
-            '<details class="thesis-ledger-details" open><summary>'
-            f"{_esc(summary)}</summary>"
-            '<div class="table-scroll"><table class="fin-table kpi-ledger-table"><thead><tr>'
+            '<details class="panel" open><summary class="panel-head">'
+            '<span class="panel-title">KPI ledger detail</span>'
+            f'<span class="panel-meta"><span class="panel-sub">{_esc(sub)}</span></span>'
+            "</summary>"
+            '<div class="table-scroll"><table class="tbl tbl-nowrap kpi-ledger-table"><thead><tr>'
             "<th>KPI</th><th>Tier</th><th>Unit</th>"
             '<th class="num">Latest</th><th>Trend</th>'
             "<th>Status</th><th>Break condition</th><th>Source</th>"
@@ -2431,9 +2409,11 @@ def _most_underweighted_panel(body: StringIO, bear: BearCaseSection) -> None:
     if not bear.most_underweighted and not bear.out_of_scope_flags:
         return
     body.write(
-        '<div class="panel underweighted-panel"><div class="panel-head">'
-        '<span class="panel-title">Most underweighted by consensus</span>'
-        '<span class="panel-sub">analyst judgment</span></div>'
+        _panel_head(
+            "Most underweighted by consensus",
+            sub="analyst judgment",
+            classes="underweighted-panel",
+        )
     )
     if bear.most_underweighted:
         body.write(f'<div class="prose-pad">{_render_markdown(bear.most_underweighted)}</div>')
@@ -2454,10 +2434,12 @@ def _most_underweighted_panel(body: StringIO, bear: BearCaseSection) -> None:
 def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
     v = snap.valuation
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Valuation summary</span>'
-        '<span class="panel-sub">DCF</span></div>'
-        '<div class="val-stack">'
+        _panel_head(
+            "Valuation summary",
+            sub="DCF",
+            as_of=v.valuation_date.isoformat() if v.valuation_date is not None else None,
+        )
+        + '<div class="val-stack">'
     )
     _val_row(body, "Consolidated NPV / share", _fmt_price(v.consolidated_npv_per_share))
     if v.sum_of_segments_npv_per_share is not None:
@@ -2470,8 +2452,7 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         _val_row(body, "Margin-of-safety bar", f"{v.mos_bar * 100:.0f}%")
     if v.trigger_status and v.trigger_status != "unknown":
         _val_row(body, "Trigger status", v.trigger_status.upper())
-    if v.valuation_date is not None:
-        _val_row(body, "Valuation date", v.valuation_date.isoformat(), muted=True)
+    # (Valuation date rides in the header's as-of slot — P4.1 anatomy.)
     if v.sheet_url:
         # A Google Sheet is linked (holdings dcf_defaults.gsheet_id) — point
         # straight at it and label it as such. The direct Sheet URL resolves both
@@ -2515,22 +2496,27 @@ def _val_row(
 
 
 def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Universal break rules</span>'
-    )
-    sub_bits = [str(thesis.overall_breach_status)]
-    if thesis.last_evaluated_at is not None:
-        sub_bits.append(f"last eval {thesis.last_evaluated_at.isoformat(timespec='minutes')}")
-    body.write(f'<span class="panel-sub">{_esc(" · ".join(sub_bits))}</span></div>')
     rules = thesis.break_rule_evaluations
     if not rules:
-        body.write(
-            '<div class="stub"><span class="stub-label">no rules evaluated</span>'
-            "Break-rule evaluator hasn't run for this ticker yet.</div></div>"
+        _empty_panel(
+            body,
+            "Universal break rules",
+            "No break-rule evaluations on file for this name yet.",
+            reason="not evaluated",
         )
         return
-    body.write('<table class="break-table"><thead><tr>')
+    body.write(
+        _panel_head(
+            "Universal break rules",
+            sub=str(thesis.overall_breach_status),
+            as_of=(
+                thesis.last_evaluated_at.isoformat(timespec="minutes")
+                if thesis.last_evaluated_at is not None
+                else None
+            ),
+        )
+    )
+    body.write('<table class="tbl"><thead><tr>')
     body.write('<th>Rule</th><th class="num">Latest</th><th class="num">Threshold</th>')
     body.write('<th class="num">Status</th></tr></thead><tbody>')
     for r in rules:
@@ -2579,12 +2565,8 @@ def _soft_rules_panel(body: StringIO, soft_evals: list[SoftRuleEvaluation]) -> N
     semantics stay visually distinct: hard rules can go RED, soft rules can't.
     """
     fired = sum(1 for ev in soft_evals if ev.status == "yellow")
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Soft signals</span>'
-        f'<span class="panel-sub">{fired} of {len(soft_evals)} fired</span></div>'
-    )
-    body.write('<table class="break-table"><thead><tr>')
+    body.write(_panel_head("Soft signals", sub=f"{fired} of {len(soft_evals)} fired"))
+    body.write('<table class="tbl"><thead><tr>')
     body.write('<th>Rule</th><th>Evidence</th><th class="num">Status</th></tr></thead><tbody>')
     for ev in soft_evals:
         body.write('<tr class="break-row">')
@@ -2611,11 +2593,12 @@ def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> N
     if not decisions:
         return
     body.write(
-        '<div class="panel decision-history-panel"><div class="panel-head">'
-        '<span class="panel-title">Recent decisions</span>'
-        f'<span class="panel-sub">last {len(decisions)} LLM recommendation'
-        f"{'s' if len(decisions) != 1 else ''}</span></div>"
-        '<div class="decision-list">'
+        _panel_head(
+            "Recent decisions",
+            sub=f"last {len(decisions)} recommendation{'s' if len(decisions) != 1 else ''}",
+            classes="decision-history-panel",
+        )
+        + '<div class="decision-list">'
     )
     for d in decisions:
         cls = f"decision-badge outcome-{_esc(d.outcome_label)}"
@@ -2637,28 +2620,25 @@ def _macro_sensitivity_panel(body: StringIO, rows: list[MacroSensitivityRow]) ->
     the macro_sensitivities table has no rows for this ticker. Rows are
     pre-sorted by ``|beta|`` descending by ``load_macro_sensitivities``.
     """
-    body.write(
-        '<div class="panel macro-sens-panel"><div class="panel-head">'
-        '<span class="panel-title">Macro factor sensitivity</span>'
-    )
-    if rows:
-        body.write(
-            f'<span class="panel-sub">{len(rows)} factor'
-            f"{'s' if len(rows) != 1 else ''} "
-            f"· lookback {rows[0].lookback_window_days}d</span>"
-        )
-    else:
-        body.write('<span class="panel-sub">no factors tracked</span>')
-    body.write("</div>")
     if not rows:
-        body.write(
-            '<div class="stub"><span class="stub-label">cold ticker</span>'
-            "No macro_sensitivities rows for this ticker. Run the macro β "
-            "backfill (alembic 0045 must be applied) to populate.</div></div>"
+        _empty_panel(
+            body,
+            "Macro factor sensitivity",
+            "No macro-factor betas computed for this name yet.",
+            reason="no factors tracked",
+            classes="macro-sens-panel",
         )
         return
     body.write(
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(
+            "Macro factor sensitivity",
+            sub=f"{len(rows)} factor{'s' if len(rows) != 1 else ''} "
+            f"· lookback {rows[0].lookback_window_days}d",
+            classes="macro-sens-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl"><thead><tr>'
         "<th>Macro factor</th>"
         '<th class="num">β</th>'
         '<th class="num">R²</th>'
@@ -2708,17 +2688,16 @@ def _macro_beta_tone(beta: float) -> str:
 
 
 def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Failure modes</span>'
-        f'<span class="panel-sub">{len(bear.failure_modes)} hypotheses tracked</span></div>'
-    )
     if not bear.failure_modes:
-        body.write(
-            '<div class="stub"><span class="stub-label">none tracked</span>'
-            "Run the bear-case LLM phase (--enable-llm) to populate.</div></div>"
+        _empty_panel(
+            body,
+            "Failure modes",
+            "No failure-mode hypotheses tracked on this build — they populate "
+            "with the bear-case analysis on the next full analysis build.",
+            reason="none tracked",
         )
         return
+    body.write(_panel_head("Failure modes", sub=f"{len(bear.failure_modes)} hypotheses tracked"))
     for i, fm in enumerate(bear.failure_modes):
         _failure_mode_card(body, i, fm)
     body.write("</div>")
@@ -2782,7 +2761,7 @@ def _eval_tab(
     body.write("</div></div>")
 
     if eval_snap.status != SectionStatus.OK and not eval_snap.rows:
-        _missing_panel(body, eval_snap.status, eval_snap.missing)
+        _missing_panel(body, eval_snap.status, eval_snap.missing, title="Quick categorization")
         _peer_comp_panel(body, peer_comp or [])
         body.write("</div>")
         return
@@ -2793,11 +2772,11 @@ def _eval_tab(
     lfy_lbl = f"FY{fy[2]}" if len(fy) >= 3 else "LFY"
 
     body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Quick categorization</span>'
-        f'<span class="panel-sub">{len(eval_snap.rows)} metrics · '
-        f"{lfy_minus_2_lbl} -> TTM</span></div>"
-        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        _panel_head(
+            "Quick categorization",
+            sub=f"{len(eval_snap.rows)} metrics · {lfy_minus_2_lbl} -> TTM",
+        )
+        + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Metric</th>"
         f'<th class="num">{lfy_minus_2_lbl}</th>'
         f'<th class="num">{lfy_minus_1_lbl}</th>'
@@ -2831,25 +2810,25 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
     Empty-state callout when the peers JSON isn't on disk yet so a cold
     evaluation run still shows the slot.
     """
-    body.write(
-        '<div class="panel peer-comp-panel"><div class="panel-head">'
-        '<span class="panel-title">Peer comparison</span>'
-    )
-    if rows:
-        body.write(
-            f'<span class="panel-sub">{len(rows)} peer'
-            f"{'s' if len(rows) != 1 else ''} · TTM key metrics from FMP</span></div>"
-        )
-    else:
-        body.write('<span class="panel-sub">peers cache cold</span></div>')
-        body.write(
-            '<div class="stub"><span class="stub-label">no peers on disk</span>'
-            "No <code>{TICKER}_peers.json</code> in <code>data/historical/fmp/</code>. "
-            "Run the FMP peers fetch to populate, then re-render.</div></div>"
+    if not rows:
+        _empty_panel(
+            body,
+            "Peer comparison",
+            "No peer set on file for this name yet — the comparison fills in "
+            "once peers are identified and their metrics fetched.",
+            reason="no peer set",
+            classes="peer-comp-panel",
         )
         return
     body.write(
-        '<table class="fin-table"><thead><tr>'
+        _panel_head(
+            "Peer comparison",
+            sub=f"{len(rows)} peer{'s' if len(rows) != 1 else ''} · TTM key metrics",
+            classes="peer-comp-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Ticker</th>"
         "<th>Name</th>"
         '<th class="num">Market cap</th>'
@@ -2943,19 +2922,18 @@ def _company_tab(
         body.write('<div class="grid-2col">')
         if cd.business_overview:
             body.write(
-                '<div class="panel" data-commentable="true" '
-                'data-anchor-type="company_overview" data-anchor-key="company_overview" '
-                'data-anchor-tab="company"><div class="panel-head">'
-                '<span class="panel-title">Business overview</span>'
-                '<span class="panel-sub">analytical take</span></div>'
-                f'<div class="prose-pad">{_render_markdown(cd.business_overview)}</div></div>'
+                _panel_head(
+                    "Business overview",
+                    sub="analytical take",
+                    attrs='data-commentable="true" data-anchor-type="company_overview" '
+                    'data-anchor-key="company_overview" data-anchor-tab="company"',
+                )
+                + f'<div class="prose-pad">{_render_markdown(cd.business_overview)}</div></div>'
             )
         if cd.revenue_model:
             body.write(
-                '<div class="panel"><div class="panel-head">'
-                '<span class="panel-title">Revenue mechanics</span>'
-                '<span class="panel-sub">unit economics + mix</span></div>'
-                f'<div class="prose-pad">{_render_markdown(cd.revenue_model)}</div></div>'
+                _panel_head("Revenue mechanics", sub="unit economics + mix")
+                + f'<div class="prose-pad">{_render_markdown(cd.revenue_model)}</div></div>'
             )
         body.write("</div>")
 
@@ -2996,11 +2974,7 @@ def _company_tab(
             if lbl not in labels:
                 labels.append(lbl)
         active = labels[0] if labels else ""
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">IR documents</span>'
-            f'<span class="panel-sub">{len(ir.cards)} on file</span></div>'
-        )
+        body.write(_panel_head("IR documents", sub=f"{len(ir.cards)} on file"))
         _quarter_selector(body, labels, group="ir")
         for c in ordered:
             qid = f"{c.quarter} {c.year}"
@@ -3026,7 +3000,7 @@ def _company_tab(
         _render_filing_intelligence(body, filing)
 
     if cd.status != SectionStatus.OK and not cd.elevator_pitch:
-        _missing_panel(body, cd.status, cd.missing)
+        _missing_panel(body, cd.status, cd.missing, title="Company description")
     body.write("</div>")
 
 
@@ -3045,9 +3019,10 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
 
     if section.raw_synthesis_md:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Buy-side narrative synthesis</span>'
-            '<span class="panel-sub">Critical operational shifts &amp; strategic takeaways</span></div>'
+            _panel_head(
+                "Buy-side narrative synthesis",
+                sub="Critical operational shifts & strategic takeaways",
+            )
         )
         body.write(
             f'<div class="prose-pad">{_render_markdown(section.raw_synthesis_md)}</div></div>'
@@ -3059,15 +3034,13 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
         body.write('<div class="grid-2col">')
 
         if seg is not None:
-            body.write(
-                '<div class="panel"><div class="panel-head">'
-                '<span class="panel-title">Reporting &amp; segment boundary changes</span>'
+            pill = (
+                '<span class="pill pill-warn">DETECTED SHIFT</span>'
+                if seg.has_changes
+                else '<span class="pill pill-ok">NO CHANGE</span>'
             )
-            if seg.has_changes:
-                body.write('<span class="pill pill-warn">DETECTED SHIFT</span>')
-            else:
-                body.write('<span class="pill pill-ok">NO CHANGE</span>')
-            body.write('</div><div class="prose-pad">')
+            body.write(_panel_head("Reporting & segment boundary changes", sub_html=pill))
+            body.write('<div class="prose-pad">')
             seg_desc = seg.description or (
                 "No reporting segment boundary changes or reclassifications detected in footnote disclosures."
             )
@@ -3075,11 +3048,8 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             body.write("</div></div>")
 
         if comp is not None:
-            body.write(
-                '<div class="panel"><div class="panel-head">'
-                '<span class="panel-title">Executive compensation alignment</span>'
-                '</div><div class="prose-pad">'
-            )
+            body.write(_panel_head("Executive compensation alignment"))
+            body.write('<div class="prose-pad">')
             metrics_str = ", ".join(comp.metrics_used) if comp.metrics_used else "—"
             body.write(f"<p><strong>Metrics tracked:</strong> {_esc(metrics_str)}</p>")
             body.write(
@@ -3095,15 +3065,13 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
 
     metric = section.metric_redefinitions
     if metric is not None and (metric.has_changes or metric.description):
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Metric redefinitions</span>'
+        pill = (
+            '<span class="pill pill-warn">DEFINITION SHIFT</span>'
+            if metric.has_changes
+            else '<span class="pill pill-ok">UNCHANGED</span>'
         )
-        if metric.has_changes:
-            body.write('<span class="pill pill-warn">DEFINITION SHIFT</span>')
-        else:
-            body.write('<span class="pill pill-ok">UNCHANGED</span>')
-        body.write('</div><div class="prose-pad">')
+        body.write(_panel_head("Metric redefinitions", sub_html=pill))
+        body.write('<div class="prose-pad">')
         body.write(
             f"<p>{_esc(metric.description or 'No operational/financial metric redefinitions detected.')}</p>"
         )
@@ -3111,11 +3079,12 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
 
     if section.investment_signals:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Investment signals &amp; tail risks</span>'
-            '<span class="panel-sub">Surfaced from commitments, litigation, and tax footnotes</span></div>'
+            _panel_head(
+                "Investment signals & tail risks",
+                sub="Surfaced from commitments, litigation, and tax footnotes",
+            )
         )
-        body.write('<table class="saydo-table"><thead><tr>')
+        body.write('<table class="tbl"><thead><tr>')
         body.write("<th>Signal type</th><th>Severity</th><th>Analytical insight</th>")
         body.write("</tr></thead><tbody>")
         sev_class = {"High": "bad", "Medium": "warn", "Low": "neutral"}
@@ -3137,26 +3106,27 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
     Empty-state callout when the extractor hasn't seen any decks for this
     ticker so the slot stays visible.
     """
-    body.write(
-        '<div class="panel strategic-targets-panel"><div class="panel-head">'
-        '<span class="panel-title">Strategic targets</span>'
-    )
-    if rows:
-        body.write(
-            f'<span class="panel-sub">{len(rows)} long-term '
-            f"commitment{'s' if len(rows) != 1 else ''} · from investor decks</span></div>"
-        )
-    else:
-        body.write('<span class="panel-sub">no decks extracted</span></div>')
-        body.write(
-            '<div class="stub"><span class="stub-label">cold ticker</span>'
-            "No strategic_targets rows for this ticker. The investor-deck "
-            "extractor (alembic 0053) hasn't populated long-term commitments "
-            "yet — run it against the latest investor presentation.</div></div>"
+    if not rows:
+        _empty_panel(
+            body,
+            "Strategic targets",
+            "No long-term management targets on file — these come from "
+            "investor decks, none of which have been processed for this "
+            "name yet.",
+            reason="no decks extracted",
+            classes="strategic-targets-panel",
         )
         return
     body.write(
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(
+            "Strategic targets",
+            sub=f"{len(rows)} long-term commitment{'s' if len(rows) != 1 else ''} "
+            "· from investor decks",
+            classes="strategic-targets-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl"><thead><tr>'
         "<th>Target</th>"
         '<th class="num">Value</th>'
         "<th>Period</th>"
@@ -3188,26 +3158,26 @@ def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrati
     Empty-state when none reported (most large-cap diversified businesses).
     Accessor filters out sub-5% rows so this is "material concentration only".
     """
-    body.write(
-        '<div class="panel customer-concentration-panel"><div class="panel-head">'
-        '<span class="panel-title">Customer concentration</span>'
-    )
-    if rows:
-        body.write(
-            f'<span class="panel-sub">{len(rows)} customer'
-            f"{'s' if len(rows) != 1 else ''} ≥ 5% of revenue</span></div>"
-        )
-    else:
-        body.write('<span class="panel-sub">none ≥ 5% reported</span></div>')
-        body.write(
-            '<div class="stub"><span class="stub-label">no material concentration</span>'
-            "No named customer represents ≥ 5% of revenue in disclosure. "
-            "(Either truly diversified, or the customer-concentration extractor "
-            "hasn't run for this ticker yet — alembic 0040.)</div></div>"
+    if not rows:
+        _empty_panel(
+            body,
+            "Customer concentration",
+            "No named customer reaches 5% of revenue in disclosure — either "
+            "genuinely diversified, or concentration hasn't been disclosed "
+            "for this name.",
+            reason="none ≥ 5% reported",
+            classes="customer-concentration-panel",
         )
         return
     body.write(
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(
+            "Customer concentration",
+            sub=f"{len(rows)} customer{'s' if len(rows) != 1 else ''} ≥ 5% of revenue",
+            classes="customer-concentration-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl"><thead><tr>'
         "<th>Period</th>"
         "<th>Customer</th>"
         '<th class="num">% of revenue</th>'
@@ -3242,29 +3212,29 @@ def _lease_ladder_panel(body: StringIO, rows: list[LeaseLadderRow]) -> None:
     Accessor pre-orders rows Y1..Thereafter then total/imputed/liability.
     Empty-state when no rows exist for the ticker.
     """
-    body.write(
-        '<div class="panel lease-ladder-panel"><div class="panel-head">'
-        '<span class="panel-title">Operating lease maturity ladder</span>'
-    )
-    if rows:
-        fy = rows[0].fiscal_year
-        unit = rows[0].unit
-        curr = rows[0].currency
-        body.write(
-            f'<span class="panel-sub">FY{fy} · as of '
-            f"{rows[0].as_of_date.isoformat()} · {_esc(curr)} {_esc(unit)}</span></div>"
-        )
-    else:
-        body.write('<span class="panel-sub">no ladder on file</span></div>')
-        body.write(
-            '<div class="stub"><span class="stub-label">cold ticker</span>'
-            "No lease_commitments rows for this ticker. The 10-K lease-ladder "
-            "extractor (alembic 0047) hasn't populated yet — run it against "
-            "the latest annual filing.</div></div>"
+    if not rows:
+        _empty_panel(
+            body,
+            "Operating lease maturity ladder",
+            "No lease-maturity ladder on file yet — it appears once the latest "
+            "annual filing's lease footnote is processed.",
+            reason="no ladder on file",
+            classes="lease-ladder-panel",
         )
         return
+    fy = rows[0].fiscal_year
+    unit = rows[0].unit
+    curr = rows[0].currency
     body.write(
-        '<table class="metrics-table"><thead><tr>'
+        _panel_head(
+            "Operating lease maturity ladder",
+            sub=f"FY{fy} · {curr} {unit}",
+            as_of=rows[0].as_of_date.isoformat(),
+            classes="lease-ladder-panel",
+        )
+    )
+    body.write(
+        '<table class="tbl"><thead><tr>'
         "<th>Bucket</th>"
         '<th class="num">Amount</th>'
         "<th>Calendar year</th>"
@@ -3315,10 +3285,7 @@ def _segment_breakdown_panel(body: StringIO, title: str, rows: list[SegmentWeigh
     has_oi = oi_row_count >= 2
 
     body.write(
-        f'<div class="panel"><div class="panel-head">'
-        f'<span class="panel-title">{_esc(title)}</span>'
-        f'<span class="panel-sub">latest period</span></div>'
-        '<table class="seg-list"><thead><tr>'
+        _panel_head(title, sub="latest period") + '<table class="tbl"><thead><tr>'
         "<th>Segment</th>"
         '<th class="num">Revenue ($M)</th>'
         '<th class="num">Share</th>'
@@ -3376,6 +3343,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             body,
             section.status if section else SectionStatus.MISSING_DATA,
             section.missing if section else None,
+            title="Executive comp & insider activity",
         )
         body.write("</div>")
         return
@@ -3391,29 +3359,26 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
     # 1. Alignment narrative
     if section.alignment_narrative_md:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Alignment read</span>'
-            "<span class=\"panel-sub\">Do management's comp metrics reward the analyst's thesis?</span>"
-            "</div>"
+            _panel_head(
+                "Alignment read",
+                sub="Do management's comp metrics reward the analyst's thesis?",
+            )
         )
         body.write(
             f'<div class="prose-pad">{_render_markdown(section.alignment_narrative_md)}</div></div>'
         )
     else:
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Alignment read</span></div>'
-            '<div class="stub"><span class="stub-label">LLM pending</span>'
-            "Rerun with <code>--enable-llm</code> to generate the alignment commentary.</div></div>"
+        _empty_panel(
+            body,
+            "Alignment read",
+            "The alignment commentary hasn't been written yet — it lands with "
+            "the next full analysis build.",
+            reason="analysis pending",
         )
 
     # 2. Anomaly flags
     if section.anomaly_flags:
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Flags</span></div>'
-            '<ul class="flag-list">'
-        )
+        body.write(_panel_head("Flags") + '<ul class="flag-list">')
         for f in section.anomaly_flags:
             tone = "flag-positive" if "POSITIVE" in f else "flag-warn"
             body.write(f'<li class="{tone}">{_esc(f)}</li>')
@@ -3422,11 +3387,11 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
     # 3. NEO comp table
     if section.packages:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Named-Executive-Officer compensation</span>'
-            f'<span class="panel-sub">{len(section.packages)} executives · {section.packages[0].currency}</span>'
-            "</div>"
-            '<table class="comp-table"><thead><tr>'
+            _panel_head(
+                "Named-Executive-Officer compensation",
+                sub=f"{len(section.packages)} executives · {section.packages[0].currency}",
+            )
+            + '<table class="tbl"><thead><tr>'
             "<th>Executive</th><th>Role</th>"
             '<th class="num">Salary</th>'
             '<th class="num">Bonus (actual/target)</th>'
@@ -3475,11 +3440,11 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
     # 4. Insider transactions
     if section.insider_signals:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Recent insider activity</span>'
-            f'<span class="panel-sub">Top {len(section.insider_signals)} by conviction signal · last 12 months</span>'
-            "</div>"
-            '<table class="insider-table"><thead><tr>'
+            _panel_head(
+                "Recent insider activity",
+                sub=f"Top {len(section.insider_signals)} by conviction signal · last 12 months",
+            )
+            + '<table class="tbl insider-table"><thead><tr>'
             "<th>Date</th><th>Insider</th><th>Role</th>"
             "<th>Action</th>"
             '<th class="num">Shares</th>'
@@ -3568,10 +3533,13 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
             '<div class="row-split"><div>'
             '<div class="eyebrow">Cross-section synthesis</div>'
             '<h2 class="section-title">Synthesis</h2></div></div>'
-            '<div class="panel"><div class="stub"><span class="stub-label">no lens artifacts cached</span>'
-            "Generate per-ticker analytical lenses with:</div>"
-            '<pre class="cli-hint">python execution/run_lens.py --ticker '
-            f"{section.ticker if section else '<TICKER>'} --all</pre></div>"
+        )
+        _empty_panel(
+            body,
+            "Analytical lenses",
+            "No analytical lenses are cached for this name yet — they are "
+            "written on the next full analysis build.",
+            reason="none cached",
         )
         body.write("</div>")
         return
@@ -3579,10 +3547,7 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
     body.write('<div class="row-split"><div>')
     body.write('<div class="eyebrow">Cross-section synthesis</div>')
     body.write(f'<h2 class="section-title">Synthesis · {len(section.lenses)} lens artifacts</h2>')
-    body.write(
-        '<p class="sub">Cached cross-section analytical reads. '
-        f"Regenerate with <code>python execution/run_lens.py --ticker {_esc(section.ticker)} --all</code>.</p>"
-    )
+    body.write('<p class="sub">Cached cross-section analytical reads.</p>')
     body.write("</div></div>")
 
     for idx, lens in enumerate(section.lenses):
@@ -3605,24 +3570,22 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
         )
         model_str = f" · {lens.model}" if lens.model else ""
 
-        # First lens (5-min reread typically) renders OPEN
+        # First lens (5-min reread typically) renders OPEN; the rest use the
+        # canonical <details class="panel"> collapse idiom (P4.1).
+        head_inner = (
+            f'<span class="panel-title">{_esc(label)}{warn}</span>'
+            f'<span class="panel-sub">{_esc(sub)}{age_str}{model_str}</span>'
+        )
+        lens_cls = f"panel lens-panel lens-{_esc(lens.name)}"
         if is_first:
             body.write(
-                f'<div class="panel lens-panel lens-{_esc(lens.name)}">'
-                '<div class="panel-head">'
-                f'<span class="panel-title">{_esc(label)}{warn}</span>'
-                f'<span class="panel-sub">{_esc(sub)}{age_str}{model_str}</span>'
-                "</div>"
+                f'<div class="{lens_cls}"><div class="panel-head">{head_inner}</div>'
                 f'<div class="prose-pad lens-body">{_render_markdown(lens.content_md)}</div>'
                 "</div>"
             )
         else:
             body.write(
-                f'<details class="panel lens-panel lens-collapsed lens-{_esc(lens.name)}">'
-                "<summary>"
-                f'<span class="panel-title">{_esc(label)}{warn}</span>'
-                f'<span class="panel-sub">{_esc(sub)}{age_str}{model_str}</span>'
-                "</summary>"
+                f'<details class="{lens_cls}"><summary class="panel-head">{head_inner}</summary>'
                 f'<div class="prose-pad lens-body">{_render_markdown(lens.content_md)}</div>'
                 "</details>"
             )
@@ -3638,11 +3601,11 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
 def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
     body.write('<div class="tab-body">')
     if pp is None or not pp.held:
-        body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Position</span></div>'
-            '<div class="stub"><span class="stub-label">not held</span>'
-            "Portfolio tracker shows no position in this name.</div></div>"
+        _empty_panel(
+            body,
+            "Position",
+            "The portfolio tracker shows no position in this name.",
+            reason="not held",
         )
         body.write("</div>")
         return
@@ -3654,11 +3617,7 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
         f"{'s' if len(pp.accounts) != 1 else ''}."
         "</h2>"
     )
-    if pp.position_as_of is not None:
-        body.write(
-            f'<div class="panel-sub">Tracker snapshot as of '
-            f"{_esc(pp.position_as_of.isoformat())} (read at report build)</div>"
-        )
+    # (Tracker snapshot date rides in the Accounts panel's as-of slot — P4.1.)
     body.write("</div></div>")
 
     body.write('<div class="position-stats">')
@@ -3679,10 +3638,12 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
 
     if pp.accounts:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Accounts</span>'
-            f'<span class="panel-sub">{len(pp.accounts)} rows</span></div>'
-            '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+            _panel_head(
+                "Accounts",
+                sub=f"{len(pp.accounts)} rows",
+                as_of=pp.position_as_of.isoformat() if pp.position_as_of is not None else None,
+            )
+            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Account</th>"
             '<th class="num">Shares</th>'
             '<th class="num">Cost basis</th>'
@@ -3713,10 +3674,11 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
     # before the analyst's own decision log.
     if pp.recent_transactions:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Recent transactions</span>'
-            f'<span class="panel-sub">{len(pp.recent_transactions)} most-recent</span></div>'
-            '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+            _panel_head(
+                "Recent transactions",
+                sub=f"{len(pp.recent_transactions)} most-recent",
+            )
+            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Date</th><th>Account</th><th>Type</th>"
             '<th class="num">Shares</th><th class="num">Amount</th>'
             "</tr></thead><tbody>"
@@ -3737,52 +3699,48 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
             ("Open decisions", pp.open_decisions),
             ("Closed decisions", pp.closed_decisions),
         ):
-            body.write(
-                f'<div class="panel"><div class="panel-head">'
-                f'<span class="panel-title">{_esc(title)}</span>'
-                f'<span class="panel-sub">{len(decisions)} logged</span></div>'
-            )
             if not decisions:
-                body.write(
-                    '<div class="stub"><span class="stub-label">empty</span>'
-                    "No decisions logged.</div>"
+                _empty_panel(
+                    body,
+                    title,
+                    f"No {title.lower()} logged for this name.",
+                    reason="none logged",
                 )
-            else:
-                for d in decisions:
-                    body.write('<div class="decision-card"><div class="decision-head">')
-                    body.write(f'<span class="decision-date">{d.decision_date.isoformat()}</span>')
-                    body.write(f'<span class="decision-action">{_esc(d.action)}</span>')
-                    if d.confidence:
-                        body.write(f'<span class="decision-confidence">{_esc(d.confidence)}</span>')
-                    if d.outcome_status and d.outcome_status not in ("open", "None"):
+                continue
+            body.write(_panel_head(title, sub=f"{len(decisions)} logged"))
+            for d in decisions:
+                body.write('<div class="decision-card"><div class="decision-head">')
+                body.write(f'<span class="decision-date">{d.decision_date.isoformat()}</span>')
+                body.write(f'<span class="decision-action">{_esc(d.action)}</span>')
+                if d.confidence:
+                    body.write(f'<span class="decision-confidence">{_esc(d.confidence)}</span>')
+                if d.outcome_status and d.outcome_status not in ("open", "None"):
+                    body.write(
+                        f'<span class="decision-outcome {_esc(d.outcome_status)}">'
+                        f"{_esc(d.outcome_status)}</span>"
+                    )
+                if d.linked_brief_path:
+                    # Link directly to the brief that backed this decision.
+                    as_uri = d.linked_brief_path.replace("\\", "/")
+                    if not as_uri.startswith(("file://", "http://", "https://")):
+                        as_uri = "file:///" + as_uri.lstrip("/")
+                    body.write(
+                        f'<a class="decision-brief-link" href="{_esc(as_uri)}" '
+                        'target="_blank" rel="noopener">brief ↗</a>'
+                    )
+                body.write("</div>")
+                body.write(f'<p class="decision-thesis">{_esc(d.thesis)}</p>')
+                # Closed-decision outcome notes/date — high-signal post-mortem.
+                if d.outcome_status not in (None, "open") and (d.outcome_date or d.outcome_notes):
+                    body.write('<div class="decision-outcome-block xsmall muted">')
+                    if d.outcome_date is not None:
                         body.write(
-                            f'<span class="decision-outcome {_esc(d.outcome_status)}">'
-                            f"{_esc(d.outcome_status)}</span>"
+                            f"<span><strong>Closed {d.outcome_date.isoformat()}.</strong> </span>"
                         )
-                    if d.linked_brief_path:
-                        # Link directly to the brief that backed this decision.
-                        as_uri = d.linked_brief_path.replace("\\", "/")
-                        if not as_uri.startswith(("file://", "http://", "https://")):
-                            as_uri = "file:///" + as_uri.lstrip("/")
-                        body.write(
-                            f'<a class="decision-brief-link" href="{_esc(as_uri)}" '
-                            'target="_blank" rel="noopener">brief ↗</a>'
-                        )
+                    if d.outcome_notes:
+                        body.write(f"<span>{_esc(d.outcome_notes)}</span>")
                     body.write("</div>")
-                    body.write(f'<p class="decision-thesis">{_esc(d.thesis)}</p>')
-                    # Closed-decision outcome notes/date — high-signal post-mortem.
-                    if d.outcome_status not in (None, "open") and (
-                        d.outcome_date or d.outcome_notes
-                    ):
-                        body.write('<div class="decision-outcome-block xsmall muted">')
-                        if d.outcome_date is not None:
-                            body.write(
-                                f"<span><strong>Closed {d.outcome_date.isoformat()}.</strong> </span>"
-                            )
-                        if d.outcome_notes:
-                            body.write(f"<span>{_esc(d.outcome_notes)}</span>")
-                        body.write("</div>")
-                    body.write("</div>")
+                body.write("</div>")
             body.write("</div>")
         body.write("</div>")
 
@@ -3823,10 +3781,10 @@ def _sources_tab(
     # Transcripts first — most-used scroll target per user request.
     if app.transcripts:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Earnings-call transcripts</span>'
-            f'<span class="panel-sub">{len(app.transcripts)} on file · click to expand</span>'
-            "</div>"
+            _panel_head(
+                "Earnings-call transcripts",
+                sub=f"{len(app.transcripts)} on file · click to expand",
+            )
         )
         for t in app.transcripts:
             body.write('<details class="transcript-block">')
@@ -3840,10 +3798,11 @@ def _sources_tab(
     # easy to miss. Severity-sorted (errors first), capped server-side at 50.
     if prov.open_issues_detail:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Open validation issues</span>'
-            f'<span class="pill pill-warn">{prov.open_validation_issues} open</span></div>'
-            '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+            _panel_head(
+                "Open validation issues",
+                sub_html=f'<span class="pill pill-warn">{prov.open_validation_issues} open</span>',
+            )
+            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Severity</th><th>Rule</th><th>Raw value</th><th>Expected</th><th>Raised</th>"
             "</tr></thead><tbody>"
         )
@@ -3864,11 +3823,11 @@ def _sources_tab(
 
     if prov.coverage:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Coverage matrix</span>'
-            f'<span class="panel-sub">{prov.open_validation_issues} open validation issues</span>'
-            "</div>"
-            '<div class="table-scroll"><table class="coverage-table"><thead><tr>'
+            _panel_head(
+                "Coverage matrix",
+                sub=f"{prov.open_validation_issues} open validation issues",
+            )
+            + '<div class="table-scroll"><table class="tbl coverage-table"><thead><tr>'
             "<th>Quarter</th>"
             '<th class="cov-cell">Audio</th>'
             '<th class="cov-cell">Transcript</th>'
@@ -3895,10 +3854,8 @@ def _sources_tab(
 
     if prov.source_docs:
         body.write(
-            '<div class="panel"><div class="panel-head">'
-            '<span class="panel-title">Source documents</span>'
-            f'<span class="panel-sub">{len(prov.source_docs)} files</span></div>'
-            '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+            _panel_head("Source documents", sub=f"{len(prov.source_docs)} files")
+            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Type</th><th>Period</th><th>Path</th><th>Fetched</th>"
             "</tr></thead><tbody>"
         )
@@ -3930,26 +3887,26 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=window_days)
     summaries: list[VersionSummary] = summarize_by_prompt_version(db_path=db_path, since=since)
 
-    body.write(
-        '<div class="panel"><div class="panel-head">'
-        '<span class="panel-title">Prompt quality</span>'
-        f'<span class="panel-sub">last {window_days} days · '
-        "grader-scored, grouped by prompt version</span></div>"
-    )
-
     if not summaries:
-        body.write(
-            '<div class="muted" style="padding:8px 12px">'
-            "No calibration data yet — run "
-            "<code>python execution/grade_bear_cases.py</code> or "
-            "<code>python execution/grade_decisions.py</code> to populate."
-            "</div></div>"
+        _empty_panel(
+            body,
+            "Prompt quality",
+            "No calibration data yet — quality scores appear here after "
+            "grading runs against recent analyses.",
+            reason=f"last {window_days} days · none scored",
         )
         return
 
+    body.write(
+        _panel_head(
+            "Prompt quality",
+            sub=f"last {window_days} days · grader-scored, grouped by prompt version",
+        )
+    )
+
     daily = daily_avg_scores(db_path=db_path, since=since)
     body.write(
-        '<div class="table-scroll"><table class="fin-table"><thead><tr>'
+        '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
         "<th>Purpose</th><th>Version</th>"
         '<th class="num">n</th>'
         '<th class="num">avg</th>'
@@ -4134,6 +4091,71 @@ def _esc(text: str) -> str:
     return html.escape(text, quote=True)
 
 
+def _panel_head(
+    title: str,
+    *,
+    sub: str | None = None,
+    sub_html: str | None = None,
+    as_of: str | None = None,
+    chip: CellSource | None = None,
+    classes: str = "",
+    attrs: str = "",
+    title_html: str | None = None,
+) -> str:
+    """Canonical section-header anatomy (P4.1): title · as-of · source chip,
+    with the descriptive sub on the right edge. Returns the OPENED panel —
+    ``<div class="panel …"><div class="panel-head">…</div>`` — so the caller
+    writes the panel body and the closing ``</div>``.
+
+    ``title``/``sub``/``as_of`` are escaped; ``title_html``/``sub_html``/
+    ``attrs`` are emitted as-is for call sites that embed links, pills, or
+    data-anchor attributes. Hand-rolled ``panel-head`` markup should not
+    exist outside this helper (and the <summary> variants that mirror it).
+    """
+    cls = f"panel {classes}".strip()
+    t = title_html if title_html is not None else _esc(title)
+    meta: list[str] = []
+    if as_of:
+        meta.append(f'<span class="panel-asof">as of {_esc(as_of)}</span>')
+    if chip is not None:
+        meta.append(_source_chip_html(chip))
+    if sub_html is not None:
+        meta.append(sub_html)
+    elif sub:
+        meta.append(f'<span class="panel-sub">{_esc(sub)}</span>')
+    meta_html = f'<span class="panel-meta">{"".join(meta)}</span>' if meta else ""
+    attrs_s = f" {attrs}" if attrs else ""
+    return (
+        f'<div class="{cls}"{attrs_s}><div class="panel-head">'
+        f'<span class="panel-title">{t}</span>{meta_html}</div>'
+    )
+
+
+def _empty_panel(
+    body: StringIO,
+    title: str,
+    message: str,
+    *,
+    reason: str = "no data",
+    classes: str = "",
+) -> None:
+    """P4.1 empty-state anatomy: a collapsed one-line <details> panel that
+    expands to an analyst-language explanation.
+
+    Empty sections collapse to a single muted line instead of stacking
+    full-height stub panels, and the copy never references CLI commands,
+    migration ids, or pipeline internals — reports speak analyst; operations
+    live under Governance.
+    """
+    cls = f"panel panel-empty {classes}".strip()
+    body.write(
+        f'<details class="{cls}"><summary class="panel-head">'
+        f'<span class="panel-title">{_esc(title)}</span>'
+        f'<span class="panel-meta"><span class="panel-sub">{_esc(reason)}</span></span>'
+        f'</summary><div class="panel-empty-body">{_esc(message)}</div></details>'
+    )
+
+
 def _fmt_usd(v: float | None) -> str:
     """Full-precision dollar (2 decimals). Used for cost basis / P&L amounts."""
     if v is None:
@@ -4154,21 +4176,58 @@ def _fmt_pct(v: float | None) -> str:
     return f"{v:.1f}%"
 
 
-def _missing_panel(body: StringIO, status: SectionStatus, missing: MissingReason | None) -> None:
+# Analyst-language readings of SectionStatus for the empty-state summary line
+# (P4.1): short right-edge reason + default expanded message. The
+# ``MissingReason.fix_command`` CLI string deliberately never renders here.
+_STATUS_EMPTY_REASON: dict[SectionStatus, tuple[str, str]] = {
+    SectionStatus.MISSING_DATA: (
+        "no data yet",
+        "No data on file for this section yet.",
+    ),
+    SectionStatus.PARTIAL: (
+        "partial coverage",
+        "Only part of this section's data is on file yet.",
+    ),
+    SectionStatus.LLM_PENDING: (
+        "analysis pending",
+        "This read hasn't been written yet — it lands with the next full analysis build.",
+    ),
+    SectionStatus.NOT_APPLICABLE: (
+        "not applicable",
+        "This section doesn't apply to this name.",
+    ),
+    SectionStatus.BUDGET_SKIPPED: (
+        "Forgone — budget",
+        "Forgone to stay under the monthly analysis budget. Raise the cap or "
+        "override from the settings drawer, then rebuild.",
+    ),
+}
+
+
+def _missing_panel(
+    body: StringIO,
+    status: SectionStatus,
+    missing: MissingReason | None,
+    *,
+    title: str = "Section data",
+) -> None:
+    """Section-level miss rendered as the collapsed empty-state panel.
+
+    ``missing.detail`` is analyst prose and is surfaced when present; the
+    ``fix_command`` CLI string is NOT (reports speak analyst — the operational
+    fix lives under Governance)."""
+    reason, default_msg = _STATUS_EMPTY_REASON.get(
+        status, (status.value.replace("_", " "), "Section returned no data.")
+    )
+    message = missing.detail if missing is not None and missing.detail else default_msg
     is_budget = status == SectionStatus.BUDGET_SKIPPED
-    title = "⏭ Forgone — budget" if is_budget else f"Section status: {status.value}"
-    body.write('<div class="panel"><div class="panel-head">')
-    body.write(f'<span class="panel-title">{title}</span>')
-    body.write("</div>")
-    stub_style = ' style="border-left:3px solid #d97706;"' if is_budget else ""
-    body.write(f'<div class="stub"{stub_style}><span class="stub-label">{status.value}</span>')
-    if missing is not None:
-        body.write(_esc(missing.detail or "No data."))
-        if missing.fix_command:
-            body.write(f'<br><span class="mono">{_esc(missing.fix_command)}</span>')
-    else:
-        body.write("Section returned no data.")
-    body.write("</div></div>")
+    _empty_panel(
+        body,
+        title,
+        message,
+        reason=reason,
+        classes="panel-budget" if is_budget else "",
+    )
 
 
 def _forgone_strip(body: StringIO, forgone: list[BudgetSkip]) -> None:
@@ -4207,7 +4266,7 @@ def _render_markdown(md: str) -> str:
         nonlocal in_table
         if not table_rows:
             return
-        out.append('<div class="table-scroll"><table class="fin-table"><thead><tr>')
+        out.append('<div class="table-scroll"><table class="tbl"><thead><tr>')
         for c in table_rows[0]:
             out.append(f"<th>{_inline_md(c)}</th>")
         out.append("</tr></thead><tbody>")
