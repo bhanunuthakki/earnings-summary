@@ -186,7 +186,7 @@ demands it (note the split in the Decision log).
   drop the panel — owner flagged the current peers as wrong).
 - [x] **P4.3 Cross-links.** *(#384)* Earnings themes ↔ bear case; valuation ↔
   thesis KPI drivers; signals ↔ news; concentration → bear.
-- [ ] **P4.4 (D3) Event resurfacing.** Digest "open items" panel; earnings
+- [x] **P4.4 (D3) Event resurfacing.** *(#387)* Digest "open items" panel; earnings
   prep + new builds lead with the owner's open watch-items; alerts attach
   relevant notes to their evidence.
 - [ ] **P4.5 (D4) Journal UI.** Notes lifecycle in the app (list / filter /
@@ -351,3 +351,13 @@ demands it (note the split in the Decision log).
   `links` slot + a data-xtab JS handler (tab switch + scroll + flash) —
   themes↔failure-modes, valuation↔KPI ledger, signals→news,
   concentration→bear. No LLM-matched linking; pair-level links only.
+- 2026-06-11 (P4.4, #387): all three resurfacing paths read analyst_notes
+  with the same lead-kind ordering (watch, question, then the rest):
+  digest "Open items" section + per-name prep notes under Upcoming
+  (3 + overflow), the workspace "Open watch-items" strip under the thesis
+  lede (render-time via load_workspace_p3_panels.open_notes; hidden when
+  the journal is empty), and a "Related notes" drawer section fed by
+  load_brief_provenance's payload (now sources_used + transcript_docs +
+  open_notes — the per-ticker alert-context bundle; still zero call-site
+  changes). Resolved/archived notes never resurface. Notes stay read-only
+  on every one of these surfaces until the P4.5 journal UI.
