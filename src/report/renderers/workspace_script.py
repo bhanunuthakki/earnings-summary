@@ -32,6 +32,28 @@ JS = r"""
 
   // (Q&A accordion: now native <details class="qa-row"> — no JS. P4.1.)
 
+  // ---- Cross-tab links (P4.3) ---------------------------------------------
+  // <a data-xtab="bear" data-anchor="panel-failure-modes"> switches to the
+  // named tab and scrolls the anchor panel into view (or the top when no
+  // anchor). Authored by workspace_html._xlink_html.
+  document.querySelectorAll('a[data-xtab]').forEach(function (link) {
+    link.addEventListener('click', function (ev) {
+      ev.preventDefault();
+      var tabBtn = document.querySelector('.tab[data-tab="' + link.getAttribute('data-xtab') + '"]');
+      if (tabBtn) tabBtn.click();
+      var anchorId = link.getAttribute('data-anchor');
+      var target = anchorId ? document.getElementById(anchorId) : null;
+      if (target) {
+        target.scrollIntoView({behavior: 'smooth', block: 'start'});
+        target.classList.add('xlink-flash');
+        setTimeout(function () { target.classList.remove('xlink-flash'); }, 1600);
+      } else {
+        var root = document.querySelector('.l1-root');
+        if (root) root.scrollTop = 0;
+      }
+    });
+  });
+
   // ---- Quarter selector ---------------------------------------------------
   document.querySelectorAll('[data-quarter-group]').forEach(function (group) {
     var groupId = group.getAttribute('data-quarter-group');

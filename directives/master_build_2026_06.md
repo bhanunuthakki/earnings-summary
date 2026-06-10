@@ -184,7 +184,7 @@ demands it (note the split in the Decision log).
 - [x] **P4.2 Coverage fill-or-hide.** *(#382)* Per-ticker section coverage report;
   hide-don't-stub policy; peer-comp fix (better comparable selection or
   drop the panel — owner flagged the current peers as wrong).
-- [ ] **P4.3 Cross-links.** Earnings themes ↔ bear case; valuation ↔
+- [x] **P4.3 Cross-links.** *(#384)* Earnings themes ↔ bear case; valuation ↔
   thesis KPI drivers; signals ↔ news; concentration → bear.
 - [ ] **P4.4 (D3) Event resurfacing.** Digest "open items" panel; earnings
   prep + new builds lead with the owner's open watch-items; alerts attach
@@ -329,3 +329,14 @@ demands it (note the split in the Decision log).
   fallback covers rivals outside the cached-profile universe (ITUB). Also
   repaired stable-API field drift (mktCap/revenueTTM/roicTTM v3 keys) that
   had been blanking every peer metric since the FMP cutover.
+- 2026-06-11 (P4.3, #384): the phase also closed the chip/viewer debt P3.5
+  left noted — CellSource gained doc_id (the P3.3 mapping dropped
+  source_doc_id) so chips deep-link `/source/<doc_id>` (locator-sharpened:
+  transcript_line → #L<n>, section → ?section=); the drawer's
+  transcript_line citations resolve through a transcript_docs map that
+  load_brief_provenance now bundles (period parsed from processed-transcript
+  file names; no call-site changes; unresolvable periods stay plain text).
+  Cross-links are deterministic header links via the P4.1 anatomy's new
+  `links` slot + a data-xtab JS handler (tab switch + scroll + flash) —
+  themes↔failure-modes, valuation↔KPI ledger, signals→news,
+  concentration→bear. No LLM-matched linking; pair-level links only.
