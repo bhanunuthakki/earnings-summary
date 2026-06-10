@@ -142,7 +142,7 @@ demands it (note the split in the Decision log).
   page v1: TWR vs SPY/QQQ/policy, allocation by account type/sector,
   concentration, per-position alpha. Degrades gracefully when the tracker
   is offline (existing pattern).
-- [ ] **P2.2 Allocation-decisions record.** Sizing-audit view (conviction
+- [x] **P2.2 Allocation-decisions record.** *(#377)* Sizing-audit view (conviction
   vs weight vs valuation gap vs alpha, mismatches ranked); the decisions
   ledger + position-sizing intents fold in as the decisions timeline.
 - [ ] **P2.3 Advisor memos.** Next-dollar allocation memo (on demand +
@@ -243,6 +243,15 @@ demands it (note the split in the Decision log).
   so it is immune to either convention. Old GET-/ ops tables + their
   renderers retired with the move (dashboard_html is now just the Actions
   fragment); /api/dashboard JSON unchanged.
+- 2026-06-10 (P2.2, #377): conviction is *recorded, never inferred* — the
+  audit's conviction/target columns read only `position_sizing_intent` (empty
+  in prod at ship time; the panel's inline editor + `POST /api/sizing-intents`
+  are the cold-start path), with the thesis verdict shown as its own column
+  rather than blended into a pseudo-conviction. Mismatch heuristics are
+  deliberately coarse rank-only scores with every contribution rendered as a
+  chip. The Portfolio sub-tab rename deferred from P2.1 landed as
+  "Performance"; the standalone Thesis Ledger tab folded into the Decisions
+  record (hashes redirect, fragment endpoint kept). No new tables.
 - 2026-06-10 (post-P2.1 follow-up, #372): owner asked for an editable
   analytics window on the Portfolio page. Window bar (1M/3M/6M/YTD/1Y/2Y
   presets + custom dates + the tracker's modeled-backfill toggle) refetches

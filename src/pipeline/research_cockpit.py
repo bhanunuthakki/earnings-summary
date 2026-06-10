@@ -155,7 +155,7 @@ def build_cockpit_rows(
 
     names = _company_names(conn, tickers)
     alerts = _pending_alert_counts(conn)
-    dcf = _latest_dcf_runs(conn)
+    dcf = latest_dcf_runs(conn)
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
     kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers)
@@ -226,7 +226,7 @@ def _pending_alert_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {str(r["ticker"]): int(r["n"]) for r in rows}
 
 
-def _latest_dcf_runs(
+def latest_dcf_runs(
     conn: sqlite3.Connection,
 ) -> dict[str, tuple[float | None, float | None, float | None, str | None]]:
     """ticker -> (fv_gap_pct, npv_per_share, live_price, valuation_date), latest
@@ -234,7 +234,8 @@ def _latest_dcf_runs(
     rather than read from ``over_under_pct`` — the bank/holdco builders stored
     that column in a different convention (percent upside) than refresh_dcf's
     documented ratio, and the row's own two fields are convention-proof and
-    currency-consistent with each other."""
+    currency-consistent with each other. Public: the allocation-decisions
+    panel (P2.2) reads the same gap so the two surfaces can never disagree."""
     rows = _safe_rows(
         conn,
         "SELECT ticker, valuation_date, npv_per_share, live_price "
