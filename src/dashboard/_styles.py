@@ -1,40 +1,21 @@
 """Shared inline CSS for the Personal CIO dashboard surfaces.
 
-Two-tone editorial palette (echoing the workspace renderer's tokens
-without depending on it — the dashboard is intentionally a separate
-render surface, not a workspace tab). Single self-contained string
-inlined under ``<style>`` so the deliverable HTML files open straight
-from the filesystem with no asset fetches.
+Palette comes from the shared token source (``src/ui/tokens.py`` — master
+build P0.1) so this surface can never drift from the workspace again;
+layout tokens stay local. Single self-contained string inlined under
+``<style>`` so the deliverable HTML files open straight from the
+filesystem with no asset fetches.
 """
 
 from __future__ import annotations
 
-CSS = r"""
+from ui.tokens import palette_css
+
+CSS = (
+    "\n/* Shared palette (single source: src/ui/tokens.py) + local layout tokens. */\n"
+    + palette_css("dark")
+    + r"""
 :root {
-  --bg: #0c0d10;
-  --surface: #14161b;
-  --paper: #1a1d23;
-  --fg: #f4f3ef;
-  --fg-soft: #d5d6d2;
-  --muted: #888b94;
-  --muted-2: #5b5e66;
-  --border: #2a2d35;
-  --border-2: #383b44;
-  --hairline: #1f2127;
-
-  --accent: #8aa8ff;
-  --accent-soft: #1c2138;
-
-  --ok: #8aa8ff;
-  --warn: #f5c66a;
-  --bad: #f08a8a;
-  --pos: #8aa8ff;
-  --neu: #888b94;
-
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --serif: 'Source Serif 4', Georgia, serif;
-  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-
   --pad-x: 22px;
   --pad-y: 14px;
   --gap: 14px;
@@ -275,3 +256,4 @@ a:hover { text-decoration: underline; }
   letter-spacing: 0.04em;
 }
 """
+)

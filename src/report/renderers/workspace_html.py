@@ -109,6 +109,7 @@ from report.sections.p3_data import (
     SayDoVerdictRow,
     StrategicTargetRow,
 )
+from ui.tokens import FAVICON_LINK
 
 # A tab tuple: (id, label, optional badge count, render-function-into-body).
 TabRenderFn: TypeAlias = Callable[[StringIO], None]
@@ -182,6 +183,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{_esc(title)}</title>
+{FAVICON_LINK}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
