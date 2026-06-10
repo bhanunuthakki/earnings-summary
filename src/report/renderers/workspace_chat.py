@@ -70,7 +70,7 @@ JS = r"""
         });
       })
       .catch(function() {
-        appendTurn('system', 'Server unreachable. Start with: python execution/comments_server.py', null);
+        appendTurn('system', 'The research server is not reachable, so chat is offline.', null);
       });
 
     // ----- Submit handler -----
@@ -124,7 +124,7 @@ JS = r"""
         return pump();
       }).catch(function(err) {
         streamEl.textContent = '[ERROR] ' + err.message;
-        hintEl.textContent = 'Server unreachable. Start: python execution/comments_server.py';
+        hintEl.textContent = 'The research server is not reachable - chat is offline.';
       });
     });
 

@@ -1,8 +1,10 @@
 """Vanilla-JS interaction layer for the workspace renderer.
 
 Wires up the interactions the server-rendered HTML alone can't do: tab
-switching, Q&A accordion, quarter-card swap, segment drill-down in the
-financials levels table. Single ``<script>`` block inlined by the renderer.
+switching, quarter-card swap, segment drill-down in the financials levels
+table. Single ``<script>`` block inlined by the renderer. Collapses use
+native <details> (P4.1) — the drill-down stays JS only because <tr> rows
+can't nest inside <details>.
 
 Kept dependency-free on purpose so the deliverable stays a single
 self-contained HTML doc that opens identically offline, in any browser, years
@@ -28,16 +30,7 @@ JS = r"""
     });
   });
 
-  // ---- Q&A accordion ------------------------------------------------------
-  document.querySelectorAll('.qa-head').forEach(function (head) {
-    head.addEventListener('click', function () {
-      var row = head.closest('.qa-row');
-      if (!row) return;
-      var open = row.classList.toggle('open');
-      var chev = head.querySelector('.qa-chev');
-      if (chev) chev.textContent = open ? '-' : '+';
-    });
-  });
+  // (Q&A accordion: now native <details class="qa-row"> — no JS. P4.1.)
 
   // ---- Quarter selector ---------------------------------------------------
   document.querySelectorAll('[data-quarter-group]').forEach(function (group) {

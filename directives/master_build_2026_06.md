@@ -178,7 +178,7 @@ demands it (note the split in the Decision log).
   view on superseded facts.
 
 ### Wave 4 — Report cohesion + memory surfacing
-- [ ] **P4.1 Section chrome.** One header anatomy (title · as-of · source
+- [x] **P4.1 Section chrome.** *(#379)* One header anatomy (title · as-of · source
   chip), analyst-language empty states (no alembic/CLI text in reports),
   empties collapse, one table class, one collapse idiom.
 - [ ] **P4.2 Coverage fill-or-hide.** Per-ticker section coverage report;
@@ -271,3 +271,16 @@ demands it (note the split in the Decision log).
   missing. The queued-action cards' relative approve links remain dead on
   the live server everywhere (no /approve route — pre-existing on /digest
   and /feed too; the CLI hint is the real path) — left for P4.4/P6.1.
+- 2026-06-11 (P4.1, #379): chrome decisions taken in-phase — the one table
+  class is `.tbl` (+`.tbl-nowrap` for dense numeric grids; semantic
+  modifiers like kpi-ledger-table keep only table-specific rules); the one
+  collapse idiom is `<details class="panel">` + `<summary class="panel-head">`
+  (Q&A accordion moved off JS onto native details; the financials line-item
+  drill is the documented JS exception — `<tr>` can't nest in `<details>`);
+  empty states are collapsed-by-default `<details>` one-liners via
+  `_empty_panel`, and `_missing_panel` no longer renders
+  `MissingReason.fix_command` (reports speak analyst; ops live under
+  Governance — html.py/markdown.py legacy renderers left as-is). Panel-level
+  source chips wired where provenance already flows (financial highlights);
+  remaining panels join as their data acquires locators (P4.3). Renderer
+  diff is net-negative (-65 lines) despite the two new helpers.

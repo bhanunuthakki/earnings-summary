@@ -251,10 +251,10 @@ def test_widget_renders_empty_state_without_breaking(tmp_path: Path) -> None:
     # No DB file at all — must render the panel chrome + a "no data" stub.
     _prompt_quality_panel(body, tmp_path / "does-not-exist.db")
     html = body.getvalue()
-    assert 'class="panel"' in html
+    assert 'class="panel panel-empty"' in html
     assert "Prompt quality" in html
     assert "No calibration data yet" in html
-    # Stub branch must not emit an empty table — verified by absence of a tbody.
+    # Empty branch must not emit an empty table — verified by absence of a tbody.
     assert "<tbody>" not in html
 
 
