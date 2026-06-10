@@ -184,6 +184,11 @@ LLM_MODELS: dict[str, str] = {
     # deterministic screen; Sonnet keeps the marginal cost proportionate.
     "advisor_next_dollar": "claude-opus-4-7",
     "advisor_swap_check": DEFAULT_MODEL,
+    # Socratic think-through (P2.4): question generation is a short grounded
+    # task (Sonnet); the decision memo weighs the owner's answers against the
+    # evidence and commits to a scoreable stance — Opus judgment tier.
+    "advisor_socratic_questions": DEFAULT_MODEL,
+    "advisor_socratic_memo": "claude-opus-4-7",
     # Short, structured, batch — Haiku for latency
     "intake_classifier": FAST_CLASSIFIER_MODEL,
     "transcript_metadata": FAST_CLASSIFIER_MODEL,

@@ -289,6 +289,13 @@ valuation rationale"), respond with both:
 
 The user can then choose to apply or reject. Don't propose a diff unless
 the user explicitly asks for an edit.
+
+When the analyst asks for a STANCE on this holding (buy/add/hold/trim/sell,
+"what would you do", "should I size up") — do NOT give one here. Stances
+exist only through the Socratic think-through, which asks THEIR read first
+and records the result for outcome scoring. Point them to it:
+http://localhost:7421/socratic/{ticker} (also under Portfolio -> Memos).
+You may still discuss evidence freely — the restriction is on stances.
 """
 
 

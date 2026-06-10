@@ -165,7 +165,7 @@ def _memo_summary_line(body_md: str, cap: int = 200) -> str:
     return body_md.strip().replace("\n", " ")[:cap]
 
 
-def _persist(
+def persist_memo(
     *,
     db_path: Path,
     user_id: str,
@@ -176,10 +176,14 @@ def _persist(
     body_md: str,
     context: dict[str, object],
     write_ledger: bool,
+    stance: str | None = None,
+    horizon_days: int = DEFAULT_HORIZON_DAYS,
 ) -> MemoResult:
     """The memory-everywhere write path: memo row -> advisor note -> (ticker
     memos) ledger entry -> backlinks. Note/ledger failures degrade — the memo
-    row is the system of record and must survive a partial memory write."""
+    row is the system of record and must survive a partial memory write.
+    Public: the Socratic flow (P2.4) persists through the same path, passing
+    the parsed stance + owner-chosen horizon."""
     memo = insert_memo(
         user_id=user_id,
         kind=kind,
@@ -188,7 +192,8 @@ def _persist(
         title=title,
         body_md=body_md,
         context=context,
-        horizon_days=DEFAULT_HORIZON_DAYS,
+        stance=stance,
+        horizon_days=horizon_days,
         db_path=db_path,
     )
     note_id: int | None = None
@@ -286,7 +291,7 @@ def generate_next_dollar_memo(
         "candidate_upsides": {t: v.upside_pct for t, v in sorted(context.candidates_val.items())},
         "holding_upsides": {t: v.upside_pct for t, v in sorted(context.holdings_val.items())},
     }
-    return _persist(
+    return persist_memo(
         db_path=db_path,
         user_id=user_id,
         kind="next_dollar",
@@ -437,7 +442,7 @@ def _swap_memo(
         f"Swap check · {pair.holding} vs {pair.candidate} "
         f"({pair.margin_pp:+.0f}pp vs {margin_pp:.0f}pp bar)"
     )
-    return _persist(
+    return persist_memo(
         db_path=db_path,
         user_id=user_id,
         kind="swap_check",
