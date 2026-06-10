@@ -7,6 +7,7 @@ explode when adding a metric, and we cannot afford to lose provenance per cell.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -56,6 +57,44 @@ class Unit(StrEnum):
     COUNT = "count"
 
 
+class FactLocator(BaseModel):
+    """Sub-document locator — WHERE inside the source document a value was read.
+
+    Serialized to the nullable ``locator`` TEXT(JSON) column on
+    financial_facts / kpi_facts (alembic 0075); contract documented in
+    directives/data_provenance.md §7. All fields are optional — populate
+    whichever the extractor actually knows; an all-empty locator serializes
+    to None so the column stays NULL rather than holding a meaningless "{}".
+    """
+
+    # Parsed 10-K/10-Q section key (the top-level key in the
+    # data/historical/fmp/{T}_form_10k_{Y}.json section-keyed text).
+    section: str | None = None
+    # Line id within the transcript the value was quoted from
+    # (transcript_segments ordering for the source document).
+    transcript_line: int | None = None
+    # 1-based page number in the source PDF (IR decks, supplements).
+    pdf_page: int | None = None
+    # Pointer into an FMP JSON payload, e.g. "[3].netIncome" — record index
+    # plus field name within the cached endpoint response.
+    json_path: str | None = None
+
+    def to_json(self) -> str | None:
+        """Compact JSON for the DB column; None when no field is set."""
+        payload = self.model_dump(exclude_none=True)
+        if not payload:
+            return None
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_json(cls, raw: str | None) -> FactLocator | None:
+        """Inverse of to_json. None/blank input maps to None; malformed JSON
+        raises (loud per the provenance contract, never silently dropped)."""
+        if raw is None or not raw.strip():
+            return None
+        return cls.model_validate_json(raw)
+
+
 class FinancialFact(BaseModel):
     """One atomic financial measurement, fully provenance-tagged."""
 
@@ -69,6 +108,7 @@ class FinancialFact(BaseModel):
     unit: Unit
     source_doc_id: int
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
+    locator: FactLocator | None = None
 
 
 class SegmentFact(BaseModel):
@@ -97,6 +137,7 @@ class KpiFact(BaseModel):
     value: Decimal
     unit: Unit
     source_doc_id: int
+    locator: FactLocator | None = None
 
 
 class SegmentDimType(StrEnum):

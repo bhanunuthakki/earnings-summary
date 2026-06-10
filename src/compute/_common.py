@@ -111,6 +111,7 @@ def insert_financial_facts(
             source_doc_id=f.source_doc_id,
             confidence=f.confidence,
             extracted_by=extracted_by,
+            locator=f.locator.to_json() if f.locator is not None else None,
         )
         if new_id is not None:
             inserted += 1

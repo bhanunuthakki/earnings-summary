@@ -104,3 +104,41 @@ The Phase 2 migration `0003_backfill_documents_from_fmp_files` walks `data/histo
 For `ir_doc`, backfill is performed by `execution/categorize_ir_uploads.py` rather than an Alembic migration: walking the user's loose uploads requires per-file content fingerprinting (issuer detection, doc-type classification, period extraction) which is more naturally expressed as an idempotent CLI than as a one-shot SQL migration. The CLI uses the same sha256-INSERT-OR-IGNORE semantics as the FMP backfill — running it twice is a no-op for unchanged files.
 
 Subsequent migrations backfill from `data/historical/sec/` and `transcripts/processed/` similarly.
+
+## 7. Filing identity & sub-document locators (alembic 0075)
+
+A fact traces to a *file* via `source_doc_id`, but auditing a number requires two more hops: WHICH regulatory filing the file represents, and WHERE inside the source the value was read. 0075 adds both halves (master build P3.1).
+
+### Filing identity — `documents.accession_number` + `documents.filing_date`
+
+| column | type | meaning |
+|---|---|---|
+| `accession_number` | TEXT, nullable | SEC EDGAR accession in **canonical dashed form** (`0001628280-21-010389`). Never store the 18-digit no-dash form — normalize on write. |
+| `filing_date` | TEXT ISO `YYYY-MM-DD`, nullable | The date the filing hit EDGAR (the companyfacts `filed` field), NOT our `fetched_at`. Orders documents by regulatory time. |
+
+Both are NULL for non-filing documents (FMP endpoint dumps, IR PDFs, transcripts). An FMP statement endpoint response spans many filings, so a *document-level* accession/filing_date is undefined for it by design — per-fact filing attribution rides on the locator (below).
+
+Backfill: `execution/backfill_document_accessions.py` (idempotent — fills NULLs only, never overwrites). Derivation order: the `#accn=` fragment on sec_xbrl `file_path`s → a dashed accession embedded in the `file_path` → an EDGAR (`sec.gov`) `source_url` carrying the accession dashed or as the 18-digit Archives directory. `filing_date` comes from the companyfacts JSON `accn → filed` mapping. Everything underivable stays NULL and is counted in the CLI's report.
+
+### Sub-document locator — `financial_facts.locator` + `kpi_facts.locator`
+
+Nullable TEXT(JSON). Canonical shape (all keys optional — populate whichever the extractor actually knows):
+
+```json
+{"section": "<parsed 10-K section key>",
+ "transcript_line": <int>,
+ "pdf_page": <int>,
+ "json_path": "<FMP record pointer, e.g. \"[3].netIncome\">"}
+```
+
+- `section` — top-level key in the parsed `data/historical/fmp/{T}_form_10k_{Y}.json` section-keyed text.
+- `transcript_line` — line id within the source transcript (`transcript_segments` ordering).
+- `pdf_page` — 1-based page in the source PDF (IR decks, supplements).
+- `json_path` — record index + field name within the cached FMP endpoint response.
+
+Rules:
+
+- The typed model is `src/models/facts.py::FactLocator`; writers serialize through `FactLocator.to_json()` (an all-empty locator serializes to `None` so the column stays NULL, never `"{}"`). The fact-store insert helpers (`src/pipeline/restatement_detector.py`) take the pre-serialized JSON.
+- There is deliberately **no DB-level CHECK** on the JSON: adding one to an existing SQLite table forces a full-table rebuild of the largest tables in the DB. Validity is the write path's job.
+- A NULL locator is valid (facts predating 0075, or sources with no meaningful sub-position). Readers must treat locator as enrichment, never a join key.
+- Extractors populate locators going forward as of P3.2; the locator column itself ships with 0075 so the stores round-trip it.

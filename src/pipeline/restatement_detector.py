@@ -204,6 +204,7 @@ def insert_with_restatement_detection(
     source_doc_id: int,
     confidence: float = 1.0,
     extracted_by: str | None = None,
+    locator: str | None = None,
 ) -> tuple[int | None, int | None]:
     """Insert one financial_facts row, setting `supersedes_id` when this is
     a restatement of an existing row from an earlier filing.
@@ -215,6 +216,11 @@ def insert_with_restatement_detection(
         or None if this is the first row for the logical key OR the new
         document is NOT a later filing than the incumbent (in which case
         the row is inserted standalone, no chain link).
+
+    `locator` is the pre-serialized sub-document locator JSON (alembic 0075;
+    serialize via models.facts.FactLocator.to_json). Like extracted_by /
+    supersedes_id, it is silently dropped when the schema predates its
+    column — acceptable for synthetic test fixtures.
 
     Callers should use this in place of a raw INSERT OR IGNORE when the
     extractor wants the restatement chain populated. Existing call sites
@@ -252,8 +258,31 @@ def insert_with_restatement_detection(
     has_audit_cols = _table_has_column(
         conn, "financial_facts", "supersedes_id"
     ) and _table_has_column(conn, "financial_facts", "extracted_by")
+    write_locator = locator is not None and _table_has_column(conn, "financial_facts", "locator")
     try:
-        if has_audit_cols:
+        if has_audit_cols and write_locator:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO financial_facts "
+                "(ticker, period_end, fiscal_period_type, line_item, value, "
+                " currency, unit, source_doc_id, confidence, extracted_by, "
+                " supersedes_id, locator) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    line_item,
+                    str(value),
+                    currency,
+                    unit,
+                    source_doc_id,
+                    confidence,
+                    extracted_by,
+                    supersedes_id,
+                    locator,
+                ),
+            )
+        elif has_audit_cols:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO financial_facts "
                 "(ticker, period_end, fiscal_period_type, line_item, value, "
@@ -328,6 +357,7 @@ def insert_kpi_with_restatement_detection(
     source_doc_id: int,
     confidence: float = 1.0,
     extracted_by: str | None = None,
+    locator: str | None = None,
 ) -> tuple[int | None, int | None]:
     """kpi_facts twin of `insert_with_restatement_detection`.
 
@@ -340,6 +370,10 @@ def insert_kpi_with_restatement_detection(
         the new document is strictly later than the incumbent's; None
         otherwise (first row for the logical key, or older-than-incumbent
         replay).
+
+    `locator` is the pre-serialized sub-document locator JSON (alembic 0075;
+    serialize via models.facts.FactLocator.to_json), dropped like the audit
+    columns when the schema predates it.
 
     Schema tolerance: when `kpi_facts` lacks the audit columns
     (`supersedes_id`, `extracted_by`, `confidence` — all added in 0054),
@@ -381,8 +415,30 @@ def insert_kpi_with_restatement_detection(
         and _table_has_column(conn, "kpi_facts", "extracted_by")
         and _table_has_column(conn, "kpi_facts", "confidence")
     )
+    write_locator = locator is not None and _table_has_column(conn, "kpi_facts", "locator")
     try:
-        if has_audit_cols:
+        if has_audit_cols and write_locator:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO kpi_facts "
+                "(ticker, period_end, fiscal_period_type, kpi_definition_id, "
+                " value, unit, source_doc_id, confidence, extracted_by, "
+                " supersedes_id, locator) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker.upper(),
+                    period_end,
+                    fiscal_period_type,
+                    kpi_definition_id,
+                    str(value),
+                    unit,
+                    source_doc_id,
+                    confidence,
+                    extracted_by,
+                    supersedes_id,
+                    locator,
+                ),
+            )
+        elif has_audit_cols:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO kpi_facts "
                 "(ticker, period_end, fiscal_period_type, kpi_definition_id, "

@@ -164,3 +164,9 @@ class Document(BaseModel):
     raw_bytes_size: int = Field(ge=0)
     source_url: str | None = None
     parent_document_id: int | None = None
+    # Filing identity (alembic 0075) — SEC EDGAR accession in canonical
+    # dashed form ("0001628280-21-010389") and the ISO YYYY-MM-DD date the
+    # filing hit EDGAR. NULL for non-filing documents (FMP endpoint dumps,
+    # IR PDFs). Backfilled by execution/backfill_document_accessions.py.
+    accession_number: str | None = None
+    filing_date: str | None = None
