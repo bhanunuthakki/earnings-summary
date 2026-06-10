@@ -345,10 +345,16 @@ def test_list_pending_actions_joins_user_id_through_alert(db_path: Path) -> None
     )
 
     # Inject a foreign-user alert + queued action via raw SQL — there's no
-    # public API for non-default user_id yet.
+    # public API for non-default user_id yet. Register 'alice' as a tenant first:
+    # alerts.user_id is a FK to tenants.id (alembic 0073), so a second tenant must
+    # exist before its rows can land.
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "INSERT INTO tenants (id, created_at) VALUES (?, ?)",
+            ("alice", datetime.now(UTC).isoformat()),
+        )
         cur = conn.execute(
             "INSERT INTO alerts (user_id, ticker, trigger_kind, fired_at, "
             "evidence_json, signature_sha) VALUES (?,?,?,?,?,?)",

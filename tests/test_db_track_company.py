@@ -16,6 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from identity import DEFAULT_USER_ID  # noqa: E402
 
 
 @pytest.fixture()
@@ -74,7 +75,7 @@ def _seed(db_path: Path, ticker: str, list_type: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type) VALUES (?, ?, ?, ?)",
-        (1, ticker, f"{ticker} Corp", list_type),
+        (DEFAULT_USER_ID, ticker, f"{ticker} Corp", list_type),
     )
     conn.commit()
     conn.close()

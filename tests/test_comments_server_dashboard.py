@@ -24,7 +24,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE tracked_companies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER DEFAULT 1,
+            user_id TEXT DEFAULT 'bhanu',
             ticker TEXT NOT NULL,
             name TEXT NOT NULL,
             list_type TEXT NOT NULL,
