@@ -78,6 +78,8 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
 def render_evidence_drawer(
     alert: AlertRow,
     brief_provenance: Mapping[str, object] | None = None,
+    *,
+    default_open: bool = True,
 ) -> str:
     """Render the evidence drawer for one alert.
 
@@ -86,9 +88,15 @@ def render_evidence_drawer(
     ``sources_used.per_metric`` for fact_id citation linking. Pass the
     *row* shape (with ``sources_used`` at the top), not just per_metric
     itself, so the caller's lookup matches the table's column layout.
+
+    ``default_open=False`` renders the drawer collapsed — for dense
+    contexts (the Holding tab's side rail) where the full citation table
+    should be one click away rather than unrolled per card. The digest and
+    feed keep the default-expanded contract.
     """
+    open_attr = " open" if default_open else ""
     body: list[str] = []
-    body.append('<details open class="evidence-drawer">')
+    body.append(f'<details{open_attr} class="evidence-drawer">')
     body.append('<summary class="evidence-summary">Evidence</summary>')
     body.append('<div class="evidence-body">')
 

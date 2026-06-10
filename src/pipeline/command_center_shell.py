@@ -449,6 +449,119 @@ td.ticker a:hover { text-decoration: underline; }
 .cc-report-frame { width: 100%; height: calc(100vh - 220px); min-height: 560px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--bg); margin-top: 6px; }
 
+/* Report split (master build P1.3): the embedded report with the analyst's
+   open notes + recent alerts in a rail beside it. The rail scrolls
+   independently, capped to the report frame's height; below 1100px the rail
+   stacks under the report. */
+.cc-holding-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 18px; align-items: start; }
+.cc-holding-main { min-width: 0; }
+.cc-holding-rail { display: flex; flex-direction: column; gap: 18px;
+  max-height: calc(100vh - 150px); overflow-y: auto; position: sticky; top: 88px; }
+.cc-rail-panel { margin-bottom: 0; padding: 14px 16px; }
+.cc-rail-panel h2 { font-size: 15px; }
+@media (max-width: 1100px) {
+  .cc-holding-split { grid-template-columns: 1fr; }
+  .cc-holding-rail { position: static; max-height: none; overflow-y: visible; }
+}
+
+/* Rail note cards — one per open analyst_notes row, color-keyed by kind. */
+.rail-note { background: var(--paper); border: 1px solid var(--hairline);
+  border-left: 3px solid var(--muted); border-radius: 6px; padding: 8px 10px;
+  margin-bottom: 8px; }
+.rail-note.nk-question { border-left-color: var(--accent); }
+.rail-note.nk-decision { border-left-color: var(--ok); }
+.rail-note.nk-watch { border-left-color: var(--warn); }
+.rail-note.nk-assumption { border-left-color: var(--fg-soft); }
+.rail-note.nk-observation { border-left-color: var(--muted); }
+.rail-note-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.rail-note-kind { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted); }
+.rail-note.nk-question .rail-note-kind { color: var(--accent); }
+.rail-note.nk-decision .rail-note-kind { color: var(--ok); }
+.rail-note.nk-watch .rail-note-kind { color: var(--warn); }
+.rail-note-when { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); }
+.rail-note-body { font-size: 12.5px; line-height: 1.5; margin: 4px 0; color: var(--fg-soft);
+  overflow-wrap: anywhere; }
+.rail-note-meta { font-size: 10.5px; color: var(--muted); overflow-wrap: anywhere; }
+.rail-note-meta code { font-size: 10.5px; }
+
+/* Alert cards + evidence drawer inside the rail — same class vocabulary the
+   digest/feed render (src/dashboard/_card.py + evidence_drawer.py); rules
+   lifted from src/dashboard/_styles.py and compacted for the 360px column.
+   Palette vars are shared via ui.tokens, so only layout is duplicated. */
+.alert-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 10px; }
+.alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ticker-badge { display: inline-flex; align-items: center; padding: 2px 7px;
+  border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent);
+  border-radius: 5px; font-family: var(--font-mono); font-weight: 600; font-size: 11px;
+  letter-spacing: 0.05em; }
+.trigger-badge, .status-badge { display: inline-flex; align-items: center; padding: 1px 6px;
+  border: 1px solid var(--border-2); border-radius: 4px; color: var(--fg-soft);
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+.status-pending { color: var(--warn); border-color: var(--warn); }
+.status-approved { color: var(--ok); border-color: var(--ok); }
+.status-dismissed { color: var(--muted); border-color: var(--muted); }
+.status-expired { color: var(--muted-2); border-color: var(--muted-2); }
+.fired-at { color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; margin-left: auto; }
+.alert-memo { margin: 4px 0 8px; padding: 7px 9px; background: var(--paper);
+  border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; font-size: 12.5px;
+  color: var(--fg-soft); }
+.alert-memo-pending { color: var(--muted); font-style: italic; }
+.queued-actions { margin-top: 8px; }
+.queued-actions h4 { font-size: 11px; font-weight: 600; margin: 0 0 5px;
+  color: var(--muted); letter-spacing: 0.04em; text-transform: uppercase; }
+.queued-action { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
+  padding: 6px 8px; background: var(--paper); border: 1px solid var(--hairline);
+  border-radius: 6px; margin-bottom: 5px; }
+.qa-kind { display: inline-flex; align-items: center; padding: 1px 5px;
+  border: 1px solid var(--border-2); background: var(--surface); color: var(--fg-soft);
+  border-radius: 3px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; }
+.qa-body { flex: 1; min-width: 140px; color: var(--fg-soft); font-size: 12px; }
+.qa-actions { display: flex; gap: 6px; align-items: center; font-family: var(--font-mono);
+  font-size: 10.5px; }
+.qa-actions a { display: inline-flex; padding: 2px 7px; border: 1px solid var(--border-2);
+  border-radius: 4px; color: var(--accent); text-decoration: none; }
+.qa-actions .qa-cli { color: var(--muted); overflow-wrap: anywhere; }
+.qa-status-applied { color: var(--ok); }
+.qa-status-cancelled { color: var(--muted); }
+.evidence-drawer { margin-top: 8px; background: var(--paper); border: 1px solid var(--hairline);
+  border-radius: 6px; }
+.evidence-drawer > summary { cursor: pointer; padding: 6px 10px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.04em;
+  text-transform: uppercase; user-select: none; }
+.evidence-drawer[open] > summary { border-bottom: 1px solid var(--hairline); }
+.evidence-body { padding: 8px 10px; }
+.evidence-section { margin-bottom: 8px; }
+.evidence-section:last-child { margin-bottom: 0; }
+.evidence-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); margin-bottom: 3px; }
+.evidence-summary-text { color: var(--fg-soft); font-size: 12.5px; }
+.evidence-malformed { padding: 8px; background: rgba(240, 138, 138, 0.08);
+  border: 1px solid var(--bad); border-radius: 4px; color: var(--bad); margin-bottom: 8px;
+  font-size: 12px; }
+.evidence-citations-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.evidence-citations-table th { text-align: left; padding: 3px 6px 3px 0; color: var(--muted);
+  font-weight: 500; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--hairline); font-family: var(--font-body); }
+.evidence-citations-table td { padding: 4px 6px 4px 0; vertical-align: top;
+  border-bottom: 1px solid var(--hairline); }
+.evidence-citations-table tr:last-child td { border-bottom: none; }
+.cite-kind { color: var(--fg-soft); white-space: nowrap; }
+.cite-locator { color: var(--muted); word-break: break-all; font-family: var(--font-mono);
+  font-size: 11px; }
+.cite-excerpt { color: var(--fg-soft); }
+.cite-prov { color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; }
+.prov-source { color: var(--accent); }
+.evidence-raw { margin-top: 4px; }
+.evidence-raw > summary { cursor: pointer; color: var(--muted); font-family: var(--font-mono);
+  font-size: 10.5px; letter-spacing: 0.04em; }
+.evidence-raw-pre { margin: 5px 0 0; padding: 7px 9px; background: var(--bg);
+  border: 1px solid var(--hairline); border-radius: 4px; font-family: var(--font-mono);
+  font-size: 10.5px; color: var(--fg-soft); white-space: pre-wrap; word-break: break-all;
+  max-height: 260px; overflow: auto; }
+
 /* Three-theme nav (master build P1.1): primary theme row + per-theme sub-tab
    rows. Sub-tab rows reuse .cc-tab styling at a smaller size. */
 .cc-theme-row { padding-top: 2px; }

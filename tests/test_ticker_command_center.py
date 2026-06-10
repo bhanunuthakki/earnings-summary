@@ -19,14 +19,17 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
+from identity import DEFAULT_USER_ID  # noqa: E402
 from pipeline.analysis_log import build_analysis_log  # noqa: E402
 from pipeline.artifact_inventory import build_artifact_inventory  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
+    build_holding_rail,
     build_ticker_command_center,
     render_holding_fragment,
     render_ticker_fragment,
     render_ticker_html,
 )
+from user_state.notes import create_note, resolve_note  # noqa: E402
 
 _HOLDINGS = {
     "ticker": "NU",
@@ -59,8 +62,18 @@ def _seed_db(db_path: Path) -> None:
         CREATE TABLE transcripts (ticker TEXT, period_end TIMESTAMP);
         CREATE TABLE thesis_evaluations (ticker TEXT, evaluated_at TIMESTAMP, overall_status TEXT);
         CREATE TABLE timeseries_signals (ticker TEXT, severity TEXT, computed_at TIMESTAMP);
-        CREATE TABLE alerts (id INTEGER PRIMARY KEY, ticker TEXT, trigger_kind TEXT, fired_at TEXT, status TEXT);
-        CREATE TABLE queued_actions (id INTEGER PRIMARY KEY, alert_id INTEGER, status TEXT);
+        CREATE TABLE alerts (id INTEGER PRIMARY KEY, user_id TEXT, ticker TEXT, trigger_kind TEXT,
+                             fired_at TEXT, status TEXT, memo_artifact_id INTEGER,
+                             evidence_json TEXT, signature_sha TEXT,
+                             dismissed_at TEXT, approved_at TEXT);
+        CREATE TABLE queued_actions (id INTEGER PRIMARY KEY, alert_id INTEGER, action_kind TEXT,
+                                     payload_json TEXT, status TEXT, created_at TEXT,
+                                     applied_at TEXT, cancelled_at TEXT);
+        CREATE TABLE analyst_notes (id INTEGER PRIMARY KEY, user_id TEXT, ticker TEXT, kind TEXT,
+                                    status TEXT, body TEXT, anchor_type TEXT, anchor_key TEXT,
+                                    source TEXT, source_ref TEXT, supersedes_id INTEGER,
+                                    resolution_note TEXT, context_json TEXT,
+                                    created_at TEXT, updated_at TEXT, resolved_at TEXT);
         CREATE TABLE management_commitments (ticker TEXT, outcome TEXT, evaluated_at TIMESTAMP);
         CREATE TABLE dcf_runs (ticker TEXT, valuation_date TEXT, segment_name TEXT, over_under_pct REAL);
         CREATE TABLE llm_calls (ticker TEXT, purpose TEXT, model TEXT, cost_estimate_usd REAL, called_at TIMESTAMP);
@@ -70,14 +83,36 @@ def _seed_db(db_path: Path) -> None:
         """
     )
     now = datetime.now(UTC).isoformat()
+    # alerts.fired_at is naive-UTC by repo convention (triggers write
+    # now(UTC).replace(tzinfo=None)); the seed matches what prod rows look like.
+    naive_now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    evidence = json.dumps(
+        {
+            "summary": "ROE inflected down two quarters running",
+            "citations": [
+                {
+                    "kind": "kpi_observation",
+                    "locator": "ROE 2026-03-31",
+                    "excerpt": "ROE 30% -> 26%",
+                }
+            ],
+        }
+    )
     conn.execute("INSERT INTO tracked_companies VALUES ('NU','Nu Holdings','portfolio',NULL)")
     conn.execute("INSERT INTO fmp_endpoint_status VALUES ('NU','2026-05-11T01:02:14')")
     conn.execute("INSERT INTO transcripts VALUES ('NU','2026-03-31')")
     conn.execute("INSERT INTO thesis_evaluations VALUES ('NU','2026-05-18T10:00:00','watch')")
     conn.execute("INSERT INTO timeseries_signals VALUES ('NU','red',?)", (now,))
     conn.execute("INSERT INTO timeseries_signals VALUES ('NU','green',?)", (now,))
-    conn.execute("INSERT INTO alerts VALUES (1,'NU','kpi_inflection',?,'pending')", (now,))
-    conn.execute("INSERT INTO queued_actions VALUES (1,1,'pending')")
+    conn.execute(
+        "INSERT INTO alerts VALUES (1, ?, 'NU', 'kpi_inflection', ?, 'pending', NULL, ?, "
+        "'sig-nu-roe', NULL, NULL)",
+        (DEFAULT_USER_ID, naive_now, evidence),
+    )
+    conn.execute(
+        "INSERT INTO queued_actions VALUES (1, 1, 'thesis_update', ?, 'pending', ?, NULL, NULL)",
+        (json.dumps({"body": "Tighten the ROE break rule"}), naive_now),
+    )
     conn.execute("INSERT INTO management_commitments VALUES ('NU','met','2026-05-01')")
     conn.execute("INSERT INTO dcf_runs VALUES ('NU','2026-05-01',NULL,0.12)")
     conn.execute("INSERT INTO llm_calls VALUES ('NU','bear_case','claude-opus-4-7',0.42,?)", (now,))
@@ -225,18 +260,114 @@ def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:
     assert "<iframe" not in frag  # nothing to embed
 
 
+# ----- Holding rail (P1.3): open notes + recent alerts beside the report -----
+
+
+def test_build_holding_rail_reads_open_notes_and_alerts(repo: Path) -> None:
+    db = repo / "data" / "portfolio.db"
+    kept = create_note(ticker="NU", kind="watch", body="Watch FX drag on ARPAC", db_path=db)
+    answered = create_note(ticker="NU", kind="question", body="NIM dip: mix or rate?", db_path=db)
+    resolve_note(answered.id, db_path=db)
+    create_note(ticker="MELI", kind="watch", body="Other name's note", db_path=db)
+
+    rail = build_holding_rail(repo, "nu")  # lowercase in → uppercased lookup
+    assert rail.notes is not None
+    assert [n.id for n in rail.notes] == [kept.id]  # open-only, this ticker only
+    assert rail.alerts is not None
+    assert len(rail.alerts) == 1
+    alert, actions = rail.alerts[0]
+    assert alert.trigger_kind == "kpi_inflection"
+    assert [qa.action_kind for qa in actions] == ["thesis_update"]
+
+
+def test_holding_fragment_surfaces_notes_and_alerts_beside_report(repo: Path) -> None:
+    db = repo / "data" / "portfolio.db"
+    create_note(
+        ticker="NU",
+        kind="watch",
+        body="Watch FX drag on ARPAC next print",
+        anchor_type="kpi",
+        anchor_key="earnings.arpac",
+        db_path=db,
+    )
+    answered = create_note(ticker="NU", kind="question", body="NIM dip: mix or rate?", db_path=db)
+    resolve_note(answered.id, db_path=db)
+
+    frag = render_holding_fragment(repo, "NU")
+    # Split layout: report main column + rail, iframe still embedded.
+    assert 'class="cc-holding-split"' in frag
+    assert 'class="cc-holding-rail"' in frag
+    assert 'src="/reports/NU"' in frag
+    # Open notes panel: the open note (with kind tone + anchor) shows; the
+    # resolved one does not.
+    assert "Open notes" in frag
+    assert "Watch FX drag on ARPAC next print" in frag
+    assert "nk-watch" in frag
+    assert "earnings.arpac" in frag
+    assert "NIM dip: mix or rate?" not in frag
+    # Recent alerts panel: the digest/feed card shape with the evidence drawer
+    # collapsed (rail density), memo line from evidence.summary, queued action,
+    # and the filtered-feed deep link.
+    assert "Recent alerts" in frag
+    assert 'class="alert-card"' in frag
+    assert "ROE inflected down two quarters running" in frag
+    assert "Tighten the ROE break rule" in frag
+    assert '<details class="evidence-drawer">' in frag
+    assert '<details open class="evidence-drawer">' not in frag
+    assert 'href="/feed?ticker=NU"' in frag
+
+
+def test_holding_rail_empty_states(repo: Path) -> None:
+    """No notes / no alerts (for a ticker with none) render the none-yet
+    states, not the substrate-unavailable ones."""
+    frag = render_holding_fragment(repo, "MELI")  # seeded DB, nothing for MELI
+    assert "No open notes on this name" in frag
+    assert "No alerts fired on this name yet" in frag
+
+
+def test_holding_rail_degrades_without_substrate(tmp_path: Path) -> None:
+    """A DB without the analyst_notes / alerts tables (pre-migration) degrades
+    to the unavailable-state per source — never an exception."""
+    (tmp_path / "data").mkdir()
+    conn = sqlite3.connect(str(tmp_path / "data" / "portfolio.db"))
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, name TEXT, list_type TEXT, "
+        "archived_at TIMESTAMP)"
+    )
+    conn.commit()
+    conn.close()
+    frag = render_holding_fragment(tmp_path, "NU")
+    assert "Notes substrate unavailable" in frag
+    assert "Alerts substrate unavailable" in frag
+
+    rail = build_holding_rail(tmp_path, "NU")
+    assert rail.notes is None
+    assert rail.alerts is None
+
+
+def test_holding_rail_missing_db_is_unavailable(tmp_path: Path) -> None:
+    rail = build_holding_rail(tmp_path, "NU")  # no data/portfolio.db at all
+    assert rail.notes is None
+    assert rail.alerts is None
+    assert rail.brief_provenance is None
+
+
 def test_holding_panel_endpoint(client) -> None:
     # No ticker → a pick-a-holding prompt, not a 404.
     empty = client.get("/api/panel/holding")
     assert empty.status_code == 200
     assert "Pick a holding" in empty.get_data(as_text=True)
-    # With a ticker → head/foot-less fragment embedding the report.
+    # With a ticker → head/foot-less fragment embedding the report, with the
+    # open-notes + recent-alerts rail beside it (P1.3).
     resp = client.get("/api/panel/holding?ticker=NU")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "<!doctype" not in body.lower()
     assert 'src="/reports/NU"' in body
     assert "Thesis" in body
+    assert 'class="cc-holding-rail"' in body
+    assert "Open notes" in body
+    assert "Recent alerts" in body
 
 
 # ----- live endpoints -----

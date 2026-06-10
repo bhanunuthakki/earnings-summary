@@ -132,7 +132,7 @@ demands it (note the split in the Decision log).
   parked under Governance → Actions until the P3.4 settings drawer.
   *Accept:* "which holding needs my attention today?" answered by the
   landing screen alone.
-- [ ] **P1.3 Holding drill-in.** Per-ticker command center + report iframe
+- [x] **P1.3 Holding drill-in.** *(#378)* Per-ticker command center + report iframe
   consolidated under Research; per-ticker open notes and recent alerts
   surface beside the report.
 
@@ -251,3 +251,14 @@ demands it (note the split in the Decision log).
   the browser; tracker untouched. Window choice is session-scoped (lives in
   the loaded panel DOM) — server-side persistence deferred until something
   needs it.
+- 2026-06-10 (P1.3, #378): the "consolidated under Research" half was
+  already in place (#248/#250 + P1.1 — /ticker/<t> 302s into #holding=<T>),
+  so the phase's delta is the report split: open notes (analyst_notes,
+  open-only, read-only until the P4.5 journal) + recent alerts in a rail
+  beside the embedded report. Alerts reuse the digest/feed card via a new
+  package-public render_alert_card with the evidence drawer collapsed by
+  default in the rail (new default_open passthrough; digest/feed contract
+  unchanged). Each rail source degrades independently when its table is
+  missing. The queued-action cards' relative approve links remain dead on
+  the live server everywhere (no /approve route — pre-existing on /digest
+  and /feed too; the CLI hint is the real path) — left for P4.4/P6.1.

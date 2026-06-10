@@ -38,6 +38,8 @@ def render_alert_card(
     actions: list[QueuedActionRow],
     show_status_badge: bool,
     brief_provenance: Mapping[str, object] | None = None,
+    *,
+    drawer_open: bool = True,
 ) -> None:
     """Render a single alert card into ``body``.
 
@@ -50,6 +52,9 @@ def render_alert_card(
     payload (see evidence_drawer.load_brief_provenance) so fact_id
     citations resolve to (source, fetched_at) instead of the dead
     "no brief provenance" cell.
+
+    ``drawer_open=False`` collapses the evidence drawer (the Holding
+    rail's compact cards); the digest and feed keep it expanded.
     """
     body.write('<div class="alert-card">')
     body.write('<div class="alert-card-head">')
@@ -72,7 +77,7 @@ def render_alert_card(
             "</div>"
         )
 
-    body.write(render_evidence_drawer(alert, brief_provenance))
+    body.write(render_evidence_drawer(alert, brief_provenance, default_open=drawer_open))
 
     if actions:
         body.write('<div class="queued-actions">')

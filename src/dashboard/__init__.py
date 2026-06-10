@@ -22,11 +22,13 @@ straight from the filesystem.
 
 from __future__ import annotations
 
+from dashboard._card import render_alert_card
 from dashboard.digest import render_morning_digest
 from dashboard.evidence_drawer import render_evidence_drawer
 from dashboard.feed import render_alert_feed
 
 __all__ = [
+    "render_alert_card",
     "render_alert_feed",
     "render_evidence_drawer",
     "render_morning_digest",

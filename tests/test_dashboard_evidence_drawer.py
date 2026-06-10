@@ -140,6 +140,16 @@ def test_fact_id_with_unmatched_locator_renders_no_match() -> None:
     assert "no match" in html
 
 
+def test_default_open_false_renders_collapsed() -> None:
+    """``default_open=False`` (the Holding rail's compact cards) drops the
+    ``open`` attribute — same sections, one click away."""
+    alert = _make_alert(evidence=json.dumps({"summary": "compact context"}))
+    html = render_evidence_drawer(alert, default_open=False)
+    assert '<details class="evidence-drawer">' in html
+    assert "<details open" not in html
+    assert "Why this fired" in html  # content unchanged, just collapsed
+
+
 # ----------------------------------------------------------------------------
 # Malformed JSON path
 # ----------------------------------------------------------------------------

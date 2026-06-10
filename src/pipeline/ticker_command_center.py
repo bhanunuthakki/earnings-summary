@@ -15,15 +15,21 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from html import escape
+from io import StringIO
 from pathlib import Path
 from typing import cast
 
+from alerts import AlertRow, QueuedActionRow, list_alerts, list_queued_actions_for_alert
+from dashboard import render_alert_card
+from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from ui.tokens import FAVICON_LINK
+from user_state.notes import AnalystNoteRow, list_notes
 
 _DEFAULT_TRACKER_URL = "http://localhost:5173"
 
@@ -358,6 +364,52 @@ def _tracker_url(t: str) -> str:
     return f"{base}/trade-analysis?ticker={t}"
 
 
+# --------------------------------------------------------------------------- #
+# Holding-rail data (master build P1.3): open notes + recent alerts beside
+# the embedded report.
+# --------------------------------------------------------------------------- #
+_RAIL_NOTES_LIMIT = 20
+_RAIL_ALERTS_LIMIT = 5
+
+
+@dataclass(slots=True)
+class HoldingRail:
+    """Side-rail substrate for the Holding tab: the analyst's open notes
+    (analyst_notes) and the newest fired alerts for one name, surfaced beside
+    the embedded report. ``notes`` / ``alerts`` are None when that substrate
+    is unavailable (DB or table missing) — an unavailable-state distinct from
+    "none yet"."""
+
+    notes: list[AnalystNoteRow] | None = None
+    alerts: list[tuple[AlertRow, list[QueuedActionRow]]] | None = None
+    brief_provenance: Mapping[str, object] | None = None
+
+
+def build_holding_rail(repo_root: Path, ticker: str) -> HoldingRail:
+    """Pure reads for the Holding tab's side rail. Each source degrades to
+    None independently when its table (or the whole DB) is missing, matching
+    the drill-down's panel-by-panel degradation contract. The brief-provenance
+    payload rides along so fact_id citations in the alert cards resolve to
+    (source, fetched_at) exactly as they do on the digest/feed."""
+    t = ticker.upper()
+    db = repo_root / "data" / "portfolio.db"
+    rail = HoldingRail()
+    if not db.exists():
+        return rail
+    try:
+        rail.notes = list_notes(ticker=t, status="open", limit=_RAIL_NOTES_LIMIT, db_path=db)
+    except sqlite3.Error:
+        rail.notes = None
+    try:
+        fired = list_alerts(ticker=t, limit=_RAIL_ALERTS_LIMIT, db_path=db)
+        rail.alerts = [(a, list_queued_actions_for_alert(a.id, db_path=db)) for a in fired]
+    except sqlite3.Error:
+        rail.alerts = None
+    if rail.alerts:
+        rail.brief_provenance = load_brief_provenance(t, db_path=db)
+    return rail
+
+
 def _has(conn: sqlite3.Connection, table: str) -> bool:
     return (
         conn.execute(
@@ -598,9 +650,11 @@ def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
 
 def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     """Assemble the full Holding-tab panel for ``ticker``: the command-center
-    sections + the 5-min reread + an embedded ``/reports/<t>`` iframe that carries
-    the inline comment / chat / apply pipeline. Reuses the analytical reread
-    fragment via its public seam (no cross-module private access)."""
+    sections + the 5-min reread + the report split — an embedded
+    ``/reports/<t>`` iframe (carrying the inline comment / chat / apply
+    pipeline) with the analyst's open notes and recent alerts in a rail
+    beside it (master build P1.3). Reuses the analytical reread fragment via
+    its public seam (no cross-module private access)."""
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
 
@@ -609,11 +663,17 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     db_path = repo_root / "data" / "portfolio.db"
     dash = build_analytical_dashboard(db_path, sections={"rereads"}, ticker=t)
     reread_html = render_panel_fragment(dash, "prereads") or ""
+    rail = build_holding_rail(repo_root, t)
     return "".join(
         [
             render_ticker_fragment(tcc),
             reread_html,
-            _report_embed_section(t, tcc.report_date),
+            '<div class="cc-holding-split">',
+            f'<div class="cc-holding-main">{_report_embed_section(t, tcc.report_date)}</div>',
+            '<aside class="cc-holding-rail">',
+            _notes_rail_section(rail.notes),
+            _alerts_rail_section(t, rail.alerts, rail.brief_provenance),
+            "</aside></div>",
         ]
     )
 
@@ -641,6 +701,81 @@ def _report_embed_section(ticker: str, report_date: str | None) -> str:
         f'title="{t} workspace report" loading="lazy"></iframe>'
         "</section>"
     )
+
+
+def _notes_rail_section(notes: list[AnalystNoteRow] | None) -> str:
+    """The rail's "Open notes" panel: live analyst memory for this name,
+    newest first. Read-only here — the notes lifecycle UI (resolve /
+    reclassify / supersede) is the P4.5 journal; this surfaces what's open
+    while the analyst reads the report."""
+    out = ['<section class="panel cc-rail-panel"><h2>Open notes</h2>']
+    if notes is None:
+        out.append(
+            '<p class="muted">Notes substrate unavailable — the analyst_notes '
+            "table is not in this DB.</p>"
+        )
+    elif not notes:
+        out.append(
+            '<p class="muted">No open notes on this name. Notes arrive from '
+            "report comments, chat, and alert flows.</p>"
+        )
+    else:
+        out.append(
+            f'<p class="sub">Open questions, watch-items, and decisions — newest first, '
+            f"up to {_RAIL_NOTES_LIMIT}.</p>"
+        )
+        for n in notes:
+            meta_bits = [f"via {escape(n.source)}"]
+            if n.anchor_key:
+                meta_bits.append(f"<code>{escape(n.anchor_key)}</code>")
+            out.append(
+                f'<div class="rail-note nk-{escape(n.kind)}">'
+                '<div class="rail-note-head">'
+                f'<span class="rail-note-kind">{escape(n.kind)}</span>'
+                f'<span class="rail-note-when">{escape(n.created_at.date().isoformat())}</span>'
+                "</div>"
+                f'<div class="rail-note-body">{escape(n.body)}</div>'
+                f'<div class="rail-note-meta">{" · ".join(meta_bits)}</div>'
+                "</div>"
+            )
+    out.append("</section>")
+    return "".join(out)
+
+
+def _alerts_rail_section(
+    ticker: str,
+    alerts: list[tuple[AlertRow, list[QueuedActionRow]]] | None,
+    brief_provenance: Mapping[str, object] | None,
+) -> str:
+    """The rail's "Recent alerts" panel: the newest fired alerts for this
+    name as the same cards the digest/feed render (status badge + memo +
+    queued actions), with the evidence drawer collapsed for rail density."""
+    out = ['<section class="panel cc-rail-panel"><h2>Recent alerts</h2>']
+    if alerts is None:
+        out.append(
+            '<p class="muted">Alerts substrate unavailable — the alerts table '
+            "is not in this DB.</p>"
+        )
+    elif not alerts:
+        out.append('<p class="muted">No alerts fired on this name yet.</p>')
+    else:
+        out.append(
+            f'<p class="sub">Newest {len(alerts)} fired — '
+            f'<a href="/feed?ticker={escape(ticker)}">full feed ↗</a></p>'
+        )
+        buf = StringIO()
+        for alert, actions in alerts:
+            render_alert_card(
+                buf,
+                alert,
+                actions=actions,
+                show_status_badge=True,
+                brief_provenance=brief_provenance,
+                drawer_open=False,
+            )
+        out.append(buf.getvalue())
+    out.append("</section>")
+    return "".join(out)
 
 
 def _identity_badges(ident: TickerIdentity) -> str:
