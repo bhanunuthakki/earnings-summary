@@ -53,6 +53,7 @@ from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
@@ -769,16 +770,18 @@ class EarningsToneTrigger:
 
         prior_transcript_ids = [cast("int", p["transcript_id"]) for p in prior_transcripts]
 
-        # Compose the full 3-block anchor (thesis + bear case + IR narrative),
-        # not just the thesis. A tone shift that confirms a named bear hypothesis
-        # — or that contradicts management's own IR framing — is the
-        # highest-value signal here, and the model can only flag it if the bear
-        # case and the IR narrative are in front of it. compose_anchor_block
-        # omits whichever blocks are absent for this ticker.
+        # Compose the full 4-block anchor (thesis + bear case + IR narrative +
+        # analyst priors), not just the thesis. A tone shift that confirms a
+        # named bear hypothesis — or that contradicts management's own IR
+        # framing, or speaks to an open analyst watch-item — is the
+        # highest-value signal here, and the model can only flag it if those
+        # blocks are in front of it. compose_anchor_block omits whichever
+        # blocks are absent for this ticker.
         thesis_anchor_block = compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
             load_ir_anchor(repo_root, ticker),
+            load_priors_anchor(repo_root, ticker),
         )
         template_text = _PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
 

@@ -175,8 +175,79 @@ def _compact_report_context(repo_root: Path, ticker: str) -> str:
     return "\n\n".join(bits) if bits else "(no cached context on file)"
 
 
+def _prior_threads_context(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    max_turns: int = 6,
+    char_cap: int = 1500,
+) -> str:
+    """Compact tail of the most recent EARLIER build's chat thread.
+
+    Chat files live per (ticker, report_date); without this, every new report
+    build starts the conversation amnesiac. Picking the latest file dated
+    strictly before this report (ISO stems sort chronologically) gives the
+    assistant the thread of what was discussed last build. Best-effort: any
+    missing/corrupt file degrades to "" — chat must keep working on a
+    first-ever build.
+    """
+    base = repo_root / "data" / "report_chats" / ticker.upper()
+    if not base.is_dir():
+        return ""
+    try:
+        candidates = sorted(p for p in base.glob("*.json") if p.stem < report_date.isoformat())
+    except OSError:
+        return ""
+    if not candidates:
+        return ""
+    prior = candidates[-1]
+    try:
+        store = ChatStore.model_validate_json(prior.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    turns = [t for t in store.thread if t.role in ("user", "assistant") and t.text.strip()]
+    if not turns:
+        return ""
+    lines: list[str] = []
+    for t in turns[-max_turns:]:
+        flat = " ".join(t.text.split())
+        if len(flat) > 220:
+            flat = flat[:217].rstrip() + "..."
+        lines.append(f"[{t.role.upper()}] {flat}")
+    block = (
+        f"### PRIOR DISCUSSION (your chat on the {prior.stem} report — "
+        f"continue from it, don't restart)\n" + "\n".join(lines)
+    )
+    return block if len(block) <= char_cap else block[:char_cap].rstrip() + "\n[...truncated]"
+
+
 def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
     context = _compact_report_context(repo_root, ticker)
+
+    # Durable analyst memory: open notes (questions / watch-items / assumptions
+    # from analyst_notes) + the tail of the previous build's chat. Both are
+    # best-effort — lazy import keeps module import light, and any failure
+    # degrades to an absent section rather than a broken chat.
+    memory_bits: list[str] = []
+    try:
+        from llm.anchors import load_priors_anchor
+
+        priors = load_priors_anchor(repo_root, ticker)
+    except Exception:
+        priors = ""
+    if priors:
+        memory_bits.append(priors)
+        memory_bits.append(
+            "When your answer resolves one of the open questions above, say so "
+            'explicitly ("this answers your open question about ...") so the '
+            "analyst can mark it resolved. When evidence touches a watch-item "
+            "or assumption, call that out by name."
+        )
+    prior_chat = _prior_threads_context(repo_root, ticker, report_date)
+    if prior_chat:
+        memory_bits.append(prior_chat)
+    memory_block = ("\n\n" + "\n\n".join(memory_bits)) if memory_bits else ""
+
     return f"""You are an analyst assistant for {ticker}, embedded in the
 workspace research report dated {report_date.isoformat()}. Answer the
 analyst's questions using the cached report context below as the primary
@@ -194,7 +265,7 @@ to look it up — you have read access to:
 
 CACHED REPORT CONTEXT (snapshot):
 
-{context}
+{context}{memory_block}
 
 When the analyst asks you to **edit** something (e.g. "rewrite the thesis
 assuming Mexico interchange caps at 1.5%", "drop this KPI", "tighten the

@@ -49,6 +49,7 @@ from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
@@ -743,14 +744,16 @@ class KpiInflectionTrigger:
         db_path = _db_path()
 
         try:
-            # Compose the full 3-block anchor (thesis + bear + IR) so the
-            # "why it matters" line can read an inflection against the bear case
-            # and management's IR framing, not the thesis alone; empty blocks are
+            # Compose the full 4-block anchor (thesis + bear + IR + analyst
+            # priors) so the "why it matters" line can read an inflection
+            # against the bear case, management's IR framing, and the analyst's
+            # own open watch-items — not the thesis alone; empty blocks are
             # omitted by compose_anchor_block.
             anchor_block = compose_anchor_block(
                 load_thesis_anchor(repo_root, ticker),
                 load_bear_anchor(repo_root, ticker),
                 load_ir_anchor(repo_root, ticker),
+                load_priors_anchor(repo_root, ticker),
             )
         except Exception as exc:  # anchor is optional; never block the memo
             log.debug(

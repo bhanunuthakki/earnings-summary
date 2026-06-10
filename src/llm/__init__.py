@@ -24,9 +24,11 @@ from __future__ import annotations
 from llm.anchors import (
     ANCHOR_BLOCK_CHAR_CAP,
     IR_ANCHOR_CHAR_CAP,
+    PRIORS_ANCHOR_CHAR_CAP,
     compose_anchor_block,
     load_bear_anchor,
     load_ir_anchor,
+    load_priors_anchor,
     load_thesis_anchor,
 )
 from llm.cli import (
@@ -66,6 +68,7 @@ __all__ = [
     "IR_ANCHOR_CHAR_CAP",
     "LLM_MODELS",
     "NUMBER_FORMATTING_BLOCK",
+    "PRIORS_ANCHOR_CHAR_CAP",
     "LLMBudgetExceeded",
     "call_llm",
     "call_llm_with_web",
@@ -75,6 +78,7 @@ __all__ = [
     "is_fallback_disabled",
     "load_bear_anchor",
     "load_ir_anchor",
+    "load_priors_anchor",
     "load_thesis_anchor",
     "record_llm_call",
     "style_block_cache_token",

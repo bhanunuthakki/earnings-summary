@@ -70,6 +70,9 @@ from llm.anchors import (
     IR_ANCHOR_CHAR_CAP as IR_ANCHOR_CHAR_CAP,
 )
 from llm.anchors import (
+    PRIORS_ANCHOR_CHAR_CAP as PRIORS_ANCHOR_CHAR_CAP,
+)
+from llm.anchors import (
     compose_anchor_block as compose_anchor_block,
 )
 from llm.anchors import (
@@ -77,6 +80,9 @@ from llm.anchors import (
 )
 from llm.anchors import (
     load_ir_anchor as load_ir_anchor,
+)
+from llm.anchors import (
+    load_priors_anchor as load_priors_anchor,
 )
 from llm.anchors import (
     load_thesis_anchor as load_thesis_anchor,
