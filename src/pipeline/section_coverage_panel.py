@@ -226,29 +226,29 @@ def load_section_coverage(
 
 
 _PANEL_STYLE = """<style>
-.sc-table { width:100%; border-collapse:collapse; font-size:12px; }
+.sc-table { width:100%; border-collapse:collapse; font-size:var(--fs-caption); }
 .sc-table th, .sc-table td {
-  padding:5px 7px; border-bottom:1px solid var(--border,#2a2d31); text-align:center;
+  padding:5px 7px; border-bottom:1px solid var(--border); text-align:center;
   white-space:nowrap; }
-.sc-table th { font-size:10px; text-transform:uppercase; letter-spacing:.05em;
-  color:var(--muted,#9aa0a6); }
+.sc-table th { font-size:var(--fs-micro); text-transform:uppercase; letter-spacing:.05em;
+  color:var(--muted); }
 .sc-table th:first-child, .sc-table td:first-child,
 .sc-table th:nth-child(2), .sc-table td:nth-child(2) { text-align:left; }
-.sc-tkr { font-family:var(--mono,monospace); font-weight:600; }
-.sc-list { color:var(--muted,#9aa0a6); font-size:10.5px; }
-.sc-filled { color:#4ade80; }
-.sc-empty { color:#5b5e66; }
-.sc-na { color:#3a3d44; }
-.sc-noreport { color:#f5c66a; font-size:10px; }
-.sc-gaps { font-variant-numeric:tabular-nums; color:var(--muted,#9aa0a6); }
+.sc-tkr { font-family:var(--mono); font-weight:600; }
+.sc-list { color:var(--muted); font-size:var(--fs-micro); }
+.sc-filled { color:var(--ok); }
+.sc-empty { color:var(--muted-2); }
+.sc-na { color:var(--border-2); }
+.sc-noreport { color:var(--warn); font-size:var(--fs-micro); }
+.sc-gaps { font-variant-numeric:tabular-nums; color:var(--muted); }
 .sc-kpis { display:flex; gap:18px; margin:4px 0 14px; flex-wrap:wrap; }
-.sc-kpi { background:#1a1d23; border:1px solid var(--border,#2a2d31);
-  border-radius:6px; padding:8px 14px; }
-.sc-kpi b { display:block; font-size:18px; }
-.sc-kpi span { font-size:11px; color:var(--muted,#9aa0a6); }
-.sc-note { margin-top:14px; padding:10px 13px; background:#1f2125;
-  border:1px solid var(--border,#2a2d31); border-radius:6px; font-size:12.5px;
-  line-height:1.55; color:var(--muted,#9aa0a6); }
+.sc-kpi { background:var(--paper); border:1px solid var(--border);
+  border-radius:var(--radius); padding:8px 14px; }
+.sc-kpi b { display:block; font-size:var(--fs-display); font-variant-numeric:tabular-nums; }
+.sc-kpi span { font-size:var(--fs-caption); color:var(--muted); }
+.sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
+  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
+  line-height:1.55; color:var(--muted); }
 </style>"""
 
 _CELL_GLYPH: dict[str, tuple[str, str, str]] = {

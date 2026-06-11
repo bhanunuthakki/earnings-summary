@@ -453,12 +453,16 @@ def test_holding_picker_band_is_search_first(repo: Path) -> None:
 
 
 def test_holding_band_combobox_prefills_current_ticker(repo: Path) -> None:
-    """A loaded holding's band combobox shows the current ticker · name and
-    carries it as data-current (so re-selecting the same name is a no-op)."""
+    """A loaded holding's band combobox carries the bare ticker as its VALUE
+    (mono), the company name as the separate muted overlay span (the canonical
+    two-part label — never "T · Name" as one string), and data-current (so
+    re-selecting the same name is a no-op)."""
     tcc = build_ticker_command_center(repo, "NU")
     frag = render_ticker_fragment(tcc)
     assert 'data-current="NU"' in frag
-    assert 'value="NU · Nu Holdings"' in frag
+    assert 'value="NU"' in frag
+    assert '<span class="cc-combo-name" title="Nu Holdings">Nu Holdings</span>' in frag
+    assert "NU · Nu Holdings" not in frag
 
 
 def test_holding_panel_endpoint(client) -> None:

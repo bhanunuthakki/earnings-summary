@@ -20,20 +20,21 @@ from pathlib import Path
 from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
 
 _PANEL_STYLE = """<style>
-.ir-cov-table { width:100%; border-collapse:collapse; font-size:13px; }
+.ir-cov-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .ir-cov-table th, .ir-cov-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border,#2a2d31); text-align:left; }
+  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
 .ir-cov-table td.num, .ir-cov-table th.num { text-align:right; }
-.ir-cov-table td.tk { font-weight:600; }
-.ir-pill { display:inline-block; padding:2px 9px; border-radius:10px;
-  font-size:11px; font-weight:600; white-space:nowrap; }
-.ir-ok { background:#14361f; color:#6ee7a0; }
-.ir-gap { background:#3a1f1f; color:#f0a0a0; }
-tr.ir-gap-row td { background:rgba(150,40,40,0.10); }
-.ir-reason { font-size:11px; color:var(--muted,#9aa0a6); margin-top:3px; }
-.ir-note { margin-top:14px; padding:10px 13px; background:#1f2125;
-  border:1px solid var(--border,#2a2d31); border-radius:6px; font-size:12.5px; line-height:1.55; }
-.ir-note code { background:#2a2d31; padding:1px 5px; border-radius:3px; }
+.ir-cov-table td.tk { font-weight:600; font-family:var(--mono); }
+.ir-pill { display:inline-block; padding:2px 9px; border-radius:var(--radius-full);
+  font-size:var(--fs-caption); font-weight:600; white-space:nowrap; }
+.ir-ok { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
+.ir-gap { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
+tr.ir-gap-row td { background:color-mix(in srgb, var(--bad) 7%, transparent); }
+.ir-reason { font-size:var(--fs-caption); color:var(--muted); margin-top:3px; }
+.ir-note { margin-top:14px; padding:10px 13px; background:var(--paper);
+  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
+  line-height:1.55; }
+.ir-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
 </style>"""
 
 

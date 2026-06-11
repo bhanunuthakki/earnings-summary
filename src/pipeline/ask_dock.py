@@ -42,12 +42,12 @@ _DOCK_CSS = """
   background:var(--surface); box-shadow:0 16px 48px rgba(0,0,0,0.55);
   display:flex; flex-direction:column; overflow:hidden; }
 .ask-dock-head { display:flex; align-items:center; gap:8px; width:100%; padding:9px 12px;
-  background:var(--paper, #1a1d23); border:none; cursor:pointer; text-align:left; }
+  background:var(--paper); border:none; cursor:pointer; text-align:left; }
 .ask-dock-title { color:var(--accent); font-weight:600; font-size:var(--fs-body); }
 .ask-dock-hint { color:var(--muted); font-size:var(--fs-caption); flex:1; overflow:hidden;
   white-space:nowrap; text-overflow:ellipsis; }
-.ask-dock-ctl { color:var(--muted); font-size:13px; padding:0 2px; text-decoration:none;
-  cursor:pointer; }
+.ask-dock-ctl { color:var(--muted); font-size:var(--fs-body); padding:0 2px;
+  text-decoration:none; cursor:pointer; }
 .ask-dock-ctl:hover { color:var(--accent); }
 .ask-dock-body { display:flex; flex-direction:column; max-height:54vh; }
 /* min — the slim pill: title only, body folded, controls hidden (the pill
@@ -81,7 +81,7 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   border-radius:var(--radius) var(--radius) 4px var(--radius); padding:5px 10px;
   font-size:var(--fs-caption); }
 .ask-dock-asst { align-self:stretch; border:1px solid var(--border);
-  background:var(--paper, #1a1d23); border-radius:var(--radius); padding:8px 10px;
+  background:var(--paper); border-radius:var(--radius); padding:8px 10px;
   font-size:var(--fs-caption); color:var(--fg); overflow-x:auto; }
 .ask-dock-asst p { margin:0 0 6px; } .ask-dock-asst p:last-child { margin-bottom:0; }
 .ask-dock-asst ul { margin:0 0 6px 16px; padding:0; }
@@ -91,7 +91,7 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   75% { content:'...'; } }
 .ask-dock-err { color:var(--bad); }
 .ask-dock-cites { margin-top:6px; display:flex; gap:5px; flex-wrap:wrap; }
-.ask-dock-cite { font-size:10.5px; color:var(--accent); border:1px solid var(--border);
+.ask-dock-cite { font-size:var(--fs-micro); color:var(--accent); border:1px solid var(--border);
   border-radius:var(--radius-full); padding:1px 7px; text-decoration:none; }
 .ask-dock-cite:hover { border-color:var(--accent); }
 .ask-dock-form { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--border); }

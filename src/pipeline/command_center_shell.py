@@ -684,12 +684,13 @@ td.ticker a:hover { color: var(--link); }
 .cc-holding-links a { color: var(--link); text-decoration: none; white-space: nowrap; }
 .cc-holding-links a:hover { text-decoration: underline; }
 .badges { display: inline-flex; gap: 4px; margin-left: 8px; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: var(--fs-micro);
-  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; background: var(--border); }
-.badge.b-ok { background: #14532d; color: var(--ok); }
-.badge.b-warn { background: #422006; color: var(--warn); }
-.badge.b-bad { background: #450a0a; color: var(--bad); }
-.badge.b-muted { background: var(--border); color: var(--muted); }
+.badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-full);
+  font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em;
+  font-weight: 600; background: var(--border); }
+.badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.badge.b-muted { background: var(--paper); color: var(--muted); }
 .fresh-strip { display: flex; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
 .fresh-cell { background: var(--panel); border-radius: var(--radius);
   padding: 8px 14px; flex: 1; min-width: 140px; }
@@ -898,6 +899,7 @@ td.ticker a:hover { color: var(--link); }
 .cc-palette-list li.sel, .cc-palette-list li:hover { background: var(--paper); }
 .cc-palette-list li .cc-pal-hint { color: var(--muted); font-size: var(--fs-micro);
   font-family: var(--font-mono); }
+.cc-palette-list .k-tick-name { max-width: 36ch; }
 .cc-palette-list li.cc-pal-none { color: var(--muted); cursor: default; }
 
 /* ============================================================
@@ -1292,9 +1294,17 @@ SHELL_JS = r"""
     if (palSel >= palMatches.length) palSel = palMatches.length ? palMatches.length - 1 : 0;
     var html = '';
     for (var j = 0; j < palMatches.length; j++) {
+      var it = palMatches[j].it;
+      // Ticker rows render the canonical two-part label (mono symbol +
+      // muted name) instead of one concatenated string.
+      var labelHtml = it.tick
+        ? '<span class="k-tick"><span class="k-tick-sym">' + escHtml(it.tick) + '</span>'
+          + (it.name ? '<span class="k-tick-name">' + escHtml(it.name) + '</span>' : '')
+          + '</span>'
+        : '<span>' + escHtml(it.label) + '</span>';
       html += '<li class="' + (j === palSel ? 'sel' : '') + '" data-idx="' + j + '">'
-        + '<span>' + escHtml(palMatches[j].it.label) + '</span>'
-        + '<span class="cc-pal-hint">' + escHtml(palMatches[j].it.hint) + '</span></li>';
+        + labelHtml
+        + '<span class="cc-pal-hint">' + escHtml(it.hint) + '</span></li>';
     }
     palList.innerHTML = html || '<li class="cc-pal-none">No matches.</li>';
   }
@@ -1312,7 +1322,11 @@ SHELL_JS = r"""
     fetchTickers().then(function (list) {
       list.forEach(function (t) {
         palItems.push({
-          label: t.ticker + (t.name ? ' · ' + t.name : ''),
+          // label stays the full searchable text; tick/name drive the
+          // two-part rendering in renderPalette.
+          label: t.ticker + (t.name ? ' ' + t.name : ''),
+          tick: t.ticker,
+          name: t.name || '',
           hint: 'ticker',
           run: goHash('holding=' + encodeURIComponent(t.ticker))
         });

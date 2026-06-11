@@ -24,17 +24,18 @@ from sources.registry import (
 )
 
 _PANEL_STYLE = """<style>
-.sc-table { width:100%; border-collapse:collapse; font-size:13px; }
+.sc-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .sc-table th, .sc-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border,#2a2d31); text-align:left; }
+  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
 .sc-table td.num, .sc-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .sc-table td.src { font-weight:600; }
-.sc-skip-hi { color:#6ee7a0; }
-.sc-skip-lo { color:#9aa0a6; }
-.sc-err { color:#f0a0a0; }
-.sc-note { margin-top:14px; padding:10px 13px; background:#1f2125;
-  border:1px solid var(--border,#2a2d31); border-radius:6px; font-size:12.5px; line-height:1.55; }
-.sc-note code { background:#2a2d31; padding:1px 5px; border-radius:3px; }
+.sc-skip-hi { color:var(--ok); }
+.sc-skip-lo { color:var(--muted); }
+.sc-err { color:var(--bad); }
+.sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
+  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
+  line-height:1.55; }
+.sc-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
 </style>"""
 
 

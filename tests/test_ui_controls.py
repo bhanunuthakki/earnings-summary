@@ -182,3 +182,66 @@ def test_shell_and_dashboard_and_workspace_compose_the_kit() -> None:
     # The workspace is the theme-switching surface: paper variant.
     assert "color-scheme: light" in WS_CSS
     assert "color-scheme: dark" in SHELL_CSS
+
+
+# ---------------------------------------------------------------------------
+# Sweep guard (PR2) — swept surfaces stay token-pure
+# ---------------------------------------------------------------------------
+
+_HEX = re.compile(r"#[0-9a-fA-F]{3,8}\b")
+
+
+def test_swept_panel_stylesheets_carry_no_raw_hex() -> None:
+    """The PR2 sweep replaced every raw hex (including ``var(--x, #hex)``
+    old-palette fallbacks) in these panel stylesheets with tokens. A new hex
+    here is palette drift — add a token or use color-mix over one."""
+    from pipeline import (
+        advisor_memos_panel,
+        allocation_decisions_panel,
+        ask_dock,
+        discovery_panel,
+        explore_panel,
+        ir_coverage_panel,
+        journal_panel,
+        restatements_panel,
+        section_coverage_panel,
+        source_calls_panel,
+        thesis_ledger_panel,
+        ticker_command_center,
+        validation_issues_panel,
+    )
+
+    sheets = {
+        "journal": journal_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "section_coverage": section_coverage_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "ir_coverage": ir_coverage_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "thesis_ledger": thesis_ledger_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "restatements": restatements_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "source_calls": source_calls_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "validation": validation_issues_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "discovery": discovery_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "explore": explore_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "allocation": allocation_decisions_panel._PANEL_CSS,  # pyright: ignore[reportPrivateUsage]
+        "advisor_memos": advisor_memos_panel._PANEL_CSS  # pyright: ignore[reportPrivateUsage]
+        + advisor_memos_panel._SOCRATIC_PAGE_CSS,  # pyright: ignore[reportPrivateUsage]
+        "ask_dock": ask_dock._DOCK_CSS,  # pyright: ignore[reportPrivateUsage]
+        "combo": ticker_command_center._COMBO_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "quicknote": ticker_command_center._QUICK_NOTE_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "tcc_drawer": ticker_command_center._TCC_DRAWER_STYLE,  # pyright: ignore[reportPrivateUsage]
+    }
+    offenders = {name: _HEX.findall(css) for name, css in sheets.items() if _HEX.search(css)}
+    assert not offenders, f"raw hex crept back into swept panel CSS: {offenders}"
+
+
+def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
+    """The 'one long label' kill (PR2): the shell palette renders ticker rows
+    as .k-tick spans, and the holding combobox never bakes 'T · Name' into its
+    input value (ticker value + .cc-combo-name overlay instead)."""
+    from pipeline.command_center_shell import SHELL_JS
+    from pipeline.ticker_command_center import _combobox  # pyright: ignore[reportPrivateUsage]
+
+    assert "k-tick-sym" in SHELL_JS
+    combo = _combobox("NU", "Nu Holdings Ltd.")
+    assert 'value="NU"' in combo
+    assert '<span class="cc-combo-name"' in combo
+    assert "NU · Nu Holdings" not in combo

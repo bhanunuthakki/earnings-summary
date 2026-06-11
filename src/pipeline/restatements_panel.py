@@ -17,18 +17,19 @@ from html import escape
 from pathlib import Path
 
 _PANEL_STYLE = """<style>
-.rs-table { width:100%; border-collapse:collapse; font-size:13px; }
+.rs-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .rs-table th, .rs-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border,#2a2d31); text-align:left; }
+  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
 .rs-table td.num, .rs-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.rs-was { color:#9aa0a6; text-decoration:line-through; }
+.rs-was { color:var(--muted); text-decoration:line-through; }
 .rs-now { font-weight:600; }
-.rs-up { color:#6ee7a0; }
-.rs-down { color:#f0a0a0; }
-.rs-note { margin-top:14px; padding:10px 13px; background:#1f2125;
-  border:1px solid var(--border,#2a2d31); border-radius:6px; font-size:12.5px; line-height:1.55; }
-.rs-note code { background:#2a2d31; padding:1px 5px; border-radius:3px; }
-.rs-doc { font-size:11px; font-family:var(--mono,monospace); }
+.rs-up { color:var(--ok); }
+.rs-down { color:var(--bad); }
+.rs-note { margin-top:14px; padding:10px 13px; background:var(--paper);
+  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
+  line-height:1.55; }
+.rs-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
+.rs-doc { font-size:var(--fs-caption); font-family:var(--mono); }
 </style>"""
 
 _LIMIT = 50

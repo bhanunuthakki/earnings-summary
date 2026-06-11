@@ -624,25 +624,27 @@ def _money(v: float | None, *, signed: bool = False) -> str:
 
 _PANEL_CSS = """<style>
 .ad-table td, .ad-timeline td { vertical-align: middle; }
-.ad-note { font-size: 12px; margin: 0 0 10px; }
-.ad-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
-.ad-badge.b-ok { background: #14532d; color: var(--ok); }
-.ad-badge.b-warn { background: #422006; color: var(--warn); }
-.ad-badge.b-bad { background: #450a0a; color: var(--bad); }
-.ad-badge.b-muted { background: #2a2c30; color: var(--muted); }
+.ad-note { font-size: var(--fs-caption); margin: 0 0 10px; }
+.ad-badge { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.4px;
+  font-weight: 600; }
+.ad-badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.ad-badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn); }
+.ad-badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.ad-badge.b-muted { background: var(--paper); color: var(--muted); }
 .ad-score { color: var(--warn); font-variant-numeric: tabular-nums; margin-right: 8px; }
-.ad-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: 10px;
-  font-size: 11px; font-family: var(--mono); background: var(--paper);
-  border: 1px solid var(--border); color: var(--muted); }
+.ad-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px;
+  border-radius: var(--radius-full); font-size: var(--fs-caption); font-family: var(--mono);
+  background: var(--paper); border: 1px solid var(--border); color: var(--muted); }
 .ad-mismatch { max-width: 420px; }
-.ad-aligned { font-size: 12px; }
+.ad-aligned { font-size: var(--fs-caption); }
 .ad-edit-btn { background: transparent; color: var(--muted); border: 1px solid var(--border);
-  border-radius: 4px; padding: 2px 9px; font-size: 11px; cursor: pointer;
+  border-radius: var(--radius); padding: 2px 9px; font-size: var(--fs-caption); cursor: pointer;
   font-family: var(--mono); }
 .ad-edit-btn:hover { color: var(--fg); border-color: var(--border-2); }
-.ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px;
-  padding: 4px 0; }
+.ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: var(--fs-caption); padding: 4px 0; }
 .ad-editor span { color: var(--muted); }
 /* Editor inputs/selects: skinned by the shared control kit (ui/controls.py). */
 .ad-editor select, .ad-editor input { padding: 3px 6px; font-size: var(--fs-caption); }
@@ -652,15 +654,20 @@ _PANEL_CSS = """<style>
 .ad-save-btn { background: var(--accent); color: var(--accent-contrast); border: none;
   border-radius: var(--radius); padding: 4px 12px; font-size: var(--fs-caption);
   font-weight: 600; cursor: pointer; }
-.ad-timeline td.tk { font-weight: 600; white-space: nowrap; }
+.ad-timeline td.tk { font-weight: 600; white-space: nowrap; font-family: var(--mono); }
 .ad-timeline td.when { color: var(--muted); white-space: nowrap; }
-.ad-pill { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px;
-  font-weight: 600; white-space: nowrap; background: #1f2b3a; color: #8fb6e6; }
-.ad-pill.p-bear_append { background: #3a1f1f; color: #f0a0a0; }
-.ad-pill.p-thesis_update { background: #14361f; color: #6ee7a0; }
-.ad-pill.p-sizing_intent { background: #2b2440; color: #c4b5fd; }
-.ad-pill.p-decision_note { background: #103039; color: #7dd3fc; }
-.ad-body { font-size: 12.5px; line-height: 1.5; }
+/* Timeline kinds: semantic tones where they exist (bear=bad, thesis=ok);
+   the rest stay one quiet treatment — color is for meaning, not category. */
+.ad-pill { display: inline-block; padding: 2px 9px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.ad-pill.p-bear_append { background: color-mix(in srgb, var(--bad) 16%, transparent);
+  color: var(--bad); }
+.ad-pill.p-thesis_update { background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok); }
+.ad-pill.p-sizing_intent, .ad-pill.p-decision_note { background: var(--paper);
+  color: var(--muted); border: 1px solid var(--border); }
+.ad-body { font-size: var(--fs-body); line-height: 1.5; }
 td.pos, span.pos { color: var(--ok); }
 td.neg, span.neg { color: var(--bad); }
 </style>"""

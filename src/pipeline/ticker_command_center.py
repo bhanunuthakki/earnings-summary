@@ -29,7 +29,7 @@ from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from ui.controls import controls_css
+from ui.controls import controls_css, ticker_label
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
@@ -688,13 +688,15 @@ def _dcf_sheets_section(ticker: str) -> str:
 
 def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> str:
     ident = tcc.identity
-    title = f"{ident.ticker}" + (f" · {ident.name}" if ident.name else "")
+    # The canonical two-part ticker label (mono symbol + muted name), display
+    # size — never the "T · Name" single string.
+    heading = ticker_label(ident.ticker, ident.name, name_max="36ch")
     parts: list[str] = [
         _PAGE_HEAD.format(
             ticker=escape(ident.ticker),
             generated_at=stamp_html(generated_at, prefix="updated "),
         ),
-        f"<header><div><h1>{escape(title)}</h1>",
+        f"<header><div><h1>{heading}</h1>",
         '<nav class="top-nav">',
         '<a href="/">&larr; Dashboard</a> · ',
         '<a href="/analytical">Analytical overview</a> · ',
@@ -764,20 +766,28 @@ def _holding_band(tcc: TickerCommandCenter) -> str:
 
 def _combobox(ticker: str, name: str | None) -> str:
     """Search-first holding picker (UX9c): a type-ahead combobox over the tracked
-    list. The input shows the current ticker · name; on focus it select-alls so
-    the first keystroke filters. Selection (click / arrow+Enter) drives the same
-    ``#holding=<T>`` hash the old ``cc-picker`` dropdown did — so the shell's
-    activation + deep-link contract is unchanged. Tickers come from the shared
-    ``/api/tickers`` source, fetched lazily on first focus."""
-    display = escape(ticker + (f" · {name}" if name else "")) if ticker else ""
+    list. The input VALUE is the bare ticker (mono); the company name renders as
+    a separate muted overlay inside the field (the canonical two-part label —
+    never "T · Name" as one string), hidden while the field has focus so typing
+    is unobstructed. On focus it select-alls so the first keystroke filters.
+    Selection (click / arrow+Enter) drives the same ``#holding=<T>`` hash the
+    old ``cc-picker`` dropdown did — so the shell's activation + deep-link
+    contract is unchanged. Tickers come from the shared ``/api/tickers`` source,
+    fetched lazily on first focus."""
     cur = escape(ticker, quote=True)
     placeholder = "Search holdings — ticker or name…"
+    name_span = (
+        f'<span class="cc-combo-name" title="{escape(name, quote=True)}">{escape(name)}</span>'
+        if ticker and name
+        else ""
+    )
     return (
         f'<div class="cc-combo" data-current="{cur}">'
         '<input class="cc-combo-input" type="text" role="combobox" aria-expanded="false" '
         'aria-autocomplete="list" aria-controls="cc-combo-list" autocomplete="off" '
-        f'spellcheck="false" value="{display}" placeholder="{placeholder}" '
+        f'spellcheck="false" value="{cur}" placeholder="{placeholder}" '
         'aria-label="Search holdings">'
+        f"{name_span}"
         '<ul class="cc-combo-list" id="cc-combo-list" role="listbox" hidden></ul>'
         "</div>"
     )
@@ -900,8 +910,20 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
 _COMBO_STYLE = """<style>
 .cc-combo { position: relative; flex: 1 1 280px; max-width: 420px; min-width: 200px; }
 /* The input itself is skinned by the shared control kit (ui/controls.py);
-   the results list is the kit's .k-menu surface with combo positioning. */
-.cc-combo-input { width: 100%; box-sizing: border-box; padding: 6px 11px; }
+   the results list is the kit's .k-menu surface with combo positioning.
+   (.cc-combo prefix: outranks the kit's input[type] baseline so the mono
+   ticker face survives the baseline's `font: inherit`.) */
+.cc-combo .cc-combo-input { width: 100%; box-sizing: border-box; padding: 6px 11px;
+  font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; }
+.cc-combo .cc-combo-input::placeholder { font-family: var(--sans); font-weight: 400;
+  letter-spacing: normal; }
+/* The two-part label inside the field: muted company name, right-aligned,
+   out of the way while typing. */
+.cc-combo-name { position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: var(--fs-caption); max-width: 58%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  pointer-events: none; }
+.cc-combo:focus-within .cc-combo-name { display: none; }
 .cc-combo-list { position: absolute; z-index: 25; top: calc(100% + 4px); left: 0; right: 0;
   margin: 0; padding: 4px 0; list-style: none; max-height: 320px; overflow-y: auto;
   background: var(--surface); border: 1px solid var(--border);
@@ -995,31 +1017,31 @@ _TCC_DRAWER_STYLE = """<style>
    verdict/freshness/links/icons cluster right. */
 .cc-holding-head { display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 12px; min-height: 40px; margin-bottom: 14px; padding-bottom: 10px;
-  border-bottom: 1px solid var(--border, #2a2c30); }
+  border-bottom: 1px solid var(--border); }
 .cc-fdot { font-size: var(--fs-body); cursor: help; margin-left: 6px; }
 a.cc-fdot { text-decoration: none; cursor: pointer; }
-.fdot-ok { color: var(--ok, #4ade80); }
-.fdot-warn { color: var(--warn, #fbbf24); }
-.fdot-bad { color: var(--bad, #f87171); }
-.tcc-drawer-btn { background: transparent; border: 1px solid var(--border, #2a2c30);
-  color: var(--muted, #888); border-radius: var(--radius); padding: 4px 10px;
+.fdot-ok { color: var(--ok); }
+.fdot-warn { color: var(--warn); }
+.fdot-bad { color: var(--bad); }
+.tcc-drawer-btn { background: transparent; border: 1px solid var(--border);
+  color: var(--muted); border-radius: var(--radius); padding: 4px 10px;
   font-size: var(--fs-caption); cursor: pointer;
   transition: color var(--transition), border-color var(--transition); }
-.tcc-drawer-btn:hover { border-color: var(--accent, #7aa2f7); color: var(--accent, #7aa2f7); }
+.tcc-drawer-btn:hover { border-color: var(--accent); color: var(--accent); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); }
 .tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34;
   animation: cc-fade-in var(--transition); }
 .tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
-  background: var(--bg, #0e0f12); border-left: 1px solid var(--border, #2a2c30); z-index: 35;
+  background: var(--bg); border-left: 1px solid var(--border); z-index: 35;
   display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35);
   animation: cc-slide-in-right var(--transition); }
 .tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
 .tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--border, #2a2c30); font-weight: 700; }
-.tcc-drawer-close { background: transparent; border: none; color: var(--muted, #888);
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
+.tcc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px;
   transition: color var(--transition); }
-.tcc-drawer-close:hover { color: var(--fg, #e8e8e3); }
+.tcc-drawer-close:hover { color: var(--fg); }
 .tcc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }
 /* Standardized overlay motion (mirrors the shell keyframes for the
    standalone /ticker page, which does not load SHELL_CSS). */
@@ -1406,16 +1428,17 @@ _PAGE_HEAD = (
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
   header {{ margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
   h1 {{ font-size: var(--fs-display); margin: 0 0 4px; font-weight: 600; }}
+  h1 .k-tick-name {{ font-size: var(--fs-section); }}
   h2 {{ font-size: var(--fs-title); margin: 0 0 8px; font-weight: 600; }}
   a {{ transition: color var(--transition); }}
   .top-nav {{ font-size: var(--fs-caption); }}
   .top-nav a {{ color: var(--accent); text-decoration: none; }}
   .top-nav a:hover {{ text-decoration: underline; }}
   .badges {{ text-align: right; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background: var(--border); margin-left: 4px; }}
-  .badge.b-ok {{ background: #14532d; color: var(--ok); }}
-  .badge.b-warn {{ background: #422006; color: var(--warn); }}
-  .badge.b-bad {{ background: #450a0a; color: var(--bad); }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: var(--radius-full); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background: var(--border); margin-left: 4px; }}
+  .badge.b-ok {{ background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }}
+  .badge.b-warn {{ background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }}
+  .badge.b-bad {{ background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }}
   .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
   .panel-h3 {{ font-size: var(--fs-body); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
