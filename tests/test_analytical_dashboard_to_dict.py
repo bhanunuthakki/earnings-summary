@@ -362,16 +362,34 @@ def test_retired_panel_fragments_404(client) -> None:
 
 
 def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) -> None:
-    """The Portfolio panel layers live tracker data over the cached synthesis.
-    With the tracker offline (dead URL) it must still render head/foot-less: the
-    live section shows the offline note and the synthesis still renders."""
+    """The Performance panel is the tracker view. With the tracker offline
+    (dead URL) it must still render head/foot-less: the live section shows the
+    offline note. The synthesis layer lives on its own panel now — none of it
+    rides along here."""
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:59999")  # nothing listening
     resp = client.get("/api/panel/portfolio")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "<!doctype" not in body.lower()  # head/foot-less fragment
     assert "Live portfolio" in body  # the live section (offline note)
-    assert "Portfolio synthesis" in body  # the cached synthesis still renders
+    assert "Portfolio synthesis" not in body  # moved to /api/panel/portfolio_synthesis
+
+
+def test_panel_fragment_portfolio_synthesis(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Synthesis tab fragment (UX round 4): the insights layer + the
+    cached lens memo (the seeded DB has none cached → the run-hint stub) at
+    its own lazy route. Tracker down → quiet equal-weight fallback; the
+    offline/start-tracker card stays on Performance."""
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:59999")  # nothing listening
+    resp = client.get("/api/panel/portfolio_synthesis")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()  # head/foot-less fragment
+    assert "Portfolio synthesis" in body  # the lens-memo section
+    assert "Exposure" in body  # the insights layer renders from the seeded DB
+    assert "Live portfolio" not in body  # no offline card on this tab
 
 
 def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(

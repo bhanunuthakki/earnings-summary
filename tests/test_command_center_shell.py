@@ -73,6 +73,7 @@ def test_render_shell_five_section_structure() -> None:
         "journal",
         "explore",
         "portfolio",
+        "portfolio_synthesis",
         "decisions_record",
         "advisor_memos",
         "holdings",
@@ -309,9 +310,24 @@ def test_sub_tab_buttons_carry_their_section() -> None:
     assert 'data-tab-target="overview" data-cc-theme="home"' in html
     assert 'data-tab-target="holding" data-cc-theme="companies"' in html
     assert 'data-tab-target="explore" data-cc-theme="ask"' in html
+    assert 'data-tab-target="portfolio_synthesis" data-cc-theme="portfolio"' in html
     assert 'data-tab-target="decisions_record" data-cc-theme="portfolio"' in html
     assert 'data-tab-target="validation" data-cc-theme="system"' in html
     assert 'data-tab-target="ir_coverage" data-cc-theme="system"' in html
+
+
+def test_synthesis_subtab_sits_right_after_performance() -> None:
+    """UX round 4: the portfolio-level synthesis (thesis rollup · exposure ·
+    next-dollar distribution · lens memo) surfaced as its own lazy sub-tab,
+    placed immediately after Performance — it was a buried strip at the bottom
+    of the Performance fragment."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'data-endpoint="/api/panel/portfolio_synthesis"' in html
+    # The trailing quote keeps "portfolio" from matching "portfolio_synthesis".
+    perf = html.index('data-tab-target="portfolio"')
+    synth = html.index('data-tab-target="portfolio_synthesis"')
+    decisions = html.index('data-tab-target="decisions_record"')
+    assert perf < synth < decisions
 
 
 def test_content_width_is_wide() -> None:

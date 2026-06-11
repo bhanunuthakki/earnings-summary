@@ -1,22 +1,34 @@
-"""Portfolio theme page renderer for the command-center shell.
+"""Portfolio section page renderers for the command-center shell.
 
-Master build P2.1 — the advisor's data foundation. The page leads with the
-tracker's analytics (TWR vs SPY / QQQ / policy with the policy mix, risk stats
-vs SPY, allocation + concentration cuts, per-position dollar alpha), then the
-live positions / % of book / taxable breakdown / latest transactions, then the
-cached ``cross_portfolio_synthesis`` lens memo. Every number in the analytics
-sections comes from the tracker's API verbatim — benchmark math is never
-rebuilt here (directive architecture rule); the only client-side arithmetic is
-display formatting and the portfolio-minus-benchmark readout of two API values.
+Master build P2.1 — the advisor's data foundation — split across two sub-tabs
+(UX round 4: the synthesis layer stopped being a buried strip at the bottom of
+Performance):
 
-Degrades gracefully: tracker fully offline → ONE "tracker offline" note (with
-the start hint) + the synthesis; tracker up but an analytics endpoint failing →
-the other sections still render and the failed ones are named in a footnote.
+* **Performance** (``render_portfolio_panel``): the tracker's analytics (TWR
+  vs SPY / QQQ / policy with the policy mix, risk stats vs SPY, allocation +
+  concentration cuts, per-position dollar alpha), then the live positions /
+  % of book / taxable breakdown / latest transactions. Every number in the
+  analytics sections comes from the tracker's API verbatim — benchmark math is
+  never rebuilt here (directive architecture rule); the only client-side
+  arithmetic is display formatting and the portfolio-minus-benchmark readout
+  of two API values.
+* **Synthesis** (``render_portfolio_synthesis_panel``): the portfolio-level
+  reading layer — thesis-health rollup + sector exposure in a grid up top, the
+  quantitative next-dollar allocation distribution (src/allocation) full-width
+  with its factor waterfall, the cached ``cross_portfolio_synthesis`` lens
+  memo below.
+
+Degrades gracefully: tracker fully offline → Performance shows ONE "tracker
+offline" note (with the start hint); tracker up but an analytics endpoint
+failing → the other sections still render and the failed ones are named in a
+footnote. The Synthesis tab never shows the offline card — its panels fall
+back to equal-weighted readings and say so in their sub-lines.
 
 Reuses the dark panel/table/kpi-strip CSS vocabulary the shell already defines;
-the analytics-only additions (legend chips, allocation bars, the benchmark
-chart) ship as a fragment-local ``<style>`` block keyed off the shared token
-variables, and the chart's series colors come from ``ui.tokens.CHART_SERIES``.
+the fragment-local additions (legend chips, allocation bars, the benchmark
+chart on Performance; the insights grid + next-dollar rows on Synthesis) ship
+as per-fragment ``<style>`` blocks keyed off the shared token variables, and
+the chart's series colors come from ``ui.tokens.CHART_SERIES``.
 """
 
 from __future__ import annotations
@@ -98,23 +110,18 @@ def validated_window(
 
 
 def render_portfolio_panel(
-    db_path: Path,
     *,
     api_url: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     include_backfill: bool = False,
 ) -> str:
-    """The Portfolio theme page fragment: tracker analytics (performance / risk /
-    positioning / alpha) over the requested window, the live positions/taxable
-    view, then the cached cross-portfolio synthesis memo. The window args come
-    from the page's own window bar (via ``/api/panel/portfolio`` query params)
-    and pass through to the tracker verbatim after validation."""
-    # Lazy imports keep the analytical builder out of this module's import graph
-    # until the panel is actually requested.
-    from pipeline.analytical_dashboard import build_analytical_dashboard
-    from pipeline.analytical_dashboard_html import render_panel_fragment
-
+    """The Portfolio → Performance tab fragment: tracker analytics (performance /
+    risk / positioning / alpha) over the requested window, then the live
+    positions/taxable view. The window args come from the page's own window bar
+    (via ``/api/panel/portfolio`` query params) and pass through to the tracker
+    verbatim after validation. The synthesis layer lives on its own sub-tab —
+    ``render_portfolio_synthesis_panel``."""
     window = validated_window(start_date, end_date, include_backfill)
     analytics = fetch_portfolio_analytics(
         api_url=api_url,
@@ -123,18 +130,13 @@ def render_portfolio_panel(
         include_backfill=window.include_backfill,
     )
     live = fetch_live_portfolio(api_url=api_url)
-    dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
-    synthesis = render_panel_fragment(dash, "portfolio") or ""
-    insights = render_portfolio_insights(db_path, live)
-    return compose_portfolio_page(analytics, live, synthesis, window=window, insights=insights)
+    return compose_portfolio_page(analytics, live, window=window)
 
 
 def compose_portfolio_page(
     analytics: PortfolioAnalytics,
     live: LivePortfolio,
-    synthesis: str,
     window: WindowSelection | None = None,
-    insights: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -143,9 +145,7 @@ def compose_portfolio_page(
     single offline note carries the start hint for the whole page (no duplicate
     per-section offline panels). Tracker up but ALL analytics endpoints failing
     (e.g. an older tracker build) → one quiet note instead of five dead
-    sections. ``insights`` (PR6) is the structured synthesis block — thesis
-    health rollup, sector exposure, next-dollar memo — rendered between the
-    live section and the cross-portfolio memo.
+    sections.
     """
     w = window or _DEFAULT_WINDOW
     parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
@@ -159,9 +159,6 @@ def compose_portfolio_page(
             f"{escape(first_error)}.</p></section>"
         )
     parts.append(render_live_portfolio_section(live))
-    if insights:
-        parts.append(insights)
-    parts.append(synthesis)
     return "".join(parts)
 
 
@@ -170,9 +167,10 @@ def compose_portfolio_page(
 # already-parsed PortfolioAnalytics — no network, no benchmark math.
 # ---------------------------------------------------------------------------
 
-# Styling only the analytics sections need; everything else reuses the shell's
-# panel/kpi/table vocabulary. Colors key off the shared token variables so a
-# palette change in ui/tokens.py propagates here untouched.
+# Styling only the Performance fragment needs; everything else reuses the
+# shell's panel/kpi/table vocabulary. Colors key off the shared token variables
+# so a palette change in ui/tokens.py propagates here untouched. (The Synthesis
+# fragment carries its own block — _INSIGHTS_CSS.)
 _ANALYTICS_CSS = """<style>
 .pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: var(--fs-body); }
 .pf-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
@@ -181,6 +179,39 @@ _ANALYTICS_CSS = """<style>
 .pf-chart { width: 100%; height: auto; display: block; }
 .pf-policy { font-size: var(--fs-caption); margin: 10px 0 0; }
 .pf-warn { color: var(--warn); }
+.pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px 32px; margin-top: 4px; }
+.pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
+  gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
+.pf-alloc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-bar { background: var(--hairline); border-radius: 3px; height: 10px; overflow: hidden; }
+.pf-bar-fill { background: var(--accent); opacity: 0.75; height: 100%; display: block; }
+.pf-alloc-pct { text-align: right; font-variant-numeric: tabular-nums; }
+.pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
+.pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
+.pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
+.pf-degraded { font-size: var(--fs-caption); }
+.pf-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--surface); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+.pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); margin-right: 4px; }
+.pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
+  font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
+.pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
+.pf-btn-apply { background: var(--accent); color: #0d1117; border: none; font-weight: 600; }
+.pf-window input[type="date"] { background: var(--paper); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; font-size: var(--fs-caption);
+  font-family: var(--mono); color-scheme: dark; }
+.pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
+  gap: 5px; margin-left: 6px; cursor: help; }
+</style>"""
+
+# Styling for the Synthesis fragment: the rollup/exposure insights grid and
+# the next-dollar distribution rows. Same token-variable discipline as
+# _ANALYTICS_CSS; a separate block so each tab ships only the rules it renders.
+_INSIGHTS_CSS = """<style>
 .pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0 18px; align-items: start; }
 .pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -213,33 +244,6 @@ _ANALYTICS_CSS = """<style>
 .pf-nd-note { font-size: var(--fs-caption); }
 .pf-nd-hint { font-size: var(--fs-caption); }
 .pf-nd-memo-h { margin-top: 12px; }
-.pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 10px 32px; margin-top: 4px; }
-.pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
-  gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
-.pf-alloc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-bar { background: var(--hairline); border-radius: 3px; height: 10px; overflow: hidden; }
-.pf-bar-fill { background: var(--accent); opacity: 0.75; height: 100%; display: block; }
-.pf-alloc-pct { text-align: right; font-variant-numeric: tabular-nums; }
-.pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
-.pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
-.pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
-.pf-degraded { font-size: var(--fs-caption); }
-.pf-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  background: var(--surface); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted); margin-right: 4px; }
-.pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
-.pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
-.pf-btn-apply { background: var(--accent); color: #0d1117; border: none; font-weight: 600; }
-.pf-window input[type="date"] { background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; font-size: var(--fs-caption);
-  font-family: var(--mono); color-scheme: dark; }
-.pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
-  gap: 5px; margin-left: 6px; cursor: help; }
 </style>"""
 
 _SECTION_LABELS: dict[str, str] = {
@@ -827,21 +831,43 @@ def _offline_reason(error: str | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Portfolio insights (UX redesign PR6) — the structured side of "synthesis":
-# thesis-health rollup, sector exposure, and the latest next-dollar memo,
-# rendered between the live section and the cross-portfolio memo. Each panel
-# hides itself when its substrate is absent (hide-don't-stub).
+# Portfolio → Synthesis tab (UX round 4; grew out of the PR6 insights strip
+# that used to ride the bottom of Performance): thesis-health rollup + sector
+# exposure in a grid up top, the next-dollar distribution full-width as the
+# centerpiece, the cross-portfolio lens memo below. Each panel hides itself
+# when its substrate is absent (hide-don't-stub).
 # ---------------------------------------------------------------------------
 
 
-def render_portfolio_insights(db_path: Path, live: LivePortfolio) -> str:
-    parts = [
-        _thesis_rollup_panel(db_path),
-        _exposure_panel(db_path, live),
-        render_next_dollar_panel(db_path, live),
-    ]
-    body = "".join(p for p in parts if p)
-    return f'<div class="pf-insights">{body}</div>' if body else ""
+def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = None) -> str:
+    """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
+    exposure weighting and the next-dollar model prefer live position weights
+    and fall back to equal-weight when the tracker is down — no offline card
+    here, Performance carries it) plus the cached ``cross_portfolio_synthesis``
+    lens memo, then assembles the page."""
+    # Lazy imports keep the analytical builder out of this module's import graph
+    # until the panel is actually requested.
+    from pipeline.analytical_dashboard import build_analytical_dashboard
+    from pipeline.analytical_dashboard_html import render_panel_fragment
+
+    live = fetch_live_portfolio(api_url=api_url)
+    dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
+    memo = render_panel_fragment(dash, "portfolio") or ""
+    return compose_synthesis_page(db_path, live, memo)
+
+
+def compose_synthesis_page(db_path: Path, live: LivePortfolio, synthesis: str) -> str:
+    """Page assembly over an already-fetched live book + lens-memo fragment
+    (testable without network; the insight panels read the DB themselves):
+    the rollup/exposure grid, then the next-dollar distribution full-width,
+    then the memo."""
+    grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
+    parts: list[str] = [_INSIGHTS_CSS]
+    if grid:
+        parts.append(f'<div class="pf-insights">{grid}</div>')
+    parts.append(render_next_dollar_panel(db_path, live))
+    parts.append(synthesis)
+    return "".join(parts)
 
 
 def _portfolio_tickers(conn: sqlite3.Connection) -> list[str]:

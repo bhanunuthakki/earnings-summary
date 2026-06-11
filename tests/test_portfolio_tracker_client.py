@@ -31,9 +31,9 @@ from integrations.portfolio_tracker_client import (
 from pipeline.portfolio_panel import (
     WindowSelection,
     compose_portfolio_page,
+    compose_synthesis_page,
     render_live_portfolio_section,
     render_portfolio_analytics_sections,
-    render_portfolio_insights,
     validated_window,
 )
 
@@ -624,13 +624,17 @@ def test_compose_page_offline_renders_single_note() -> None:
     live = LivePortfolio(
         available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
     )
-    html = compose_portfolio_page(analytics, live, "<div>SYNTH</div>")
+    html = compose_portfolio_page(analytics, live)
     # Tracker fully down → exactly ONE offline note (the live section's, which
     # carries the start hint) — not a second analytics offline panel.
     assert html.count("offline-tech") == 1
     assert "uvicorn portfolio_tracker.api.main:app" in html
     assert "Portfolio analytics" not in html
-    assert "SYNTH" in html
+    # The synthesis layer moved to its own sub-tab — Performance carries none
+    # of it (no insights grid, no next-dollar, no lens memo).
+    assert 'class="pf-insights"' not in html
+    assert "Where the next dollar goes" not in html
+    assert "Portfolio synthesis" not in html
 
 
 def test_compose_page_analytics_down_live_up_notes_quietly() -> None:
@@ -655,7 +659,7 @@ def test_compose_page_analytics_down_live_up_notes_quietly() -> None:
         ],
         by_tax_treatment={"taxable": 0.0, "tax_deferred": 0.0, "tax_free": 12000.0, "unknown": 0.0},
     )
-    html = compose_portfolio_page(analytics, live, "")
+    html = compose_portfolio_page(analytics, live)
     # An older tracker build (reachable, but no analytics routes) gets one
     # quiet note naming the failure, and the live book still renders.
     assert "analytics endpoints aren't" in html
@@ -734,7 +738,7 @@ def test_compose_page_renders_window_bar_with_echoed_values() -> None:
         available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
     )
     window = WindowSelection(start_date="2026-01-01", end_date="2026-06-10", include_backfill=True)
-    html = compose_portfolio_page(analytics, live, "", window=window)
+    html = compose_portfolio_page(analytics, live, window=window)
     # The bar renders even with the tracker down (it doubles as a retry
     # control), echoing the applied window into the inputs.
     assert 'id="pf-window-bar"' in html
@@ -749,21 +753,27 @@ def test_compose_page_renders_window_bar_with_echoed_values() -> None:
 def test_compose_page_default_window_bar_is_unset() -> None:
     analytics = PortfolioAnalytics(available=False, api_url="http://x", errors={})
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    html = compose_portfolio_page(analytics, live, "")
+    html = compose_portfolio_page(analytics, live)
     assert 'id="pf-window-bar"' in html
     assert 'id="pf-start" value=""' in html and 'id="pf-end" value=""' in html
     assert 'id="pf-backfill">' in html  # unchecked
 
 
-# ----- Portfolio insights (PR6): rollup / exposure / next-dollar -----
+# ----- Portfolio → Synthesis tab: rollup / exposure / next-dollar / memo -----
 
 
-def test_portfolio_insights_empty_db_renders_nothing(tmp_path: Path) -> None:
+def test_synthesis_page_empty_db_renders_only_the_memo(tmp_path: Path) -> None:
+    """No substrate → no insight panels (hide-don't-stub); the lens-memo
+    fragment passes through untouched."""
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    assert render_portfolio_insights(tmp_path / "missing.db", live) == ""
+    html = compose_synthesis_page(tmp_path / "missing.db", live, "<div>MEMO</div>")
+    assert "MEMO" in html
+    assert 'class="pf-insights"' not in html
+    assert "Thesis health" not in html
+    assert "Where the next dollar goes" not in html
 
 
-def test_portfolio_insights_rollup_and_next_dollar(tmp_path: Path) -> None:
+def test_synthesis_page_rollup_and_next_dollar(tmp_path: Path) -> None:
     import sqlite3
 
     db = tmp_path / "data" / "portfolio.db"
@@ -797,7 +807,7 @@ def test_portfolio_insights_rollup_and_next_dollar(tmp_path: Path) -> None:
     conn.close()
 
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    html = render_portfolio_insights(db, live)
+    html = compose_synthesis_page(db, live, "")
     # Rollup: latest-eval-wins, flagged chip deep-links to the Holding tab.
     assert "Thesis health" in html
     assert "2 OK" in html and "1 flagged" in html
@@ -810,7 +820,9 @@ def test_portfolio_insights_rollup_and_next_dollar(tmp_path: Path) -> None:
     assert "MELI" in html
     assert "##" not in html.split("Where the next dollar goes")[1][:300]
     assert 'href="#advisor_memos"' in html
-    assert "pf-nd-row" not in html
+    # class= (not the bare token): the fragment's <style> block names the
+    # selector even when no distribution row renders.
+    assert 'class="pf-nd-row"' not in html
 
 
 def _next_dollar_fixture(tmp_path: Path) -> tuple[Path, Path]:
@@ -897,10 +909,10 @@ def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
         api_url="http://x",
         positions=[_position("AAA", 5000.0), _position("BBB", 3000.0), _position("CCC", 2000.0)],
     )
-    html = render_portfolio_insights(db, live)
+    html = compose_synthesis_page(db, live, "")
 
     # Distribution bars render, weighted by the tracker's live values.
-    assert "pf-nd-row" in html
+    assert 'class="pf-nd-row"' in html
     assert "tracker-weighted" in html
     assert "now 50.0%" in html  # AAA = 5000 / 10000
     assert 'href="../research/AAA/"' in html
@@ -928,7 +940,21 @@ def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
 def test_next_dollar_equal_weight_when_tracker_down(tmp_path: Path) -> None:
     _repo_root, db = _next_dollar_fixture(tmp_path)
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    html = render_portfolio_insights(db, live)
-    assert "pf-nd-row" in html
+    html = compose_synthesis_page(db, live, "")
+    assert 'class="pf-nd-row"' in html
     assert "equal-weighted" in html
     assert "now 33.3%" in html
+
+
+def test_synthesis_page_layout_order(tmp_path: Path) -> None:
+    """The Synthesis tab's shape: the rollup/exposure insights grid first, the
+    next-dollar distribution full-width below it (NOT a grid cell — the grid
+    wrapper closes before the section opens), the lens memo last."""
+    _repo_root, db = _next_dollar_fixture(tmp_path)
+    live = LivePortfolio(available=False, api_url="http://x", error="down")
+    memo = '<section class="panel synthesis-panel">MEMO</section>'
+    html = compose_synthesis_page(db, live, memo)
+    grid = html.index('class="pf-insights"')  # exposure renders (equal-weight)
+    nd = html.index("Where the next dollar goes")
+    assert grid < nd < html.index("synthesis-panel")
+    assert '</div><section class="panel"><h2>Where the next dollar goes</h2>' in html
