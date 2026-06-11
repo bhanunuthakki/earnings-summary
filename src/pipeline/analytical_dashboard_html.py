@@ -25,6 +25,7 @@ from pipeline.analytical_dashboard import (
     PredictionOutcomeRow,
     TriggerLadderRow,
 )
+from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 
 _TRIGGER_TONE: dict[str, str] = {
@@ -43,7 +44,7 @@ def render_html(
     tier_coverage: dict[str, dict[str, int]] | None = None,
 ) -> str:
     parts: list[str] = [
-        _PAGE_HEAD.format(generated_at=escape(generated_at.isoformat(timespec="seconds"))),
+        _PAGE_HEAD.format(generated_at=stamp_html(generated_at, prefix="updated ")),
         _tier_coverage_strip(tier_coverage or {}),
         # Top of page: portfolio-wide synthesis when cached
         _portfolio_synthesis_section(dash.portfolio_synthesis_md),
@@ -192,7 +193,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             pct_str = f"{d.outcome_pct * 100:+.1f}%" if d.outcome_pct is not None else "—"
             out.append(
                 "<tr>"
-                f"<td>{escape(d.made_at[:10])}</td>"
+                f"<td>{stamp_html(d.made_at, mode='date')}</td>"
                 f'<td><a href="../research/{escape(d.ticker)}/" class="ticker-link">{escape(d.ticker)}</a></td>'
                 f"<td>{escape(kind_label)}</td>"
                 f"<td>{escape(d.conviction or '—')}</td>"
@@ -350,7 +351,7 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
         return ""
 
     parts: list[str] = [
-        '<div class="tier-strip"><span class="tier-strip-label">Tier coverage:</span>'
+        '<div class="tier-strip"><span class="tier-strip-label">Data freshness:</span>'
     ]
     chips: list[str] = []
     for tier in ("P1", "P2", "P3"):
@@ -370,8 +371,12 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
                 f"{tier}: {fresh_disp} / {total_disp} fresh</span>"
             )
         else:
+            # P3 is the deep-history backfill tier — thousands of old rows
+            # pending is routine, not an incident, so it renders muted instead
+            # of shouting red on the landing page (PR1).
+            stale_cls = "tier-backfill" if tier == "P3" else "tier-stale"
             chips.append(
-                f'<span class="tier-chip tier-stale" title="To force-refresh: '
+                f'<span class="tier-chip {stale_cls}" title="To force-refresh: '
                 f"python execution/daily_fetch_and_brief.py --ignore-tier "
                 f'(or run the {_tier_cron_hint(tier)} cron)">'
                 f"{tier}: {fresh_disp} / {total_disp} fresh "
@@ -444,7 +449,7 @@ def _reread_card(r: PortfolioLensRow) -> str:
     return (
         f'<details class="reread-card"><summary>'
         f'<a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a>'
-        f'<span class="reread-stamp">{escape(r.generated_at[:10])}</span>'
+        f"{stamp_html(r.generated_at, mode='date', css='reread-stamp')}"
         f"</summary>"
         f'<div class="reread-body">{rendered}</div>'
         "</details>"
@@ -775,12 +780,14 @@ _PAGE_HEAD = (
   .tier-ok {{ color: #4ade80; }}
   .tier-stale {{ color: #fbbf24; }}
   .tier-stale-count {{ color: #f87171; font-weight: 600; }}
+  .tier-backfill {{ color: #888; }}
+  .tier-backfill .tier-stale-count {{ color: #888; font-weight: 400; }}
   .tier-empty {{ color: #666; }}
 </style>
 </head>
 <body>
 <h1>Portfolio · analytical dashboard</h1>
-<div class="stamp">generated {generated_at}</div>
+<div class="stamp">{generated_at}</div>
 """
 )
 

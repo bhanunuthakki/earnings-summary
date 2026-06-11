@@ -20,6 +20,7 @@ from dashboard._card import render_alert_card
 from dashboard._styles import CSS
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
+from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 
 
@@ -120,9 +121,7 @@ def _render_alert_list(
     body.write("</div>")
 
     if not alerts:
-        body.write(
-            '<div class="empty-state">No alerts match the current filters.</div>'
-        )
+        body.write('<div class="empty-state">No alerts match the current filters.</div>')
         body.write("</section>")
         return
 
@@ -148,10 +147,10 @@ def _render_alert_list(
 
 
 def _render_footer(body: StringIO) -> None:
-    generated_at = datetime.now(UTC).isoformat(timespec="seconds")
+    generated_at = datetime.now(UTC).replace(tzinfo=None)
     body.write('<div class="l1-footer">')
     body.write("<span>Alert feed</span>")
-    body.write(f"<span>generated {_esc(generated_at)}</span>")
+    body.write(stamp_html(generated_at, prefix="generated "))
     body.write("</div>")
 
 

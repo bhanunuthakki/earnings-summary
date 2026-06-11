@@ -37,6 +37,8 @@ from dashboard._card import render_alert_card, render_queued_action
 from dashboard._styles import CSS
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
+from report.renderers.numfmt import fmt_date
+from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 from user_state.ledger import list_recent_entries
 from user_state.notes import AnalystNoteRow, list_notes
@@ -95,7 +97,7 @@ def render_morning_digest(
 
 def _render_header(body: StringIO, render_date: date) -> None:
     body.write('<header class="l1-header">')
-    body.write(f"<h1>Morning digest · {_esc(render_date.isoformat())}</h1>")
+    body.write(f"<h1>Morning digest · {_esc(fmt_date(render_date.isoformat()))}</h1>")
     body.write(
         '<div class="l1-subtitle">'
         "What's new since yesterday — pending alerts, outstanding drafts, "
@@ -190,13 +192,12 @@ def _render_open_items(body: StringIO, user_id: str, db_path: Path | None) -> No
             if n.ticker
             else '<span class="oi-ticker oi-portfolio">PORTFOLIO</span>'
         )
-        when = _esc(n.created_at.date().isoformat())
         body.write(
             '<li class="open-item">'
             f'<span class="oi-kind">{_esc(n.kind)}</span>'
             f"{ticker_html}"
             f'<span class="oi-body">{_esc(n.body)}</span>'
-            f'<span class="oi-when">{when}</span>'
+            f"{stamp_html(n.created_at, mode='date', css='oi-when')}"
             "</li>"
         )
     body.write("</ul></section>")
@@ -367,13 +368,12 @@ def _render_thesis_ledger(body: StringIO, user_id: str, db_path: Path | None) ->
     body.write('<ul class="ledger-list">')
     for entry in entries:
         kind_label = _LEDGER_KIND_LABELS.get(entry.entry_kind, entry.entry_kind)
-        when = _esc(entry.created_at.date().isoformat())
         body.write(
             '<li class="ledger-entry">'
             '<div class="ledger-meta">'
             f'<span class="ledger-ticker">{_esc(entry.ticker)}</span>'
             f'<span class="ledger-kind">{_esc(kind_label)}</span>'
-            f'<span class="ledger-when">{when}</span>'
+            f"{stamp_html(entry.created_at, mode='date', css='ledger-when')}"
             "</div>"
             f'<div class="ledger-body">{_esc(entry.body)}</div>'
             "</li>"
@@ -382,10 +382,10 @@ def _render_thesis_ledger(body: StringIO, user_id: str, db_path: Path | None) ->
 
 
 def _render_footer(body: StringIO, render_date: date) -> None:
-    generated_at = datetime.now(UTC).isoformat(timespec="seconds")
+    generated_at = datetime.now(UTC).replace(tzinfo=None)
     body.write('<div class="l1-footer">')
-    body.write(f"<span>Digest · {_esc(render_date.isoformat())}</span>")
-    body.write(f"<span>generated {_esc(generated_at)}</span>")
+    body.write(f"<span>Digest · {_esc(fmt_date(render_date.isoformat()))}</span>")
+    body.write(stamp_html(generated_at, prefix="generated "))
     body.write("</div>")
 
 

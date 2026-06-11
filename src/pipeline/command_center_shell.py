@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from pipeline.research_cockpit import CockpitRow
+from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
 # Three-theme information architecture (master build P1.1): a primary theme
@@ -152,7 +153,7 @@ def render_shell(
     inlined for first paint; every other sub-tab is an empty placeholder that
     lazy-loads from its ``/api/panel/<name>`` endpoint on first activation.
     """
-    stamp = (generated_at or datetime.now(UTC)).isoformat(timespec="seconds")
+    stamp = stamp_html(generated_at or datetime.now(UTC), css="cc-stamp", prefix="updated ")
     flat_tabs = tuple(t for _tid, _tlabel, subs in themes for t in subs)
     return "".join(
         [
@@ -164,7 +165,7 @@ def render_shell(
             f"</nav>"
             f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
             f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
-            f'<span class="cc-stamp">generated {escape(stamp)}</span></div>',
+            f"{stamp}</div>",
             _render_tab_bar(themes),
             '<main class="cc-panels">',
             _render_panels(flat_tabs, overview_html),
@@ -417,6 +418,8 @@ code { font-family: var(--font-mono); font-size: 12px; color: #b8b8b0; }
 .tier-ok { color: var(--ok); }
 .tier-stale { color: var(--warn); }
 .tier-stale-count { color: var(--bad); font-weight: 600; }
+.tier-backfill { color: var(--muted); }
+.tier-backfill .tier-stale-count { color: var(--muted); font-weight: 400; }
 .tier-empty { color: #666; }
 
 /* ============================================================

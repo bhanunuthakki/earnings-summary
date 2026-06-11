@@ -427,8 +427,11 @@ def test_render_offline_shows_start_hint() -> None:
             available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
         )
     )
-    assert "not reachable" in html
+    assert "isn't running" in html  # humane lede, not a raw requests repr
     assert "uvicorn portfolio_tracker.api.main:app" in html  # the start hint
+    # The raw error survives, but only inside the collapsed technical details.
+    assert "offline-tech" in html
+    assert "ConnectionError: nope" in html
     assert "<!doctype" not in html.lower()
 
 
@@ -618,7 +621,7 @@ def test_compose_page_offline_renders_single_note() -> None:
     html = compose_portfolio_page(analytics, live, "<div>SYNTH</div>")
     # Tracker fully down → exactly ONE offline note (the live section's, which
     # carries the start hint) — not a second analytics offline panel.
-    assert html.count("not reachable") == 1
+    assert html.count("offline-tech") == 1
     assert "uvicorn portfolio_tracker.api.main:app" in html
     assert "Portfolio analytics" not in html
     assert "SYNTH" in html
@@ -734,7 +737,7 @@ def test_compose_page_renders_window_bar_with_echoed_values() -> None:
     assert 'data-preset="ytd"' in html and 'data-preset="default"' in html
     assert "/api/panel/portfolio" in html  # the refetch script targets this panel
     # Still exactly ONE offline note alongside the bar.
-    assert html.count("not reachable") == 1
+    assert html.count("offline-tech") == 1
 
 
 def test_compose_page_default_window_bar_is_unset() -> None:
