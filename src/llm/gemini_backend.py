@@ -72,7 +72,7 @@ log = logging.getLogger(__name__)
 # derivation in gemini_model_for keeps these two aligned with LLM_MODELS so
 # retuning a purpose's Claude tier automatically retunes its Gemini mirror.
 GEMINI_BACKEND_DEFAULT_MODEL = "gemini-2.5-pro"
-GEMINI_BACKEND_FAST_MODEL = "gemini-2.5-flash"
+GEMINI_BACKEND_FAST_MODEL = "gemini-3.5-flash"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
 # derivation (Claude fast-classifier purposes → Flash, everything else → Pro)
