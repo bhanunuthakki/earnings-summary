@@ -20,7 +20,7 @@ from timeseries.loaders import (
     load_kpi_series_with_provenance,
 )
 from user_state.saved_views import delete_view, get_view, list_views, save_view
-from viewspec.engine import execute_view, metric_catalog
+from viewspec.engine import ViewCell, ViewResult, ViewRow, execute_view, metric_catalog
 from viewspec.render import render_view_fragment
 from viewspec.spec import MetricRef, ViewSpec, ViewSpecError
 
@@ -416,6 +416,55 @@ def test_render_yoy_heat_shading(db: Path) -> None:
     html_out = render_view_fragment(result, include_chart=False)
     assert "background:rgba(2,158,115" in html_out  # positive growth shaded green
     assert "+25.0%" in html_out
+
+
+def _nm_result(values: list[float | None], transform: str) -> ViewResult:
+    """A hand-built single-series result — direct control over absurd values
+    the fixture DB's tame revenue series can't produce."""
+    spec = _spec(transform=transform)
+    row = ViewRow(
+        ticker="TST",
+        metric=spec.metrics[0],
+        label="TST · revenue",
+        unit=None,
+        cells=[ViewCell(value=v, raw=None, source=None) for v in values],
+    )
+    labels = [f"P{i}" for i in range(len(values))]
+    return ViewResult(spec=spec, period_labels=labels, rows=[row], warnings=[])
+
+
+def test_render_nm_policy_yoy() -> None:
+    result = _nm_result([10.0, 500.0, -1748.7, 25.0], transform="yoy")
+    html_out = render_view_fragment(result)
+    # Beyond ±500 -> muted n/m cell, real value kept in the title tooltip.
+    assert '<td class="vx-nm" title="-1748.7% — beyond ±500%, not meaningful">n/m</td>' in html_out
+    # Exactly at the threshold still renders (strictly-beyond policy).
+    assert "+500.0%" in html_out
+    # The n/m cell is excluded from heat shading: only the 3 sane cells shade.
+    assert html_out.count("background:rgba") == 3
+    # Meta line counts the suppressed cells.
+    assert "1 value n/m" in html_out
+    # Chart y-scale excludes the absurd value: it appears once (tooltip), never
+    # in the SVG's axis / end-of-line labels.
+    assert html_out.count("-1748.7%") == 1
+    assert "<svg" in html_out
+
+
+def test_render_nm_policy_cagr_threshold() -> None:
+    result = _nm_result([150.0, 250.0, -300.0], transform="cagr")
+    html_out = render_view_fragment(result, include_chart=False)
+    assert "+150.0%" in html_out  # under the 200% cagr limit
+    assert html_out.count(">n/m</td>") == 2
+    assert "beyond ±200%" in html_out
+    assert "2 values n/m" in html_out
+
+
+def test_render_nm_only_for_growth_transforms() -> None:
+    # margin / level values are read as-is, however large.
+    html_out = render_view_fragment(_nm_result([1000.0], transform="margin"), include_chart=False)
+    assert "+1000.0%" in html_out
+    assert ">n/m" not in html_out
+    assert "n/m</div>" not in html_out  # meta line carries no count
 
 
 def test_render_empty_result(db: Path) -> None:

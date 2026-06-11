@@ -218,11 +218,13 @@ def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None
     """(rev_yoy_pct, fcf_margin_pct) per ticker for the eval table (PR7).
 
     Revenue YoY: latest quarterly ``metrics`` row vs the first row at least
-    ~11 months older (calendar-quarter aligned in practice). FCF margin: the
-    ``ratios`` view's TTM row (fraction → percent points). Best-effort — a
-    missing view degrades to {} and the columns render em-dashes.
+    ~11 months older (calendar-quarter aligned in practice). FCF margin: TTM —
+    the ``ratios`` view's TTM row when financial_facts carries one, else
+    summed on the fly from the newest four quarterly rows (sum FCF / sum
+    revenue; prod has no TTM facts, so this path is what populates the
+    column). Best-effort — a missing view degrades to {} and the columns
+    render em-dashes.
     """
-    out: dict[str, tuple[float | None, float | None]] = {}
     fcf: dict[str, float] = {}
     for r in _safe_rows(
         conn, "SELECT ticker, fcf_margin FROM ratios WHERE fiscal_period_type = 'TTM'"
@@ -233,30 +235,32 @@ def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None
         except (TypeError, ValueError):
             continue
 
-    by_ticker: dict[str, list[tuple[str, float]]] = {}
+    by_ticker: dict[str, list[tuple[str, float, float | None]]] = {}
     for r in _safe_rows(
         conn,
-        "SELECT ticker, period_end, revenue FROM metrics "
-        "WHERE fiscal_period_type LIKE 'Q%' AND revenue IS NOT NULL "
+        "SELECT ticker, period_end, revenue, free_cash_flow, operating_cash_flow, capex "
+        "FROM metrics WHERE fiscal_period_type LIKE 'Q%' AND revenue IS NOT NULL "
         "ORDER BY ticker, period_end DESC",
     ):
         try:
-            by_ticker.setdefault(str(r["ticker"]).upper(), []).append(
-                (str(r["period_end"]), float(r["revenue"]))
-            )
+            rev = float(r["revenue"])
         except (TypeError, ValueError):
             continue
+        by_ticker.setdefault(str(r["ticker"]).upper(), []).append(
+            (str(r["period_end"]), rev, _quarter_fcf(r))
+        )
 
+    out: dict[str, tuple[float | None, float | None]] = {}
     for t, rows in by_ticker.items():
         rev_yoy: float | None = None
         if rows:
-            latest_end, latest_rev = rows[0]
+            latest_end, latest_rev, _ = rows[0]
             try:
                 latest_dt = datetime.fromisoformat(latest_end[:10])
             except ValueError:
                 latest_dt = None
             if latest_dt is not None and latest_rev:
-                for end, rev in rows[1:]:
+                for end, rev, _ in rows[1:]:
                     try:
                         dt = datetime.fromisoformat(end[:10])
                     except ValueError:
@@ -265,10 +269,56 @@ def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None
                     if 330 <= age <= 430 and rev:
                         rev_yoy = (latest_rev / rev - 1.0) * 100.0
                         break
-        out[t] = (rev_yoy, fcf.get(t))
+        margin = fcf.get(t)
+        if margin is None:
+            margin = _ttm_fcf_margin(rows)
+        out[t] = (rev_yoy, margin)
     for t, margin in fcf.items():
         out.setdefault(t, (None, margin))
     return out
+
+
+def _quarter_fcf(row: sqlite3.Row) -> float | None:
+    """One quarter's FCF from a ``metrics`` row: the free_cash_flow column
+    when present, else OCF + capex (capex is stored signed — a negative
+    outflow — so addition IS ocf-minus-spend)."""
+    try:
+        if row["free_cash_flow"] is not None:
+            return float(row["free_cash_flow"])
+        ocf, capex = row["operating_cash_flow"], row["capex"]
+        if ocf is not None and capex is not None:
+            return float(ocf) + float(capex)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _ttm_fcf_margin(rows: list[tuple[str, float, float | None]]) -> float | None:
+    """Sum FCF over revenue across the newest four FCF-bearing quarters.
+
+    ``rows`` arrive newest-first. Guards: four distinct quarter-ends spanning
+    at most ~11 months (a hole in the window — endpoints 365+ days apart —
+    would silently mix two fiscal years) and a positive revenue sum.
+    """
+    window: list[tuple[datetime, float, float]] = []
+    for end, rev, q_fcf in rows:
+        if q_fcf is None:
+            continue
+        try:
+            dt = datetime.fromisoformat(end[:10])
+        except ValueError:
+            continue
+        if window and window[-1][0] == dt:  # defensive: duplicate period rows
+            continue
+        window.append((dt, rev, q_fcf))
+        if len(window) == 4:
+            break
+    if len(window) < 4 or (window[0][0] - window[-1][0]).days > 330:
+        return None
+    rev_sum = sum(rev for _, rev, _ in window)
+    if rev_sum <= 0:
+        return None
+    return sum(f for _, _, f in window) / rev_sum * 100.0
 
 
 def _company_names(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, str]:
