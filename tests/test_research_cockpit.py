@@ -32,6 +32,7 @@ from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
     _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     build_cockpit_rows,
+    eval_attractiveness,
     render_research_cockpit,
 )
 from report.renderers.numfmt import fmt_date  # noqa: E402
@@ -504,6 +505,157 @@ def test_eval_fundamentals_prefers_ratios_ttm_row(conn: sqlite3.Connection) -> N
 
 
 # --------------------------------------------------------------------------- #
+# eval_attractiveness (the next-dollar sort)
+# --------------------------------------------------------------------------- #
+
+
+def _attract(
+    dcf: float | None = 0.0,
+    growth: float | None = 0.0,
+    fcf: float | None = 5.0,
+    peg: float | None = 2.0,
+) -> tuple[float, str, bool]:
+    """Scorer with all-neutral (x1.0) defaults so each test varies one factor."""
+    return eval_attractiveness(
+        dcf_upside_pct=dcf, rev_yoy_pct=growth, fcf_margin_pct=fcf, peg_ratio=peg
+    )
+
+
+def test_attractiveness_band_edges() -> None:
+    """Thresholds are inclusive (>=, best-first); below every band falls to
+    the factor floor; PEG bands run lower-better."""
+    assert _attract(dcf=50.0)[0] == pytest.approx(1.8)
+    assert _attract(dcf=49.9)[0] == pytest.approx(1.5)
+    assert _attract(dcf=-10.0)[0] == pytest.approx(1.0)
+    assert _attract(dcf=-30.1)[0] == pytest.approx(0.5)
+    assert _attract(growth=30.0)[0] == pytest.approx(1.6)
+    assert _attract(growth=-10.1)[0] == pytest.approx(0.55)
+    assert _attract(fcf=25.0)[0] == pytest.approx(1.3)
+    assert _attract(fcf=-1.0)[0] == pytest.approx(0.7)
+    assert _attract(peg=1.0)[0] == pytest.approx(1.2)
+    assert _attract(peg=3.5)[0] == pytest.approx(0.8)
+
+
+def test_attractiveness_full_data_why() -> None:
+    """Every factor named with its input and multiplier — the math in the why
+    string is reproducible by eye (the spec'd chip tooltip)."""
+    score, why, partial = eval_attractiveness(
+        dcf_upside_pct=32.0, rev_yoy_pct=24.0, fcf_margin_pct=18.0, peg_ratio=1.4
+    )
+    assert score == pytest.approx(1.5 * 1.4 * 1.15 * 1.0)
+    assert not partial
+    assert why == (
+        "dcf 1.50 (+32.0% upside) x growth 1.40 (+24.0% YoY) "
+        f"x fcf 1.15 (18.0% margin) x peg 1.00 (1.4) = {score:.2f}"
+    )
+
+
+def test_attractiveness_missing_factors_sink_not_vanish() -> None:
+    """A missing input contributes the x0.85 missing factor (named n/a in the
+    why) and flags the row partial; even an all-missing name still scores."""
+    score, why, partial = eval_attractiveness(
+        dcf_upside_pct=None, rev_yoy_pct=12.0, fcf_margin_pct=None, peg_ratio=None
+    )
+    assert partial
+    assert score == pytest.approx(0.85 * 1.2 * 0.85 * 0.85)
+    assert "dcf 0.85 (n/a)" in why
+    assert "growth 1.20 (+12.0% YoY)" in why
+    floor_score, _, floor_partial = eval_attractiveness(
+        dcf_upside_pct=None, rev_yoy_pct=None, fcf_margin_pct=None, peg_ratio=None
+    )
+    assert floor_partial
+    assert floor_score == pytest.approx(0.85**4)
+
+
+def test_attractiveness_nonpositive_peg_is_missing() -> None:
+    """A PEG <= 0 is cache garbage (the §Valuation builder gates on positive
+    forward growth), not a cheapness signal."""
+    score, why, partial = _attract(peg=-0.5)
+    assert partial
+    assert "peg 0.85 (n/a)" in why
+    assert score == pytest.approx(0.85)
+
+
+def _seed_eval_name(c: sqlite3.Connection, ticker: str, name: str) -> None:
+    c.execute(
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type, "
+        "last_built_at) VALUES ('bhanu', ?, ?, 'evaluation', 'equity', NULL)",
+        (ticker, name),
+    )
+
+
+def test_build_evaluation_sorted_by_attractiveness(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """The evaluation list orders by score descending: a full-data name with
+    strong factors leads, a partial name with soft factors sits mid, and the
+    fixture's all-missing V sinks to the bottom — present, not dropped. The
+    portfolio list keeps its attention sort and never carries a score."""
+    _seed_eval_name(conn, "GOODE", "Good Eval Co")
+    _seed_eval_name(conn, "MEHE", "Meh Eval Co")
+    # GOODE: DCF +50% upside (FV 30 vs the run's own price 20), growth +25%,
+    # TTM margin 20%, PEG 0.8 -> 1.8 * 1.4 * 1.15 * 1.2.
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, revenue_growths_json, "
+        "fcf_margin, wacc, terminal_growth, npv, npv_per_share, live_price, created_at) "
+        "VALUES ('GOODE', '2026-06-09', 10, '[]', 0.2, 0.1, 0.025, 1000, 30.0, 20.0, ?)",
+        (_iso(NOW - timedelta(days=1)),),
+    )
+    _seed_fact_quarters(
+        conn,
+        "GOODE",
+        [
+            ("2026-03-31 00:00:00", "Q1", 125.0, None, None, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 115.0, None, None, 23.0),
+            ("2025-09-30 00:00:00", "Q3", 110.0, None, None, 22.0),
+            ("2025-06-30 00:00:00", "Q2", 100.0, None, None, 20.0),
+            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, None),  # YoY base only
+        ],
+    )
+    (repo_root / "data" / "valuation_basis" / "GOODE.json").write_text(
+        json.dumps({"ticker": "GOODE", "peg_ratio": 0.8}), encoding="utf-8"
+    )
+    # MEHE: no DCF run, growth +5% (x1.0), margin 2% (x0.9), no PEG.
+    _seed_fact_quarters(
+        conn,
+        "MEHE",
+        [
+            ("2026-03-31 00:00:00", "Q1", 105.0, None, None, 2.1),
+            ("2025-12-31 00:00:00", "Q4", 103.0, None, None, 2.06),
+            ("2025-09-30 00:00:00", "Q3", 102.0, None, None, 2.04),
+            ("2025-06-30 00:00:00", "Q2", 100.0, None, None, 2.0),
+            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, None),
+        ],
+    )
+    conn.commit()
+
+    built = build_cockpit_rows(conn, repo_root)
+    assert [r.base.ticker for r in built["evaluation"]] == ["GOODE", "MEHE", "V"]
+    by = _by_ticker(built["evaluation"])
+    goode = by["GOODE"]
+    assert goode.attractiveness == pytest.approx(1.8 * 1.4 * 1.15 * 1.2)
+    assert not goode.attractiveness_partial
+    assert goode.attractiveness_why == (
+        "dcf 1.80 (+50.0% upside) x growth 1.40 (+25.0% YoY) "
+        "x fcf 1.15 (20.0% margin) x peg 1.20 (0.8) = 3.48"
+    )
+    mehe = by["MEHE"]
+    assert mehe.attractiveness == pytest.approx(0.85 * 1.0 * 0.9 * 0.85)
+    assert mehe.attractiveness_partial  # no dcf run, no peg cache
+    v = by["V"]  # npv_per_share NULL -> no upside; no fundamentals; no peg
+    assert v.attractiveness == pytest.approx(0.85**4)
+    assert v.attractiveness_partial
+    # Portfolio: attention order (NU warn > AAA ok), scores never computed.
+    assert [r.base.ticker for r in built["portfolio"]] == ["NU", "AAA"]
+    assert all(r.attractiveness is None for r in built["portfolio"])
+    # The strong name renders a hi-tone chip with the full math in its hover.
+    html = render_research_cockpit(built)
+    assert "attract-chip attract-hi" in html
+    assert ">3.48</span>" in html
+    assert "x peg 1.20 (0.8) = 3.48" in html
+
+
+# --------------------------------------------------------------------------- #
 # render_research_cockpit
 # --------------------------------------------------------------------------- #
 
@@ -545,6 +697,17 @@ def test_render_thin_evaluation_variant(rows: dict[str, list[CockpitRow]]) -> No
     assert "cockpit-thin" in html
     # The thin table drops the KPI-moves column; the full table keeps it.
     assert html.count("Tier-1 moves") == 1
+
+
+def test_render_eval_score_column(rows: dict[str, list[CockpitRow]]) -> None:
+    """The Score column exists only in the thin/evaluation table; V (every
+    factor missing) renders a low-tone dashed partial chip whose hover names
+    all four n/a factors."""
+    html = render_research_cockpit(rows)
+    assert html.count(">Score</th>") == 1
+    assert "attract-chip attract-lo attract-partial" in html
+    assert ">0.52</span>" in html
+    assert "dcf 0.85 (n/a) x growth 0.85 (n/a) x fcf 0.85 (n/a) x peg 0.85 (n/a) = 0.52" in html
 
 
 def test_render_escapes_company_name(rows: dict[str, list[CockpitRow]]) -> None:

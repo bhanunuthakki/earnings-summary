@@ -19,9 +19,14 @@ without leaving the Overview tab:
   telemetry rows); unreviewed (pending) alerts, documents fetched since the
   last report build, and open report comments.
 
-Evaluation-list names get a thinner row variant (no KPI chips, tighter type).
-The old per-column ops-freshness tables shrink to one staleness dot per row
-with the detail in its hover title.
+Evaluation-list names get a thinner row variant (no KPI chips, tighter type)
+and their own sort: attention ordering is near-meaningless for names with no
+thesis rules (it degenerates to alphabetical), so the evaluation table orders
+by a transparent next-dollar attractiveness score instead — DCF upside ×
+revenue growth × FCF margin × PEG, each a small band table, the factor math
+shipped verbatim as the score chip's hover title (see
+:func:`eval_attractiveness`). The old per-column ops-freshness tables shrink
+to one staleness dot per row with the detail in its hover title.
 
 Built directly over ``data/portfolio.db`` + the on-disk FMP caches. Every
 enrichment query degrades to empty on a missing table/column
@@ -122,6 +127,11 @@ class CockpitRow:
     # mostly-empty portfolio columns for screen-relevant ones.
     rev_yoy_pct: float | None = None  # latest quarter vs the year-ago quarter
     fcf_margin_pct: float | None = None  # TTM, percent points
+    # Next-dollar attractiveness (evaluation rows only — portfolio rows keep
+    # the attention sort and never carry a score).
+    attractiveness: float | None = None
+    attractiveness_why: str | None = None  # the factor math, chip hover verbatim
+    attractiveness_partial: bool = False  # at least one factor input missing
     # Thesis detail
     kpi_deltas: list[KpiDelta] = field(default_factory=list["KpiDelta"])
     rule_summary: str | None = None  # breached/warned rule names for the badge hover
@@ -139,6 +149,131 @@ class CockpitRow:
 
 
 # --------------------------------------------------------------------------- #
+# Evaluation-list attractiveness (the next-dollar sort)
+# --------------------------------------------------------------------------- #
+# "Which screen name deserves the next research dollar?" — a transparent
+# product of band-table multipliers in the dashboard.inbox_rank style: NO ML,
+# and no price-history/covariance work on a render path (the allocation
+# model's expensive legs stay out). Every input is already on the row:
+#
+#     score = dcf (fair-value upside) x growth (Rev YoY) x fcf (TTM margin)
+#           x peg (PEG ratio)
+#
+# Each factor is named with its input in the why string that ships as the
+# score chip's hover title, so the math is reproducible by eye. A missing
+# input contributes ``_MISSING_FACTOR`` and marks the row partial: sparse
+# names sink below comparably-scored full-data ones instead of vanishing,
+# while staying above known-bad fundamentals (unexplored beats known-bad).
+
+_MISSING_FACTOR = 0.85
+
+# (threshold, multiplier) rows, best-first: the first row whose threshold the
+# value meets (>=) wins; below every band falls to the floor. Upside is
+# npv_per_share / live_price - 1 in %, the run's own price — the same
+# convention (and the same currency-consistency argument) as
+# :func:`latest_dcf_runs` and ``allocation.model._dcf_upside``.
+_DCF_BANDS: tuple[tuple[float, float], ...] = (
+    (50.0, 1.8),
+    (25.0, 1.5),
+    (10.0, 1.25),
+    (-10.0, 1.0),
+    (-30.0, 0.7),
+)
+_DCF_FLOOR = 0.5
+_GROWTH_BANDS: tuple[tuple[float, float], ...] = (
+    (30.0, 1.6),
+    (20.0, 1.4),
+    (10.0, 1.2),
+    (0.0, 1.0),
+    (-10.0, 0.75),
+)
+_GROWTH_FLOOR = 0.55
+_FCF_BANDS: tuple[tuple[float, float], ...] = ((25.0, 1.3), (15.0, 1.15), (5.0, 1.0), (0.0, 0.9))
+_FCF_FLOOR = 0.7
+# PEG is lower-better (growth-adjusted cheapness): <= thresholds, best-first.
+_PEG_BANDS: tuple[tuple[float, float], ...] = ((1.0, 1.2), (2.0, 1.0), (3.0, 0.9))
+_PEG_FLOOR = 0.8
+
+# Chip tone thresholds (render-side): hi = worth a look, lo = sinking.
+_ATTRACT_HI, _ATTRACT_LO = 1.25, 0.75
+
+
+def _band(value: float, bands: tuple[tuple[float, float], ...], floor: float) -> float:
+    for threshold, mult in bands:
+        if value >= threshold:
+            return mult
+    return floor
+
+
+def _peg_band(value: float) -> float:
+    for threshold, mult in _PEG_BANDS:
+        if value <= threshold:
+            return mult
+    return _PEG_FLOOR
+
+
+def eval_attractiveness(
+    *,
+    dcf_upside_pct: float | None,
+    rev_yoy_pct: float | None,
+    fcf_margin_pct: float | None,
+    peg_ratio: float | None,
+) -> tuple[float, str, bool]:
+    """(score, why, partial) — one evaluation name's next-dollar attractiveness.
+
+    A non-positive PEG is treated as missing (the §Valuation builder gates on
+    positive forward growth, so a negative ratio is cache garbage, not signal).
+    Public: tests pin the band edges and the why format; the render path
+    surfaces ``why`` verbatim as the chip tooltip.
+    """
+    factors: list[tuple[str, float, str]] = []
+    if dcf_upside_pct is None:
+        factors.append(("dcf", _MISSING_FACTOR, "n/a"))
+    else:
+        factors.append(
+            (
+                "dcf",
+                _band(dcf_upside_pct, _DCF_BANDS, _DCF_FLOOR),
+                f"{fmt_pct(dcf_upside_pct, signed=True)} upside",
+            )
+        )
+    if rev_yoy_pct is None:
+        factors.append(("growth", _MISSING_FACTOR, "n/a"))
+    else:
+        factors.append(
+            (
+                "growth",
+                _band(rev_yoy_pct, _GROWTH_BANDS, _GROWTH_FLOOR),
+                f"{fmt_pct(rev_yoy_pct, signed=True)} YoY",
+            )
+        )
+    if fcf_margin_pct is None:
+        factors.append(("fcf", _MISSING_FACTOR, "n/a"))
+    else:
+        factors.append(
+            (
+                "fcf",
+                _band(fcf_margin_pct, _FCF_BANDS, _FCF_FLOOR),
+                f"{fmt_pct(fcf_margin_pct)} margin",
+            )
+        )
+    if peg_ratio is None or peg_ratio <= 0:
+        factors.append(("peg", _MISSING_FACTOR, "n/a"))
+    else:
+        factors.append(("peg", _peg_band(peg_ratio), f"{peg_ratio:.1f}"))
+
+    score = 1.0
+    for _, mult, _ in factors:
+        score *= mult
+    partial = any(detail == "n/a" for _, _, detail in factors)
+    why = (
+        " x ".join(f"{name} {mult:.2f} ({detail})" for name, mult, detail in factors)
+        + f" = {score:.2f}"
+    )
+    return score, why, partial
+
+
+# --------------------------------------------------------------------------- #
 # Build
 # --------------------------------------------------------------------------- #
 
@@ -149,8 +284,11 @@ def build_cockpit_rows(
     *,
     now: datetime | None = None,
 ) -> dict[str, list[CockpitRow]]:
-    """Assemble ``{"portfolio": [...], "evaluation": [...]}``, attention-sorted
-    (breach first, then pending alerts, then new docs, then ticker).
+    """Assemble ``{"portfolio": [...], "evaluation": [...]}``. Portfolio is
+    attention-sorted (breach first, then pending alerts, then new docs, then
+    ticker); evaluation is sorted by next-dollar attractiveness, score
+    descending (see :func:`eval_attractiveness`) — for held names "needs me
+    today" beats "deserves new money", for screen names it's the reverse.
 
     Layers batch enrichment queries + per-ticker disk-cache reads over the
     existing :func:`build_dashboard_rows` (which stays the ``/api/dashboard``
@@ -181,6 +319,26 @@ def build_cockpit_rows(
             rule_summary, evaluated_at, rule_tones = evals.get(t, (None, None, {}))
             deltas = _toned(kpi_facts.get(t, []), rule_tones) if t in portfolio_tickers else []
             fv_gap, fair_value, dcf_price, dcf_date = dcf.get(t, (None, None, None, None))
+            rev_yoy, fcf_margin = fundamentals.get(t, (None, None))
+            peg = _peg_ratio(repo_root, t)
+            score: float | None = None
+            why: str | None = None
+            partial = False
+            if list_type == "evaluation":
+                upside = (
+                    (fair_value / dcf_price - 1.0) * 100.0
+                    if fair_value is not None
+                    and fair_value > 0
+                    and dcf_price is not None
+                    and dcf_price > 0
+                    else None
+                )
+                score, why, partial = eval_attractiveness(
+                    dcf_upside_pct=upside,
+                    rev_yoy_pct=rev_yoy,
+                    fcf_margin_pct=fcf_margin,
+                    peg_ratio=peg,
+                )
             built.append(
                 CockpitRow(
                     base=row,
@@ -192,18 +350,29 @@ def build_cockpit_rows(
                     fair_value=fair_value,
                     dcf_price=dcf_price,
                     dcf_date=dcf_date,
-                    peg_ratio=_peg_ratio(repo_root, t),
+                    peg_ratio=peg,
                     next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
                     rule_summary=rule_summary,
                     evaluated_at=evaluated_at,
-                    rev_yoy_pct=fundamentals.get(t, (None, None))[0],
-                    fcf_margin_pct=fundamentals.get(t, (None, None))[1],
+                    rev_yoy_pct=rev_yoy,
+                    fcf_margin_pct=fcf_margin,
+                    attractiveness=score,
+                    attractiveness_why=why,
+                    attractiveness_partial=partial,
                 )
             )
-        built.sort(key=lambda r: r.attention_key)
+        if list_type == "evaluation":
+            built.sort(
+                key=lambda r: (
+                    -(r.attractiveness if r.attractiveness is not None else 0.0),
+                    r.base.ticker,
+                )
+            )
+        else:
+            built.sort(key=lambda r: r.attention_key)
         out[list_type] = built
     return out
 
@@ -642,6 +811,15 @@ def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, t
         head = (
             "<thead><tr>"
             "<th>Ticker</th><th>Thesis</th>"
+            # The eval table's sort key leads its numeric columns: next-dollar
+            # attractiveness, factor math in each chip's hover.
+            + (
+                "<th class='num' title='next-dollar attractiveness: DCF upside x Rev growth "
+                "x FCF margin x PEG (hover a score for its factor math; dashed = partial "
+                "data)'>Score</th>"
+                if thin
+                else ""
+            )
             + ("<th>Tier-1 moves</th>" if not thin else "")
             + "<th class='num'>Price</th><th class='num'>vs DCF FV</th>"
             "<th class='num'>PEG</th>"
@@ -674,6 +852,8 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
         f"<td class='ticker'{name_attr}><a href='/ticker/{t}'>{t}</a></td>",
         f"<td>{_verdict_badge(row, now)}</td>",
     ]
+    if thin:
+        cells.append(f"<td class='num'>{_score_cell(row)}</td>")
     if not thin:
         cells.append(f"<td class='kpi-moves'>{_kpi_chips(row.kpi_deltas)}</td>")
     cells.extend(
@@ -698,6 +878,21 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
         ]
     )
     return "<tr>" + "".join(cells) + "</tr>"
+
+
+def _score_cell(row: CockpitRow) -> str:
+    """The attractiveness chip; the full factor math rides the hover title."""
+    if row.attractiveness is None:
+        return _muted()
+    cls = "attract-chip"
+    if row.attractiveness >= _ATTRACT_HI:
+        cls += " attract-hi"
+    elif row.attractiveness <= _ATTRACT_LO:
+        cls += " attract-lo"
+    if row.attractiveness_partial:
+        cls += " attract-partial"
+    title = f" title='{escape(row.attractiveness_why)}'" if row.attractiveness_why else ""
+    return f"<span class='{cls}'{title}>{row.attractiveness:.2f}</span>"
 
 
 def _signed_pct_cell(v: float | None) -> str:
@@ -887,6 +1082,12 @@ _COCKPIT_CSS = """
 .kpi-chip.chip-warn { border-color: var(--warn); }
 .kpi-chip.chip-warn b { color: var(--warn); }
 .kpi-chip.chip-ok b { color: var(--ok); }
+.attract-chip { display: inline-block; padding: 1px 7px; border-radius: var(--radius-full);
+  font-family: var(--mono); font-size: var(--fs-caption); background: var(--paper);
+  border: 1px solid var(--border); color: var(--fg); cursor: help; }
+.attract-chip.attract-hi { color: var(--ok); border-color: var(--ok); }
+.attract-chip.attract-lo { color: var(--muted); }
+.attract-chip.attract-partial { border-style: dashed; }
 .pill { display: inline-block; margin-right: 4px; padding: 1px 7px; border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-weight: 600; text-decoration: none; cursor: default; }
 a.pill { cursor: pointer; }
