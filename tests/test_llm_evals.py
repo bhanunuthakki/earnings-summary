@@ -22,6 +22,7 @@ from evals.harness import CaseResult, EvalAbortError, EvalRunSummary, now_naive_
 from evals.judge import JudgeOutcome, JudgeVerdict, parse_verdict
 from evals.store import write_run
 from evals.viewspec_compile import GoldenCase, load_golden, run_viewspec_eval, spec_diff
+from llm.prompt_versions import prompt_version_for
 from viewspec.nl_compile import NLCompileResult
 from viewspec.spec import ViewSpec
 
@@ -492,7 +493,9 @@ def test_run_eval_end_to_end_persists(tmp_path: Path, monkeypatch: pytest.Monkey
     assert summary.n_cases == 2
     assert summary.n_pass == 1
     assert summary.avg_score == pytest.approx(0.65)
-    assert summary.prompt_version == "v1"
+    # The summary carries the registry's CURRENT version (not a literal), so a
+    # registry bump stays a one-line change.
+    assert summary.prompt_version == prompt_version_for("viewspec_compile")
     assert summary.golden_set_sha is not None
 
     run_db_id = persist_summary(summary, db_path=db_path)
@@ -517,7 +520,7 @@ def test_run_eval_end_to_end_persists(tmp_path: Path, monkeypatch: pytest.Monkey
     assert case_rows[1][1] == 0 and case_rows[1][3] == "mismatch"
     assert case_rows[0][4] == "PROMPT"  # transcript persisted
     assert bridge is not None
-    assert bridge[0] == "viewspec_compile" and bridge[1] == "v1"
+    assert bridge[0] == "viewspec_compile" and bridge[1] == summary.prompt_version
     assert bridge[2] == pytest.approx(0.65)
     assert bridge[3] == "auto:eval_harness"
 

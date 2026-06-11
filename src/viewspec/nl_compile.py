@@ -158,10 +158,20 @@ Rules:
 - metrics MUST be tokens copied verbatim from the vocabulary ("fin:..." financial line items,
   "kpi:..." company KPIs, "seg:<dim_type>:<dim_name>:<metric>" segment slices). Never invent one.
   If the user names something with no matching token, use the closest token that exists.
+- Resolve colloquial metric names to the MOST SPECIFIC matching token, never a broader
+  rollup that merely contains it: "R&D spend" -> fin:research_and_development (NOT
+  fin:operating_expenses), "capex" -> fin:capital_expenditure.
 - tickers: use the symbols the user names; when none are named, default to: {defaults}.
 - transform: "yoy" for growth/change questions, "cagr" for multi-year compounding (set
   cagr_years from the question, default 3), "margin" for "as % of revenue" questions,
   otherwise "level".
+- The transform is computed ON TOP of the chosen metric, so growth/margin questions take
+  the BASE measure and let the transform do the math: "revenue growth" -> fin:revenue +
+  transform "yoy", NOT a pre-computed kpi like kpi:Revenue YoY Growth (USD).
+- kpi tokens whose NAME already encodes a growth rate / YoY change / margin
+  ("...YoY Growth...", "...Margin...", "...YoY change...") are ALREADY transformed: when
+  one IS the right metric, transform must be "level" — never stack "yoy"/"margin" on top
+  (that computes growth-of-a-growth-rate / margin-of-a-margin, which is always wrong).
 - cadence "annual" only when the question is in years/annual/FY terms; periods defaults
   to 12 for quarterly and 8 for annual when the question doesn't say.
 {context_block}

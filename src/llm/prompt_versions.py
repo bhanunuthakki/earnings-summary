@@ -65,7 +65,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # makes a prompt rewrite show up as a comparable A/B slice in
     # summarize_by_prompt_version. Bump when nl_compile._build_prompt changes
     # materially.
-    "viewspec_compile": "v1",
+    # v2 (2026-06-11): no transform-stacking on pre-transformed kpi tokens +
+    # most-specific colloquialism resolution — the first live eval run's
+    # failure modes (vs-002/vs-016 YoY-of-YoY, vs-010 R&D->opex).
+    "viewspec_compile": "v2",
 }
 
 _DEFAULT_VERSION = "v1"
