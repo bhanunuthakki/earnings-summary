@@ -197,7 +197,7 @@ demands it (note the split in the Decision log).
 - [x] **P5.1 ViewSpec engine.** *(#389)* Deterministic pivot spec + renderer
   (table + chart, provenance-chipped once P3.3 lands); saved views; embed
   hooks for cockpit/reports.
-- [ ] **P5.2 NL compile.** Query box → fast-model → ViewSpec (validated,
+- [x] **P5.2 NL compile.** *(#390)* Query box → fast-model → ViewSpec (validated,
   schema-constrained, never raw SQL); degrade to the builder UI on parse
   failure.
 - [ ] **P5.3 Discovery pipelines.** Factor screens over the tracked
@@ -377,6 +377,18 @@ demands it (note the split in the Decision log).
   MAX_TICKERS=16 so the whole-portfolio prefill runs first-click.
   saved_views (0079) upserts by (user_id, name) — the name is the stable
   embed handle; GET /api/views/<id>/fragment is the embed hook.
+- 2026-06-11 (P5.2, #390): the compiler is a tri-state, never an exception
+  — ok / budget_skipped / error all render in the panel's message slot and
+  the builder UI keeps working (the directive's degrade contract). The
+  model output goes through the SAME ViewSpec.from_dict as the builder and
+  REST routes; one repair retry feeds the validation message back, then
+  degrade. Grounding = metric_catalog tokens for the panel's tickers +
+  tracked tickers named in the query (the model copies tokens, never
+  invents metric names). viewspec_compile pinned to Haiku (interactive,
+  copy-the-token task); llm_budgets row seeded by 0080 at $5/mo with
+  on_exceed='skip' so a blown cap silently disables the NL box only. A
+  successful compile populates the builder via applySpec and runs — the
+  owner always sees what the question compiled to before tweaking.
 - 2026-06-11 (P4.5, #388 — wave 4 complete): the journal's lifecycle home
   is Research → Journal (/api/panel/journal + /api/notes REST, thin over
   user_state.notes; supersede = chained replacement, never an edit). The
