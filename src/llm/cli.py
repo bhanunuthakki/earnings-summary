@@ -21,6 +21,13 @@ fallback in ``src/llm/fallback.py``. Setup-class errors (binary missing on
 first call) propagate without fallback — they need operator action, not
 papering over.
 
+Second backend: ``src/llm/gemini_backend.py`` wraps the consumer-subscription
+Gemini CLI with the same call contract. ``call_llm`` routes a purpose there
+only when it appears in the eval-gated allowlist (ships EMPTY — judges must
+grade per-purpose output quality first; see directives/gemini_backend.md) or
+when a caller forces ``backend="gemini"`` explicitly (the compare harness).
+Everything else runs Claude, exactly as before.
+
 Public API:
     DEFAULT_MODEL, FAST_CLASSIFIER_MODEL — canonical model ids.
     LLM_MODELS — per-purpose model selection table.
@@ -528,6 +535,7 @@ def call_llm(
     scope: str | None = None,
     run_id: str | None = None,
     force_budget_bypass: bool = False,
+    backend: str | None = None,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
@@ -538,14 +546,30 @@ def call_llm(
     through call_llm so retunes (model swap, timeout change, billing change,
     fallback policy) happen in one place.
 
+    Backend resolution (Claude stays the default):
+      * ``backend="claude"`` / ``backend="gemini"`` — explicit force. The
+        compare harness (execution/compare_backends.py) uses this; a forced
+        Gemini call that fails raises rather than silently switching, because
+        the caller asked for THAT backend's answer.
+      * ``backend=None`` (default) — Gemini only when ``model`` is None (a
+        purpose-resolved call) AND ``purpose`` is in the eval-gated allowlist
+        (``llm.gemini_backend.gemini_allowed_purposes()``, ships empty).
+        An allowlist-routed Gemini call that fails OPERATIONALLY degrades to
+        Claude so enabling a purpose can never break the pipeline; setup and
+        budget errors propagate per ``is_hard_stop``.
+
     Args:
         prompt: The fully-rendered prompt text.
         purpose: Logical key for model selection (see LLM_MODELS). Required
             for new code; the explicit `model` arg overrides it when both
             are passed (escape hatch for one-off retunes during debugging).
-        model: Explicit Claude model id. If neither purpose nor model is set,
-            falls back to DEFAULT_MODEL with a warning log.
-        timeout_seconds: Per-call timeout. None = DEFAULT_TIMEOUT_SECONDS.
+        model: Explicit model id — a Claude id, or a Gemini id when paired
+            with ``backend="gemini"``. If neither purpose nor model is set,
+            falls back to DEFAULT_MODEL with a warning log. An explicit
+            model with no explicit backend always runs Claude (the allowlist
+            only reroutes purpose-resolved calls).
+        timeout_seconds: Per-call timeout. None = the backend's default
+            (DEFAULT_TIMEOUT_SECONDS / GEMINI_BACKEND_TIMEOUT_SECONDS).
         ticker: Optional ticker for ledger attribution. Set when the call is
             scoped to a single name; helps cost queries break out by ticker.
         scope: Optional analytical scope for the ledger (e.g. 'portfolio',
@@ -557,7 +581,45 @@ def call_llm(
             entirely. Use sparingly — CLI tools that need to force a refresh
             past a hard cap should pass this. Soft caps log+proceed anyway,
             so this is only meaningful when the cap is hard-blocked.
+        backend: None (resolve via allowlist), "claude", or "gemini".
     """
+    if backend not in (None, "claude", "gemini"):
+        raise ValueError(f"Unknown LLM backend {backend!r}: expected 'claude' or 'gemini'.")
+    resolved_backend = backend
+    if resolved_backend is None:
+        from llm.gemini_backend import gemini_allowed_purposes  # late — avoids import cycle
+
+        is_allowlisted = (
+            model is None and purpose is not None and purpose in gemini_allowed_purposes()
+        )
+        resolved_backend = "gemini" if is_allowlisted else "claude"
+    if resolved_backend == "gemini":
+        from llm.gemini_backend import call_gemini  # late — avoids import cycle
+
+        try:
+            return call_gemini(
+                prompt,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                force_budget_bypass=force_budget_bypass,
+            )
+        except (LLMBudgetExceeded, LLMSetupError):
+            raise  # hard stops — never paper over with a backend switch
+        except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
+            if backend == "gemini":
+                raise  # explicitly forced: the caller wants Gemini's answer or its error
+            log.warning(
+                {
+                    "event": "gemini_backend_failed_falling_back_to_claude",
+                    "purpose": purpose,
+                    "error": f"{type(gemini_error).__name__}: {str(gemini_error)[:200]}",
+                }
+            )
+            # fall through to the Claude path below (its own ledger rows)
     if model is None:
         if purpose is None:
             log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})

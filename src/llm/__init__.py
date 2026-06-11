@@ -8,6 +8,10 @@ Layout:
                (try_gemini_fallback, GEMINI_FALLBACK_MODEL).
     cli      — Claude CLI subprocess wiring + the public call_llm /
                call_llm_with_web entry points + LLMBudgetExceeded.
+    gemini_backend — consumer-subscription Gemini CLI second backend,
+               eval-gated via an empty-by-default purpose allowlist
+               (call_gemini, gemini_allowed_purposes; see
+               directives/gemini_backend.md).
     ledger   — best-effort llm_calls ledger writes
                (record_llm_call, fallback_call_logged).
 
@@ -47,6 +51,14 @@ from llm.fallback import (
     is_fallback_disabled,
     try_gemini_fallback,
 )
+from llm.gemini_backend import (
+    GEMINI_BACKEND_ALLOWED_PURPOSES,
+    GEMINI_BACKEND_DEFAULT_MODEL,
+    GEMINI_BACKEND_FAST_MODEL,
+    call_gemini,
+    gemini_allowed_purposes,
+    gemini_model_for,
+)
 from llm.ledger import (
     fallback_call_logged,
     record_llm_call,
@@ -64,17 +76,23 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT_SECONDS",
     "FAST_CLASSIFIER_MODEL",
+    "GEMINI_BACKEND_ALLOWED_PURPOSES",
+    "GEMINI_BACKEND_DEFAULT_MODEL",
+    "GEMINI_BACKEND_FAST_MODEL",
     "GEMINI_FALLBACK_MODEL",
     "IR_ANCHOR_CHAR_CAP",
     "LLM_MODELS",
     "NUMBER_FORMATTING_BLOCK",
     "PRIORS_ANCHOR_CHAR_CAP",
     "LLMBudgetExceeded",
+    "call_gemini",
     "call_llm",
     "call_llm_with_web",
     "compose_anchor_block",
     "compose_brief_prompt",
     "fallback_call_logged",
+    "gemini_allowed_purposes",
+    "gemini_model_for",
     "is_fallback_disabled",
     "load_bear_anchor",
     "load_ir_anchor",
