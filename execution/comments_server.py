@@ -175,6 +175,15 @@ def _note_to_json(note: object) -> dict[str, object]:
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
+def _view_to_json(view: object) -> dict[str, object]:
+    """SavedViewRow → JSON-safe dict for the /api/views responses (P5.1)."""
+    from dataclasses import asdict
+    from datetime import datetime as _dt
+
+    payload = asdict(view)  # pyright: ignore[reportArgumentType]  # always a SavedViewRow
+    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -356,6 +365,19 @@ def create_app(
                 render_section_coverage_panel(db_path, repo_root, user_id=user_id),
                 mimetype="text/html",
             )
+
+        if name == "explore":
+            # Research → Explore (P5.1): the ViewSpec builder. ``?fragment=
+            # views`` returns just the saved-view chip strip — the panel JS
+            # refreshes it after every save/delete.
+            from pipeline.explore_panel import render_explore_panel, render_saved_views_list
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            if request.args.get("fragment") == "views":
+                return Response(
+                    render_saved_views_list(db_path, user_id=user_id), mimetype="text/html"
+                )
+            return Response(render_explore_panel(db_path, user_id=user_id), mimetype="text/html")
 
         if name == "journal":
             # Research → Journal (P4.5): the analyst_notes lifecycle UI.
@@ -737,6 +759,110 @@ def create_app(
         if updated is None:
             return ({"error": f"note {note_id} not found"}, 404)
         return {"note": _note_to_json(updated)}
+
+    @app.route("/api/viewspec/catalog", methods=["GET"])
+    def viewspec_catalog_api():
+        """Metric catalog for the Explore builder (P5.1): what's plottable
+        for ``?tickers=A,B`` — financial line items, KPI names, segment
+        slices — as token/label/coverage entries per domain."""
+        from viewspec.engine import metric_catalog
+
+        tickers = [t for t in (request.args.get("tickers") or "").split(",") if t.strip()]
+        return metric_catalog(db_path, tickers)
+
+    @app.route("/api/viewspec/run", methods=["POST"])
+    def viewspec_run_api():
+        """Execute a ViewSpec (P5.1). JSON body: the spec object, optionally
+        wrapped as ``{"spec": {...}, "chart": bool}``. Returns the rendered
+        HTML fragment (matrix + chips + chart); 400 with the full validation
+        message list on a bad spec — the panel (and the P5.2 NL box) surface
+        it and degrade to the builder."""
+        from viewspec.engine import execute_view
+        from viewspec.render import render_view_fragment
+        from viewspec.spec import ViewSpec, ViewSpecError
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw_spec = body.get("spec", body)
+        include_chart = bool(body.get("chart", True))
+        try:
+            spec = ViewSpec.from_dict(raw_spec)
+        except ViewSpecError as exc:
+            return ({"error": str(exc)}, 400)
+        result = execute_view(spec, db_path=db_path)
+        return Response(
+            render_view_fragment(result, include_chart=include_chart), mimetype="text/html"
+        )
+
+    @app.route("/api/views", methods=["GET", "POST"])
+    def views_api():
+        """Saved views CRUD (P5.1, saved_views 0079). GET lists; POST
+        ``{"name": ..., "spec": {...}}`` validates the spec then upserts by
+        (user, name) — saving an existing name replaces its spec."""
+        from user_state import saved_views as views_store
+        from viewspec.spec import ViewSpec, ViewSpecError
+
+        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        if request.method == "GET":
+            try:
+                rows = views_store.list_views(user_id=user_id, db_path=db_path)
+            except sqlite3.Error:
+                rows = []  # pre-0079 schema degrades to empty
+            return {"views": [_view_to_json(v) for v in rows]}
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return ({"error": "name required"}, 400)
+        try:
+            spec = ViewSpec.from_dict(payload.get("spec"))
+        except ViewSpecError as exc:
+            return ({"error": str(exc)}, 400)
+        try:
+            row = views_store.save_view(
+                name=name, spec=spec.to_dict(), user_id=user_id, db_path=db_path
+            )
+        except sqlite3.Error:
+            return ({"error": "saved_views table missing (run alembic upgrade)"}, 500)
+        return ({"view": _view_to_json(row)}, 201)
+
+    @app.route("/api/views/<int:view_id>", methods=["DELETE"])
+    def views_delete_api(view_id: int):
+        """Hard-delete one saved view (a query, not memory)."""
+        from user_state import saved_views as views_store
+
+        try:
+            deleted = views_store.delete_view(view_id, db_path=db_path)
+        except sqlite3.Error:
+            return ({"error": "saved_views table missing (run alembic upgrade)"}, 500)
+        if not deleted:
+            return ({"error": f"view {view_id} not found"}, 404)
+        return {"deleted": True}
+
+    @app.route("/api/views/<int:view_id>/fragment", methods=["GET"])
+    def views_fragment_api(view_id: int):
+        """One saved view, executed and rendered — the embed hook (P5.1) the
+        Explore panel's chips use and any cockpit/report surface can iframe
+        or fetch-inject. ``?chart=0`` renders the matrix only."""
+        from user_state import saved_views as views_store
+        from viewspec.engine import execute_view
+        from viewspec.render import render_view_fragment
+        from viewspec.spec import ViewSpec, ViewSpecError
+
+        try:
+            row = views_store.get_view(view_id, db_path=db_path)
+        except sqlite3.Error:
+            row = None
+        if row is None:
+            abort(404)
+        try:
+            spec = ViewSpec.from_dict(row.spec)
+        except ViewSpecError as exc:
+            return ({"error": f"stored spec no longer valid: {exc}"}, 400)
+        include_chart = request.args.get("chart") not in ("0", "false")
+        result = execute_view(spec, db_path=db_path)
+        return Response(
+            render_view_fragment(result, include_chart=include_chart), mimetype="text/html"
+        )
 
     @app.route("/api/sizing-intents", methods=["POST", "OPTIONS"])
     def sizing_intents_api():

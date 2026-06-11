@@ -16,14 +16,12 @@ faked.
 from __future__ import annotations
 
 import html
-import json
 import re
-import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import TypeAlias, cast
+from typing import TypeAlias
 
 from industry_classifier import (
     SECTION_CUSTOMER_CONCENTRATION,
@@ -112,6 +110,7 @@ from report.sections.p3_data import (
     SayDoVerdictRow,
     StrategicTargetRow,
 )
+from ui.source_chip import source_chip_html, source_hover_title
 from ui.tokens import FAVICON_LINK
 from user_state.notes import AnalystNoteRow
 
@@ -767,88 +766,11 @@ def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> No
     body.write("</div>")
 
 
-_SOURCE_CHIP_ABBREV: dict[str, str] = {
-    "sec_official": "SEC",
-    "fmp_normalized": "FMP",
-    "llm_extracted": "LLM",
-    "yfinance_fallback": "YF",
-    "s1_provisional": "S-1",
-}
-
-
-def _source_hover_title(src: CellSource) -> str:
-    """Hover text for a sourced number: tier + fetched-at (P3.3 contract)."""
-    parts = [src.source]
-    if src.fetched_at:
-        parts.append(f"fetched {src.fetched_at[:10]}")
-    return " · ".join(parts)
-
-
-def _viewer_href(src: CellSource) -> str | None:
-    """In-app ``/source/<doc_id>`` link for a sourced cell (P4.3).
-
-    The locator JSON sharpens the destination: ``transcript_line`` becomes
-    the reader's ``#L<n>`` line anchor, ``section`` the 10-K reader's
-    ``?section=`` deep link. None when the cell carries no document id —
-    the chip then falls back to the raw source_url only.
-    """
-    if src.doc_id is None:
-        return None
-    suffix = ""
-    if src.locator:
-        try:
-            loc: object = json.loads(src.locator)
-        except (ValueError, TypeError):
-            loc = None
-        if isinstance(loc, dict):
-            loc_map = cast("dict[str, object]", loc)
-            line = loc_map.get("transcript_line")
-            section = loc_map.get("section")
-            if isinstance(line, int):
-                suffix = f"#L{line}"
-            elif isinstance(section, str) and section:
-                suffix = f"?section={urllib.parse.quote(section)}"
-    return f"/source/{src.doc_id}{suffix}"
-
-
-def _source_chip_html(src: CellSource) -> str:
-    """Clickable per-number source chip: hover = tier + fetched-at; click
-    opens a JS-free <details> popover with the document identity (doc type,
-    accession, filing date, sub-document locator) and the open links — the
-    in-app /source viewer (P4.3) plus the original document URL.
-    """
-    abbrev = _SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
-    tier_slug = src.source.replace("_", "-")
-    rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
-    if src.fetched_at:
-        rows.append(f'<div class="src-pop-row">fetched {_esc(src.fetched_at[:10])}</div>')
-    if src.doc_type:
-        rows.append(f'<div class="src-pop-row">{_esc(src.doc_type)}</div>')
-    if src.accession_number:
-        acc = _esc(src.accession_number)
-        filed = f" · filed {_esc(src.filing_date)}" if src.filing_date else ""
-        rows.append(f'<div class="src-pop-row mono">{acc}{filed}</div>')
-    if src.locator:
-        rows.append(f'<div class="src-pop-row mono src-pop-locator">{_esc(src.locator)}</div>')
-    viewer = _viewer_href(src)
-    if viewer:
-        rows.append(
-            f'<div class="src-pop-row"><a href="{_esc(viewer)}" target="_blank" '
-            'rel="noopener">open in viewer ↗</a></div>'
-        )
-    if src.source_url:
-        label = "original document ↗" if viewer else "open source ↗"
-        rows.append(
-            f'<div class="src-pop-row"><a href="{_esc(src.source_url)}" target="_blank" '
-            f'rel="noopener">{label}</a></div>'
-        )
-    return (
-        '<details class="src-pop">'
-        f'<summary class="src-chip src-{_esc(tier_slug)}" '
-        f'title="{_esc(_source_hover_title(src))}">{_esc(abbrev)}</summary>'
-        f'<div class="src-pop-body">{"".join(rows)}</div>'
-        "</details>"
-    )
+# P3.3 chip anatomy — shared with the dashboard's Explore panel since P5.1:
+# the implementation lives in ui.source_chip; these aliases keep the
+# renderer's call sites (and the P3.3 tests' private-name imports) stable.
+_source_hover_title = source_hover_title
+_source_chip_html = source_chip_html
 
 
 def _source_for_display_index(li: QuarterlyLineItem, idx: int) -> CellSource | None:
