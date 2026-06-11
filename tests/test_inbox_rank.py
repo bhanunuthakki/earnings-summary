@@ -18,7 +18,7 @@ import pytest
 
 from alerts import AlertRow
 from dashboard.inbox import InboxItem
-from dashboard.inbox_rank import annotate_and_rank, bucket_label
+from dashboard.inbox_rank import annotate_and_rank
 
 NOW = datetime(2026, 6, 10, 12, 0, 0)
 
@@ -208,7 +208,7 @@ def test_edgar_ownership_rows_stay_news(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_pending_outranks_dismissed_within_a_bucket() -> None:
+def test_pending_outranks_dismissed_at_equal_age() -> None:
     when = NOW - timedelta(hours=3)
     pending = _alert_item(status="pending", when=when)
     dismissed = _alert_item(status="dismissed", when=when)
@@ -217,7 +217,7 @@ def test_pending_outranks_dismissed_within_a_bucket() -> None:
     assert ranked[0].score > ranked[1].score
 
 
-def test_recency_decay_is_monotonic_within_a_bucket() -> None:
+def test_recency_decay_is_monotonic() -> None:
     fresh = _item("ledger", when=NOW - timedelta(hours=1), body="a")
     older = _item("ledger", when=NOW - timedelta(hours=10), body="b")
     ranked = _rank([older, fresh])
@@ -225,17 +225,79 @@ def test_recency_decay_is_monotonic_within_a_bucket() -> None:
     assert ranked[0].score > ranked[1].score
 
 
-def test_bucket_order_beats_score() -> None:
-    """An Earlier item never outranks a Today item, whatever its severity —
-    score orders WITHIN buckets, not across them."""
-    today_low = _item("note", when=NOW - timedelta(hours=1), body="watch x")  # low severity
-    old_high = _alert_item(
-        trigger_kind="kpi_inflection", status="pending", when=NOW - timedelta(days=20)
+def test_score_orders_flat_across_days() -> None:
+    """No bucket tiers (owner feedback 2026-06-11): yesterday's pending
+    earnings alert outranks today's low-severity watch note — the per-card
+    relative stamp carries the "when", the score carries the "how much"."""
+    yesterday_earnings = _alert_item(
+        trigger_kind="earnings_tone", status="pending", when=NOW - timedelta(hours=26)
     )
-    ranked = _rank([old_high, today_low])
-    assert ranked[0].kind == "note"
-    assert bucket_label(ranked[0].when, NOW) == "Today"
-    assert bucket_label(ranked[1].when, NOW) == "Earlier"
+    today_note = _item("note", when=NOW - timedelta(hours=1), body="watch x")
+    ranked = _rank([today_note, yesterday_earnings])
+    assert [it.kind for it in ranked] == ["alert", "note"]
+    assert ranked[0].score > ranked[1].score
+
+
+def test_earnings_carry_the_single_highest_severity() -> None:
+    """Owner feedback 2026-06-11: earnings outrank every other category at
+    equal age/status — including thesis changes, the old top weight."""
+    when = NOW - timedelta(hours=2)
+    ranked = _rank(
+        [
+            _alert_item(
+                trigger_kind="material_news",
+                status="open",
+                when=when,
+                evidence={"headline": "NU opens hub"},
+            ),
+            _alert_item(trigger_kind="kpi_inflection", status="open", when=when),
+            _alert_item(trigger_kind="earnings_tone", status="open", when=when),
+        ]
+    )
+    assert [it.category for it in ranked] == ["earnings", "thesis", "news"]
+
+
+def test_synthesis_ranks_below_news() -> None:
+    """Owner feedback 2026-06-11: memo cards are background reading — a fresh
+    synthesis section sits below a plain news alert of the same age."""
+    when = NOW - timedelta(hours=2)
+    news = _alert_item(
+        trigger_kind="material_news",
+        status="open",
+        when=when,
+        evidence={"headline": "NU opens hub"},
+    )
+    memo = _item("synthesis", ticker=None, when=when, body="weekly memo section")
+    ranked = _rank([memo, news])
+    assert [it.category for it in ranked] == ["news", "synthesis"]
+
+
+def test_advisor_memo_ledger_entry_rides_the_synthesis_weight() -> None:
+    """The advisor's persist_memo ledger echo (title "Advisor memo") is memo
+    commentary, not a thesis change: it categorizes as synthesis and lands
+    below plain news — the "advisor memo up top" complaint, fixed."""
+    when = NOW - timedelta(hours=2)
+    memo = _item("ledger", when=when, title="Advisor memo", body="swap check: hold")
+    plain = _item("ledger", when=when, body="thesis edit")
+    news = _alert_item(
+        trigger_kind="material_news",
+        status="open",
+        when=when,
+        evidence={"headline": "NU opens hub"},
+    )
+    ranked = _rank([memo, plain, news])
+    assert [it.category for it in ranked] == ["thesis", "news", "synthesis"]
+    assert ranked[-1].title == "Advisor memo"
+
+
+def test_recency_floor_ties_break_newest_first() -> None:
+    """Two items deep past the decay floor score identically — the newer one
+    renders first (the flat sort's only secondary key)."""
+    newer = _item("ledger", when=NOW - timedelta(days=10), body="newer")
+    older = _item("ledger", when=NOW - timedelta(days=12), body="older")
+    ranked = _rank([older, newer])
+    assert [it.body for it in ranked] == ["newer", "older"]
+    assert ranked[0].score == ranked[1].score
 
 
 def test_position_weight_boosts_the_bigger_holding() -> None:

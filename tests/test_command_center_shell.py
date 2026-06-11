@@ -49,6 +49,33 @@ def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     assert "data-ix-badge" not in bare
 
 
+def test_overview_rail_mounts_upcoming_strip_above_the_inbox() -> None:
+    """The retired /digest page's one surviving feature: the compact
+    upcoming-earnings strip renders inside the rail, ABOVE the Inbox header.
+    Without it the rail renders exactly as before."""
+    html = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        inbox_html='<div class="ix-stream ix-compact" data-ix-surface="home"></div>',
+        upcoming_html='<div class="up-strip">UP-MARKER</div>',
+    )
+    assert "UP-MARKER" in html
+    assert html.index('class="up-strip"') < html.index("ix-stream")
+    # The rail links to the feed only — the digest link is gone.
+    assert 'href="/feed"' in html
+    assert "/digest" not in html
+    # No strip → no strip markup, rail otherwise intact.
+    no_strip = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        inbox_html='<div class="ix-stream"></div>',
+    )
+    assert "up-strip" not in no_strip
+    assert 'data-ix-badge="home"' in no_strip
+    # The strip's CSS ships with the shell stylesheet.
+    assert ".up-strip {" in SHELL_CSS
+
+
 def test_render_shell_five_section_structure() -> None:
     html = render_shell(
         overview_html="<div id='ov-marker'>OVERVIEW</div>",
@@ -89,9 +116,10 @@ def test_render_shell_five_section_structure() -> None:
     # Overview is inlined verbatim and marked loaded.
     assert "OVERVIEW" in html
     assert 'data-panel="overview" data-loaded="1"' in html
-    # Topbar links to the live alerting surfaces stay reachable.
-    assert 'href="/digest"' in html
+    # Topbar links to the live feed; the retired /digest page is gone from the
+    # entire shell document (topbar, rail, palette).
     assert 'href="/feed"' in html
+    assert "/digest" not in html
 
 
 def test_system_demoted_to_utility_icon() -> None:

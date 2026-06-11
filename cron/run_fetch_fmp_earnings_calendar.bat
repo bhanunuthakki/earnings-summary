@@ -6,7 +6,7 @@ REM      /earnings endpoint 402s and this step fails — that is expected; the
 REM      cache simply stays at its last good state.
 REM   2. Materialize the canonical expected_earnings table from the
 REM      FMP-cache -> yfinance preference stack (refresh_expected_earnings.py).
-REM      Runs even when step 1 fails, so the digest / cockpit / portfolio-
+REM      Runs even when step 1 fails, so the home strip / cockpit / portfolio-
 REM      tracker keep getting dates. Runs before backfill_earnings_surprises
 REM      (06:15) and daily_fetch_and_brief (06:30).
 REM Output goes to .tmp/cron_logs/fetch_fmp_earnings_calendar_<TS>.log.

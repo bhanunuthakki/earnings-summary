@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Daily 04:00 — Personal CIO morning pipeline. Chains run_triggers (fire + persist alerts, cost-capped $10) -> build_morning_digest -> build_alert_feed in one run so the morning digest/feed HTML is fresh, not stale. Never aborts early: a trigger failure still rebuilds the read-only digest + feed. Supersedes the standalone run_triggers cron (PR #172).</Description>
+    <Description>Daily 04:00 — Personal CIO morning pipeline. Chains fetch_news -> run_triggers (fire + persist alerts, cost-capped $10) -> build_alert_feed -> validation gate in one run so the morning feed HTML is fresh, not stale. Never aborts early: a trigger failure still rebuilds the read-only feed. Supersedes the standalone run_triggers cron (PR #172); the digest render stage retired with the /digest page (2026-06-11).</Description>
     <URI>\earnings-summary\run_morning_pipeline</URI>
   </RegistrationInfo>
   <Triggers>

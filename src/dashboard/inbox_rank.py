@@ -1,11 +1,13 @@
 """Inbox categorization + transparent ranking (Inbox v2).
 
 Every stream item gets ONE category facet — the filter chips on the Home
-rail and the feed — and a transparent score that orders cards WITHIN their
-recency bucket:
+rail and the feed — and a transparent score that orders the WHOLE stream
+flat: score descending, newest-first on ties. There are no recency-bucket
+tiers — each card's relative stamp says "when", the score says "how much
+it matters":
 
     score = severity (category x status)
-          x recency decay (48h half-life)
+          x recency decay (30h half-life)
           x position weight (live tracker % of book, equal-weight fallback)
           x thesis relevance (ticker currently WARN / BREACH)
 
@@ -48,10 +50,10 @@ if TYPE_CHECKING:
     from dashboard.inbox import InboxItem
 
 __all__ = [
+    "ADVISOR_MEMO_TITLE",
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
     "annotate_and_rank",
-    "bucket_label",
     "live_position_weights",
 ]
 
@@ -105,6 +107,13 @@ _KIND_CATEGORIES: dict[str, str] = {
     "synthesis": CATEGORY_SYNTHESIS,
 }
 
+# The advisor's persist_memo ledger echo renders under this title
+# (dashboard.inbox keys its ledger-kind label off this constant — one source
+# of truth). Those cards are memo commentary, not thesis changes, so they
+# ride the synthesis weight (owner feedback 2026-06-11: the advisor memo
+# must not sit on top of the stream).
+ADVISOR_MEMO_TITLE = "Advisor memo"
+
 # news.source substrings (lowercased) that mark a story as issuer PR-wire
 # distribution rather than journalism.
 _PRESS_WIRE_SOURCES: tuple[str, ...] = (
@@ -150,15 +159,18 @@ _DISCLOSURE_ONLY_8K_ITEMS = frozenset({"7.01", "8.01", "9.01"})
 # Severity / decay tables (the transparent part)
 # ----------------------------------------------------------------------------
 
+# Owner-set priorities (2026-06-11 feedback): earnings carry the single
+# highest weight, and synthesis — the advisor-memo / synthesis-memo cards —
+# ranks below plain news: memos are background reading, not events.
 _CATEGORY_SEVERITY: dict[str, float] = {
-    CATEGORY_THESIS: 3.0,
-    CATEGORY_EARNINGS: 2.6,
-    CATEGORY_DRAFTS: 2.4,
-    CATEGORY_SYNTHESIS: 2.0,
+    CATEGORY_EARNINGS: 3.2,
+    CATEGORY_THESIS: 2.8,
+    CATEGORY_DRAFTS: 2.2,
     CATEGORY_NEWS: 1.8,
     CATEGORY_RATING: 1.6,
     CATEGORY_WATCH: 1.4,
     CATEGORY_PRESS: 1.2,
+    CATEGORY_SYNTHESIS: 1.0,
 }
 
 _STATUS_MULTIPLIER: dict[str, float] = {
@@ -171,7 +183,10 @@ _STATUS_MULTIPLIER: dict[str, float] = {
     "expired": 0.4,
 }
 
-_RECENCY_HALF_LIFE_HOURS = 48.0
+# 30h half-life (was 48h): with the bucket tiers gone, decay alone keeps the
+# stream fresh-first — short enough that today dominates, long enough that
+# yesterday's earnings still outrank this morning's wire noise.
+_RECENCY_HALF_LIFE_HOURS = 30.0
 _RECENCY_FLOOR = 0.05
 
 # Position factor: 1 + slope x weight-fraction, capped so a mega-position
@@ -180,23 +195,6 @@ _POSITION_SLOPE = 1.5
 _POSITION_WEIGHT_CAP = 0.4
 
 _THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "breach": 1.5}
-
-# ----------------------------------------------------------------------------
-# Recency buckets — single source of truth for sort + render grouping
-# ----------------------------------------------------------------------------
-
-_BUCKET_RANK: dict[str, int] = {"Today": 0, "Yesterday": 1, "This week": 2, "Earlier": 3}
-
-
-def bucket_label(when: datetime, now: datetime) -> str:
-    days = (now.date() - when.date()).days
-    if days <= 0:
-        return "Today"
-    if days == 1:
-        return "Yesterday"
-    if days <= 7:
-        return "This week"
-    return "Earlier"
 
 
 # ----------------------------------------------------------------------------
@@ -341,6 +339,8 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
                     category = CATEGORY_PRESS
         else:
             category = _KIND_CATEGORIES.get(it.kind, CATEGORY_WATCH)
+            if it.kind == "ledger" and it.title == ADVISOR_MEMO_TITLE:
+                category = CATEGORY_SYNTHESIS
         out.append(category)
     return out
 
@@ -414,11 +414,11 @@ def annotate_and_rank(
     now: datetime,
     position_weights: Mapping[str, float] | None = None,
 ) -> list[InboxItem]:
-    """Assign category/score/score_why to every item and order the stream:
-    recency bucket first (Today → Earlier), then score descending, then
-    newest-first. ``position_weights`` is ticker → fraction-of-book; ``None``
-    means "try the live tracker" (TTL-cached, equal-weight when offline) —
-    pass ``{}`` to force equal weighting."""
+    """Assign category/score/score_why to every item and order the stream
+    flat: score descending, newest-first on ties (recency lives inside the
+    score as decay, not as a sort tier). ``position_weights`` is ticker →
+    fraction-of-book; ``None`` means "try the live tracker" (TTL-cached,
+    equal-weight when offline) — pass ``{}`` to force equal weighting."""
     if not items:
         return []
     weights = dict(position_weights) if position_weights is not None else live_position_weights()
@@ -429,9 +429,9 @@ def annotate_and_rank(
         score, why = _score_one(it, category, now=now, weights=weights, tones=tones)
         annotated.append(replace(it, category=category, score=score, score_why=why))
 
-    def _sort_key(x: InboxItem) -> tuple[int, float, float]:
+    def _sort_key(x: InboxItem) -> tuple[float, float]:
         aware = x.when if x.when.tzinfo else x.when.replace(tzinfo=UTC)
-        return (_BUCKET_RANK.get(bucket_label(x.when, now), 9), -x.score, -aware.timestamp())
+        return (-x.score, -aware.timestamp())
 
     annotated.sort(key=_sort_key)
     return annotated

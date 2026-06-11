@@ -112,7 +112,7 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
     reader (P4.3), and the ticker's open analyst notes so alerts surface
     the owner's standing watch-items next to their evidence (P4.4). Any
     part may be absent; None only when none is available (missing DB, no
-    rows). Callers (digest/feed/holding rail) look this up once per ticker.
+    rows). Callers (feed/holding rail) look this up once per ticker.
     """
     if not db_path.exists():
         return None
@@ -165,8 +165,8 @@ def render_evidence_drawer(
 
     ``default_open=False`` renders the drawer collapsed — for dense
     contexts (the Holding tab's side rail) where the full citation table
-    should be one click away rather than unrolled per card. The digest and
-    feed keep the default-expanded contract.
+    should be one click away rather than unrolled per card. The feed
+    keeps the default-expanded contract.
     """
     open_attr = " open" if default_open else ""
     body: list[str] = []

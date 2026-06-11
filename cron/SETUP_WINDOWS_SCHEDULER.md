@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Fourteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (triggers → digest → feed); the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating).
+Fourteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating).
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -16,10 +16,10 @@ Fourteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06
 |---|---|---|---|---|
 | `earnings-summary\refresh_cache` | Daily 03:00 | `refresh_cache.task.xml` | `run_refresh_cache.bat` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (defaults to `basic` = 250/day) and drains the highest-priority stale endpoints up to the cap. Failed endpoints (403 / Legacy Endpoint) get a 30-day retry window so a downgrade builds a backlog automatically; an upgrade catches up across following days. See `## Switching FMP tier` below. |
 | `earnings-summary\refresh_dirty_artifacts` | Daily 04:00 | `refresh_dirty_artifacts.task.xml` | `run_refresh_dirty_artifacts.bat` | **LLM artifact cache drain.** Picks up every `llm_artifacts` row with `dirty=1` (upstream-fact trigger) or `expires_at < now` (per-purpose TTL elapsed — see `_DEFAULT_TTL_DAYS` in `src/llm_artifact_store.py`). For each (ticker, purpose), shells out to the regenerator script defined in `execution/refresh_dirty_artifacts._PURPOSE_TO_REGENERATOR`. Halts gracefully (exit 0) once accumulated `llm_calls.cost_estimate_usd` for this run reaches `--max-cost-usd 5`. |
-| `earnings-summary\run_morning_pipeline` | Daily 04:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | **Personal CIO morning pipeline.** One orchestrated run chaining three subprocess stages: (1) `run_triggers.py` fans registered triggers across the portfolio + watchlist + evaluation list, persisting fresh alerts + drafted actions (cost-capped at `--max-cost-usd 10`); (2) `build_morning_digest.py` rebuilds today's digest HTML (`data/dashboard/morning/`); (3) `build_alert_feed.py` rebuilds the chronological feed HTML (`data/dashboard/feed.html`). Never aborts early — a trigger-stage failure/timeout still rebuilds the read-only digest + feed over existing alerts. Process exit code = count of failed stages. **Supersedes the standalone `run_triggers` cron from PR #172**: the digest/feed are now rebuilt in the same run that fires the alerts, so a 07:00 read is never stale. |
+| `earnings-summary\run_morning_pipeline` | Daily 04:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | **Personal CIO morning pipeline.** One orchestrated run chaining four subprocess stages: (0) `fetch_news.py` ingests fresh per-ticker news for the material_news trigger; (1) `run_triggers.py` fans registered triggers across the portfolio + watchlist + evaluation list, persisting fresh alerts + drafted actions (cost-capped at `--max-cost-usd 10`); (2) `build_alert_feed.py` rebuilds the chronological feed HTML (`data/dashboard/feed.html`); (3) `run_validation_engine.py --gate` runs the population-level data checks. Never aborts early — a trigger-stage failure/timeout still rebuilds the read-only feed over existing alerts. Process exit code = count of failed stages. **Supersedes the standalone `run_triggers` cron from PR #172**; the morning-digest render stage retired with the `/digest` page (2026-06-11) — the live Home rail serves that view straight from the DB. |
 | `earnings-summary\scan_ir_transcripts` | Daily 04:15 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | **Post-earnings IR-transcript scan.** For each active-universe ticker within 14 days of its last earnings date (`sources.earnings_calendar.last_earnings_date`), re-checks the issuer's OWN IR site (the `issuer_ir` source — `ir_pipeline.transcript`) for the latest reported quarter's transcript and fetches + ingests it. Idempotent on `transcripts/processed/<T>_Q<n>_<Y>.txt` — stops once that quarter is ingested. A tighter, windowed companion to `backfill_transcripts` that catches the issuer's official transcript days-to-weeks before the aggregators index it. |
 | `earnings-summary\backfill_transcripts` | Daily 04:30 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | For every active-universe ticker (`db.ACTIVE_LIST_TYPES`), fetches the last 6 fiscal quarters of Q&A from the free aggregator chain, runs ingest, extracts commitments. Idempotent — re-running with no missing quarters is a no-op. |
-| `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Two steps. (1) Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker — on free/basic tier FMP refuses (402 since 2026-06-10) and the cache stays at its last good state. (2) Runs `execution/refresh_expected_earnings.py`, which materializes the **canonical `expected_earnings` table** via `next_earnings_date` (FMP cache → yfinance fallback); the morning digest, the Home cockpit, and the portfolio-tracker's read-only bridge all read that table. Step 2 runs even when step 1 fails. |
+| `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Two steps. (1) Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker — on free/basic tier FMP refuses (402 since 2026-06-10) and the cache stays at its last good state. (2) Runs `execution/refresh_expected_earnings.py`, which materializes the **canonical `expected_earnings` table** via `next_earnings_date` (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, the Home cockpit, and the portfolio-tracker's read-only bridge all read that table. Step 2 runs even when step 1 fails. |
 | `earnings-summary\backfill_earnings_surprises` | Daily 06:15 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | For every active-universe ticker, merges `<TICKER>_earnings_calendar.json` (FMP primary, full EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Idempotent. Revenue surprise degrades to NULL when FMP coverage lapses. |
 | `earnings-summary\daily_fetch_and_brief` | Daily 06:30 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Drains `tracked_companies.brief_dirty` with three gates: **A** tier cadence (P1 daily, P2 if >7d old, P3 if >30d old), **B** material-change hash (skip if content unchanged AND last build < 7d), **C** evaluation cadence (skip if list_type=evaluation AND last build < 7d). For un-skipped tickers, runs thesis evaluator + DCF refresh + brief regen with `--enable-llm` so §8/§9 populate via the Claude CLI (Gemini fallback). |
 
@@ -221,7 +221,7 @@ filename is just for humans.
 ### Migrating from PR #172's `run_triggers` cron
 
 `run_morning_pipeline` replaces the standalone `run_triggers` task: the pipeline
-runs `run_triggers.py` as its first stage, then rebuilds the digest + feed in the
+runs `run_triggers.py` after the news fetch, then rebuilds the feed in the
 same run. If you ever registered `\earnings-summary\run_triggers` (it was never in
 this doc's install list, so most setups won't have it), delete it so the trigger
 stage doesn't double-fire:
@@ -268,15 +268,15 @@ Then check:
   contributed each record (fmp_calendar vs yfinance).
 - For `daily_fetch_and_brief`: `output/research/<TICKER>/<DATE>_report.html`
   for any tickers that had `brief_dirty=1`.
-- For `run_morning_pipeline`: the log shows three `=== Stage N - …` headers
-  (triggers → digest → feed) with each child's captured output beneath, then a
-  JSON summary `{ "stage_1_triggers": "ok"|"failed", "stage_2_digest": …,
-  "stage_3_feed": …, "elapsed_seconds": … }`. A failed/timed-out stage does NOT
-  stop later stages; the process exit code is the number of failed stages (0 =
-  all good). On success expect a fresh `data/dashboard/morning/<DATE>.html`
-  (+ `index.html`) and `data/dashboard/feed.html`. Use `--skip-triggers` to
-  re-render the digest + feed only (e.g. after approving/dismissing alerts)
-  without paying for another trigger sweep.
+- For `run_morning_pipeline`: the log shows one `=== Stage N - …` header per
+  stage (news → triggers → feed → validation) with each child's captured
+  output beneath, then a JSON summary `{ "stage_0_news": "ok"|"failed",
+  "stage_1_triggers": …, "stage_2_feed": …, "stage_3_validate": …,
+  "elapsed_seconds": … }`. A failed/timed-out stage does NOT stop later
+  stages; the process exit code is the number of failed stages (0 = all
+  good). On success expect a fresh `data/dashboard/feed.html`. Use
+  `--skip-triggers` to re-render the feed only (e.g. after
+  approving/dismissing alerts) without paying for another trigger sweep.
 - For `refresh_dirty_artifacts`: log shows a "Dirty artifact refresh manifest"
   block listing dedup'd `(ticker, command)` pairs, followed by per-job
   `drain_invoke` / `drain_subprocess_ok` / `drain_subprocess_failed` events.

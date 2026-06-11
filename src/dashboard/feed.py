@@ -94,8 +94,8 @@ def _render_header(body: StringIO, total: int, limit: int) -> None:
     body.write("<h1>Inbox feed</h1>")
     body.write(
         f'<div class="l1-subtitle">{total} item(s) returned '
-        f"(limit {limit}). Ranked within each recency bucket — hover a kind "
-        "chip for the why. Status badge shows current state."
+        f"(limit {limit}). Ranked by severity x recency x position x thesis — "
+        "hover a kind chip for the why. Status badge shows current state."
         "</div>"
     )
     body.write("</header>")

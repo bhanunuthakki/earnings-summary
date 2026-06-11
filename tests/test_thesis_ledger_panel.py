@@ -2,7 +2,7 @@
 
 Renders the append-only thesis_ledger_entries history (the populated decision
 history) as a command-center fragment, so it is discoverable in the app and not
-only via the /digest route (v6 re-grade, Richness & surfacing).
+only via the since-retired /digest page (v6 re-grade, Richness & surfacing).
 """
 
 from __future__ import annotations

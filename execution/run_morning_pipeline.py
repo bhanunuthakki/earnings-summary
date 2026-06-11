@@ -1,22 +1,22 @@
-"""Orchestrate the morning pipeline: news -> triggers -> digest -> feed -> validate.
+"""Orchestrate the morning pipeline: news -> triggers -> feed -> validate.
 
 The daily trigger driver (``run_triggers.py``) fires alerts and persists them;
-the dashboard renderers (``build_morning_digest.py`` + ``build_alert_feed.py``)
-render HTML from those persisted alerts. On their own they are unchained: the
-driver runs at 04:00 via cron, but the digest HTML is only rebuilt when
-manually invoked, so a 07:00 read shows stale HTML. This orchestrator chains
-the stages into one scheduled run.
+the feed renderer (``build_alert_feed.py``) renders HTML from those persisted
+alerts. On their own they are unchained: the driver runs at 04:00 via cron,
+but the feed HTML is only rebuilt when manually invoked, so a 07:00 read shows
+stale HTML. This orchestrator chains the stages into one scheduled run. (The
+morning-digest render stage retired with the standalone /digest page,
+2026-06-11 — the live Home rail serves that view straight from the DB.)
 
-Five stages run in sequence as subprocess-isolated children:
+Four stages run in sequence as subprocess-isolated children:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
      ``news`` table so the material_news trigger has stories to classify;
      ``--news-source`` selects FMP / WebSearch+Opus / auto).
   1. triggers -- ``run_triggers.py`` (the long pole; fans LLM-backed sensors
      across the portfolio, cost-capped via ``--max-cost-usd``).
-  2. digest   -- ``build_morning_digest.py`` for today.
-  3. feed     -- ``build_alert_feed.py``.
-  4. validate -- ``run_validation_engine.py --gate`` (LAST so it never blocks a
+  2. feed     -- ``build_alert_feed.py``.
+  3. validate -- ``run_validation_engine.py --gate`` (LAST so it never blocks a
      render): runs the population-level data checks and makes a HALT-severity
      result a failed stage, so egregious data lands in the pipeline exit code
      for monitoring. The standing machinery that *runs* the validation gate.
@@ -24,15 +24,15 @@ Five stages run in sequence as subprocess-isolated children:
 Resilience contract (the load-bearing behavior):
 
   * The orchestrator NEVER aborts early. A failed or timed-out stage is logged
-    and the remaining stages still run. The digest + feed are read-only renders
-    over whatever alerts already exist, so a trigger failure must not leave the
-    user staring at a stale digest -- the renders run regardless. Likewise a
+    and the remaining stages still run. The feed is a read-only render over
+    whatever alerts already exist, so a trigger failure must not leave the
+    user staring at a stale feed -- the render runs regardless. Likewise a
     failed news fetch (stage 0) never blocks the trigger sweep: triggers run
     over whatever news already exists, degrading to none.
   * Each stage's stdout/stderr is captured and echoed under a stage header.
   * Exit code is the count of failed stages (0 = all good), reported only AFTER
     every non-skipped stage has been attempted. This lets cron / monitoring
-    detect partial failure while still producing the best-effort digest.
+    detect partial failure while still producing the best-effort feed.
 
 Usage:
     python execution/run_morning_pipeline.py
@@ -41,10 +41,10 @@ Usage:
     python execution/run_morning_pipeline.py --user-id bhanu --db-path /tmp/x.db
     python execution/run_morning_pipeline.py --skip-triggers   # re-render only
 
-``--skip-triggers`` runs stages 2 + 3 only -- useful for re-rendering the
-digest/feed after manual approve/dismiss actions mutate the alert rows, without
-paying for another trigger sweep (it skips stage 0 news too). ``--skip-news``
-skips only the news fetch.
+``--skip-triggers`` runs the feed render only -- useful for re-rendering after
+manual approve/dismiss actions mutate the alert rows, without paying for
+another trigger sweep (it skips stage 0 news too). ``--skip-news`` skips only
+the news fetch.
 
 This orchestrates the scripts via subprocess (process isolation, matching
 the repo's drain-executor + daily-fetch-and-brief pattern) rather than importing
@@ -72,7 +72,7 @@ DEFAULT_MAX_COST_USD = 10.0
 
 # Per-stage wall-clock caps. Stage 1 fans LLM-backed sensors across the whole
 # portfolio and is the long pole -- 30 min mirrors the slice-1 guidance. The
-# two render stages are pure SQLite reads + HTML writes; 5 min is generous.
+# feed render stage is a pure SQLite read + HTML write; 5 min is generous.
 _TRIGGERS_TIMEOUT_S = 1800
 _RENDER_TIMEOUT_S = 300
 # Stage 0 (news) is fast on the FMP path, but an `auto`/`websearch` run can make
@@ -80,7 +80,7 @@ _RENDER_TIMEOUT_S = 300
 # The additive EDGAR (sequential, SEC-throttled ~0.5s/ticker) + yfinance-grades
 # (threaded) feeds add a low single-digit number of minutes across the book.
 _NEWS_TIMEOUT_S = 900
-# Stage 4 (data validation) runs population-level range / magnitude-jump /
+# Stage 3 (data validation) runs population-level range / magnitude-jump /
 # source-disagreement checks across every tracked ticker — a SQLite-bound sweep;
 # 10 min is generous.
 _VALIDATE_TIMEOUT_S = 600
@@ -89,10 +89,9 @@ _VALIDATE_TIMEOUT_S = 600
 # skipped stage still appears (as "skipped") even though it never ran.
 STAGE_NEWS = "stage_0_news"
 STAGE_TRIGGERS = "stage_1_triggers"
-STAGE_DIGEST = "stage_2_digest"
-STAGE_FEED = "stage_3_feed"
-STAGE_VALIDATE = "stage_4_validate"
-_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_DIGEST, STAGE_FEED, STAGE_VALIDATE)
+STAGE_FEED = "stage_2_feed"
+STAGE_VALIDATE = "stage_3_validate"
+_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_FEED, STAGE_VALIDATE)
 
 # News ingestion source for Stage 0. Default `auto` (self-healing): FMP first,
 # falling back to WebSearch+Opus per ticker on refusal — so the material_news
@@ -136,10 +135,10 @@ class _StageResult:
 
 
 def _stage_args_for(args: argparse.Namespace, *, include_max_cost: bool) -> list[str]:
-    """Common pass-through args shared by every stage.
+    """Common pass-through args shared by the trigger + feed stages.
 
-    ``--user-id`` and ``--db-path`` go to all three scripts; ``--max-cost-usd``
-    is meaningful only to the trigger stage (the renderers have no such flag).
+    ``--user-id`` and ``--db-path`` go to both scripts; ``--max-cost-usd``
+    is meaningful only to the trigger stage (the renderer has no such flag).
     ``--db-path`` is omitted when unset so each script applies its own default
     DB resolution rather than receiving a literal ``None``.
     """
@@ -154,8 +153,8 @@ def _stage_args_for(args: argparse.Namespace, *, include_max_cost: bool) -> list
 def _build_stages(args: argparse.Namespace) -> list[_Stage]:
     """Construct the ordered stage list from CLI args.
 
-    Stage 1 is omitted entirely when ``--skip-triggers`` is set; the digest +
-    feed stages always run.
+    Stage 1 is omitted entirely when ``--skip-triggers`` is set; the feed
+    stage always runs.
     """
     py = sys.executable
     exec_dir = PROJECT_ROOT / "execution"
@@ -199,20 +198,8 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
 
     stages.append(
         _Stage(
-            key=STAGE_DIGEST,
-            label="Stage 2 - morning digest (build_morning_digest.py)",
-            argv=[
-                py,
-                str(exec_dir / "build_morning_digest.py"),
-                *_stage_args_for(args, include_max_cost=False),
-            ],
-            timeout_s=_RENDER_TIMEOUT_S,
-        )
-    )
-    stages.append(
-        _Stage(
             key=STAGE_FEED,
-            label="Stage 3 - alert feed (build_alert_feed.py)",
+            label="Stage 2 - alert feed (build_alert_feed.py)",
             argv=[
                 py,
                 str(exec_dir / "build_alert_feed.py"),
@@ -222,8 +209,8 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
         )
     )
 
-    # Stage 4 -- data validation GATE, LAST so a HALT verdict never blocks the
-    # renders. ``run_validation_engine.py --gate`` runs the population-level
+    # Stage 3 -- data validation GATE, LAST so a HALT verdict never blocks the
+    # render. ``run_validation_engine.py --gate`` runs the population-level
     # range / magnitude-jump / source-disagreement checks and exits non-zero
     # when this run records a HALT-severity issue (a 10x unit error, a >1000x
     # range violation). ``_run_stage`` turns that non-zero exit into a FAILED
@@ -240,7 +227,7 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
         stages.append(
             _Stage(
                 key=STAGE_VALIDATE,
-                label="Stage 4 - data validation gate (run_validation_engine.py --gate)",
+                label="Stage 3 - data validation gate (run_validation_engine.py --gate)",
                 argv=[
                     py,
                     str(exec_dir / "run_validation_engine.py"),
@@ -317,7 +304,7 @@ def _fail(
 ) -> _StageResult:
     """Emit a prominent failure banner (stderr) and a status line (stdout).
 
-    Stage 1's failure is deliberately tolerated -- the digest/feed still run --
+    Stage 1's failure is deliberately tolerated -- the feed still renders --
     so it must be loud in the cron log rather than buried in the child's
     captured output.
     """
@@ -335,8 +322,8 @@ def _fail(
 def _summarize(results: list[_StageResult], *, elapsed_seconds: float) -> dict[str, object]:
     """Build the final summary dict keyed by the canonical stage keys.
 
-    A stage that never ran (only stage 1, via ``--skip-triggers``) is reported
-    as "skipped" so the summary always carries all three keys.
+    A stage that never ran (via the ``--skip-*`` flags) is reported as
+    "skipped" so the summary always carries every stage key.
     """
     by_key = {r.key: r.status.value for r in results}
     summary: dict[str, object] = {
@@ -361,7 +348,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--user-id",
         default=DEFAULT_USER_ID,
-        help=f"Owner of the alerts / digest / feed rows. Default: "
+        help=f"Owner of the alerts / feed rows. Default: "
         f"{DEFAULT_USER_ID!r}. Passed through to every stage.",
     )
     parser.add_argument(
@@ -374,7 +361,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-triggers",
         action="store_true",
-        help="Skip stage 1 (triggers) and run only the digest + feed renders. "
+        help="Skip stage 1 (triggers) and run only the feed render. "
         "Useful for re-rendering after manual approve/dismiss actions. Also "
         "skips stage 0 (news), since there is nothing to classify.",
     )
