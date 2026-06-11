@@ -30,8 +30,11 @@ Design — thin shell + lazy panels:
   ``GET /api/panel/notes_drawer`` on every open; when the Holding tab is
   active its current ticker scopes the drawer (pre-filled quick-add + that
   name's notes and recent alerts). The full lifecycle stays on Journal.
-* **The Holding drill-down is dropdown-driven** (``cc-picker``): re-fetches
-  ``endpoint?ticker=<T>`` server-side on change.
+* **The Holding drill-down is search-driven** (UX9c): a type-ahead combobox in
+  the holding fragment's utility band (``cc-combo``) drives the same
+  ``#holding=<T>`` hash the old ``cc-picker`` dropdown did; the shell re-fetches
+  ``endpoint?ticker=<T>`` server-side on the resulting hashchange. While a
+  holding is open the Companies sub-row is suppressed for a clean reading view.
 * **Deep-linkable** via ``location.hash`` — ``#holdings``, ``#holding=NU`` —
   with ``hashchange`` driving back/forward; killed-panel hashes redirect.
 * **Peek primitive (UX9)**: one shared quick-look popover + scrim. Links opt
@@ -387,7 +390,7 @@ def _render_panels(
     tabs: tuple[tuple[str, str, str | None, bool, bool], ...], overview_html: str
 ) -> str:
     out: list[str] = []
-    for pid, _label, endpoint, picker, required in tabs:
+    for pid, _label, endpoint, picker, _required in tabs:
         if pid == "overview":
             out.append(
                 f'<section class="cc-panel" data-panel="{escape(pid)}" data-loaded="1">'
@@ -395,19 +398,15 @@ def _render_panels(
             )
             continue
         ep = f' data-endpoint="{escape(endpoint)}"' if endpoint else ""
+        # ``data-picker`` now means "ticker-scoped panel" — the shell passes the
+        # hash ticker straight to loadBody. The picker UI itself moved into the
+        # Holding fragment as a search combobox (UX9c), so there is no longer a
+        # ``cc-picker`` <select> in the shell chrome. ``required`` is unused now:
+        # the no-ticker fragment renders the combobox band, not a shell stub.
         pk = ' data-picker="1"' if picker else ""
-        rq = ' data-picker-required="1"' if required else ""
-        picker_html = (
-            '<div class="cc-picker-wrap">'
-            '<select class="cc-picker" aria-label="Filter by ticker"></select>'
-            "</div>"
-            if picker
-            else ""
-        )
         out.append(
-            f'<section class="cc-panel" data-panel="{escape(pid)}"{ep}{pk}{rq} '
+            f'<section class="cc-panel" data-panel="{escape(pid)}"{ep}{pk} '
             f'data-loaded="0" data-current-ticker="" hidden>'
-            f"{picker_html}"
             '<div class="cc-panel-body"><div class="cc-loading">Loading…</div></div>'
             "</section>"
         )
@@ -502,11 +501,8 @@ button { transition: color var(--transition), border-color var(--transition),
   background-size: 200% 100%; animation: cc-shimmer 1.2s ease-in-out infinite; }
 @keyframes cc-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
-/* Ticker picker (Pre-reads / Insiders / Holding) */
-.cc-picker-wrap { margin-bottom: var(--sp-4); }
-.cc-picker { background: var(--panel-alt); color: var(--ink); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 7px 10px; font-size: var(--fs-body); min-width: 260px;
-  font-family: var(--font-body); }
+/* The Holding tab's ticker picker is now a search combobox inside the holding
+   fragment's utility band (UX9c, .cc-combo) — no shell-chrome <select>. */
 
 /* ============================================================
    Analytical / command-center panel vocabulary (dark)
@@ -661,12 +657,8 @@ td.ticker a:hover { color: var(--link); }
 /* ============================================================
    Holding drill-down tab (ticker_command_center sections + embedded report)
    ============================================================ */
-.cc-holding-head { display: flex; justify-content: space-between; align-items: flex-start;
-  flex-wrap: wrap; gap: 8px; margin-bottom: 18px; padding-bottom: 12px;
-  border-bottom: 1px solid var(--border); }
-.cc-holding-ticker { font-size: var(--fs-display); font-weight: 700; font-family: var(--font-mono); }
-.cc-holding-name { font-size: var(--fs-title); color: var(--ink-muted); }
-.cc-holding-links { font-size: var(--fs-body); display: flex; gap: 14px; align-items: center; }
+.cc-holding-links { font-size: var(--fs-body); display: inline-flex; gap: 14px;
+  align-items: center; }
 .cc-holding-links a { color: var(--link); text-decoration: none; white-space: nowrap; }
 .cc-holding-links a:hover { text-decoration: underline; }
 .badges { display: inline-flex; gap: 4px; margin-left: 8px; }
@@ -934,8 +926,8 @@ td.ticker a:hover { color: var(--link); }
 ).strip()
 
 
-# Tab switching + lazy panel loading + cc-picker + hash deep-linking. Vanilla JS,
-# no build step. Plain string (not an f-string / .format template) so its braces
+# Tab switching + lazy panel loading + ticker-scoped panels + hash deep-linking.
+# Vanilla JS, no build step. Plain string (not an f-string / .format template) so its braces
 # are literal.
 SHELL_JS = r"""
 (function () {
@@ -1004,33 +996,10 @@ SHELL_JS = r"""
       .catch(function () { TICKERS = []; return TICKERS; });
   }
 
-  function populatePicker(panel) {
-    var sel = panel.querySelector('.cc-picker');
-    if (!sel || sel.getAttribute('data-filled') === '1') return Promise.resolve();
-    var required = panel.getAttribute('data-picker-required') === '1';
-    return fetchTickers().then(function (list) {
-      var opts = required
-        ? '<option value="">— select a holding —</option>'
-        : '<option value="">All holdings</option>';
-      list.forEach(function (t) {
-        var label = t.ticker + (t.name ? ' · ' + t.name : '');
-        opts += '<option value="' + t.ticker + '">' + label + '</option>';
-      });
-      sel.innerHTML = opts;
-      sel.setAttribute('data-filled', '1');
-    });
-  }
-
   function loadBody(panel, ticker) {
     var ep = panel.getAttribute('data-endpoint');
     if (!ep) return;
     var body = panel.querySelector('.cc-panel-body');
-    var required = panel.getAttribute('data-picker-required') === '1';
-    if (required && !ticker) {
-      body.innerHTML = '<div class="cc-empty">Pick a holding from the dropdown above.</div>';
-      panel.setAttribute('data-current-ticker', '');
-      return;
-    }
     var url = ep + (ticker ? ('?ticker=' + encodeURIComponent(ticker)) : '');
     body.innerHTML = '<div class="cc-loading">Loading…</div>';
     fetch(url).then(function (r) {
@@ -1058,23 +1027,27 @@ SHELL_JS = r"""
       themeTabs.forEach(function (t) {
         t.classList.toggle('active', t.getAttribute('data-theme-target') === activeTheme);
       });
+      // While a specific holding is open (Holding panel + a ticker), suppress
+      // the Companies sub-row for a clean reading view (UX9c) — the band's
+      // combobox switches holdings, and the row returns on the no-ticker state
+      // / Discovery / Journal. Other sections show their row as usual.
+      var holdingOpen = (panelId === 'holding' && !!ticker);
       subnavs.forEach(function (n) {
-        n.hidden = (n.getAttribute('data-cc-theme') !== activeTheme);
+        var theme = n.getAttribute('data-cc-theme');
+        n.hidden = (theme !== activeTheme) || (holdingOpen && theme === 'companies');
       });
       lastPanelByTheme[activeTheme] = panelId;
     }
+    // ``data-picker`` panels are ticker-scoped: pass the hash ticker straight to
+    // loadBody (the in-fragment combobox supplies it via the #holding=<T> hash).
     var isPicker = panel.getAttribute('data-picker') === '1';
     var loaded = panel.getAttribute('data-loaded') === '1';
     if (isPicker) {
-      populatePicker(panel).then(function () {
-        var sel = panel.querySelector('.cc-picker');
-        if (sel) sel.value = ticker || '';
-        var cur = panel.getAttribute('data-current-ticker') || '';
-        if (!loaded || cur !== (ticker || '')) {
-          loadBody(panel, ticker || null);
-          panel.setAttribute('data-loaded', '1');
-        }
-      });
+      var cur = panel.getAttribute('data-current-ticker') || '';
+      if (!loaded || cur !== (ticker || '')) {
+        loadBody(panel, ticker || null);
+        panel.setAttribute('data-loaded', '1');
+      }
     } else if (!loaded && panel.getAttribute('data-endpoint')) {
       loadBody(panel, null);
       panel.setAttribute('data-loaded', '1');
@@ -1657,15 +1630,6 @@ SHELL_JS = r"""
     });
   });
 
-  panels.forEach(function (panel) {
-    var sel = panel.querySelector('.cc-picker');
-    if (!sel) return;
-    sel.addEventListener('change', function () {
-      var pid = panel.getAttribute('data-panel');
-      var t = sel.value;
-      location.hash = t ? ('#' + pid + '=' + encodeURIComponent(t)) : ('#' + pid);
-    });
-  });
 
   // A ticker link anywhere in the shell (analytical panels' .ticker-link, the
   // Overview status tables' td.ticker links) opens the per-ticker Holding tab

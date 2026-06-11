@@ -183,12 +183,24 @@ def test_render_shell_lazy_endpoints_and_pickers() -> None:
     assert 'data-endpoint="/api/panel/holdings"' in html
     assert 'data-endpoint="/api/panel/validation"' in html
     assert 'data-loaded="0"' in html
-    # Only the per-ticker Holding drill-down is dropdown-driven now.
-    assert html.count('class="cc-picker"') == 1
-    assert 'data-endpoint="/api/panel/holding"' in html
+    # The Holding drill-down is ticker-scoped (data-picker routes the hash ticker
+    # to loadBody), but the picker UI is now a search combobox INSIDE the holding
+    # fragment (UX9c) — there is no longer a cc-picker <select> in shell chrome.
+    assert 'data-panel="holding" data-endpoint="/api/panel/holding" data-picker="1"' in html
+    assert 'class="cc-picker"' not in html
+    assert "data-picker-required" not in html
     # The shell JS + CSS are inlined.
     assert SHELL_JS[:30] in html
     assert SHELL_CSS[:30] in html
+
+
+def test_holding_open_suppresses_companies_subrow() -> None:
+    """UX9c: while a specific holding is open (Holding panel + a ticker), the
+    Companies sub-row hides for a clean reading view; it returns on the
+    no-ticker state and on Discovery/Journal. The combobox switches holdings."""
+    # The activation JS gates the companies sub-row on (holdingOpen && theme).
+    assert "panelId === 'holding' && !!ticker" in SHELL_JS
+    assert "holdingOpen && theme === 'companies'" in SHELL_JS
 
 
 def test_settings_drawer_structure() -> None:

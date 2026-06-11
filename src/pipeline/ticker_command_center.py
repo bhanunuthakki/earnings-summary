@@ -723,37 +723,77 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
 
 def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
     """Head/foot-less command-center fragment for the unified shell's Holding tab
-    (UX redesign PR4 — report-first): a slim utility header (identity · verdict ·
-    freshness dot · links · Ops/Notes buttons) and NOTHING else inline. The
-    config/meta sections (refresh, DCF⇄Sheets, analyses log, artifacts) live in
-    the Ops drawer; the analysis sections the old layout stacked here
-    (position / decisions / thesis) are already in the embedded report's own
-    tabs, so showing them twice was the page's main clutter source."""
-    return _holding_header(tcc)
+    (UX redesign PR4 → squeezed to one band in UX9c): a single ~40px utility band
+    — the search combobox inline left, verdict · freshness dot · report/DCF/tracker
+    links · Ops/Notes icons right — and NOTHING else inline. The config/meta
+    sections (refresh, DCF⇄Sheets, analyses log, artifacts, 5-min reread) live in
+    the Ops drawer; notes + alerts ride in the shared ✎ Notes drawer; the analysis
+    sections the old layout stacked here (position / decisions / thesis) are
+    already in the embedded report's own tabs."""
+    return _holding_band(tcc)
 
 
-def _holding_header(tcc: TickerCommandCenter) -> str:
+def _holding_band(tcc: TickerCommandCenter) -> str:
+    """The one-line holding utility band (UX9c). Left: the type-ahead combobox
+    (replacing the PR4 ticker/name heading + the shell's old cc-picker dropdown).
+    Right: verdict + freshness dot + report/DCF/tracker links + Ops/Notes icons.
+    The ✎ Notes button opens the shell's SHARED notes drawer (data-cc-notes-open),
+    which scopes to this ticker — so the holding's own PR4 notes drawer retires."""
     ident = tcc.identity
-    name = f'<span class="cc-holding-name"> · {escape(ident.name)}</span>' if ident.name else ""
     links = [
-        f'<a href="/reports/{escape(ident.ticker)}" target="_blank" rel="noopener">Full report ↗</a>',
-        f'<a href="/dcf/{escape(ident.ticker)}">DCF workbook ↓</a>',
+        f'<a href="/reports/{escape(ident.ticker)}" target="_blank" rel="noopener">Report ↗</a>',
+        f'<a href="/dcf/{escape(ident.ticker)}">DCF ↓</a>',
     ]
     if tcc.tracker_url:
         links.append(
-            f'<a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">'
-            "Portfolio Tracker ↗</a>"
+            f'<a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">Tracker ↗</a>'
         )
     return (
         '<div class="cc-holding-head">'
-        f'<div class="cc-holding-id"><span class="cc-holding-ticker">{escape(ident.ticker)}</span>'
-        f"{name}{_identity_badges(ident)}{_freshness_dot(ident)}</div>"
-        f'<div class="cc-holding-links">{" · ".join(links)}'
+        f"{_combobox(ident.ticker, ident.name)}"
+        '<div class="cc-holding-right">'
+        f"{_identity_badges(ident)}{_freshness_dot(ident)}"
+        f'<span class="cc-holding-links">{" · ".join(links)}</span>'
         ' <button type="button" class="tcc-drawer-btn" data-tcc-drawer="ops" '
-        'title="Refresh · budgets · DCF⇄Sheets · analyses log · artifacts">⚙ Ops</button>'
-        ' <button type="button" class="tcc-drawer-btn" data-tcc-drawer="notes" '
-        'title="Open notes + recent alerts for this name">✎ Notes</button>'
+        'title="Refresh · budgets · DCF⇄Sheets · analyses log · artifacts · 5-min reread">'
+        "⚙ Ops</button>"
+        ' <button type="button" class="tcc-drawer-btn" data-cc-notes-open '
+        'title="Quick note + open notes + recent alerts for this name">✎ Notes</button>'
         "</div></div>"
+    )
+
+
+def _combobox(ticker: str, name: str | None) -> str:
+    """Search-first holding picker (UX9c): a type-ahead combobox over the tracked
+    list. The input shows the current ticker · name; on focus it select-alls so
+    the first keystroke filters. Selection (click / arrow+Enter) drives the same
+    ``#holding=<T>`` hash the old ``cc-picker`` dropdown did — so the shell's
+    activation + deep-link contract is unchanged. Tickers come from the shared
+    ``/api/tickers`` source, fetched lazily on first focus."""
+    display = escape(ticker + (f" · {name}" if name else "")) if ticker else ""
+    cur = escape(ticker, quote=True)
+    placeholder = "Search holdings — ticker or name…"
+    return (
+        f'<div class="cc-combo" data-current="{cur}">'
+        '<input class="cc-combo-input" type="text" role="combobox" aria-expanded="false" '
+        'aria-autocomplete="list" aria-controls="cc-combo-list" autocomplete="off" '
+        f'spellcheck="false" value="{display}" placeholder="{placeholder}" '
+        'aria-label="Search holdings">'
+        '<ul class="cc-combo-list" id="cc-combo-list" role="listbox" hidden></ul>'
+        "</div>"
+    )
+
+
+def render_holding_picker_band(_repo_root: Path) -> str:
+    """The Holding tab's no-ticker state (UX9c): the combobox band alone, with a
+    hint — so the picker is always present, including before any holding is
+    opened. ``_repo_root`` is accepted for a uniform route signature (the band is
+    static; the combobox fetches /api/tickers client-side)."""
+    return (
+        '<div class="cc-holding-head cc-holding-empty">'
+        f"{_combobox('', None)}"
+        '<span class="cc-holding-hint">Search a ticker or name to open a holding.</span>'
+        "</div>" + _COMBO_STYLE + _COMBO_SCRIPT
     )
 
 
@@ -805,15 +845,17 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     db_path = repo_root / "data" / "portfolio.db"
     dash = build_analytical_dashboard(db_path, sections={"rereads"}, ticker=t)
     reread_html = render_panel_fragment(dash, "prereads") or ""
-    rail = build_holding_rail(repo_root, t)
-    reread_fold = (
-        f'<details class="tcc-reread-fold"><summary>5-minute reread</summary>'
-        f"{reread_html}</details>"
+    # The 5-min reread folds into the Ops drawer (UX9c) — one band above the
+    # report, nothing else inline. The reread leads the drawer (it's the most
+    # likely thing reached for) ahead of the config/meta sections.
+    reread_section = (
+        '<section class="panel"><h2>5-minute reread</h2>' + reread_html + "</section>"
         if reread_html
         else ""
     )
     ops_body = "".join(
         [
+            reread_section,
             _freshness_strip(tcc.identity),
             _refresh_section(t),
             _dcf_sheets_section(t),
@@ -821,16 +863,16 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
             _artifacts_section(tcc.artifacts),
         ]
     )
-    notes_body = _notes_rail_section(rail.notes) + _alerts_rail_section(
-        t, rail.alerts, rail.brief_provenance
-    )
+    # Notes + alerts now ride in the shell's SHARED ✎ drawer (PR1), which the
+    # band's Notes button opens ticker-scoped — so the holding's own PR4 notes
+    # drawer is retired (one notes surface, not two).
     return "".join(
         [
             render_ticker_fragment(tcc),
-            reread_fold,
             f'<div class="tcc-report-main">{_report_embed_section(t, tcc.report_date)}</div>',
             _tcc_drawer("ops", "Ops · refresh & data", ops_body),
-            _tcc_drawer("notes", "Notes & alerts", notes_body),
+            _COMBO_STYLE,
+            _COMBO_SCRIPT,
             _TCC_DRAWER_STYLE,
             _TCC_DRAWER_SCRIPT,
         ]
@@ -849,9 +891,108 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
     )
 
 
+_COMBO_STYLE = """<style>
+.cc-combo { position: relative; flex: 1 1 280px; max-width: 420px; min-width: 200px; }
+.cc-combo-input { width: 100%; box-sizing: border-box; background: var(--paper, #1a1d23);
+  color: var(--fg, #e8e8e3); border: 1px solid var(--border, #2a2c30);
+  border-radius: var(--radius, 6px); padding: 6px 11px; font-size: var(--fs-body, 13px);
+  font-family: inherit; }
+.cc-combo-input:focus { outline: none; border-color: var(--accent, #7aa2f7); }
+.cc-combo-list { position: absolute; z-index: 25; top: calc(100% + 4px); left: 0; right: 0;
+  margin: 0; padding: 4px 0; list-style: none; max-height: 320px; overflow-y: auto;
+  background: var(--surface, #16171a); border: 1px solid var(--border, #2a2c30);
+  border-radius: var(--radius, 6px); box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+.cc-combo-list[hidden] { display: none; }
+.cc-combo-list li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
+  cursor: pointer; font-size: var(--fs-body, 13px); }
+.cc-combo-list li.sel, .cc-combo-list li:hover { background: var(--paper, #1a1d23); }
+.cc-combo-tk { font-family: var(--font-mono, monospace); font-weight: 600;
+  color: var(--fg, #e8e8e3); }
+.cc-combo-nm { color: var(--muted, #888); font-size: var(--fs-caption, 11px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-combo-none { color: var(--muted, #888); cursor: default; }
+.cc-holding-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cc-holding-hint { color: var(--muted, #888); font-size: var(--fs-caption, 12px); }
+</style>"""
+
+# Self-contained combobox wiring, re-run on every fragment inject (the shell's
+# injectHtml re-creates <script> tags). Guards on data-wired so a re-inject only
+# wires the fresh widget. Navigation is hash-only — identical contract to the
+# retired cc-picker <select>.
+_COMBO_SCRIPT = """<script>
+(function () {
+  var combo = document.querySelector('.cc-combo');
+  if (!combo || combo.dataset.wired) return;
+  combo.dataset.wired = '1';
+  var input = combo.querySelector('.cc-combo-input');
+  var list = combo.querySelector('.cc-combo-list');
+  var all = null, matches = [], sel = -1;
+  var current = combo.getAttribute('data-current') || '';
+  var display = input.value;
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function fetchT() {
+    if (all) return Promise.resolve(all);
+    return fetch('/api/tickers').then(function (r) { return r.json(); })
+      .then(function (j) { all = (j && j.tickers) || []; return all; })
+      .catch(function () { all = []; return all; });
+  }
+  function render(q) {
+    var ql = (q || '').trim().toLowerCase();
+    matches = (all || []).filter(function (t) {
+      if (!ql) return true;
+      return t.ticker.toLowerCase().indexOf(ql) !== -1
+        || (t.name && t.name.toLowerCase().indexOf(ql) !== -1);
+    }).slice(0, 50);
+    if (sel >= matches.length) sel = matches.length - 1;
+    var html = '';
+    for (var i = 0; i < matches.length; i++) {
+      var t = matches[i];
+      html += '<li role="option" class="' + (i === sel ? 'sel' : '') + '" data-i="' + i
+        + '" data-tk="' + esc(t.ticker) + '"><span class="cc-combo-tk">' + esc(t.ticker)
+        + '</span>' + (t.name ? '<span class="cc-combo-nm">' + esc(t.name) + '</span>' : '')
+        + '</li>';
+    }
+    list.innerHTML = html || '<li class="cc-combo-none">No match.</li>';
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  }
+  function open() { fetchT().then(function () { render(''); }); }
+  function close() { list.hidden = true; input.setAttribute('aria-expanded', 'false'); }
+  function pick(tk) {
+    if (tk && tk !== current) { location.hash = '#holding=' + encodeURIComponent(tk); }
+    else { input.value = display; close(); }
+  }
+  input.addEventListener('focus', function () { sel = -1; input.select(); open(); });
+  input.addEventListener('input', function () { sel = -1; fetchT().then(function () { render(input.value); }); });
+  input.addEventListener('keydown', function (ev) {
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (matches.length) { sel = Math.min(sel + 1, matches.length - 1); render(input.value); } }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (matches.length) { sel = Math.max(sel - 1, 0); render(input.value); } }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (sel >= 0 && matches[sel]) pick(matches[sel].ticker); else if (matches.length === 1) pick(matches[0].ticker); }
+    else if (ev.key === 'Escape') { input.value = display; close(); input.blur(); }
+  });
+  list.addEventListener('mousedown', function (ev) {
+    var li = ev.target.closest('li[data-tk]');
+    if (!li) return;
+    ev.preventDefault();  // keep focus off blur until we navigate
+    pick(li.getAttribute('data-tk'));
+  });
+  input.addEventListener('blur', function () {
+    // Delay so a list mousedown registers first; then restore the display label.
+    setTimeout(function () { if (!list.hidden) { close(); input.value = display; } }, 150);
+  });
+})();
+</script>"""
+
+
 _TCC_DRAWER_STYLE = """<style>
+/* The one-line holding utility band (UX9c): ~40px, combobox left, the
+   verdict/freshness/links/icons cluster right. */
 .cc-holding-head { display: flex; justify-content: space-between; align-items: center;
-  flex-wrap: wrap; gap: 8px; }
+  flex-wrap: wrap; gap: 12px; min-height: 40px; margin-bottom: 14px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border, #2a2c30); }
 .cc-fdot { font-size: var(--fs-body); cursor: help; margin-left: 6px; }
 .fdot-ok { color: var(--ok, #4ade80); }
 .fdot-warn { color: var(--warn, #fbbf24); }
@@ -861,11 +1002,6 @@ _TCC_DRAWER_STYLE = """<style>
   font-size: var(--fs-caption); cursor: pointer;
   transition: color var(--transition), border-color var(--transition); }
 .tcc-drawer-btn:hover { border-color: var(--accent, #7aa2f7); color: var(--accent, #7aa2f7); }
-.tcc-reread-fold { margin: 10px 0 14px;
-  border-radius: var(--radius); background: var(--surface, #16171a); padding: 0 14px; }
-.tcc-reread-fold > summary { cursor: pointer; padding: 10px 0; font-size: var(--fs-body);
-  font-weight: 600; color: var(--muted, #888); }
-.tcc-reread-fold[open] > summary { color: var(--fg, #e8e8e3); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); }
 .tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34;
   animation: cc-fade-in var(--transition); }
