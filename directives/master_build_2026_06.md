@@ -194,7 +194,7 @@ demands it (note the split in the Decision log).
   any report section.
 
 ### Wave 5 — Exploration + discovery
-- [ ] **P5.1 ViewSpec engine.** Deterministic pivot spec + renderer
+- [x] **P5.1 ViewSpec engine.** *(#389)* Deterministic pivot spec + renderer
   (table + chart, provenance-chipped once P3.3 lands); saved views; embed
   hooks for cockpit/reports.
 - [ ] **P5.2 NL compile.** Query box → fast-model → ViewSpec (validated,
@@ -361,6 +361,22 @@ demands it (note the split in the Decision log).
   open_notes — the per-ticker alert-context bundle; still zero call-site
   changes). Resolved/archived notes never resurface. Notes stay read-only
   on every one of these surfaces until the P4.5 journal UI.
+- 2026-06-11 (P5.1, #389): the ViewSpec contract accepts metric refs as
+  objects OR compact tokens (fin:revenue / kpi:ROE /
+  seg:product:AWS:revenue) — one parser serves the builder UI's option
+  values and the future P5.2 compiler output. Cross-ticker alignment is by
+  CALENDAR bucket derived from fiscal period_end (offset fiscal calendars
+  land in the quarter they ended in; labels can differ from issuer fiscal
+  names) and transforms look back by calendar key, so series gaps yield
+  empty cells, never misaligned ratios. Chips pair value + provenance from
+  the SAME tier-aware winning row via two new with-provenance loaders
+  (closing the wave-4 seam: kpi cells now carry doc_id on this surface);
+  segment cells stay unchipped (period-level provenance — wire when a
+  surface needs it). The P3.3 chip anatomy moved to ui/source_chip.py,
+  re-imported by the workspace renderer under its original private names.
+  MAX_TICKERS=16 so the whole-portfolio prefill runs first-click.
+  saved_views (0079) upserts by (user_id, name) — the name is the stable
+  embed handle; GET /api/views/<id>/fragment is the embed hook.
 - 2026-06-11 (P4.5, #388 — wave 4 complete): the journal's lifecycle home
   is Research → Journal (/api/panel/journal + /api/notes REST, thin over
   user_state.notes; supersede = chained replacement, never an edit). The
