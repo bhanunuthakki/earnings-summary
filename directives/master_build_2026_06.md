@@ -203,7 +203,7 @@ demands it (note the split in the Decision log).
 - [x] **P5.3 Discovery pipelines.** *(#391)* Factor screens over the tracked
   universe; adjacency miner over transcripts/news/competitive watchlists;
   candidates table with "why surfaced" evidence.
-- [ ] **P5.4 Discovery queue.** Approval queue UI under Research + chat
+- [x] **P5.4 Discovery queue.** *(#392 — wave 5 complete)* Approval queue UI under Research + chat
   commands; individual + bulk eval-build triggers (budget-aware, streamed
   via the existing jobs SSE).
 
@@ -402,6 +402,20 @@ demands it (note the split in the Decision log).
   ND/EBITDA /4). Re-running discovery refreshes evidence/score but NEVER
   status — dismissed stays dismissed; the lifecycle belongs to the P5.4
   queue. score = screens passed + adjacency sources (capped 3), rank-only.
+- 2026-06-11 (P5.4, #392 — wave 5 complete): the queue rejects building/
+  built from its own status route — only discovery_build.py's ladder
+  writes them, so "built" always means a brief actually exists. The build
+  worker promotes via direct UPDATE (not db.track_company, whose upsert
+  fires its own fire-and-forget onboard subprocess) and re-QUEUES a name
+  whose build failed instead of poisoning the batch. Bulk builds cap at
+  10 per run (~4h + multi-dollar — beyond that is a misclick, not a
+  decision). "Chat commands" landed as deterministic server-side
+  /discovery verbs intercepted BEFORE the LLM pool (zero model spend,
+  instant; the chat prompt advertises them) — the directive names chat as
+  a build-trigger surface, so unlike P2.4's stance redirect these act
+  directly. The build invocation matches the eval-onboard convention
+  (onboard --industry-template auto, build_artifacts --flavor evaluation
+  --enable-llm).
 - 2026-06-11 (P4.5, #388 — wave 4 complete): the journal's lifecycle home
   is Research → Journal (/api/panel/journal + /api/notes REST, thin over
   user_state.notes; supersede = chained replacement, never an edit). The

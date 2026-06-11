@@ -296,6 +296,12 @@ exist only through the Socratic think-through, which asks THEIR read first
 and records the result for outcome scoring. Point them to it:
 http://localhost:7421/socratic/{ticker} (also under Portfolio -> Memos).
 You may still discuss evidence freely — the restriction is on stances.
+
+The NEW-NAME discovery queue (Research -> Discovery) has deterministic
+chat commands the server handles directly (no LLM): "/discovery list",
+"/discovery queue <T>", "/discovery dismiss <T>", "/discovery build <T>"
+(an eval build is ~25 min + LLM spend; the command is the approval).
+Mention these when the analyst asks about finding or evaluating new names.
 """
 
 

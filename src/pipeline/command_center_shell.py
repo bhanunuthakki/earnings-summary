@@ -68,6 +68,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # metrics x tickers x period x transform over the fact tables,
             # with saved views.
             ("explore", "Explore", "/api/panel/explore", False, False),
+            # New-name discovery queue (P5.4): screened/adjacency candidates
+            # with why-surfaced evidence; approval gates every eval build.
+            ("discovery", "Discovery", "/api/panel/discovery", False, False),
             # The analyst journal's lifecycle home (P4.5): list / filter /
             # resolve / reclassify / supersede over analyst_notes.
             ("journal", "Journal", "/api/panel/journal", False, False),
