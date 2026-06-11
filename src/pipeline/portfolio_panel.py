@@ -819,7 +819,7 @@ def render_portfolio_insights(db_path: Path, live: LivePortfolio) -> str:
     parts = [
         _thesis_rollup_panel(db_path),
         _exposure_panel(db_path, live),
-        _next_dollar_panel(db_path),
+        render_next_dollar_panel(db_path),
     ]
     body = "".join(p for p in parts if p)
     return f'<div class="pf-insights">{body}</div>' if body else ""
@@ -869,7 +869,10 @@ def _thesis_rollup_panel(db_path: Path) -> str:
     flagged = [(t, s) for t, s in sorted(latest.items()) if tones.get(s, "bad") != "ok"]
     ok_n = len(latest) - len(flagged)
     chips = "".join(
-        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}">'
+        # data-peek-ticker: the chip text carries " · status", so the hover
+        # mini-card needs the bare symbol spelled out (UX9).
+        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}" '
+        f'data-peek-ticker="{escape(t)}">'
         f"{escape(t)} · {escape(s)}</a>"
         for t, s in flagged
     )
@@ -939,9 +942,10 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
     )
 
 
-def _next_dollar_panel(db_path: Path) -> str:
+def render_next_dollar_panel(db_path: Path) -> str:
     """The latest next-dollar advisor memo, excerpted, deep-linking into the
-    Memos tab for the full record."""
+    Memos tab for the full record (and peeking the rendered memo in the
+    shell, UX9). Public for the markup-contract tests."""
     if not db_path.exists():
         return ""
     try:
@@ -965,7 +969,10 @@ def _next_dollar_panel(db_path: Path) -> str:
     return (
         '<section class="panel"><h2>Where the next dollar goes</h2>'
         f'<p class="sub">{escape(title)} · {stamp_html(created_at, mode="date")} · '
-        '<a href="#advisor_memos">full memo →</a></p>'
+        # Peeks the rendered memo in place (UX9); the hash href still lands on
+        # the Memos tab for middle-click / non-shell surfaces.
+        '<a href="#advisor_memos" data-peek-url="/api/peek/memo/next_dollar" '
+        'data-peek-title="Next-dollar memo">full memo →</a></p>'
         f'<p class="pf-nd-excerpt">{escape(excerpt)}</p></section>'
     )
 

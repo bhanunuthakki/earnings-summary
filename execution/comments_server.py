@@ -1280,7 +1280,12 @@ def create_app(
         transcript_line locators/citations), parsed 10-K/10-Q JSONs the
         section reader (?section= for FactLocator.section); everything else
         302s to the document's source_url, falling back to a registry-
-        metadata page so a /source link is never a dead end."""
+        metadata page so a /source link is never a dead end.
+
+        ``?fragment=1`` (UX9) returns the chrome-less peek variant instead of
+        a full document — and NEVER 302s externally (the shell's peek fetch
+        can't follow a cross-origin redirect); non-viewable docs render their
+        metadata card with the outbound link."""
         from pipeline.source_viewers import (
             load_document,
             render_fallback_page,
@@ -1288,19 +1293,84 @@ def create_app(
             render_transcript_page,
         )
 
-        html = render_transcript_page(repo_root, db_path, doc_id)
+        fragment = request.args.get("fragment") == "1"
+        html = render_transcript_page(repo_root, db_path, doc_id, fragment=fragment)
         if html is None:
-            html = render_form10k_page(repo_root, db_path, doc_id, request.args.get("section"))
+            html = render_form10k_page(
+                repo_root, db_path, doc_id, request.args.get("section"), fragment=fragment
+            )
         if html is not None:
             return Response(html, mimetype="text/html")
         doc = load_document(db_path, doc_id)
         if (
-            doc is not None
+            not fragment
+            and doc is not None
             and doc.source_url
             and doc.source_url.startswith(("http://", "https://"))
         ):
             return redirect(doc.source_url, code=302)
-        return Response(render_fallback_page(db_path, doc_id), mimetype="text/html")
+        return Response(
+            render_fallback_page(db_path, doc_id, fragment=fragment), mimetype="text/html"
+        )
+
+    # ----- PEEK FRAGMENTS (UX9 quick-look popover) -----
+    # Small head/foot-less payloads for the shell's peek primitive: review an
+    # alert, glance at a ticker, read a memo — without leaving the panel.
+
+    @app.route("/api/peek/alert/<int:alert_id>", methods=["GET"])
+    def peek_alert(alert_id: int):
+        """One full alert card (evidence drawer open, queued actions with
+        their approve/dismiss links) for the inbox "review →" peek."""
+        from pipeline.peeks import render_alert_peek
+
+        html = render_alert_peek(db_path, alert_id)
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/alerts", methods=["GET"])
+    def peek_alerts():
+        """A short stack of alert cards (``?ticker=`` / ``?status=`` filtered)
+        for the cockpit's pending-alert pills; the full feed stays the
+        overflow path."""
+        from pipeline.peeks import render_alerts_list_peek
+
+        return Response(
+            render_alerts_list_peek(
+                db_path,
+                user_id=request.args.get("user_id", DEFAULT_USER_ID),
+                ticker=request.args.get("ticker") or None,
+                status=request.args.get("status") or None,
+            ),
+            mimetype="text/html",
+        )
+
+    @app.route("/api/peek/ticker/<ticker>", methods=["GET"])
+    def peek_ticker(ticker: str):
+        """The ticker hover mini-card: price + day move, thesis verdict, DCF
+        gap, next ER, unreviewed count. 404 for untracked tickers (the hover
+        simply doesn't show)."""
+        from pipeline.peeks import render_ticker_peek
+
+        conn = _open_db()
+        try:
+            html = render_ticker_peek(conn, repo_root, ticker)
+        finally:
+            conn.close()
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/memo/<kind>", methods=["GET"])
+    def peek_memo(kind: str):
+        """The latest advisor memo of ``kind``, markdown-rendered, for the
+        portfolio insights "full memo →" peek."""
+        from pipeline.peeks import render_memo_peek
+
+        html = render_memo_peek(db_path, kind)
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
 
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):

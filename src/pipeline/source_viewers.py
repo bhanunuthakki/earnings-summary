@@ -17,6 +17,13 @@ dispatcher route in comments_server routes by doc_type and falls back to
 the document's source_url). Renderers return None when the document isn't
 viewable in that shape — the route turns that into the fallback, never a
 crash.
+
+``?fragment=1`` (UX9) returns the same content chrome-less — a ``sv-frag``
+div instead of a full document — for the command-center shell's peek
+popover, which provides the styles via ``VIEWER_CONTENT_CSS``. Fragment
+mode never 302s to an external source_url (the peek fetch couldn't follow
+it cross-origin); external-only documents render their metadata card with
+the outbound link instead.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import urllib.parse
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
@@ -38,16 +46,12 @@ _FORM_JSON_DOC_TYPES = frozenset({"fmp_10k_json", "fmp_10q_json"})
 # their speaker prefix bolded. Conservative: short prefix, single colon.
 _SPEAKER_RE = re.compile(r"^([A-Z][\w.\- ',()]{0,70}?):(\s|$)")
 
-_PAGE_CSS = """
-body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
-  font-size: 14px; line-height: 1.55; }
-a { color: var(--accent); }
-.sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
-  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
-  position: sticky; top: 0; background: var(--bg); z-index: 5; }
+# Content rules shared by the full pages and the ``fragment=1`` payloads.
+# The command-center shell appends this block to its own stylesheet so a
+# fragment injected into the peek renders identically to the full page.
+VIEWER_CONTENT_CSS = """
 .sv-title { font-size: 16px; font-weight: 700; }
 .sv-meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
-.sv-body { max-width: 980px; margin: 0 auto; padding: 18px 22px 80px; }
 .sv-lines { list-style: none; margin: 0; padding: 0; counter-reset: ln; }
 .sv-lines li { counter-increment: ln; padding: 1px 8px 1px 0; display: flex; gap: 14px; }
 .sv-lines li::before { content: counter(ln); color: var(--muted-2); width: 42px;
@@ -65,9 +69,24 @@ a { color: var(--accent); }
 .sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
 .sv-sec-key { color: var(--muted); font-size: 12px; }
 .sv-sec-val { white-space: pre-wrap; word-break: break-word; }
+.sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+  margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+"""
+
+_PAGE_CSS = (
+    """
+body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
+  font-size: 14px; line-height: 1.55; }
+a { color: var(--accent); }
+.sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
+  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+  position: sticky; top: 0; background: var(--bg); z-index: 5; }
+.sv-body { max-width: 980px; margin: 0 auto; padding: 18px 22px 80px; }
 .sv-fallback { max-width: 720px; margin: 60px auto; padding: 22px;
   border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
 """
+    + VIEWER_CONTENT_CSS
+)
 
 
 @dataclass(slots=True)
@@ -136,6 +155,17 @@ def _page(title: str, head_extra: str, body: str) -> str:
     )
 
 
+def _fragment(title: str, meta_html: str, body: str) -> str:
+    """The chrome-less ``fragment=1`` shape: same content classes, no document
+    head or styles — the host surface supplies ``VIEWER_CONTENT_CSS``."""
+    return (
+        '<div class="sv-frag">'
+        f'<div class="sv-frag-head"><span class="sv-title">{escape(title)}</span>'
+        f"{meta_html}</div>"
+        f'<div class="sv-frag-body">{body}</div></div>'
+    )
+
+
 def _doc_meta_html(doc: _DocRow) -> str:
     bits = [f'<span class="sv-meta">doc #{doc.id} · {escape(doc.doc_type)}</span>']
     if doc.accession_number:
@@ -156,9 +186,13 @@ def _doc_meta_html(doc: _DocRow) -> str:
 # ----------------------------------------------------------------------------
 
 
-def render_transcript_page(repo_root: Path, db_path: Path, doc_id: int) -> str | None:
+def render_transcript_page(
+    repo_root: Path, db_path: Path, doc_id: int, *, fragment: bool = False
+) -> str | None:
     """Numbered-line transcript page; None when the doc isn't a readable
-    transcript (wrong type, missing file)."""
+    transcript (wrong type, missing file). ``fragment=True`` returns the
+    chrome-less peek shape (line ids unchanged, so ``#L<n>`` anchors still
+    resolve inside the host's popover)."""
     doc = load_document(db_path, doc_id)
     if doc is None or doc.doc_type not in _TRANSCRIPT_DOC_TYPES:
         return None
@@ -181,11 +215,15 @@ def render_transcript_page(repo_root: Path, db_path: Path, doc_id: int) -> str |
         items.append(f'<li id="L{n}"><span class="ln-text">{text}</span></li>')
 
     title = f"{doc.ticker} transcript · {path.stem}"
+    body = f'<ol class="sv-lines">{"".join(items)}</ol>'
+    if fragment:
+        meta = f'{_doc_meta_html(doc)}<span class="sv-meta">{len(lines)} lines</span>'
+        return _fragment(title, meta, body)
     head = (
         f'<span class="sv-title">{escape(title)}</span>{_doc_meta_html(doc)}'
         f'<span class="sv-meta">{len(lines)} lines · link any line as #L&lt;n&gt;</span>'
     )
-    return _page(title, head, f'<ol class="sv-lines">{"".join(items)}</ol>')
+    return _page(title, head, body)
 
 
 # ----------------------------------------------------------------------------
@@ -196,11 +234,21 @@ _META_KEYS = frozenset({"symbol", "period", "year"})
 
 
 def render_form10k_page(
-    repo_root: Path, db_path: Path, doc_id: int, section: str | None = None
+    repo_root: Path,
+    db_path: Path,
+    doc_id: int,
+    section: str | None = None,
+    *,
+    fragment: bool = False,
 ) -> str | None:
     """Section reader over a parsed FMP form 10-K/10-Q JSON; None when the
     doc isn't one or the file can't be read. ``section`` deep-links the
-    section a FactLocator.section names; default = the first section."""
+    section a FactLocator.section names; default = the first section.
+
+    In ``fragment`` mode the section nav uses absolute ``/source/<id>?section=``
+    hrefs — a relative ``?section=`` would resolve against the HOST page the
+    peek is embedded in, navigating the whole shell instead of the popover.
+    """
     doc = load_document(db_path, doc_id)
     if doc is None or doc.doc_type not in _FORM_JSON_DOC_TYPES:
         return None
@@ -223,16 +271,23 @@ def render_form10k_page(
     nav_parts: list[str] = []
     for k in sections:
         cls = ' class="active"' if k == active else ""
-        nav_parts.append(f'<a href="?section={escape(k)}"{cls}>{escape(k)}</a>')
+        href = (
+            f"/source/{doc.id}?section={urllib.parse.quote(k)}"
+            if fragment
+            else f"?section={escape(k)}"
+        )
+        nav_parts.append(f'<a href="{href}"{cls}>{escape(k)}</a>')
     nav = "".join(nav_parts)
     year = doc_map.get("year")
     period = doc_map.get("period")
     title = f"{doc.ticker} {escape(str(period)) if period else ''} {year if year else ''} filing"
-    head = f'<span class="sv-title">{escape(title.strip())}</span>{_doc_meta_html(doc)}'
     body = (
         f'<div class="sv-secnav">{nav}</div>'
         f"<h2>{escape(active)}</h2>{_render_section(doc_map.get(active))}"
     )
+    if fragment:
+        return _fragment(title.strip(), _doc_meta_html(doc), body)
+    head = f'<span class="sv-title">{escape(title.strip())}</span>{_doc_meta_html(doc)}'
     return _page(title.strip(), head, body)
 
 
@@ -275,17 +330,23 @@ def _render_section(raw: object) -> str:
 # ----------------------------------------------------------------------------
 
 
-def render_fallback_page(db_path: Path, doc_id: int) -> str:
-    """Shown when a document has no in-app viewer AND no source_url to
-    redirect to: its registry metadata, so the link is never a dead end."""
+def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) -> str:
+    """Shown when a document has no in-app viewer: its registry metadata, so
+    the link is never a dead end. The full-page route only reaches this when
+    there is also no source_url to 302 to; ``fragment`` mode reaches it for
+    ANY non-viewable doc (a peek fetch can't follow an external redirect), so
+    the metadata card's "original source ↗" link is the way out."""
     doc = load_document(db_path, doc_id)
     if doc is None:
+        if fragment:
+            return (
+                '<div class="sv-frag"><p class="sv-sec-key">'
+                f"No documents row with id {doc_id}.</p></div>"
+            )
         body = f'<div class="sv-fallback"><h2>Unknown document</h2><p class="sv-sec-key">No documents row with id {doc_id}.</p></div>'
         return _page("Unknown document", '<span class="sv-title">Source</span>', body)
-    body = (
-        '<div class="sv-fallback">'
-        f"<h2>{escape(doc.ticker)} · {escape(doc.doc_type)}</h2>"
-        f'<p class="sv-sec-key">No in-app viewer for this document type.</p>'
+    rows = (
+        '<p class="sv-sec-key">No in-app viewer for this document type.</p>'
         f'<div class="sv-sec-row"><div class="sv-sec-key">file</div>'
         f'<div class="sv-sec-val">{escape(doc.file_path)}</div></div>'
         + (
@@ -296,7 +357,12 @@ def render_fallback_page(db_path: Path, doc_id: int) -> str:
             if doc.accession_number
             else ""
         )
-        + "</div>"
+    )
+    if fragment:
+        return _fragment(f"{doc.ticker} · {doc.doc_type}", _doc_meta_html(doc), rows)
+    body = (
+        '<div class="sv-fallback">'
+        f"<h2>{escape(doc.ticker)} · {escape(doc.doc_type)}</h2>" + rows + "</div>"
     )
     head = f'<span class="sv-title">Source · doc #{doc.id}</span>{_doc_meta_html(doc)}'
     return _page(f"Source doc {doc.id}", head, body)

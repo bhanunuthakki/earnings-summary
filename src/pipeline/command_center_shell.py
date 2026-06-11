@@ -26,6 +26,11 @@ Design — thin shell + lazy panels:
   ``endpoint?ticker=<T>`` server-side on change.
 * **Deep-linkable** via ``location.hash`` — ``#holdings``, ``#holding=NU`` —
   with ``hashchange`` driving back/forward; killed-panel hashes redirect.
+* **Peek primitive (UX9)**: one shared quick-look popover + scrim. Links opt
+  in with ``data-peek-url`` (href untouched — middle-click still navigates);
+  ``/source/<doc_id>`` links peek their ``fragment=1`` variant automatically;
+  ticker links grow a hover mini-card from ``/api/peek/ticker/<T>``. Report
+  iframes are separate documents and stay drill-through.
 
 The standalone ``/analytical`` and ``/ticker/<t>`` pages remain as working
 deep-link targets (zero rewrite); this shell is purely additive.
@@ -42,6 +47,7 @@ from html import escape
 
 from dashboard.inbox import INBOX_CSS, INBOX_JS
 from pipeline.research_cockpit import CockpitRow
+from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -211,6 +217,7 @@ def render_shell(
             "</main>",
             _SETTINGS_DRAWER_HTML,
             _PALETTE_HTML,
+            _PEEK_HTML,
             f"<script>{SHELL_JS}</script>",
             _DOC_FOOT,
         ]
@@ -287,6 +294,25 @@ _PALETTE_HTML = (
     'autocomplete="off" spellcheck="false">'
     '<ul id="cc-palette-list" class="cc-palette-list"></ul>'
     "</div>"
+)
+
+# Peek / quick-look primitive (UX9): one positioned popover + scrim the whole
+# shell shares, plus the ticker hover mini-card. Any shell link can opt in
+# with ``data-peek-url`` (its href stays the real destination for middle-click
+# and new-tab); ``/source/<doc_id>`` links peek automatically. The body is
+# fetched lazily as an HTML fragment and injected through the same script
+# re-execution path the lazy panels use.
+_PEEK_HTML = (
+    '<div class="cc-peek-scrim" id="cc-peek-scrim" hidden></div>'
+    '<div class="cc-peek" id="cc-peek" hidden role="dialog" aria-label="Quick look">'
+    '<div class="cc-peek-head">'
+    '<span class="cc-peek-title" id="cc-peek-title"></span>'
+    '<a class="cc-peek-openfull" id="cc-peek-openfull" href="#" hidden>open full ↗</a>'
+    '<button class="cc-peek-close" id="cc-peek-close" type="button" '
+    'aria-label="Close">&times;</button></div>'
+    '<div class="cc-peek-body" id="cc-peek-body"></div>'
+    "</div>"
+    '<div class="cc-hovercard" id="cc-hovercard" hidden></div>'
 )
 
 
@@ -740,7 +766,54 @@ td.ticker a:hover { text-decoration: underline; }
 .cc-palette-list li .cc-pal-hint { color: var(--muted); font-size: 11px;
   font-family: var(--font-mono); }
 .cc-palette-list li.cc-pal-none { color: var(--muted); cursor: default; }
+
+/* ============================================================
+   Peek / quick-look (UX9): one shared popover instead of the
+   drill-throughs — source excerpts, alert review, memos.
+   z-order: drawer (39) < peek (45) < hover card (46) < palette (49).
+   ============================================================ */
+.cc-peek-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 44; }
+.cc-peek { position: fixed; z-index: 45; width: min(680px, 92vw);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.5); display: flex; flex-direction: column;
+  overflow: hidden; }
+.cc-peek[hidden], .cc-peek-scrim[hidden], .cc-hovercard[hidden] { display: none; }
+.cc-peek-head { display: flex; align-items: center; gap: 12px; padding: 9px 14px;
+  border-bottom: 1px solid var(--border); flex: none; }
+.cc-peek-title { font-weight: 700; font-size: 13px; margin-right: auto;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-peek-openfull { font-size: 11.5px; color: var(--muted); text-decoration: none;
+  white-space: nowrap; }
+.cc-peek-openfull:hover { color: var(--accent); }
+.cc-peek-close { background: transparent; border: none; color: var(--muted);
+  font-size: 19px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+.cc-peek-close:hover { color: var(--ink); }
+.cc-peek-body { overflow-y: auto; padding: 12px 14px; min-height: 60px; }
+.cc-peek-body .alert-card:last-child { margin-bottom: 0; }
+.cc-peek-foot { margin-top: 8px; font-size: 12px; }
+.cc-peek-foot a { color: var(--muted); text-decoration: none; }
+.cc-peek-foot a:hover { color: var(--accent); }
+.cc-peek-memo-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.cc-peek-memo-head h2 { font-size: 15px; margin: 0; }
+/* JS-applied stand-in for the full page's :target highlight (#L<n>). */
+.cc-peek-target { background: rgba(245, 198, 106, 0.14);
+  outline: 1px solid var(--warn); border-radius: 4px; }
+
+/* Ticker hover mini-card */
+.cc-hovercard { position: fixed; z-index: 46; width: 300px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.45); font-size: 12.5px; }
+.cc-mini-head { display: flex; align-items: center; gap: 8px; }
+.cc-mini-ticker { font-family: var(--font-mono); font-weight: 700; font-size: 14px; }
+.cc-mini-name { color: var(--muted); font-size: 11.5px; margin: 1px 0 6px; }
+.cc-mini-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.cc-mini-row > span { color: var(--muted); }
+.cc-mini-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.cc-mini-open { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
+  font-size: 11.5px; }
+.cc-mini-open a { color: var(--accent); text-decoration: none; }
 """
+    + VIEWER_CONTENT_CSS
     + INBOX_CSS
 ).strip()
 
@@ -901,6 +974,8 @@ SHELL_JS = r"""
   }
 
   function onHashChange() {
+    closePeek();
+    closeHover();
     var p = parseHash();
     var wasDrawerPanel = !!DRAWER_OPENERS[p.panel];
     if (REDIRECTS[p.panel]) { p = { panel: REDIRECTS[p.panel], ticker: null }; }
@@ -1061,6 +1136,239 @@ SHELL_JS = r"""
   var palBtn = document.getElementById('cc-palette-open');
   if (palBtn) palBtn.addEventListener('click', openPalette);
 
+  // ----- Peek / quick-look (UX9) -----
+  // One shared popover for the shell's drill-throughs: any link carrying
+  // data-peek-url opens its fragment in-context on a plain left click, and
+  // /source/<doc_id> links peek automatically (fragment=1 variant). The href
+  // is never rewritten — middle-click / ctrl-click / open-in-new-tab keep the
+  // real destination. Report iframes are separate documents, so in-report
+  // links are untouched by these document-level listeners.
+  var peek = document.getElementById('cc-peek');
+  var peekScrim = document.getElementById('cc-peek-scrim');
+  var peekBody = document.getElementById('cc-peek-body');
+  var peekTitle = document.getElementById('cc-peek-title');
+  var peekFull = document.getElementById('cc-peek-openfull');
+  var peekSeq = 0;       // stale-response guard across rapid open/close
+  var peekFragUrl = null;  // current fragment URL (re-fetched after approve/dismiss)
+
+  function positionPeek(anchor) {
+    var w = Math.min(680, Math.round(window.innerWidth * 0.92));
+    var left = Math.round((window.innerWidth - w) / 2);
+    var top = Math.round(window.innerHeight * 0.08);
+    if (anchor && anchor.getBoundingClientRect) {
+      var r = anchor.getBoundingClientRect();
+      left = Math.max(12, Math.min(Math.round(r.left), window.innerWidth - w - 12));
+      // Anchor below the trigger when it sits in the upper half; otherwise the
+      // near-top default keeps tall fragments readable.
+      if (r.bottom < window.innerHeight * 0.5) top = Math.round(r.bottom + 8);
+    }
+    peek.style.left = left + 'px';
+    peek.style.top = top + 'px';
+    peek.style.maxHeight = Math.max(240, window.innerHeight - top - 24) + 'px';
+  }
+
+  function loadPeek(fragUrl, anchorId) {
+    var seq = ++peekSeq;
+    peekFragUrl = fragUrl;
+    peekBody.innerHTML = '<div class="cc-loading">Loading…</div>';
+    fetch(fragUrl).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (html) {
+      if (seq !== peekSeq) return;
+      injectHtml(peekBody, html);
+      peekBody.scrollTop = 0;
+      if (anchorId && /^[A-Za-z][\w-]*$/.test(anchorId)) {
+        var el = peekBody.querySelector('#' + anchorId);
+        if (el) {
+          el.classList.add('cc-peek-target');
+          el.scrollIntoView({ block: 'center' });
+        }
+      }
+    }).catch(function (e) {
+      if (seq !== peekSeq) return;
+      peekBody.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+    });
+  }
+
+  function openPeek(fragUrl, opts) {
+    if (!peek) return;
+    opts = opts || {};
+    closeHover();
+    peekTitle.textContent = opts.title || 'Quick look';
+    if (opts.fullHref) { peekFull.href = opts.fullHref; peekFull.hidden = false; }
+    else { peekFull.hidden = true; }
+    peek.hidden = false;
+    peekScrim.hidden = false;
+    positionPeek(opts.anchor || null);
+    loadPeek(fragUrl, opts.anchorId || null);
+  }
+
+  function closePeek() {
+    if (!peek || peek.hidden) return;
+    peek.hidden = true;
+    peekScrim.hidden = true;
+    peekBody.innerHTML = '';
+    peekFragUrl = null;
+    peekSeq++;
+  }
+
+  // /source/<id>[?...][#L<n>] -> its fragment variant + the line to highlight.
+  function peekUrlForSource(href) {
+    var anchorId = null;
+    var hi = href.indexOf('#');
+    if (hi !== -1) { anchorId = href.substring(hi + 1); href = href.substring(0, hi); }
+    var sep = href.indexOf('?') === -1 ? '?' : '&';
+    return { url: href + sep + 'fragment=1', anchorId: anchorId };
+  }
+
+  document.addEventListener('click', function (ev) {
+    if (ev.defaultPrevented || ev.button !== 0) return;
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    if (!ev.target.closest) return;
+    var a = ev.target.closest('a[data-peek-url], a[href^="/source/"]');
+    if (!a || a.id === 'cc-peek-openfull') return;
+    ev.preventDefault();
+    // A source-chip's viewer link lives inside its <details> popover — fold
+    // the popover so it isn't left dangling under the peek scrim.
+    var pop = a.closest('details.src-pop');
+    if (pop) pop.removeAttribute('open');
+    var explicit = a.getAttribute('data-peek-url');
+    var info = explicit
+      ? { url: explicit, anchorId: null }
+      : peekUrlForSource(a.getAttribute('href'));
+    if (a.closest('#cc-peek')) {
+      // Inside the peek (e.g. the 10-K section nav): retarget in place.
+      if (!explicit) { peekFull.href = a.getAttribute('href'); peekFull.hidden = false; }
+      loadPeek(info.url, info.anchorId);
+      return;
+    }
+    openPeek(info.url, {
+      title: a.getAttribute('data-peek-title') || (explicit ? 'Quick look' : 'Source'),
+      fullHref: a.getAttribute('href'),
+      anchor: a,
+      anchorId: info.anchorId
+    });
+  });
+
+  // Approve / dismiss inside the peek: run the same GET /approve the cards
+  // use, then re-fetch the fragment so the card shows its new status pill —
+  // the review never leaves the page. (The route 303s back to a full page;
+  // fetch follows it and the body is simply discarded.)
+  if (peekBody) peekBody.addEventListener('click', function (ev) {
+    if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    var a = ev.target.closest ? ev.target.closest('a[href^="/approve"]') : null;
+    if (!a) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    fetch(a.getAttribute('href')).then(function (r) {
+      // 409 = stale/double click — the re-fetch below shows the true state.
+      if (!r.ok && r.status !== 409) throw new Error('HTTP ' + r.status);
+      if (peekFragUrl) loadPeek(peekFragUrl, null);
+    }).catch(function (e) {
+      var d = document.createElement('div');
+      d.className = 'cc-empty';
+      d.textContent = 'Action failed (' + e.message + ').';
+      peekBody.insertBefore(d, peekBody.firstChild);
+    });
+  });
+
+  var peekClose = document.getElementById('cc-peek-close');
+  if (peekClose) peekClose.addEventListener('click', closePeek);
+  if (peekScrim) peekScrim.addEventListener('click', closePeek);
+
+  // ----- Ticker hover mini-card (UX9) -----
+  // Hovering a ticker link (cockpit rows, analytical .ticker-link cells, or
+  // anything carrying data-peek-ticker) shows a small price/verdict/next-ER
+  // card from /api/peek/ticker/<T>. Hover-capable pointers only; fragments
+  // are cached per page load.
+  var hovercard = document.getElementById('cc-hovercard');
+  var hoverCache = {};
+  var hoverShowTimer = null;
+  var hoverHideTimer = null;
+  var hoverSeq = 0;
+  var HOVER_SEL = 'a.ticker-link, td.ticker a, [data-peek-ticker]';
+  var TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
+
+  function closeHover() {
+    if (hoverShowTimer) { clearTimeout(hoverShowTimer); hoverShowTimer = null; }
+    if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+    if (hovercard && !hovercard.hidden) { hovercard.hidden = true; hovercard.innerHTML = ''; }
+    hoverSeq++;
+  }
+
+  function positionHover(rect) {
+    var w = 300;
+    var left = Math.max(8, Math.min(Math.round(rect.left), window.innerWidth - w - 8));
+    hovercard.style.left = left + 'px';
+    if (rect.bottom + 230 > window.innerHeight && rect.top > 240) {
+      hovercard.style.top = Math.round(rect.top - 6) + 'px';
+      hovercard.style.transform = 'translateY(-100%)';
+    } else {
+      hovercard.style.top = Math.round(rect.bottom + 6) + 'px';
+      hovercard.style.transform = '';
+    }
+  }
+
+  function showHover(el) {
+    var t = el.getAttribute('data-peek-ticker') || (el.textContent || '').trim().toUpperCase();
+    if (!TICKER_RE.test(t)) return;
+    var seq = ++hoverSeq;
+    var rect = el.getBoundingClientRect();
+    function render(html) {
+      if (seq !== hoverSeq) return;
+      hovercard.innerHTML = html;
+      hovercard.hidden = false;
+      positionHover(rect);
+    }
+    if (hoverCache[t]) { render(hoverCache[t]); return; }
+    render('<div class="cc-loading">Loading…</div>');
+    fetch('/api/peek/ticker/' + encodeURIComponent(t)).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (html) {
+      hoverCache[t] = html;
+      render(html);
+    }).catch(function () {
+      // Unknown/untracked ticker — no card is the right answer.
+      if (seq === hoverSeq) closeHover();
+    });
+  }
+
+  var hoverCapable = !(window.matchMedia && window.matchMedia('(hover: none)').matches);
+  if (hovercard && hoverCapable) {
+    document.addEventListener('mouseover', function (ev) {
+      if (!ev.target.closest) return;
+      if (ev.target.closest('#cc-hovercard')) {
+        if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+        return;
+      }
+      var el = ev.target.closest(HOVER_SEL);
+      if (!el) return;
+      if (hoverHideTimer) { clearTimeout(hoverHideTimer); hoverHideTimer = null; }
+      if (hoverShowTimer) clearTimeout(hoverShowTimer);
+      hoverShowTimer = setTimeout(function () { showHover(el); }, 240);
+    });
+    document.addEventListener('mouseout', function (ev) {
+      if (!ev.target.closest) return;
+      if (!ev.target.closest(HOVER_SEL) && !ev.target.closest('#cc-hovercard')) return;
+      if (hoverShowTimer) { clearTimeout(hoverShowTimer); hoverShowTimer = null; }
+      if (hoverHideTimer) clearTimeout(hoverHideTimer);
+      hoverHideTimer = setTimeout(function () {
+        if (hovercard && !hovercard.hidden) { hovercard.hidden = true; hovercard.innerHTML = ''; }
+        hoverSeq++;
+        hoverHideTimer = null;
+      }, 200);
+    });
+    // The card anchors to a fixed position — close rather than drift on scroll.
+    document.addEventListener('scroll', function () {
+      if (hovercard && !hovercard.hidden) closeHover();
+    }, true);
+    hovercard.addEventListener('click', function (ev) {
+      if (ev.target.closest && ev.target.closest('a')) closeHover();
+    });
+  }
+
   document.addEventListener('keydown', function (ev) {
     if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K')) {
       ev.preventDefault();
@@ -1068,7 +1376,10 @@ SHELL_JS = r"""
       return;
     }
     if (ev.key === 'Escape') {
-      if (pal && !pal.hidden) closePalette(); else closeDrawer();
+      if (pal && !pal.hidden) closePalette();
+      else if (peek && !peek.hidden) closePeek();
+      else if (hovercard && !hovercard.hidden) closeHover();
+      else closeDrawer();
     }
   });
   if (drawer) {

@@ -170,7 +170,7 @@ def build_cockpit_rows(
         built: list[CockpitRow] = []
         for row in rows:
             t = row.ticker
-            price, day_move, price_asof = _profile_quote(repo_root, t)
+            price, day_move, price_asof = profile_quote(repo_root, t)
             rule_summary, evaluated_at, rule_tones = evals.get(t, (None, None, {}))
             deltas = _toned(kpi_facts.get(t, []), rule_tones) if t in portfolio_tickers else []
             fv_gap, fair_value, dcf_price, dcf_date = dcf.get(t, (None, None, None, None))
@@ -186,7 +186,7 @@ def build_cockpit_rows(
                     dcf_price=dcf_price,
                     dcf_date=dcf_date,
                     peg_ratio=_peg_ratio(repo_root, t),
-                    next_earnings=_next_earnings(repo_root, t, ref),
+                    next_earnings=next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
@@ -546,10 +546,12 @@ def _read_json(path: Path) -> object | None:
         return None
 
 
-def _profile_quote(repo_root: Path, ticker: str) -> tuple[float | None, float | None, str | None]:
+def profile_quote(repo_root: Path, ticker: str) -> tuple[float | None, float | None, str | None]:
     """(price, day-move %, as-of) from ``data/historical/fmp/<T>_profile.json``.
     As-of is the file mtime — the price is from the last FMP cycle, which the
-    staleness dot already surfaces; a render path must not hit the network."""
+    staleness dot already surfaces; a render path must not hit the network.
+    Public: the ticker hover mini-card (pipeline.peeks) reads the same quote
+    so it can never disagree with the cockpit row it annotates."""
     path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
     payload = _read_json(path)
     rec: dict[str, object] | None = None
@@ -578,10 +580,11 @@ def _peg_ratio(repo_root: Path, ticker: str) -> float | None:
     return float(v) if isinstance(v, (int, float)) else None
 
 
-def _next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
+def next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
     """Earliest calendar date >= today from the FMP earnings-calendar cache.
     Read-only twin of ``sources.earnings_calendar._try_fmp_cache`` minus its
-    ``source_calls`` logging (a dashboard render is not a sourcing decision)."""
+    ``source_calls`` logging (a dashboard render is not a sourcing decision).
+    Public: shared with the ticker hover mini-card (pipeline.peeks)."""
     payload = _read_json(
         repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_earnings_calendar.json"
     )
@@ -787,9 +790,14 @@ def _earnings_cell(row: CockpitRow, now: datetime) -> str:
 def _inbox_cell(row: CockpitRow) -> str:
     pills: list[str] = []
     if row.pending_alerts:
+        # data-peek-url: the pill peeks the pending cards in place (UX9); the
+        # /feed href stays the real destination for middle-click / new tab.
+        t = escape(row.base.ticker)
         pills.append(
-            f"<a class='pill pill-bad' href='/feed?ticker={escape(row.base.ticker)}"
-            f"&status=pending' title='unreviewed alerts'>{row.pending_alerts} alert"
+            f"<a class='pill pill-bad' href='/feed?ticker={t}&status=pending' "
+            f"data-peek-url='/api/peek/alerts?ticker={t}&status=pending' "
+            f"data-peek-title='Pending alerts · {t}' "
+            f"title='unreviewed alerts'>{row.pending_alerts} alert"
             f"{'s' if row.pending_alerts != 1 else ''}</a>"
         )
     if row.new_docs:

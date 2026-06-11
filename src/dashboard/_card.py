@@ -64,7 +64,12 @@ def render_alert_card(
         fired = fired.astimezone(UTC).replace(tzinfo=None)
     body.write(f'<div class="alert-card" data-when="{fired.isoformat(timespec="seconds")}">')
     body.write('<div class="alert-card-head">')
-    body.write(f'<span class="ticker-badge">{_esc(alert.ticker)}</span>')
+    # data-peek-ticker: in the shell, hovering the badge shows the ticker
+    # mini-card (UX9); inert markup on the standalone digest/feed pages.
+    body.write(
+        f'<span class="ticker-badge" data-peek-ticker="{_esc(alert.ticker)}">'
+        f"{_esc(alert.ticker)}</span>"
+    )
     body.write(f'<span class="trigger-badge">{_esc(alert.trigger_kind)}</span>')
     if show_status_badge:
         status_class = f"status-{alert.status}"
