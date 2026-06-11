@@ -1,10 +1,10 @@
 """Unit tests for the unified command-center shell renderer.
 
 The shell is a pure function over a pre-built Overview HTML string + the
-three-theme table (master build P1.1); these lock the structural contract
-the lazy-loader JS relies on (theme row + sub-tab rows, per-panel
-endpoints, cc-picker on the dropdown-driven Holding tab, legacy-hash
-redirects for the killed surfaces).
+five-section table (UX redesign PR2); these lock the structural contract
+the lazy-loader JS relies on (top-bar section nav + per-section sub-tab
+rows, per-panel endpoints, cc-picker on the dropdown-driven Holding tab,
+legacy-hash + section-alias redirects, the Ctrl+K palette chrome).
 """
 
 from __future__ import annotations
@@ -21,8 +21,8 @@ from pipeline.command_center_shell import (
 
 
 def test_overview_panel_is_the_research_cockpit() -> None:
-    """Overview = the cockpit + the tier strip. The IR-KPI + maintenance
-    action blocks moved to Governance → Actions (P1.2) and must NOT inline."""
+    """Overview = the cockpit + the freshness strip. The IR-KPI + maintenance
+    action blocks moved to the settings drawer (P3.4) and must NOT inline."""
     html = render_overview_panel({"portfolio": [], "evaluation": []}, coverage={})
     assert "Portfolio" in html
     assert "Evaluation" in html
@@ -32,7 +32,7 @@ def test_overview_panel_is_the_research_cockpit() -> None:
     assert "/actions/maintenance" not in html
 
 
-def test_render_shell_three_theme_structure() -> None:
+def test_render_shell_five_section_structure() -> None:
     html = render_shell(
         overview_html="<div id='ov-marker'>OVERVIEW</div>",
         generated_at=datetime(2026, 6, 1, tzinfo=UTC),
@@ -40,19 +40,25 @@ def test_render_shell_three_theme_structure() -> None:
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</body></html>")
     assert "<title>Portfolio · command center</title>" in html
-    # Primary theme row: exactly the three themes.
-    for theme in ("research", "portfolio", "governance"):
-        assert f'data-theme-target="{theme}"' in html
-        assert f'data-cc-theme="{theme}"' in html  # its sub-tab row exists
-    # Surviving sub-tabs, each tagged with its theme. budget/actions left the
-    # nav for the settings drawer in P3.4; validation joined Governance;
-    # thesis_ledger folded into the Decisions record in P2.2.
+    # Top-bar section nav: exactly the five sections.
+    for section in ("home", "companies", "ask", "portfolio", "system"):
+        assert f'data-theme-target="{section}"' in html
+        assert f'data-cc-theme="{section}"' in html  # its sub-tab row exists
+    # The old three-theme ids are gone from the nav.
+    for dead in ("research", "governance"):
+        assert f'data-theme-target="{dead}"' not in html
+    # Surviving sub-tabs, each tagged with its section.
     for target in (
         "overview",
         "holding",
+        "discovery",
+        "journal",
+        "explore",
         "portfolio",
         "decisions_record",
+        "advisor_memos",
         "holdings",
+        "section_coverage",
         "ir_coverage",
         "source_calls",
         "validation",
@@ -69,11 +75,27 @@ def test_render_shell_three_theme_structure() -> None:
     assert 'href="/feed"' in html
 
 
+def test_single_tab_sections_suppress_their_sub_row() -> None:
+    """Home and Ask have one sub-tab each — the row stays in the DOM (the JS
+    derives the active section from the sub-tab's data-cc-theme) but is marked
+    data-single so CSS suppresses it. Multi-tab sections must NOT be marked."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'data-cc-theme="home" data-single="1"' in html
+    assert 'data-cc-theme="ask" data-single="1"' in html
+    assert 'data-cc-theme="companies" data-single="1"' not in html
+    assert 'data-cc-theme="portfolio" data-single="1"' not in html
+    assert 'data-cc-theme="system" data-single="1"' not in html
+    # The CSS that suppresses single-tab rows + the [hidden] restatement that
+    # keeps inactive rows from stacking (display:flex used to beat [hidden]).
+    assert '.cc-subtabs[data-single="1"] { display: none; }' in SHELL_CSS
+    assert ".cc-tabs[hidden] { display: none; }" in SHELL_CSS
+
+
 def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     """Pre-reads / Insiders / Predictions / Decisions died as nav surfaces
-    (master build P1.1), budget/actions became drawer sections (P3.4), and
-    thesis_ledger folded into the Decisions record (P2.2); every legacy
-    deep-link must remap client-side."""
+    (P1.1), budget/actions became drawer sections (P3.4), thesis_ledger folded
+    into the Decisions record (P2.2), and the four section names alias to
+    their landing panels (PR2); every one must remap client-side."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     for killed in (
         "prereads",
@@ -97,12 +119,23 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "thesis_ledger",
         "budget",
         "actions",
+        "home",
+        "companies",
+        "ask",
+        "system",
     }
+    for alias in ("home", "companies", "ask", "system"):
+        assert f"{alias}:" in SHELL_JS.replace("'", "")
     for new_home in _LEGACY_PANEL_REDIRECTS.values():
         assert f'data-tab-target="{new_home}"' in html
     # The old decisions/ledger deep-links land on the allocation record.
     assert _LEGACY_PANEL_REDIRECTS["decisions"] == "decisions_record"
     assert _LEGACY_PANEL_REDIRECTS["thesis_ledger"] == "decisions_record"
+    # Section aliases land on each section's first panel.
+    assert _LEGACY_PANEL_REDIRECTS["home"] == "overview"
+    assert _LEGACY_PANEL_REDIRECTS["companies"] == "holding"
+    assert _LEGACY_PANEL_REDIRECTS["ask"] == "explore"
+    assert _LEGACY_PANEL_REDIRECTS["system"] == "section_coverage"
     # The drawer-section legacy ids also auto-open the drawer on arrival.
     assert "DRAWER_OPENERS = { budget: 1, actions: 1 }" in SHELL_JS
 
@@ -138,17 +171,38 @@ def test_settings_drawer_structure() -> None:
     assert '<section class="cc-panel" data-panel="actions"' not in html
 
 
+def test_command_palette_chrome() -> None:
+    """PR2: the Ctrl/Cmd+K palette — overlay + input + list in the DOM, the
+    topbar trigger button, and the JS wiring constants."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'id="cc-palette"' in html
+    assert 'id="cc-palette-input"' in html
+    assert 'id="cc-palette-list"' in html
+    assert 'id="cc-palette-open"' in html
+    assert "openPalette" in SHELL_JS
+    assert "metaKey" in SHELL_JS  # Cmd+K works on mac keyboards too
+
+
 def test_render_shell_overview_not_a_lazy_endpoint() -> None:
     """Overview must be inlined, never assigned a /api/panel/ endpoint."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-endpoint="/api/panel/overview"' not in html
 
 
-def test_sub_tab_buttons_carry_their_theme() -> None:
-    """The JS derives the active theme from the active sub-tab's
+def test_sub_tab_buttons_carry_their_section() -> None:
+    """The JS derives the active section from the active sub-tab's
     data-cc-theme — every sub-tab button must carry one."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    assert 'data-tab-target="overview" data-cc-theme="research"' in html
+    assert 'data-tab-target="overview" data-cc-theme="home"' in html
+    assert 'data-tab-target="holding" data-cc-theme="companies"' in html
+    assert 'data-tab-target="explore" data-cc-theme="ask"' in html
     assert 'data-tab-target="decisions_record" data-cc-theme="portfolio"' in html
-    assert 'data-tab-target="validation" data-cc-theme="governance"' in html
-    assert 'data-tab-target="ir_coverage" data-cc-theme="governance"' in html
+    assert 'data-tab-target="validation" data-cc-theme="system"' in html
+    assert 'data-tab-target="ir_coverage" data-cc-theme="system"' in html
+
+
+def test_content_width_is_wide() -> None:
+    """PR2: the 1280px cap left ~300px dead gutters per side at 1920 — the
+    shell now flows to 1600."""
+    assert "max-width: 1600px" in SHELL_CSS
+    assert "max-width: 1280px" not in SHELL_CSS
