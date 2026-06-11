@@ -215,6 +215,15 @@ LLM_MODELS: dict[str, str] = {
     # off the hot path, so the judgment-tier cost is immaterial. The Gemini-side
     # judge resolves to Pro via gemini_model_for (not a fast-classifier purpose).
     "backend_compare_judge": "claude-opus-4-8",
+    # Eval-harness judge (src/evals/judge.py, directives/llm_evals_plan.md):
+    # decides whether a model output that DIVERGES from a golden expectation
+    # is still analytically equivalent. Deliberately Haiku — the verdict is a
+    # narrow schema-bound JSON object over two small specs and a one-line
+    # diff, the harness fails CLOSED on bad verdicts, and judge volume must
+    # stay cheap enough to run on every prompt change (cost model in the
+    # directive). Escalate per-purpose in the grader config (not here) if
+    # Haiku agreement spot-checks come back weak on nuanced rubrics.
+    "eval_judge": FAST_CLASSIFIER_MODEL,
 }
 
 
