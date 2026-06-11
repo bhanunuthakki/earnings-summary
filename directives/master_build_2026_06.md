@@ -200,7 +200,7 @@ demands it (note the split in the Decision log).
 - [x] **P5.2 NL compile.** *(#390)* Query box → fast-model → ViewSpec (validated,
   schema-constrained, never raw SQL); degrade to the builder UI on parse
   failure.
-- [ ] **P5.3 Discovery pipelines.** Factor screens over the tracked
+- [x] **P5.3 Discovery pipelines.** *(#391)* Factor screens over the tracked
   universe; adjacency miner over transcripts/news/competitive watchlists;
   candidates table with "why surfaced" evidence.
 - [ ] **P5.4 Discovery queue.** Approval queue UI under Research + chat
@@ -389,6 +389,19 @@ demands it (note the split in the Decision log).
   on_exceed='skip' so a blown cap silently disables the NL box only. A
   successful compile populates the builder via applySpec and runs — the
   owner always sees what the question compiled to before tweaking.
+- 2026-06-11 (P5.3, #391): both pipelines are deterministic + LLM-free +
+  offline (the index universe is ~97% covered by local FMP caches; ~15s
+  for a full run). Real-data dry-runs drove two design corrections: (1)
+  index lists carry delisted GHOSTS whose frozen caches pass value screens
+  — gated on the profile's isActivelyTrading flag + a 400-day income-
+  freshness cut (469 → 371 candidates); (2) substring name-matching is
+  banned — the universe literally matches %KLA% to "kirKLAnd's" — so the
+  adjacency matcher is word-boundary full-phrase with a distinctive-first-
+  token shortcut (unique + >=6 chars + stoplist + Capitalized-in-source).
+  Screens TTM-ize FMP's per-quarter ratio fractions (4-quarter sums;
+  ND/EBITDA /4). Re-running discovery refreshes evidence/score but NEVER
+  status — dismissed stays dismissed; the lifecycle belongs to the P5.4
+  queue. score = screens passed + adjacency sources (capped 3), rank-only.
 - 2026-06-11 (P4.5, #388 — wave 4 complete): the journal's lifecycle home
   is Research → Journal (/api/panel/journal + /api/notes REST, thin over
   user_state.notes; supersede = chained replacement, never an edit). The
