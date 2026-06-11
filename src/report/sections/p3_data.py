@@ -179,9 +179,7 @@ def _parse_date(raw: object) -> date | None:
 # ---------------------------------------------------------------------------
 
 
-def load_macro_sensitivities(
-    ticker: str, *, db_path: Path | str
-) -> list[MacroSensitivityRow]:
+def load_macro_sensitivities(ticker: str, *, db_path: Path | str) -> list[MacroSensitivityRow]:
     """All macro_sensitivities rows for `ticker`, ordered by |beta| desc."""
     conn = _open(db_path)
     if conn is None or not _table_exists(conn, "macro_sensitivities"):
@@ -215,9 +213,7 @@ def load_macro_sensitivities(
     return out
 
 
-def load_strategic_targets(
-    ticker: str, *, db_path: Path | str
-) -> list[StrategicTargetRow]:
+def load_strategic_targets(ticker: str, *, db_path: Path | str) -> list[StrategicTargetRow]:
     """All strategic_targets rows for `ticker`, newest extraction first."""
     conn = _open(db_path)
     if conn is None or not _table_exists(conn, "strategic_targets"):
@@ -281,7 +277,9 @@ def load_customer_concentrations(
             fiscal_period_type=str(r["fiscal_period_type"]),
             customer_label=str(r["customer_label"]),
             pct_of_revenue=float(r["pct_of_revenue"]),
-            revenue_amount=(float(r["revenue_amount"]) if r["revenue_amount"] is not None else None),
+            revenue_amount=(
+                float(r["revenue_amount"]) if r["revenue_amount"] is not None else None
+            ),
             revenue_currency=r["revenue_currency"],
         )
         for r in rows
@@ -400,12 +398,8 @@ def load_decision_history(
         kind = str(r["recommendation_kind"])
         by_kind[kind] = by_kind.get(kind, 0) + 1
         if r["conviction"] is not None:
-            by_conviction[str(r["conviction"])] = (
-                by_conviction.get(str(r["conviction"]), 0) + 1
-            )
-        outcome_pct = (
-            float(r["outcome_pct"]) if r["outcome_pct"] is not None else None
-        )
+            by_conviction[str(r["conviction"])] = by_conviction.get(str(r["conviction"]), 0) + 1
+        outcome_pct = float(r["outcome_pct"]) if r["outcome_pct"] is not None else None
         if outcome_pct is not None:
             counted += 1
             # ADD wins are positive return; TRIM/SELL wins are NEGATIVE return.
@@ -561,7 +555,7 @@ def _is_named_rival(company_name: str | None, watchlist: list[str]) -> bool:
 
 
 def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[PeerCompRow]:
-    """Scored comparable selection for the eval snapshot (P4.2).
+    """Scored comparable selection for the eval snapshot (P4.2; tightened PR7).
 
     The raw FMP peer list is a sector/market-cap screen whose alphabetical
     head is frequently wrong (the owner flagged NU → Barclays, NOW → Applied
@@ -570,14 +564,17 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
 
       +3  named in the owner's competitive_watchlist (thesis JSON)
       +2  same FMP industry as the target
+      +2  a TRACKED company (portfolio/evaluation) — relevance signal, and
+          its metrics resolve from our own cached data
       +1  same FMP sector
       +1  market cap within 0.2x – 5x of the target
 
-    and keep the top ``max_peers`` that score >= 1 — i.e. a candidate with
-    no affinity beyond appearing in FMP's screen is dropped. Each surviving
-    row carries its ``match_reasons`` so the table can show the basis.
-    Empty result (no peers file, or nothing scores) → the renderer hides
-    the panel (P4.2 hide-don't-stub).
+    and keep the top ``max_peers`` that score >= 1. PR7 additionally drops
+    candidates that pass the screen but carry NO resolvable metrics at all
+    (cap, revenue, margin, ROIC all absent) — those rows rendered as a wall
+    of em-dashes (the owner's "shit peers" UBER table: six semicap/SaaS names
+    with every cell blank). A named rival survives even metric-less (it's
+    informative by itself). Empty result → the renderer hides the panel.
     """
     fmp_dir = Path(repo_root) / "data" / "historical" / "fmp"
     ticker = ticker.upper()
@@ -587,8 +584,9 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
 
     _, target_sector, target_industry, target_cap = _profile_fields(fmp_dir, ticker)
     watchlist = _watchlist_names(ticker, repo_root)
+    tracked = _tracked_tickers(repo_root)
 
-    scored: list[tuple[float, int, str, str | None, float | None, tuple[str, ...]]] = []
+    scored: list[tuple[float, int, str, str | None, float | None, tuple[str, ...], bool]] = []
     for idx, (peer, pool_name, pool_cap) in enumerate(pool):
         if peer == ticker:
             continue
@@ -599,7 +597,8 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
         peer_cap = prof_cap if prof_cap is not None else pool_cap
         score = 0.0
         reasons: list[str] = []
-        if _is_named_rival(peer_name, watchlist):
+        named = _is_named_rival(peer_name, watchlist)
+        if named:
             score += 3
             reasons.append("named rival")
         if target_industry and peer_industry == target_industry:
@@ -608,30 +607,63 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
         elif target_sector and peer_sector == target_sector:
             score += 1
             reasons.append("same sector")
+        if peer in tracked:
+            score += 2
+            reasons.append("tracked")
         if target_cap and peer_cap and 0.2 <= peer_cap / target_cap <= 5.0:
             score += 1
             reasons.append("similar scale")
         if score < 1:
             continue
         # Tiebreak: original FMP order (idx) keeps the sort deterministic.
-        scored.append((score, idx, peer, peer_name, peer_cap, tuple(reasons)))
+        scored.append((score, idx, peer, peer_name, peer_cap, tuple(reasons), named))
 
     scored.sort(key=lambda t: (-t[0], t[1]))
 
     out: list[PeerCompRow] = []
-    for _score, _idx, peer, peer_name, peer_cap, row_reasons in scored[:max_peers]:
-        out.append(
-            PeerCompRow(
-                peer_ticker=peer,
-                peer_name=peer_name,
-                market_cap_usd=peer_cap,
-                revenue_ttm_usd=_peer_revenue_ttm(fmp_dir, peer),
-                net_margin_ttm=_peer_net_margin_ttm(fmp_dir, peer),
-                roic_ttm=_peer_roic_ttm(fmp_dir, peer),
-                match_reasons=row_reasons,
-            )
+    for _score, _idx, peer, peer_name, peer_cap, row_reasons, named in scored:
+        if len(out) >= max_peers:
+            break
+        row = PeerCompRow(
+            peer_ticker=peer,
+            peer_name=peer_name,
+            market_cap_usd=peer_cap,
+            revenue_ttm_usd=_peer_revenue_ttm(fmp_dir, peer),
+            net_margin_ttm=_peer_net_margin_ttm(fmp_dir, peer),
+            roic_ttm=_peer_roic_ttm(fmp_dir, peer),
+            match_reasons=row_reasons,
         )
+        has_metrics = any(
+            v is not None
+            for v in (row.market_cap_usd, row.revenue_ttm_usd, row.net_margin_ttm, row.roic_ttm)
+        )
+        if not has_metrics and not named:
+            continue  # an all-dash row says nothing — hide-don't-stub
+        out.append(row)
     return out
+
+
+def _tracked_tickers(repo_root: Path) -> set[str]:
+    """Active tracked symbols (portfolio + evaluation) — best-effort, {} on
+    any miss. A tracked peer is both a relevance signal and one whose data
+    we already cache locally."""
+    db = Path(repo_root) / "data" / "portfolio.db"
+    if not db.exists():
+        return set()
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return set()
+    try:
+        rows = conn.execute(
+            "SELECT ticker FROM tracked_companies "
+            "WHERE archived_at IS NULL AND list_type IN ('portfolio', 'evaluation')"
+        ).fetchall()
+        return {str(r[0]).upper() for r in rows}
+    except sqlite3.Error:
+        return set()
+    finally:
+        conn.close()
 
 
 def _first_record(path: Path) -> dict[str, object] | None:
@@ -733,9 +765,7 @@ def load_saydo_verdicts(
                 unit=str(r["unit"]),
                 narrative=str(r["narrative"]),
                 realized_value=(
-                    float(r["realized_value"])
-                    if r["realized_value"] is not None
-                    else None
+                    float(r["realized_value"]) if r["realized_value"] is not None else None
                 ),
                 outcome=r["outcome"],
                 evaluated_at=_parse_dt(r["evaluated_at"]),

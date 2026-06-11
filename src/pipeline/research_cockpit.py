@@ -114,6 +114,10 @@ class CockpitRow:
     next_earnings: str | None = None  # ISO date
     pending_alerts: int = 0
     new_docs: int = 0
+    # Eval-screen fundamentals (PR7): the thin/evaluation table swaps the
+    # mostly-empty portfolio columns for screen-relevant ones.
+    rev_yoy_pct: float | None = None  # latest quarter vs the year-ago quarter
+    fcf_margin_pct: float | None = None  # TTM, percent points
     # Thesis detail
     kpi_deltas: list[KpiDelta] = field(default_factory=list["KpiDelta"])
     rule_summary: str | None = None  # breached/warned rule names for the badge hover
@@ -159,6 +163,7 @@ def build_cockpit_rows(
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
     kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers)
+    fundamentals = _eval_fundamentals(conn)
 
     out: dict[str, list[CockpitRow]] = {}
     for list_type, rows in base_rows.items():
@@ -187,6 +192,8 @@ def build_cockpit_rows(
                     kpi_deltas=deltas,
                     rule_summary=rule_summary,
                     evaluated_at=evaluated_at,
+                    rev_yoy_pct=fundamentals.get(t, (None, None))[0],
+                    fcf_margin_pct=fundamentals.get(t, (None, None))[1],
                 )
             )
         built.sort(key=lambda r: r.attention_key)
@@ -205,6 +212,63 @@ def _safe_rows(
         return []
     cur.row_factory = sqlite3.Row
     return cur.fetchall()
+
+
+def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None, float | None]]:
+    """(rev_yoy_pct, fcf_margin_pct) per ticker for the eval table (PR7).
+
+    Revenue YoY: latest quarterly ``metrics`` row vs the first row at least
+    ~11 months older (calendar-quarter aligned in practice). FCF margin: the
+    ``ratios`` view's TTM row (fraction → percent points). Best-effort — a
+    missing view degrades to {} and the columns render em-dashes.
+    """
+    out: dict[str, tuple[float | None, float | None]] = {}
+    fcf: dict[str, float] = {}
+    for r in _safe_rows(
+        conn, "SELECT ticker, fcf_margin FROM ratios WHERE fiscal_period_type = 'TTM'"
+    ):
+        try:
+            if r["fcf_margin"] is not None:
+                fcf[str(r["ticker"]).upper()] = float(r["fcf_margin"]) * 100.0
+        except (TypeError, ValueError):
+            continue
+
+    by_ticker: dict[str, list[tuple[str, float]]] = {}
+    for r in _safe_rows(
+        conn,
+        "SELECT ticker, period_end, revenue FROM metrics "
+        "WHERE fiscal_period_type LIKE 'Q%' AND revenue IS NOT NULL "
+        "ORDER BY ticker, period_end DESC",
+    ):
+        try:
+            by_ticker.setdefault(str(r["ticker"]).upper(), []).append(
+                (str(r["period_end"]), float(r["revenue"]))
+            )
+        except (TypeError, ValueError):
+            continue
+
+    for t, rows in by_ticker.items():
+        rev_yoy: float | None = None
+        if rows:
+            latest_end, latest_rev = rows[0]
+            try:
+                latest_dt = datetime.fromisoformat(latest_end[:10])
+            except ValueError:
+                latest_dt = None
+            if latest_dt is not None and latest_rev:
+                for end, rev in rows[1:]:
+                    try:
+                        dt = datetime.fromisoformat(end[:10])
+                    except ValueError:
+                        continue
+                    age = (latest_dt - dt).days
+                    if 330 <= age <= 430 and rev:
+                        rev_yoy = (latest_rev / rev - 1.0) * 100.0
+                        break
+        out[t] = (rev_yoy, fcf.get(t))
+    for t, margin in fcf.items():
+        out.setdefault(t, (None, margin))
+    return out
 
 
 def _company_names(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, str]:
@@ -474,7 +538,16 @@ def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, t
             "<th>Ticker</th><th>Thesis</th>"
             + ("<th>Tier-1 moves</th>" if not thin else "")
             + "<th class='num'>Price</th><th class='num'>vs DCF FV</th>"
-            "<th class='num'>PEG</th><th>Next ER</th><th>Inbox</th>"
+            "<th class='num'>PEG</th>"
+            # Eval rows trade the (mostly empty for them) Tier-1 column for
+            # screen fundamentals (PR7).
+            + (
+                "<th class='num' title='latest quarter vs the year-ago quarter'>Rev YoY</th>"
+                "<th class='num' title='trailing-twelve-month FCF margin'>FCF mgn</th>"
+                if thin
+                else ""
+            )
+            + "<th>Next ER</th><th>Inbox</th>"
             "<th class='dot-col' title='Ops freshness'>&#9679;</th>"
             "</tr></thead>"
         )
@@ -502,12 +575,37 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
             f"<td class='num'>{_price_cell(row)}</td>",
             f"<td class='num'>{_fv_gap_cell(row)}</td>",
             f"<td class='num'>{_peg_cell(row)}</td>",
+        ]
+    )
+    if thin:
+        cells.extend(
+            [
+                f"<td class='num'>{_signed_pct_cell(row.rev_yoy_pct)}</td>",
+                f"<td class='num'>{_plain_pct_cell(row.fcf_margin_pct)}</td>",
+            ]
+        )
+    cells.extend(
+        [
             f"<td>{_earnings_cell(row, now)}</td>",
             f"<td>{_inbox_cell(row)}</td>",
             f"<td class='dot-col'>{_staleness_dot(row, now)}</td>",
         ]
     )
     return "<tr>" + "".join(cells) + "</tr>"
+
+
+def _signed_pct_cell(v: float | None) -> str:
+    if v is None:
+        return _muted()
+    tone = "pos" if v >= 0 else "neg"
+    return f"<span class='{tone}'>{escape(fmt_pct(v, signed=True))}</span>"
+
+
+def _plain_pct_cell(v: float | None) -> str:
+    if v is None:
+        return _muted()
+    tone = "pos" if v >= 0 else "neg"
+    return f"<span class='{tone}'>{escape(fmt_pct(v))}</span>"
 
 
 def _muted(text: str = "&mdash;") -> str:
