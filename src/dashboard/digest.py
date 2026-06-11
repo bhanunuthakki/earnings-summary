@@ -60,7 +60,17 @@ def render_morning_digest(
     re-generated for a historical date honest.
     """
     window_start, window_end = _window_for_date(date)
-    items = collect_inbox(db_path, user_id=user_id, since=window_start, until=window_end, limit=60)
+    # ``now`` anchors recency decay + bucket order to the digest's own day, so
+    # a digest re-generated for a historical date ranks as that morning would
+    # have (the same anchor render_inbox_stream gets below).
+    items = collect_inbox(
+        db_path,
+        user_id=user_id,
+        since=window_start,
+        until=window_end,
+        limit=60,
+        now=datetime.combine(date, time.max),
+    )
 
     body = StringIO()
     body.write('<div class="l1-shell">')

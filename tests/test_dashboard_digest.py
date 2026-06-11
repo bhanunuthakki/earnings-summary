@@ -548,3 +548,76 @@ def test_duplicate_ledger_bodies_dedupe_in_the_stream(db_path: Path) -> None:
 
     html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
     assert html.count("Risk-adjusted NIM contracted 100 bps QoQ") == 1
+
+
+# ----------------------------------------------------------------------------
+# Synthesis sections flow into the stream (Inbox v2)
+# ----------------------------------------------------------------------------
+
+
+def _seed_synthesis_artifact(db_path: Path, generated_at: datetime, content_md: str) -> None:
+    """llm_artifacts is migration 0035 — BEFORE this fixture's stamp point —
+    so the table is absent here exactly like a fresh deployment; create the
+    minimal shape the inbox reader queries."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS llm_artifacts ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, scope TEXT, "
+            "purpose TEXT, content_md TEXT, generated_at TEXT, superseded_by_id INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts (ticker, scope, purpose, content_md, generated_at) "
+            "VALUES (NULL, 'portfolio', 'lens:cross_portfolio_synthesis', ?, ?)",
+            (content_md, generated_at.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_SYNTHESIS_MEMO = """# Weekly synthesis
+
+## This week's most-look name
+**GOOG** — cloud margin inflected while capex guidance held.
+
+## Thematic convergence clusters
+GOOG / META / AMZN — capex absorption; joint downside if AI revenue lags.
+
+## Capital allocation suggestions
+ADD 0.5% to META — bear-case failure mode #2 refuted this quarter.
+
+## What I'd want to spend more time on
+Credit-cycle exposure across NU / MELI.
+"""
+
+
+def test_fresh_synthesis_sections_flow_into_the_stream(db_path: Path) -> None:
+    """Inbox v2: when the cross_portfolio_synthesis lens output is fresh, its
+    three actionable sections land in the stream as kind=synthesis items."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    now = _datetime.now(_UTC).replace(tzinfo=None)
+    _seed_synthesis_artifact(db_path, now - timedelta(hours=4), _SYNTHESIS_MEMO)
+
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+    assert "Most-look name" in html
+    assert "cloud margin inflected while capex guidance held" in html
+    assert "Convergence clusters" in html
+    assert "Allocation suggestions" in html
+    # The fourth section stays in the Portfolio tab's full memo.
+    assert "spend more time on" not in html
+
+
+def test_stale_synthesis_stays_out_of_the_stream(db_path: Path) -> None:
+    """A synthesis memo older than the freshness window is stale insight —
+    it stays on the Portfolio tab, not in the stream."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    now = _datetime.now(_UTC).replace(tzinfo=None)
+    _seed_synthesis_artifact(db_path, now - timedelta(days=12), _SYNTHESIS_MEMO)
+
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+    assert "Most-look name" not in html

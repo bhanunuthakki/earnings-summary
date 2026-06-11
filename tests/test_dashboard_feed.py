@@ -48,7 +48,7 @@ def _evidence(memo: str = "memo") -> str:
 
 def test_empty_db_renders_empty_list(db_path: Path) -> None:
     html = render_alert_feed(db_path=db_path)
-    assert "No alerts match" in html
+    assert "No items match" in html
     # The filter strip is still rendered so the analyst sees what they filtered by
     assert "ticker:" in html
     assert "trigger:" in html
@@ -190,3 +190,94 @@ def test_feed_stream_carries_unread_tracking_markup(db_path: Path) -> None:
     assert 'data-when="' in html
     assert "ix-last-seen:" in html
     assert 'class="ix-act' not in html
+
+
+# ----------------------------------------------------------------------------
+# Inbox v2: full stream, category chips, transparent ranking
+# ----------------------------------------------------------------------------
+
+
+def test_plain_feed_is_the_full_stream(db_path: Path) -> None:
+    """With no alert-specific filters, /feed renders the WHOLE inbox — ledger
+    entries and journal notes alongside alerts (Inbox v2)."""
+    from user_state.ledger import append_entry
+    from user_state.notes import create_note
+
+    _seed_mixed_statuses(db_path)
+    append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="ROE floor re-tested and held",
+        db_path=db_path,
+    )
+    create_note(ticker="NU", kind="watch", body="Watch NIM trajectory", db_path=db_path)
+
+    html = render_alert_feed(db_path=db_path)
+    assert "7 shown" in html
+    assert "ROE floor re-tested and held" in html
+    assert "Watch NIM trajectory" in html
+
+
+def test_alert_filters_narrow_back_to_alerts_only(db_path: Path) -> None:
+    """status / trigger_kind are alert-vocabulary filters — setting either
+    drops the non-alert kinds from the stream."""
+    from user_state.ledger import append_entry
+
+    _seed_mixed_statuses(db_path)
+    append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="ROE floor re-tested and held",
+        db_path=db_path,
+    )
+    html = render_alert_feed(db_path=db_path, status="pending")
+    assert "ROE floor re-tested and held" not in html
+    assert "2 shown" in html
+
+
+def test_category_chips_render_with_counts(db_path: Path) -> None:
+    """The feed renders the category filter chips: every seeded category
+    appears with its count (earnings_tone → Earnings, kpi_inflection /
+    thesis_drift → Thesis changes, saydo_due → Watch items, material_news →
+    News), and cards carry the matching data-cat hooks the chip JS filters on."""
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path)
+    assert 'class="ix-cats"' in html
+    assert "All <span>5</span>" in html
+    assert "Earnings <span>1</span>" in html
+    assert "News <span>1</span>" in html
+    assert "Thesis changes <span>2</span>" in html
+    assert "Watch items <span>1</span>" in html
+    assert 'data-cat="earnings"' in html
+    assert 'data-cat="thesis"' in html
+
+
+def test_rating_change_headline_categorizes_as_rating(db_path: Path) -> None:
+    """A material_news alert whose headline is upgrade/downgrade-shaped lands
+    in the Rating-changes facet (the live leg of the category while the
+    dedicated FMP grades feed stays unverified on the free tier)."""
+    fired = datetime(2026, 5, 27, 9, 0, tzinfo=UTC)
+    fire_alert(
+        ticker="NU",
+        trigger_kind="material_news",
+        fired_at=fired,
+        evidence_json=json.dumps(
+            {"headline": "UBS upgrades Nu Holdings to Buy", "why_material": "street turn"}
+        ),
+        signature_sha="sig-grade",
+        db_path=db_path,
+    )
+    html = render_alert_feed(db_path=db_path)
+    assert "Rating changes <span>1</span>" in html
+    assert 'data-cat="rating"' in html
+
+
+def test_every_card_carries_the_ranking_tooltip(db_path: Path) -> None:
+    """The 'why ranked here' factor breakdown rides the trigger chip's title —
+    one per card, naming every factor."""
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path)
+    assert html.count('title="ranked: severity') == 5
+    assert "x recency" in html
+    assert "x position" in html
+    assert "x thesis" in html
