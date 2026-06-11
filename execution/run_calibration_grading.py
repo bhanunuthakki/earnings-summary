@@ -1,15 +1,21 @@
 """Run the calibration graders so the prompt-calibration loop is fed automatically.
 
-Three graders score *matured* LLM outputs against realized data and write
-``prompt_calibration_scores`` rows, each tagged with the central prompt-version
-registry (``src/llm/prompt_versions.py``) so the dashboard's A/B view has a
-version dimension:
+Six rungs score LLM outputs and write ``prompt_calibration_scores`` rows, each
+tagged with the central prompt-version registry
+(``src/llm/prompt_versions.py``) so the dashboard's A/B view has a version
+dimension. Three OUTCOME graders over matured outputs vs realized data:
 
   * ``grade_predictions.py`` -- management-prediction EXTRACTION quality: the
     fraction of due predictions well-formed enough to grade against realized
     ``kpi_facts`` (deterministic; no LLM).
   * ``grade_decisions.py``   -- decision-audit outcomes vs realized price moves.
   * ``grade_bear_cases.py``  -- bear-hypothesis materialization.
+
+Plus three QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
+rubric audits over the week's fresh artifacts (``--since-days``):
+``bear_case``, ``transcript_summary``, ``advisor_next_dollar``. Each also
+writes an ``eval_runs`` row with per-case judge evidence; a week with no
+fresh artifacts is a clean no-op.
 
 These were manual CLIs that nothing ran, so ``prompt_calibration_scores`` stayed
 empty even though the machinery was correct (v6 re-grade, LLM pass-through: "the
@@ -56,19 +62,46 @@ class StageStatus(StrEnum):
 
 @dataclass(slots=True)
 class _Grader:
-    """One grader: a stable key + the script to run + a wall-clock cap."""
+    """One grader: a stable key + the script to run (+ args) + a wall-clock cap."""
 
     key: str
     script: str
     timeout_s: int
+    args: tuple[str, ...] = ()
 
+
+# How far back the weekly eval-audit rungs look. One day of overlap over a
+# weekly cron so an artifact written while last week's run was in flight
+# isn't skipped forever.
+_EVAL_AUDIT_SINCE_DAYS = "8"
 
 # Run order: the two deterministic graders first (cheap, no external calls),
-# then the LLM-backed bear grader.
+# then the LLM-backed bear grader, then the three rubric-audit eval rungs
+# (llm_evals_plan §3 PR 3: audit-mode judging of the week's fresh artifacts —
+# Haiku judge per artifact, eval_judge budget; an empty week exits 0 without
+# writing a run).
 _GRADERS: tuple[_Grader, ...] = (
     _Grader("predictions", "grade_predictions.py", _FAST_TIMEOUT_S),
     _Grader("decisions", "grade_decisions.py", _FAST_TIMEOUT_S),
     _Grader("bear_cases", "grade_bear_cases.py", _BEAR_TIMEOUT_S),
+    _Grader(
+        "eval_bear_case",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "bear_case", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
+    _Grader(
+        "eval_transcript_summary",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "transcript_summary", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
+    _Grader(
+        "eval_advisor_next_dollar",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "advisor_next_dollar", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
 )
 _GRADER_KEYS = tuple(g.key for g in _GRADERS)
 
@@ -94,7 +127,7 @@ def _run_grader(grader: _Grader) -> _GraderResult:
     )
     sys.stdout.flush()
 
-    argv = [sys.executable, str(PROJECT_ROOT / "execution" / grader.script)]
+    argv = [sys.executable, str(PROJECT_ROOT / "execution" / grader.script), *grader.args]
     t0 = time.monotonic()
     try:
         proc = subprocess.run(
@@ -158,7 +191,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="append",
         default=[],
         choices=_GRADER_KEYS,
-        help="Skip a grader by key (repeatable): predictions | decisions | bear_cases.",
+        help="Skip a rung by key (repeatable): " + " | ".join(_GRADER_KEYS) + ".",
     )
     return parser.parse_args(argv)
 

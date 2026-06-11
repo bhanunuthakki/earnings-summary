@@ -1,9 +1,9 @@
 """Tests for execution/run_calibration_grading.py — the calibration-grader orchestrator.
 
-It runs three graders (predictions -> decisions -> bear_cases) as subprocesses.
-Its load-bearing contract mirrors run_morning_pipeline: attempt every non-skipped
-grader even when an earlier one fails or times out, and report the count of
-failed graders as the exit code.
+It runs six rungs (predictions -> decisions -> bear_cases -> three eval-audit
+rungs, llm_evals_plan PR 3) as subprocesses. Its load-bearing contract mirrors
+run_morning_pipeline: attempt every non-skipped rung even when an earlier one
+fails or times out, and report the count of failed rungs as the exit code.
 
 ``subprocess.run`` is monkeypatched throughout — no real processes are spawned.
 Tests assert structural properties (call order, exit codes, summary statuses),
@@ -24,6 +24,10 @@ from execution import run_calibration_grading
 PREDICTIONS = "grade_predictions.py"
 DECISIONS = "grade_decisions.py"
 BEAR = "grade_bear_cases.py"
+EVALS = "run_llm_evals.py"
+
+# The full run order: outcome graders, then the three eval-audit rungs.
+ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS]
 
 
 class _FakeCompleted:
@@ -89,7 +93,7 @@ def test_all_graders_run_in_order(
 
     rc = run_calibration_grading.main([])
     assert rc == 0
-    assert fake.scripts == [PREDICTIONS, DECISIONS, BEAR]
+    assert fake.scripts == ALL_SCRIPTS
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["predictions"] == "ok"
@@ -107,7 +111,7 @@ def test_one_grader_failure_does_not_stop_the_rest(
 
     rc = run_calibration_grading.main([])
     assert rc == 1
-    assert fake.scripts == [PREDICTIONS, DECISIONS, BEAR]
+    assert fake.scripts == ALL_SCRIPTS
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["predictions"] == "failed"
@@ -125,7 +129,7 @@ def test_timeout_is_caught_and_counted(
 
     rc = run_calibration_grading.main([])
     assert rc == 1
-    assert fake.scripts == [PREDICTIONS, DECISIONS, BEAR]
+    assert fake.scripts == ALL_SCRIPTS
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["bear_cases"] == "failed"
@@ -139,7 +143,7 @@ def test_skip_omits_a_grader(
 
     rc = run_calibration_grading.main(["--skip", "bear_cases"])
     assert rc == 0
-    assert fake.scripts == [PREDICTIONS, DECISIONS]
+    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS]
     assert BEAR not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -154,3 +158,41 @@ def test_all_fail_exit_code_counts_all(
 
     rc = run_calibration_grading.main([])
     assert rc == 3
+
+
+def test_eval_audit_rungs_scope_to_fresh_artifacts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The three eval-audit rungs (llm_evals_plan PR 3) call run_llm_evals.py
+    one purpose each, scoped by --since-days so the weekly cron only judges
+    the week's fresh artifacts; their statuses land in the summary JSON."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_calibration_grading.main([])
+    assert rc == 0
+    eval_calls = [c for c in fake.calls if _script_of(c) == EVALS]
+    purposes = []
+    for argv in eval_calls:
+        assert "--since-days" in argv
+        purposes.append(argv[argv.index("--purpose") + 1])
+    assert purposes == ["bear_case", "transcript_summary", "advisor_next_dollar"]
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["eval_bear_case"] == "ok"
+    assert summary["eval_transcript_summary"] == "ok"
+    assert summary["eval_advisor_next_dollar"] == "ok"
+
+
+def test_skip_an_eval_rung(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_calibration_grading.main(["--skip", "eval_transcript_summary"])
+    assert rc == 0
+    eval_purposes = [c[c.index("--purpose") + 1] for c in fake.calls if _script_of(c) == EVALS]
+    assert eval_purposes == ["bear_case", "advisor_next_dollar"]
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["eval_transcript_summary"] == "skipped"
