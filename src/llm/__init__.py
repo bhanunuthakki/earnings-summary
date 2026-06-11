@@ -12,6 +12,9 @@ Layout:
                eval-gated via an empty-by-default purpose allowlist
                (call_gemini, gemini_allowed_purposes; see
                directives/gemini_backend.md).
+    backend_judge — pairwise Claude-vs-Gemini judge over the compare corpus;
+               grades a purpose for the gemini_backend allowlist
+               (judge_pair, aggregate_by_purpose; CLI execution/grade_backends.py).
     ledger   — best-effort llm_calls ledger writes
                (record_llm_call, fallback_call_logged).
 
@@ -34,6 +37,14 @@ from llm.anchors import (
     load_ir_anchor,
     load_priors_anchor,
     load_thesis_anchor,
+)
+from llm.backend_judge import (
+    JUDGE_PURPOSE as BACKEND_COMPARE_JUDGE_PURPOSE,
+)
+from llm.backend_judge import (
+    aggregate_by_purpose,
+    cross_judge_agreement,
+    judge_pair,
 )
 from llm.cli import (
     CLAUDE_WEB_TIMEOUT_SECONDS,
@@ -71,6 +82,7 @@ from llm.style import (
 
 __all__ = [
     "ANCHOR_BLOCK_CHAR_CAP",
+    "BACKEND_COMPARE_JUDGE_PURPOSE",
     "CLAUDE_WEB_TIMEOUT_SECONDS",
     "CLAUDE_WEB_TOOLS",
     "DEFAULT_MODEL",
@@ -85,15 +97,18 @@ __all__ = [
     "NUMBER_FORMATTING_BLOCK",
     "PRIORS_ANCHOR_CHAR_CAP",
     "LLMBudgetExceeded",
+    "aggregate_by_purpose",
     "call_gemini",
     "call_llm",
     "call_llm_with_web",
     "compose_anchor_block",
     "compose_brief_prompt",
+    "cross_judge_agreement",
     "fallback_call_logged",
     "gemini_allowed_purposes",
     "gemini_model_for",
     "is_fallback_disabled",
+    "judge_pair",
     "load_bear_anchor",
     "load_ir_anchor",
     "load_priors_anchor",
