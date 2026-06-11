@@ -109,6 +109,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "Portfolio",
         (
             ("portfolio", "Performance", "/api/panel/portfolio", False, False),
+            # UX round 4 — the portfolio-level reading layer surfaced out of
+            # Performance's bottom strip: thesis rollup + sector exposure, the
+            # next-dollar allocation distribution, the cross-portfolio lens memo.
+            ("portfolio_synthesis", "Synthesis", "/api/panel/portfolio_synthesis", False, False),
             # P2.2 — the allocation-decisions record: sizing audit + the merged
             # decisions timeline (thesis ledger + sizing intents + decision
             # notes). The standalone Thesis Ledger tab folded into it.
