@@ -189,7 +189,7 @@ demands it (note the split in the Decision log).
 - [x] **P4.4 (D3) Event resurfacing.** *(#387)* Digest "open items" panel; earnings
   prep + new builds lead with the owner's open watch-items; alerts attach
   relevant notes to their evidence.
-- [ ] **P4.5 (D4) Journal UI.** Notes lifecycle in the app (list / filter /
+- [x] **P4.5 (D4) Journal UI.** *(#388)* Notes lifecycle in the app (list / filter /
   resolve / reclassify / supersede via /api/notes) + "add note" capture on
   any report section.
 
@@ -361,3 +361,12 @@ demands it (note the split in the Decision log).
   open_notes — the per-ticker alert-context bundle; still zero call-site
   changes). Resolved/archived notes never resurface. Notes stay read-only
   on every one of these surfaces until the P4.5 journal UI.
+- 2026-06-11 (P4.5, #388 — wave 4 complete): the journal's lifecycle home
+  is Research → Journal (/api/panel/journal + /api/notes REST, thin over
+  user_state.notes; supersede = chained replacement, never an edit). The
+  "add note" capture deliberately rides the comment sidebar's existing
+  per-section anchors but POSTs straight to /api/notes (kind picker,
+  source="manual") — the comments→intent→processor pipeline is untouched,
+  so a journal capture never triggers a brief edit. Capture works on any
+  data-commentable section of the workspace report; portfolio-level notes
+  come from the Journal tab's own form (blank ticker).

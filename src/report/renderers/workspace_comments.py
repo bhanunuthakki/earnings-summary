@@ -280,6 +280,8 @@ JS = r"""
   if (sidebar) {
     sidebar.querySelector('.cmt-close').addEventListener('click', closeSidebar);
     sidebar.querySelector('#cmt-form').addEventListener('submit', onSubmit);
+    var saveNoteBtn = sidebar.querySelector('#cmt-save-note');
+    if (saveNoteBtn) saveNoteBtn.addEventListener('click', onSaveNote);
     // Autosave the draft on every keystroke so a tab close / refresh /
     // server-down outage doesn't lose typed-but-unposted text.
     var draftArea = sidebar.querySelector('#cmt-form [name="comment"]');
@@ -472,6 +474,37 @@ JS = r"""
       renderList();
       hint('Queued — will retry when server is back. (' + loadOutbox().length + ' total)');
       console.warn(err);
+    });
+  }
+
+  // P4.5 "add note" capture: save the textarea straight into the analyst
+  // journal (analyst_notes via /api/notes) anchored to the open section —
+  // a durable thought, not a processor instruction.
+  function onSaveNote() {
+    if (!currentAnchor) return;
+    var form = document.getElementById('cmt-form');
+    var text = form.comment.value.trim();
+    if (!text) { hint('Write the note text above first.'); return; }
+    var kind = form.note_kind ? form.note_kind.value : 'observation';
+    var anchorAtSubmit = currentAnchor;
+    fetch(SERVER_URL + '/api/notes', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        ticker: TICKER,
+        kind: kind,
+        body: text,
+        anchor_type: anchorAtSubmit.type,
+        anchor_key: anchorAtSubmit.key,
+        context: {report_date: REPORT_DATE, tab: anchorAtSubmit.tab || null}
+      })
+    }).then(function(r) {
+      if (!r.ok) throw new Error('notes HTTP ' + r.status);
+      form.comment.value = '';
+      clearDraft(anchorAtSubmit);
+      hint('Saved to journal ✓');
+    }).catch(function() {
+      hint('Server unreachable — journal capture needs the research server.');
     });
   }
 

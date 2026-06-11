@@ -4014,6 +4014,20 @@ def _comment_sidebar_shell(body: StringIO) -> None:
         "</select>"
         '<button type="submit">Post</button>'
         "</div>"
+        # P4.5 "add note" capture: saves the text above straight into the
+        # analyst journal (analyst_notes), anchored to this section — no
+        # comment processor involved. Wired in workspace_comments.JS.
+        '<div class="cmt-form-row cmt-note-row">'
+        '<select name="note_kind" title="Journal note kind">'
+        '<option value="watch">Watch item</option>'
+        '<option value="question">Question</option>'
+        '<option value="observation">Observation</option>'
+        '<option value="assumption">Assumption</option>'
+        '<option value="decision">Decision</option>'
+        "</select>"
+        '<button type="button" id="cmt-save-note" '
+        'title="Save the text above as a durable journal note">Save to journal</button>'
+        "</div>"
         '<div class="cmt-form-hint" id="cmt-form-hint"></div>'
         "</form>"
         "</aside>"
