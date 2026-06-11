@@ -166,6 +166,15 @@ def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None
     return None, None
 
 
+def _note_to_json(note: object) -> dict[str, object]:
+    """AnalystNoteRow → JSON-safe dict for the /api/notes responses (P4.5)."""
+    from dataclasses import asdict
+    from datetime import datetime as _dt
+
+    payload = asdict(note)  # pyright: ignore[reportArgumentType]  # always an AnalystNoteRow
+    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -345,6 +354,26 @@ def create_app(
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
             return Response(
                 render_section_coverage_panel(db_path, repo_root, user_id=user_id),
+                mimetype="text/html",
+            )
+
+        if name == "journal":
+            # Research → Journal (P4.5): the analyst_notes lifecycle UI.
+            # ``?fragment=list`` returns just the filtered note list — the
+            # panel's own JS refreshes that fragment after every action.
+            from pipeline.journal_panel import render_journal_list, render_journal_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            j_ticker = (request.args.get("ticker") or "").strip().upper() or None
+            j_kind = (request.args.get("kind") or "").strip() or None
+            j_status = (request.args.get("status") or "open").strip() or "open"
+            renderer = (
+                render_journal_list
+                if request.args.get("fragment") == "list"
+                else render_journal_panel
+            )
+            return Response(
+                renderer(db_path, user_id=user_id, ticker=j_ticker, kind=j_kind, status=j_status),
                 mimetype="text/html",
             )
 
@@ -604,6 +633,110 @@ def create_app(
         if not ticker_settings.set_bypass_budget(t, value, db_path=db_path):
             return ({"error": "could not persist (ticker_settings table missing?)"}, 500)
         return {"ticker": t, "bypass_budget": value}
+
+    @app.route("/api/notes", methods=["GET", "POST", "OPTIONS"])
+    def notes_api():
+        """The analyst-journal REST surface (P4.5), thin over user_state.notes.
+
+        GET  ?ticker=&kind=&status=   list notes (status defaults to live —
+                                      everything except superseded/archived)
+        POST {ticker?, kind, body, anchor_type?, anchor_key?, context?}
+                                      create an open note (source="manual")
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from user_state import notes as notes_store
+
+        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        if request.method == "GET":
+            q_ticker = (request.args.get("ticker") or "").strip().upper() or None
+            q_kind = (request.args.get("kind") or "").strip() or None
+            q_status = (request.args.get("status") or "").strip() or None
+            try:
+                rows = notes_store.list_notes(
+                    user_id=user_id,
+                    ticker=q_ticker,
+                    kind=q_kind,
+                    status=q_status,
+                    db_path=db_path,
+                )
+            except ValueError as exc:
+                return ({"error": str(exc)}, 400)
+            return {"notes": [_note_to_json(n) for n in rows]}
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        note_body = str(payload.get("body") or "").strip()
+        if not note_body:
+            return ({"error": "body required"}, 400)
+        kind = str(payload.get("kind") or "observation")
+        ticker_raw = payload.get("ticker")
+        note_ticker = str(ticker_raw).strip().upper() or None if ticker_raw is not None else None
+        anchor_type_raw = payload.get("anchor_type")
+        anchor_key_raw = payload.get("anchor_key")
+        context_raw = payload.get("context")
+        try:
+            created = notes_store.create_note(
+                user_id=user_id,
+                ticker=note_ticker,
+                kind=kind,
+                body=note_body,
+                anchor_type=str(anchor_type_raw) if anchor_type_raw is not None else None,
+                anchor_key=str(anchor_key_raw) if anchor_key_raw is not None else None,
+                source="manual",
+                context=cast("dict[str, object]", context_raw)
+                if isinstance(context_raw, dict)
+                else None,
+                db_path=db_path,
+            )
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        return ({"note": _note_to_json(created)}, 201)
+
+    @app.route("/api/notes/<int:note_id>/<action>", methods=["POST", "OPTIONS"])
+    def notes_action_api(note_id: int, action: str):
+        """Lifecycle actions on one note (P4.5): resolve / reclassify /
+        supersede / archive. Supersede creates the chained replacement and
+        returns it; the others return the updated row. 404 on unknown id,
+        400 on a bad kind or missing supersede body."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from user_state import notes as notes_store
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            if action == "resolve":
+                res_raw = payload.get("resolution_note")
+                updated = notes_store.resolve_note(
+                    note_id,
+                    resolution_note=str(res_raw).strip() or None if res_raw is not None else None,
+                    db_path=db_path,
+                )
+            elif action == "archive":
+                updated = notes_store.archive_note(note_id, db_path=db_path)
+            elif action == "reclassify":
+                updated = notes_store.reclassify_note(
+                    note_id, kind=str(payload.get("kind") or ""), db_path=db_path
+                )
+            elif action == "supersede":
+                new_body = str(payload.get("body") or "").strip()
+                if not new_body:
+                    return ({"error": "body required for supersede"}, 400)
+                kind_raw = payload.get("kind")
+                updated = notes_store.supersede_note(
+                    note_id,
+                    body=new_body,
+                    kind=str(kind_raw) if kind_raw is not None else None,
+                    db_path=db_path,
+                )
+            else:
+                return ({"error": f"unknown action {action!r}"}, 404)
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        if updated is None:
+            return ({"error": f"note {note_id} not found"}, 404)
+        return {"note": _note_to_json(updated)}
 
     @app.route("/api/sizing-intents", methods=["POST", "OPTIONS"])
     def sizing_intents_api():
