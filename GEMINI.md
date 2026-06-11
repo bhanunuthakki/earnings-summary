@@ -106,6 +106,18 @@ LLMs are probabilistic, business logic is deterministic. This 3-layer architectu
 - API keys passed to scripts via environment variables only — never as CLI args (they leak into shell history and process lists).
 - Secrets used in URL query strings get redacted in any logged output.
 
+## Session & Agent Model Selection (Token Discipline)
+
+When proposing or spawning work that spans multiple sessions/agents (chips, worktree sessions, subagents, scheduled agents), state a recommended model **per session**, chosen by task nature — never one global default. Any plan that proposes N sessions must list the model next to each session.
+
+- **Opus-class** (Claude Opus 4.8 / Fable 5; Gemini Ultra-tier) — architecture or design under ambiguity, writing directives/plans for multi-session tracks, financial-judgment calibration (e.g. DCF/SOTP assumptions), prompt & eval-rubric design, anything where a wrong early decision is expensive to unwind. Few sessions should need this.
+- **Sonnet-class** (Claude Sonnet 4.6; Gemini Pro-tier) — the default for implementation: features with a directive/spec and acceptance criteria, refactors behind tests, bugfixes, pipeline/schema work. When unsure, pick Sonnet.
+- **Haiku-class** (Claude Haiku 4.5; Gemini Flash-tier) — mechanical work with no judgment: renames, formatting/checklist sweeps, fixed-recipe backfills, high-volume classification. Also the default tier for mechanical subagent fan-out (search, verification sweeps) inside any session.
+
+Rules of thumb: a directive with acceptance criteria exists → Sonnet executes it; writing the directive itself → Opus-class. Escalate a session's model only after it actually fails on quality, not preemptively.
+
+Scope note: this governs **coding/session** model choice. In-app per-purpose LLM routing is governed separately by `LLM_MODELS` in `src/llm/cli.py` plus the model-downgrade eval loop (`directives/model_eval_loop.md`).
+
 
 # Backend Development Guidelines — Full Reference
 
