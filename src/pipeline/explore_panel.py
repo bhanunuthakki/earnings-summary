@@ -13,8 +13,11 @@ JS refreshes that after save/delete. Execution goes through
 ``POST /api/viewspec/run``; the catalog reloads from
 ``GET /api/viewspec/catalog`` when the ticker set changes.
 
-This panel is the structured fallback target for the P5.2 natural-language
-box: a failed NL compile degrades here, never to raw SQL.
+The natural-language box (P5.2) rides on top: ``POST /api/viewspec/compile``
+turns a question into a spec via a fast model and ``applySpec`` populates
+the builder and runs it — so every compile lands in the SAME validated
+spec the pickers build, never raw SQL. A failed or budget-skipped compile
+just reports itself in the message slot; the builder keeps working.
 """
 
 from __future__ import annotations
@@ -61,6 +64,9 @@ _PANEL_STYLE = """<style>
 .vx-none { color:var(--muted); font-size:12px; }
 .vx-error { color:var(--bad); font-size:12.5px; margin:6px 0; }
 .vx-hint { color:var(--muted); font-size:11.5px; margin-top:10px; }
+.vx-nl { border-bottom:1px solid var(--border); padding-bottom:10px; }
+.vx-nl input[name="nl_query"] { flex:1; min-width:280px; }
+.vx-nl-msg { color:var(--muted); font-size:11.5px; }
 </style>"""
 
 # Plain string (not an f-string) so braces pass through untouched; the panel
@@ -150,6 +156,33 @@ _PANEL_JS = """
     });
     loadCatalog(tokens, runView);
   }
+  function compileNL() {
+    var q = el('vx-nl-q').value.trim();
+    var msg = el('vx-nl-msg');
+    if (!q) { msg.textContent = 'Type a question first.'; return; }
+    var btn = el('vx-nl-go');
+    btn.disabled = true;
+    msg.textContent = 'compiling…';
+    fetch('/api/viewspec/compile', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: q, tickers: tickers()})
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      btn.disabled = false;
+      if (res.status === 'ok' && res.spec) {
+        msg.textContent = 'compiled — builder updated';
+        applySpec(res.spec);
+      } else {
+        msg.textContent = res.message || res.error || 'compile failed — use the builder';
+      }
+    }).catch(function () {
+      btn.disabled = false;
+      msg.textContent = 'compile failed — use the builder';
+    });
+  }
+  el('vx-nl-go').addEventListener('click', compileNL);
+  el('vx-nl-q').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); compileNL(); }
+  });
   el('vx-load-metrics').addEventListener('click', function () { loadCatalog(); });
   el('vx-run').addEventListener('click', runView);
   el('vx-save').addEventListener('click', function () {
@@ -261,6 +294,14 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
 <h2>Explore</h2>
 <div id="vx-root">
 <div class="vx-builder">
+  <div class="vx-row vx-nl">
+    <label>ask</label>
+    <input id="vx-nl-q" name="nl_query"
+      placeholder="e.g. NU vs MELI revenue growth, last 8 quarters">
+    <button type="button" id="vx-nl-go">Compile</button>
+    <span class="vx-nl-msg" id="vx-nl-msg">compiles into the builder below &mdash; never raw
+ SQL; falls back to the pickers when it can&#x27;t parse</span>
+  </div>
   <div class="vx-row">
     <label>tickers</label>
     <input id="vx-tickers" name="tickers" value="{tickers_val}"

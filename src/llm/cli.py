@@ -194,6 +194,12 @@ LLM_MODELS: dict[str, str] = {
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
+    # NL → ViewSpec compile (master build P5.2): the Explore panel's query
+    # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
+    # interactive (the owner is waiting at the input) — latency dominates and
+    # Haiku is reliable on copy-the-token tasks. Validation + one repair
+    # retry live in viewspec.nl_compile; failures degrade to the builder UI.
+    "viewspec_compile": FAST_CLASSIFIER_MODEL,
 }
 
 
