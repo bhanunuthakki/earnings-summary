@@ -12,6 +12,7 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Mapping
+from datetime import UTC
 from io import StringIO
 from typing import cast
 
@@ -56,7 +57,12 @@ def render_alert_card(
     ``drawer_open=False`` collapses the evidence drawer (the Holding
     rail's compact cards); the digest and feed keep it expanded.
     """
-    body.write('<div class="alert-card">')
+    # data-when (naive-UTC seconds) feeds the inbox unread tracking — full
+    # cards on /digest and /feed accent the same way the rail's compact ones do.
+    fired = alert.fired_at
+    if fired.tzinfo is not None:
+        fired = fired.astimezone(UTC).replace(tzinfo=None)
+    body.write(f'<div class="alert-card" data-when="{fired.isoformat(timespec="seconds")}">')
     body.write('<div class="alert-card-head">')
     body.write(f'<span class="ticker-badge">{_esc(alert.ticker)}</span>')
     body.write(f'<span class="trigger-badge">{_esc(alert.trigger_kind)}</span>')

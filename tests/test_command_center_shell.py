@@ -32,6 +32,22 @@ def test_overview_panel_is_the_research_cockpit() -> None:
     assert "/actions/maintenance" not in html
 
 
+def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
+    """Inbox v2: the rail header carries the per-surface unread badge and the
+    aside embeds INBOX_JS (unread accents + the hover ✓/✕ POST wiring)."""
+    html = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        inbox_html='<div class="ix-stream ix-compact" data-ix-surface="home"></div>',
+    )
+    assert 'data-ix-badge="home"' in html
+    assert "ix-last-seen:" in html  # INBOX_JS inlined with the rail
+    assert "'/approve'" in html  # quick-action fetch wiring rides along
+    # No rail → no badge, no script (the panel renders bare).
+    bare = render_overview_panel({"portfolio": [], "evaluation": []}, coverage={})
+    assert "data-ix-badge" not in bare
+
+
 def test_render_shell_five_section_structure() -> None:
     html = render_shell(
         overview_html="<div id='ov-marker'>OVERVIEW</div>",

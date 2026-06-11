@@ -17,6 +17,7 @@ same narrative.
 from __future__ import annotations
 
 import html
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -24,6 +25,7 @@ from io import StringIO
 from pathlib import Path
 
 from alerts import (
+    ACTION_STATUS_PENDING,
     AlertRow,
     QueuedActionRow,
     list_alerts,
@@ -36,7 +38,7 @@ from ui.time import stamp_html
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
 
-__all__ = ["INBOX_CSS", "InboxItem", "collect_inbox", "render_inbox_stream"]
+__all__ = ["INBOX_CSS", "INBOX_JS", "InboxItem", "collect_inbox", "render_inbox_stream"]
 
 _LEDGER_KIND_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
@@ -44,6 +46,12 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "sizing_update": "Sizing change",
     "earnings_prep_append": "Earnings-prep note",
 }
+
+# Cross-kind dedupe survivor order: when near-identical bodies land in the
+# stream under different kinds (the advisor's memory-everywhere write puts one
+# memo line in the ledger AND the journal), keep the kind that carries the
+# most context on its card.
+_KIND_RICHNESS: dict[str, int] = {"alert": 3, "draft": 2, "ledger": 1, "note": 0}
 
 
 @dataclass(frozen=True)
@@ -66,6 +74,20 @@ class InboxItem:
 def _norm_body(text: str) -> str:
     """Dedupe key normalization: case/whitespace-insensitive head of the body."""
     return " ".join(text.lower().split())[:120]
+
+
+# The per-kind decorations the memory-everywhere writes wrap around one
+# narrative (advisor.memos.persist_memo): the journal echo leads with
+# "[advisor memo #12 · swap_check] ", the ledger echo embeds "(memo #12)".
+_LEADING_TAG_RE = re.compile(r"^\s*\[[^\]]*\]\s*")
+_MEMO_REF_RE = re.compile(r"\s*\(memo #\d+\)")
+
+
+def _fuzzy_norm(text: str) -> str:
+    """Cross-kind dedupe key: ``_norm_body`` after stripping the per-kind
+    decorations, so "Title (memo #12) — line" (ledger) and
+    "[advisor memo #12 · kind] Title — line" (journal) collapse."""
+    return _norm_body(_MEMO_REF_RE.sub(" ", _LEADING_TAG_RE.sub("", text)))
 
 
 def _as_naive_utc(dt: datetime) -> datetime:
@@ -221,18 +243,28 @@ def collect_inbox(
                 )
             )
 
-    # Dedupe: keep the NEWEST of near-identical (kind, ticker, body-head)
-    # rows. Alerts dedupe upstream on signature_sha already — body dedupe is
-    # for ledger/note/draft texts that repeat across consecutive runs.
+    # Dedupe: near-identical bodies collapse ACROSS kinds, not just within
+    # one — an advisor memo's ledger entry and its journal-observation echo
+    # carry the same line under different decorations (see ``_fuzzy_norm``),
+    # and the old per-kind key rendered both. The survivor is the RICHEST
+    # kind (alert > draft > ledger > note), newest on ties — so within one
+    # kind this still keeps the newest of texts that repeat across
+    # consecutive runs. Bodyless items (alert cards — their narrative lives
+    # in evidence_json) pass through: alerts dedupe upstream on
+    # signature_sha already.
     items.sort(key=lambda it: it.when, reverse=True)
-    seen: set[tuple[str, str | None, str]] = set()
-    deduped: list[InboxItem] = []
+    richest: dict[tuple[str | None, str], InboxItem] = {}
+    passthrough: list[InboxItem] = []
     for it in items:
-        key = (it.kind, it.ticker, _norm_body(it.body) if it.body else f"#{id(it.alert)}")
-        if it.body and key in seen:
+        if not it.body:
+            passthrough.append(it)
             continue
-        seen.add(key)
-        deduped.append(it)
+        key = (it.ticker, _fuzzy_norm(it.body))
+        cur = richest.get(key)
+        if cur is None or _KIND_RICHNESS.get(it.kind, 0) > _KIND_RICHNESS.get(cur.kind, 0):
+            richest[key] = it
+    deduped = passthrough + list(richest.values())
+    deduped.sort(key=lambda it: it.when, reverse=True)
     return deduped[:limit]
 
 
@@ -259,15 +291,20 @@ def render_inbox_stream(
     compact: bool = False,
     show_status_badge: bool = True,
     now: datetime | None = None,
+    surface: str | None = None,
     empty_text: str = "Nothing new — alerts, drafts, thesis changes, and watch items land here.",
 ) -> str:
     """The stream HTML: recency-grouped cards. ``compact`` is the Home-rail
-    variant — clamped bodies, collapsed evidence, no nested action bodies."""
+    variant — clamped bodies, collapsed evidence, no nested action bodies,
+    hover ✓/✕ quick actions on approvable cards. ``surface`` names the page
+    ("home" | "digest" | "feed") for the unread tracking: INBOX_JS keys its
+    per-surface localStorage last-seen off the ``data-ix-surface`` attr."""
     if not items:
         return f'<div class="ix-empty">{_esc(empty_text)}</div>'
     now_dt = now or datetime.now(UTC).replace(tzinfo=None)
     out = StringIO()
-    out.write(f'<div class="ix-stream{" ix-compact" if compact else ""}">')
+    surface_attr = f' data-ix-surface="{_esc(surface)}"' if surface else ""
+    out.write(f'<div class="ix-stream{" ix-compact" if compact else ""}"{surface_attr}>')
     current_bucket: str | None = None
     for it in items:
         b = _bucket(it.when, now_dt)
@@ -300,13 +337,28 @@ def _render_item(
         )
         return
 
-    out.write('<div class="ix-card">')
+    when_attr = it.when.isoformat(timespec="seconds")
+    out.write(f'<div class="ix-card" data-kind="{_esc(it.kind)}" data-when="{when_attr}">')
     out.write('<div class="ix-head">')
     if it.ticker:
         out.write(f'<span class="ix-ticker">{_esc(it.ticker)}</span>')
     out.write(f'<span class="ix-kind ix-kind-{_esc(it.kind)}">{_esc(_title_for(it))}</span>')
     if show_status and it.status and it.status not in ("open",):
         out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
+    quick_id = _quick_action_id(it) if compact else None
+    if quick_id is not None:
+        # Zero-height quick actions (Inbox v2): two compact icon buttons in
+        # the EXISTING header row, right side, before the timestamp —
+        # visibility-flipped on card hover so the resting layout is
+        # byte-identical. INBOX_JS posts /approve and updates in place.
+        out.write(
+            '<span class="ix-quick">'
+            f'<button class="ix-act ix-act-approve" type="button" '
+            f'data-action-id="{quick_id}" title="Approve &amp; apply">&#10003;</button>'
+            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'data-action-id="{quick_id}" data-dismiss="1" title="Dismiss">&#10005;</button>'
+            "</span>"
+        )
     out.write(stamp_html(it.when, css="ix-when"))
     out.write("</div>")
     body = it.body or _alert_memo(it)
@@ -326,6 +378,20 @@ def _title_for(it: InboxItem) -> str:
     # collect_inbox sets a specific title per kind: alert → trigger kind,
     # draft/ledger → the action/entry-kind label, note → watch|question|…
     return it.title
+
+
+def _quick_action_id(it: InboxItem) -> int | None:
+    """The queued-action id the rail's hover ✓/✕ operate on, or None when the
+    card carries nothing approvable. Drafts act on their own action; alert
+    cards act on their first still-pending queued action (one action per
+    alert is the drafter's norm)."""
+    if it.kind == "draft" and it.action is not None and it.action.status == ACTION_STATUS_PENDING:
+        return it.action.id
+    if it.kind == "alert":
+        for qa in it.actions:
+            if qa.status == ACTION_STATUS_PENDING:
+                return qa.id
+    return None
 
 
 def _alert_memo(it: InboxItem) -> str:
@@ -366,4 +432,136 @@ INBOX_CSS = """
 .ix-open { margin-top: 4px; font-size: 11.5px; }
 .ix-open a { color: var(--accent, #7aa2f7); text-decoration: none; }
 .ix-empty { color: var(--muted, #888); font-size: 12.5px; padding: 14px 4px; }
+/* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
+   in the existing header row and flip visibility (layout stays reserved, so
+   nothing shifts) on card hover / keyboard focus. */
+.ix-quick { margin-left: auto; display: inline-flex; gap: 3px; visibility: hidden; }
+.ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
+.ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
+.ix-act { font-family: var(--mono, monospace); font-size: 11px; line-height: 1;
+  font-weight: 600; color: var(--muted, #888); background: transparent;
+  border: 1px solid var(--border, #2a2c30); border-radius: 4px; padding: 1px 5px;
+  cursor: pointer; }
+.ix-act-approve:hover { color: var(--ok, #4ade80); border-color: var(--ok, #4ade80); }
+.ix-act-dismiss:hover { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
+.ix-act[disabled] { opacity: 0.5; cursor: default; }
+.ix-act-fail { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
+.ix-acted { margin-left: auto; font-family: var(--mono, monospace); font-size: 10.5px;
+  white-space: nowrap; color: var(--muted, #888); }
+.ix-acted-applied { color: var(--ok, #4ade80); }
+.ix-status-cancelled { color: var(--muted, #888); }
+.ix-dismissed { opacity: 0.55; transition: opacity 0.3s ease; }
+/* Unread ("since you last looked") — inset accent bar: no border-width
+   change, zero layout shift. */
+.ix-new { box-shadow: inset 2px 0 0 var(--accent, #7aa2f7); }
+.ix-badge { display: inline-block; min-width: 14px; text-align: center;
+  margin-left: 6px; padding: 1px 5px; border-radius: 9px;
+  background: var(--accent, #7aa2f7); color: #101114;
+  font-family: var(--mono, monospace); font-size: 10.5px; font-weight: 700;
+  line-height: 1.4; vertical-align: 2px; }
+.ix-badge[hidden] { display: none; }
+""".strip()
+
+# Behavior for the stream's two client-side features, embedded once per page
+# that renders an inbox (shell Overview, /digest, /feed). Plain string — its
+# braces must survive f-string assembly untouched.
+#
+# 1. UNREAD — per-surface "since you last looked": cards carry ``data-when``
+#    (naive-UTC seconds, lexicographically comparable); anything newer than
+#    the surface's localStorage high-water mark gets ``.ix-new`` and is
+#    counted into the surface's ``[data-ix-badge]`` (the Home rail header).
+#    The mark advances only once the stream is actually ON SCREEN
+#    (IntersectionObserver — landing on another tab doesn't mark Home seen),
+#    so accents persist while you read and clear on the next visit.
+# 2. QUICK ACTIONS — the rail's hover ✓/✕ POST /approve (the GET links'
+#    fetch sibling: same route + same-site guard, JSON instead of a 303) and
+#    update the card in place. Draft cards own their status chip, so it
+#    swaps (applied/cancelled) and a dismissal fades the card; alert cards
+#    keep their chip — it shows the ALERT's status, which approving a
+#    queued action does not change — and get a small "✓ applied" /
+#    "✕ dismissed" confirmation where the buttons sat.
+INBOX_JS = r"""
+(function () {
+  if (window.__ixWired) return;
+  window.__ixWired = true;
+
+  function nowStamp() { return new Date().toISOString().slice(0, 19); }
+
+  function initStream(stream) {
+    var surface = stream.getAttribute('data-ix-surface');
+    if (!surface) return;
+    var key = 'ix-last-seen:' + surface;
+    var last = null;
+    try { last = localStorage.getItem(key); } catch (e) { return; }
+    var fresh = 0;
+    var cards = stream.querySelectorAll('[data-when]');
+    for (var i = 0; i < cards.length; i++) {
+      var w = cards[i].getAttribute('data-when');
+      if (last && w && w > last) { cards[i].classList.add('ix-new'); fresh++; }
+    }
+    var badge = document.querySelector('[data-ix-badge="' + surface + '"]');
+    if (badge && fresh > 0) { badge.textContent = String(fresh); badge.hidden = false; }
+    function markSeen() {
+      try { localStorage.setItem(key, nowStamp()); } catch (e) { /* storage off */ }
+    }
+    if (typeof IntersectionObserver === 'undefined') { markSeen(); return; }
+    var io = new IntersectionObserver(function (entries) {
+      for (var j = 0; j < entries.length; j++) {
+        if (entries[j].isIntersecting) { markSeen(); io.disconnect(); return; }
+      }
+    });
+    io.observe(stream);
+  }
+  var streams = document.querySelectorAll('.ix-stream[data-ix-surface]');
+  for (var i = 0; i < streams.length; i++) initStream(streams[i]);
+
+  document.addEventListener('click', function (ev) {
+    if (!ev.target || !ev.target.closest) return;
+    var btn = ev.target.closest('.ix-act');
+    if (!btn || btn.disabled) return;
+    var actionId = btn.getAttribute('data-action-id');
+    var dismiss = btn.getAttribute('data-dismiss') === '1';
+    var card = btn.closest('.ix-card');
+    var quick = btn.closest('.ix-quick');
+    var btns = quick ? quick.querySelectorAll('.ix-act') : [btn];
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+    fetch('/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'action_id=' + encodeURIComponent(actionId) + (dismiss ? '&dismiss=1' : '')
+    }).then(function (resp) {
+      return resp.json().catch(function () { return {}; }).then(function (payload) {
+        if (!resp.ok) throw new Error(payload.error || ('HTTP ' + resp.status));
+        return payload;
+      });
+    }).then(function (payload) {
+      if (!card) return;
+      var status = payload.status || (dismiss ? 'cancelled' : 'applied');
+      if (quick) {
+        var done = document.createElement('span');
+        done.className = 'ix-acted ix-acted-' + status;
+        done.textContent = dismiss ? '✕ dismissed' : '✓ applied';
+        quick.parentNode.replaceChild(done, quick);
+      }
+      if (card.getAttribute('data-kind') === 'draft') {
+        var chip = card.querySelector('.ix-status');
+        if (!chip) {
+          chip = document.createElement('span');
+          var head = card.querySelector('.ix-head');
+          var anchor = card.querySelector('.ix-acted') || card.querySelector('.ix-when');
+          if (head) head.insertBefore(chip, anchor);
+        }
+        chip.className = 'ix-status ix-status-' + status;
+        chip.textContent = status;
+        var open = card.querySelector('.ix-open');
+        if (open) open.remove();
+        if (dismiss) card.classList.add('ix-dismissed');
+      }
+    }).catch(function (err) {
+      for (var k = 0; k < btns.length; k++) btns[k].disabled = false;
+      btn.classList.add('ix-act-fail');
+      btn.title = String((err && err.message) || err);
+    });
+  });
+})();
 """.strip()

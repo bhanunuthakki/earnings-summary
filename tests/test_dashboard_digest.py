@@ -450,6 +450,27 @@ def test_thesis_ledger_entries_fold_into_the_stream(db_path: Path) -> None:
     assert "Bear-case append" in html
 
 
+def test_digest_stream_carries_unread_tracking_markup(db_path: Path) -> None:
+    """Inbox v2: the digest is one of the three unread-tracked surfaces — the
+    stream tags itself, cards carry comparable timestamps, and the page embeds
+    INBOX_JS (accents only here; the count badge is the Home rail's)."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from user_state.ledger import append_entry
+
+    append_entry(
+        ticker="NU",
+        entry_kind="thesis_update",
+        body="Unread-tracking probe entry.",
+        db_path=db_path,
+    )
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+    assert 'data-ix-surface="digest"' in html
+    assert 'data-when="' in html
+    assert "ix-last-seen:" in html
+
+
 def test_duplicate_ledger_bodies_dedupe_in_the_stream(db_path: Path) -> None:
     """PR3 regression: the old digest showed one NU thesis update three times
     because consecutive ledger rows carried the same narrative. Near-identical
