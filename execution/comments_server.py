@@ -67,6 +67,7 @@ from refresh_dispatch import STEP_NAMES  # noqa: E402
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
+from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
@@ -350,7 +351,7 @@ def create_app(
             conn.close()
         coverage = tier_coverage_summary(repo_root)
         inbox_html = render_inbox_stream(
-            collect_inbox(db_path, limit=14), db_path=db_path, compact=True
+            collect_inbox(db_path, limit=14), db_path=db_path, compact=True, surface="home"
         )
         overview = render_overview_panel(rows, coverage, inbox_html=inbox_html)
         return Response(render_shell(overview_html=overview), mimetype="text/html")
@@ -673,22 +674,25 @@ def create_app(
         qs = request.query_string.decode()
         return redirect("/feed" + (f"?{qs}" if qs else ""))
 
-    @app.route("/approve", methods=["GET"])
+    @app.route("/approve", methods=["GET", "POST"])
     def approve_or_dismiss_action():
         """One-click approve / dismiss for the queued-action cards (digest,
         feed, Holding rail). ``?action_id=N`` approves — writes the downstream
         thesis-ledger / sizing-intent row, then marks the action applied, via
         the same shared core as the approve CLI; ``&dismiss=1`` cancels
-        instead (no ledger write). 303-redirects back to the surface the
+        instead (no ledger write). GET 303-redirects back to the surface the
         click came from (Referer path, else /feed) so the re-rendered card
-        shows its new status pill.
+        shows its new status pill; POST (the Home rail's hover ✓/✕ fetch,
+        params in the form body or query string) returns
+        ``{ok, action_id, status}`` JSON instead, so the card updates in
+        place without a reload.
 
-        A state-changing GET (the cards are plain ``<a>`` links), so it
-        carries the same-site guard the JSON-POST CORS defense can't provide
-        for top-level navigations: a cross-site Referer or
-        ``Sec-Fetch-Site: cross-site`` gets 403, while no-Referer requests
+        State-changing either way, so both methods carry the same-site guard
+        the JSON-POST CORS defense can't provide for top-level navigations
+        (and a urlencoded form POST never preflights): a cross-site Referer
+        or ``Sec-Fetch-Site: cross-site`` gets 403, while no-Referer requests
         (address bar, curl) stay usable."""
-        raw_id = request.args.get("action_id", "")
+        raw_id = request.values.get("action_id", "")
         try:
             action_id = int(raw_id)
         except ValueError:
@@ -697,8 +701,9 @@ def create_app(
         back = _referer_back_path(referer)
         if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (referer and back is None):
             return ({"error": "cross-site approve/dismiss rejected"}, 403)
+        dismissed = request.values.get("dismiss") in ("1", "true", "True")
         try:
-            if request.args.get("dismiss") in ("1", "true", "True"):
+            if dismissed:
                 dismiss_action(action_id, db_path=db_path)
             else:
                 approve_and_apply(action_id, db_path=db_path)
@@ -709,6 +714,9 @@ def create_app(
             # payload — 409 either way; the message says which. The CLI hint
             # on the card remains the fallback path.
             return ({"error": str(exc)}, 409)
+        if request.method == "POST":
+            status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
+            return {"ok": True, "action_id": action_id, "status": status}
         return redirect(back or "/feed", code=303)
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----

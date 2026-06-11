@@ -212,3 +212,60 @@ def test_feed_renders_absolute_approve_links(client: FlaskClient, db_path: Path)
     html = client.get("/feed").data.decode()
     assert f'href="/approve?action_id={action_id}"' in html
     assert f'href="/approve?action_id={action_id}&dismiss=1"' in html
+
+
+# ----------------------------------------------------------------------------
+# POST /approve — the Home rail's hover ✓/✕ fetch variant (Inbox v2). Same
+# core + same-site guard as the GET links; JSON out instead of a 303 so the
+# card can update in place without a reload.
+# ----------------------------------------------------------------------------
+
+
+def test_approve_post_applies_and_returns_json(client: FlaskClient, db_path: Path) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    resp = client.post("/approve", data={"action_id": str(action_id)})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "action_id": action_id, "status": "applied"}
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_APPLIED
+    entries = list_entries(ticker="NU", db_path=db_path)
+    assert len(entries) == 1
+    assert entries[0].body == "Deposit franchise scaling ahead of plan"
+
+
+def test_approve_post_dismiss_cancels_and_returns_json(client: FlaskClient, db_path: Path) -> None:
+    action_id = _seed_pending_action(db_path, ticker="GOOG")
+    resp = client.post("/approve", data={"action_id": str(action_id), "dismiss": "1"})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "action_id": action_id, "status": "cancelled"}
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
+    assert list_entries(ticker="GOOG", db_path=db_path) == []
+
+
+def test_approve_post_rejects_cross_site(client: FlaskClient, db_path: Path) -> None:
+    # The urlencoded-form POST never triggers a CORS preflight, so the route's
+    # own same-site guard is the only thing between a hostile page and the DB.
+    action_id = _seed_pending_action(db_path)
+    via_fetch_metadata = client.post(
+        "/approve",
+        data={"action_id": str(action_id)},
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert via_fetch_metadata.status_code == 403
+    via_referer = client.post(
+        "/approve",
+        data={"action_id": str(action_id)},
+        headers={"Referer": "https://evil.example/payload"},
+    )
+    assert via_referer.status_code == 403
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+
+
+def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path) -> None:
+    action_id = _seed_pending_action(db_path)
+    assert client.post("/approve", data={"action_id": str(action_id)}).status_code == 200
+    resp = client.post("/approve", data={"action_id": str(action_id)})
+    assert resp.status_code == 409
+    payload = resp.get_json()
+    assert payload is not None
+    assert "cannot transition" in payload["error"]
+    assert len(list_entries(ticker="NU", db_path=db_path)) == 1

@@ -132,7 +132,7 @@ def test_ticker_filter_narrows_to_one_ticker(db_path: Path) -> None:
     assert html.count('class="ticker-badge">META') == 0
     assert html.count('class="ticker-badge">NU') == 0
     # The filter chip echoes the filter value
-    assert "ticker:</span> <span class=\"filter-value\">GOOG" in html
+    assert 'ticker:</span> <span class="filter-value">GOOG' in html
 
 
 def test_trigger_kind_filter_narrows_to_one_kind(db_path: Path) -> None:
@@ -140,7 +140,7 @@ def test_trigger_kind_filter_narrows_to_one_kind(db_path: Path) -> None:
     html = render_alert_feed(db_path=db_path, trigger_kind="saydo_due")
     assert "1 shown" in html
     # The filter chip shows the requested trigger kind
-    assert "trigger:</span> <span class=\"filter-value\">saydo_due" in html
+    assert 'trigger:</span> <span class="filter-value">saydo_due' in html
 
 
 def test_status_filter_narrows_to_pending(db_path: Path) -> None:
@@ -178,3 +178,15 @@ def test_feed_html_is_a_complete_document(db_path: Path) -> None:
     html = render_alert_feed(db_path=db_path)
     assert html.startswith("<!doctype html>")
     assert "</html>" in html
+
+
+def test_feed_stream_carries_unread_tracking_markup(db_path: Path) -> None:
+    """Inbox v2: the feed is unread-tracked too — full alert cards carry
+    ``data-when`` and the page embeds INBOX_JS. The hover ✓/✕ quick actions
+    stay rail-only (the feed keeps its <a> approve links)."""
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path)
+    assert 'data-ix-surface="feed"' in html
+    assert 'data-when="' in html
+    assert "ix-last-seen:" in html
+    assert 'class="ix-act' not in html

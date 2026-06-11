@@ -30,7 +30,7 @@ from io import StringIO
 from pathlib import Path
 
 from dashboard._styles import CSS
-from dashboard.inbox import INBOX_CSS, collect_inbox, render_inbox_stream
+from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from report.renderers.numfmt import fmt_date
 from ui.time import stamp_html
@@ -74,6 +74,7 @@ def render_morning_digest(
             items,
             db_path=db_path,
             now=datetime.combine(date, time.max),
+            surface="digest",
             empty_text=(
                 "Nothing changed in the last 24h — no alerts, drafts, thesis "
                 "edits, or new watch items. ✓ Your portfolio looks quiet."
@@ -288,6 +289,7 @@ def _document(render_date: date, body: str) -> str:
 </head>
 <body>
 {body}
+<script>{INBOX_JS}</script>
 </body>
 </html>
 """

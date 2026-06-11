@@ -40,7 +40,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html import escape
 
-from dashboard.inbox import INBOX_CSS
+from dashboard.inbox import INBOX_CSS, INBOX_JS
 from pipeline.research_cockpit import CockpitRow
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -157,13 +157,18 @@ def render_overview_panel(
     main = render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
     if not inbox_html:
         return main
+    # The badge carries the "new since you last looked" count; INBOX_JS (one
+    # IIFE, embedded with the rail it drives) fills it from the per-surface
+    # localStorage mark and wires the cards' hover ✓/✕ quick actions.
     rail = (
         '<aside class="cc-home-rail">'
-        '<div class="cc-home-rail-head"><h2>Inbox</h2>'
+        '<div class="cc-home-rail-head">'
+        '<h2>Inbox<span class="ix-badge" data-ix-badge="home" hidden></span></h2>'
         '<span class="cc-home-rail-links">'
         '<a href="/digest">digest</a> · <a href="/feed">full feed</a>'
         "</span></div>"
         f"{inbox_html}"
+        f"<script>{INBOX_JS}</script>"
         "</aside>"
     )
     return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>'

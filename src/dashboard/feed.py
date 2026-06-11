@@ -15,7 +15,7 @@ from io import StringIO
 from pathlib import Path
 
 from dashboard._styles import CSS
-from dashboard.inbox import INBOX_CSS, collect_inbox, render_inbox_stream
+from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
@@ -67,6 +67,7 @@ def render_alert_feed(
         render_inbox_stream(
             items,
             db_path=db_path,
+            surface="feed",
             empty_text="No alerts match the current filters.",
         )
     )
@@ -146,6 +147,7 @@ def _document(body: str) -> str:
 </head>
 <body>
 {body}
+<script>{INBOX_JS}</script>
 </body>
 </html>
 """
