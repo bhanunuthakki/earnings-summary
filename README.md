@@ -243,7 +243,7 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 |---|---|---|---|
 | `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`basic`=250/day, `starter`=unlimited @ 5/sec, `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
 | `backfill_transcripts` | Daily 04:30 | `execution/backfill_transcripts.py` | For every active ticker, fetches the last 6 fiscal quarters of Q&A from the free aggregator chain (roic.ai → stockanalysis.com → tickertrends.io), ingests, extracts forward-looking commitments. Idempotent — file-exists check + sha256 dedup |
-| `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` | Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker. On `basic` tier this 403s; the `next_earnings_date` adapter in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) falls back to yfinance |
+| `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` then `execution/refresh_expected_earnings.py` | Step 1 refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker (on free/basic tier FMP refuses — 402 since 2026-06-10 — and the cache stays at its last good state). Step 2 materializes the **canonical `expected_earnings` table** through the `next_earnings_date` stack in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) (FMP cache → yfinance fallback); the digest, cockpit, and portfolio-tracker bridge all read that table |
 | `backfill_earnings_surprises` | Daily 06:15 | `execution/backfill_earnings_surprises.py` + `ingest_earnings_surprises.py` | Two-stage: merges `<TICKER>_earnings_calendar.json` (FMP primary, EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Stage-2 gate prevents partial ingestion if stage-1 fails |
 | `daily_fetch_and_brief` | Daily 06:30 | `execution/daily_fetch_and_brief.py --enable-llm` | **The drainer.** Picks up every ticker with `brief_dirty=1`, applies three gates (see §[When the report auto-updates](#when-the-report-auto-updates)), runs `thesis_evaluator → match_commitments → refresh_dcf → build_artifacts` for un-skipped tickers, clears the flag |
 
@@ -279,6 +279,8 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
          │
          ▼
 05:45  fetch_fmp_earnings_calendar ──► data/historical/fmp/<T>_earnings_calendar.json
+         │                             └─► refresh_expected_earnings ──► expected_earnings table
+         │                                 (canonical calendar: digest, cockpit, portfolio-tracker)
          │
          ▼
 06:15  backfill_earnings_surprises ──► data/surprise/<T>_surprises.json + earnings_surprises

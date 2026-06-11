@@ -11,10 +11,13 @@ without leaving the Overview tab:
   value (the stored ``over_under_pct`` mixes two writer conventions, and a
   fresher external price would silently mix currencies), and the PEG ratio from
   the §Valuation cache where present.
-* **Events** — next earnings date from the FMP earnings-calendar cache (the
-  read-only twin of ``sources.earnings_calendar``: a render path must not write
-  ``source_calls`` telemetry rows), unreviewed (pending) alerts, documents
-  fetched since the last report build, and open report comments.
+* **Events** — next earnings date from the ``expected_earnings`` table (0082,
+  the canonical calendar materialized daily by
+  ``execution/refresh_expected_earnings.py``), falling back per ticker to the
+  FMP earnings-calendar cache on disk (a read-only twin of
+  ``sources.earnings_calendar``: a render path must not write ``source_calls``
+  telemetry rows); unreviewed (pending) alerts, documents fetched since the
+  last report build, and open report comments.
 
 Evaluation-list names get a thinner row variant (no KPI chips, tighter type).
 The old per-column ops-freshness tables shrink to one staleness dot per row
@@ -37,6 +40,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 
@@ -164,6 +168,9 @@ def build_cockpit_rows(
     evals = _latest_evaluations(conn)
     kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers)
     fundamentals = _eval_fundamentals(conn)
+    # Canonical calendar first (one batch query); the per-ticker FMP-cache file
+    # read below remains as fallback for pre-0082 DBs / not-yet-refreshed rows.
+    next_er = {t: d.isoformat() for t, d in upcoming_by_ticker(conn, ref.date()).items()}
 
     out: dict[str, list[CockpitRow]] = {}
     for list_type, rows in base_rows.items():
@@ -186,7 +193,7 @@ def build_cockpit_rows(
                     dcf_price=dcf_price,
                     dcf_date=dcf_date,
                     peg_ratio=_peg_ratio(repo_root, t),
-                    next_earnings=_next_earnings(repo_root, t, ref),
+                    next_earnings=next_er.get(t) or _next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
@@ -537,7 +544,9 @@ def _peg_ratio(repo_root: Path, ticker: str) -> float | None:
 def _next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
     """Earliest calendar date >= today from the FMP earnings-calendar cache.
     Read-only twin of ``sources.earnings_calendar._try_fmp_cache`` minus its
-    ``source_calls`` logging (a dashboard render is not a sourcing decision)."""
+    ``source_calls`` logging (a dashboard render is not a sourcing decision).
+    FALLBACK only: ``build_cockpit_rows`` prefers the ``expected_earnings``
+    table; this covers pre-0082 DBs and tickers the refresher hasn't seen."""
     payload = _read_json(
         repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_earnings_calendar.json"
     )

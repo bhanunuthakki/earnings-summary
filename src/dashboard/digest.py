@@ -11,10 +11,11 @@ sections:
                                 old What's-new / Open-items / Outstanding /
                                 Recent-thesis-changes quartet that showed the
                                 same queued action up to three different ways.
-  3. Upcoming this week      — estimated next-earnings for tracked names
-                                (labelled "est." — earnings_surprises holds
-                                only past releases), each led by the owner's
-                                open watch items for that name.
+  3. Upcoming this week      — next earnings for tracked names: real dates
+                                from the expected_earnings calendar (0082),
+                                falling back to a +91d estimate (labelled
+                                "est.") only when the calendar has no row;
+                                each led by the owner's open watch items.
 
 Empty-state path: section 2 collapses to one "nothing changed" line rather
 than emitting empty divs, so the morning open of a quiet day still looks
@@ -31,6 +32,7 @@ from pathlib import Path
 
 from dashboard._styles import CSS
 from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox, render_inbox_stream
+from expected_earnings import upcoming_by_ticker
 from identity import DEFAULT_USER_ID
 from report.renderers.numfmt import fmt_date
 from ui.time import stamp_html
@@ -49,7 +51,8 @@ def render_morning_digest(
     inbox* — ONE deduped "What changed" stream (alerts of any status, drafts,
     thesis-ledger entries, journal items, newest first) instead of the old
     four sections that showed the same queued action up to three ways —
-    followed by the estimated-earnings look-ahead.
+    followed by the earnings look-ahead (calendar dates, estimated only as
+    fallback).
 
     The 24h window is ``[date - 1d, date + 1d)`` in UTC — wide enough that
     the morning of ``date`` always picks up "yesterday after-close" prints
@@ -125,30 +128,31 @@ def _open_notes(
     return sorted(rows, key=lambda n: _OPEN_ITEM_KIND_RANK.get(n.kind, 9))
 
 
-# There is no future-earnings calendar table; estimate each tracked name's next
-# report as its latest known release + one quarter, and surface those landing in
-# the next two weeks. Honest approximation (labelled "est."), built from the
-# earnings_surprises history that already exists — no new fetch / cron.
+# Real next-earnings dates come from the expected_earnings table (0082) — the
+# canonical calendar materialized daily from the FMP-cache → yfinance stack by
+# execution/refresh_expected_earnings.py. Tracked names the calendar has no
+# future row for fall back to the old estimate: latest known release + one
+# quarter (labelled "est."), built from the earnings_surprises history.
 _NEXT_EARNINGS_GAP_DAYS = 91
 _UPCOMING_HORIZON_DAYS = 14
 
 
-def _upcoming_earnings(
-    db_path: Path | None, today: date, *, horizon_days: int = _UPCOMING_HORIZON_DAYS
-) -> list[tuple[str, date]]:
-    """Estimated next-earnings dates within the horizon for tracked names.
-
-    Best-effort: a missing DB / table yields ``[]`` so the digest degrades to an
-    empty-state rather than raising. Read-only.
-    """
-    if db_path is None or not Path(db_path).exists():
-        return []
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return []
+def _tracked_tickers(conn: sqlite3.Connection) -> set[str]:
+    """Non-archived portfolio + evaluation tickers ([] on a partial schema)."""
     try:
         rows = conn.execute(
+            "SELECT ticker FROM tracked_companies WHERE archived_at IS NULL "
+            "AND list_type IN ('portfolio', 'evaluation')"
+        ).fetchall()
+    except sqlite3.Error:
+        return set()
+    return {str(t) for (t,) in rows}
+
+
+def _last_release_by_ticker(conn: sqlite3.Connection) -> list[tuple[str, object]]:
+    """Latest earnings_surprises release per tracked name, for the est. path."""
+    try:
+        return conn.execute(
             """
             SELECT es.ticker, MAX(es.release_date) AS last_release
             FROM earnings_surprises es
@@ -162,18 +166,46 @@ def _upcoming_earnings(
         ).fetchall()
     except sqlite3.Error:
         return []
+
+
+def _upcoming_earnings(
+    db_path: Path | None, today: date, *, horizon_days: int = _UPCOMING_HORIZON_DAYS
+) -> list[tuple[str, date, bool]]:
+    """``(ticker, date, is_estimate)`` within the horizon for tracked names.
+
+    Calendar rows win: a ticker with ANY future ``expected_earnings`` row is
+    calendar-owned — it appears iff that real date lands in the horizon, and
+    is never re-estimated. Only tickers without a future calendar row fall
+    back to the +91d estimate. Best-effort: a missing DB / table degrades to
+    the fallback (or ``[]``) rather than raising. Read-only.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        tracked = _tracked_tickers(conn)
+        calendar = {t: d for t, d in upcoming_by_ticker(conn, today).items() if t in tracked}
+        last_releases = _last_release_by_ticker(conn)
     finally:
         conn.close()
     horizon_end = today + timedelta(days=horizon_days)
-    out: list[tuple[str, date]] = []
-    for ticker, last_release in rows:
+    out: list[tuple[str, date, bool]] = []
+    for ticker, nxt in calendar.items():
+        if today <= nxt <= horizon_end:
+            out.append((ticker, nxt, False))
+    for ticker, last_release in last_releases:
+        if str(ticker) in calendar:
+            continue
         try:
             last = date.fromisoformat(str(last_release)[:10])
         except (ValueError, TypeError):
             continue
         est = last + timedelta(days=_NEXT_EARNINGS_GAP_DAYS)
         if today <= est <= horizon_end:
-            out.append((str(ticker), est))
+            out.append((str(ticker), est, True))
     out.sort(key=lambda t: (t[1], t[0]))
     return out
 
@@ -185,30 +217,33 @@ def _render_upcoming(
     *,
     user_id: str = DEFAULT_USER_ID,
 ) -> None:
-    """'Upcoming this week' — tracked names whose ESTIMATED next earnings (latest
-    release + ~1 quarter) land within the next two weeks. Each name leads with
-    the owner's open watch items / questions (P4.4) so earnings prep starts
-    from what the owner already said to look for."""
+    """'Upcoming this week' — tracked names whose next earnings land within the
+    next two weeks: real calendar dates from ``expected_earnings``, with the
+    +91d estimate (labelled "est.") only for names the calendar doesn't cover.
+    Each name leads with the owner's open watch items / questions (P4.4) so
+    earnings prep starts from what the owner already said to look for."""
     upcoming = _upcoming_earnings(db_path, render_date)
     body.write('<section class="dash-section dash-upcoming">')
     body.write('<div class="dash-section-header">')
     body.write('<div class="dash-section-title">Upcoming this week</div>')
-    body.write(f'<div class="dash-section-count">{len(upcoming)} est.</div>')
+    body.write(f'<div class="dash-section-count">{len(upcoming)} expected</div>')
     body.write("</div>")
     if not upcoming:
         body.write(
-            '<div class="empty-state">No estimated earnings in the next two weeks for '
+            '<div class="empty-state">No earnings expected in the next two weeks for '
             "tracked names.</div>"
         )
         body.write("</section>")
         return
     body.write('<ul class="upcoming-list">')
-    for ticker, est in upcoming:
+    for ticker, when, is_estimate in upcoming:
+        date_txt = f"~{when.isoformat()}" if is_estimate else when.isoformat()
+        note = "est. next earnings" if is_estimate else "next earnings"
         body.write(
             '<li class="upcoming-item">'
             f'<span class="up-ticker">{_esc(ticker)}</span> '
-            f'<span class="up-date">~{_esc(est.isoformat())}</span> '
-            '<span class="up-note">est. next earnings</span>'
+            f'<span class="up-date">{_esc(date_txt)}</span> '
+            f'<span class="up-note">{note}</span>'
         )
         prep_notes = _open_notes(db_path, user_id, ticker=ticker)
         if prep_notes:

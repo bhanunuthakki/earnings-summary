@@ -99,7 +99,8 @@ def _seed_calendar(db_path: Path) -> None:
 def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None:
     """The 'Upcoming this week' section surfaces tracked names whose estimated next
     earnings (latest release + ~1 quarter) land within the horizon â€” and excludes
-    far-out estimates and non-portfolio/evaluation names."""
+    far-out estimates and non-portfolio/evaluation names. (No expected_earnings
+    rows seeded: every name exercises the est. fallback path.)"""
     _seed_calendar(db_path)
     html = render_morning_digest(TODAY, db_path=db_path)
     assert "est. next earnings" in html
@@ -109,6 +110,63 @@ def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None
     assert "est. next earnings</span></li>" in html
     # Exactly one upcoming item (NU).
     assert html.count("upcoming-item") == 1
+
+
+def _seed_expected_earnings(db_path: Path, rows: list[tuple[str, date]]) -> None:
+    """Insert real calendar rows (the 0082 table exists via the alembic fixture)."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executemany(
+            "INSERT INTO expected_earnings (ticker, expected_date, detected_source) "
+            "VALUES (?, ?, 'fmp')",
+            [(t, d.isoformat()) for t, d in rows],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_upcoming_prefers_real_calendar_dates(db_path: Path) -> None:
+    """A name with an expected_earnings row shows the REAL date â€” no '~', no
+    'est.' â€” and its +91d estimate is suppressed."""
+    _seed_calendar(db_path)  # NU's est would be TODAY+11
+    real = TODAY + timedelta(days=4)
+    _seed_expected_earnings(db_path, [("NU", real)])
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert html.count("upcoming-item") == 1
+    assert f'<span class="up-date">{real.isoformat()}</span>' in html
+    assert "est. next earnings" not in html
+    assert f"~{real.isoformat()}" not in html
+    assert (TODAY - timedelta(days=80) + timedelta(days=91)).isoformat() not in html
+
+
+def test_upcoming_calendar_beyond_horizon_suppresses_estimate(db_path: Path) -> None:
+    """When the calendar KNOWS the next date is beyond the horizon, the name is
+    hidden â€” not re-estimated into the window by the +91d fallback."""
+    _seed_calendar(db_path)  # NU's est (TODAY+11) would land in the horizon
+    _seed_expected_earnings(db_path, [("NU", TODAY + timedelta(days=40))])
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert html.count("upcoming-item") == 0
+    assert "No earnings expected in the next two weeks" in html
+
+
+def test_upcoming_mixes_calendar_dates_and_estimate_fallback(db_path: Path) -> None:
+    """Calendar-owned names render real dates; names without a calendar row keep
+    the labelled estimate; watchlist names stay excluded even with a row."""
+    _seed_calendar(db_path)  # NU: surprises only -> est TODAY+11
+    _seed_expected_earnings(
+        db_path,
+        [("ORCL", TODAY + timedelta(days=2)), ("ZZ", TODAY + timedelta(days=3))],
+    )
+    html = render_morning_digest(TODAY, db_path=db_path)
+    assert html.count("upcoming-item") == 2
+    real = (TODAY + timedelta(days=2)).isoformat()
+    est = (TODAY - timedelta(days=80) + timedelta(days=91)).isoformat()
+    assert f'<span class="up-date">{real}</span>' in html  # ORCL, real
+    assert f'<span class="up-date">~{est}</span>' in html  # NU, estimated
+    assert "est. next earnings" in html
+    assert 'up-ticker">ZZ' not in html  # watchlist excluded from the calendar path too
+    assert html.index('up-ticker">ORCL') < html.index('up-ticker">NU')  # date order
 
 
 # ----------------------------------------------------------------------------

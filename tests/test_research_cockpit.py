@@ -279,11 +279,29 @@ def test_build_valuation_fields(rows: dict[str, list[CockpitRow]]) -> None:
 
 def test_build_event_fields(rows: dict[str, list[CockpitRow]]) -> None:
     nu = _by_ticker(rows["portfolio"])["NU"]
+    # expected_earnings is empty in this fixture -> the FMP-cache file fallback.
     assert nu.next_earnings == (NOW + timedelta(days=30)).date().isoformat()  # earliest future
     assert nu.pending_alerts == 2  # dismissed alert not counted
     assert nu.new_docs == 1  # only the doc fetched after last_built_at
     v = _by_ticker(rows["evaluation"])["V"]
     assert (v.next_earnings, v.pending_alerts, v.new_docs) == (None, 0, 0)
+
+
+def test_build_next_earnings_prefers_canonical_table(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """An expected_earnings row (0082, the canonical calendar) wins over the
+    on-disk FMP cache; tickers without a row keep the file fallback."""
+    table_date = (NOW + timedelta(days=9)).date().isoformat()  # file says +30d
+    conn.execute(
+        "INSERT INTO expected_earnings (ticker, expected_date, detected_source) "
+        "VALUES ('NU', ?, 'yfinance')",
+        (table_date,),
+    )
+    conn.commit()
+    built = build_cockpit_rows(conn, repo_root)
+    assert _by_ticker(built["portfolio"])["NU"].next_earnings == table_date
+    assert _by_ticker(built["evaluation"])["V"].next_earnings is None
 
 
 def test_build_degrades_on_minimal_schema(tmp_path: Path) -> None:
