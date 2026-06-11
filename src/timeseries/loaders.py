@@ -5,6 +5,8 @@ or the query returns nothing — never raise):
 
   load_kpi_series(ticker, kpi_name, ...)             — kpi_facts JOIN kpi_definitions
   load_financial_series(ticker, line_item, ...)      — financial_facts
+  load_financial_series_with_provenance(...)         — same pick + per-row provenance (P5.1)
+  load_kpi_series_with_provenance(...)               — kpi sibling of the above (P5.1)
   load_segment_junction_series(ticker, dims, metric) — segment_periods + segment_dimensions (cross-tab)
   load_segment_series(ticker, segment, metric)       — thin shim that maps the legacy
                                                        segment_facts metric vocabulary to the
@@ -35,12 +37,31 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 from timeseries.primitives import Observation
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SourcedObservation:
+    """One observation plus the provenance of its winning fact row.
+
+    ``provenance`` carries the same key set as
+    :func:`load_financial_cell_provenance`'s per-cell payload (source,
+    fact_id, source_doc_id, fetched_at, source_url, doc_type,
+    accession_number, filing_date, locator) so chip builders consume one
+    shape regardless of which loader produced the cell.
+    """
+
+    period_end: datetime
+    value: float
+    unit: str | None
+    provenance: dict[str, object]
+
 
 DEFAULT_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
 
@@ -583,6 +604,234 @@ def load_financial_cell_provenance(
             }
         )
         return {}
+    finally:
+        conn.close()
+
+
+def _sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
+    """Rows carrying (period_end, value, unit, + provenance columns) → an
+    ascending SourcedObservation list, deduplicating by period_end with the
+    last row winning (the SQL has already chosen the canonical row per
+    logical key via tier/id ordering)."""
+    by_period: dict[datetime, SourcedObservation] = {}
+    for r in rows:
+        pe = _parse_period_end(r["period_end"])
+        if pe is None:
+            continue
+        try:
+            v = float(r["value"])
+        except (TypeError, ValueError):
+            continue
+        prov: dict[str, object] = {
+            "source": str(r["source"]) if r["source"] is not None else "unknown",
+            "fact_id": int(r["fact_id"]),
+            "source_doc_id": int(r["source_doc_id"]),
+            "fetched_at": str(r["fetched_at"]) if r["fetched_at"] is not None else None,
+            "source_url": str(r["source_url"]) if r["source_url"] is not None else None,
+            "doc_type": str(r["doc_type"]) if r["doc_type"] is not None else None,
+            "accession_number": (
+                str(r["accession_number"]) if r["accession_number"] is not None else None
+            ),
+            "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
+            "locator": str(r["locator"]) if r["locator"] is not None else None,
+        }
+        unit_raw = r["unit"]
+        by_period[pe] = SourcedObservation(
+            period_end=pe,
+            value=v,
+            unit=str(unit_raw) if unit_raw is not None else None,
+            provenance=prov,
+        )
+    return [by_period[pe] for pe in sorted(by_period)]
+
+
+def load_financial_series_with_provenance(
+    ticker: str,
+    line_item: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+) -> list[SourcedObservation]:
+    """`load_financial_series` + per-observation provenance in ONE query.
+
+    The ViewSpec engine (master build P5.1) renders every cell with a
+    source chip; loading values and provenance separately would risk the
+    chip describing a different row than the displayed number when the
+    tier-aware pick and the cell-provenance pick diverge (see
+    `load_financial_cell_provenance`'s docstring). This loader uses the
+    SAME tier+id ordering as `load_financial_series`, so the value and its
+    chip always come from the same winning fact row.
+
+    Requires the documents table (provenance is the point): returns []
+    when it — or financial_facts — is missing. Columns absent on legacy
+    schemas (locator/accession: 0075, tier: 0054) come back as None.
+    """
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return []
+    conn = _open(resolved)
+    if conn is None:
+        return []
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    placeholders = ",".join("?" * len(period_list))
+    try:
+        if not _has_table(conn, "financial_facts") or not _has_table(conn, "documents"):
+            return []
+        has_tier = _has_column(conn, "documents", "source_quality_tier")
+        rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        tier_select = (
+            "d.source_quality_tier AS source"
+            if has_tier
+            else "COALESCE(d.source_type, 'unknown') AS source"
+        )
+        locator_select = (
+            "ff.locator" if _has_column(conn, "financial_facts", "locator") else "NULL AS locator"
+        )
+        accession_select = (
+            "d.accession_number, d.filing_date"
+            if _has_column(conn, "documents", "accession_number")
+            else "NULL AS accession_number, NULL AS filing_date"
+        )
+        unit_select = "ff.unit" if _has_column(conn, "financial_facts", "unit") else "NULL AS unit"
+        rows = conn.execute(
+            f"""
+            SELECT ff.period_end,
+                   ff.value,
+                   {unit_select},
+                   ff.id AS fact_id,
+                   ff.source_doc_id,
+                   {locator_select},
+                   d.fetched_at,
+                   d.source_url,
+                   d.doc_type,
+                   {accession_select},
+                   {tier_select}
+            FROM financial_facts ff
+            JOIN documents d ON d.id = ff.source_doc_id
+            WHERE ff.ticker = ?
+              AND ff.line_item = ?
+              AND ff.fiscal_period_type IN ({placeholders})
+              AND ff.id = (
+                SELECT ff2.id
+                FROM financial_facts ff2
+                JOIN documents d2 ON d2.id = ff2.source_doc_id
+                WHERE ff2.ticker = ff.ticker
+                  AND ff2.line_item = ff.line_item
+                  AND ff2.period_end = ff.period_end
+                  AND ff2.fiscal_period_type = ff.fiscal_period_type
+                ORDER BY {rank_expr.replace("d.", "d2.")} DESC, ff2.id DESC
+                LIMIT 1
+              )
+            ORDER BY ff.period_end ASC
+            """,
+            (ticker.upper(), line_item, *period_list),
+        ).fetchall()
+        return _sourced_rows(rows)
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_financial_sourced_failed",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        return []
+    finally:
+        conn.close()
+
+
+def load_kpi_series_with_provenance(
+    ticker: str,
+    kpi_name: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+) -> list[SourcedObservation]:
+    """`load_kpi_series` + per-observation provenance in ONE query.
+
+    The kpi_facts sibling of `load_financial_series_with_provenance`,
+    closing the seam P3.3 left (kpi cells rode CellSource but their loader
+    path never emitted document identity). Same tier+id row pick as
+    `load_kpi_series`; same provenance payload shape as the financial
+    loaders. Requires kpi_facts + kpi_definitions + documents; returns []
+    when any is missing.
+    """
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return []
+    conn = _open(resolved)
+    if conn is None:
+        return []
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    placeholders = ",".join("?" * len(period_list))
+    try:
+        for required in ("kpi_facts", "kpi_definitions", "documents"):
+            if not _has_table(conn, required):
+                return []
+        has_tier = _has_column(conn, "documents", "source_quality_tier")
+        rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        tier_select = (
+            "d.source_quality_tier AS source"
+            if has_tier
+            else "COALESCE(d.source_type, 'unknown') AS source"
+        )
+        locator_select = (
+            "kf.locator" if _has_column(conn, "kpi_facts", "locator") else "NULL AS locator"
+        )
+        accession_select = (
+            "d.accession_number, d.filing_date"
+            if _has_column(conn, "documents", "accession_number")
+            else "NULL AS accession_number, NULL AS filing_date"
+        )
+        unit_select = "kf.unit" if _has_column(conn, "kpi_facts", "unit") else "NULL AS unit"
+        rows = conn.execute(
+            f"""
+            SELECT kf.period_end,
+                   kf.value,
+                   {unit_select},
+                   kf.id AS fact_id,
+                   kf.source_doc_id,
+                   {locator_select},
+                   d.fetched_at,
+                   d.source_url,
+                   d.doc_type,
+                   {accession_select},
+                   {tier_select}
+            FROM kpi_facts kf
+            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+            JOIN documents d ON d.id = kf.source_doc_id
+            WHERE kf.ticker = ?
+              AND kd.name = ?
+              AND kf.fiscal_period_type IN ({placeholders})
+              AND kf.id = (
+                SELECT kf2.id
+                FROM kpi_facts kf2
+                JOIN documents d2 ON d2.id = kf2.source_doc_id
+                WHERE kf2.ticker = kf.ticker
+                  AND kf2.kpi_definition_id = kf.kpi_definition_id
+                  AND kf2.period_end = kf.period_end
+                  AND kf2.fiscal_period_type = kf.fiscal_period_type
+                ORDER BY {rank_expr.replace("d.", "d2.")} DESC, kf2.id DESC
+                LIMIT 1
+              )
+            ORDER BY kf.period_end ASC
+            """,
+            (ticker.upper(), kpi_name, *period_list),
+        ).fetchall()
+        return _sourced_rows(rows)
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_kpi_sourced_failed",
+                "ticker": ticker,
+                "kpi": kpi_name,
+                "error": str(exc),
+            }
+        )
+        return []
     finally:
         conn.close()
 

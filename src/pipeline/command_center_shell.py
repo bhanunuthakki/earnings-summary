@@ -64,6 +64,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         (
             ("overview", "Overview", None, False, False),
             ("holding", "Holding", "/api/panel/holding", True, True),
+            # On-the-fly slice-and-dice (P5.1): the ViewSpec builder —
+            # metrics x tickers x period x transform over the fact tables,
+            # with saved views.
+            ("explore", "Explore", "/api/panel/explore", False, False),
             # The analyst journal's lifecycle home (P4.5): list / filter /
             # resolve / reclassify / supersede over analyst_notes.
             ("journal", "Journal", "/api/panel/journal", False, False),
