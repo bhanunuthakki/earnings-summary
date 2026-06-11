@@ -42,6 +42,12 @@ Design — thin shell + lazy panels:
   ``/source/<doc_id>`` links peek their ``fragment=1`` variant automatically;
   ticker links grow a hover mini-card from ``/api/peek/ticker/<T>``. Report
   iframes are separate documents and stay drill-through.
+* **The Ask dock is shell chrome (Ask v5)**: ``pipeline.ask_dock`` renders
+  once into the body, OUTSIDE ``.cc-panels``, so the conversational dock
+  persists across every tab switch. Three states — min pill / floating card /
+  split column (``body[data-ask-split="1"]`` reflows the panels beside it) —
+  persisted in localStorage; the thread tail survives reloads via
+  sessionStorage.
 
 The standalone ``/analytical`` and ``/ticker/<t>`` pages remain as working
 deep-link targets (zero rewrite); this shell is purely additive.
@@ -57,6 +63,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from dashboard.inbox import INBOX_CSS, INBOX_JS
+from pipeline.ask_dock import render_ask_dock
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui.time import stamp_html
@@ -170,17 +177,14 @@ def render_overview_panel(
     below it, and — when provided — the unified Inbox in a right-hand rail
     (UX redesign PR3: what changed, beside what you hold). Reuses the existing
     public seams so there is no second code path for any of this content.
-    The collapsible Ask dock (Ask v4, pipeline.ask_dock) rides along pinned
-    to the panel's corner — same engine as the Ask tab, pop-out hands the
-    thread over."""
+    (The Ask dock is no longer panel content — it renders once in the shell
+    chrome, see ``render_shell``, so it persists across tab switches.)"""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
-    from pipeline.ask_dock import render_ask_dock
     from pipeline.research_cockpit import render_research_cockpit
 
     main = render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
-    dock = render_ask_dock()
     if not inbox_html:
-        return main + dock
+        return main
     # The badge carries the "new since you last looked" count; INBOX_JS (one
     # IIFE, embedded with the rail it drives) fills it from the per-surface
     # localStorage mark and wires the cards' hover ✓/✕ quick actions.
@@ -195,7 +199,7 @@ def render_overview_panel(
         f"<script>{INBOX_JS}</script>"
         "</aside>"
     )
-    return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>{dock}'
+    return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>'
 
 
 def render_shell(
@@ -209,6 +213,7 @@ def render_shell(
     ``overview_html`` is the pre-built Overview panel (see ``render_overview_panel``)
     inlined for first paint; every other sub-tab is an empty placeholder that
     lazy-loads from its ``/api/panel/<name>`` endpoint on first activation.
+    The persistent Ask dock mounts once here, outside the panel container.
     """
     stamp = stamp_html(generated_at or datetime.now(UTC), css="cc-stamp", prefix="updated ")
     flat_tabs = tuple(t for _tid, _tlabel, subs in themes for t in subs)
@@ -241,6 +246,9 @@ def render_shell(
             _NOTES_DRAWER_HTML,
             _PALETTE_HTML,
             _PEEK_HTML,
+            # The persistent Ask dock (Ask v5): shell chrome, not panel
+            # content — outside .cc-panels so it survives every tab switch.
+            render_ask_dock(),
             f"<script>{SHELL_JS}</script>",
             _DOC_FOOT,
         ]
@@ -878,7 +886,8 @@ td.ticker a:hover { color: var(--link); }
 /* ============================================================
    Peek / quick-look (UX9): one shared popover instead of the
    drill-throughs — source excerpts, alert review, memos.
-   z-order: drawer (39) < peek (45) < hover card (46) < palette (49).
+   z-order: ask dock (35) < drawer (39) < peek (45) < hover card (46)
+   < palette (49).
    ============================================================ */
 .cc-peek-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 44; }
 .cc-peek { position: fixed; z-index: 45; width: min(680px, 92vw);

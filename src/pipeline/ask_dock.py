@@ -1,26 +1,44 @@
-"""The Home tab's Ask dock (Ask v4): the conversational engine, docked.
+"""The persistent Ask dock (Ask v5): the conversational engine, docked in
+the shell chrome.
 
-A collapsible chat dock pinned to the Home panel's bottom-right corner so a
-question never requires leaving the landing tab. Same engine and SSE
-contract as the Ask tab (``POST /api/ask/stream``: stage/delta/fragment/
-final/citations/error frames); the dock renders a compact thread — prose
-with citation chips, view fragments inline — and keeps a client-side
-history tail for narrative continuity.
+A chat dock rendered ONCE into the command-center shell's body — outside the
+``.cc-panels`` panel-swap container — so the conversation survives tab
+switches instead of vanishing with the Home panel. Three states, with
+explicit header controls, persisted under ``localStorage['askDockMode']``
+(the legacy boolean ``askDockOpen`` key migrates on first boot):
+
+* **min** — a slim bottom-right pill (just the Ask title; ▁ minimizes,
+  clicking the pill restores the last expanded state);
+* **float** — the 400px floating card pinned bottom-right (the classic dock);
+* **split** (◫) — a fixed right-side column under the top bar; the shell
+  reflows beside it (``body[data-ask-split="1"] .cc-panels`` gains a right
+  margin over the standard ``--transition`` timing), a side-by-side copilot
+  usable while browsing any panel or report. Esc exits split — the shell's
+  overlays (palette, peek, hover card, drawers) keep first claim on the key.
+
+Same engine and SSE contract as the Ask tab (``POST /api/ask/stream``:
+stage/delta/fragment/final/citations/error frames); the dock renders a
+compact thread — prose with citation chips, view fragments inline — and
+keeps a client-side history tail for narrative continuity. The tail also
+persists under ``sessionStorage['cc-ask-dock-tail']`` so a reload replays
+the conversation.
 
 The ⇗ pop-out stashes that history under ``sessionStorage['cc-ask-thread']``
-(plus any pending input under the palette's ``cc-ask-q`` key) and jumps to
-``#explore`` — the Ask panel replays the turns at wire-up, so the
-conversation continues in the full tab. Collapsed/open state persists in
-``localStorage``. Markup is fully self-contained (own ids, own CSS, own
-IIFE) and lives only in the Home panel's DOM, so it disappears with the
-panel when another tab is active.
+(plus any pending input under the palette's ``cc-ask-q`` key), minimizes the
+dock, and jumps to ``#explore`` — the Ask panel replays the turns at
+wire-up, so the conversation continues in the full tab.
+
+Stacking: the dock sits at z-index 35 — above the panels and the sticky top
+bar (30), below the drawers (38/39), peek (44/45), hover card (46), and
+palette (48/49) — so every shell overlay covers it, in split mode included.
+Markup is fully self-contained (own ids, own CSS, own IIFE).
 """
 
 from __future__ import annotations
 
 _DOCK_CSS = """
 .ask-dock { position:fixed; right:18px; bottom:14px; width:400px; max-width:calc(100vw - 36px);
-  z-index:60; border:1px solid var(--border); border-radius:var(--radius);
+  z-index:35; border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); box-shadow:0 16px 48px rgba(0,0,0,0.55);
   display:flex; flex-direction:column; overflow:hidden; }
 .ask-dock-head { display:flex; align-items:center; gap:8px; width:100%; padding:9px 12px;
@@ -28,11 +46,33 @@ _DOCK_CSS = """
 .ask-dock-title { color:var(--accent); font-weight:600; font-size:var(--fs-body); }
 .ask-dock-hint { color:var(--muted); font-size:var(--fs-caption); flex:1; overflow:hidden;
   white-space:nowrap; text-overflow:ellipsis; }
-.ask-dock-pop { color:var(--muted); font-size:13px; padding:0 2px; text-decoration:none;
+.ask-dock-ctl { color:var(--muted); font-size:13px; padding:0 2px; text-decoration:none;
   cursor:pointer; }
-.ask-dock-pop:hover { color:var(--accent); }
+.ask-dock-ctl:hover { color:var(--accent); }
 .ask-dock-body { display:flex; flex-direction:column; max-height:54vh; }
-.ask-dock[data-collapsed="1"] .ask-dock-body { display:none; }
+/* min — the slim pill: title only, body folded, controls hidden (the pill
+   itself is the restore control). */
+.ask-dock[data-mode="min"] { width:auto; }
+.ask-dock[data-mode="min"] .ask-dock-body,
+.ask-dock[data-mode="min"] .ask-dock-hint,
+.ask-dock[data-mode="min"] .ask-dock-ctl { display:none; }
+/* split — a full-height right column under the top bar (the dock JS keeps
+   --ask-dock-top synced to the topbar's measured height); the panels reflow
+   beside it via the body[data-ask-split] rule below. */
+.ask-dock[data-mode="split"] { top:var(--ask-dock-top, 52px); right:0; bottom:0; width:420px;
+  max-width:100vw; border:none; border-left:1px solid var(--border); border-radius:0;
+  box-shadow:-12px 0 32px rgba(0,0,0,0.35); }
+.ask-dock[data-mode="split"] .ask-dock-body { flex:1; min-height:0; max-height:none; }
+.ask-dock[data-mode="split"] .ask-dock-thread { flex:1; }
+.ask-dock[data-mode="split"] .ask-dock-splitbtn { color:var(--accent); }
+/* The shell reflow: the transition lives on the base state so entering AND
+   exiting split animate over the standard timing. */
+.cc-panels { transition: margin-right var(--transition); }
+body[data-ask-split="1"] .cc-panels { margin-right:440px; }
+/* Narrow screens: the column overlays instead of crushing the panels. */
+@media (max-width: 900px) {
+  body[data-ask-split="1"] .cc-panels { margin-right:0; }
+}
 .ask-dock-thread { overflow-y:auto; padding:10px 12px; display:flex; flex-direction:column;
   gap:8px; min-height:60px; }
 .ask-dock-empty { color:var(--muted); font-size:var(--fs-caption); }
@@ -75,9 +115,13 @@ _DOCK_JS = r"""
   var input = document.getElementById('ask-dock-q');
   var toggle = document.getElementById('ask-dock-toggle');
   var pop = document.getElementById('ask-dock-pop');
+  var minBtn = document.getElementById('ask-dock-min');
+  var splitBtn = document.getElementById('ask-dock-split');
+  var TAIL_KEY = 'cc-ask-dock-tail';
   var history = [];
   var lastSpec = null;
   var busy = false;
+  var expandedMode = 'float';  // the state a pill click restores
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -96,21 +140,63 @@ _DOCK_JS = r"""
   function remember(role, text) {
     history.push({role: role, text: String(text || '').slice(0, 1200)});
     if (history.length > 12) history = history.slice(-12);
+    try { sessionStorage.setItem(TAIL_KEY, JSON.stringify(history)); } catch (e) {}
   }
   function scroll() { thread.scrollTop = thread.scrollHeight; }
-  function setOpen(open) {
-    dock.dataset.collapsed = open ? '0' : '1';
-    try { localStorage.setItem('askDockOpen', open ? '1' : '0'); } catch (e) {}
-    if (open) input.focus();
+
+  // Split mode pins the column under the top bar — measure it rather than
+  // hardcode (the bar's height is content-driven and can wrap on resize).
+  function syncTop() {
+    var bar = document.querySelector('.cc-topbar');
+    if (bar) dock.style.setProperty('--ask-dock-top', bar.offsetHeight + 'px');
   }
-  toggle.addEventListener('click', function (ev) {
-    if (ev.target === pop) return;
-    setOpen(dock.dataset.collapsed === '1');
+  function setMode(mode, skipFocus) {
+    if (mode !== 'float' && mode !== 'split') mode = 'min';
+    dock.dataset.mode = mode;
+    if (mode !== 'min') expandedMode = mode;
+    if (mode === 'split') {
+      syncTop();
+      document.body.setAttribute('data-ask-split', '1');
+    } else {
+      document.body.removeAttribute('data-ask-split');
+    }
+    try { localStorage.setItem('askDockMode', mode); } catch (e) {}
+    if (mode !== 'min' && !skipFocus) input.focus();
+  }
+  window.addEventListener('resize', function () {
+    if (dock.dataset.mode === 'split') syncTop();
   });
-  try { if (localStorage.getItem('askDockOpen') === '1') setOpen(true); } catch (e) {}
+
+  // Header click toggles min <-> the last expanded state; the inline controls
+  // (▁ / ◫ / ⇗) are explicit and excluded from the toggle.
+  toggle.addEventListener('click', function (ev) {
+    if (ev.target.closest && ev.target.closest('.ask-dock-ctl')) return;
+    setMode(dock.dataset.mode === 'min' ? expandedMode : 'min');
+  });
+  minBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    setMode('min');
+  });
+  splitBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    setMode(dock.dataset.mode === 'split' ? 'float' : 'split');
+  });
+
+  // Esc exits split — but the shell's overlays own the key first: while the
+  // palette, peek, hover card, or either drawer is open, leave it to them.
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape' || dock.dataset.mode !== 'split') return;
+    var overlays = ['cc-palette', 'cc-peek', 'cc-hovercard', 'cc-notes-drawer', 'cc-drawer'];
+    for (var i = 0; i < overlays.length; i++) {
+      var el = document.getElementById(overlays[i]);
+      if (el && !el.hidden) return;
+    }
+    setMode('float');
+  });
 
   // ⇗ pop-out: hand the dock conversation to the full Ask tab (same
-  // sessionStorage contract as the shell palette's cc-ask-q handoff).
+  // sessionStorage contract as the shell palette's cc-ask-q handoff), then
+  // minimize so the thread doesn't render twice beside the Ask panel.
   pop.addEventListener('click', function (ev) {
     ev.stopPropagation();
     try {
@@ -118,9 +204,43 @@ _DOCK_JS = r"""
       var pending = input.value.trim();
       if (pending) sessionStorage.setItem('cc-ask-q', pending);
     } catch (e) {}
+    setMode('min', true);
     location.hash = '#explore';
     window.dispatchEvent(new Event('cc-ask-q'));
   });
+
+  // Replay the persisted tail so a reload keeps the conversation (text only —
+  // view fragments and citation chips live in the turns that produced them).
+  try {
+    var tail = JSON.parse(sessionStorage.getItem(TAIL_KEY) || 'null');
+    if (tail && tail.length) {
+      history = tail.slice(-12);
+      var empty = thread.querySelector('.ask-dock-empty');
+      if (empty) empty.remove();
+      history.forEach(function (turn) {
+        var el = document.createElement('div');
+        if (turn.role === 'user') {
+          el.className = 'ask-dock-user';
+          el.textContent = turn.text;
+        } else {
+          el.className = 'ask-dock-asst';
+          el.innerHTML = md(turn.text);
+        }
+        thread.appendChild(el);
+      });
+      scroll();
+    }
+  } catch (e) {}
+
+  // Boot state: askDockMode, migrating the legacy boolean askDockOpen once.
+  var boot = null;
+  try {
+    boot = localStorage.getItem('askDockMode');
+    if (boot !== 'min' && boot !== 'float' && boot !== 'split') {
+      boot = localStorage.getItem('askDockOpen') === '1' ? 'float' : 'min';
+    }
+  } catch (e) { boot = 'min'; }
+  setMode(boot, true);
 
   function citeRow(card, items) {
     var chips = (items || []).map(function (c) {
@@ -246,18 +366,23 @@ _DOCK_JS = r"""
 
 
 def render_ask_dock() -> str:
-    """The dock fragment — markup + scoped CSS + its IIFE, ready to append
-    to the Home panel."""
+    """The dock fragment — markup + scoped CSS + its IIFE, rendered once into
+    the shell chrome (outside the panel-swap container)."""
     return f"""<style>{_DOCK_CSS}</style>
-<div class="ask-dock" id="ask-dock" data-collapsed="1">
+<div class="ask-dock" id="ask-dock" data-mode="min">
   <button type="button" class="ask-dock-head" id="ask-dock-toggle">
     <span class="ask-dock-title">Ask</span>
     <span class="ask-dock-hint">tables for metric questions &middot; cited answers for open ones</span>
-    <span class="ask-dock-pop" id="ask-dock-pop" title="Continue in the Ask tab">&#x21D7;</span>
+    <span class="ask-dock-ctl" id="ask-dock-min" role="button" title="Minimize"
+      aria-label="Minimize">&#x2581;</span>
+    <span class="ask-dock-ctl ask-dock-splitbtn" id="ask-dock-split" role="button"
+      title="Split view beside the page (Esc exits)" aria-label="Toggle split view">&#x25EB;</span>
+    <span class="ask-dock-ctl" id="ask-dock-pop" role="button" title="Continue in the Ask tab"
+      aria-label="Continue in the Ask tab">&#x21D7;</span>
   </button>
   <div class="ask-dock-body" id="ask-dock-body">
     <div class="ask-dock-thread" id="ask-dock-thread">
-      <span class="ask-dock-empty">Ask about any tracked name without leaving Home.</span>
+      <span class="ask-dock-empty">Ask about any tracked name without leaving this tab.</span>
     </div>
     <form class="ask-dock-form" id="ask-dock-form">
       <input id="ask-dock-q" placeholder="Ask&hellip;" autocomplete="off">

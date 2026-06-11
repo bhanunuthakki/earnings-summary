@@ -319,3 +319,21 @@ def test_content_width_is_wide() -> None:
     shell now flows to 1600."""
     assert "max-width: 1600px" in SHELL_CSS
     assert "max-width: 1280px" not in SHELL_CSS
+
+
+def test_ask_dock_is_persistent_shell_chrome() -> None:
+    """Ask v5: the dock is shell chrome — rendered once OUTSIDE .cc-panels so
+    it survives panel swaps — with the explicit state controls, the split-view
+    reflow hook, and the mode/thread persistence keys wired."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert html.count('id="ask-dock"') == 1
+    # Outside the panel-swap container: the dock markup sits after </main>.
+    assert html.index('id="ask-dock"') > html.index("</main>")
+    # Header controls: ▁ minimize, ◫ split, ⇗ pop-out to the Ask tab.
+    for control in ('id="ask-dock-min"', 'id="ask-dock-split"', 'id="ask-dock-pop"'):
+        assert control in html
+    # Split view reflows the panels beside the dock column.
+    assert 'body[data-ask-split="1"] .cc-panels' in html
+    # Mode persists in localStorage; the thread tail in sessionStorage.
+    assert "askDockMode" in html
+    assert "cc-ask-dock-tail" in html

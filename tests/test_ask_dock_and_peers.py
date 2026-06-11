@@ -1,17 +1,20 @@
-"""Ask v4 surfaces: the Home Ask dock (markup + pop-out handoff contract)
-and the /api/peers/<ticker> route (the PR #400 scored comparable set the
+"""Ask dock surfaces (Ask v5): the persistent shell-chrome dock (three
+states, split-view reflow, pop-out handoff contract) and the
+/api/peers/<ticker> route (the PR #400 scored comparable set the
 "+ Peers" actions inject)."""
 
 from __future__ import annotations
 
+import re
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from flask.testing import FlaskClient
 
 from pipeline.ask_dock import render_ask_dock
-from pipeline.command_center_shell import render_overview_panel
+from pipeline.command_center_shell import SHELL_CSS, render_overview_panel, render_shell
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -19,7 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 import comments_server  # noqa: E402
 
 # ----------------------------------------------------------------------------
-# The Home dock
+# The persistent Ask dock
 # ----------------------------------------------------------------------------
 
 
@@ -31,12 +34,14 @@ def test_dock_fragment_is_self_contained() -> None:
         "ask-dock-thread",
         "ask-dock-form",
         "ask-dock-q",
+        "ask-dock-min",
+        "ask-dock-split",
         "ask-dock-pop",
     ):
         assert f'id="{dom_id}"' in html
-    # Same engine as the Ask tab, collapsed by default.
+    # Same engine as the Ask tab, minimized (the slim pill) by default.
     assert "/api/ask/stream" in html
-    assert 'data-collapsed="1"' in html
+    assert 'data-mode="min"' in html
     # It renders the full event vocabulary: stages, prose, views, citations.
     for marker in ("'stage'", "'delta'", "'fragment'", "'final'", "'citations'", "'error'"):
         assert marker in html
@@ -44,20 +49,68 @@ def test_dock_fragment_is_self_contained() -> None:
 
 def test_dock_popout_hands_thread_to_the_ask_tab() -> None:
     """The ⇗ pop-out uses the palette's handoff contract: thread under
-    cc-ask-thread, pending input under cc-ask-q, jump to #explore + event."""
+    cc-ask-thread, pending input under cc-ask-q, jump to #explore + event —
+    and the dock minimizes so the thread doesn't render twice beside the
+    Ask panel."""
     html = render_ask_dock()
     assert "cc-ask-thread" in html
     assert "cc-ask-q" in html
     assert "#explore" in html
     assert "new Event('cc-ask-q')" in html
+    assert "setMode('min', true)" in html
 
 
-def test_overview_panel_carries_the_dock() -> None:
-    plain = render_overview_panel({}, None)
-    assert 'id="ask-dock"' in plain
-    with_rail = render_overview_panel({}, None, inbox_html="<div>inbox</div>")
-    assert 'id="ask-dock"' in with_rail
-    assert "cc-home-grid" in with_rail
+def test_dock_three_states_and_persistence() -> None:
+    """Ask v5: min / float / split with explicit header controls. The mode
+    persists in localStorage (the legacy boolean key migrates once) and the
+    thread tail persists in sessionStorage so a reload replays it."""
+    html = render_ask_dock()
+    # Split view: the dock-side CSS hook + the body attribute that reflows
+    # the shell panels beside the column over the standard transition.
+    assert '.ask-dock[data-mode="split"]' in html
+    assert 'body[data-ask-split="1"] .cc-panels' in html
+    assert "transition: margin-right var(--transition)" in html
+    assert "data-ask-split" in html
+    # State + thread persistence keys.
+    assert "askDockMode" in html
+    assert "askDockOpen" in html  # one-time migration of the legacy key
+    assert "cc-ask-dock-tail" in html
+    # Esc exits split, deferring to the shell's overlays first.
+    assert "'Escape'" in html
+    for overlay in ("cc-palette", "cc-peek", "cc-notes-drawer", "cc-drawer"):
+        assert overlay in html
+
+
+def _block_z_index(css: str, selector: str) -> int:
+    m = re.search(re.escape(selector) + r" \{[^}]*z-index:\s*(\d+)", css)
+    assert m is not None, f"no z-index found for {selector}"
+    return int(m.group(1))
+
+
+def test_dock_stacks_under_shell_overlays() -> None:
+    """The dock sits above the panels but BELOW every shell overlay — the
+    drawers (Settings/Notes), peek, and palette all cover it, so split mode
+    never fights them."""
+    dock_z = _block_z_index(render_ask_dock(), ".ask-dock")
+    drawer_scrim_z = _block_z_index(SHELL_CSS, ".cc-drawer-scrim")
+    palette_z = _block_z_index(SHELL_CSS, ".cc-palette")
+    assert dock_z < drawer_scrim_z < palette_z
+
+
+def test_dock_is_shell_chrome_not_home_panel_content() -> None:
+    """Ask v5: the dock renders ONCE in the shell body, outside the
+    panel-swap container, so it exists on every tab — the Home panel
+    fragment no longer carries it (it used to vanish with the panel)."""
+    for overview in (
+        render_overview_panel({}, None),
+        render_overview_panel({}, None, inbox_html="<div>inbox</div>"),
+    ):
+        assert 'id="ask-dock"' not in overview
+    # The rail layout itself is unchanged.
+    assert "cc-home-grid" in render_overview_panel({}, None, inbox_html="<div>inbox</div>")
+    shell = render_shell(overview_html="<p>ov</p>", generated_at=datetime(2026, 6, 11, tzinfo=UTC))
+    assert shell.count('id="ask-dock"') == 1
+    assert shell.index('id="ask-dock"') > shell.index("</main>")
 
 
 # ----------------------------------------------------------------------------
