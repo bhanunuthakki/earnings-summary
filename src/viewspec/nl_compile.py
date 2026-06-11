@@ -32,6 +32,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from llm.cli import call_llm
 from llm_budget import should_skip_for_budget
@@ -116,8 +117,22 @@ def _vocab_block(db_path: Path, tickers: list[str]) -> str:
     return "\n".join(lines) if lines else "# (no metric vocabulary available)"
 
 
-def _build_prompt(query: str, vocab: str, default_tickers: list[str]) -> str:
+def _build_prompt(
+    query: str,
+    vocab: str,
+    default_tickers: list[str],
+    context_spec: dict[str, object] | None = None,
+) -> str:
     defaults = ", ".join(default_tickers) if default_tickers else "(none configured)"
+    context_block = ""
+    if context_spec:
+        context_block = f"""
+Current view (the user may be REFINING it — "now annual", "add MELI",
+"same but as margins"): {json.dumps(context_spec)}
+- When the question refines the current view, return the FULL updated spec,
+  carrying over everything the question doesn't change. When the question is
+  a fresh one, ignore the current view entirely.
+"""
     return f"""\
 You translate an analyst's question into a ViewSpec JSON object for a
 financial pivot engine. Output ONLY the JSON object — no prose, no
@@ -141,7 +156,7 @@ Rules:
   otherwise "level".
 - cadence "annual" only when the question is in years/annual/FY terms; periods defaults
   to 12 for quarterly and 8 for annual when the question doesn't say.
-
+{context_block}
 Metric vocabulary:
 {vocab}
 
@@ -165,6 +180,7 @@ def compile_nl_to_viewspec(
     *,
     db_path: Path,
     context_tickers: list[str] | None = None,
+    context_spec: dict[str, object] | None = None,
     run_id: str | None = None,
 ) -> NLCompileResult:
     """Compile one natural-language question. Never raises — every failure
@@ -172,7 +188,10 @@ def compile_nl_to_viewspec(
 
     ``context_tickers`` is the panel's current ticker input — it scopes the
     kpi/segment vocabulary and serves as the default universe when the
-    question names no tickers.
+    question names no tickers. ``context_spec`` is the PREVIOUS turn's spec
+    (the Ask thread, PR5): the prompt instructs the model to treat the query
+    as a refinement of it when that reading fits ("now annual" carries the
+    rest of the view over).
     """
     q = query.strip()
     if not q:
@@ -192,9 +211,18 @@ def compile_nl_to_viewspec(
     defaults = [t.strip().upper() for t in (context_tickers or []) if t.strip()]
     tracked = _tracked_tickers(db_path)
     named = _tickers_in_query(q, tracked)
-    vocab_tickers = list(dict.fromkeys([*defaults, *named])) or sorted(tracked)[:8]
+    context_spec_tickers: list[str] = []
+    if context_spec:
+        raw_tk = context_spec.get("tickers")
+        if isinstance(raw_tk, list):
+            context_spec_tickers = [
+                t.upper() for t in cast("list[object]", raw_tk) if isinstance(t, str) and t.strip()
+            ]
+    vocab_tickers = (
+        list(dict.fromkeys([*defaults, *named, *context_spec_tickers])) or sorted(tracked)[:8]
+    )
     vocab = _vocab_block(db_path, vocab_tickers)
-    prompt = _build_prompt(q, vocab, defaults or named)
+    prompt = _build_prompt(q, vocab, defaults or named, context_spec=context_spec)
 
     attempts = 0
     last_error = ""
