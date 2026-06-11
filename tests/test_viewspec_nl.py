@@ -222,7 +222,8 @@ def test_migration_seeds_budget_row(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
-    command.upgrade(cfg, "head")
+    # Pin to the revision under test — later migrations are someone else's.
+    command.upgrade(cfg, "0080_viewspec_compile_budget")
     conn = sqlite3.connect(db)
     row = conn.execute(
         "SELECT monthly_cap_usd, on_exceed FROM llm_budgets WHERE purpose = 'viewspec_compile'"
@@ -237,7 +238,9 @@ def test_migration_tolerates_missing_llm_budgets(tmp_path: Path) -> None:
     db = tmp_path / "bare.db"
     cfg = _alembic_cfg(db)
     command.stamp(cfg, "0079_saved_views")
-    command.upgrade(cfg, "head")  # no llm_budgets table — must not raise
+    # Pinned (not "head") so later migrations don't fail this assertion;
+    # the point is only that 0080 tolerates an absent llm_budgets table.
+    command.upgrade(cfg, "0080_viewspec_compile_budget")
     conn = sqlite3.connect(db)
     rev = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
     conn.close()
