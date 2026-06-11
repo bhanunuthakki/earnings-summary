@@ -16,17 +16,20 @@ Category derivation:
   * alerts map by ``trigger_kind`` (earnings_tone → Earnings, kpi_inflection /
     thesis_drift → Thesis changes, saydo_due → Watch items);
   * ``material_news`` alerts refine via the ``news`` row behind the alert
-    (alembic 0065): a press-wire ``source`` → Press releases, a grades feed
-    or an upgrade/downgrade-shaped headline → Rating changes, else News;
+    (alembic 0065): a grades feed or an upgrade/downgrade-shaped headline →
+    Rating changes; an ``edgar_8k`` row → Press releases when the filing is
+    disclosure-only (items ⊆ {7.01, 8.01, 9.01}), else News; a press-wire
+    ``source`` → Press releases; else News;
   * drafts → Drafts, ledger entries → Thesis changes, journal notes → Watch
     items, synthesis sections → Synthesis.
 
-Rating changes today come from headline patterns on the stock-news feed —
-the dedicated FMP per-event grades endpoint (``/stable/grades``) could not be
-confirmed available on FMP_TIER=free (docs are auth-gated; the live probe hit
-the free tier's daily quota: 429 ``{"Error Message": "Limit Reach …"}``), so
-the categorizer also recognizes a future ``source_feed='fmp_grades'`` without
-needing changes here.
+Rating changes arrive two ways: the additive yfinance grades feed
+(``source_feed='yf_grades'``, execution/fetch_yf_grades.py) and headline
+patterns on the stock-news feed. The dedicated FMP per-event grades endpoint
+(``/stable/grades``) could not be confirmed available on FMP_TIER=free (docs
+are auth-gated; the live probe hit the free tier's daily quota: 429
+``{"Error Message": "Limit Reach …"}``), so ``fmp_grades`` stays recognized as
+a future feed tag without needing changes here.
 """
 
 from __future__ import annotations
@@ -127,7 +130,20 @@ _RATING_HEADLINE_RX = re.compile(
     re.IGNORECASE,
 )
 
-_GRADES_SOURCE_FEED = "fmp_grades"  # forward-compat: the stubbed dedicated feed
+# Dedicated grades feeds: yf_grades is live (execution/fetch_yf_grades.py);
+# fmp_grades remains forward-compat for the still-unverified FMP endpoint.
+_GRADES_SOURCE_FEEDS: tuple[str, ...] = ("fmp_grades", "yf_grades")
+
+# EDGAR 8-K rows (execution/fetch_edgar_news.py) carry their Reg-S-K item codes
+# in the headline prefix: "8-K 2.01, 9.01: completed acquisition — Acme, Inc.".
+_EDGAR_8K_FEED = "edgar_8k"
+_EDGAR_8K_ITEMS_RX = re.compile(r"^8-K(?:/A)?\s+([0-9][0-9., ]*):")
+
+# Items that are company-published disclosure rather than a hard corporate
+# event: 7.01 Reg-FD, 8.01 other events, 9.01 exhibits boilerplate. A filing
+# whose items all sit in this set reads as a press release; ANY other item
+# (2.01 acquisition, 5.02 exec change, ...) keeps it in News.
+_DISCLOSURE_ONLY_8K_ITEMS = frozenset({"7.01", "8.01", "9.01"})
 
 
 # ----------------------------------------------------------------------------
@@ -315,7 +331,11 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
             if it.title == "material_news":
                 news_id, headline = evidence.get(idx, (None, ""))
                 source, source_feed = meta.get(news_id or -1, ("", ""))
-                if source_feed == _GRADES_SOURCE_FEED or _RATING_HEADLINE_RX.search(headline):
+                if source_feed in _GRADES_SOURCE_FEEDS:
+                    category = CATEGORY_RATING
+                elif source_feed == _EDGAR_8K_FEED:
+                    category = _edgar_8k_category(headline)
+                elif _RATING_HEADLINE_RX.search(headline):
                     category = CATEGORY_RATING
                 elif any(wire in source for wire in _PRESS_WIRE_SOURCES):
                     category = CATEGORY_PRESS
@@ -323,6 +343,20 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
             category = _KIND_CATEGORIES.get(it.kind, CATEGORY_WATCH)
         out.append(category)
     return out
+
+
+def _edgar_8k_category(headline: str) -> str:
+    """Press releases for disclosure-only 8-Ks (every item in 7.01/8.01/9.01),
+    News for anything carrying a material item — read from the item codes the
+    EDGAR feed embeds in the headline. No codes parseable → News (8-K alone is
+    a corporate event, and 13D/G rows never reach here)."""
+    match = _EDGAR_8K_ITEMS_RX.match(headline)
+    if match is None:
+        return CATEGORY_NEWS
+    codes = {code.strip() for code in match.group(1).split(",") if code.strip()}
+    if codes and codes <= _DISCLOSURE_ONLY_8K_ITEMS:
+        return CATEGORY_PRESS
+    return CATEGORY_NEWS
 
 
 def _age_text(hours: float) -> str:

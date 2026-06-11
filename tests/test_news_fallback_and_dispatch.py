@@ -13,6 +13,10 @@ Hermetic — no live LLM/web/FMP. Covers (plan §6.6, §6.7):
   * dispatcher auto routing — falls back only on refusal, never on 200+[]; FMP
     rows persist without a fallback; --source websearch never calls FMP, and
     --source fmp never calls WebSearch even on refusal.
+  * additive feeds (EDGAR + yfinance grades) — run for every source policy,
+    skip flags opt out, failures degrade without touching the policy rows, and
+    cross-feed duplicates (ticker + normalized headline + date) are dropped.
+    An autouse fixture stubs both to [] so every dispatcher test stays hermetic.
 """
 
 from __future__ import annotations
@@ -34,6 +38,20 @@ from llm_client import structure_recent_news_json
 from news.store import NewsRow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _no_additive_rows(*_a: object, **_k: object) -> list[NewsRow]:
+    return []
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The dispatcher now runs the additive EDGAR + grades feeds by default;
+    stub both to [] so no dispatcher test ever touches sec.gov / Yahoo.
+    Additive-specific tests re-patch with their own recorders."""
+    monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", _no_additive_rows)
+    monkeypatch.setattr(fetch_news.yfgrades, "fetch_grades_for_ticker", _no_additive_rows)
+
 
 _LLM_ARTIFACTS_DDL = (
     "CREATE TABLE llm_artifacts ("
@@ -409,3 +427,148 @@ def test_source_fmp_never_calls_websearch_even_on_refusal(
 
     fetch_news.run(["AAPL"], source="fmp", db_path=str(news_db), days=2, limit=50)
     assert ws.calls == 0  # fmp-only: no fallback even when FMP refuses
+
+
+# ===========================================================================
+# additive feeds (EDGAR + grades): supplement, never replace
+# ===========================================================================
+
+
+class _AdditiveRecorder:
+    """Canned per-ticker additive fetcher (records calls, optionally raises)."""
+
+    def __init__(self, rows: list[NewsRow] | None = None, error: Exception | None = None) -> None:
+        self.rows = rows if rows is not None else []
+        self.error = error
+        self.calls = 0
+
+    def __call__(self, ticker: str, *, days: int) -> list[NewsRow]:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.rows
+
+
+def _edgar_row(headline: str = "8-K 2.01, 9.01: completed acquisition — Acme") -> NewsRow:
+    return NewsRow(
+        ticker="AAPL",
+        headline=headline,
+        url="https://www.sec.gov/Archives/edgar/data/1/1/doc.htm",
+        published_at="2026-01-15 21:00:00",
+        source="SEC EDGAR",
+        source_feed="edgar_8k",
+    )
+
+
+def _grade_row() -> NewsRow:
+    return NewsRow(
+        ticker="AAPL",
+        headline="Wedbush upgrades AAPL to Outperform",
+        url="https://finance.yahoo.com/quote/AAPL/analysis#grade-1",
+        published_at="2026-01-15 14:00:00",
+        source="Wedbush",
+        source_feed="yf_grades",
+    )
+
+
+def _patch_primary_fmp_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fetch_news.fmpnews, "FMP_API_KEY", "key")
+    monkeypatch.setattr(
+        fetch_news.fmpnews,
+        "fetch_news_for_ticker",
+        _FmpStub(_fmp_result(200, [{"x": 1}], [_fmp_row()])),
+    )
+    monkeypatch.setattr(fetch_news, "fetch_websearch_news_for_ticker", _WsRecorder([]))
+
+
+def test_additive_rows_persist_alongside_policy_rows(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_primary_fmp_ok(monkeypatch)
+    edgar = _AdditiveRecorder([_edgar_row()])
+    grades = _AdditiveRecorder([_grade_row()])
+    monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", edgar)
+    monkeypatch.setattr(fetch_news.yfgrades, "fetch_grades_for_ticker", grades)
+
+    rc = fetch_news.run(["AAPL"], source="auto", db_path=str(news_db), days=2, limit=50)
+    assert rc == 0
+    assert (edgar.calls, grades.calls) == (1, 1)
+    assert _news_rows(news_db) == [
+        ("AAPL", "https://finance.yahoo.com/quote/AAPL/analysis#grade-1", "yf_grades"),
+        ("AAPL", "https://news.example/fmp1", "fmp_stock_news"),
+        ("AAPL", "https://www.sec.gov/Archives/edgar/data/1/1/doc.htm", "edgar_8k"),
+    ]
+
+
+def test_additive_duplicate_of_policy_story_is_dropped(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same ticker + normalized headline + date as the FMP row (urls differ) ->
+    the additive copy never lands; the policy row does."""
+    _patch_primary_fmp_ok(monkeypatch)
+    dup = _edgar_row(headline="FMP story")  # normalizes equal to 'fmp story', same date
+    monkeypatch.setattr(
+        fetch_news.edgarnews, "fetch_edgar_news_for_ticker", _AdditiveRecorder([dup])
+    )
+
+    fetch_news.run(["AAPL"], source="auto", db_path=str(news_db), days=2, limit=50)
+    assert _news_rows(news_db) == [("AAPL", "https://news.example/fmp1", "fmp_stock_news")]
+
+
+def test_additive_failure_degrades_without_touching_policy_rows(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_primary_fmp_ok(monkeypatch)
+    monkeypatch.setattr(
+        fetch_news.edgarnews,
+        "fetch_edgar_news_for_ticker",
+        _AdditiveRecorder(error=RuntimeError("sec.gov down")),
+    )
+    monkeypatch.setattr(
+        fetch_news.yfgrades,
+        "fetch_grades_for_ticker",
+        _AdditiveRecorder(error=RuntimeError("yahoo down")),
+    )
+
+    rc = fetch_news.run(["AAPL"], source="auto", db_path=str(news_db), days=2, limit=50)
+    assert rc == 0  # additive hiccups never fail the dispatch
+    assert _news_rows(news_db) == [("AAPL", "https://news.example/fmp1", "fmp_stock_news")]
+
+
+def test_skip_flags_disable_each_additive_feed(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_primary_fmp_ok(monkeypatch)
+    edgar = _AdditiveRecorder([_edgar_row()])
+    grades = _AdditiveRecorder([_grade_row()])
+    monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", edgar)
+    monkeypatch.setattr(fetch_news.yfgrades, "fetch_grades_for_ticker", grades)
+
+    fetch_news.run(
+        ["AAPL"],
+        source="auto",
+        db_path=str(news_db),
+        days=2,
+        limit=50,
+        skip_edgar=True,
+        skip_grades=True,
+    )
+    assert (edgar.calls, grades.calls) == (0, 0)
+    assert _news_rows(news_db) == [("AAPL", "https://news.example/fmp1", "fmp_stock_news")]
+
+
+def test_additive_feeds_run_under_websearch_policy_too(
+    news_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Additive means policy-independent: even with --source websearch (the
+    FMP-fully-cut-off setting) the EDGAR + grades legs still contribute."""
+    monkeypatch.setattr(fetch_news, "fetch_websearch_news_for_ticker", _WsRecorder([_ws_row()]))
+    edgar = _AdditiveRecorder([_edgar_row()])
+    monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", edgar)
+
+    fetch_news.run(["AAPL"], source="websearch", db_path=str(news_db), days=2, limit=50)
+    assert edgar.calls == 1
+    assert _news_rows(news_db) == [
+        ("AAPL", "https://news.example/ws1", "websearch_opus"),
+        ("AAPL", "https://www.sec.gov/Archives/edgar/data/1/1/doc.htm", "edgar_8k"),
+    ]

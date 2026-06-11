@@ -17,6 +17,7 @@ calling fetcher logs and exits non-zero rather than silently dropping news.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
@@ -44,10 +45,16 @@ _MIN_PUBLISHED_YEAR = 2000
 _FUTURE_SKEW_DAYS = 2
 
 # `source_feed` provenance tags — which ingester wrote the row. Defined here so
-# both feeds and the dedup tests reference one spelling, not scattered literals.
+# the feeds and the dedup tests reference one spelling, not scattered literals.
 # SOURCE_FEED_FMP matches the column's server_default in migration 0065_news.
+# The EDGAR/grades tags are the ADDITIVE feeds (directives/news_sources_plan.md):
+# they supplement the FMP→WebSearch ladder, never replace it.
 SOURCE_FEED_FMP = "fmp_stock_news"
 SOURCE_FEED_WEBSEARCH = "websearch_opus"
+SOURCE_FEED_EDGAR_8K = "edgar_8k"
+SOURCE_FEED_EDGAR_13D = "edgar_13d"
+SOURCE_FEED_EDGAR_13G = "edgar_13g"
+SOURCE_FEED_YF_GRADES = "yf_grades"
 
 
 class NewsRow(BaseModel):
@@ -150,3 +157,64 @@ def upsert_news_rows(conn: sqlite3.Connection, rows: Iterable[NewsRow]) -> tuple
             inserted += 1
     conn.commit()
     return inserted, total - inserted
+
+
+# ---------------------------------------------------------------------------
+# Cross-feed story dedup (the additive-feed guard)
+# ---------------------------------------------------------------------------
+
+_HEADLINE_NORMALIZE_RX = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_headline(headline: str) -> str:
+    """Canonical headline form for cross-feed dedup: lowercase, every run of
+    non-alphanumerics collapsed to one space, ends stripped — so punctuation,
+    smart quotes, and spacing differences between two feeds' renderings of the
+    same story compare equal."""
+    return _HEADLINE_NORMALIZE_RX.sub(" ", headline.lower()).strip()
+
+
+def _story_key(row: NewsRow) -> tuple[str, str, str]:
+    """(ticker, normalized headline, published DATE) — same story, any feed."""
+    return row.ticker, normalize_headline(row.headline), row.published_at[:10]
+
+
+def drop_duplicate_stories(
+    conn: sqlite3.Connection,
+    candidates: Iterable[NewsRow],
+    *,
+    against: Iterable[NewsRow] = (),
+) -> list[NewsRow]:
+    """Filter ``candidates`` down to rows whose (ticker, normalized headline,
+    published date) is not already present — in ``against`` (rows queued for the
+    same write by another feed), earlier in ``candidates`` itself, or in the
+    `news` table.
+
+    This is the ADDITIVE-feed guard: ``upsert_news_rows``'s ``UNIQUE (ticker,
+    url)`` key dedupes re-runs of one feed, but the same story arriving from two
+    feeds carries two different urls. Additive feeds (EDGAR, grades) run their
+    rows through here so they supplement — never duplicate — the primary feeds.
+
+    Best-effort against the DB: if the `news` table is absent or unreadable the
+    check degrades to batch-only dedup (the subsequent upsert still surfaces a
+    missing table loudly)."""
+    seen: set[tuple[str, str, str]] = {_story_key(row) for row in against}
+    kept: list[NewsRow] = []
+    for row in candidates:
+        key = _story_key(row)
+        if key in seen:
+            continue
+        ticker, normalized, day = key
+        try:
+            existing = conn.execute(
+                "SELECT headline FROM news WHERE ticker = ? AND substr(published_at, 1, 10) = ?",
+                (ticker, day),
+            ).fetchall()
+        except sqlite3.Error:
+            existing = []
+        if any(normalize_headline(str(h)) == normalized for (h,) in existing):
+            seen.add(key)
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept

@@ -25,7 +25,14 @@ from alembic.config import Config
 from pydantic import ValidationError
 
 from alembic import command
-from news.store import SOURCE_FEED_FMP, SOURCE_FEED_WEBSEARCH, NewsRow, upsert_news_rows
+from news.store import (
+    SOURCE_FEED_FMP,
+    SOURCE_FEED_WEBSEARCH,
+    NewsRow,
+    drop_duplicate_stories,
+    normalize_headline,
+    upsert_news_rows,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0064_queued_actions"
@@ -258,3 +265,79 @@ def test_newsrow_rejects_empty_identity_fields() -> None:
     for field in ("ticker", "url", "headline"):
         with pytest.raises(ValidationError):
             _row(**{field: ""})
+
+
+# ---------------------------------------------------------------------------
+# drop_duplicate_stories — the cross-feed (ticker, headline, date) guard
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_headline_collapses_punctuation_and_case() -> None:
+    assert normalize_headline("Acme acquires Beta for $2B!") == "acme acquires beta for 2b"
+    assert normalize_headline("ACME — acquires   'Beta', for $2B") == "acme acquires beta for 2b"
+
+
+def test_drop_duplicates_against_queued_rows_and_within_batch(news_db: Path) -> None:
+    """A candidate matching a queued primary-feed row (same ticker, normalized
+    headline, date — different url/feed) is dropped; so is a within-batch
+    repeat. Different ticker or different date survives."""
+    primary = _row(url="https://news.example/fmp", headline="Acme acquires Beta for $2B!")
+    candidates = [
+        _row(  # same story, EDGAR rendering — punctuation/case differ, url differs
+            url="https://sec.example/8k",
+            headline="ACME acquires Beta, for $2B",
+            source_feed="edgar_8k",
+        ),
+        _row(  # within-batch duplicate of a fresh story
+            url="https://a/1", headline="Beta CFO departs", source_feed="edgar_8k"
+        ),
+        _row(  # the survivor for that story
+            url="https://a/2", headline="Beta — CFO departs!", source_feed="edgar_8k"
+        ),
+        _row(  # same headline as primary but another DATE -> kept
+            url="https://a/3",
+            headline="Acme acquires Beta for $2B",
+            published_at="2026-05-29 14:00:00",
+            source_feed="edgar_8k",
+        ),
+        _row(  # same headline as primary but another TICKER -> kept
+            ticker="WPM", url="https://a/4", headline="Acme acquires Beta for $2B"
+        ),
+    ]
+    conn = sqlite3.connect(str(news_db))
+    try:
+        kept = drop_duplicate_stories(conn, candidates, against=[primary])
+    finally:
+        conn.close()
+    assert [r.url for r in kept] == ["https://a/1", "https://a/3", "https://a/4"]
+
+
+def test_drop_duplicates_against_already_persisted_rows(news_db: Path) -> None:
+    """Yesterday's run persisted the story; today another feed re-renders it
+    under a new url — the table lookup catches it."""
+    conn = sqlite3.connect(str(news_db))
+    try:
+        _ = upsert_news_rows(conn, [_row(url="https://news.example/orig")])
+        candidate = _row(
+            url="https://other.example/copy",
+            headline="Acme Acquires Beta for $2B",
+            source_feed=SOURCE_FEED_WEBSEARCH,
+        )
+        kept = drop_duplicate_stories(conn, [candidate])
+        assert kept == []
+        fresh = _row(url="https://other.example/new", headline="Acme raises guidance")
+        assert drop_duplicate_stories(conn, [fresh]) == [fresh]
+    finally:
+        conn.close()
+
+
+def test_drop_duplicates_degrades_to_batch_only_without_table(tmp_path: Path) -> None:
+    """No `news` table -> the DB check degrades silently to batch-only dedup
+    (the subsequent upsert still surfaces the missing table loudly)."""
+    conn = sqlite3.connect(str(tmp_path / "empty.db"))
+    try:
+        twice = [_row(url="https://a/1"), _row(url="https://a/2")]
+        kept = drop_duplicate_stories(conn, twice)
+    finally:
+        conn.close()
+    assert [r.url for r in kept] == ["https://a/1"]

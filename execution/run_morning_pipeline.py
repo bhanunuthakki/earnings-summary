@@ -77,7 +77,9 @@ _TRIGGERS_TIMEOUT_S = 1800
 _RENDER_TIMEOUT_S = 300
 # Stage 0 (news) is fast on the FMP path, but an `auto`/`websearch` run can make
 # one Opus web call per fallback ticker, so it gets more headroom than a render.
-_NEWS_TIMEOUT_S = 600
+# The additive EDGAR (sequential, SEC-throttled ~0.5s/ticker) + yfinance-grades
+# (threaded) feeds add a low single-digit number of minutes across the book.
+_NEWS_TIMEOUT_S = 900
 # Stage 4 (data validation) runs population-level range / magnitude-jump /
 # source-disagreement checks across every tracked ticker — a SQLite-bound sweep;
 # 10 min is generous.
