@@ -1,7 +1,14 @@
 @echo off
-REM Daily 05:45 — refresh data/historical/fmp/<TICKER>_earnings_calendar.json
-REM for every portfolio + watchlist ticker. Runs 15 min before the
-REM earnings_calendar_watcher (06:00) so the watcher reads fresh dates.
+REM Daily 05:45 — two steps, one log:
+REM   1. Refresh data/historical/fmp/<TICKER>_earnings_calendar.json for every
+REM      active ticker. While the FMP subscription is lapsed the stable
+REM      /earnings endpoint 402s and this step fails — that is expected; the
+REM      cache simply stays at its last good state.
+REM   2. Materialize the canonical expected_earnings table from the
+REM      FMP-cache -> yfinance preference stack (refresh_expected_earnings.py).
+REM      Runs even when step 1 fails, so the digest / cockpit / portfolio-
+REM      tracker keep getting dates. Runs before backfill_earnings_surprises
+REM      (06:15) and daily_fetch_and_brief (06:30).
 REM Output goes to .tmp/cron_logs/fetch_fmp_earnings_calendar_<TS>.log.
 
 setlocal
@@ -16,5 +23,6 @@ set LOG_FILE=%LOG_DIR%\fetch_fmp_earnings_calendar_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 python execution\fetch_fmp_earnings_calendar.py --all > "%LOG_FILE%" 2>&1
+python execution\refresh_expected_earnings.py >> "%LOG_FILE%" 2>&1
 
 endlocal
