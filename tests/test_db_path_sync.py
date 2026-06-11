@@ -77,7 +77,7 @@ def test_fetch_news_main_syncs_global(
     sqlite3.connect(str(override)).close()
     captured: dict[str, str] = {}
 
-    def _fake_run(tickers: list[str], *, source: str, db_path: str, days: int, limit: int) -> int:
+    def _fake_run(tickers: list[str], *, source: str, db_path: str, days: int, limit: int, **_: object) -> int:
         captured["db_path"] = db_path
         captured["global"] = db.DB_PATH
         return 0
