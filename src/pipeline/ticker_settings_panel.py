@@ -60,7 +60,9 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         f"<td>{escape(t)}</td>"
         f'<td class="ts-state">{"on" if bypass else "off"}</td>'
         f'<td><input type="checkbox" class="ts-toggle" data-ticker="{escape(t)}"'
-        f'{" checked" if bypass else ""} aria-label="Bypass budget for {escape(t)}"></td>'
+        f'{" checked" if bypass else ""} aria-label="Bypass budget for {escape(t)}" '
+        f'title="When on, EVERY LLM build for {escape(t)} ignores the per-purpose '
+        f'budget caps - uncapped spend for this name"></td>'
         f'<td class="num">{escape(updated[:10])}</td>'
         "</tr>"
         for t, bypass, updated in rows

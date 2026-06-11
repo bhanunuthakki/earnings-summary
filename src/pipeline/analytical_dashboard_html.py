@@ -254,8 +254,13 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
         "<code>skip</code> forgoes the call when over cap (and flags it in the brief); "
         "<code>block</code> fails the build; <code>warn</code> overspends.</p>",
         '<table class="budget-table"><thead><tr>',
-        '<th>Purpose</th><th class="num">Spend</th><th class="num">Cap</th>',
-        '<th>Burn</th><th class="num">Headroom</th><th>Mode</th><th></th>',
+        '<th title="The LLM call site this cap governs (one row per purpose)">Purpose</th>',
+        '<th class="num" title="Spent this month against this purpose">Spend</th>',
+        '<th class="num" title="Monthly cap in USD - edit and Save">Cap</th>',
+        '<th title="Share of the cap consumed">Burn</th>',
+        '<th class="num" title="Cap remaining as % (negative = over)">Headroom</th>',
+        '<th title="What happens once over cap: skip forgoes the call, '
+        'block fails the build, warn just overspends">Mode</th><th></th>',
         "</tr></thead><tbody>",
     ]
     for r in panel.rows:
@@ -314,8 +319,14 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         bar_tone = "burn-ok"
     bar_width_pct = int(burn_pct * 100)
     purpose_esc = escape(r.purpose)
+    mode_titles = {
+        "skip": "Over cap: forgo the call and flag it in the brief",
+        "block": "Over cap: fail the build loudly",
+        "warn": "Over cap: keep calling, just log the overage",
+    }
     mode_opts = "".join(
-        f'<option value="{m}"{" selected" if m == r.on_exceed else ""}>{m}</option>'
+        f'<option value="{m}" title="{escape(mode_titles[m], quote=True)}"'
+        f"{' selected' if m == r.on_exceed else ''}>{m}</option>"
         for m in ("skip", "block", "warn")
     )
     # Render >100% as a full bar with the "over" tone — visual cap, the
@@ -326,13 +337,16 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         f"<td><code>{purpose_esc}</code></td>"
         f'<td class="num">${r.current_spend_usd:,.2f}</td>'
         f'<td class="num"><input class="budget-cap" type="number" min="0" step="1" '
-        f'style="width:80px" value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}"></td>'
+        f'style="width:80px" value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}" '
+        f'title="Monthly cap in USD for {purpose_esc}"></td>'
         f'<td class="burn-cell"><div class="burn-bar">'
         f'<div class="burn-fill {bar_tone}" style="width: {min(100, bar_width_pct)}%"></div>'
         f"</div></td>"
         f'<td class="num">{r.headroom_pct * 100:+.0f}%</td>'
-        f'<td><select class="budget-mode" aria-label="mode for {purpose_esc}">{mode_opts}</select></td>'
-        f'<td><button type="button" class="budget-save">Save</button> '
+        f'<td><select class="budget-mode" aria-label="mode for {purpose_esc}" '
+        f'title="What happens once {purpose_esc} is over cap">{mode_opts}</select></td>'
+        f'<td><button type="button" class="budget-save" '
+        f'title="Apply this cap + mode for {purpose_esc}">Save</button> '
         f'<span class="budget-msg muted"></span></td>'
         "</tr>"
     )
