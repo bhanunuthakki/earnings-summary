@@ -67,6 +67,7 @@ from dashboard.upcoming import UPCOMING_CSS
 from pipeline.ask_dock import render_ask_dock
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
+from ui.controls import controls_css
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -432,6 +433,7 @@ def _render_panels(
 # its rules — and any later-inlined comment/chat CSS — resolve unchanged.
 SHELL_CSS = (
     palette_css("dark")
+    + controls_css("dark")
     + """
 :root {
   --panel: var(--surface);
@@ -626,11 +628,12 @@ code { font-family: var(--font-mono); font-size: 0.93em; color: var(--fg-soft); 
 .burn-over { background: var(--bad); }
 .budget-footer { margin-top: 12px; font-size: var(--fs-body); color: var(--fg-soft); }
 .budget-footer strong { color: var(--ink); }
-.budget-table input, .budget-table select { background: var(--panel-alt); color: var(--ink);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 6px;
-  font-size: var(--fs-body); }
-.budget-save { background: var(--accent); color: #0d1117; border: none; padding: 5px 12px;
-  border-radius: var(--radius); font-weight: 600; font-size: var(--fs-body); cursor: pointer; }
+/* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
+.budget-table input, .budget-table select { padding: 4px 6px; }
+.budget-table select { padding-right: 26px; }
+.budget-save { background: var(--accent); color: var(--accent-contrast); border: none;
+  padding: 5px 12px; border-radius: var(--radius); font-weight: 600;
+  font-size: var(--fs-body); cursor: pointer; }
 /* Tier coverage strip */
 .tier-strip { background: var(--panel); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex;
@@ -878,8 +881,11 @@ td.ticker a:hover { color: var(--link); }
   overflow: hidden; animation: cc-pop-in var(--transition); }
 .cc-palette[hidden], .cc-palette-scrim[hidden] { display: none; }
 .cc-palette input { width: 100%; box-sizing: border-box; background: transparent;
-  border: none; border-bottom: 1px solid var(--border); color: var(--ink);
+  border: none; border-bottom: 1px solid var(--border); border-radius: 0; color: var(--ink);
   padding: 13px 16px; font-size: var(--fs-section); font-family: var(--font-body); outline: none; }
+/* The palette field is the dialog's own chrome — no kit focus ring. */
+.cc-palette input:focus-visible { border-color: var(--border); border-bottom-color: var(--accent);
+  box-shadow: none; }
 .cc-palette-list { list-style: none; margin: 0; padding: 6px 0; max-height: 46vh;
   overflow-y: auto; }
 .cc-palette-list li { display: flex; justify-content: space-between; gap: 12px;

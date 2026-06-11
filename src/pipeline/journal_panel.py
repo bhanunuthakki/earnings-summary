@@ -29,13 +29,12 @@ from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
 _PANEL_STYLE = """<style>
 .jr-filters { display:flex; gap:8px; align-items:center; margin:4px 0 14px; flex-wrap:wrap; }
-.jr-filters input, .jr-filters select {
-  background:#1a1d23; color:var(--fg,#f4f3ef); border:1px solid var(--border,#2a2d31);
-  border-radius:6px; padding:5px 9px; font-size:12.5px; }
+/* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
 .jr-filters input { width:90px; text-transform:uppercase; }
-.jr-filters button { background:#1c2138; color:#8aa8ff; border:1px solid #8aa8ff;
-  border-radius:6px; padding:5px 12px; font-size:12.5px; cursor:pointer; }
-.jr-count { color:var(--muted,#9aa0a6); font-size:12px; margin-left:auto; }
+.jr-filters button { background:var(--accent-soft); color:var(--accent);
+  border:1px solid var(--accent); border-radius:var(--radius); padding:5px 12px;
+  font-size:var(--fs-body); cursor:pointer; }
+.jr-count { color:var(--muted); font-size:var(--fs-caption); margin-left:auto; }
 .jr-note { border:1px solid var(--border,#2a2d31); border-radius:8px;
   background:#14161b; padding:10px 14px; margin-bottom:10px; }
 .jr-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
@@ -52,14 +51,13 @@ _PANEL_STYLE = """<style>
 .jr-resolution { margin-top:6px; font-size:12px; color:var(--muted,#9aa0a6); }
 .jr-anchor { color:var(--muted,#9aa0a6); font-size:10.5px; font-family:var(--mono,monospace); }
 .jr-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
-.jr-actions button, .jr-actions select {
-  background:#1a1d23; color:var(--fg-soft,#d5d6d2); border:1px solid var(--border,#2a2d31);
-  border-radius:5px; padding:3px 9px; font-size:11.5px; cursor:pointer; }
-.jr-actions button:hover { border-color:#8aa8ff; color:#8aa8ff; }
+.jr-actions select { font-size:var(--fs-caption); padding:3px 9px; }
+.jr-actions button { background:transparent; color:var(--muted);
+  border:1px solid var(--border); border-radius:var(--radius); padding:3px 9px;
+  font-size:var(--fs-caption); cursor:pointer; }
+.jr-actions button:hover { border-color:var(--accent); color:var(--accent); }
 .jr-note-new { margin:0 0 16px; }
-.jr-note-new textarea { width:100%; box-sizing:border-box; background:#1a1d23;
-  color:var(--fg,#f4f3ef); border:1px solid var(--border,#2a2d31); border-radius:6px;
-  padding:7px 9px; font-size:12.5px; min-height:54px; }
+.jr-note-new textarea { width:100%; box-sizing:border-box; min-height:54px; }
 .jr-note-new .jr-row { display:flex; gap:8px; margin-top:6px; }
 .jr-empty { color:var(--muted,#9aa0a6); padding:18px 0; }
 .jr-hint { color:var(--muted,#9aa0a6); font-size:11.5px; margin-top:10px; }

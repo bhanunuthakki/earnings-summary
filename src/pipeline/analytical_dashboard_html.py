@@ -25,6 +25,7 @@ from pipeline.analytical_dashboard import (
     PredictionOutcomeRow,
     TriggerLadderRow,
 )
+from ui.controls import controls_css
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -705,7 +706,7 @@ _PAGE_HEAD = (
 """
     + FAVICON_LINK
     + "\n<style>\n"
-    + palette_css("dark").replace("{", "{{").replace("}", "}}")
+    + (palette_css("dark") + controls_css("dark")).replace("{", "{{").replace("}", "}}")
     + """
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
   h1 {{ font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }}

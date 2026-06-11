@@ -95,10 +95,8 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   border-radius:var(--radius-full); padding:1px 7px; text-decoration:none; }
 .ask-dock-cite:hover { border-color:var(--accent); }
 .ask-dock-form { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--border); }
-.ask-dock-form input { flex:1; background:var(--paper, #1a1d23); color:var(--fg);
-  border:1px solid var(--border); border-radius:var(--radius); padding:7px 10px;
-  font-size:var(--fs-caption); }
-.ask-dock-form input:focus { outline:none; border-color:var(--accent); }
+/* Input skinned by the shared control kit (ui/controls.py). */
+.ask-dock-form input { flex:1; padding:7px 10px; font-size:var(--fs-caption); }
 .ask-dock-form button { background:var(--accent-soft); color:var(--accent);
   border:1px solid var(--accent); border-radius:var(--radius); padding:7px 12px;
   font-size:var(--fs-caption); cursor:pointer; }

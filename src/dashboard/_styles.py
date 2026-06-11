@@ -11,11 +11,13 @@ filesystem with no asset fetches.
 
 from __future__ import annotations
 
+from ui.controls import controls_css
 from ui.tokens import palette_css
 
 CSS = (
     "\n/* Shared palette (single source: src/ui/tokens.py) + local layout tokens. */\n"
     + palette_css("dark")
+    + controls_css("dark")
     + r"""
 :root {
   --pad-x: 22px;

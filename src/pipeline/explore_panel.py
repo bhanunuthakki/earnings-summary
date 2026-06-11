@@ -50,9 +50,8 @@ _PANEL_STYLE = """<style>
   padding:12px 14px; margin:4px 0 12px; }
 .vx-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
 .vx-row label { color:var(--muted); font-size:var(--fs-caption); }
-.vx-row input, .vx-row select {
-  background:var(--paper, #1a1d23); color:var(--fg); border:1px solid var(--border);
-  border-radius:var(--radius); padding:5px 9px; font-size:var(--fs-body); }
+/* Inputs/selects: skinned by the shared control kit (ui/controls.py) —
+   only layout lives here. */
 .vx-row input[name="tickers"] { width:260px; text-transform:uppercase; }
 .vx-row input[name="periods"], .vx-row input[name="cagr_years"] { width:54px; }
 .vx-row input[name="view_name"] { width:200px; }
@@ -64,8 +63,7 @@ _PANEL_STYLE = """<style>
   margin-bottom:10px; }
 .vx-picker label { display:block; color:var(--muted); font-size:var(--fs-caption); margin-bottom:3px;
   text-transform:uppercase; letter-spacing:.06em; }
-.vx-picker select { width:100%; background:var(--paper, #1a1d23); color:var(--fg-soft, var(--fg));
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-caption); padding:4px; }
+.vx-picker select { width:100%; font-size:var(--fs-caption); }
 .vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .vx-saved { display:inline-flex; align-items:center; border:1px solid var(--border);
   border-radius:var(--radius); background:var(--paper, #1a1d23); overflow:hidden; }
@@ -125,9 +123,7 @@ _PANEL_STYLE = """<style>
 .ask-cmd { font-family:var(--font-mono, monospace); font-size:var(--fs-caption); white-space:pre-wrap;
   color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
-.ask-inputrow input { flex:1; background:var(--paper, #1a1d23); color:var(--fg);
-  border:1px solid var(--border); border-radius:var(--radius); padding:9px 13px; font-size:var(--fs-section); }
-.ask-inputrow input:focus { outline:none; border-color:var(--accent); }
+.ask-inputrow input { flex:1; padding:9px 13px; font-size:var(--fs-section); }
 .ask-inputrow button { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
   border-radius:var(--radius); padding:9px 16px; font-size:var(--fs-body); cursor:pointer; }
 .ask-ctx { color:var(--muted); font-size:var(--fs-caption); }
