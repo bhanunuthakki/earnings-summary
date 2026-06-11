@@ -201,13 +201,14 @@ Definitions:
                    wasn't disclosed, the period is too short, etc.)
 """
     try:
+        # Model resolves from LLM_MODELS["bear_case_grading"] — the registry
+        # is the single reviewable surface for pins (llm_evals_plan.md §5.5).
         raw = call_llm(
             prompt,
             purpose="bear_case_grading",
             ticker=ticker,
-            model="claude-sonnet-4-6",
         )
-    except Exception as exc:  # noqa: BLE001 — log and skip
+    except Exception as exc:  # log and skip — grading is retried next run
         log.warning({"event": "grader_llm_failed", "error": str(exc)})
         return None
     raw = raw.strip()

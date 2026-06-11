@@ -242,13 +242,14 @@ Paragraph:
 """
 
     try:
+        # Model resolves from LLM_MODELS["decision_extraction"] — the registry
+        # is the single reviewable surface for pins (llm_evals_plan.md §5.5).
         raw = call_llm(
             prompt,
             purpose="decision_extraction",
             ticker=ticker,
-            model="claude-haiku-4-5-20251001",
         )
-    except Exception as exc:  # noqa: BLE001 — extractor is best-effort
+    except Exception as exc:  # extractor is best-effort
         log.warning({"event": "decision_extractor_llm_failed", "error": str(exc)})
         return []
 

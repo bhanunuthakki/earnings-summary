@@ -1,19 +1,29 @@
 """Run an LLM eval (directives/llm_evals_plan.md).
 
-Grades a purpose's outputs against its golden set through the PRODUCTION call
-path, persists the run + per-case transcripts to eval_runs/eval_case_results
-(alembic 0083), and bridges the run average into prompt_calibration_scores so
+Two modes, one harness:
+
+* mode A (live golden set) — `viewspec_compile`: generates fresh outputs
+  through the PRODUCTION call path and grades them against the checked-in
+  golden set, judge only on ambiguous divergence.
+* mode B (rubric audit) — `bear_case` / `transcript_summary` /
+  `advisor_next_dollar`: judges REAL production artifacts facet-by-facet
+  against the versioned rubric in evals/rubrics/<purpose>.md.
+
+Both persist the run + per-case transcripts to eval_runs/eval_case_results
+(alembic 0083) and bridge the run average into prompt_calibration_scores so
 `summarize_by_prompt_version` compares prompt versions.
 
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
-    python execution/run_llm_evals.py --purpose viewspec_compile \
-        --repo-root C:/Users/Bhanu/.gemini/antigravity/scratch/earnings-summary
+    python execution/run_llm_evals.py --purpose bear_case \
+        --repo-root C:/Users/Bhanu/.gemini/antigravity/scratch/earnings-summary --limit 5
+    python execution/run_llm_evals.py --purpose transcript_summary --since-days 7
     python execution/run_llm_evals.py --purpose viewspec_compile --no-persist --limit 3
     python execution/run_llm_evals.py --purpose viewspec_compile --min-score 0.8  # gate
 
-Exit codes: 0 ok · 1 hard failure (bad golden set, missing DB/tables, abort)
-· 3 ran fine but avg_score below --min-score (the regression gate).
+Exit codes: 0 ok (including an empty audit corpus — nothing to grade) · 1 hard
+failure (bad golden set/rubric, missing DB/tables, abort) · 3 ran fine but
+avg_score below --min-score (the regression gate).
 """
 
 from __future__ import annotations
@@ -29,7 +39,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 log = logging.getLogger("run_llm_evals")
 
-PURPOSES = ("viewspec_compile",)
+GOLDEN_PURPOSES = ("viewspec_compile",)
+AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
+PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 
 
 def _parse_args() -> argparse.Namespace:
@@ -53,9 +65,24 @@ def _parse_args() -> argparse.Namespace:
         "--golden",
         type=Path,
         default=None,
-        help="Override the golden-set file (default: <this repo>/evals/golden/<purpose>.json).",
+        help="Mode A: override the golden-set file "
+        "(default: <this repo>/evals/golden/<purpose>.json). "
+        "Mode B: override the rubric file "
+        "(default: <this repo>/evals/rubrics/<purpose>.md).",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Grade only the first N cases.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Grade only the first N cases (mode B corpora are newest-first).",
+    )
+    parser.add_argument(
+        "--since-days",
+        type=int,
+        default=None,
+        help="Mode B only: audit just the artifacts produced in the last N days "
+        "(the weekly-cron scope). Ignored for golden-set purposes.",
+    )
     parser.add_argument(
         "--no-persist",
         action="store_true",
@@ -64,7 +91,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-judge",
         action="store_true",
-        help="Skip judge calls — divergent cases just fail (no judge spend).",
+        help="Mode A only: skip judge calls — divergent cases just fail (no judge "
+        "spend). Mode B is judge-driven, so this flag is rejected there.",
     )
     parser.add_argument(
         "--min-score",
@@ -97,21 +125,52 @@ def main() -> int:
     _sync_db_to_repo(repo_root)
 
     from evals.harness import EvalAbortError, persist_summary
-    from evals.judge import run_judge
-    from evals.viewspec_compile import DEFAULT_GOLDEN_RELPATH, run_viewspec_eval
 
-    golden_path = (args.golden or (PROJECT_ROOT / DEFAULT_GOLDEN_RELPATH)).resolve()
     try:
-        summary = run_viewspec_eval(
-            db_path=db_path,
-            golden_path=golden_path,
-            code_root=PROJECT_ROOT,  # the sha of the code/prompt under eval, not the data repo
-            limit=args.limit,
-            judge=None if args.no_judge else run_judge,
-        )
+        if args.purpose in AUDIT_PURPOSES:
+            if args.no_judge:
+                print(
+                    "ERROR: --no-judge is a mode-A flag; rubric audits are judge-driven.",
+                    file=sys.stderr,
+                )
+                return 1
+            from evals.rubric_judge import run_rubric_eval
+
+            summary = run_rubric_eval(
+                args.purpose,
+                db_path=db_path,
+                repo_root=repo_root,
+                code_root=PROJECT_ROOT,  # rubric + git sha come from the checkout under eval
+                rubric_path=args.golden.resolve() if args.golden else None,
+                limit=args.limit,
+                since_days=args.since_days,
+            )
+        else:
+            from evals.judge import run_judge
+            from evals.viewspec_compile import DEFAULT_GOLDEN_RELPATH, run_viewspec_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / DEFAULT_GOLDEN_RELPATH)).resolve()
+            summary = run_viewspec_eval(
+                db_path=db_path,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,  # the sha of the code/prompt under eval, not the data repo
+                limit=args.limit,
+                judge=None if args.no_judge else run_judge,
+            )
     except (EvalAbortError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+
+    if summary.n_cases == 0:
+        # An empty audit corpus (e.g. --since-days over a quiet week) is
+        # "nothing to grade", not a quality signal — don't write a run row
+        # and don't trip the gate.
+        print(
+            f"No cases to grade for {args.purpose}"
+            + (f" (since_days={args.since_days})" if args.since_days is not None else "")
+            + " — exiting without persisting.",
+        )
+        return 0
 
     if not args.no_persist:
         try:
