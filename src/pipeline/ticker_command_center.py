@@ -799,7 +799,9 @@ def render_holding_picker_band(_repo_root: Path) -> str:
 
 def _freshness_dot(ident: TickerIdentity) -> str:
     """One dot instead of three giant cards: worst-of staleness across the
-    build and the FMP pull, with the detail in the tooltip (PR1 time rules)."""
+    build and the FMP pull, with the detail in the tooltip (PR1 time rules).
+    Clicking peeks the per-source provenance card (UX9d) — ages + inline
+    refresh — with /#system as the real href for middle-click."""
     from datetime import UTC as _UTC
 
     now = datetime.now(_UTC).replace(tzinfo=None)
@@ -826,7 +828,12 @@ def _freshness_dot(ident: TickerIdentity) -> str:
         f"Transcript {ident.last_transcript_period}" if ident.last_transcript_period else None,
     ]
     title = escape(" · ".join(b for b in bits if b), quote=True)
-    return f'<span class="cc-fdot {tone}" title="{title}">●</span>'
+    t = escape(ident.ticker, quote=True)
+    return (
+        f'<a class="cc-fdot {tone}" href="/#system" '
+        f'data-peek-url="/api/peek/provenance?ticker={t}" '
+        f'data-peek-title="Data provenance · {t}" title="{title}">●</a>'
+    )
 
 
 def render_holding_fragment(repo_root: Path, ticker: str) -> str:
@@ -994,6 +1001,7 @@ _TCC_DRAWER_STYLE = """<style>
   flex-wrap: wrap; gap: 12px; min-height: 40px; margin-bottom: 14px; padding-bottom: 10px;
   border-bottom: 1px solid var(--border, #2a2c30); }
 .cc-fdot { font-size: var(--fs-body); cursor: help; margin-left: 6px; }
+a.cc-fdot { text-decoration: none; cursor: pointer; }
 .fdot-ok { color: var(--ok, #4ade80); }
 .fdot-warn { color: var(--warn, #fbbf24); }
 .fdot-bad { color: var(--bad, #f87171); }

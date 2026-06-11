@@ -1394,6 +1394,22 @@ def create_app(
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/provenance", methods=["GET"])
+    def peek_provenance():
+        """Per-source data freshness with inline refresh buttons (UX9d) — the
+        click-through behind the cockpit freshness dots, the holding-header
+        dot, and the Home tier strip. ``?ticker=`` scopes to one holding;
+        bare = portfolio-wide. The buttons POST the existing ``/actions/*``
+        endpoints and stream their job log inside the peek; System → Actions
+        stays the deep console. Always 200 — missing data degrades to
+        em-dash ages."""
+        from pipeline.peeks import render_provenance_peek
+
+        return Response(
+            render_provenance_peek(db_path, request.args.get("ticker") or None),
+            mimetype="text/html",
+        )
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         """Full per-ticker command-center state as JSON: identity/freshness,

@@ -355,6 +355,11 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
 def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
     """Compact one-line summary of "how stale is each tier right now?".
 
+    Each chip is a peek trigger (UX9d): clicking opens the portfolio-wide
+    data-provenance card — per-source ages with inline refresh — while the
+    cron-hint tooltips stay the hover layer and /#system stays the real href
+    for middle-click (and for the static export, which has no peek host).
+
     Empty-coverage case (no tracked tickers / no DB) renders nothing rather
     than an empty bar — keeps the dashboard clean for first-run setups.
     """
@@ -367,6 +372,7 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
     parts: list[str] = [
         '<div class="tier-strip"><span class="tier-strip-label">Data freshness:</span>'
     ]
+    peek = 'href="/#system" data-peek-url="/api/peek/provenance" data-peek-title="Data provenance"'
     chips: list[str] = []
     for tier in ("P1", "P2", "P3"):
         c = coverage.get(tier, {})
@@ -374,15 +380,15 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
         stale = int(c.get("stale", 0))
         total = int(c.get("total", 0))
         if total == 0:
-            chips.append(f'<span class="tier-chip tier-empty">{tier}: 0 tracked</span>')
+            chips.append(f'<a {peek} class="tier-chip tier-empty">{tier}: 0 tracked</a>')
             continue
         # Pretty-printer for large counts ("1.8k / 2.3k") on P3.
         fresh_disp = _fmt_count(fresh)
         total_disp = _fmt_count(total)
         if stale == 0:
             chips.append(
-                f'<span class="tier-chip tier-ok" title="{tier} — all fresh">'
-                f"{tier}: {fresh_disp} / {total_disp} fresh</span>"
+                f'<a {peek} class="tier-chip tier-ok" title="{tier} — all fresh">'
+                f"{tier}: {fresh_disp} / {total_disp} fresh</a>"
             )
         else:
             # P3 is the deep-history backfill tier — thousands of old rows
@@ -390,11 +396,11 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
             # of shouting red on the landing page (PR1).
             stale_cls = "tier-backfill" if tier == "P3" else "tier-stale"
             chips.append(
-                f'<span class="tier-chip {stale_cls}" title="To force-refresh: '
+                f'<a {peek} class="tier-chip {stale_cls}" title="To force-refresh: '
                 f"python execution/daily_fetch_and_brief.py --ignore-tier "
                 f'(or run the {_tier_cron_hint(tier)} cron)">'
                 f"{tier}: {fresh_disp} / {total_disp} fresh "
-                f'<span class="tier-stale-count">({stale} stale)</span></span>'
+                f'<span class="tier-stale-count">({stale} stale)</span></a>'
             )
     parts.append(" · ".join(chips))
     parts.append("</div>")
@@ -795,6 +801,7 @@ _PAGE_HEAD = (
   .tier-strip {{ background: var(--surface); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
   .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
   .tier-chip {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 2px 6px; border-radius: 3px; cursor: help; }}
+  a.tier-chip {{ text-decoration: none; cursor: pointer; }}
   .tier-ok {{ color: var(--ok); }}
   .tier-stale {{ color: var(--warn); }}
   .tier-stale-count {{ color: var(--bad); font-weight: 600; }}
