@@ -386,6 +386,13 @@ a { color: var(--link); }
   padding-right: 2px; }
 .cc-panel[hidden] { display: none; }
 .cc-loading, .cc-empty { color: var(--muted); font-size: 13px; padding: 24px 4px; }
+/* Skeleton shimmer under the loading text (PR8) — feedback that the panel
+   is alive, without a spinner library. */
+.cc-loading::after { content: ''; display: block; height: 10px; margin-top: 12px;
+  border-radius: 5px; max-width: 420px;
+  background: linear-gradient(90deg, var(--surface) 25%, var(--paper) 50%, var(--surface) 75%);
+  background-size: 200% 100%; animation: cc-shimmer 1.2s ease-in-out infinite; }
+@keyframes cc-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 
 /* Ticker picker (Pre-reads / Insiders / Holding) */
 .cc-picker-wrap { margin-bottom: 16px; }
@@ -687,7 +694,7 @@ td.ticker a:hover { text-decoration: underline; }
   font-family: var(--font-body); margin-right: 14px; }
 .cc-settings-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 38; }
-.cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 92vw);
+.cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 39;
   display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35); }
 .cc-drawer[hidden], .cc-drawer-scrim[hidden] { display: none; }

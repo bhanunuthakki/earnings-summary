@@ -82,14 +82,19 @@ _ACTIONS_BLOCK = """
   var outputEl = document.getElementById('ir-output');
   var es = null;
   var finished = false;
+  var t0 = 0;
 
   function setStatus(text, cls) {
     statusEl.textContent = text;
     statusEl.className = 'actions-status' + (cls ? ' ' + cls : '');
   }
+  function elapsed() {
+    var s = Math.floor((Date.now() - t0) / 1000);
+    return '[' + Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + '] ';
+  }
   function appendLine(line) {
     outputEl.hidden = false;
-    outputEl.textContent += line + '\\n';
+    outputEl.textContent += elapsed() + line + '\\n';
     outputEl.scrollTop = outputEl.scrollHeight;
   }
   function closeStream() {
@@ -104,6 +109,7 @@ _ACTIONS_BLOCK = """
     if (!(quarters > 0)) quarters = 8;
     closeStream();
     finished = false;
+    t0 = Date.now();
     outputEl.textContent = '';
     outputEl.hidden = true;
     submitEl.disabled = true;
@@ -136,10 +142,11 @@ _ACTIONS_BLOCK = """
         } else if (m.event === 'done') {
           finished = true;
           appendLine('# exit code ' + m.exit_code);
+          var took = Math.round((Date.now() - t0) / 1000);
           if (m.exit_code === 0) {
-            setStatus('Done. KPIs ingested at IR-doc tier.', 'ok');
+            setStatus('Done in ' + took + 's. KPIs ingested at IR-doc tier.', 'ok');
           } else {
-            setStatus('Failed (exit ' + m.exit_code + '). See log above.', 'error');
+            setStatus('Failed (exit ' + m.exit_code + ') after ' + took + 's. See log above.', 'error');
           }
           submitEl.disabled = false;
           closeStream();
@@ -171,13 +178,18 @@ _MAINTENANCE_BLOCK = """
     Repo-wide chores, streamed live — the same CLIs the crons run.
   </p>
   <div class="actions-form">
-    <button type="button" class="maint-btn" data-action="seed_kpis">Seed KPI defs</button>
-    <button type="button" class="maint-btn" data-action="process_inbox">Process dropped docs</button>
-    <button type="button" class="maint-btn" data-action="sweep_history">Sweep output history</button>
-    <button type="button" class="maint-btn" data-action="onboard_pending">Onboard pending</button>
+    <button type="button" class="maint-btn" data-action="seed_kpis"
+      title="Re-seed kpi_definitions from the per-ticker holdings JSONs. Idempotent - safe to re-run.">Seed KPI defs</button>
+    <button type="button" class="maint-btn" data-action="process_inbox"
+      title="Register documents dropped into the inbox folder (categorize + attach to their tickers).">Process dropped docs</button>
+    <button type="button" class="maint-btn" data-action="sweep_history"
+      title="Archive superseded report builds out of output/ - keeps the newest per ticker.">Sweep output history</button>
+    <button type="button" class="maint-btn" data-action="onboard_pending"
+      title="Run the full onboarding pipeline for every ticker queued as pending.">Onboard pending</button>
     <span class="maint-sep">|</span>
     <input type="text" id="maint-onboard-ticker" class="ir-ticker" placeholder="Ticker" aria-label="Ticker to onboard">
-    <button type="button" class="maint-btn" data-action="onboard" data-needs-ticker="1">Onboard ticker</button>
+    <button type="button" class="maint-btn" data-action="onboard" data-needs-ticker="1"
+      title="FMP onboard + first report build for ONE new ticker. Takes minutes and spends FMP quota.">Onboard ticker</button>
     <span id="maint-status" class="actions-status" role="status" aria-live="polite"></span>
   </div>
   <pre id="maint-output" class="actions-output" hidden></pre>
@@ -195,13 +207,17 @@ _MAINTENANCE_BLOCK = """
   var statusEl = document.getElementById('maint-status');
   var outputEl = document.getElementById('maint-output');
   var tickerEl = document.getElementById('maint-onboard-ticker');
-  var es = null, finished = false;
+  var es = null, finished = false, t0 = 0;
+  function elapsed() {
+    var s = Math.floor((Date.now() - t0) / 1000);
+    return '[' + Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + '] ';
+  }
   function setStatus(t, c) { statusEl.textContent = t; statusEl.className = 'actions-status' + (c ? ' ' + c : ''); }
-  function appendLine(l) { outputEl.hidden = false; outputEl.textContent += l + '\\n'; outputEl.scrollTop = outputEl.scrollHeight; }
+  function appendLine(l) { outputEl.hidden = false; outputEl.textContent += elapsed() + l + '\\n'; outputEl.scrollTop = outputEl.scrollHeight; }
   function enable() { btns.forEach(function (b) { b.disabled = false; }); }
   function run(action, ticker) {
     if (es) { es.close(); es = null; }
-    finished = false; outputEl.textContent = ''; outputEl.hidden = true;
+    finished = false; outputEl.textContent = ''; outputEl.hidden = true; t0 = Date.now();
     btns.forEach(function (b) { b.disabled = true; });
     setStatus('Starting ' + action + '...', 'running');
     var payload = { action: action };
@@ -220,7 +236,8 @@ _MAINTENANCE_BLOCK = """
         else if (m.event === 'log') { appendLine(m.line); }
         else if (m.event === 'done') {
           finished = true; appendLine('# exit code ' + m.exit_code);
-          setStatus(m.exit_code === 0 ? 'Done.' : 'Failed (exit ' + m.exit_code + ').', m.exit_code === 0 ? 'ok' : 'error');
+          var took = Math.round((Date.now() - t0) / 1000);
+          setStatus(m.exit_code === 0 ? ('Done in ' + took + 's.') : ('Failed (exit ' + m.exit_code + ') after ' + took + 's.'), m.exit_code === 0 ? 'ok' : 'error');
           enable(); if (es) { es.close(); es = null; }
         }
       };
