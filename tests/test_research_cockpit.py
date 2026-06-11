@@ -30,6 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db as dbmod  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
+    _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     build_cockpit_rows,
     render_research_cockpit,
 )
@@ -321,6 +322,104 @@ def test_build_degrades_on_minimal_schema(tmp_path: Path) -> None:
     assert nu.kpi_deltas == []
     html = render_research_cockpit(rows)
     assert "NU" in html
+
+
+def _seed_fact_quarters(
+    c: sqlite3.Connection,
+    ticker: str,
+    periods: list[tuple[str, str, float, float | None, float | None, float | None]],
+) -> None:
+    """financial_facts rows feeding the metrics/ratios views, one document per
+    call: (period_end, fiscal_period_type, revenue, ocf, capex, fcf)."""
+    c.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES (?, 'fmp', 'fmp_statements', ?, ?, ?, 'ok', 10)",
+        (ticker, f"data/{ticker}_facts.json", f"{ticker:0>64}", _iso(NOW)),
+    )
+    doc_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+    items = ("revenue", "operating_cash_flow", "capital_expenditure", "free_cash_flow")
+    for period_end, fpt, *vals in periods:
+        for item, val in zip(items, vals, strict=True):
+            if val is None:
+                continue
+            c.execute(
+                "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
+                "line_item, value, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, 'actual', ?)",
+                (ticker, period_end, fpt, item, val, doc_id),
+            )
+    c.commit()
+
+
+def test_eval_fundamentals_ttm_margin_from_quarters(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """No TTM facts (the prod shape) -> FCF margin sums the newest four
+    quarters; a quarter lacking free_cash_flow derives it from OCF + signed
+    capex; the fifth-newest quarter stays out of the window."""
+    _seed_fact_quarters(
+        conn,
+        "V",
+        [
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, None),  # derived: 20
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
+            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),  # excluded
+        ],
+    )
+    rev_yoy, margin = _eval_fundamentals(conn)["V"]
+    assert rev_yoy == pytest.approx(20.0)
+    assert margin == pytest.approx(80.0 / 435.0 * 100.0)
+    # …and it lands on the cockpit row end-to-end.
+    v = _by_ticker(build_cockpit_rows(conn, repo_root)["evaluation"])["V"]
+    assert v.fcf_margin_pct == pytest.approx(80.0 / 435.0 * 100.0)
+
+
+def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
+    """A hole in the quarter window (endpoints a full year apart — BHP-style
+    half-year rows) or fewer than four FCF-bearing quarters -> no margin
+    rather than a mislabeled one."""
+    _seed_fact_quarters(
+        conn,
+        "GAPQ",
+        [
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+            # 2025-06-30 missing -> the newest-4 window spans 365 days.
+            ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    _seed_fact_quarters(
+        conn,
+        "FEWQ",
+        [
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+        ],
+    )
+    out = _eval_fundamentals(conn)
+    assert out["GAPQ"] == (pytest.approx(20.0), None)
+    assert out["FEWQ"][1] is None
+
+
+def test_eval_fundamentals_prefers_ratios_ttm_row(conn: sqlite3.Connection) -> None:
+    """A real TTM facts row (margin 25%) outranks the on-the-fly quarterly
+    sum (~18.4%) when financial_facts carries one."""
+    _seed_fact_quarters(
+        conn,
+        "TTMQ",
+        [
+            ("2026-03-31 00:00:00", "TTM", 400.0, None, None, 100.0),
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    assert _eval_fundamentals(conn)["TTMQ"][1] == pytest.approx(25.0)
 
 
 # --------------------------------------------------------------------------- #

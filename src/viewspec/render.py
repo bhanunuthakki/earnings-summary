@@ -11,6 +11,11 @@ inclusion.
 Heat shading follows the charts_v2 convention (green positive / red
 negative, saturation by magnitude) but only for signed-growth transforms
 (yoy / cagr) — levels and margins are read as values, not directions.
+
+Growth values beyond the per-transform n/m limits (lumpy bases, sign
+flips — BN-style ±1700% YoY cells) render as a muted "n/m" with the real
+value in the cell tooltip, and stay out of the heat shading and the
+chart's y-scale so the remaining series keep a readable range.
 """
 
 from __future__ import annotations
@@ -22,6 +27,11 @@ from ui.source_chip import SOURCE_CHIP_CSS, source_chip_html
 from viewspec.engine import ViewResult, ViewRow
 
 _MAX_CHART_SERIES = 8
+
+# |value| display limits (percent points) past which a growth cell is "not
+# meaningful": a tiny or sign-flipping base produces faithful-but-absurd
+# growth numbers that read as garbage and blow out the shared color/y scales.
+_NM_LIMITS: dict[str, float] = {"yoy": 500.0, "cagr": 200.0}
 
 # Fragment-scoped styles: the vx-* matrix plus the shared chip anatomy and
 # dark-shell overrides for the charts_v2 SVG text (its stylesheet hardcodes
@@ -40,6 +50,7 @@ VIEWSPEC_CSS = (
 .vx-matrix .vx-label { text-align: left; font-weight: 600; color: var(--fg);
   background: var(--paper, var(--surface)); position: sticky; left: 0; }
 .vx-matrix td { color: var(--fg-soft, var(--fg)); }
+.vx-matrix td.vx-nm { color: var(--muted); cursor: help; }
 .vx-unit { color: var(--muted); font-weight: 400; }
 .vx-chart { margin-top: 12px; }
 .vx-chart .cv2-title { fill: var(--fg); }
@@ -64,6 +75,12 @@ def _heat_style(pct: float | None) -> str:
     if pct >= 0:
         return f"background:rgba(2,158,115,{alpha:.2f})"
     return f"background:rgba(203,77,77,{alpha:.2f})"
+
+
+def _is_nm(value: float | None, transform: str) -> bool:
+    """True when a growth value is past the transform's n/m display limit."""
+    limit = _NM_LIMITS.get(transform)
+    return limit is not None and value is not None and abs(value) > limit
 
 
 def _is_pct_unit(unit: str | None) -> bool:
@@ -102,9 +119,14 @@ def _row_html(row: ViewRow, transform: str) -> str:
     unit_sub = f' <span class="vx-unit">({escape(row.unit)})</span>' if row.unit else ""
     cells: list[str] = [f'<th class="vx-label">{escape(row.label)}{unit_sub}</th>']
     shade = transform in ("yoy", "cagr")
+    limit = _NM_LIMITS.get(transform)
     for cell in row.cells:
-        style = f' style="{_heat_style(cell.value)}"' if shade else ""
         chip = f" {source_chip_html(cell.source)}" if cell.source is not None else ""
+        if limit is not None and cell.value is not None and abs(cell.value) > limit:
+            tip = f"{fmt_pct(cell.value)} — beyond ±{limit:.0f}%, not meaningful"
+            cells.append(f'<td class="vx-nm" title="{tip}">n/m{chip}</td>')
+            continue
+        style = f' style="{_heat_style(cell.value)}"' if shade else ""
         cells.append(f"<td{style}>{_fmt_cell(cell.value, transform, row.unit)}{chip}</td>")
     return f"<tr>{''.join(cells)}</tr>"
 
@@ -117,6 +139,9 @@ def render_view_fragment(result: ViewResult, *, include_chart: bool = True) -> s
         f"{len(result.rows)} series · {len(result.period_labels)} {spec.cadence} buckets · "
         f"{escape(spec.transform)} — {_transform_caption(spec.transform, spec.cagr_years)}"
     )
+    nm_count = sum(1 for row in result.rows for c in row.cells if _is_nm(c.value, spec.transform))
+    if nm_count:
+        meta += f" · {nm_count} value{'s' if nm_count != 1 else ''} n/m"
     parts.append(f'<div class="vx-meta">{meta}</div>')
     for w in result.warnings:
         parts.append(f'<div class="vx-warn">⚠ {escape(w)}</div>')
@@ -146,7 +171,15 @@ def render_view_fragment(result: ViewResult, *, include_chart: bool = True) -> s
 def _chart_html(result: ViewResult) -> str:
     spec = result.spec
     rows = result.rows[:_MAX_CHART_SERIES]
-    series = [LineSeries(name=row.label, values=[c.value for c in row.cells]) for row in rows]
+    # n/m values are dropped (not clamped): the chart's y-scale and polylines
+    # both skip None points, so the sane series keep a readable range.
+    series = [
+        LineSeries(
+            name=row.label,
+            values=[None if _is_nm(c.value, spec.transform) else c.value for c in row.cells],
+        )
+        for row in rows
+    ]
     value_fmt = "pct" if spec.transform in ("yoy", "cagr", "margin") else "compact"
     svg = multi_line_chart(
         series,
