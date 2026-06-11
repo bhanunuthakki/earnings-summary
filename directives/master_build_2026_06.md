@@ -1,10 +1,12 @@
 # Master build directive — research companion & investment advisor
 
-**Status: ACTIVE — the canonical plan.** Supersedes `improvement_roadmap_2026_06.md`
-(now a pointer stub). Origin: the 2026-06-10 audit + grill-me session; every
-decision below was confirmed by the owner. Agents executing this directive:
-update the phase checkboxes as PRs land, and record deviations in the
-Decision log at the bottom.
+**Status: COMPLETE (2026-06-11) — all 20 phases shipped.** Built across
+2026-06-10/11 in #361–#393 (waves 0–6, one PR per phase); the close-out
+review is the final Decision-log entry. Supersedes
+`improvement_roadmap_2026_06.md` (now a pointer stub). Origin: the
+2026-06-10 audit + grill-me session; every decision below was confirmed by
+the owner. This document stays as the record of what was decided and built;
+new work gets a new directive.
 
 ## North star
 
@@ -208,7 +210,7 @@ demands it (note the split in the Decision log).
   via the existing jobs SSE).
 
 ### Wave 6 — Hardening
-- [ ] **P6.1 Consolidation cleanup.** Retire dead routes/renderers left by
+- [x] **P6.1 Consolidation cleanup.** *(#393)* Retire dead routes/renderers left by
   the theme migration; latency pass on the three landing surfaces; residual
   design-debt sweep; directive close-out review.
 
@@ -425,3 +427,32 @@ demands it (note the split in the Decision log).
   so a journal capture never triggers a brief edit. Capture works on any
   data-commentable section of the workspace report; portfolio-level notes
   come from the Journal tab's own form (blank ticker).
+- 2026-06-11 (P6.1, #393 — CLOSE-OUT REVIEW; directive COMPLETE). Cleanup
+  taken: retired the dead `/api/panel/{insiders,predictions,decisions}`
+  fallback entries + fragment branches the theme migration left (nothing
+  fetched them; the sections still render in the static export), the
+  never-wired design-bundle slots (line_chart / stacked_bars /
+  sensitivity_grid / compute_gordon_sensitivity + their CSS + the
+  hero_quote models — defined since the original design, never produced),
+  and the signals cards' inline hardcoded colors (now token classes).
+  Latency pass: the three landing surfaces measured — Research overview
+  191ms, Governance coverage 264ms, every other panel <300ms; the two
+  tracker-backed tabs (Portfolio, Decisions) burned 8.2s when the tracker
+  was OFFLINE — Windows loopback refused-connect retries (~2s per address
+  family, doubled by "localhost" dual-stack). Fixed in the client: a
+  (connect=0.5s, read) timeout tuple + 127.0.0.1 default — offline
+  degrade now ~1s, live tracker unaffected.
+  Review against the north star: all 20 phases shipped #361–#393 over
+  2026-06-10/11. Deep research = the three-theme app + provenance-chipped
+  reports with /source viewers; surfacing new companies = screens +
+  adjacency + the gated queue; slice-and-dice = ViewSpec + NL compile;
+  opportunity cost + positioning = the advisor package (memos, Socratic
+  stances, scorecard) on tracker benchmarks; persistent thought = the
+  journal woven into digest/prep/builds/alerts. Out of scope held: no
+  email/push, no remote access, no event-driven feeds; pull-only on
+  localhost. Known carried seams (deliberate, documented in memory):
+  reports show new chrome only on rebuild; kpi-chip doc_id pending the
+  kpi loader path (partially closed by P5.1's tier-aware chip loaders);
+  watchlist DCF currency artifacts; validation_issues empty until the
+  engine runs against prod; next_dollar memos unscoreable v1. New work
+  gets a new directive — this one is a record now.
