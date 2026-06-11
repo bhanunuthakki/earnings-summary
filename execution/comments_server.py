@@ -9,8 +9,11 @@ Endpoints:
   GET    /comments?ticker=&report_date=   list comments for a (ticker, date)
   PATCH  /comments/<id>       update status / append thread
   DELETE /comments/<id>       hard-delete
-  POST   /chat/<ticker>       streaming chat (Phase 3 — see workspace_chat.py)
+  POST   /chat/<ticker>       streaming chat — the unified ask engine with the
+                              ticker context pack (src/ask/engine.py)
   POST   /chat/<ticker>/apply apply a chatbot-proposed diff (Phase 4)
+  POST   /api/ask             one Ask-tab turn — the same engine with the
+                              portfolio context pack
   GET    /healthz             health check
 
 Usage:
@@ -35,6 +38,7 @@ import os
 import queue
 import sys
 import urllib.parse
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -68,9 +72,12 @@ import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
 from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED  # noqa: E402
+from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
+from ask.engine import AskTurn, fold_events, respond_turn, sanitize_history  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
+from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
@@ -200,91 +207,9 @@ def _candidate_to_json(cand: object) -> dict[str, object]:
 # the queue can't hand-wave a name into "built".
 _DISCOVERY_OWNER_STATUSES: frozenset[str] = frozenset({"new", "queued", "dismissed"})
 
-# Candidates a build may start from. Anything else is either already done
-# (built), in flight (building), or explicitly rejected (dismissed).
-_DISCOVERY_BUILDABLE: frozenset[str] = frozenset({"new", "queued"})
-
-
-def _discovery_chat_command(repo_root: Path, message: str, registry: Registry) -> str | None:
-    """Deterministic ``/discovery`` chat commands (P5.4) — handled server-side
-    BEFORE the LLM (no model call, no budget). Returns the reply text, or
-    None when the message isn't a /discovery command.
-
-      /discovery list           — top live candidates with why-surfaced
-      /discovery queue <T>      — mark a candidate queued
-      /discovery dismiss <T>    — dismiss (stays dismissed across re-runs)
-      /discovery build <T>      — start the eval build job (the approval)
-    """
-    text = message.strip()
-    if not text.lower().startswith("/discovery"):
-        return None
-    from discovery.store import list_candidates, set_status
-
-    db_path = repo_root / "data" / "portfolio.db"
-    parts = text.split()
-    verb = parts[1].lower() if len(parts) > 1 else "list"
-    arg = parts[2].upper() if len(parts) > 2 else ""
-    usage = (
-        "Usage: /discovery list | /discovery queue <TICKER> | "
-        "/discovery dismiss <TICKER> | /discovery build <TICKER>. "
-        "The full queue lives under Research -> Discovery."
-    )
-    try:
-        live = list_candidates(db_path=db_path)
-    except Exception:
-        return "The discovery queue isn't available (table missing?). " + usage
-    by_ticker = {c.ticker: c for c in live}
-
-    if verb == "list":
-        if not live:
-            return (
-                "The discovery queue is empty — run the pipelines from "
-                "Research -> Discovery (Run discovery)."
-            )
-        lines = [
-            f"{c.ticker} (score {c.score:g}, {c.status}) — "
-            + "; ".join(str(e.get("detail") or "") for e in c.evidence[:2])
-            for c in live[:10]
-        ]
-        more = f"\n...and {len(live) - 10} more in Research -> Discovery." if len(live) > 10 else ""
-        return "Top discovery candidates:\n" + "\n".join(lines) + more
-
-    if verb in ("queue", "dismiss"):
-        if not arg:
-            return usage
-        cand = by_ticker.get(arg)
-        if cand is None:
-            return f"{arg} isn't in the live discovery queue. " + usage
-        new_status = "queued" if verb == "queue" else "dismissed"
-        set_status(cand.id, new_status, db_path=db_path)
-        return f"{arg} -> {new_status}."
-
-    if verb == "build":
-        if not arg:
-            return usage
-        cand = by_ticker.get(arg)
-        if cand is None or cand.status not in _DISCOVERY_BUILDABLE:
-            return (
-                f"{arg} isn't buildable (must be a live candidate in new/queued status). " + usage
-            )
-        argv = [
-            sys.executable,
-            str(repo_root / "execution" / "discovery_build.py"),
-            "--tickers",
-            arg,
-            "--repo-root",
-            str(repo_root),
-        ]
-        try:
-            job = registry.start(ticker=arg, kind="discovery-build", argv=argv)
-        except RegistryConflict as exc:
-            return f"Can't start the build: {exc}"
-        return (
-            f"Eval build started for {arg} (job {job.job_id}, ~25 min + LLM spend). "
-            "Watch it under Research -> Discovery."
-        )
-
-    return usage
+# The deterministic /discovery chat commands moved to ask.commands (the
+# unified ask engine intercepts them from BOTH chat surfaces); the REST
+# build routes share its buildable-status set via discovery.store.
 
 
 def create_app(
@@ -963,56 +888,44 @@ def create_app(
 
     @app.route("/api/ask", methods=["POST", "OPTIONS"])
     def ask_api():
-        """One Ask-thread turn (UX redesign PR5): NL question → compiled
-        ViewSpec → executed view → rendered fragment, in one round trip.
+        """One Ask-thread turn — the unified ask engine with the PORTFOLIO
+        context pack ("one brain, two entry points": same engine as the
+        report drawer's /chat/<ticker>, different attached context).
 
-        JSON body ``{"query": ..., "tickers": [...], "context_spec": {...}}``
-        — ``context_spec`` is the previous turn's spec, so follow-ups like
-        "now annual" refine it instead of starting over. Always 200 with a
-        tri-state payload: ``{"status": "ok", "spec", "fragment", "message"}``
-        or ``{"status": "budget_skipped" | "error", "message"}``. 400 only
-        for a missing query."""
+        JSON body ``{"query": ..., "tickers": [...], "context_spec": {...},
+        "history": [{"role", "text"}, ...]}`` — ``context_spec`` is the
+        previous turn's view spec (follow-ups like "now annual" refine it),
+        ``history`` the client-side thread tail for narrative continuity.
+        Always 200 with a tri-state payload: ``{"status": "ok", "kind":
+        "view", "spec", "fragment", "message"}`` for data answers,
+        ``{"status": "ok", "kind": "narrative" | "command", "text"}`` for
+        prose, or ``{"status": "budget_skipped" | "error", "message"}``.
+        400 only for a missing query."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from viewspec.engine import execute_view
-        from viewspec.nl_compile import compile_nl_to_viewspec
-        from viewspec.render import render_view_fragment
-        from viewspec.spec import ViewSpec, ViewSpecError
-
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         query = str(body.get("query") or "").strip()
         if not query:
             return ({"error": "query required"}, 400)
         raw_tickers = body.get("tickers")
-        context = (
+        tickers = (
             [str(t) for t in cast("list[object]", raw_tickers)]
             if isinstance(raw_tickers, list)
             else []
         )
         raw_ctx = body.get("context_spec")
         context_spec = cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None
-        result = compile_nl_to_viewspec(
-            query, db_path=db_path, context_tickers=context, context_spec=context_spec
+        turn = AskTurn(
+            text=query,
+            tickers=tickers,
+            context_spec=context_spec,
+            history=sanitize_history(body.get("history")),
         )
-        if result.status != "ok" or result.spec is None:
-            return {"status": result.status, "message": result.message or "compile failed"}
-        try:
-            spec = ViewSpec.from_dict(result.spec.to_dict())
-            view = execute_view(spec, db_path=db_path)
-            fragment = render_view_fragment(view, include_chart=True)
-        except ViewSpecError as exc:
-            return {"status": "error", "message": str(exc)}
-        n_rows = len(view.rows)
-        refined = " (refined the previous view)" if context_spec else ""
-        message = (
-            f"{n_rows} series · {spec.transform} · {spec.cadence}, {spec.periods} periods{refined}"
+        pack = build_portfolio_pack(repo_root, db_path)
+        events = respond_turn(
+            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
-        return {
-            "status": "ok",
-            "spec": result.spec.to_dict(),
-            "fragment": fragment,
-            "message": message,
-        }
+        return fold_events(events)
 
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
@@ -1186,7 +1099,7 @@ def create_app(
         not_buildable = [
             t
             for t in tickers
-            if t not in by_ticker or by_ticker[t].status not in _DISCOVERY_BUILDABLE
+            if t not in by_ticker or by_ticker[t].status not in BUILDABLE_STATUSES
         ]
         if not_buildable:
             return (
@@ -2052,41 +1965,32 @@ def create_app(
         body = request.get_json(silent=True) or {}
         try:
             report_date = _parse_date(body["report_date"])
-            user_message = body["message"]
+            user_message = str(body["message"])
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
 
-        # Deterministic /discovery commands (P5.4) short-circuit BEFORE the
-        # LLM pool — no model call, no budget, instant reply in the same
-        # SSE frame shape the chat client already renders.
-        cmd_reply = _discovery_chat_command(
-            repo_root, str(cast("object", user_message)), job_registry
+        # The unified ask engine with this report's TICKER context pack
+        # ("one brain, two entry points" — same engine as /api/ask).
+        # Deterministic commands reply instantly, metric questions render
+        # live view fragments, everything else streams from the narrative
+        # LLM with the report context + persisted thread.
+        raw_ctx = body.get("context_spec")
+        turn = AskTurn(
+            text=user_message,
+            context_spec=cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None,
         )
-        if cmd_reply is not None:
+        pack = build_ticker_pack(ticker, report_date)
 
-            def generate_command_reply(reply: str = cmd_reply):
-                yield f"data: {json.dumps({'type': 'delta', 'text': reply})}\n\n"
-                yield f"data: {json.dumps({'type': 'final', 'text': reply})}\n\n"
-
-            return Response(
-                stream_with_context(generate_command_reply()),
-                mimetype="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-        # The LLM subprocess (Claude CLI) drives `stream_response` for
+        # The narrative path drives an LLM subprocess (Claude CLI) for
         # 10-60s; running it inline would pin the Flask request thread
-        # for that whole window. Dispatch to the chat pool and pipe its
-        # chunks through a Queue, then drain the queue into SSE frames.
+        # for that whole window. Dispatch to the chat pool (the generator
+        # body executes lazily, on the pool thread) and pipe its events
+        # through a Queue, then drain the queue into SSE frames.
         chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
-        chat_pool.submit(
-            _drain_chat_stream,
-            repo_root,
-            ticker,
-            report_date,
-            user_message,
-            chunks,
+        events = respond_turn(
+            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
+        chat_pool.submit(_drain_events, events, chunks)
 
         def generate():
             while True:
@@ -2128,23 +2032,15 @@ def _parse_date(s: str) -> date:
     return date.fromisoformat(s[:10])
 
 
-def _drain_chat_stream(
-    repo_root: Path,
-    ticker: str,
-    report_date: date,
-    user_message: str,
+def _drain_events(
+    events: Iterator[dict[str, object]],
     chunks: queue.Queue[dict[str, object] | None],
 ) -> None:
-    """Iterate `stream_response` on a pool thread and push each chunk
-    onto `chunks`. `None` marks end-of-stream so the SSE generator on
-    the request thread can stop pumping."""
+    """Iterate an ask-engine event stream on a pool thread and push each
+    event onto `chunks`. `None` marks end-of-stream so the SSE generator
+    on the request thread can stop pumping."""
     try:
-        for chunk in build_chat_response.stream_response(
-            repo_root=repo_root,
-            ticker=ticker,
-            report_date=report_date,
-            user_message=user_message,
-        ):
+        for chunk in events:
             chunks.put(chunk)
     except Exception as e:
         # Surface as an SSE error frame instead of crashing the pool —

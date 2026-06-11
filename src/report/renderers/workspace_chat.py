@@ -2,9 +2,11 @@
 
 Vanilla JS. Reads boot data shared with workspace_comments (window
 `__workspaceCommentBoot`). Streams via SSE from `comments_server.py`
-endpoint `/chat/<ticker>`. Renders Markdown responses (basic — code
-fences + bold + lists). Shows an "Apply this change" button when the
-response includes a `diff_proposal` event.
+endpoint `/chat/<ticker>` — the unified ask engine with this report's
+ticker context pack. Renders Markdown responses (basic — code fences +
+bold + lists), live data-view fragments (`fragment` events, when a metric
+question routes to the ViewSpec path), and an "Apply this change" button
+when the response includes a `diff_proposal` event.
 """
 
 JS = r"""
@@ -111,6 +113,18 @@ JS = r"""
                 if (ev.type === 'delta') {
                   streamEl.textContent += ev.text;
                   threadEl.scrollTop = threadEl.scrollHeight;
+                } else if (ev.type === 'fragment') {
+                  // A metric question routed to the data path: the engine
+                  // streams a rendered view fragment instead of prose.
+                  var frag = document.createElement('div');
+                  frag.className = 'chat-fragment';
+                  frag.innerHTML = ev.html || '';
+                  assistantEl.appendChild(frag);
+                  threadEl.scrollTop = threadEl.scrollHeight;
+                } else if (ev.type === 'final') {
+                  // Data turns carry no deltas — the final's message line
+                  // ("4 series · yoy · quarterly") is the turn's text.
+                  if (!streamEl.textContent) streamEl.textContent = ev.text || '';
                 } else if (ev.type === 'diff_proposal') {
                   appendDiffButton(assistantEl, ev.diff);
                 } else if (ev.type === 'error') {
@@ -292,6 +306,10 @@ CSS = r"""
   background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
   border-radius: 4px; padding: 8px 10px; overflow-x: auto;
   font-family: var(--font-mono); font-size: 11.5px; margin: 6px 0;
+}
+.chat-fragment {
+  margin-top: 8px; overflow-x: auto; max-width: 100%;
+  border-top: 1px solid var(--hairline); padding-top: 8px;
 }
 .chat-diff {
   margin-top: 8px; padding: 8px 10px;

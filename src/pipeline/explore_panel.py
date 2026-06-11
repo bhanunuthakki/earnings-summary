@@ -1,11 +1,15 @@
 """Ask panel (UX redesign PR5 over master build P5.1/P5.2).
 
-Conversational-first: a chat thread where each question compiles to a
-validated ViewSpec, executes, and renders inline as a matrix/chart card
-(``POST /api/ask``). Follow-ups send the previous spec as context so
-"now annual" / "add MELI" refine instead of starting over; every card
-offers "Open in builder" and "Pin as view". The full ViewSpec builder
-survives untouched inside the "Advanced builder" fold below the thread.
+Conversational-first: a chat thread over the unified ask engine
+(``POST /api/ask`` → ``src/ask/engine.py`` with the PORTFOLIO context
+pack). Data questions compile to a validated ViewSpec, execute, and render
+inline as a matrix/chart card; narrative questions stream through the same
+claude-CLI path as the report drawer's chat and render as prose; /discovery
+and /help reply instantly. Follow-ups send the previous spec as context so
+"now annual" / "add MELI" refine instead of starting over, plus the thread
+tail for narrative continuity; every view card offers "Open in builder" and
+"Pin as view". The full ViewSpec builder survives untouched inside the
+"Advanced builder" fold below the thread.
 
 Original P5.1 builder notes:
 
@@ -99,6 +103,17 @@ _PANEL_STYLE = """<style>
 .ask-busy { color:var(--muted); font-size:12.5px; }
 .ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
 @keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
+.ask-prose { font-size:13px; line-height:1.55; color:var(--fg); }
+.ask-prose p { margin:0 0 8px; }
+.ask-prose ul { margin:4px 0 8px 18px; padding:0; }
+.ask-prose li { margin:2px 0; }
+.ask-prose code { font-family:var(--font-mono, monospace); font-size:11.5px;
+  background:rgba(255,255,255,0.05); padding:1px 4px; border-radius:3px; }
+.ask-prose pre.ask-code { background:rgba(0,0,0,0.3); border:1px solid var(--border);
+  border-radius:4px; padding:8px 10px; overflow-x:auto; font-size:11.5px;
+  font-family:var(--font-mono, monospace); margin:6px 0; }
+.ask-cmd { font-family:var(--font-mono, monospace); font-size:12px; white-space:pre-wrap;
+  color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
 .ask-inputrow input { flex:1; background:var(--paper, #1a1d23); color:var(--fg);
   border:1px solid var(--border); border-radius:8px; padding:9px 13px; font-size:13.5px; }
@@ -262,18 +277,39 @@ _PANEL_JS = """
     applySpec(spec);
   });
 
-  // ---- Ask thread (UX redesign PR5): conversational layer over the same
-  // compile→run pipeline. Follow-ups send the previous spec as context so
-  // "now annual" / "add MELI" refine instead of starting over. ----
+  // ---- Ask thread: one conversational engine (src/ask/engine.py) behind
+  // POST /api/ask. Data questions come back as view fragments; narrative
+  // questions as prose; /discovery + /help as instant command replies.
+  // Follow-ups send the previous spec (view refinement) AND the thread
+  // tail (narrative continuity — the server keeps no Ask-tab state). ----
   var askThread = el('ask-thread');
   var askInput = el('ask-q');
   var askGo = el('ask-go');
   var askCtx = el('ask-ctx');
   var lastSpec = null;
   var askBusy = false;
+  var askHistory = [];
 
   function askEsc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function askMd(text) {
+    var html = askEsc(text);
+    html = html.replace(/```[\\w]*\\n([\\s\\S]*?)```/g, function (_m, body) {
+      return '<pre class="ask-code">' + body + '</pre>';
+    });
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+    html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+    html = html.replace(/(?:^|\\n)[-*]\\s+(.+)/g, '\\n<li>$1</li>');
+    html = html.replace(/(<li>[\\s\\S]+?<\\/li>)+/g, function (b) { return '<ul>' + b + '</ul>'; });
+    return html.split(/\\n\\n+/).map(function (p) {
+      if (/^<(pre|ul)/.test(p)) return p;
+      return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
+    }).join('');
+  }
+  function askRemember(role, text) {
+    askHistory.push({role: role, text: String(text || '').slice(0, 1200)});
+    if (askHistory.length > 12) askHistory = askHistory.slice(-12);
   }
   function askScroll() { askThread.scrollTop = askThread.scrollHeight; }
   function clearHello() {
@@ -298,20 +334,29 @@ _PANEL_JS = """
     askThread.appendChild(user);
     var card = document.createElement('div');
     card.className = 'ask-turn-assistant';
-    card.innerHTML = '<div class="ask-busy">compiling<span class="dots"></span></div>';
+    card.innerHTML = '<div class="ask-busy">working<span class="dots"></span></div>';
     askThread.appendChild(card);
     askScroll();
     var staged = setTimeout(function () {
       var busy = card.querySelector('.ask-busy');
-      if (busy) busy.innerHTML = 'running the view<span class="dots"></span>';
-    }, 1400);
+      if (busy) busy.innerHTML = 'still working — data views are fast, researched answers can take ~30s<span class="dots"></span>';
+    }, 2500);
+    askRemember('user', query);
     fetch('/api/ask', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec})
+      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec,
+                            history: askHistory.slice(0, -1)})
     }).then(function (r) { return r.json(); }).then(function (res) {
       clearTimeout(staged);
       askBusy = false;
-      if (res.status === 'ok' && res.spec) {
+      if (res.status === 'ok' && res.kind === 'narrative') {
+        var note = res.note ? '<div class="ask-meta">' + askEsc(res.note) + '</div>' : '';
+        card.innerHTML = note + '<div class="ask-prose">' + askMd(res.text || '') + '</div>';
+        askRemember('assistant', res.text || '');
+      } else if (res.status === 'ok' && res.kind === 'command') {
+        card.innerHTML = '<pre class="ask-cmd">' + askEsc(res.text || '') + '</pre>';
+        askRemember('assistant', res.text || '');
+      } else if (res.status === 'ok' && res.spec) {
         lastSpec = res.spec;
         setCtx(true);
         card.innerHTML = '<div class="ask-meta">' + askEsc(res.message || 'done') + '</div>'
@@ -321,6 +366,7 @@ _PANEL_JS = """
           + '<button type="button" data-ask-act="pin">Pin as view</button>'
           + '</div>';
         card.setAttribute('data-ask-spec', JSON.stringify(res.spec));
+        askRemember('assistant', res.message || 'rendered a data view');
       } else {
         card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
           + askEsc(res.message || 'Could not answer that — try the advanced builder.')
@@ -444,9 +490,12 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
 <h2>Ask</h2>
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">
-  <div class="ask-hello">Ask about any tracked name — answers come back as live
- tables and charts with per-number source chips. Follow-ups refine the last answer
- (&ldquo;now annual&rdquo;, &ldquo;add {escape(second)}&rdquo;, &ldquo;same but as margins&rdquo;).
+  <div class="ask-hello">Ask anything across the tracked universe. Metric questions
+ come back as live tables and charts with per-number source chips; narrative questions
+ (&ldquo;why&rdquo;, &ldquo;what&rsquo;s the bear case&rdquo;) get a researched answer.
+ Follow-ups refine the last answer (&ldquo;now annual&rdquo;, &ldquo;add {escape(second)}&rdquo;,
+ &ldquo;same but as margins&rdquo;). <code>/view</code> forces a data view; <code>/help</code>
+ lists commands.
     <div class="ask-chips">
       <button type="button" class="ask-chip"
         data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">

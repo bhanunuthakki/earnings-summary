@@ -241,7 +241,7 @@ def test_views_post_validates(client: FlaskClient) -> None:
 
 
 # ----------------------------------------------------------------------------
-# /api/ask — one Ask-thread turn (PR5)
+# /api/ask — one Ask-thread turn through the unified engine (portfolio pack)
 # ----------------------------------------------------------------------------
 
 
@@ -275,6 +275,7 @@ def test_ask_endpoint_compiles_runs_and_renders(
     assert res.status_code == 200
     body = res.get_json()
     assert body["status"] == "ok"
+    assert body["kind"] == "view"
     assert seen["query"] == "TST revenue"
     assert seen["context_spec"] == {"tickers": ["TST"]}
     assert "vx-matrix" in body["fragment"]
@@ -282,21 +283,90 @@ def test_ask_endpoint_compiles_runs_and_renders(
     assert "series" in body["message"]
 
 
-def test_ask_endpoint_degrades_on_compile_failure(
+def test_ask_endpoint_surfaces_forced_view_compile_failure(
     client: FlaskClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """/view forces the data path — a failed compile is the answer (no
+    narrative fallback), preserving the old tri-state degrade contract."""
     from viewspec import nl_compile
 
     def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
         return nl_compile.NLCompileResult(status="error", message="no matching metric token")
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
-    res = client.post("/api/ask", json={"query": "garbage"})
+    res = client.post("/api/ask", json={"query": "/view garbage"})
     assert res.status_code == 200  # tri-state payload, never a 500
     body = res.get_json()
     assert body["status"] == "error"
     assert "no matching metric token" in body["message"]
     assert "fragment" not in body
+
+
+def test_ask_endpoint_answers_narrative_questions(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-metric question routes to the narrative path with the PORTFOLIO
+    context pack attached (the one-brain/two-entry-points seam)."""
+    import chat_session
+
+    prompts: list[str] = []
+
+    def fake_llm(prompt: str):
+        prompts.append(prompt)
+        yield {"type": "delta", "text": "prose"}
+        yield {"type": "final", "text": "a researched answer"}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    res = client.post(
+        "/api/ask",
+        json={
+            "query": "what's the bear case here?",
+            "history": [{"role": "user", "text": "earlier question"}],
+        },
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert body["kind"] == "narrative"
+    assert body["text"] == "a researched answer"
+    # The portfolio pack's system context + client history reached the LLM.
+    assert "portfolio research assistant" in prompts[0]
+    assert "portfolio: TST" in prompts[0]
+    assert "[USER] earlier question" in prompts[0]
+
+
+def test_ask_endpoint_data_question_falls_back_to_narrative(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A data-shaped question whose compile fails still gets answered in
+    prose, with the note surfaced in the payload."""
+    import chat_session
+    from viewspec import nl_compile
+
+    def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
+        return nl_compile.NLCompileResult(status="error", message="nope")
+
+    def fake_llm(prompt: str):
+        yield {"type": "final", "text": "prose fallback"}
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    res = client.post("/api/ask", json={"query": "TST revenue growth, last 8 quarters"})
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert body["kind"] == "narrative"
+    assert body["text"] == "prose fallback"
+    assert "prose" in body["note"]
+
+
+def test_ask_endpoint_runs_commands(client: FlaskClient) -> None:
+    """Deterministic commands work from the Ask tab too — no LLM."""
+    res = client.post("/api/ask", json={"query": "/help"})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert body["kind"] == "command"
+    assert "/discovery" in body["text"]
 
 
 def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
