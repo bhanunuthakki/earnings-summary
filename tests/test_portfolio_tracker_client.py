@@ -13,6 +13,8 @@ states.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import requests
 
@@ -756,18 +758,15 @@ def test_compose_page_default_window_bar_is_unset() -> None:
 # ----- Portfolio insights (PR6): rollup / exposure / next-dollar -----
 
 
-def test_portfolio_insights_empty_db_renders_nothing(tmp_path) -> None:
-    from pathlib import Path
-
+def test_portfolio_insights_empty_db_renders_nothing(tmp_path: Path) -> None:
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    assert render_portfolio_insights(Path(tmp_path) / "missing.db", live) == ""
+    assert render_portfolio_insights(tmp_path / "missing.db", live) == ""
 
 
-def test_portfolio_insights_rollup_and_next_dollar(tmp_path) -> None:
+def test_portfolio_insights_rollup_and_next_dollar(tmp_path: Path) -> None:
     import sqlite3
-    from pathlib import Path
 
-    db = Path(tmp_path) / "data" / "portfolio.db"
+    db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
     conn.executescript(
@@ -805,7 +804,131 @@ def test_portfolio_insights_rollup_and_next_dollar(tmp_path) -> None:
     assert 'href="#holding=WIX"' in html
     assert "WIX" in html
     # Next-dollar memo excerpted with markdown stripped + Memos deep link.
+    # No DCF/price/macro substrate in this fixture -> the quantitative model
+    # has nothing to score and the panel falls back to the memo alone.
     assert "Where the next dollar goes" in html
     assert "MELI" in html
     assert "##" not in html.split("Where the next dollar goes")[1][:300]
     assert 'href="#advisor_memos"' in html
+    assert "pf-nd-row" not in html
+
+
+def _next_dollar_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    """Repo root with the full next-dollar substrate: three portfolio names,
+    dcf_runs rows, synthetic price charts (BBB tracks AAA; CCC independent),
+    and a next-dollar advisor memo. Macro tables are absent on purpose — the
+    factor must hide itself and renormalize the blend."""
+    import json
+    import sqlite3
+    from datetime import date, timedelta
+
+    import numpy as np
+
+    repo_root = tmp_path
+    db = repo_root / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT);"
+        "CREATE TABLE advisor_memos (id INTEGER PRIMARY KEY, kind TEXT, title TEXT,"
+        " body_md TEXT, created_at TEXT);"
+        "CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT,"
+        " valuation_date TEXT, npv_per_share NUMERIC, live_price FLOAT, created_at TEXT);"
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL)",
+        [("AAA",), ("BBB",), ("CCC",)],
+    )
+    conn.execute(
+        "INSERT INTO advisor_memos (kind, title, body_md, created_at) VALUES"
+        " ('next_dollar', 'Next-dollar memo', '## Narrative **layer**', '2026-06-10')"
+    )
+    conn.executemany(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, created_at)"
+        " VALUES (?, '2026-06-08', ?, 100.0, '2026-06-08 00:00:00')",
+        [("AAA", 150.0), ("BBB", 90.0), ("CCC", 120.0)],
+    )
+    conn.commit()
+    conn.close()
+
+    days: list[date] = []
+    d = date.today() - timedelta(days=2)
+    while len(days) < 200:
+        if d.weekday() < 5:
+            days.append(d)
+        d -= timedelta(days=1)
+    days.reverse()
+    rng = np.random.default_rng(0)
+    base = rng.normal(0.0005, 0.02, 200)
+    noise = rng.normal(0.0, 0.005, 200)
+    indep = rng.normal(0.0005, 0.02, 200)
+    fmp = repo_root / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True)
+    for ticker, rets in (("AAA", base), ("BBB", 0.9 * base + noise), ("CCC", indep)):
+        prices = 100.0 * np.exp(np.cumsum(rets))
+        rows = [
+            {"date": days[i].isoformat(), "adjClose": round(float(prices[i]), 6)}
+            for i in range(200)
+        ][::-1]  # newest first, like FMP
+        (fmp / f"{ticker}_price_chart_10y_div_adj.json").write_text(
+            json.dumps(rows), encoding="utf-8"
+        )
+    return repo_root, db
+
+
+def _position(ticker: str, value: float) -> LivePosition:
+    return LivePosition(
+        ticker=ticker,
+        name=ticker,
+        quantity=1.0,
+        market_value=value,
+        cost_basis=None,
+        unrealized_pnl=None,
+        percent_of_portfolio=None,
+    )
+
+
+def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
+    import re
+
+    _repo_root, db = _next_dollar_fixture(tmp_path)
+    live = LivePortfolio(
+        available=True,
+        api_url="http://x",
+        positions=[_position("AAA", 5000.0), _position("BBB", 3000.0), _position("CCC", 2000.0)],
+    )
+    html = render_portfolio_insights(db, live)
+
+    # Distribution bars render, weighted by the tracker's live values.
+    assert "pf-nd-row" in html
+    assert "tracker-weighted" in html
+    assert "now 50.0%" in html  # AAA = 5000 / 10000
+    assert 'href="../research/AAA/"' in html
+    # Macro tables absent -> factor hidden, blend renormalized and labelled.
+    assert "expected return 62% / diversification 38%" in html
+    assert "macro tilt hidden" in html
+    # Provenance sub-line carries the covariance window + shrinkage.
+    assert "daily returns through" in html
+    assert "LW shrink" in html
+    # Waterfall chips: signed contribution per factor, raw in the tooltip.
+    assert "expected return +" in html
+    assert "z +" in html and "raw +50.0%" in html
+    assert "corr to book" in html
+    # The softmax shares sum to ~100 across the three rows.
+    allocs = [float(m) for m in re.findall(r'pf-nd-alloc">([0-9.]+)%', html)]
+    assert len(allocs) == 3
+    assert sum(allocs) == pytest.approx(100.0, abs=0.2)
+    assert allocs == sorted(allocs, reverse=True)
+    # The advisor memo keeps its excerpt below, under its own sub-heading.
+    assert "Advisor memo" in html
+    assert "Narrative" in html and "##" not in html.split("Advisor memo")[1][:200]
+    assert 'href="#advisor_memos"' in html
+
+
+def test_next_dollar_equal_weight_when_tracker_down(tmp_path: Path) -> None:
+    _repo_root, db = _next_dollar_fixture(tmp_path)
+    live = LivePortfolio(available=False, api_url="http://x", error="down")
+    html = render_portfolio_insights(db, live)
+    assert "pf-nd-row" in html
+    assert "equal-weighted" in html
+    assert "now 33.3%" in html
