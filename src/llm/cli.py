@@ -255,9 +255,40 @@ LLM_MODELS: dict[str, str] = {
 
 
 def _model_for(purpose: str) -> str:
-    """Resolve a purpose key to a model id. Unknown purposes fall back to
-    DEFAULT_MODEL so a missing entry doesn't crash the pipeline — but the
-    fallback is logged so the gap surfaces in observability."""
+    """Resolve a purpose key to a model id.
+
+    Resolution order (first match wins):
+      1. Active ``model_pin_overrides`` row in the DB — set by the
+         auto-switch loop when a cheaper model holds sustained parity.
+         Fail-safe: any DB error falls through silently to the code pin.
+      2. ``LLM_MODELS`` hardcoded pin (the default code-time choice).
+      3. ``DEFAULT_MODEL`` fallback for unknown purposes (logged as a warning
+         so the gap surfaces in observability).
+    """
+    # 1. DB-backed override (the auto-switch loop writes here).
+    try:
+        from llm.model_overrides import active_override
+
+        override = active_override(purpose)
+        if override is not None:
+            log.info(
+                {
+                    "event": "llm_model_pin_override_active",
+                    "purpose": purpose,
+                    "model": override,
+                }
+            )
+            return override
+    except Exception as exc:
+        log.debug(
+            {
+                "event": "llm_model_override_check_failed",
+                "purpose": purpose,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+
+    # 2. Code pin.
     model = LLM_MODELS.get(purpose)
     if model is None:
         log.warning(
@@ -298,7 +329,7 @@ CLAUDE_WEB_TIMEOUT_SECONDS = 1800  # web fetches add round-trips; bigger cap
 CLAUDE_WEB_MAX_BUDGET_USD = float(os.environ.get("CLAUDE_WEB_MAX_BUDGET_USD", "2.0"))
 
 
-class LLMBudgetExceeded(RuntimeError):
+class LLMBudgetExceeded(RuntimeError):  # noqa: N818
     """Raised by `_call_claude` when the per-purpose monthly cap is at/over
     AND the budget row has hard_block=True. Callers can catch this to
     degrade gracefully (skip the section, write a stub, queue for next
@@ -427,7 +458,7 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
                 "reason": check.reason,
             }
         )
-        try:
+        try:  # noqa: SIM105
             record_alert(purpose, 1.0, check.current_spend)
         except Exception:
             pass
@@ -442,7 +473,7 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
                 "reason": check.reason,
             }
         )
-        try:
+        try:  # noqa: SIM105
             record_alert(purpose, 0.80, check.current_spend)
         except Exception:
             pass
