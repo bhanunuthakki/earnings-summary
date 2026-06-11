@@ -28,10 +28,11 @@ def test_actions_panel_includes_refresh_ir_control():
 
 def test_actions_panel_js_escapes_newline_not_raw():
     """Regression: the log-append must emit a JS `\\n` escape. A raw newline in
-    the Python source would land inside a single-quoted JS string and break it."""
+    the Python source would land inside a single-quoted JS string and break it.
+    (PR8 prefixes each line with the [m:ss] elapsed stamp.)"""
     html = render_actions_panel()
-    assert "outputEl.textContent += line + '\\n'" in html  # two-char escape
-    assert "outputEl.textContent += line + '\n'" not in html  # never a raw newline
+    assert "outputEl.textContent += elapsed() + line + '\\n'" in html  # two-char escape
+    assert "+ line + '\n'" not in html  # never a raw newline
 
 
 def test_actions_panel_includes_maintenance_controls():
