@@ -176,4 +176,4 @@ def test_empty_db_still_writes_valid_html_file(
     assert rc == 0
     assert out.exists()
     html = out.read_text(encoding="utf-8")
-    assert "Nothing fired" in html
+    assert "Nothing changed" in html  # PR3: the unified-stream empty state
