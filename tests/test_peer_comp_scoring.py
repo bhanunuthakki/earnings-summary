@@ -159,3 +159,56 @@ def test_legacy_peerslist_payload_shape(tmp_path: Path) -> None:
     rows = load_peer_comp("TT", repo_root=tmp_path)
     assert [r.peer_ticker for r in rows] == ["PP"]
     assert "same industry" in rows[0].match_reasons
+
+
+def test_tracked_peer_gets_relevance_boost(tmp_path: Path) -> None:
+    """PR7: a peer the platform already tracks outranks an untracked one with
+    the same FMP affinity - it is a relevance signal and its data is local."""
+    import sqlite3
+
+    repo = _seed_repo(tmp_path)
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)")
+    conn.execute("INSERT INTO tracked_companies VALUES ('BIGB', 'evaluation', NULL)")
+    conn.commit()
+    conn.close()
+
+    rows = load_peer_comp("NU", repo_root=repo)
+    tickers = [r.peer_ticker for r in rows]
+    bigb = next(r for r in rows if r.peer_ticker == "BIGB")
+    assert "tracked" in bigb.match_reasons
+    # BIGB (industry 2 + tracked 2 = 4) now outranks SMLB (industry + scale = 3).
+    assert tickers.index("BIGB") < tickers.index("SMLB")
+
+
+def test_all_dash_unnamed_rows_dropped(tmp_path: Path) -> None:
+    """PR7: a candidate that passes the affinity screen but resolves NO
+    metrics at all (no cap, no TTM files) renders as a wall of em-dashes -
+    drop it. A named rival survives metric-less (informative by itself)."""
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    _write_json(
+        fmp / "UBER_peers.json",
+        [
+            {"symbol": "GHST", "companyName": "Ghost Metrics Inc"},
+            {"symbol": "LYFT", "companyName": "Lyft, Inc."},
+        ],
+    )
+    _write_json(
+        fmp / "UBER_profile.json",
+        _profile("Uber Technologies", "Technology", "Software - Application", 150e9),
+    )
+    # GHST: same industry (score 2) but no cap anywhere and no TTM files.
+    _write_json(
+        fmp / "GHST_profile.json",
+        _profile("Ghost Metrics Inc", "Technology", "Software - Application", None),
+    )
+    # LYFT: named rival via the watchlist, also metric-less - must survive.
+    _write_json(
+        tmp_path / "micro_thesis" / "holdings" / "UBER.json",
+        {"competitive_watchlist": ["Lyft"]},
+    )
+    rows = load_peer_comp("UBER", repo_root=tmp_path)
+    tickers = [r.peer_ticker for r in rows]
+    assert "GHST" not in tickers
+    assert "LYFT" in tickers

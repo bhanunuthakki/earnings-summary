@@ -47,7 +47,7 @@ from report.renderers.workspace_html import (  # noqa: E402
     _company_tab,
     _customer_concentration_panel,
     _decisions_tab,
-    _eval_tab,
+    _eval_screen_panels,
     _lease_ladder_panel,
     _macro_sensitivity_panel,
     _open_items_strip,
@@ -377,9 +377,9 @@ def test_decisions_tab_renders_summary_chips_and_ledger() -> None:
     assert "Q4 cleared every KPI." in html
     assert "Premium too wide." in html
     # Outcome cells: 8% ADD is positive return = correct → 'pos'
-    assert '+8.0%' in html
+    assert "+8.0%" in html
     # TRIM -6% return is correct (trim then drop) → 'pos'
-    assert '-6.0%' in html
+    assert "-6.0%" in html
 
 
 def test_decisions_tab_conviction_outcome_breakdown() -> None:
@@ -946,7 +946,9 @@ def test_saydo_tab_includes_verdicts_panel() -> None:
     assert "Cloud growth" in html
 
 
-def test_eval_tab_includes_peer_comp_panel() -> None:
+def test_eval_screen_panels_include_peer_comp() -> None:
+    """PR7: the screen block (now embedded in the Company tab) renders the
+    numbers table + comps."""
     eval_snap = EvaluationSnapshotSection(
         status=SectionStatus.OK,
         ticker="TEST",
@@ -976,15 +978,15 @@ def test_eval_tab_includes_peer_comp_panel() -> None:
         ),
     ]
     out = StringIO()
-    _eval_tab(out, eval_snap, peers)
+    _eval_screen_panels(out, eval_snap, peers)
     html = out.getvalue()
-    assert "Quick categorization" in html
+    assert "Numbers at a glance" in html
     assert "Peer comparison" in html
     assert "ALT" in html
     assert "Alt Co" in html
 
 
-def test_eval_tab_hides_peer_panel_when_no_peers() -> None:
+def test_eval_screen_panels_hide_peer_panel_when_no_peers() -> None:
     """P4.2 hide-don't-stub: nothing scored → no peer panel in the screen."""
     eval_snap = EvaluationSnapshotSection(
         status=SectionStatus.OK,
@@ -993,7 +995,7 @@ def test_eval_tab_hides_peer_panel_when_no_peers() -> None:
         fiscal_years=[],
     )
     out = StringIO()
-    _eval_tab(out, eval_snap, [])
+    _eval_screen_panels(out, eval_snap, [])
     html = out.getvalue()
     assert "Peer comparison" not in html
 

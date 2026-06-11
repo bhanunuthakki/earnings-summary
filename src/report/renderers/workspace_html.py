@@ -426,19 +426,14 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     pos = spec.portfolio_position  # narrow for the closure
     eval_snap = spec.evaluation_snapshot
     tabs: list[TabDef] = []
-    if spec.flavor == ReportFlavor.EVALUATION and eval_snap is not None:
-        tabs.append(
-            (
-                "eval",
-                "Eval Screen",
-                len(eval_snap.rows),
-                lambda b: _eval_tab(b, eval_snap, p3.peer_comp),
-            )
-        )
     # Tab order: portfolio/watchlist puts thesis first as the analytical
     # anchor; evaluation reports lead with Company since the reader hasn't
-    # internalized the business yet.
+    # internalized the business yet. PR7: the old standalone "Eval Screen"
+    # tab folded into the Company tab (description first, numbers + comps
+    # right under the pitch), so evaluation lands on one coherent intro.
     is_eval = spec.flavor == ReportFlavor.EVALUATION
+    company_eval_snap = eval_snap if is_eval else None
+    company_peers = p3.peer_comp if is_eval else None
     tab_blocks: list[TabDef] = [
         (
             "thesis",
@@ -508,6 +503,8 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
                 p3.customer_concentrations,
                 p3.lease_ladder,
                 suppressed_sections=frozenset(spec.suppressed_sections),
+                eval_snap=company_eval_snap,
+                peer_comp=company_peers,
             ),
         ),
         (
@@ -2674,41 +2671,17 @@ def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _eval_tab(
+def _eval_screen_panels(
     body: StringIO,
     eval_snap: EvaluationSnapshotSection,
-    peer_comp: list[PeerCompRow] | None = None,
+    peer_comp: list[PeerCompRow] | None,
 ) -> None:
-    """Render the 3y quick-categorization data table for new-name screening.
-
-    Only added to the tab list when ``spec.flavor == ReportFlavor.EVALUATION``
-    and the evaluation snapshot is populated. Mirrors what the legacy renderer
-    surfaces in §1 for the evaluation flavor — abs / margin / ratio metrics
-    across LFY-2 / LFY-1 / LFY / TTM with a 3y CAGR column for absolute series.
-
-    Followed by a peer-comp table when ``peer_comp`` is non-empty — gives
-    the screen "premium to peers" context the legacy snapshot lacks.
-    """
-    body.write('<div class="tab-body">')
-    body.write('<div class="row-split"><div>')
-    body.write('<div class="eyebrow">Eval Screen · 3-year quick categorization</div>')
-    title = eval_snap.company_name or "Evaluation snapshot"
-    body.write(f'<h2 class="section-title">{_esc(title)}</h2>')
-    sub_bits: list[str] = []
-    if eval_snap.sector:
-        sub_bits.append(eval_snap.sector)
-    if eval_snap.market_cap is not None:
-        sub_bits.append(f"Market cap {_fmt_usd_compact(eval_snap.market_cap)}")
-    if eval_snap.current_price is not None:
-        sub_bits.append(f"Price {_fmt_usd(eval_snap.current_price)}")
-    if sub_bits:
-        body.write(f'<p class="lede">{_esc(" · ".join(sub_bits))}</p>')
-    body.write("</div></div>")
-
+    """The quick-categorization table + peer comparison — shared by the legacy
+    Eval Screen tab and the Company tab's "numbers at a glance" block (PR7,
+    where the evaluation flavor now lands)."""
     if eval_snap.status != SectionStatus.OK and not eval_snap.rows:
         _missing_panel(body, eval_snap.status, eval_snap.missing, title="Quick categorization")
         _peer_comp_panel(body, peer_comp or [])
-        body.write("</div>")
         return
 
     fy = eval_snap.fiscal_years
@@ -2718,7 +2691,7 @@ def _eval_tab(
 
     body.write(
         _panel_head(
-            "Quick categorization",
+            "Numbers at a glance",
             sub=f"{len(eval_snap.rows)} metrics · {lfy_minus_2_lbl} -> TTM",
         )
         + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
@@ -2743,8 +2716,6 @@ def _eval_tab(
     body.write("</tbody></table></div></div>")
 
     _peer_comp_panel(body, peer_comp or [])
-
-    body.write("</div>")
 
 
 def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
@@ -2842,6 +2813,8 @@ def _company_tab(
     customer_concentrations: list[CustomerConcentrationRow] | None = None,
     lease_ladder: list[LeaseLadderRow] | None = None,
     suppressed_sections: frozenset[str] | None = None,
+    eval_snap: EvaluationSnapshotSection | None = None,
+    peer_comp: list[PeerCompRow] | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -2858,6 +2831,11 @@ def _company_tab(
 
     if cd.elevator_pitch:
         body.write(f'<div class="elevator-block">{_esc(cd.elevator_pitch)}</div>')
+
+    # Evaluation flavor (PR7): the landing tab carries the screen numbers +
+    # comps right under the pitch — description first, then the data.
+    if eval_snap is not None:
+        _eval_screen_panels(body, eval_snap, peer_comp)
 
     if cd.business_overview or cd.revenue_model:
         body.write('<div class="grid-2col">')

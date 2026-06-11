@@ -208,9 +208,7 @@ def test_lease_ladder_orders_by_canonical_year_buckets(tmp_path: Path) -> None:
     conn.close()
 
     out = load_lease_ladder("AMZN", db_path=db)
-    assert [r.ladder_year for r in out] == [
-        "Y1", "Y2", "Y3", "Y4", "Y5", "Thereafter"
-    ]
+    assert [r.ladder_year for r in out] == ["Y1", "Y2", "Y3", "Y4", "Y5", "Thereafter"]
 
 
 def test_decision_history_aggregates_and_computes_win_rate(tmp_path: Path) -> None:
@@ -247,7 +245,14 @@ def test_decision_history_aggregates_and_computes_win_rate(tmp_path: Path) -> No
             ("ADD", "high", now - timedelta(days=90), 0.08, now, now),  # win
             ("ADD", "medium", now - timedelta(days=60), -0.02, now, now),  # loss
             ("ADD", "high", now - timedelta(days=30), 0.05, now, now),  # win
-            ("TRIM", "low", now - timedelta(days=10), -0.06, now, now),  # win (negative = correct trim)
+            (
+                "TRIM",
+                "low",
+                now - timedelta(days=10),
+                -0.06,
+                now,
+                now,
+            ),  # win (negative = correct trim)
             ("HOLD", None, now - timedelta(days=5), None, None, now),  # uncounted
         ],
     )
@@ -378,7 +383,9 @@ def test_peer_comp_caps_at_max_peers(tmp_path: Path) -> None:
         json.dumps([{"symbol": "GOOG", "peersList": big_peer_list}]),
         encoding="utf-8",
     )
-    profile = [{"companyName": "X", "sector": "Technology", "industry": "Software"}]
+    # mktCap present so the rows carry at least one metric — PR7 drops
+    # unnamed candidates whose every metric cell would render an em-dash.
+    profile = [{"companyName": "X", "sector": "Technology", "industry": "Software", "mktCap": 1e9}]
     (fmp / "GOOG_profile.json").write_text(json.dumps(profile), encoding="utf-8")
     for p in big_peer_list:
         (fmp / f"{p}_profile.json").write_text(json.dumps(profile), encoding="utf-8")
