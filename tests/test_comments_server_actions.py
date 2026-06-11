@@ -321,7 +321,7 @@ def test_dcf_route_streams_xlsx_when_unlinked(client, tmp_path):
     assert resp.status_code == 200
 
 
-def test_run_eval_action_validates_and_starts_job(client: "FlaskClient") -> None:
+def test_run_eval_action_validates_and_starts_job(client: FlaskClient) -> None:
     """/actions/run-eval (llm_evals_plan PR 3): rejects unknown purposes,
     starts a registry job running execution/run_llm_evals.py for known ones."""
     bad = client.post("/actions/run-eval", json={"purpose": "not_a_purpose"})
@@ -336,7 +336,7 @@ def test_run_eval_action_validates_and_starts_job(client: "FlaskClient") -> None
     assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
 
 
-def test_evals_panel_route_serves_fragment(client: "FlaskClient") -> None:
+def test_evals_panel_route_serves_fragment(client: FlaskClient) -> None:
     """GET /api/panel/evals renders on a minimal DB (no eval tables yet) —
     the run bar must be present so the first eval can be started from it."""
     resp = client.get("/api/panel/evals")
