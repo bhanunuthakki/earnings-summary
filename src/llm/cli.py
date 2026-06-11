@@ -109,6 +109,12 @@ LLM_MODELS: dict[str, str] = {
     "thesis_pass_b": DEFAULT_MODEL,
     "bear_case": DEFAULT_MODEL,
     "event_brief": DEFAULT_MODEL,
+    # Thesis pressure-test (execution/pressure_test_thesis.py): long-context
+    # adversarial judgment over the whole evidence corpus. Was unregistered —
+    # it landed on Sonnet anyway via the unknown-purpose fallback, but with a
+    # warning logged on every call and the pin invisible to review. Registered
+    # at the model it was already getting (llm_evals_plan.md §5.5).
+    "pressure_test_thesis": DEFAULT_MODEL,
     # Investor-deck extraction: long-context structured-output. Decks run
     # ~30-60 pages of dense slide content; Sonnet's reasoning is needed to
     # distinguish forward-looking commitments from historical recap and to
@@ -202,6 +208,12 @@ LLM_MODELS: dict[str, str] = {
     "transcript_metadata": FAST_CLASSIFIER_MODEL,
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
+    # Decision extraction (src/decision_extractor.py): per-paragraph
+    # structured extraction of recommendation sentences from five_min_reread
+    # lens artifacts — narrow JSON task, batched. Was a hardcoded Haiku
+    # model= at the call site; moved here so the registry stays the single
+    # reviewable surface (llm_evals_plan.md §5.5).
+    "decision_extraction": FAST_CLASSIFIER_MODEL,
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates and
@@ -215,15 +227,30 @@ LLM_MODELS: dict[str, str] = {
     # off the hot path, so the judgment-tier cost is immaterial. The Gemini-side
     # judge resolves to Pro via gemini_model_for (not a fast-classifier purpose).
     "backend_compare_judge": "claude-opus-4-8",
-    # Eval-harness judge (src/evals/judge.py, directives/llm_evals_plan.md):
-    # decides whether a model output that DIVERGES from a golden expectation
-    # is still analytically equivalent. Deliberately Haiku — the verdict is a
-    # narrow schema-bound JSON object over two small specs and a one-line
-    # diff, the harness fails CLOSED on bad verdicts, and judge volume must
-    # stay cheap enough to run on every prompt change (cost model in the
-    # directive). Escalate per-purpose in the grader config (not here) if
-    # Haiku agreement spot-checks come back weak on nuanced rubrics.
+    # Bear-case outcome grading (src/bear_case_grader.py): judges whether a
+    # past failure-mode hypothesis materialized against realized KPI data —
+    # a judgment call over a small evidence table, run weekly per due
+    # hypothesis. Was a hardcoded Sonnet model= at the call site; moved here
+    # so the registry stays the single reviewable surface (llm_evals_plan.md
+    # §5.5).
+    "bear_case_grading": DEFAULT_MODEL,
+    # Eval-harness judge (src/evals/judge.py + rubric_judge.py,
+    # directives/llm_evals_plan.md): mode A — decides whether a model output
+    # that DIVERGES from a golden expectation is still analytically
+    # equivalent; mode B — scores production prose facet-by-facet against a
+    # versioned rubric. Deliberately Haiku — the verdict is a narrow
+    # schema-bound JSON object, the harness fails CLOSED on bad verdicts,
+    # and judge volume must stay cheap enough to run on every prompt change
+    # (cost model in the directive). Escalate per-purpose via
+    # AuditSpec.judge_model in the grader config (not here) if agreement
+    # spot-checks (execution/spot_check_eval_judge.py) come back weak.
     "eval_judge": FAST_CLASSIFIER_MODEL,
+    # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
+    # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
+    # resolve their model from the Lens object itself
+    # (src/synthesis/lenses/_shared.py, `Lens.model`) and pass it explicitly,
+    # so they never hit the unknown-purpose fallback. The lens table stays
+    # the reviewable surface for those (llm_evals_plan.md §5.5 decision).
 }
 
 

@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 from typing import cast
 
-from llm.cli import call_llm
+from llm.cli import call_llm, is_hard_stop
 
 log = logging.getLogger(__name__)
 
@@ -122,12 +122,22 @@ def run_judge(
     *,
     run_id: str | None = None,
 ) -> JudgeOutcome:
-    """One judge call. Never raises — every failure mode returns a
-    fail-closed JudgeOutcome with the error recorded."""
+    """One judge call. Transient failures return a fail-closed JudgeOutcome
+    with the error recorded; HARD STOPS (budget cap, missing CLI — see
+    ``llm.cli.is_hard_stop``) raise ``EvalAbortError`` instead, because a
+    case scored 0 by a capped budget is configuration, not quality, and must
+    not poison the prompt-version history."""
     prompt = build_judge_prompt(question, expected_json, actual_json, diff)
     try:
         raw = call_llm(prompt, purpose=JUDGE_PURPOSE, scope="eval", run_id=run_id)
     except Exception as exc:
+        if is_hard_stop(exc):
+            from evals.harness import EvalAbortError  # local — avoids module cycle
+
+            raise EvalAbortError(
+                f"eval_judge hard stop: {type(exc).__name__}: {exc} — "
+                "aborting instead of failing cases on configuration."
+            ) from exc
         log.warning(
             {
                 "event": "eval_judge_call_failed",

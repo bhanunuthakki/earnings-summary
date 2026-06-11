@@ -6,7 +6,12 @@ quality, **(3)** structured schema-validated output, **(4)** logging of cost/lat
 Models judge other models' output; scores are keyed to prompt versions so prompt changes
 become measurable regressions instead of vibes.
 
-Status: pilot (viewspec_compile golden-set eval, PR 1 below) implemented in this PR.
+Status: PR 1 (pilot: viewspec_compile golden-set eval) merged as #424; first win — prompt
+v2 scored 16/16 vs v1's 13/16 (#427). PR 2 (rubric-judge mode B: bear_case /
+transcript_summary / advisor_next_dollar rubrics + audit runs + judge spot-check) implemented
+in this PR — with one adaptation: the "production transcript sink" shipped earlier as
+`src/llm/capture.py` (#421, `LLM_CAPTURE_DIR`), so PR 2 reuses it instead of adding a
+duplicate `LLM_TRANSCRIPT_DIR` sink. PRs 3–4 pending.
 Companion directive: `directives/llm_calls.md` (the canonical-entry-point rule this plan
 builds on).
 

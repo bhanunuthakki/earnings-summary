@@ -69,6 +69,18 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # most-specific colloquialism resolution — the first live eval run's
     # failure modes (vs-002/vs-016 YoY-of-YoY, vs-010 R&D->opex).
     "viewspec_compile": "v2",
+    # Rubric-audited prose purposes (mode B, PR 2): their audit runs are keyed
+    # to these versions, so bump when generate_summary's prompt /
+    # _NEXT_DOLLAR_PROMPT is materially rewritten and the score history forks
+    # cleanly. (bear_case is already registered above with the outcome
+    # graders — one entry governs both its grading modes.)
+    "transcript_summary": "v1",
+    "advisor_next_dollar": "v1",
+    # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
+    # templates). Bump when either judge prompt is materially reworded so
+    # spot-check agreement rates (execution/spot_check_eval_judge.py) stay
+    # comparable within a version.
+    "eval_judge": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
