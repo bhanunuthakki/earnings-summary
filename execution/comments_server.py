@@ -1428,6 +1428,55 @@ def create_app(
             201,
         )
 
+    @app.route("/actions/start-tracker", methods=["POST", "OPTIONS"])
+    def start_tracker_server():
+        """Start the companion portfolio-tracker API on :8000 (UX redesign
+        PR6) — the Portfolio tab's offline card gets a button instead of a
+        prose CLI hint. Runs the tracker's OWN venv python from the sibling
+        checkout (so it finds its .env + data files) as a registry job whose
+        startup log streams over the standard /actions/stream channel.
+        409 when a tracker job is already running; 404 when the sibling
+        checkout is missing."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        tracker_root = repo_root.parent / "portfolio-tracker"
+        if not tracker_root.exists():
+            return (
+                {"error": f"portfolio-tracker checkout not found at {tracker_root}"},
+                404,
+            )
+        venv_python = tracker_root / (
+            ".venv/Scripts/python.exe" if os.name == "nt" else ".venv/bin/python"
+        )
+        python_bin = str(venv_python) if venv_python.exists() else sys.executable
+        argv = [
+            python_bin,
+            "-m",
+            "uvicorn",
+            "portfolio_tracker.api.main:app",
+            "--port",
+            "8000",
+        ]
+        try:
+            job = job_registry.start(
+                ticker="_REPO",
+                kind="tracker-server",
+                argv=argv,
+                cwd=str(tracker_root),
+            )
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
     @app.route("/actions/refresh-ir", methods=["POST", "OPTIONS"])
     def start_refresh_ir():
         """Refresh a ticker's KPIs from its IR historical-data spreadsheet.

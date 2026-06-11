@@ -31,6 +31,7 @@ from pipeline.portfolio_panel import (
     compose_portfolio_page,
     render_live_portfolio_section,
     render_portfolio_analytics_sections,
+    render_portfolio_insights,
     validated_window,
 )
 
@@ -428,7 +429,10 @@ def test_render_offline_shows_start_hint() -> None:
         )
     )
     assert "isn't running" in html  # humane lede, not a raw requests repr
-    assert "uvicorn portfolio_tracker.api.main:app" in html  # the start hint
+    assert "uvicorn portfolio_tracker.api.main:app" in html  # the manual hint
+    # PR6: a one-click start button wired to /actions/start-tracker.
+    assert 'id="pf-start-tracker"' in html
+    assert "/actions/start-tracker" in html
     # The raw error survives, but only inside the collapsed technical details.
     assert "offline-tech" in html
     assert "ConnectionError: nope" in html
@@ -747,3 +751,61 @@ def test_compose_page_default_window_bar_is_unset() -> None:
     assert 'id="pf-window-bar"' in html
     assert 'id="pf-start" value=""' in html and 'id="pf-end" value=""' in html
     assert 'id="pf-backfill">' in html  # unchecked
+
+
+# ----- Portfolio insights (PR6): rollup / exposure / next-dollar -----
+
+
+def test_portfolio_insights_empty_db_renders_nothing(tmp_path) -> None:
+    from pathlib import Path
+
+    live = LivePortfolio(available=False, api_url="http://x", error="down")
+    assert render_portfolio_insights(Path(tmp_path) / "missing.db", live) == ""
+
+
+def test_portfolio_insights_rollup_and_next_dollar(tmp_path) -> None:
+    import sqlite3
+    from pathlib import Path
+
+    db = Path(tmp_path) / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT);"
+        "CREATE TABLE thesis_evaluations (ticker TEXT, overall_status TEXT, evaluated_at TEXT);"
+        "CREATE TABLE advisor_memos (id INTEGER PRIMARY KEY, kind TEXT, title TEXT,"
+        " body_md TEXT, created_at TEXT);"
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, 'portfolio', NULL)",
+        [("NU",), ("MELI",), ("WIX",)],
+    )
+    conn.executemany(
+        "INSERT INTO thesis_evaluations VALUES (?, ?, ?)",
+        [
+            ("NU", "ok", "2026-06-01"),
+            ("NU", "warn", "2026-05-01"),  # older row must NOT win
+            ("MELI", "ok", "2026-06-01"),
+            ("WIX", "watch", "2026-06-01"),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO advisor_memos (kind, title, body_md, created_at) VALUES"
+        " ('next_dollar', 'Next-dollar memo', '## Where it works hardest **MELI**',"
+        " '2026-06-10')"
+    )
+    conn.commit()
+    conn.close()
+
+    live = LivePortfolio(available=False, api_url="http://x", error="down")
+    html = render_portfolio_insights(db, live)
+    # Rollup: latest-eval-wins, flagged chip deep-links to the Holding tab.
+    assert "Thesis health" in html
+    assert "2 OK" in html and "1 flagged" in html
+    assert 'href="#holding=WIX"' in html
+    assert "WIX" in html
+    # Next-dollar memo excerpted with markdown stripped + Memos deep link.
+    assert "Where the next dollar goes" in html
+    assert "MELI" in html
+    assert "##" not in html.split("Where the next dollar goes")[1][:300]
+    assert 'href="#advisor_memos"' in html
