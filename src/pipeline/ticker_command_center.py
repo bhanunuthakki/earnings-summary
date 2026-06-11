@@ -28,7 +28,7 @@ from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
-from report.renderers.numfmt import fmt_date
+from report.renderers.numfmt import fmt_date, fmt_reltime
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 from user_state.notes import AnalystNoteRow, list_notes
@@ -613,10 +613,17 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
 
 
 def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
-    """Head/foot-less command-center fragment for the unified shell's Holding tab:
-    the same per-ticker sections as the standalone page, minus the page chrome,
-    with a compact header carrying the report / DCF / tracker links. The section
-    renderers are reused as-is, so there is one code path for the panel content."""
+    """Head/foot-less command-center fragment for the unified shell's Holding tab
+    (UX redesign PR4 — report-first): a slim utility header (identity · verdict ·
+    freshness dot · links · Ops/Notes buttons) and NOTHING else inline. The
+    config/meta sections (refresh, DCF⇄Sheets, analyses log, artifacts) live in
+    the Ops drawer; the analysis sections the old layout stacked here
+    (position / decisions / thesis) are already in the embedded report's own
+    tabs, so showing them twice was the page's main clutter source."""
+    return _holding_header(tcc)
+
+
+def _holding_header(tcc: TickerCommandCenter) -> str:
     ident = tcc.identity
     name = f'<span class="cc-holding-name"> · {escape(ident.name)}</span>' if ident.name else ""
     links = [
@@ -628,35 +635,59 @@ def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
             f'<a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">'
             "Portfolio Tracker ↗</a>"
         )
-    head = (
+    return (
         '<div class="cc-holding-head">'
         f'<div class="cc-holding-id"><span class="cc-holding-ticker">{escape(ident.ticker)}</span>'
-        f"{name}{_identity_badges(ident)}</div>"
-        f'<div class="cc-holding-links">{" · ".join(links)}</div>'
-        "</div>"
+        f"{name}{_identity_badges(ident)}{_freshness_dot(ident)}</div>"
+        f'<div class="cc-holding-links">{" · ".join(links)}'
+        ' <button type="button" class="tcc-drawer-btn" data-tcc-drawer="ops" '
+        'title="Refresh · budgets · DCF⇄Sheets · analyses log · artifacts">⚙ Ops</button>'
+        ' <button type="button" class="tcc-drawer-btn" data-tcc-drawer="notes" '
+        'title="Open notes + recent alerts for this name">✎ Notes</button>'
+        "</div></div>"
     )
-    return "".join(
-        [
-            head,
-            _freshness_strip(ident),
-            _refresh_section(ident.ticker),
-            _dcf_sheets_section(ident.ticker),
-            _position_section(tcc.position),
-            _analyses_section(tcc.analysis),
-            _decisions_section(tcc.recent_decisions),
-            _artifacts_section(tcc.artifacts),
-            _thesis_section(tcc.thesis),
-        ]
-    )
+
+
+def _freshness_dot(ident: TickerIdentity) -> str:
+    """One dot instead of three giant cards: worst-of staleness across the
+    build and the FMP pull, with the detail in the tooltip (PR1 time rules)."""
+    from datetime import UTC as _UTC
+
+    now = datetime.now(_UTC).replace(tzinfo=None)
+
+    def _age_days(iso: str | None) -> float | None:
+        if not iso:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(iso))
+        except ValueError:
+            return None
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(_UTC).replace(tzinfo=None)
+        return (now - dt).total_seconds() / 86400.0
+
+    ages = [
+        a for a in (_age_days(ident.last_build_at), _age_days(ident.last_fmp_at)) if a is not None
+    ]
+    worst = max(ages) if ages else None
+    tone = "fdot-bad" if worst is None or worst > 21 else ("fdot-warn" if worst > 7 else "fdot-ok")
+    bits = [
+        f"Build {fmt_reltime(ident.last_build_at)}" if ident.last_build_at else "Never built",
+        f"FMP pull {fmt_reltime(ident.last_fmp_at)}" if ident.last_fmp_at else "No FMP pull",
+        f"Transcript {ident.last_transcript_period}" if ident.last_transcript_period else None,
+    ]
+    title = escape(" · ".join(b for b in bits if b), quote=True)
+    return f'<span class="cc-fdot {tone}" title="{title}">●</span>'
 
 
 def render_holding_fragment(repo_root: Path, ticker: str) -> str:
-    """Assemble the full Holding-tab panel for ``ticker``: the command-center
-    sections + the 5-min reread + the report split — an embedded
-    ``/reports/<t>`` iframe (carrying the inline comment / chat / apply
-    pipeline) with the analyst's open notes and recent alerts in a rail
-    beside it (master build P1.3). Reuses the analytical reread fragment via
-    its public seam (no cross-module private access)."""
+    """Assemble the Holding-tab panel for ``ticker`` (UX redesign PR4):
+    the report IS the page. Slim utility header → collapsed 5-minute reread →
+    the embedded ``/reports/<t>`` iframe at full width (it carries the inline
+    comment / chat / apply pipeline). Everything operational moved into two
+    on-demand drawers: **Ops** (refresh · budget bypass · DCF⇄Sheets ·
+    analyses log · artifacts · freshness detail) and **Notes** (open analyst
+    notes + recent alerts — the old right-hand rail)."""
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
 
@@ -666,18 +697,104 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     dash = build_analytical_dashboard(db_path, sections={"rereads"}, ticker=t)
     reread_html = render_panel_fragment(dash, "prereads") or ""
     rail = build_holding_rail(repo_root, t)
+    reread_fold = (
+        f'<details class="tcc-reread-fold"><summary>5-minute reread</summary>'
+        f"{reread_html}</details>"
+        if reread_html
+        else ""
+    )
+    ops_body = "".join(
+        [
+            _freshness_strip(tcc.identity),
+            _refresh_section(t),
+            _dcf_sheets_section(t),
+            _analyses_section(tcc.analysis),
+            _artifacts_section(tcc.artifacts),
+        ]
+    )
+    notes_body = _notes_rail_section(rail.notes) + _alerts_rail_section(
+        t, rail.alerts, rail.brief_provenance
+    )
     return "".join(
         [
             render_ticker_fragment(tcc),
-            reread_html,
-            '<div class="cc-holding-split">',
-            f'<div class="cc-holding-main">{_report_embed_section(t, tcc.report_date)}</div>',
-            '<aside class="cc-holding-rail">',
-            _notes_rail_section(rail.notes),
-            _alerts_rail_section(t, rail.alerts, rail.brief_provenance),
-            "</aside></div>",
+            reread_fold,
+            f'<div class="tcc-report-main">{_report_embed_section(t, tcc.report_date)}</div>',
+            _tcc_drawer("ops", "Ops · refresh & data", ops_body),
+            _tcc_drawer("notes", "Notes & alerts", notes_body),
+            _TCC_DRAWER_STYLE,
+            _TCC_DRAWER_SCRIPT,
         ]
     )
+
+
+def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
+    return (
+        f'<div class="tcc-drawer-scrim" data-tcc-scrim="{escape(drawer_id)}" hidden></div>'
+        f'<aside class="tcc-drawer" data-tcc-panel="{escape(drawer_id)}" hidden '
+        f'aria-label="{escape(title, quote=True)}">'
+        f'<div class="tcc-drawer-head"><span>{escape(title)}</span>'
+        f'<button type="button" class="tcc-drawer-close" data-tcc-close="{escape(drawer_id)}" '
+        'aria-label="Close">&times;</button></div>'
+        f'<div class="tcc-drawer-body">{body}</div></aside>'
+    )
+
+
+_TCC_DRAWER_STYLE = """<style>
+.cc-holding-head { display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 8px; }
+.cc-fdot { font-size: 13px; cursor: help; margin-left: 6px; }
+.fdot-ok { color: var(--ok, #4ade80); }
+.fdot-warn { color: var(--warn, #fbbf24); }
+.fdot-bad { color: var(--bad, #f87171); }
+.tcc-drawer-btn { background: transparent; border: 1px solid var(--border, #2a2c30);
+  color: var(--muted, #888); border-radius: 6px; padding: 4px 10px; font-size: 12px;
+  cursor: pointer; }
+.tcc-drawer-btn:hover { border-color: var(--accent, #7aa2f7); color: var(--accent, #7aa2f7); }
+.tcc-reread-fold { margin: 10px 0 14px; border: 1px solid var(--border, #2a2c30);
+  border-radius: 8px; background: var(--surface, #16171a); padding: 0 14px; }
+.tcc-reread-fold > summary { cursor: pointer; padding: 10px 0; font-size: 13px;
+  font-weight: 600; color: var(--muted, #888); }
+.tcc-reread-fold[open] > summary { color: var(--fg, #e8e8e3); }
+.tcc-report-main .cc-report-frame { height: calc(100vh - 200px); }
+.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34; }
+.tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
+  background: var(--bg, #0e0f12); border-left: 1px solid var(--border, #2a2c30); z-index: 35;
+  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35); }
+.tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
+.tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; border-bottom: 1px solid var(--border, #2a2c30); font-weight: 700; }
+.tcc-drawer-close { background: transparent; border: none; color: var(--muted, #888);
+  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+.tcc-drawer-close:hover { color: var(--fg, #e8e8e3); }
+.tcc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }
+</style>"""
+
+_TCC_DRAWER_SCRIPT = """<script>
+(function () {
+  function setOpen(id, open) {
+    var panel = document.querySelector('.tcc-drawer[data-tcc-panel="' + id + '"]');
+    var scrim = document.querySelector('.tcc-drawer-scrim[data-tcc-scrim="' + id + '"]');
+    if (panel) panel.hidden = !open;
+    if (scrim) scrim.hidden = !open;
+  }
+  document.querySelectorAll('.tcc-drawer-btn[data-tcc-drawer]').forEach(function (b) {
+    b.addEventListener('click', function () { setOpen(b.getAttribute('data-tcc-drawer'), true); });
+  });
+  document.querySelectorAll('.tcc-drawer-close[data-tcc-close]').forEach(function (b) {
+    b.addEventListener('click', function () { setOpen(b.getAttribute('data-tcc-close'), false); });
+  });
+  document.querySelectorAll('.tcc-drawer-scrim[data-tcc-scrim]').forEach(function (s) {
+    s.addEventListener('click', function () { setOpen(s.getAttribute('data-tcc-scrim'), false); });
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return;
+    document.querySelectorAll('.tcc-drawer:not([hidden])').forEach(function (p) {
+      setOpen(p.getAttribute('data-tcc-panel'), false);
+    });
+  });
+})();
+</script>"""
 
 
 def _report_embed_section(ticker: str, report_date: str | None) -> str:
@@ -691,14 +808,12 @@ def _report_embed_section(ticker: str, report_date: str | None) -> str:
         return (
             '<section class="panel"><h2>Full report</h2>'
             '<p class="muted">No workspace brief built yet for this ticker — '
-            "use Refresh above to build one.</p></section>"
+            "open ⚙ Ops above and hit Refresh to build one.</p></section>"
         )
+    # Report-first (PR4): no panel heading/sub — the report carries its own
+    # identity header; this wrapper exists only for the frame border.
     return (
-        '<section class="panel cc-report-embed">'
-        "<h2>Full report · inline comments + chat</h2>"
-        '<p class="sub">The complete workspace brief — comment pins, free-text '
-        "commenting, and the Ask-Claude chat + apply-diff pipeline all run live "
-        f"against this server (report dated {escape(report_date)}).</p>"
+        '<section class="panel cc-report-embed" style="padding:6px">'
         f'<iframe class="cc-report-frame" src="/reports/{t}" '
         f'title="{t} workspace report" loading="lazy"></iframe>'
         "</section>"

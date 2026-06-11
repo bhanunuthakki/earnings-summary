@@ -231,15 +231,21 @@ def test_report_date_none_without_brief(tmp_path: Path) -> None:
 
 
 def test_render_ticker_fragment_is_headless(repo: Path) -> None:
+    """PR4 (report-first): the fragment is a SLIM header — identity, verdict,
+    freshness dot, links, and the two drawer buttons. The old inline
+    position/thesis/analyses sections (duplicates of the embedded report's
+    own tabs) are gone from the inline flow."""
     tcc = build_ticker_command_center(repo, "NU")
     frag = render_ticker_fragment(tcc)
     assert "<!doctype" not in frag.lower()
     assert "<html" not in frag.lower()
-    # Command-center sections + the report/DCF links in the compact header.
-    for marker in ("Analyses run", "Artifacts", "Thesis", "Position"):
-        assert marker in frag
     assert 'href="/reports/NU"' in frag
     assert 'href="/dcf/NU"' in frag
+    assert 'data-tcc-drawer="ops"' in frag
+    assert 'data-tcc-drawer="notes"' in frag
+    assert 'class="cc-fdot' in frag  # freshness dot replaces the 3-card strip
+    for gone in ("Analyses run", "Artifacts", "Tier-1 KPIs", "kpi-strip"):
+        assert gone not in frag
 
 
 def test_render_holding_fragment_embeds_report(repo: Path) -> None:
@@ -247,8 +253,10 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     # The full pipeline is carried by an iframe of the workspace report.
     assert 'src="/reports/NU"' in frag
     assert "cc-report-frame" in frag
-    # Command-center sections + the reread section header are present.
-    assert "Position" in frag
+    # Ops drawer carries the config/meta sections; the reread is a collapsed fold.
+    assert 'data-tcc-panel="ops"' in frag
+    assert "Analyses run" in frag
+    assert "tcc-reread-fold" in frag
     assert "Per-holding 5-min rereads" in frag
 
 
@@ -294,9 +302,9 @@ def test_holding_fragment_surfaces_notes_and_alerts_beside_report(repo: Path) ->
     resolve_note(answered.id, db_path=db)
 
     frag = render_holding_fragment(repo, "NU")
-    # Split layout: report main column + rail, iframe still embedded.
-    assert 'class="cc-holding-split"' in frag
-    assert 'class="cc-holding-rail"' in frag
+    # PR4: notes + alerts ride in the Notes drawer; the report is full-width.
+    assert 'data-tcc-panel="notes"' in frag
+    assert 'class="tcc-report-main"' in frag
     assert 'src="/reports/NU"' in frag
     # Open notes panel: the open note (with kind tone + anchor) shows; the
     # resolved one does not.
@@ -357,15 +365,14 @@ def test_holding_panel_endpoint(client) -> None:
     empty = client.get("/api/panel/holding")
     assert empty.status_code == 200
     assert "Pick a holding" in empty.get_data(as_text=True)
-    # With a ticker → head/foot-less fragment embedding the report, with the
-    # open-notes + recent-alerts rail beside it (P1.3).
+    # With a ticker → head/foot-less fragment embedding the report at full
+    # width, with notes + alerts in the Notes drawer (PR4 report-first).
     resp = client.get("/api/panel/holding?ticker=NU")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "<!doctype" not in body.lower()
     assert 'src="/reports/NU"' in body
-    assert "Thesis" in body
-    assert 'class="cc-holding-rail"' in body
+    assert 'data-tcc-panel="notes"' in body
     assert "Open notes" in body
     assert "Recent alerts" in body
 
