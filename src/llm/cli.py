@@ -56,6 +56,7 @@ import tempfile
 import time
 from datetime import UTC, datetime
 
+from llm.capture import capture_exchange
 from llm.ledger import fallback_call_logged, record_llm_call
 
 log = logging.getLogger(__name__)
@@ -503,6 +504,17 @@ def _call_claude(
             response_text=text,
             meta=meta,
         )
+        # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
+        # corpus source for execution/compare_backends.py --from-capture.
+        capture_exchange(
+            prompt=prompt,
+            response=text,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            model=model,
+            run_id=run_id,
+        )
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -754,6 +766,18 @@ def call_llm_with_web(
             run_id=run_id,
             response_text=text,
             meta=meta,
+        )
+        # Opt-in full-text capture (see _call_claude). scope tags it as a web
+        # call so the replay step can flag web-grounded purposes (Gemini has no
+        # web tools, so those comparisons are structurally Claude-favored).
+        capture_exchange(
+            prompt=prompt,
+            response=text,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope or "web",
+            model=resolved_model,
+            run_id=run_id,
         )
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as web_err:

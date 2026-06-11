@@ -247,6 +247,143 @@ def compare_prompt(
     return record
 
 
+def _load_capture_records(
+    path: Path, *, purpose_filter: str | None, limit: int | None
+) -> list[dict[str, object]]:
+    """Load captured Claude exchanges (src/llm/capture.py), keeping the replayable
+    ones: a real Claude response, deduped by prompt_sha256. Web-grounded captures
+    are kept but flagged downstream — Gemini has no web tools, so those comparisons
+    are structurally Claude-favored."""
+    seen: set[str] = set()
+    out: list[dict[str, object]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parsed: object = json.loads(line)
+        if not isinstance(parsed, dict):
+            continue
+        rec = cast("dict[str, object]", parsed)
+        purpose = rec.get("purpose")
+        purpose_s = purpose if isinstance(purpose, str) else None
+        if purpose_filter is not None and purpose_s != purpose_filter:
+            continue
+        backend = rec.get("backend")
+        if backend not in (None, "claude"):  # only Claude captures are replayable
+            continue
+        response = rec.get("response")
+        if not isinstance(response, str) or not response.strip():
+            continue
+        sha = rec.get("prompt_sha256")
+        key = sha if isinstance(sha, str) else str(rec.get("prompt", ""))[:64]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rec)
+        if limit is not None and len(out) >= limit:
+            break
+    return out
+
+
+def replay_capture_record(
+    rec: dict[str, object],
+    *,
+    run_id: str,
+    gemini_model: str | None,
+    timeout_seconds: int | None,
+    force_budget_bypass: bool,
+) -> dict[str, object]:
+    """Build a compare record from a captured Claude exchange: REUSE the captured
+    Claude response (zero extra Claude spend), run ONLY Gemini live. Output shape
+    matches compare_prompt so grade_backends reads it unchanged."""
+    prompt = str(rec.get("prompt", ""))
+    purpose = rec.get("purpose")
+    purpose_s = purpose if isinstance(purpose, str) else None
+    ticker = rec.get("ticker")
+    ticker_s = ticker if isinstance(ticker, str) else None
+    claude_model = rec.get("model")
+    claude_model_s = claude_model if isinstance(claude_model, str) else "(captured)"
+    scope = rec.get("scope")
+    sha = sha256_text(prompt)
+    label = f"{purpose_s or 'adhoc'}:{ticker_s or '-'}:{sha[:8]}"
+
+    record: dict[str, object] = {
+        "run_id": run_id,
+        "recorded_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
+        "purpose": purpose_s,
+        "label": label,
+        "ticker": ticker_s,
+        "prompt_sha256": sha,
+        "prompt_chars": len(prompt),
+        "prompt": prompt,
+        "source": "capture",
+        "captured_scope": scope,  # "web" flags a web-grounded (Claude-favored) purpose
+        "claude": {
+            "model": claude_model_s,
+            "ok": True,
+            "elapsed_ms": None,  # reused from capture, not measured now
+            "response": str(rec.get("response", "")),
+            "error": None,
+        },
+    }
+    gemini = _run_one_backend(
+        "gemini",
+        prompt,
+        purpose=purpose_s,
+        ticker=ticker_s,
+        run_id=run_id,
+        model=gemini_model,
+        timeout_seconds=timeout_seconds,
+        force_budget_bypass=force_budget_bypass,
+    )
+    resolved_gemini = gemini_model or gemini_model_for(purpose_s)
+    record["gemini"] = {"model": resolved_gemini, **gemini}
+    status = "ok" if gemini["ok"] else "FAILED"
+    log.info(
+        "  %s [%s] gemini %s in %sms%s (claude reused from capture)",
+        label,
+        resolved_gemini,
+        status,
+        gemini["elapsed_ms"],
+        "" if gemini["ok"] else f" - {gemini['error']}",
+    )
+    return record
+
+
+def _write_and_summarize(records: list[dict[str, object]], out_path: Path, run_id: str) -> int:
+    """Append records to the corpus JSONL and print a one-line-per-backend summary.
+    Shared by the live-compare path and the --from-capture replay path."""
+    with out_path.open("a", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    log.info("")
+    log.info("run_id=%s  ->  %s", run_id, out_path)
+    failures = 0
+    for record in records:
+        for backend in BACKENDS:
+            raw = record.get(backend)
+            if not isinstance(raw, dict):
+                continue
+            result = cast("dict[str, object]", raw)
+            ok = bool(result["ok"])
+            if not ok:
+                failures += 1
+            log.info(
+                "%-32s %-7s %-22s %-6s %6sms  %s",
+                record["label"],
+                backend,
+                result["model"],
+                "ok" if ok else "FAIL",
+                result["elapsed_ms"],
+                (str(result["response"])[:60].replace("\n", " ") + "…")
+                if ok
+                else str(result["error"])[:80],
+            )
+    log.info("%d record(s), %d backend failure(s)", len(records), failures)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run the same prompt through the Claude and Gemini backends, side by side."
@@ -255,9 +392,20 @@ def main() -> int:
     source.add_argument("--smoke", action="store_true", help="run the built-in golden set")
     source.add_argument("--prompt", help="inline prompt text")
     source.add_argument("--prompt-file", type=Path, help="read the prompt from a file (UTF-8)")
+    source.add_argument(
+        "--from-capture",
+        type=Path,
+        help="replay a src/llm/capture.py JSONL: reuse each captured Claude response, run Gemini only",
+    )
     parser.add_argument("--purpose", help="purpose key for model resolution + budget + ledger")
     parser.add_argument("--label", default="adhoc", help="short name for this prompt in the record")
     parser.add_argument("--ticker", help="optional ticker for ledger attribution")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="with --from-capture: replay only the first N records",
+    )
     parser.add_argument("--claude-model", help="override the Claude model id")
     parser.add_argument("--gemini-model", help="override the Gemini model id")
     parser.add_argument("--timeout", type=int, default=None, help="per-call timeout seconds")
@@ -286,6 +434,30 @@ def main() -> int:
 
         db.set_db_path(db_path)
 
+    run_id = uuid.uuid4().hex
+    out_path = args.out or (repo_root / "data" / "backend_compare" / f"compare_{run_id[:8]}.jsonl")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    records: list[dict[str, object]] = []
+
+    if args.from_capture is not None:
+        # Replay mode: reuse each captured Claude response, run Gemini only.
+        capture_recs = _load_capture_records(
+            args.from_capture, purpose_filter=args.purpose, limit=args.limit
+        )
+        log.info("replay %d capture record(s) from %s", len(capture_recs), args.from_capture)
+        for rec in capture_recs:
+            records.append(
+                replay_capture_record(
+                    rec,
+                    run_id=run_id,
+                    gemini_model=args.gemini_model,
+                    timeout_seconds=args.timeout,
+                    force_budget_bypass=args.force_budget_bypass,
+                )
+            )
+        return _write_and_summarize(records, out_path, run_id)
+
     if args.smoke:
         prompts = _smoke_prompts()
     else:
@@ -296,11 +468,6 @@ def main() -> int:
         )
         prompts = [{"purpose": args.purpose, "label": args.label, "prompt": text}]
 
-    run_id = uuid.uuid4().hex
-    out_path = args.out or (repo_root / "data" / "backend_compare" / f"compare_{run_id[:8]}.jsonl")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    records: list[dict[str, object]] = []
     for item in prompts:
         purpose = str(item["purpose"]) if item["purpose"] is not None else None
         label = str(item["label"])
@@ -320,35 +487,7 @@ def main() -> int:
             )
         )
 
-    with out_path.open("a", encoding="utf-8") as fh:
-        for record in records:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-    # Human summary: one line per prompt per backend.
-    log.info("")
-    log.info("run_id=%s  ->  %s", run_id, out_path)
-    failures = 0
-    for record in records:
-        for backend in BACKENDS:
-            raw = record[backend]
-            assert isinstance(raw, dict)  # built by compare_prompt above
-            result = cast("dict[str, object]", raw)
-            ok = bool(result["ok"])
-            if not ok:
-                failures += 1
-            log.info(
-                "%-28s %-7s %-22s %-6s %6sms  %s",
-                record["label"],
-                backend,
-                result["model"],
-                "ok" if ok else "FAIL",
-                result["elapsed_ms"],
-                (str(result["response"])[:60].replace("\n", " ") + "…")
-                if ok
-                else str(result["error"])[:80],
-            )
-    log.info("%d prompt(s), %d backend failure(s)", len(records), failures)
-    return 0
+    return _write_and_summarize(records, out_path, run_id)
 
 
 if __name__ == "__main__":
