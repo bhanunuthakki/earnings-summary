@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 
 from pipeline.command_center_shell import (
     _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]  # keep-in-sync contract under test
+    _SETTINGS_DRAWER_HTML,  # pyright: ignore[reportPrivateUsage]  # collapsed-by-default contract
     SHELL_CSS,
     SHELL_JS,
     render_overview_panel,
@@ -179,12 +180,33 @@ def test_settings_drawer_structure() -> None:
     assert 'id="cc-drawer"' in html
     assert 'id="cc-drawer-close"' in html
     # Drawer sections lazy-load the SAME fragments the old tabs served.
-    assert 'class="cc-drawer-sec" open data-endpoint="/api/panel/budget"' in html
+    assert 'class="cc-drawer-sec" data-endpoint="/api/panel/budget"' in html
     assert 'data-endpoint="/api/panel/ticker_settings"' in html
     assert 'data-endpoint="/api/panel/actions"' in html
     # The drawer endpoints are sections, not nav panels.
     assert '<section class="cc-panel" data-panel="budget"' not in html
     assert '<section class="cc-panel" data-panel="actions"' not in html
+
+
+def test_settings_drawer_sections_collapsed_with_remembered_state() -> None:
+    """UI polish: every drawer section ships collapsed (no `open` attribute
+    in the drawer markup); SHELL_JS restores and persists each section's
+    state per-endpoint in localStorage."""
+    assert "<details" in _SETTINGS_DRAWER_HTML
+    assert " open " not in _SETTINGS_DRAWER_HTML
+    assert "cc-drawer-sec:" in SHELL_JS
+    assert "localStorage.setItem(drawerSecKey(" in SHELL_JS
+    assert "localStorage.getItem(drawerSecKey(" in SHELL_JS
+
+
+def test_type_scale_tokens_reach_the_shell() -> None:
+    """The semantic scale is the shell's only type vocabulary: the headline
+    tiers reference tokens and the old hardcoded h1/h2 sizes are gone."""
+    assert "--fs-display: 22px" in SHELL_CSS
+    assert "h1 { font-size: var(--fs-display)" in SHELL_CSS
+    assert "h2 { font-size: var(--fs-title)" in SHELL_CSS
+    assert "font-size: 24px" not in SHELL_CSS
+    assert "font-size: 18px" not in SHELL_CSS
 
 
 def test_command_palette_chrome() -> None:

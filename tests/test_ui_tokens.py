@@ -20,11 +20,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ui.tokens import (  # noqa: E402
     CHART_SERIES,
+    CHROME_TOKENS,
     FAVICON_LINK,
     FONT_TOKENS,
     PALETTE_DARK,
     PALETTE_LIGHT,
     PALETTE_WHITE_OVERRIDES,
+    SPACING_SCALE,
+    TYPE_SCALE,
     page_title,
     palette_css,
 )
@@ -71,6 +74,35 @@ def test_palette_css_dark_is_a_single_root_block() -> None:
 def test_palette_css_rejects_unknown_default() -> None:
     with pytest.raises(ValueError):
         palette_css("sepia")
+
+
+def test_type_scale_is_the_six_step_importance_ladder() -> None:
+    """The semantic scale is a public contract for every renderer (and the
+    queued UI sessions building on this one): six steps, strictly descending,
+    named by importance — display > title > section > body > caption > micro."""
+    order = ["fs-display", "fs-title", "fs-section", "fs-body", "fs-caption", "fs-micro"]
+    assert list(TYPE_SCALE) == order
+    sizes = [float(TYPE_SCALE[k].removesuffix("px")) for k in order]
+    assert sizes == sorted(sizes, reverse=True)
+    assert len(set(sizes)) == 6
+
+
+def test_spacing_scale_ascends() -> None:
+    steps = [float(v.removesuffix("px")) for v in SPACING_SCALE.values()]
+    assert steps == sorted(steps)
+
+
+def test_chrome_tokens_pin_the_one_radius_and_standard_transition() -> None:
+    assert CHROME_TOKENS["radius"] == "8px"
+    assert CHROME_TOKENS["radius-full"] == "999px"
+    assert CHROME_TOKENS["transition"] == "150ms ease"
+
+
+def test_scale_tokens_ride_along_in_both_palette_css_modes() -> None:
+    for mode in ("paper", "dark"):
+        root = palette_css(mode).split("}")[0]
+        for name in (*TYPE_SCALE, *SPACING_SCALE, *CHROME_TOKENS):
+            assert f"--{name}:" in root, f"--{name} missing from palette_css({mode!r}) :root"
 
 
 def test_chart_series_is_six_unique_colors() -> None:

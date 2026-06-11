@@ -26,7 +26,7 @@ from pipeline.analytical_dashboard import (
     TriggerLadderRow,
 )
 from ui.time import stamp_html
-from ui.tokens import FAVICON_LINK
+from ui.tokens import FAVICON_LINK, palette_css
 
 _TRIGGER_TONE: dict[str, str] = {
     "sell": "tone-sell",
@@ -688,6 +688,8 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
     return "".join(out)
 
 
+# The whole concatenated head goes through str.format(), so the palette block
+# (literal CSS braces) must be brace-escaped before splicing.
 _PAGE_HEAD = (
     """<!doctype html>
 <html lang="en">
@@ -696,107 +698,109 @@ _PAGE_HEAD = (
 <title>Portfolio · analytical dashboard</title>
 """
     + FAVICON_LINK
+    + "\n<style>\n"
+    + palette_css("dark").replace("{", "{{").replace("}", "}}")
     + """
-<style>
-  body {{ margin: 0; padding: 24px; font-family: 'Inter', -apple-system, sans-serif; background: #0c0d10; color: #e5e5e2; line-height: 1.5; font-size: 14px; }}
-  h1 {{ font-size: 24px; margin: 0 0 8px; font-weight: 600; }}
-  h2 {{ font-size: 18px; margin: 0 0 6px; font-weight: 600; }}
-  .stamp {{ color: #888; font-size: 12px; font-family: 'JetBrains Mono', monospace; margin-bottom: 24px; }}
-  .panel {{ margin-bottom: 32px; background: #16171a; border: 1px solid #2a2c30; border-radius: 8px; padding: 18px 20px; }}
-  .panel .sub {{ color: #999; font-size: 12px; margin: 0 0 16px; }}
-  .muted {{ color: #888; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ text-align: left; padding: 8px 10px; border-bottom: 2px solid #2a2c30; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; font-weight: 600; }}
-  td {{ padding: 8px 10px; border-bottom: 1px solid #1f2125; vertical-align: top; }}
-  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  td.muted {{ color: #666; }}
-  td.pos {{ color: #4ade80; }}
-  td.neg {{ color: #f87171; }}
-  .ticker-link {{ color: #f5f5f0; text-decoration: none; font-weight: 600; }}
-  .ticker-link:hover {{ color: #aaa; }}
+  body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
+  h1 {{ font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }}
+  h2 {{ font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }}
+  .stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); margin-bottom: 24px; }}
+  .panel {{ margin-bottom: 32px; background: var(--surface); border-radius: var(--radius); padding: 18px 20px; }}
+  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 16px; }}
+  .muted {{ color: var(--muted); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
+  th {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
+  td {{ padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
+  tbody tr:hover td {{ background: rgba(255,255,255,0.025); }}
+  td.num {{ text-align: right; }}
+  td.muted {{ color: var(--muted-2); }}
+  td.pos {{ color: var(--ok); }}
+  td.neg {{ color: var(--bad); }}
+  .ticker-link {{ color: var(--fg); text-decoration: none; font-weight: 600; transition: color var(--transition); }}
+  .ticker-link:hover {{ color: var(--accent); }}
   tr.tone-sell {{ background: rgba(248, 113, 113, 0.06); }}
   tr.tone-trim {{ background: rgba(251, 191, 36, 0.04); }}
   tr.tone-init {{ background: rgba(74, 222, 128, 0.06); }}
   tr.tx-buy {{ background: rgba(74, 222, 128, 0.04); }}
   tr.tx-sell {{ background: rgba(248, 113, 113, 0.02); }}
-  td.trigger-cell {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; }}
-  tr.tone-sell .trigger-cell {{ color: #f87171; }}
-  tr.tone-trim .trigger-cell {{ color: #fbbf24; }}
-  tr.tone-init .trigger-cell {{ color: #4ade80; }}
-  td.signal-strong {{ color: #4ade80; font-weight: 600; }}
-  td.signal-medium {{ color: #fbbf24; }}
-  td.signal-weak {{ color: #888; }}
+  td.trigger-cell {{ font-family: var(--mono); font-size: var(--fs-caption); text-transform: uppercase; }}
+  tr.tone-sell .trigger-cell {{ color: var(--bad); }}
+  tr.tone-trim .trigger-cell {{ color: var(--warn); }}
+  tr.tone-init .trigger-cell {{ color: var(--ok); }}
+  td.signal-strong {{ color: var(--ok); font-weight: 600; }}
+  td.signal-medium {{ color: var(--warn); }}
+  td.signal-weak {{ color: var(--muted); }}
   /* Synthesis panel */
-  .synthesis-panel {{ border-left: 3px solid #4ade80; }}
-  .synthesis-body {{ font-size: 14px; line-height: 1.65; }}
-  .synthesis-body h2, .synthesis-body h3, .synthesis-body h4 {{ color: #f5f5f0; margin-top: 1.2em; margin-bottom: 6px; }}
-  .synthesis-body h2 {{ font-size: 18px; }}
-  .synthesis-body h3 {{ font-size: 15px; }}
-  .synthesis-body h4 {{ font-size: 13px; color: #4ade80; }}
-  .synthesis-body strong {{ color: #f5f5f0; }}
-  .synthesis-body code {{ background: #1f2125; padding: 1px 5px; border-radius: 3px; font-family: 'JetBrains Mono', monospace; font-size: 12px; }}
+  .synthesis-panel {{ border-left: 3px solid var(--ok); }}
+  .synthesis-body {{ font-size: var(--fs-section); line-height: 1.65; }}
+  .synthesis-body h2, .synthesis-body h3, .synthesis-body h4 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
+  .synthesis-body h2 {{ font-size: var(--fs-title); }}
+  .synthesis-body h3 {{ font-size: var(--fs-section); }}
+  .synthesis-body h4 {{ font-size: var(--fs-body); color: var(--ok); }}
+  .synthesis-body strong {{ color: var(--fg); }}
+  .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 0.93em; }}
   .synthesis-body ul {{ padding-left: 22px; }}
   .synthesis-body li {{ margin-bottom: 4px; }}
-  .synthesis-body hr {{ border: none; border-top: 1px solid #2a2c30; margin: 16px 0; }}
+  .synthesis-body hr {{ border: none; border-top: 1px solid var(--border); margin: 16px 0; }}
   /* Reread grid */
   .reread-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; margin-top: 8px; }}
-  .reread-card {{ background: #16171a; border: 1px solid #2a2c30; border-radius: 6px; padding: 12px 14px; }}
-  .reread-card summary {{ cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: baseline; font-size: 16px; font-weight: 600; }}
+  .reread-card {{ background: var(--surface); border-radius: var(--radius); padding: 12px 14px; }}
+  .reread-card summary {{ cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-title); font-weight: 600; }}
   .reread-card summary::-webkit-details-marker {{ display: none; }}
-  .reread-card summary::before {{ content: '▸ '; color: #888; font-family: 'JetBrains Mono', monospace; }}
+  .reread-card summary::before {{ content: '▸ '; color: var(--muted); font-family: var(--mono); }}
   .reread-card[open] summary::before {{ content: '▾ '; }}
-  .reread-stamp {{ color: #888; font-size: 11px; font-family: 'JetBrains Mono', monospace; font-weight: 400; }}
-  .reread-body {{ font-size: 13px; line-height: 1.55; margin-top: 10px; }}
-  .reread-body h2, .reread-body h3, .reread-body h4 {{ color: #f5f5f0; margin: 10px 0 4px; }}
-  .reread-body h2 {{ font-size: 14px; color: #4ade80; }}
-  .reread-body h3 {{ font-size: 13px; }}
-  .reread-body strong {{ color: #f5f5f0; }}
+  .reread-stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }}
+  .reread-body {{ font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }}
+  .reread-body h2, .reread-body h3, .reread-body h4 {{ color: var(--fg); margin: 10px 0 4px; }}
+  .reread-body h2 {{ font-size: var(--fs-section); color: var(--ok); }}
+  .reread-body h3 {{ font-size: var(--fs-body); }}
+  .reread-body strong {{ color: var(--fg); }}
   .reread-body ul {{ padding-left: 18px; }}
-  .reread-body hr {{ border: none; border-top: 1px solid #2a2c30; margin: 10px 0; }}
-  .cli-hint {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 10px 12px; background: #1f2125; border-radius: 4px; color: #4ade80; overflow-x: auto; margin: 6px 0 0; }}
+  .reread-body hr {{ border: none; border-top: 1px solid var(--border); margin: 10px 0; }}
+  .cli-hint {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); color: var(--ok); overflow-x: auto; margin: 6px 0 0; }}
   /* Decisions panel */
-  .panel-h3 {{ font-size: 14px; margin: 18px 0 8px; font-weight: 600; color: #f5f5f0; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.4px; }}
+  .panel-h3 {{ font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600; color: var(--fg); }}
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 12px; }}
-  .kpi-card {{ background: #1f2125; border: 1px solid #2a2c30; border-radius: 6px; padding: 10px 12px; text-align: center; }}
-  .kpi-card.tone-good {{ border-left: 3px solid #4ade80; }}
-  .kpi-card.tone-warn {{ border-left: 3px solid #fbbf24; }}
-  .kpi-card.tone-bad {{ border-left: 3px solid #f87171; }}
-  .kpi-card.tone-muted {{ border-left: 3px solid #555; }}
-  .kpi-label {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; letter-spacing: 0.5px; }}
-  .kpi-value {{ font-size: 22px; font-weight: 700; margin: 2px 0; color: #f5f5f0; }}
-  .kpi-sub {{ font-size: 10px; color: #777; font-family: 'JetBrains Mono', monospace; }}
+  .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; text-align: center; }}
+  .kpi-card.tone-good {{ border-left: 3px solid var(--ok); }}
+  .kpi-card.tone-warn {{ border-left: 3px solid var(--warn); }}
+  .kpi-card.tone-bad {{ border-left: 3px solid var(--bad); }}
+  .kpi-card.tone-muted {{ border-left: 3px solid var(--muted-2); }}
+  .kpi-label {{ font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }}
+  .kpi-value {{ font-size: var(--fs-display); font-weight: 700; margin: 2px 0; color: var(--fg); font-variant-numeric: tabular-nums; }}
+  .kpi-sub {{ font-size: var(--fs-micro); color: var(--muted); font-family: var(--mono); }}
   .calib-strip {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }}
-  .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: 12px; }}
-  .calib-label {{ font-family: 'JetBrains Mono', monospace; color: #aaa; text-transform: uppercase; }}
-  .calib-bar {{ background: #1f2125; border-radius: 3px; height: 14px; overflow: hidden; }}
+  .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }}
+  .calib-label {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }}
+  .calib-bar {{ background: var(--paper); border-radius: var(--radius-full); height: 14px; overflow: hidden; }}
   .calib-fill {{ background: linear-gradient(90deg, #f87171 0%, #fbbf24 50%, #4ade80 100%); height: 100%; }}
-  .calib-value {{ font-family: 'JetBrains Mono', monospace; color: #ccc; text-align: right; }}
-  .decisions-table td.outcome-correct {{ color: #4ade80; }}
-  .decisions-table td.outcome-wrong {{ color: #f87171; }}
-  .decisions-table td.outcome-mixed {{ color: #fbbf24; }}
-  .decisions-table td.outcome-pending {{ color: #888; }}
+  .calib-value {{ font-family: var(--mono); color: var(--fg-soft); text-align: right; }}
+  .decisions-table td.outcome-correct {{ color: var(--ok); }}
+  .decisions-table td.outcome-wrong {{ color: var(--bad); }}
+  .decisions-table td.outcome-mixed {{ color: var(--warn); }}
+  .decisions-table td.outcome-pending {{ color: var(--muted); }}
   /* LLM budget panel */
-  .budget-table td code {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #f5f5f0; background: transparent; padding: 0; }}
+  .budget-table td code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg); background: transparent; padding: 0; }}
   .burn-cell {{ width: 200px; padding: 6px 10px; }}
-  .burn-bar {{ width: 100%; height: 8px; background: #1f2125; border-radius: 4px; overflow: hidden; }}
+  .burn-bar {{ width: 100%; height: 8px; background: var(--paper); border-radius: var(--radius-full); overflow: hidden; }}
   .burn-fill {{ height: 100%; transition: width 0.2s; }}
-  .burn-ok {{ background: #4ade80; }}
-  .burn-warn {{ background: #fbbf24; }}
-  .burn-over {{ background: #f87171; }}
-  .block-hard {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #f87171; font-weight: 600; }}
-  .block-soft {{ font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #888; }}
-  .budget-footer {{ margin-top: 12px; font-size: 13px; color: #ccc; }}
-  .budget-footer strong {{ color: #f5f5f0; }}
+  .burn-ok {{ background: var(--ok); }}
+  .burn-warn {{ background: var(--warn); }}
+  .burn-over {{ background: var(--bad); }}
+  .block-hard {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--bad); font-weight: 600; }}
+  .block-soft {{ font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }}
+  .budget-footer {{ margin-top: 12px; font-size: var(--fs-body); color: var(--fg-soft); }}
+  .budget-footer strong {{ color: var(--fg); }}
   /* Tier coverage strip */
-  .tier-strip {{ background: #16171a; border: 1px solid #2a2c30; border-radius: 6px; padding: 10px 14px; margin-bottom: 22px; font-size: 13px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
-  .tier-strip-label {{ color: #888; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 8px; }}
-  .tier-chip {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; padding: 2px 6px; border-radius: 3px; cursor: help; }}
-  .tier-ok {{ color: #4ade80; }}
-  .tier-stale {{ color: #fbbf24; }}
-  .tier-stale-count {{ color: #f87171; font-weight: 600; }}
-  .tier-backfill {{ color: #888; }}
-  .tier-backfill .tier-stale-count {{ color: #888; font-weight: 400; }}
-  .tier-empty {{ color: #666; }}
+  .tier-strip {{ background: var(--surface); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
+  .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
+  .tier-chip {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 2px 6px; border-radius: 3px; cursor: help; }}
+  .tier-ok {{ color: var(--ok); }}
+  .tier-stale {{ color: var(--warn); }}
+  .tier-stale-count {{ color: var(--bad); font-weight: 600; }}
+  .tier-backfill {{ color: var(--muted); }}
+  .tier-backfill .tier-stale-count {{ color: var(--muted); font-weight: 400; }}
+  .tier-empty {{ color: var(--muted-2); }}
 </style>
 </head>
 <body>

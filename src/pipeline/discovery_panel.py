@@ -37,20 +37,23 @@ _PANEL_STYLE = """<style>
 .dq-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:4px 0 12px; }
 .dq-bar select, .dq-bar input {
   background:var(--paper, #1a1d23); color:var(--fg); border:1px solid var(--border);
-  border-radius:6px; padding:5px 9px; font-size:12.5px; }
-.dq-bar button { background:#1c2138; color:var(--accent); border:1px solid var(--accent);
-  border-radius:6px; padding:5px 12px; font-size:12.5px; cursor:pointer; }
+  border-radius:var(--radius); padding:5px 9px; font-size:var(--fs-body); }
+.dq-bar button { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
+  border-radius:var(--radius); padding:5px 12px; font-size:var(--fs-body); cursor:pointer;
+  transition:filter var(--transition); }
 .dq-bar button:hover { filter:brightness(1.15); }
 .dq-bar button[disabled] { opacity:.45; cursor:default; }
-.dq-count { color:var(--muted); font-size:12px; margin-left:auto; }
-.dq-table { border-collapse:collapse; width:100%; font-size:12.5px; }
-.dq-table th, .dq-table td { padding:6px 8px; border-bottom:1px solid var(--border);
+.dq-count { color:var(--muted); font-size:var(--fs-caption); margin-left:auto; }
+.dq-table { border-collapse:collapse; width:100%; font-size:var(--fs-body);
+  font-variant-numeric:tabular-nums; }
+.dq-table th, .dq-table td { padding:6px 8px; border-bottom:1px solid var(--hairline);
   text-align:left; vertical-align:top; }
-.dq-table th { color:var(--muted); font-size:11px; text-transform:uppercase;
-  letter-spacing:.05em; }
+.dq-table th { color:var(--muted); font-size:var(--fs-caption); text-transform:uppercase;
+  letter-spacing:.06em; font-weight:600; }
+.dq-table tbody tr:hover td { background:rgba(255,255,255,0.025); }
 .dq-tick { font-family:var(--mono, monospace); font-weight:600; }
 .dq-score { font-family:var(--mono, monospace); }
-.dq-status { font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; }
+.dq-status { font-size:var(--fs-micro); font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .dq-status-new { color:var(--accent); }
 .dq-status-queued { color:var(--warn); }
 .dq-status-building { color:var(--warn); font-weight:700; }
@@ -58,21 +61,21 @@ _PANEL_STYLE = """<style>
 .dq-status-dismissed { color:var(--muted); }
 .dq-ev { margin:0; padding-left:16px; }
 .dq-ev li { margin:1px 0; color:var(--fg-soft, var(--fg)); }
-.dq-ev .dq-src { font-family:var(--mono, monospace); font-size:10px; color:var(--muted);
+.dq-ev .dq-src { font-family:var(--mono, monospace); font-size:var(--fs-micro); color:var(--muted);
   margin-right:5px; }
 .dq-acts { display:flex; gap:5px; flex-wrap:wrap; }
 .dq-acts button { background:var(--paper, #1a1d23); color:var(--fg-soft, var(--fg));
-  border:1px solid var(--border); border-radius:5px; padding:3px 9px; font-size:11.5px;
-  cursor:pointer; }
+  border:1px solid var(--border); border-radius:var(--radius); padding:3px 9px; font-size:var(--fs-caption);
+  cursor:pointer; transition:color var(--transition), border-color var(--transition); }
 .dq-acts button:hover { border-color:var(--accent); color:var(--accent); }
 .dq-acts button[data-act="build"]:hover { border-color:var(--warn); color:var(--warn); }
 .dq-empty { color:var(--muted); padding:18px 0; }
-.dq-log { background:var(--paper, #14161b); border:1px solid var(--border); border-radius:8px;
+.dq-log { background:var(--paper, #14161b); border:1px solid var(--border); border-radius:var(--radius);
   padding:8px 12px; margin-top:12px; max-height:280px; overflow-y:auto;
-  font-family:var(--mono, monospace); font-size:11px; color:var(--fg-soft, var(--fg));
+  font-family:var(--mono, monospace); font-size:var(--fs-caption); color:var(--fg-soft, var(--fg));
   white-space:pre-wrap; display:none; }
-.dq-hint { color:var(--muted); font-size:11.5px; margin-top:10px; }
-.dq-warnrow { color:var(--warn); font-size:12px; margin:6px 0; }
+.dq-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
+.dq-warnrow { color:var(--warn); font-size:var(--fs-caption); margin:6px 0; }
 </style>"""
 
 # Plain string (not an f-string) so braces pass through untouched.

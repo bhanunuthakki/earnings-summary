@@ -100,6 +100,63 @@ FONT_TOKENS: dict[str, str] = {
     "mono": "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
 }
 
+# ---------------------------------------------------------------------------
+# Semantic type scale (UI polish foundation, 2026-06-11).
+#
+# Size encodes IMPORTANCE, not surface. Before this scale the ten renderers
+# carried 34 distinct font sizes (8.5px-100px); the same component rendered
+# at different sizes on different surfaces (.kpi-value: 22px shell vs 18px
+# ticker page; h1: 24px shell vs 26px digest). Every rule now picks the step
+# that matches the element's importance:
+#
+#   --fs-display  the page's one dominant element: page title, hero stat
+#   --fs-title    panel / drawer / card titles (the h2 tier)
+#   --fs-section  sub-section headings inside a panel; serif reading prose
+#                 (serif sits one step above sans UI body for optical parity)
+#   --fs-body     default UI text: tables, inputs, buttons, tabs
+#   --fs-caption  secondary metadata: table headers, stamps, hints, sublabels
+#   --fs-micro    smallest annotations: chips, badges, kind tags, axis marks
+#
+# Two sanctioned escapes, nothing else: the workspace report's 60px identity
+# ticker (a deliberate brand moment) and `font-size: 0.93em` for inline
+# code/mono inside running text (an optical correction — mono renders larger
+# than sans at equal px — not an importance level).
+#
+# Queued UI sessions build on these names — treat them as a public contract.
+TYPE_SCALE: dict[str, str] = {
+    "fs-display": "22px",
+    "fs-title": "16px",
+    "fs-section": "14px",
+    "fs-body": "13px",
+    "fs-caption": "11.5px",
+    "fs-micro": "10px",
+}
+
+# Spacing scale — gaps, paddings, and margins snap to these steps so density
+# differences between surfaces stay deliberate (a surface may still define
+# local layout tokens, but their VALUES should come from this ladder).
+SPACING_SCALE: dict[str, str] = {
+    "sp-1": "4px",
+    "sp-2": "8px",
+    "sp-3": "12px",
+    "sp-4": "16px",
+    "sp-5": "24px",
+    "sp-6": "32px",
+}
+
+# Chrome: ONE corner radius for rectangular boxes (cards, panels, drawers,
+# inputs, popovers); --radius-full only for deliberately round shapes (pills,
+# dots, toggle tracks). --transition is the standard hover/drawer/popover
+# timing — use `var(--transition)` with explicit properties, never `all`.
+CHROME_TOKENS: dict[str, str] = {
+    "radius": "8px",
+    "radius-full": "999px",
+    "transition": "150ms ease",
+}
+
+# Rides along inside every palette_css() :root block.
+_SCALE_TOKENS: dict[str, str] = {**TYPE_SCALE, **SPACING_SCALE, **CHROME_TOKENS}
+
 # Categorical chart series (Okabe-Ito, colorblind-safe). Values unchanged
 # from charts_v2's historical hardcode — exposed here so the next palette
 # decision happens in one place.
@@ -123,18 +180,18 @@ def palette_css(default: str = "paper") -> str:
     ``default="paper"`` emits the workspace contract: light ``:root`` plus
     ``[data-theme="white"]`` and ``[data-theme="dark"]`` overrides.
     ``default="dark"`` emits a dark-only ``:root`` for the dashboard
-    surfaces that have no theme switcher. Font tokens ride along in
-    ``:root`` either way.
+    surfaces that have no theme switcher. Font tokens and the semantic
+    type/spacing/chrome scale ride along in ``:root`` either way.
     """
     if default == "dark":
-        return ":root {\n" + _vars({**PALETTE_DARK, **FONT_TOKENS}) + "\n}\n"
+        return ":root {\n" + _vars({**PALETTE_DARK, **FONT_TOKENS, **_SCALE_TOKENS}) + "\n}\n"
     if default != "paper":
         raise ValueError(f"default must be 'paper' or 'dark', got {default!r}")
     white = {**PALETTE_LIGHT, **PALETTE_WHITE_OVERRIDES}
     white_delta = {k: v for k, v in white.items() if PALETTE_LIGHT.get(k) != v}
     return (
         ":root {\n"
-        + _vars({**PALETTE_LIGHT, **FONT_TOKENS})
+        + _vars({**PALETTE_LIGHT, **FONT_TOKENS, **_SCALE_TOKENS})
         + "\n}\n\n"
         + ':root[data-theme="white"] {\n'
         + _vars(white_delta)

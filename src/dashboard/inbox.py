@@ -424,57 +424,59 @@ def _esc(text: str) -> str:
 
 
 INBOX_CSS = """
-.ix-stream { display: flex; flex-direction: column; gap: 8px; }
-.ix-bucket { color: var(--muted, #888); font-size: 10.5px; font-family: var(--mono, monospace);
-  text-transform: uppercase; letter-spacing: 0.6px; margin: 10px 0 2px; }
+.ix-stream { display: flex; flex-direction: column; gap: var(--sp-2); }
+.ix-bucket { color: var(--muted, #888); font-size: var(--fs-micro); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; margin: 10px 0 2px; }
 .ix-bucket:first-child { margin-top: 0; }
-.ix-card { border: 1px solid var(--border, #2a2c30); border-radius: 8px;
+.ix-card { border-radius: var(--radius);
   background: var(--surface, #16171a); padding: 9px 12px; }
 .ix-head { display: flex; align-items: baseline; gap: 8px; }
-.ix-ticker { font-family: var(--mono, monospace); font-weight: 700; font-size: 12px;
-  color: var(--accent, #7aa2f7); }
-.ix-kind { font-size: 10.5px; font-family: var(--mono, monospace); text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--muted, #888); }
-.ix-status { font-size: 10px; font-family: var(--mono, monospace); border: 1px solid var(--border, #2a2c30);
-  border-radius: 4px; padding: 0 5px; color: var(--muted, #888); }
+.ix-ticker { font-family: var(--mono, monospace); font-weight: 700; font-size: var(--fs-caption);
+  color: var(--fg, #e8e8e3); }
+.ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted, #888); }
+.ix-status { font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border, #2a2c30);
+  border-radius: var(--radius); padding: 0 5px; color: var(--muted, #888);
+  text-transform: uppercase; letter-spacing: 0.05em; }
 .ix-status-pending { color: var(--warn, #fbbf24); border-color: var(--warn, #fbbf24); }
 .ix-status-applied, .ix-status-approved { color: var(--ok, #4ade80); }
-.ix-when { margin-left: auto; color: var(--muted, #888); font-size: 10.5px;
+.ix-when { margin-left: auto; color: var(--muted, #888); font-size: var(--fs-micro);
   font-family: var(--mono, monospace); white-space: nowrap; }
-.ix-body { margin-top: 5px; font-size: 12.5px; line-height: 1.45; color: var(--fg, #e8e8e3);
+.ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg, #e8e8e3);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.ix-compact .ix-body { -webkit-line-clamp: 2; font-size: 12px; }
+.ix-compact .ix-body { -webkit-line-clamp: 2; }
 .ix-card:hover .ix-body { -webkit-line-clamp: unset; }
 .ix-actions { margin-top: 6px; }
-.ix-open { margin-top: 4px; font-size: 11.5px; }
+.ix-open { margin-top: 4px; font-size: var(--fs-caption); }
 .ix-open a { color: var(--accent, #7aa2f7); text-decoration: none; }
-.ix-empty { color: var(--muted, #888); font-size: 12.5px; padding: 14px 4px; }
+.ix-empty { color: var(--muted, #888); font-size: var(--fs-body); padding: 14px 4px; }
 /* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
    in the existing header row and flip visibility (layout stays reserved, so
    nothing shifts) on card hover / keyboard focus. */
 .ix-quick { margin-left: auto; display: inline-flex; gap: 3px; visibility: hidden; }
 .ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
 .ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
-.ix-act { font-family: var(--mono, monospace); font-size: 11px; line-height: 1;
+.ix-act { font-size: var(--fs-caption); line-height: 1;
   font-weight: 600; color: var(--muted, #888); background: transparent;
-  border: 1px solid var(--border, #2a2c30); border-radius: 4px; padding: 1px 5px;
-  cursor: pointer; }
+  border: 1px solid var(--border, #2a2c30); border-radius: var(--radius); padding: 1px 5px;
+  cursor: pointer; transition: color var(--transition), border-color var(--transition); }
 .ix-act-approve:hover { color: var(--ok, #4ade80); border-color: var(--ok, #4ade80); }
 .ix-act-dismiss:hover { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
 .ix-act[disabled] { opacity: 0.5; cursor: default; }
 .ix-act-fail { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
-.ix-acted { margin-left: auto; font-family: var(--mono, monospace); font-size: 10.5px;
+.ix-acted { margin-left: auto; font-size: var(--fs-micro); font-weight: 600;
   white-space: nowrap; color: var(--muted, #888); }
 .ix-acted-applied { color: var(--ok, #4ade80); }
 .ix-status-cancelled { color: var(--muted, #888); }
-.ix-dismissed { opacity: 0.55; transition: opacity 0.3s ease; }
+.ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
 /* Unread ("since you last looked") — inset accent bar: no border-width
-   change, zero layout shift. */
+   change, zero layout shift. Accent is sanctioned here: unread marks are
+   actionable state, the one non-link accent this surface carries. */
 .ix-new { box-shadow: inset 2px 0 0 var(--accent, #7aa2f7); }
 .ix-badge { display: inline-block; min-width: 14px; text-align: center;
-  margin-left: 6px; padding: 1px 5px; border-radius: 9px;
+  margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
   background: var(--accent, #7aa2f7); color: #101114;
-  font-family: var(--mono, monospace); font-size: 10.5px; font-weight: 700;
+  font-family: var(--mono, monospace); font-size: var(--fs-micro); font-weight: 700;
   line-height: 1.4; vertical-align: 2px; }
 .ix-badge[hidden] { display: none; }
 """.strip()

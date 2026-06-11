@@ -174,69 +174,69 @@ def compose_portfolio_page(
 # panel/kpi/table vocabulary. Colors key off the shared token variables so a
 # palette change in ui/tokens.py propagates here untouched.
 _ANALYTICS_CSS = """<style>
-.pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: 12.5px; }
+.pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: var(--fs-body); }
 .pf-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .pf-chip strong { color: var(--fg); font-variant-numeric: tabular-nums; }
 .pf-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .pf-chart { width: 100%; height: auto; display: block; }
-.pf-policy { font-size: 12px; margin: 10px 0 0; }
+.pf-policy { font-size: var(--fs-caption); margin: 10px 0 0; }
 .pf-warn { color: var(--warn); }
 .pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0 18px; align-items: start; }
 .pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.pf-th-chip { font-family: var(--mono, monospace); font-size: 12px; text-decoration: none;
-  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; }
+.pf-th-chip { font-family: var(--mono, monospace); font-size: var(--fs-caption); text-decoration: none;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 9px; }
 .pf-th-warn { color: var(--warn); border-color: var(--warn); }
 .pf-th-bad { color: var(--bad); border-color: var(--bad); }
 .pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;
-  align-items: center; font-size: 12.5px; padding: 3px 0; }
+  align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-exp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-exp-bar { background: var(--paper, #1a1d23); border-radius: 4px; height: 9px; overflow: hidden; }
-.pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.pf-exp-bar { background: var(--paper, #1a1d23); border-radius: var(--radius); height: 9px; overflow: hidden; }
+.pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
 .pf-exp-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
-.pf-nd-excerpt { font-size: 13px; line-height: 1.55; }
-.pf-nd-item { border-radius: 6px; }
+.pf-nd-excerpt { font-size: var(--fs-body); line-height: 1.55; }
+.pf-nd-item { border-radius: var(--radius); }
 .pf-nd-item:hover, .pf-nd-item:focus-within { background: var(--surface); }
 .pf-nd-row { display: grid; grid-template-columns: 56px 1fr 56px 70px; gap: 10px;
-  align-items: center; font-size: 12.5px; padding: 3px 0; }
+  align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-nd-ticker { font-family: var(--mono); }
-.pf-nd-bar { background: var(--paper, #1a1d23); border-radius: 4px; height: 9px; overflow: hidden; }
-.pf-nd-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.pf-nd-bar { background: var(--paper, #1a1d23); border-radius: var(--radius); height: 9px; overflow: hidden; }
+.pf-nd-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
 .pf-nd-alloc { text-align: right; font-variant-numeric: tabular-nums; }
-.pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
 .pf-nd-wf { display: none; gap: 6px; flex-wrap: wrap; padding: 1px 0 6px; }
 .pf-nd-item:hover .pf-nd-wf, .pf-nd-item:focus-within .pf-nd-wf { display: flex; }
-.pf-nd-chip { font-family: var(--mono, monospace); font-size: 11px; border: 1px solid var(--border);
-  border-radius: 5px; padding: 2px 7px; cursor: help; color: var(--muted); }
+.pf-nd-chip { font-family: var(--mono, monospace); font-size: var(--fs-caption); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 2px 7px; cursor: help; color: var(--muted); }
 .pf-nd-chip.pos { color: var(--ok); border-color: var(--ok); }
 .pf-nd-chip.neg { color: var(--bad); border-color: var(--bad); }
-.pf-nd-note { font-size: 12px; }
-.pf-nd-hint { font-size: 11.5px; }
+.pf-nd-note { font-size: var(--fs-caption); }
+.pf-nd-hint { font-size: var(--fs-caption); }
 .pf-nd-memo-h { margin-top: 12px; }
 .pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 10px 32px; margin-top: 4px; }
 .pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
-  gap: 10px; align-items: center; font-size: 12.5px; padding: 3px 0; }
+  gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-alloc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pf-bar { background: var(--hairline); border-radius: 3px; height: 10px; overflow: hidden; }
 .pf-bar-fill { background: var(--accent); opacity: 0.75; height: 100%; display: block; }
 .pf-alloc-pct { text-align: right; font-variant-numeric: tabular-nums; }
-.pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+.pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
 .pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
 .pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
-.pf-degraded { font-size: 12px; }
+.pf-degraded { font-size: var(--fs-caption); }
 .pf-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; margin-bottom: 18px; font-size: 12.5px; }
-.pf-window-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--muted); margin-right: 4px; }
+  background: var(--surface); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+.pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted); margin-right: 4px; }
 .pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
-  border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer;
-  font-family: var(--sans); }
+  border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
+  font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
 .pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
 .pf-btn-apply { background: var(--accent); color: #0d1117; border: none; font-weight: 600; }
 .pf-window input[type="date"] { background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font-size: 12px;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; font-size: var(--fs-caption);
   font-family: var(--mono); color-scheme: dark; }
 .pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
   gap: 5px; margin-left: 6px; cursor: help; }
