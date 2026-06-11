@@ -184,6 +184,107 @@ def _view_to_json(view: object) -> dict[str, object]:
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
+def _candidate_to_json(cand: object) -> dict[str, object]:
+    """CandidateRow → JSON-safe dict for the /api/discovery responses (P5.4)."""
+    from dataclasses import asdict
+    from datetime import datetime as _dt
+
+    payload = asdict(cand)  # pyright: ignore[reportArgumentType]  # always a CandidateRow
+    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+
+
+# Lifecycle moves the OWNER may make from the queue UI / chat. ``building``
+# and ``built`` are written only by the build pathway (discovery_build.py) —
+# the queue can't hand-wave a name into "built".
+_DISCOVERY_OWNER_STATUSES: frozenset[str] = frozenset({"new", "queued", "dismissed"})
+
+# Candidates a build may start from. Anything else is either already done
+# (built), in flight (building), or explicitly rejected (dismissed).
+_DISCOVERY_BUILDABLE: frozenset[str] = frozenset({"new", "queued"})
+
+
+def _discovery_chat_command(repo_root: Path, message: str, registry: Registry) -> str | None:
+    """Deterministic ``/discovery`` chat commands (P5.4) — handled server-side
+    BEFORE the LLM (no model call, no budget). Returns the reply text, or
+    None when the message isn't a /discovery command.
+
+      /discovery list           — top live candidates with why-surfaced
+      /discovery queue <T>      — mark a candidate queued
+      /discovery dismiss <T>    — dismiss (stays dismissed across re-runs)
+      /discovery build <T>      — start the eval build job (the approval)
+    """
+    text = message.strip()
+    if not text.lower().startswith("/discovery"):
+        return None
+    from discovery.store import list_candidates, set_status
+
+    db_path = repo_root / "data" / "portfolio.db"
+    parts = text.split()
+    verb = parts[1].lower() if len(parts) > 1 else "list"
+    arg = parts[2].upper() if len(parts) > 2 else ""
+    usage = (
+        "Usage: /discovery list | /discovery queue <TICKER> | "
+        "/discovery dismiss <TICKER> | /discovery build <TICKER>. "
+        "The full queue lives under Research -> Discovery."
+    )
+    try:
+        live = list_candidates(db_path=db_path)
+    except Exception:
+        return "The discovery queue isn't available (table missing?). " + usage
+    by_ticker = {c.ticker: c for c in live}
+
+    if verb == "list":
+        if not live:
+            return (
+                "The discovery queue is empty — run the pipelines from "
+                "Research -> Discovery (Run discovery)."
+            )
+        lines = [
+            f"{c.ticker} (score {c.score:g}, {c.status}) — "
+            + "; ".join(str(e.get("detail") or "") for e in c.evidence[:2])
+            for c in live[:10]
+        ]
+        more = f"\n...and {len(live) - 10} more in Research -> Discovery." if len(live) > 10 else ""
+        return "Top discovery candidates:\n" + "\n".join(lines) + more
+
+    if verb in ("queue", "dismiss"):
+        if not arg:
+            return usage
+        cand = by_ticker.get(arg)
+        if cand is None:
+            return f"{arg} isn't in the live discovery queue. " + usage
+        new_status = "queued" if verb == "queue" else "dismissed"
+        set_status(cand.id, new_status, db_path=db_path)
+        return f"{arg} -> {new_status}."
+
+    if verb == "build":
+        if not arg:
+            return usage
+        cand = by_ticker.get(arg)
+        if cand is None or cand.status not in _DISCOVERY_BUILDABLE:
+            return (
+                f"{arg} isn't buildable (must be a live candidate in new/queued status). " + usage
+            )
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "discovery_build.py"),
+            "--tickers",
+            arg,
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = registry.start(ticker=arg, kind="discovery-build", argv=argv)
+        except RegistryConflict as exc:
+            return f"Can't start the build: {exc}"
+        return (
+            f"Eval build started for {arg} (job {job.job_id}, ~25 min + LLM spend). "
+            "Watch it under Research -> Discovery."
+        )
+
+    return usage
+
+
 def create_app(
     repo_root: Path,
     *,
@@ -378,6 +479,31 @@ def create_app(
                     render_saved_views_list(db_path, user_id=user_id), mimetype="text/html"
                 )
             return Response(render_explore_panel(db_path, user_id=user_id), mimetype="text/html")
+
+        if name == "discovery":
+            # Research → Discovery (P5.4): the candidate approval queue —
+            # the budget gate ("queue, never auto-build"). ``?fragment=list``
+            # returns just the table for the panel JS's refreshes.
+            from pipeline.discovery_panel import (
+                render_discovery_list,
+                render_discovery_panel,
+            )
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            d_status = (request.args.get("status") or "live").strip() or "live"
+            try:
+                d_min = float(request.args.get("min_score") or 0)
+            except ValueError:
+                d_min = 0.0
+            d_renderer = (
+                render_discovery_list
+                if request.args.get("fragment") == "list"
+                else render_discovery_panel
+            )
+            return Response(
+                d_renderer(db_path, user_id=user_id, status=d_status, min_score=d_min),
+                mimetype="text/html",
+            )
 
         if name == "journal":
             # Research → Journal (P4.5): the analyst_notes lifecycle UI.
@@ -891,6 +1017,144 @@ def create_app(
         result = execute_view(spec, db_path=db_path)
         return Response(
             render_view_fragment(result, include_chart=include_chart), mimetype="text/html"
+        )
+
+    @app.route("/api/discovery/candidates", methods=["GET"])
+    def discovery_candidates_api():
+        """The discovery queue as JSON (P5.4): ``?status=live`` (default,
+        everything except dismissed) or one lifecycle bucket."""
+        from discovery.store import CANDIDATE_STATUSES, list_candidates
+
+        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        status_raw = (request.args.get("status") or "live").strip()
+        status = None if status_raw == "live" else status_raw
+        if status is not None and status not in CANDIDATE_STATUSES:
+            return ({"error": f"unknown status {status_raw!r}"}, 400)
+        try:
+            rows = list_candidates(user_id=user_id, status=status, db_path=db_path)
+        except sqlite3.Error:
+            rows = []  # pre-0081 schema degrades to empty
+        return {"candidates": [_candidate_to_json(c) for c in rows]}
+
+    @app.route("/api/discovery/candidates/<int:cand_id>/status", methods=["POST"])
+    def discovery_status_api(cand_id: int):
+        """Owner lifecycle moves (P5.4): queued / dismissed / new (re-open).
+        ``building``/``built`` belong to the build pathway and are rejected
+        here — the queue can't hand-wave a name into built."""
+        from discovery.store import set_status
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        status = str(payload.get("status") or "")
+        if status not in _DISCOVERY_OWNER_STATUSES:
+            return (
+                {"error": f"status must be one of {sorted(_DISCOVERY_OWNER_STATUSES)}"},
+                400,
+            )
+        try:
+            row = set_status(cand_id, status, db_path=db_path)
+        except sqlite3.Error:
+            return ({"error": "discovery_candidates table missing (run alembic upgrade)"}, 500)
+        if row is None:
+            return ({"error": f"candidate {cand_id} not found"}, 404)
+        return {"candidate": _candidate_to_json(row)}
+
+    @app.route("/actions/discovery-run", methods=["POST", "OPTIONS"])
+    def start_discovery_run():
+        """Re-run the P5.3 pipelines (screens + adjacency) as a streamed job.
+        Deterministic and LLM-free — this surfaces candidates; it never
+        builds them."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "run_discovery.py"),
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker="DISCOVERY", kind="discovery-run", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/discovery-build", methods=["POST", "OPTIONS"])
+    def start_discovery_build():
+        """Eval-build approved candidates (P5.4) — THE budget gate's other
+        side: this only runs because the owner clicked/typed it. JSON body
+        ``{"tickers": ["WDC", ...]}`` (1..MAX_BUILD_BATCH names, each must
+        be a live candidate in new/queued status). One sequential job;
+        ~25 min + LLM spend per name; streamed via the jobs SSE."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from discovery_build import MAX_BUILD_BATCH
+
+        from discovery.store import list_candidates
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw = body.get("tickers")
+        if not isinstance(raw, list) or not raw:
+            return ({"error": "tickers (non-empty list) required"}, 400)
+        tickers = [str(t).strip().upper() for t in cast("list[object]", raw) if str(t).strip()]
+        if not tickers:
+            return ({"error": "tickers (non-empty list) required"}, 400)
+        if len(tickers) > MAX_BUILD_BATCH:
+            return (
+                {"error": f"at most {MAX_BUILD_BATCH} builds per run, got {len(tickers)}"},
+                400,
+            )
+        user_id = str(body.get("user_id") or DEFAULT_USER_ID)
+        try:
+            live = list_candidates(user_id=user_id, db_path=db_path)
+        except sqlite3.Error:
+            return ({"error": "discovery_candidates table missing (run alembic upgrade)"}, 500)
+        by_ticker = {c.ticker: c for c in live}
+        not_buildable = [
+            t
+            for t in tickers
+            if t not in by_ticker or by_ticker[t].status not in _DISCOVERY_BUILDABLE
+        ]
+        if not_buildable:
+            return (
+                {
+                    "error": "not buildable (must be live candidates in new/queued "
+                    f"status): {not_buildable}"
+                },
+                400,
+            )
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "discovery_build.py"),
+            "--tickers",
+            ",".join(tickers),
+            "--repo-root",
+            str(repo_root),
+            "--user-id",
+            user_id,
+        ]
+        slot_ticker = tickers[0] if len(tickers) == 1 else "DISCOVERY-BULK"
+        try:
+            job = job_registry.start(ticker=slot_ticker, kind="discovery-build", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "tickers": tickers,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
         )
 
     @app.route("/api/sizing-intents", methods=["POST", "OPTIONS"])
@@ -1606,6 +1870,24 @@ def create_app(
             user_message = body["message"]
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
+
+        # Deterministic /discovery commands (P5.4) short-circuit BEFORE the
+        # LLM pool — no model call, no budget, instant reply in the same
+        # SSE frame shape the chat client already renders.
+        cmd_reply = _discovery_chat_command(
+            repo_root, str(cast("object", user_message)), job_registry
+        )
+        if cmd_reply is not None:
+
+            def generate_command_reply(reply: str = cmd_reply):
+                yield f"data: {json.dumps({'type': 'delta', 'text': reply})}\n\n"
+                yield f"data: {json.dumps({'type': 'final', 'text': reply})}\n\n"
+
+            return Response(
+                stream_with_context(generate_command_reply()),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         # The LLM subprocess (Claude CLI) drives `stream_response` for
         # 10-60s; running it inline would pin the Flask request thread
