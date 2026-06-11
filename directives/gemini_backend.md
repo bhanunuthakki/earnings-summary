@@ -117,6 +117,36 @@ prompt with the full prompt, both responses, models, latencies, errors, and
 through `call_llm` with explicit `backend=` so ledger rows and budget gating
 match production behavior exactly.
 
+### Across the whole `--enable-llm` surface: capture + replay
+
+Hand-built prompts (`--smoke`) cover 3 purposes. To compare across **every**
+purpose a real build exercises — `bear_case`, `valuation_basis`,
+`recent_developments`, `earnings_themes_split`, `qa_topics`,
+`exec_comp_alignment`, … — capture the real prompts from a build, then replay
+only the Gemini side (the Claude response is reused, so no extra Claude spend):
+
+```
+# 1. Harvest real prompts during a real build (capture is OFF unless the env is set).
+#    The judge/eval purposes are auto-excluded; LLM_CAPTURE_PURPOSES=csv narrows further.
+LLM_CAPTURE_DIR=data/llm_capture python execution/build_artifacts.py --enable-llm \
+    --ticker NU --repo-root <MAIN repo>
+
+# 2. Replay each captured Claude prompt through Gemini ONLY, into a compare corpus.
+python execution/compare_backends.py --from-capture data/llm_capture/capture_<date>.jsonl \
+    --repo-root <MAIN repo>
+
+# 3. Grade it (dual judge), exactly as any other corpus.
+python execution/grade_backends.py --repo-root <MAIN repo>
+```
+
+The capture sink is `src/llm/capture.py` (env-gated, off by default, best-effort —
+prompts embed thesis/IR content so the ledger stays sha-only; this is the opt-in
+full-text path). Records dedup by `prompt_sha256` on replay. **Web purposes**
+(`recent_developments`, scope `web`) are captured + flagged but are structurally
+Claude-favored — the Gemini backend has no web tools, so a low Gemini score there
+means "can't do this purpose without web", not "worse model". Filter them out
+(`--purpose`) or read the `captured_scope` field when interpreting the verdict.
+
 ## Grading the corpus (the promotion verdict)
 
 `src/llm/backend_judge.py` + `execution/grade_backends.py` turn a corpus into a
