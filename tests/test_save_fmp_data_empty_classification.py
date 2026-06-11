@@ -7,6 +7,7 @@ common case for a freshly-IPO'd ticker. It must be recorded as `empty`, NOT
 200-empty and let the v3/v4 403 fallback overwrite the status (and burned 2
 extra calls per empty endpoint).
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -14,20 +15,42 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_save_fmp_data():
-    """Import execution/save_fmp_data.py. The module sys.exit(1)s at import if
-    FMP_API_KEY is unset, so seed a dummy key first (fmp_call's network layer is
-    monkey-patched, so the key is never actually used)."""
-    os.environ.setdefault("FMP_API_KEY", "test-key-unused")
+    """Import execution/save_fmp_data.py with the FMP env vars isolated.
+
+    - The module sys.exit(1)s at import if FMP_API_KEY is unset, so seed a dummy
+      key (fmp_call's network layer is monkey-patched, so it's never used).
+    - `_stable_only` is read from FMP_TIER at module load, and FMP_TIER=free can
+      leak in from a .env before that read happens: llm_client.py's bare
+      load_dotenv() (run when an earlier test in the same pytest process imports
+      it) walks up past worktree roots to the main repo's .env, and the module's
+      own load_dotenv(PROJECT_ROOT / ".env") hits it directly on a main
+      checkout. Pin FMP_TIER to a paid tier for the exec so the v3/v4 fallback
+      ladder these tests assert stays enabled (load_dotenv never overrides vars
+      that are already set), then restore both vars — the module captures them
+      into constants at import, so nothing re-reads the env afterwards.
+    """
     src = PROJECT_ROOT / "execution" / "save_fmp_data.py"
     spec = importlib.util.spec_from_file_location("save_fmp_data", src)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules["save_fmp_data"] = mod
-    spec.loader.exec_module(mod)
+    saved = {key: os.environ.get(key) for key in ("FMP_TIER", "FMP_API_KEY")}
+    os.environ["FMP_TIER"] = "premium"
+    os.environ.setdefault("FMP_API_KEY", "test-key-unused")
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     return mod
 
 
@@ -35,7 +58,7 @@ def test_stable_empty_array_records_empty_and_stops_ladder() -> None:
     mod = _load_save_fmp_data()
     calls: list[str] = []
 
-    def fake_http_get(url, params):
+    def fake_http_get(url: str, params: dict[str, object]) -> tuple[int, object | None, str | None]:
         calls.append(url)
         if "/stable/" in url:
             return (200, [], None)  # accessible, no rows yet
@@ -58,7 +81,7 @@ def test_stable_with_data_returns_body_unchanged() -> None:
     mod = _load_save_fmp_data()
     payload = [{"date": "2025-12-31", "revenue": 100}]
 
-    def fake_http_get(url, params):
+    def fake_http_get(url: str, params: dict[str, object]) -> tuple[int, object | None, str | None]:
         if "/stable/" in url:
             return (200, payload, None)
         return (403, None, "tier")
@@ -77,7 +100,7 @@ def test_all_variants_403_returns_forbidden() -> None:
     403 — the empty fix must not swallow real forbiddens."""
     mod = _load_save_fmp_data()
 
-    def fake_http_get(url, params):
+    def fake_http_get(url: str, params: dict[str, object]) -> tuple[int, object | None, str | None]:
         return (403, None, "fmp-err: tier-restricted")
 
     mod._http_get = fake_http_get  # type: ignore[assignment]
@@ -93,7 +116,7 @@ def test_empty_on_v3_fallback_still_classifies_empty() -> None:
     accessible-but-empty — empty must win over the earlier 403."""
     mod = _load_save_fmp_data()
 
-    def fake_http_get(url, params):
+    def fake_http_get(url: str, params: dict[str, object]) -> tuple[int, object | None, str | None]:
         if "/api/v3/" in url:
             return (200, [], None)
         return (403, None, "tier")
@@ -107,23 +130,39 @@ def test_empty_on_v3_fallback_still_classifies_empty() -> None:
     assert kind is not None and kind.startswith("v3-path:")
 
 
-def test_run_ticker_branch_classifies_empty_as_empty(monkeypatch) -> None:
+def test_run_ticker_branch_classifies_empty_as_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end at the classification layer: a 200-empty fmp_call result lands
     in the `empty` summary bucket (not `forbidden`)."""
     mod = _load_save_fmp_data()
 
     # Single tiny job so the runner does one fmp_call.
-    monkeypatch.setattr(
-        mod, "per_ticker_jobs",
-        lambda symbol, list_type="portfolio": [
-            {"path": "income-statement", "symbol": symbol, "period": "quarter",
-             "suffix": "income_statement_quarterly", "extra": {}, "file_override": None}
-        ],
-    )
-    monkeypatch.setattr(mod, "_list_type_for", lambda ticker: "evaluation")
-    monkeypatch.setattr(mod, "_flush_status_batch", lambda rows: None)
-    monkeypatch.setattr(mod, "fmp_call",
-                        lambda endpoint, ticker, extra: (200, None, "empty-list", "stable:income-statement"))
+    def fake_jobs(symbol: str, list_type: str = "portfolio") -> list[dict[str, object]]:
+        return [
+            {
+                "path": "income-statement",
+                "symbol": symbol,
+                "period": "quarter",
+                "suffix": "income_statement_quarterly",
+                "extra": {},
+                "file_override": None,
+            }
+        ]
+
+    def fake_list_type(ticker: str) -> str:
+        return "evaluation"
+
+    def fake_flush(rows: object) -> None:
+        return None
+
+    def fake_fmp_call(
+        endpoint: str, ticker: str, extra: dict[str, object]
+    ) -> tuple[int, None, str, str]:
+        return (200, None, "empty-list", "stable:income-statement")
+
+    monkeypatch.setattr(mod, "per_ticker_jobs", fake_jobs)
+    monkeypatch.setattr(mod, "_list_type_for", fake_list_type)
+    monkeypatch.setattr(mod, "_flush_status_batch", fake_flush)
+    monkeypatch.setattr(mod, "fmp_call", fake_fmp_call)
 
     summary = mod.run_ticker("FRVO")
     assert summary["empty"] == 1
