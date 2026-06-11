@@ -56,6 +56,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "kpi_inflection_context": "v1",
     "material_news_classification": "v1",
     "saydo_due_context": "v1",
+    # Pairwise backend judge (src/llm/backend_judge.py). Bump when the A/B judge
+    # rubric is materially reworded so a re-grade of the same corpus is comparable
+    # to the prior verdict instead of being silently confounded by the prompt.
+    "backend_compare_judge": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

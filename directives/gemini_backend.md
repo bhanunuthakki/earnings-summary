@@ -84,8 +84,10 @@ call_llm(purpose in allowlist)           -> Gemini, once judges pass it
 ## Models, cost, ledger
 
 * Model resolution: explicit `GEMINI_MODELS` pin → tier derivation from
-  `LLM_MODELS` (Haiku-tier purposes → `gemini-2.5-flash`, everything else →
-  `gemini-2.5-pro`). One table drives both backends' latency tiers.
+  `LLM_MODELS` (Haiku-tier purposes → `gemini-3.5-flash` (GA 2026-05-19),
+  everything else → `gemini-2.5-pro`). One table drives both backends' latency
+  tiers. Bump `GEMINI_BACKEND_FAST_MODEL` / `_DEFAULT_MODEL` when Google ships a
+  newer GA tier.
 * Consumer-tier limits (Login with Google, free individual plan): ~60
   requests/min, ~1000/day, models can transparently reroute pro→flash under
   load; a paid Google AI plan raises the caps. Check the plan if bulk jobs
@@ -114,3 +116,40 @@ prompt with the full prompt, both responses, models, latencies, errors, and
 (for smoke prompts) the expected answer as judge ground truth. Both sides run
 through `call_llm` with explicit `backend=` so ledger rows and budget gating
 match production behavior exactly.
+
+## Grading the corpus (the promotion verdict)
+
+`src/llm/backend_judge.py` + `execution/grade_backends.py` turn a corpus into a
+per-purpose recommendation. This is **pairwise** (is Gemini at parity with Claude
+*for this purpose*?) — distinct from the general LLM-evals harness, which scores
+one model's output absolutely against a golden set / rubric.
+
+```
+# grade the most recent corpus with BOTH judges (Claude Opus + Gemini Pro):
+python execution/grade_backends.py --repo-root <MAIN repo>
+
+# one corpus, one purpose, Claude judge only:
+python execution/grade_backends.py --run-id c64bbd98 --purpose viewspec_compile --judges claude
+```
+
+How it stays honest:
+* **Brand-blind.** The judge sees "Response A" / "Response B", never which model
+  wrote which — judges carry brand priors.
+* **Position-swap.** Every pair is judged twice with the sides swapped; a backend
+  wins only if both passes agree once mapped back. A flip ⇒ a non-robust tie
+  (`position_consistent=false`) — the judge was following position, not quality.
+* **Dual judge.** `--judges claude,gemini` grades with Claude Opus AND Gemini Pro;
+  cross-judge agreement is the headline (cancels same-family favouritism). The
+  Gemini judge uses a forced `backend="gemini"` — legitimately bypassing the
+  production allowlist, because a judge call is not production routing.
+* **Fail closed.** An unparseable / failed judge verdict never passes a side; the
+  pair resolves to a tie with the raw text preserved (mirrors `src/evals/judge.py`).
+
+Judge calls bill under `purpose="backend_compare_judge"` (Opus pin in `LLM_MODELS`;
+Gemini side → Pro), sharing the grade `run_id` so cost joins from `llm_calls`.
+Output: `data/backend_compare/graded_<runid>.jsonl` (one line per judged pair) +
+`summary_<runid>.json` (rollups + agreement). The recommendation
+(`PROMOTE_CANDIDATE` / `HOLD` / `REJECT` / `INSUFFICIENT_DATA`) is **advisory** —
+it's the evidence you cite in the PR that edits `GEMINI_BACKEND_ALLOWED_PURPOSES`,
+never an automatic gate. A pre-login corpus (Gemini side failed) grades to
+all-skips with a clear message.
