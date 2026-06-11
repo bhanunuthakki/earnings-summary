@@ -647,6 +647,24 @@ _PANEL_JS = """
   }
   window.addEventListener('cc-ask-q', consumePaletteQuery);
   consumePaletteQuery();
+
+  // Saved-view handoff (UX9b): the shell palette stashes a chosen view id and
+  // jumps to #explore. Open the advanced builder fold and click that view's
+  // load chip — reusing the same delegated load+run path the chip strip uses.
+  function consumePaletteView() {
+    var id = null;
+    try { id = sessionStorage.getItem('cc-view-id'); } catch (e) { return; }
+    if (!id) return;
+    try { sessionStorage.removeItem('cc-view-id'); } catch (e) {}
+    var chip = root.querySelector('[data-view-id="' + id + '"] button[data-act="load"]');
+    if (!chip) return;
+    var fold = el('ask-advanced');
+    if (fold) fold.open = true;
+    chip.click();
+    if (fold) fold.scrollIntoView({behavior: 'smooth', block: 'start'});
+  }
+  window.addEventListener('cc-view-id', consumePaletteView);
+  consumePaletteView();
 })();
 """
 

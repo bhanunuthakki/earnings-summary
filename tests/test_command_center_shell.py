@@ -57,7 +57,8 @@ def test_render_shell_five_section_structure() -> None:
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</body></html>")
     assert "<title>Portfolio · command center</title>" in html
-    # Top-bar section nav: exactly the five sections.
+    # Every section keeps its activation contract — four in the primary nav,
+    # System as the utility icon (UX9b) — and every one keeps a sub-tab row.
     for section in ("home", "companies", "ask", "portfolio", "system"):
         assert f'data-theme-target="{section}"' in html
         assert f'data-cc-theme="{section}"' in html  # its sub-tab row exists
@@ -90,6 +91,25 @@ def test_render_shell_five_section_structure() -> None:
     # Topbar links to the live alerting surfaces stay reachable.
     assert 'href="/digest"' in html
     assert 'href="/feed"' in html
+
+
+def test_system_demoted_to_utility_icon() -> None:
+    """UX9b: the primary nav carries Home · Companies · Ask · Portfolio only;
+    System rides as a top-right icon button that keeps the cc-theme-tab /
+    data-theme-target activation contract (its sub-tabs render as before once
+    opened) plus a data-pal-label so its palette row stays readable."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    topnav = html.split('class="cc-topnav"', 1)[1].split("</nav>", 1)[0]
+    for primary in ("home", "companies", "ask", "portfolio"):
+        assert f'data-theme-target="{primary}"' in topnav
+    assert 'data-theme-target="system"' not in topnav
+    # The icon button: theme contract intact, palette label carried.
+    assert 'class="cc-theme-tab cc-system-btn"' in html
+    assert 'data-theme-target="system" data-pal-label="System"' in html
+    # The palette JS prefers the readable label over the glyph text.
+    assert "data-pal-label" in SHELL_JS
+    # System's sub-tab row still exists for when the icon activates it.
+    assert 'data-cc-theme="system"' in html
 
 
 def test_single_tab_sections_suppress_their_sub_row() -> None:
@@ -230,6 +250,38 @@ def test_command_palette_hands_query_to_ask() -> None:
     assert "'cc-ask-q'" in SHELL_JS
     assert "'#explore'" in SHELL_JS
     assert "Ask: " in SHELL_JS  # the dynamic palette entry label
+
+
+def test_command_palette_ctrl_space_and_grown_corpus() -> None:
+    """UX9b: Ctrl+Space joins Ctrl+K as a binding, and the palette corpus grows
+    to open journal notes (→ #journal) and saved views (→ the Ask/explore
+    builder via the same sessionStorage handoff as goAsk)."""
+    # Ctrl+Space — ev.code so the binding is keyboard-layout independent.
+    assert "ev.code === 'Space'" in SHELL_JS
+    # Corpus growth: open notes + saved views fetched on open.
+    assert "'/api/notes?status=open'" in SHELL_JS
+    assert "'/api/views'" in SHELL_JS
+    assert "goHash('journal')" in SHELL_JS
+    # Saved-view pick hands off like goAsk: stash the id, jump, poke the panel.
+    assert "goView" in SHELL_JS
+    assert "'cc-view-id'" in SHELL_JS
+
+
+def test_notes_drawer_chrome() -> None:
+    """UX9b: the shared ✎ Notes drawer — topbar trigger + drawer chrome in the
+    DOM, and the JS that re-fetches /api/panel/notes_drawer on every open with
+    the Holding tab's ticker as scope. The quick-add fragment refreshes the
+    list through the window.ccReloadNotesDrawer hook."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'id="cc-notes-toggle"' in html
+    assert 'id="cc-notes-drawer"' in html
+    assert 'id="cc-notes-drawer-body"' in html
+    assert 'id="cc-notes-close"' in html
+    assert "'/api/panel/notes_drawer'" in SHELL_JS
+    assert "ccReloadNotesDrawer" in SHELL_JS
+    assert "data-current-ticker" in SHELL_JS  # holding selection scopes the drawer
+    # Fragment-side ✎ buttons (e.g. the Holding header's) open the SAME drawer.
+    assert "data-cc-notes-open" in SHELL_JS
 
 
 def test_render_shell_overview_not_a_lazy_endpoint() -> None:

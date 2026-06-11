@@ -31,7 +31,7 @@ from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
-from user_state.notes import AnalystNoteRow, list_notes
+from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
 _DEFAULT_TRACKER_URL = "http://localhost:5173"
 
@@ -410,6 +410,115 @@ def build_holding_rail(repo_root: Path, ticker: str) -> HoldingRail:
     if rail.alerts:
         rail.brief_provenance = load_brief_provenance(t, db_path=db)
     return rail
+
+
+# --------------------------------------------------------------------------- #
+# Shared ✎ Notes drawer fragment (UX9b): the shell's topbar drawer body.
+# Lives here (not in the shell module) because it reuses the holding rail's
+# substrate + renderers — open notes and, when ticker-scoped, recent alerts.
+# --------------------------------------------------------------------------- #
+_QUICK_NOTE_STYLE = """<style>
+.cc-quicknote .qn-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.cc-quicknote select, .cc-quicknote input, .cc-quicknote textarea {
+  background: var(--paper, #1a1d23); color: var(--fg, #e8e8e3);
+  border: 1px solid var(--border, #2a2c30); border-radius: 6px; padding: 6px 9px;
+  font-size: 12.5px; font-family: inherit; }
+.cc-quicknote textarea { width: 100%; box-sizing: border-box; resize: vertical;
+  margin-bottom: 8px; }
+.cc-quicknote .qn-ticker { width: 120px; text-transform: uppercase; }
+.cc-quicknote .qn-save { background: var(--accent, #7aa2f7); color: #0d1117; border: none;
+  padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
+.cc-quicknote .qn-msg { font-size: 12px; }
+.cc-notes-foot { color: var(--muted, #888); font-size: 12px; }
+</style>"""
+
+_QUICK_NOTE_SCRIPT = """<script>
+(function () {
+  var root = document.querySelector('.cc-quicknote');
+  if (!root || root.dataset.wired) return;
+  root.dataset.wired = '1';
+  var msg = root.querySelector('.qn-msg');
+  function save() {
+    var body = root.querySelector('.qn-body').value.trim();
+    if (!body) { msg.textContent = 'write the note first'; return; }
+    var payload = { kind: root.querySelector('.qn-kind').value, body: body };
+    var t = root.querySelector('.qn-ticker').value.trim().toUpperCase();
+    if (t) payload.ticker = t;
+    msg.textContent = 'saving\\u2026';
+    fetch('/api/notes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+    }).then(function (res) {
+      if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); return; }
+      msg.textContent = 'saved \\u2713';
+      // The shell re-fetches this whole fragment, so the new note appears in
+      // the list below (and the form resets).
+      if (window.ccReloadNotesDrawer) window.ccReloadNotesDrawer();
+    }).catch(function () { msg.textContent = 'network error'; });
+  }
+  root.querySelector('.qn-save').addEventListener('click', save);
+  root.querySelector('.qn-body').addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); }
+  });
+})();
+</script>"""
+
+
+def _quick_add_form(ticker: str | None) -> str:
+    """Kind · ticker · body → POST /api/notes (source="manual"). The ticker
+    input pre-fills with the Holding tab's selection when the drawer opens
+    ticker-scoped, and stays editable — a quick note about another name
+    shouldn't need a tab switch."""
+    kind_opts = "".join(
+        f'<option value="{escape(k)}"{" selected" if k == "observation" else ""}>{escape(k)}</option>'
+        for k in NOTE_KINDS
+    )
+    tval = f' value="{escape(ticker, quote=True)}"' if ticker else ""
+    return (
+        '<section class="panel cc-rail-panel cc-quicknote"><h2>Quick note</h2>'
+        '<div class="qn-row">'
+        f'<select class="qn-kind" aria-label="Note kind">{kind_opts}</select>'
+        f'<input class="qn-ticker" type="text" placeholder="ticker (optional)" maxlength="8"'
+        f'{tval} aria-label="Ticker" autocapitalize="characters" spellcheck="false">'
+        "</div>"
+        '<textarea class="qn-body" rows="3" '
+        'placeholder="What did you notice? Enter saves · Shift+Enter for a newline."></textarea>'
+        '<div class="qn-row"><button type="button" class="qn-save">Add note</button>'
+        '<span class="qn-msg muted"></span></div>'
+        "</section>" + _QUICK_NOTE_STYLE + _QUICK_NOTE_SCRIPT
+    )
+
+
+def render_notes_drawer_fragment(repo_root: Path, ticker: str | None = None) -> str:
+    """The shared ✎ Notes drawer body (UX9b): quick-add above the open-notes
+    list. Ticker-scoped (Holding tab open) it also carries that name's recent
+    alerts — the content the holding page's PR4 Notes drawer held — so nothing
+    the analyst used to see there is lost. The full lifecycle UI (resolve ·
+    reclassify · supersede) stays on Companies → Journal; this drawer is
+    capture + recall without leaving the current screen."""
+    t = ticker.strip().upper() if ticker and ticker.strip() else None
+    parts = [_quick_add_form(t)]
+    if t:
+        rail = build_holding_rail(repo_root, t)
+        parts.append(_notes_rail_section(rail.notes))
+        parts.append(_alerts_rail_section(t, rail.alerts, rail.brief_provenance))
+    else:
+        db = repo_root / "data" / "portfolio.db"
+        notes: list[AnalystNoteRow] | None = None
+        if db.exists():
+            try:
+                notes = list_notes(status="open", limit=_RAIL_NOTES_LIMIT, db_path=db)
+            except sqlite3.Error:
+                notes = None
+        parts.append(_notes_rail_section(notes))
+    parts.append(
+        '<p class="cc-notes-foot">Resolve · reclassify · supersede live in '
+        '<a href="/#journal">Companies → Journal</a>.</p>'
+    )
+    return "".join(parts)
 
 
 def _has(conn: sqlite3.Connection, table: str) -> bool:

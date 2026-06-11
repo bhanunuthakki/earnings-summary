@@ -16,13 +16,20 @@ Design — thin shell + lazy panels:
   it in the DOM. Inline ``<script>`` blocks inside a fragment (e.g. the budget
   Save-button wiring) are re-executed after injection — ``innerHTML`` alone does
   not run them.
-* **Five-section IA (UX redesign PR2)**: one sticky top bar carries the
-  section nav — Home / Companies / Ask / Portfolio / System — and only the
-  active section's sub-tab row renders below it (single-tab sections render
-  none). A Ctrl/Cmd+K command palette jumps to tickers, tabs, and actions —
-  and hands anything else you type to the Ask tab as a question.
-  Legacy hashes (and the section names themselves) remap — see
-  ``_LEGACY_PANEL_REDIRECTS``.
+* **Four primary sections + a System icon (UX9b over the PR2 IA)**: the top
+  bar's nav carries Home / Companies / Ask / Portfolio; System demoted to a
+  top-right icon button beside ⌘K and ⚙ Settings (same ``data-theme-target``
+  contract, so its sub-tabs render exactly as before once opened). Only the
+  active section's sub-tab row renders below the bar (single-tab sections
+  render none). A Ctrl/Cmd+K — or Ctrl+Space — command palette jumps to
+  tickers, tabs, actions, open journal notes, and saved views; anything else
+  you type hands off to the Ask tab as a question. Legacy hashes (and the
+  section names themselves) remap — see ``_LEGACY_PANEL_REDIRECTS``.
+* **A shared ✎ Notes drawer in the top bar**: quick-add (kind · ticker ·
+  body → ``POST /api/notes``) + the open-notes list, lazy-fetched from
+  ``GET /api/panel/notes_drawer`` on every open; when the Holding tab is
+  active its current ticker scopes the drawer (pre-filled quick-add + that
+  name's notes and recent alerts). The full lifecycle stays on Journal.
 * **The Holding drill-down is dropdown-driven** (``cc-picker``): re-fetches
   ``endpoint?ticker=<T>`` server-side on change.
 * **Deep-linkable** via ``location.hash`` — ``#holdings``, ``#holding=NU`` —
@@ -52,13 +59,15 @@ from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
-# Five-section information architecture (UX redesign PR2, replacing the P1.1
-# three-theme layout): one slim top bar carries the section nav — Home ·
-# Companies · Ask · Portfolio · System — and the active section's sub-tabs
-# render in ONE row below it (sections with a single sub-tab suppress the row
-# entirely, so Home and Ask have zero secondary chrome). "Governance" demoted
-# into System alongside the settings drawer; "Research" split into Home
-# (the cockpit) / Companies (per-name work) / Ask (the NL+ViewSpec surface).
+# Four primary sections + System-as-icon (UX9b over the PR2 five-section IA):
+# the top bar's nav carries Home · Companies · Ask · Portfolio; System (the
+# diagnostics surfaces) demoted to a top-right icon button in the utility
+# cluster — it stays a full section (sub-tab row, deep links, palette entry)
+# once opened. The active section's sub-tabs render in ONE row below the bar
+# (sections with a single sub-tab suppress the row entirely, so Home and Ask
+# have zero secondary chrome). "Governance" demoted into System alongside the
+# settings drawer; "Research" split into Home (the cockpit) / Companies
+# (per-name work) / Ask (the NL+ViewSpec surface).
 #
 # Sub-tab entries keep the original shape — (panel_id, label, endpoint,
 # is_picker, picker_required) — and PANEL IDS ARE UNCHANGED, so every
@@ -203,9 +212,10 @@ def render_shell(
     return "".join(
         [
             _DOC_HEAD,
-            # One sticky top bar: brand + the five-section nav + utility links.
-            # No stacked tab tiers — the active section's sub-row (if it has
-            # more than one sub-tab) is the only other chrome.
+            # One sticky top bar: brand + the four primary sections + utility
+            # cluster (⌘K · System icon · ✎ Notes · ⚙ Settings). No stacked tab
+            # tiers — the active section's sub-row (if it has more than one
+            # sub-tab) is the only other chrome.
             f'<div class="cc-topbar"><div class="cc-brand">Command Center</div>'
             f"{_render_section_nav(themes)}"
             f'<nav class="cc-links">'
@@ -213,7 +223,10 @@ def render_shell(
             f'<a href="/feed">Alert feed</a>'
             f"</nav>"
             f'<button class="cc-palette-btn" id="cc-palette-open" type="button" '
-            f'title="Jump to a ticker, tab, or action (Ctrl+K)">⌘K</button>'
+            f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">⌘K</button>'
+            f"{_render_system_button(themes)}"
+            f'<button class="cc-notes-btn" id="cc-notes-toggle" type="button" '
+            f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
             f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
             f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
             f"{stamp}</div>",
@@ -222,6 +235,7 @@ def render_shell(
             _render_panels(flat_tabs, overview_html),
             "</main>",
             _SETTINGS_DRAWER_HTML,
+            _NOTES_DRAWER_HTML,
             _PALETTE_HTML,
             _PEEK_HTML,
             f"<script>{SHELL_JS}</script>",
@@ -256,18 +270,62 @@ _SETTINGS_DRAWER_HTML = (
 )
 
 
+# The shared ✎ Notes drawer (UX9b): the same right-drawer pattern as Settings,
+# but its body is ONE lazy fragment — /api/panel/notes_drawer — re-fetched on
+# every open (notes change while you work) with the Holding tab's current
+# ticker as scope when one is open. Quick-add wiring lives in the fragment; it
+# calls window.ccReloadNotesDrawer (exposed by SHELL_JS) after a save.
+_NOTES_DRAWER_HTML = (
+    '<div class="cc-drawer-scrim" id="cc-notes-scrim" hidden></div>'
+    '<aside class="cc-drawer cc-notes-drawer" id="cc-notes-drawer" hidden aria-label="Notes">'
+    '<div class="cc-drawer-head"><span>Notes</span>'
+    '<button class="cc-drawer-close" id="cc-notes-close" type="button" '
+    'aria-label="Close">&times;</button></div>'
+    '<div class="cc-drawer-body" id="cc-notes-drawer-body">'
+    '<div class="cc-loading">Loading…</div></div>'
+    "</aside>"
+)
+
+# Sections that live as utility icons beside ⌘K/⚙ instead of in the primary
+# nav (UX9b). They keep full section behavior — data-theme-target, sub-tab
+# row, palette entry, #<name> alias — only the button's placement and skin
+# change.
+_UTILITY_SECTIONS: frozenset[str] = frozenset({"system"})
+
+
 def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
-    """The five section buttons, inline in the top bar. The attribute contract
+    """The primary section buttons, inline in the top bar — every section
+    except the utility-icon ones (System). The attribute contract
     (``data-theme-target``) is unchanged from the theme era — the JS keys off
     it, only the visual placement moved."""
     out = ['<nav class="cc-topnav" role="tablist">']
     for tid, tlabel, _subs in themes:
+        if tid in _UTILITY_SECTIONS:
+            continue
         out.append(
             f'<button class="cc-tab cc-theme-tab" type="button" role="tab" '
             f'data-theme-target="{escape(tid)}">{escape(tlabel)}</button>'
         )
     out.append("</nav>")
     return "".join(out)
+
+
+def _render_system_button(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
+    """System as a top-right icon button (UX9b). Carries ``cc-theme-tab`` +
+    ``data-theme-target`` so the activation JS treats it exactly like a nav
+    section button; ``data-pal-label`` keeps its palette row readable (the
+    button's visible text is just the glyph)."""
+    for tid, tlabel, subs in themes:
+        if tid not in _UTILITY_SECTIONS:
+            continue
+        sub_labels = " · ".join(label for _pid, label, _ep, _pk, _rq in subs)
+        return (
+            f'<button class="cc-theme-tab cc-system-btn" type="button" role="tab" '
+            f'data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
+            f'aria-label="{escape(tlabel)}" title="{escape(f"{tlabel} · {sub_labels}", quote=True)}"'
+            f">▦</button>"
+        )
+    return ""
 
 
 def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
@@ -298,7 +356,8 @@ def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
 _PALETTE_HTML = (
     '<div class="cc-palette-scrim" id="cc-palette-scrim" hidden></div>'
     '<div class="cc-palette" id="cc-palette" hidden role="dialog" aria-label="Command palette">'
-    '<input id="cc-palette-input" type="text" placeholder="Jump to a ticker, tab, or action…" '
+    '<input id="cc-palette-input" type="text" '
+    'placeholder="Jump to a ticker, tab, note, or view — or just ask…" '
     'autocomplete="off" spellcheck="false">'
     '<ul id="cc-palette-list" class="cc-palette-list"></ul>'
     "</div>"
@@ -760,8 +819,22 @@ td.ticker a:hover { color: var(--link); }
 /* Settings drawer (P3.4): admin-as-drawer instead of admin-as-tab. */
 .cc-settings-btn { background: var(--panel-alt); color: var(--ink); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-body); font-weight: 600;
-  cursor: pointer; font-family: var(--font-body); margin-right: 14px; }
+  cursor: pointer; font-family: var(--font-body); margin-right: 14px; margin-left: 6px; }
 .cc-settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* System demoted to a utility icon (UX9b): same activation contract as a nav
+   section button, skinned like its ⌘K / ⚙ neighbours. */
+.cc-system-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: var(--radius); padding: 5px 10px; font-size: var(--fs-body); cursor: pointer;
+  font-family: var(--font-body); margin-left: 6px; line-height: 1.2; }
+.cc-system-btn:hover, .cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Shared ✎ Notes drawer trigger (UX9b). */
+.cc-notes-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
+  border-radius: var(--radius); padding: 5px 10px; font-size: var(--fs-body); cursor: pointer;
+  font-family: var(--font-body); margin-left: 6px; line-height: 1.2; }
+.cc-notes-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cc-notes-drawer { width: min(560px, 94vw); }
 .cc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 38;
   animation: cc-fade-in var(--transition); }
 .cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 94vw);
@@ -1049,6 +1122,7 @@ SHELL_JS = r"""
 
   function openDrawer() {
     if (!drawer) return;
+    closeNotesDrawer();  // one right-drawer at a time
     drawer.hidden = false;
     if (drawerScrim) drawerScrim.hidden = false;
     var secs = drawer.querySelectorAll('.cc-drawer-sec[open]');
@@ -1067,6 +1141,71 @@ SHELL_JS = r"""
   var drawerClose = document.getElementById('cc-drawer-close');
   if (drawerClose) drawerClose.addEventListener('click', closeDrawer);
   if (drawerScrim) drawerScrim.addEventListener('click', closeDrawer);
+
+  // ----- Shared ✎ Notes drawer (UX9b) -----
+  // One lazy fragment (/api/panel/notes_drawer), re-fetched on EVERY open so
+  // the list is always current; the Holding tab's selection scopes it. The
+  // quick-add form inside the fragment calls window.ccReloadNotesDrawer after
+  // a successful POST /api/notes so the list refreshes in place.
+  var notesDrawer = document.getElementById('cc-notes-drawer');
+  var notesScrim = document.getElementById('cc-notes-scrim');
+  var notesBody = document.getElementById('cc-notes-drawer-body');
+
+  function holdingTicker() {
+    // The drawer's ticker scope: the Holding panel's current selection, but
+    // only while the user is actually ON the Holding tab.
+    var p = panelById('holding');
+    if (!p || p.hidden) return '';
+    return p.getAttribute('data-current-ticker') || '';
+  }
+
+  function loadNotesDrawer() {
+    if (!notesBody) return;
+    var t = holdingTicker();
+    notesBody.innerHTML = '<div class="cc-loading">Loading…</div>';
+    fetch('/api/panel/notes_drawer' + (t ? '?ticker=' + encodeURIComponent(t) : ''))
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      }).then(function (html) {
+        injectHtml(notesBody, html);
+      }).catch(function (e) {
+        notesBody.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+      });
+  }
+  window.ccReloadNotesDrawer = loadNotesDrawer;
+
+  function openNotesDrawer() {
+    if (!notesDrawer) return;
+    closeDrawer();
+    closePalette();
+    notesDrawer.hidden = false;
+    if (notesScrim) notesScrim.hidden = false;
+    loadNotesDrawer();
+  }
+
+  function closeNotesDrawer() {
+    if (notesDrawer) notesDrawer.hidden = true;
+    if (notesScrim) notesScrim.hidden = true;
+  }
+
+  var notesBtn = document.getElementById('cc-notes-toggle');
+  if (notesBtn) notesBtn.addEventListener('click', function () {
+    if (notesDrawer && notesDrawer.hidden) openNotesDrawer(); else closeNotesDrawer();
+  });
+  var notesClose = document.getElementById('cc-notes-close');
+  if (notesClose) notesClose.addEventListener('click', closeNotesDrawer);
+  if (notesScrim) notesScrim.addEventListener('click', closeNotesDrawer);
+
+  // Any ✎ button inside an injected fragment (e.g. the Holding header's)
+  // opens the SAME shared drawer — delegated so lazily-injected panels count.
+  document.addEventListener('click', function (ev) {
+    if (!ev.target.closest) return;
+    var b = ev.target.closest('[data-cc-notes-open]');
+    if (!b) return;
+    ev.preventDefault();
+    openNotesDrawer();
+  });
 
   // ----- Command palette (Ctrl/Cmd+K, PR2) -----
   // One input over sections, sub-tabs, tickers (lazy from /api/tickers), and
@@ -1095,13 +1234,31 @@ SHELL_JS = r"""
       window.dispatchEvent(new Event('cc-ask-q'));
     };
   }
+  function goView(id) {
+    // Saved-view palette pick (UX9b): same stash-and-jump handoff as goAsk,
+    // but for a saved view id — the Ask/explore panel loads + runs its chip
+    // (see consumePaletteView in explore_panel).
+    return function () {
+      try { sessionStorage.setItem('cc-view-id', String(id)); } catch (e) {}
+      location.hash = '#explore';
+      window.dispatchEvent(new Event('cc-view-id'));
+    };
+  }
+  function notePalLabel(body) {
+    var flat = String(body || '').replace(/\s+/g, ' ').trim();
+    if (flat.length > 64) flat = flat.slice(0, 63) + '…';
+    return '✎ ' + flat;
+  }
 
   function palStatic() {
     var items = [];
     themeTabs.forEach(function (t) {
       var tid = t.getAttribute('data-theme-target');
       var first = firstPanelOfTheme(tid);
-      if (first) items.push({ label: t.textContent, hint: 'section', run: goHash(first) });
+      // Icon-skinned section buttons (System) carry their readable name in
+      // data-pal-label — the visible text is just a glyph.
+      var lab = t.getAttribute('data-pal-label') || t.textContent;
+      if (first) items.push({ label: lab, hint: 'section', run: goHash(first) });
     });
     tabs.forEach(function (t) {
       items.push({
@@ -1145,6 +1302,7 @@ SHELL_JS = r"""
   function openPalette() {
     if (!pal) return;
     closeDrawer();
+    closeNotesDrawer();
     pal.hidden = false;
     if (palScrim) palScrim.hidden = false;
     palInput.value = '';
@@ -1161,6 +1319,28 @@ SHELL_JS = r"""
       });
       renderPalette(palInput.value);
     });
+    // Grown corpus (UX9b): open journal notes land on the Journal lifecycle
+    // tab; saved views hand off to the Ask/explore builder. Both fetched fresh
+    // per open (they change while you work) and best-effort — a failed fetch
+    // just leaves that slice out of the corpus.
+    fetch('/api/notes?status=open').then(function (r) { return r.json(); })
+      .then(function (j) {
+        ((j && j.notes) || []).forEach(function (n) {
+          palItems.push({
+            label: notePalLabel(n.body),
+            hint: 'note' + (n.ticker ? ' · ' + n.ticker : ''),
+            run: goHash('journal')
+          });
+        });
+        renderPalette(palInput.value);
+      }).catch(function () {});
+    fetch('/api/views').then(function (r) { return r.json(); })
+      .then(function (j) {
+        ((j && j.views) || []).forEach(function (v) {
+          palItems.push({ label: '▤ ' + v.name, hint: 'saved view', run: goView(v.id) });
+        });
+        renderPalette(palInput.value);
+      }).catch(function () {});
     setTimeout(function () { palInput.focus(); }, 0);
   }
 
@@ -1428,7 +1608,9 @@ SHELL_JS = r"""
   }
 
   document.addEventListener('keydown', function (ev) {
-    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K')) {
+    // Ctrl/Cmd+K, plus Ctrl+Space (UX9b) — ev.code so the spacebar binding is
+    // keyboard-layout independent.
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K' || ev.code === 'Space')) {
       ev.preventDefault();
       if (pal && pal.hidden) openPalette(); else closePalette();
       return;
@@ -1437,6 +1619,7 @@ SHELL_JS = r"""
       if (pal && !pal.hidden) closePalette();
       else if (peek && !peek.hidden) closePeek();
       else if (hovercard && !hovercard.hidden) closeHover();
+      else if (notesDrawer && !notesDrawer.hidden) closeNotesDrawer();
       else closeDrawer();
     }
   });
