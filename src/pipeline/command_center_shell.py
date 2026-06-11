@@ -157,13 +157,18 @@ def render_overview_panel(
     "which holding needs my attention today?") with the tier-coverage strip
     below it, and — when provided — the unified Inbox in a right-hand rail
     (UX redesign PR3: what changed, beside what you hold). Reuses the existing
-    public seams so there is no second code path for any of this content."""
+    public seams so there is no second code path for any of this content.
+    The collapsible Ask dock (Ask v4, pipeline.ask_dock) rides along pinned
+    to the panel's corner — same engine as the Ask tab, pop-out hands the
+    thread over."""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
+    from pipeline.ask_dock import render_ask_dock
     from pipeline.research_cockpit import render_research_cockpit
 
     main = render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
+    dock = render_ask_dock()
     if not inbox_html:
-        return main
+        return main + dock
     # The badge carries the "new since you last looked" count; INBOX_JS (one
     # IIFE, embedded with the rail it drives) fills it from the per-surface
     # localStorage mark and wires the cards' hover ✓/✕ quick actions.
@@ -178,7 +183,7 @@ def render_overview_panel(
         f"<script>{INBOX_JS}</script>"
         "</aside>"
     )
-    return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>'
+    return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>{dock}'
 
 
 def render_shell(

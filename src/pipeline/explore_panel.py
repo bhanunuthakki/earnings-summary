@@ -132,11 +132,15 @@ _PANEL_STYLE = """<style>
   border-radius:var(--radius); padding:9px 16px; font-size:var(--fs-body); cursor:pointer; }
 .ask-ctx { color:var(--muted); font-size:var(--fs-caption); }
 .ask-ctx a { color:var(--accent); cursor:pointer; }
-.ask-advanced { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
-  padding:0 14px; margin-top:6px; }
-.ask-advanced > summary { cursor:pointer; padding:10px 0; font-size:var(--fs-body); font-weight:600;
-  color:var(--muted); }
-.ask-advanced[open] > summary { color:var(--fg); }
+.ask-builder-pop { border:1px solid var(--accent); border-radius:var(--radius); background:var(--surface);
+  padding:0 14px 12px; margin-top:10px; box-shadow:0 14px 44px rgba(0,0,0,0.5); }
+.ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
+  font-size:var(--fs-body); font-weight:600; color:var(--fg); }
+.ask-pop-head button { background:transparent; border:none; color:var(--muted); font-size:16px;
+  cursor:pointer; padding:0 4px; }
+.ask-pop-head button:hover { color:var(--fg); }
+.ask-inputrow #ask-diy { color:var(--muted); border-color:var(--border); background:transparent; }
+.ask-inputrow #ask-diy:hover { color:var(--accent); border-color:var(--accent); }
 .ask-advanced .vx-builder { border:none; padding-left:0; padding-right:0; margin-top:0; }
 </style>"""
 
@@ -183,6 +187,7 @@ _PANEL_JS = """
       var opt = document.createElement('option');
       opt.value = e.token;
       opt.textContent = e.label + (e.tickers > 1 ? ' (' + e.tickers + ')' : '');
+      if (e.title) opt.title = e.title;
       if (keep && keep.indexOf(e.token) !== -1) opt.selected = true;
       sel.appendChild(opt);
     });
@@ -256,6 +261,86 @@ _PANEL_JS = """
   });
   el('vx-load-metrics').addEventListener('click', function () { loadCatalog(); });
   el('vx-run').addEventListener('click', runView);
+
+  // ---- DIY builder popover (Ask v4): the builder opens on demand from the
+  // DIY button / "Open in builder" instead of living as a bottom fold. ----
+  var builderPop = el('ask-advanced');
+  function openBuilder() {
+    if (!builderPop) return;
+    builderPop.hidden = false;
+    builderPop.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  }
+  function closeBuilder() { if (builderPop) builderPop.hidden = true; }
+  var diyBtn = el('ask-diy');
+  if (diyBtn) diyBtn.addEventListener('click', function () {
+    if (builderPop && builderPop.hidden) openBuilder(); else closeBuilder();
+  });
+  var popClose = el('ask-pop-close');
+  if (popClose) popClose.addEventListener('click', closeBuilder);
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') closeBuilder();
+  });
+
+  // ---- Scored peers (Ask v4): /api/peers/<T> serves the PR #400 peer
+  // scoring; "+ Peers" widens a view to the comparable set. ----
+  function fetchPeers(base, cb) {
+    fetch('/api/peers/' + encodeURIComponent(base))
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        cb((res.peers || []).map(function (p) { return p.ticker; }));
+      })
+      .catch(function () { cb([]); });
+  }
+  var vxPeers = el('vx-peers');
+  if (vxPeers) vxPeers.addEventListener('click', function () {
+    var cur = tickers();
+    if (!cur.length) { showError('Add a base ticker first.'); return; }
+    vxPeers.disabled = true;
+    fetchPeers(cur[0], function (peers) {
+      vxPeers.disabled = false;
+      if (!peers.length) { showError('No scored peers for ' + cur[0] + '.'); return; }
+      var merged = cur.slice();
+      peers.forEach(function (p) { if (merged.indexOf(p) === -1) merged.push(p); });
+      el('vx-tickers').value = merged.slice(0, 16).join(', ');
+      loadCatalog(selectedTokens());
+    });
+  });
+  function addPeersToCard(btn, card, spec) {
+    var base = (spec.tickers && spec.tickers[0]) || tickers()[0];
+    if (!base || !card) return;
+    btn.disabled = true;
+    btn.textContent = 'adding peers…';
+    fetchPeers(base, function (peers) {
+      var current = spec.tickers || [];
+      var merged = current.slice();
+      peers.forEach(function (p) { if (merged.indexOf(p) === -1) merged.push(p); });
+      merged = merged.slice(0, 16);
+      if (merged.length === current.length) {
+        btn.textContent = 'no new peers';
+        return;
+      }
+      var newSpec = JSON.parse(JSON.stringify(spec));
+      newSpec.tickers = merged;
+      fetch('/api/viewspec/run', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({spec: newSpec})
+      }).then(function (r) {
+        if (!r.ok) throw new Error('run failed');
+        return r.text();
+      }).then(function (h) {
+        lastSpec = newSpec;
+        setCtx(true);
+        var added = merged.filter(function (t) { return current.indexOf(t) === -1; });
+        card.innerHTML = '<div class="ask-meta">' + askEsc(base + ' + scored peers: ' + added.join(', ')) + '</div>'
+          + h + askActionsHtml();
+        card.setAttribute('data-ask-spec', JSON.stringify(newSpec));
+        askScroll();
+      }).catch(function () {
+        btn.disabled = false;
+        btn.textContent = '+ Peers';
+      });
+    });
+  }
   el('vx-save').addEventListener('click', function () {
     var name = el('vx-view-name').value.trim();
     if (!name) { showError('Name the view before saving.'); return; }
@@ -340,6 +425,13 @@ _PANEL_JS = """
         + askEsc(String(c.n)) + '] ' + askEsc(c.label || c.kind || 'source') + '</a>';
     }).join('');
     return chips ? '<div class="ask-cite-row">' + chips + '</div>' : '';
+  }
+  function askActionsHtml() {
+    return '<div class="ask-actions">'
+      + '<button type="button" data-ask-act="builder">Open in builder</button>'
+      + '<button type="button" data-ask-act="peers">+ Peers</button>'
+      + '<button type="button" data-ask-act="pin">Pin as view</button>'
+      + '</div>';
   }
   function askRemember(role, text) {
     askHistory.push({role: role, text: String(text || '').slice(0, 1200)});
@@ -429,10 +521,7 @@ _PANEL_JS = """
         var msg = (finalEv && finalEv.text) || 'done';
         card.innerHTML = '<div class="ask-meta">' + askEsc(msg) + '</div>'
           + (frag.html || '')
-          + '<div class="ask-actions">'
-          + '<button type="button" data-ask-act="builder">Open in builder</button>'
-          + '<button type="button" data-ask-act="pin">Pin as view</button>'
-          + '</div>';
+          + askActionsHtml();
         card.setAttribute('data-ask-spec', JSON.stringify(frag.spec || {}));
         askRemember('assistant', msg);
       } else if (finalEv) {
@@ -499,10 +588,10 @@ _PANEL_JS = """
     var spec = {};
     try { spec = JSON.parse(holder ? holder.getAttribute('data-ask-spec') : '{}'); } catch (e) {}
     if (act.getAttribute('data-ask-act') === 'builder') {
-      var fold = el('ask-advanced');
-      if (fold) fold.open = true;
+      openBuilder();
       applySpec(spec);
-      if (fold) fold.scrollIntoView({behavior: 'smooth', block: 'start'});
+    } else if (act.getAttribute('data-ask-act') === 'peers') {
+      addPeersToCard(act, holder, spec);
     } else {
       var name = window.prompt('Save this view as…');
       if (!name) return;
@@ -512,6 +601,39 @@ _PANEL_JS = """
       }).then(function (r) { if (r.ok) refreshSaved(); });
     }
   });
+
+  // Home-dock handoff (Ask v4): the dock stashes its thread when popping
+  // out to this tab; replay it as text turns + seed the narrative history.
+  // Registered BEFORE the palette consumer so a pending question lands
+  // after the replayed thread.
+  function consumeDockThread() {
+    var raw = null;
+    try {
+      raw = sessionStorage.getItem('cc-ask-thread');
+      if (raw) sessionStorage.removeItem('cc-ask-thread');
+    } catch (e) { return; }
+    if (!raw) return;
+    var turns = [];
+    try { turns = JSON.parse(raw) || []; } catch (e) { return; }
+    if (!turns.length) return;
+    clearHello();
+    turns.forEach(function (t) {
+      if (!t || !t.text) return;
+      askRemember(t.role, t.text);
+      var div = document.createElement('div');
+      if (t.role === 'user') {
+        div.className = 'ask-turn-user';
+        div.textContent = t.text;
+      } else {
+        div.className = 'ask-turn-assistant';
+        div.innerHTML = '<div class="ask-prose">' + askMd(t.text) + '</div>';
+      }
+      askThread.appendChild(div);
+    });
+    askScroll();
+  }
+  window.addEventListener('cc-ask-q', consumeDockThread);
+  consumeDockThread();
 
   // Ctrl/Cmd+K handoff: the shell palette stashes the typed query in
   // sessionStorage and jumps to #explore; consume it at wire-up (lazy
@@ -559,7 +681,9 @@ def _picker_html(dom_id: str, label: str, entries: list[dict[str, object]]) -> s
         n_raw = e.get("tickers")
         n = n_raw if isinstance(n_raw, int) else 0
         suffix = f" ({n})" if n > 1 else ""
-        opts.append(f'<option value="{token}">{escape(text + suffix)}</option>')
+        title_raw = e.get("title")
+        title_attr = f' title="{escape(str(title_raw))}"' if title_raw else ""
+        opts.append(f'<option value="{token}"{title_attr}>{escape(text + suffix)}</option>')
     return (
         f'<div class="vx-picker"><label>{escape(label)}</label>'
         f'<select id="{dom_id}" multiple size="9">{"".join(opts)}</select></div>'
@@ -627,11 +751,14 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
 <div class="ask-inputrow">
   <input id="ask-q" placeholder="Ask — e.g. {escape(first)} vs {escape(second)} revenue growth, last 8 quarters" autocomplete="off">
   <button type="button" id="ask-go">Ask</button>
+  <button type="button" id="ask-diy"
+    title="Build a view by hand — tickers, metrics, transform, saved views">DIY</button>
   <span class="ask-ctx" id="ask-ctx" hidden>refining the last view &middot;
  <a id="ask-ctx-clear">start fresh</a></span>
 </div>
-<details class="ask-advanced" id="ask-advanced">
-<summary>Advanced builder &middot; saved views</summary>
+<div class="ask-advanced ask-builder-pop" id="ask-advanced" hidden>
+<div class="ask-pop-head"><span>DIY builder &middot; saved views</span>
+<button type="button" id="ask-pop-close" title="Close (Esc)">&times;</button></div>
 <div class="vx-builder">
   <div class="vx-row vx-nl">
     <label>ask</label>
@@ -647,6 +774,8 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
       placeholder="NU, MELI, &hellip;">
     <button type="button" id="vx-load-metrics"
       title="Refresh the metric pickers for these tickers">Load metrics</button>
+    <button type="button" id="vx-peers"
+      title="Append the first ticker&#x27;s scored peer set (named rivals, same industry, tracked names)">+ Peers</button>
     <label>transform</label>
     <select id="vx-transform">{transform_opts}</select>
     <label>cadence</label>
@@ -674,6 +803,6 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
  bucket a year ago &middot; cagr = trailing N-year compound growth &middot; margin = value
  / revenue. Cross-ticker columns align on calendar buckets derived from each fiscal
  period end. Saved views embed elsewhere via /api/views/&lt;id&gt;/fragment.</p>
-</details>
+</div>
 </div>
 <script>{_PANEL_JS}</script>"""

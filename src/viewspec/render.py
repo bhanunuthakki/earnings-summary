@@ -115,9 +115,12 @@ def _transform_caption(transform: str, cagr_years: int) -> str:
     return "levels"
 
 
-def _row_html(row: ViewRow, transform: str) -> str:
+def _row_html(row: ViewRow, transform: str, definition: str | None = None) -> str:
     unit_sub = f' <span class="vx-unit">({escape(row.unit)})</span>' if row.unit else ""
-    cells: list[str] = [f'<th class="vx-label">{escape(row.label)}{unit_sub}</th>']
+    # Definition tooltip (Ask v4): hovering the series label explains the
+    # metric (kpi_definitions notes / the fin glossary).
+    title_attr = f' title="{escape(definition)}"' if definition else ""
+    cells: list[str] = [f'<th class="vx-label"{title_attr}>{escape(row.label)}{unit_sub}</th>']
     shade = transform in ("yoy", "cagr")
     limit = _NM_LIMITS.get(transform)
     for cell in row.cells:
@@ -156,7 +159,10 @@ def render_view_fragment(result: ViewResult, *, include_chart: bool = True) -> s
     head = ['<tr><th class="vx-label">Series</th>']
     head.extend(f"<th>{escape(p)}</th>" for p in result.period_labels)
     head.append("</tr>")
-    body = [_row_html(row, spec.transform) for row in result.rows]
+    body = [
+        _row_html(row, spec.transform, result.definitions.get(row.metric.token()))
+        for row in result.rows
+    ]
     parts.append(
         '<div class="vx-wrap"><table class="vx-matrix">'
         f"<thead>{''.join(head)}</thead><tbody>{''.join(body)}</tbody></table></div>"
