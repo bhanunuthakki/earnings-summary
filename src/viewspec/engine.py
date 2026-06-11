@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from report.models import CellSource
@@ -77,6 +77,10 @@ class ViewResult:
     period_labels: list[str]
     rows: list[ViewRow]
     warnings: list[str]
+    # {metric token: one-line definition} — row-label tooltips (Ask v4).
+    # Populated by execute_view from viewspec.glossary; default keeps every
+    # hand-constructed ViewResult (tests, embeds) valid.
+    definitions: dict[str, str] = field(default_factory=dict[str, str])
 
 
 def _bucket_label(bucket: _Bucket, cadence: str) -> str:
@@ -241,11 +245,17 @@ def execute_view(
             )
         )
 
+    from viewspec.glossary import metric_definitions
+
+    resolved_db = db_path
+    if resolved_db is None and repo_root is not None:
+        resolved_db = repo_root / "data" / "portfolio.db"
     return ViewResult(
         spec=spec,
         period_labels=[_bucket_label(b, spec.cadence) for b in display_buckets],
         rows=rows,
         warnings=warnings,
+        definitions=metric_definitions(spec.metrics, db_path=resolved_db, tickers=spec.tickers),
     )
 
 
@@ -325,6 +335,10 @@ def metric_catalog(
             )
     finally:
         conn.close()
+    # Definition tooltips (Ask v4) — picker <option title> text per entry.
+    from viewspec.glossary import attach_catalog_titles
+
+    attach_catalog_titles(out, db_path=db_path, tickers=symbols)
     return out
 
 

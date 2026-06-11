@@ -965,6 +965,34 @@ def create_app(
         )
         return _stream_engine_events(events)
 
+    @app.route("/api/peers/<ticker>", methods=["GET"])
+    def peers_api(ticker: str):
+        """The scored comparable set for one ticker (the PR #400 peer
+        scoring) — the Ask thread's "+ peers" action injects these into the
+        pivot universe instead of FMP's alphabetical screen head. Always
+        200 with ``{"ticker", "peers": [{"ticker", "name", "reasons"}]}``;
+        a failed lookup degrades to an empty list with an ``error`` note."""
+        from report.sections import p3_data  # lazy: pulls the report graph
+
+        sym = ticker.strip().upper()
+        if not sym:
+            return ({"error": "ticker required"}, 400)
+        try:
+            rows = p3_data.load_peer_comp(sym, repo_root=repo_root)
+        except Exception as exc:  # best-effort surface, never a 500
+            return {"ticker": sym, "peers": [], "error": f"peer lookup failed: {exc}"}
+        return {
+            "ticker": sym,
+            "peers": [
+                {
+                    "ticker": r.peer_ticker,
+                    "name": r.peer_name,
+                    "reasons": list(r.match_reasons),
+                }
+                for r in rows
+            ],
+        }
+
     def _parse_ask_turn() -> AskTurn | None:
         """The shared /api/ask request shape → AskTurn; None on a missing
         query (the routes 400)."""

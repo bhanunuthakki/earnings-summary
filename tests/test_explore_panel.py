@@ -137,14 +137,48 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
 
 def test_explore_panel_is_ask_first(db_path: Path) -> None:
     """PR5: the thread + input lead the panel; the full builder survives
-    untouched inside the Advanced fold (same ids, same JS contract)."""
+    untouched (same ids, same JS contract) — since Ask v4 as a DIY popover
+    instead of a bottom fold."""
     html_out = render_explore_panel(db_path)
     assert 'id="ask-thread"' in html_out
     assert 'id="ask-q"' in html_out
     assert "ask-chip" in html_out  # suggestion chips seed the empty thread
-    assert 'class="ask-advanced"' in html_out
+    assert 'class="ask-advanced ask-builder-pop"' in html_out
     for builder_id in ("vx-run", "vx-pick-fin", "vx-save", "vx-tickers"):
         assert f'id="{builder_id}"' in html_out
+
+
+def test_explore_panel_builder_is_a_diy_popover(db_path: Path) -> None:
+    """Ask v4: the builder opens from the DIY button (hidden by default,
+    closable), 'Open in builder' routes through the same popover, and the
+    answer-card actions carry the scored-peers injector."""
+    html_out = render_explore_panel(db_path)
+    assert 'id="ask-diy"' in html_out
+    assert 'id="ask-pop-close"' in html_out
+    assert 'id="ask-advanced" hidden' in html_out
+    assert "<details" not in html_out  # the fold is gone
+    assert "function openBuilder()" in html_out
+    assert 'data-ask-act="peers"' in html_out  # card action (askActionsHtml)
+    assert 'id="vx-peers"' in html_out  # builder action
+    assert "/api/peers/" in html_out
+    assert "function addPeersToCard" in html_out
+
+
+def test_explore_panel_picker_options_carry_definition_titles(db_path: Path) -> None:
+    """Ask v4 definitions: server-rendered picker options get title tooltips
+    (the fin glossary here; kpi notes when the table carries them), and the
+    JS sets them on catalog reloads too."""
+    html_out = render_explore_panel(db_path)
+    assert "FMP-normalized income-statement top line" in html_out  # fin:revenue
+    assert "opt.title = e.title" in html_out
+
+
+def test_explore_panel_consumes_dock_thread_handoff(db_path: Path) -> None:
+    """Ask v4 Home dock: the panel replays a stashed dock thread at wire-up
+    (sessionStorage 'cc-ask-thread', same event as the palette handoff)."""
+    html_out = render_explore_panel(db_path)
+    assert "cc-ask-thread" in html_out
+    assert "function consumeDockThread()" in html_out
 
 
 def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:
@@ -189,7 +223,10 @@ def test_catalog_endpoint(client: FlaskClient) -> None:
     res = client.get("/api/viewspec/catalog?tickers=TST")
     assert res.status_code == 200
     body = res.get_json()
-    assert {"token": "fin:revenue", "label": "revenue", "tickers": 1} in body["fin"]
+    entry = next(e for e in body["fin"] if e["token"] == "fin:revenue")
+    assert entry["label"] == "revenue"
+    assert entry["tickers"] == 1
+    assert "top line" in entry["title"]  # definition tooltip (Ask v4)
     assert body["kpi"] == []
 
 

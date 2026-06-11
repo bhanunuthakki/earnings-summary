@@ -523,13 +523,21 @@ def test_metric_catalog(db: Path) -> None:
     cat = metric_catalog(db, ["TST", "ALT"])
     fin_tokens = [e["token"] for e in cat["fin"]]
     assert fin_tokens[0] == "fin:revenue"  # both tickers carry it → ranked first
-    assert {"token": "fin:revenue", "label": "revenue", "tickers": 2} in cat["fin"]
-    assert {"token": "kpi:ROE", "label": "ROE", "tickers": 1} in cat["kpi"]
-    assert {
-        "token": "seg:product:Cloud:revenue",
-        "label": "Cloud revenue (product)",
-        "tickers": 1,
-    } in cat["seg"]
+
+    def _entry(domain: str, token: str) -> dict[str, object]:
+        return next(e for e in cat[domain] if e["token"] == token)
+
+    fin = _entry("fin", "fin:revenue")
+    assert fin["label"] == "revenue"
+    assert fin["tickers"] == 2
+    assert "title" in fin  # definition tooltip (Ask v4)
+    kpi = _entry("kpi", "kpi:ROE")
+    assert kpi["label"] == "ROE"
+    assert kpi["tickers"] == 1
+    seg = _entry("seg", "seg:product:Cloud:revenue")
+    assert seg["label"] == "Cloud revenue (product)"
+    assert seg["tickers"] == 1
+    assert "product axis" in str(seg["title"])
     assert metric_catalog(db, []) == {"fin": [], "kpi": [], "seg": []}
     empty = metric_catalog(db.parent / "absent.db", ["TST"])
     assert empty == {"fin": [], "kpi": [], "seg": []}
