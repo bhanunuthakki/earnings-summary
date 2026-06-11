@@ -10,15 +10,12 @@ re-running the CLI with different args.
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 
-from alerts import AlertRow, list_alerts, list_queued_actions_for_alert
-from dashboard._card import render_alert_card
 from dashboard._styles import CSS
-from dashboard.evidence_drawer import load_brief_provenance
+from dashboard.inbox import INBOX_CSS, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
@@ -39,22 +36,21 @@ def render_alert_feed(
     args so the analyst can see which slice they're looking at without
     re-checking their shell history.
     """
-    alerts_all = list_alerts(
+    # The feed is the alerts-only view of the unified inbox (PR3) — same
+    # model and cards as the Home rail and the digest, full-page with filters.
+    items = collect_inbox(
+        db_path,
         user_id=user_id,
         ticker=ticker,
         status=status,
+        trigger_kind=trigger_kind,
+        kinds=("alert",),
         limit=limit,
-        db_path=db_path,
-    )
-    alerts = (
-        alerts_all
-        if trigger_kind is None
-        else [a for a in alerts_all if a.trigger_kind == trigger_kind]
     )
 
     body = StringIO()
     body.write('<div class="l1-shell">')
-    _render_header(body, total=len(alerts), limit=limit)
+    _render_header(body, total=len(items), limit=limit)
     _render_filter_strip(
         body,
         ticker=ticker,
@@ -62,7 +58,19 @@ def render_alert_feed(
         status=status,
         limit=limit,
     )
-    _render_alert_list(body, alerts, db_path)
+    body.write('<section class="dash-section dash-feed">')
+    body.write('<div class="dash-section-header">')
+    body.write('<div class="dash-section-title">Alerts</div>')
+    body.write(f'<div class="dash-section-count">{len(items)} shown</div>')
+    body.write("</div>")
+    body.write(
+        render_inbox_stream(
+            items,
+            db_path=db_path,
+            empty_text="No alerts match the current filters.",
+        )
+    )
+    body.write("</section>")
     _render_footer(body)
     body.write("</div>")
     return _document(body.getvalue())
@@ -109,43 +117,6 @@ def _filter_chip(label: str, value: str) -> str:
     )
 
 
-def _render_alert_list(
-    body: StringIO,
-    alerts: list[AlertRow],
-    db_path: Path | None,
-) -> None:
-    body.write('<section class="dash-section dash-feed">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Alerts</div>')
-    body.write(f'<div class="dash-section-count">{len(alerts)} shown</div>')
-    body.write("</div>")
-
-    if not alerts:
-        body.write('<div class="empty-state">No alerts match the current filters.</div>')
-        body.write("</section>")
-        return
-
-    # One brief-provenance lookup per ticker so fact_id citations in the
-    # evidence drawer resolve (P3.3); alerts routinely share tickers.
-    prov_cache: dict[str, Mapping[str, object] | None] = {}
-    for alert in alerts:
-        actions = list_queued_actions_for_alert(alert.id, db_path=db_path)
-        if alert.ticker not in prov_cache:
-            prov_cache[alert.ticker] = (
-                load_brief_provenance(alert.ticker, db_path=db_path)
-                if db_path is not None
-                else None
-            )
-        render_alert_card(
-            body,
-            alert,
-            actions=actions,
-            show_status_badge=True,
-            brief_provenance=prov_cache[alert.ticker],
-        )
-    body.write("</section>")
-
-
 def _render_footer(body: StringIO) -> None:
     generated_at = datetime.now(UTC).replace(tzinfo=None)
     body.write('<div class="l1-footer">')
@@ -170,7 +141,8 @@ def _document(body: str) -> str:
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
-<style>{CSS}</style>
+<style>{CSS}
+{INBOX_CSS}</style>
 </head>
 <body>
 {body}

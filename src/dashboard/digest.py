@@ -1,46 +1,40 @@
 """Daily morning HTML digest renderer.
 
-One self-contained HTML page per day with five sections:
+UX redesign PR3: the digest is the *since-yesterday view of the unified
+inbox* (dashboard/inbox.py). One self-contained HTML page per day with three
+sections:
 
-  1. Header                     — date + "what's new since yesterday" label
-  2. What's new (last 24h)      — pending alerts fired in the window
-  3. Outstanding queued actions — pending actions whose alert is outside (2)
-  4. Upcoming this week         — estimated next-earnings for tracked names
-                                   no upcoming-earnings data source is persisted
-                                   (earnings_surprises holds only past releases)
-  5. Recent thesis changes      — the cross-holding thesis-ledger panel: the
-                                   newest accepted, alert-driven thesis edits
-                                   (_render_thesis_ledger over list_recent_entries)
+  1. Header                  — date + "what changed since yesterday" label
+  2. What changed (last 24h) — ONE deduped stream: alerts (any status),
+                                queued-action drafts, thesis-ledger entries,
+                                and journal items, newest first. Replaces the
+                                old What's-new / Open-items / Outstanding /
+                                Recent-thesis-changes quartet that showed the
+                                same queued action up to three different ways.
+  3. Upcoming this week      — estimated next-earnings for tracked names
+                                (labelled "est." — earnings_surprises holds
+                                only past releases), each led by the owner's
+                                open watch items for that name.
 
-Empty-state path: sections 1+2 collapse to "Nothing fired in the last
-24h" rather than emitting empty divs, so the morning open of an empty
-day still looks intentional.
+Empty-state path: section 2 collapses to one "nothing changed" line rather
+than emitting empty divs, so the morning open of a quiet day still looks
+intentional.
 """
 
 from __future__ import annotations
 
 import html
 import sqlite3
-from collections.abc import Mapping
 from datetime import UTC, date, datetime, time, timedelta
 from io import StringIO
 from pathlib import Path
 
-from alerts import (
-    AlertRow,
-    QueuedActionRow,
-    list_pending_actions,
-    list_pending_alerts,
-    list_queued_actions_for_alert,
-)
-from dashboard._card import render_alert_card, render_queued_action
 from dashboard._styles import CSS
-from dashboard.evidence_drawer import load_brief_provenance
+from dashboard.inbox import INBOX_CSS, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from report.renderers.numfmt import fmt_date
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
-from user_state.ledger import list_recent_entries
 from user_state.notes import AnalystNoteRow, list_notes
 
 
@@ -51,39 +45,43 @@ def render_morning_digest(
 ) -> str:
     """Return the full HTML string for the morning digest of ``date``.
 
-    The 24h window is defined as ``[date - 1d, date + 1d)`` in UTC — wide
-    enough that the morning of ``date`` always picks up "yesterday after-
-    close" prints regardless of the user's local timezone. The store
-    queries by ``fired_at >=`` (no upper bound) but the populated set is
-    further filtered in this renderer to ensure we don't surface alerts
-    fired *after* the digest date (e.g. when a digest is re-generated for
-    a historical date).
+    UX redesign PR3: the digest is the *since-yesterday view of the unified
+    inbox* — ONE deduped "What changed" stream (alerts of any status, drafts,
+    thesis-ledger entries, journal items, newest first) instead of the old
+    four sections that showed the same queued action up to three ways —
+    followed by the estimated-earnings look-ahead.
+
+    The 24h window is ``[date - 1d, date + 1d)`` in UTC — wide enough that
+    the morning of ``date`` always picks up "yesterday after-close" prints
+    regardless of the user's local timezone; the upper bound keeps a digest
+    re-generated for a historical date honest.
     """
     window_start, window_end = _window_for_date(date)
-    pending_alerts_all = list_pending_alerts(
-        user_id=user_id,
-        since=window_start,
-        db_path=db_path,
-    )
-    pending_alerts = [a for a in pending_alerts_all if _as_naive_utc(a.fired_at) < window_end]
-    pending_alerts.sort(key=lambda a: (a.ticker, a.trigger_kind))
-
-    actions_per_alert: dict[int, list[QueuedActionRow]] = {}
-    for a in pending_alerts:
-        actions_per_alert[a.id] = _pending_actions_for(a.id, db_path)
-
-    in_section_2_ids = {a.id for a in pending_alerts}
-    all_pending_actions = list_pending_actions(user_id=user_id, db_path=db_path)
-    outstanding_actions = [qa for qa in all_pending_actions if qa.alert_id not in in_section_2_ids]
+    items = collect_inbox(db_path, user_id=user_id, since=window_start, until=window_end, limit=60)
 
     body = StringIO()
     body.write('<div class="l1-shell">')
     _render_header(body, date)
-    _render_whats_new(body, pending_alerts, actions_per_alert, db_path)
-    _render_open_items(body, user_id, db_path)
-    _render_outstanding(body, outstanding_actions)
+    body.write('<section class="dash-section dash-whats-new">')
+    body.write('<div class="dash-section-header">')
+    body.write('<div class="dash-section-title">What changed (last 24h)</div>')
+    body.write(f'<div class="dash-section-count">{len(items)} item(s)</div>')
+    body.write("</div>")
+    # Bucket labels (Today / Yesterday) are relative to the digest's own day,
+    # not the +1d window bound — an item from the render date reads "Today".
+    body.write(
+        render_inbox_stream(
+            items,
+            db_path=db_path,
+            now=datetime.combine(date, time.max),
+            empty_text=(
+                "Nothing changed in the last 24h — no alerts, drafts, thesis "
+                "edits, or new watch items. ✓ Your portfolio looks quiet."
+            ),
+        )
+    )
+    body.write("</section>")
     _render_upcoming(body, date, db_path, user_id=user_id)
-    _render_thesis_ledger(body, user_id, db_path)
     _render_footer(body, date)
     body.write("</div>")
 
@@ -100,58 +98,16 @@ def _render_header(body: StringIO, render_date: date) -> None:
     body.write(f"<h1>Morning digest · {_esc(fmt_date(render_date.isoformat()))}</h1>")
     body.write(
         '<div class="l1-subtitle">'
-        "What's new since yesterday — pending alerts, outstanding drafts, "
-        "upcoming events, cross-holding rollup."
+        "Since yesterday, in one stream — alerts, drafts awaiting review, "
+        "thesis changes, and your open watch items, deduped."
         "</div>"
     )
     body.write("</header>")
 
 
-def _render_whats_new(
-    body: StringIO,
-    alerts: list[AlertRow],
-    actions_per_alert: Mapping[int, list[QueuedActionRow]],
-    db_path: Path | None = None,
-) -> None:
-    body.write('<section class="dash-section dash-whats-new">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">What\'s new (last 24h)</div>')
-    body.write(f'<div class="dash-section-count">{len(alerts)} alert(s)</div>')
-    body.write("</div>")
-
-    if not alerts:
-        body.write(
-            '<div class="empty-state">'
-            "Nothing fired in the last 24h. ✓ Your portfolio looks quiet."
-            "</div>"
-        )
-        body.write("</section>")
-        return
-
-    # One brief-provenance lookup per ticker so fact_id citations in the
-    # evidence drawer resolve (P3.3); alerts routinely share tickers.
-    prov_cache: dict[str, Mapping[str, object] | None] = {}
-    for alert in alerts:
-        if alert.ticker not in prov_cache:
-            prov_cache[alert.ticker] = (
-                load_brief_provenance(alert.ticker, db_path=db_path)
-                if db_path is not None
-                else None
-            )
-        render_alert_card(
-            body,
-            alert,
-            actions=list(actions_per_alert.get(alert.id, [])),
-            show_status_badge=False,
-            brief_provenance=prov_cache[alert.ticker],
-        )
-    body.write("</section>")
-
-
-# Lead kinds for the open-items panel + the per-ticker earnings-prep lists
+# Lead kinds for the per-ticker earnings-prep lists
 # (P4.4): the owner's watch items and unanswered questions come first.
 _OPEN_ITEM_KIND_RANK = {"watch": 0, "question": 1}
-_OPEN_ITEMS_LIMIT = 30
 _PREP_NOTES_PER_TICKER = 3
 
 
@@ -166,73 +122,6 @@ def _open_notes(
     except sqlite3.Error:
         return []
     return sorted(rows, key=lambda n: _OPEN_ITEM_KIND_RANK.get(n.kind, 9))
-
-
-def _render_open_items(body: StringIO, user_id: str, db_path: Path | None) -> None:
-    """'Open items' (P4.4) — the owner's standing watch items, questions, and
-    other open notes from the analyst journal, so the digest carries what the
-    owner already said to look for alongside what's new."""
-    notes = _open_notes(db_path, user_id)[:_OPEN_ITEMS_LIMIT]
-    body.write('<section class="dash-section dash-open-items">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Open items</div>')
-    body.write(f'<div class="dash-section-count">{len(notes)} open</div>')
-    body.write("</div>")
-    if not notes:
-        body.write(
-            '<div class="empty-state">No open items in the analyst journal — '
-            "notes arrive from report comments, chat, and alert reviews.</div>"
-        )
-        body.write("</section>")
-        return
-    body.write('<ul class="open-items-list">')
-    for n in notes:
-        ticker_html = (
-            f'<span class="oi-ticker">{_esc(n.ticker)}</span>'
-            if n.ticker
-            else '<span class="oi-ticker oi-portfolio">PORTFOLIO</span>'
-        )
-        body.write(
-            '<li class="open-item">'
-            f'<span class="oi-kind">{_esc(n.kind)}</span>'
-            f"{ticker_html}"
-            f'<span class="oi-body">{_esc(n.body)}</span>'
-            f"{stamp_html(n.created_at, mode='date', css='oi-when')}"
-            "</li>"
-        )
-    body.write("</ul></section>")
-
-
-def _render_outstanding(body: StringIO, actions: list[QueuedActionRow]) -> None:
-    body.write('<section class="dash-section dash-outstanding">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Outstanding queued actions</div>')
-    body.write(f'<div class="dash-section-count">{len(actions)} pending</div>')
-    body.write("</div>")
-
-    if not actions:
-        body.write('<div class="empty-state">No outstanding queued actions.</div>')
-        body.write("</section>")
-        return
-
-    grouped: dict[int, list[QueuedActionRow]] = {}
-    for qa in actions:
-        grouped.setdefault(qa.alert_id, []).append(qa)
-
-    for alert_id, qas in grouped.items():
-        body.write('<div class="alert-card">')
-        body.write('<div class="alert-card-head">')
-        body.write(
-            f'<span class="trigger-badge">alert #{alert_id}</span>'
-            f'<span class="fired-at">{len(qas)} draft(s) pending</span>'
-        )
-        body.write("</div>")
-        body.write('<div class="queued-actions">')
-        for qa in qas:
-            render_queued_action(body, qa)
-        body.write("</div>")
-        body.write("</div>")
-    body.write("</section>")
 
 
 # There is no future-earnings calendar table; estimate each tracked name's next
@@ -335,52 +224,6 @@ def _render_upcoming(
     body.write("</section>")
 
 
-_LEDGER_KIND_LABELS: Mapping[str, str] = {
-    "thesis_update": "Thesis update",
-    "bear_append": "Bear case",
-    "earnings_prep_append": "Earnings prep",
-}
-
-
-def _render_thesis_ledger(body: StringIO, user_id: str, db_path: Path | None) -> None:
-    """Cross-holding 'recent thesis changes' — the append-only ledger of every
-    accepted, alert-driven thesis edit. This previously had no reader on any
-    surface (the section was a hard-coded 'deferred' stub), so the durable
-    record of how the thesis moved over time was computed but never shown."""
-    try:
-        entries = list_recent_entries(user_id=user_id, limit=20, db_path=db_path)
-    except (FileNotFoundError, RuntimeError, sqlite3.Error):
-        entries = []
-
-    body.write('<section class="dash-section dash-ledger">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Recent thesis changes</div>')
-    label = "entry" if len(entries) == 1 else "entries"
-    body.write(f'<div class="dash-section-count">{len(entries)} {label}</div>')
-    body.write("</div>")
-    if not entries:
-        body.write(
-            '<div class="empty-state">'
-            "No thesis-ledger entries yet — approving a queued action records one here."
-            "</div></section>"
-        )
-        return
-    body.write('<ul class="ledger-list">')
-    for entry in entries:
-        kind_label = _LEDGER_KIND_LABELS.get(entry.entry_kind, entry.entry_kind)
-        body.write(
-            '<li class="ledger-entry">'
-            '<div class="ledger-meta">'
-            f'<span class="ledger-ticker">{_esc(entry.ticker)}</span>'
-            f'<span class="ledger-kind">{_esc(kind_label)}</span>'
-            f"{stamp_html(entry.created_at, mode='date', css='ledger-when')}"
-            "</div>"
-            f'<div class="ledger-body">{_esc(entry.body)}</div>'
-            "</li>"
-        )
-    body.write("</ul></section>")
-
-
 def _render_footer(body: StringIO, render_date: date) -> None:
     generated_at = datetime.now(UTC).replace(tzinfo=None)
     body.write('<div class="l1-footer">')
@@ -428,14 +271,6 @@ def _window_for_date(render_date: date) -> tuple[datetime, datetime]:
     return start_dt, end_dt
 
 
-def _pending_actions_for(alert_id: int, db_path: Path | None) -> list[QueuedActionRow]:
-    """Return only the pending queued actions for an alert. The store's
-    ``list_queued_actions_for_alert`` returns all statuses; the digest
-    only wants the actionable subset."""
-    all_qa = list_queued_actions_for_alert(alert_id, db_path=db_path)
-    return [qa for qa in all_qa if qa.status == "pending"]
-
-
 def _document(render_date: date, body: str) -> str:
     title = f"Morning digest · {render_date.isoformat()}"
     return f"""<!doctype html>
@@ -448,7 +283,8 @@ def _document(render_date: date, body: str) -> str:
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap" rel="stylesheet">
-<style>{CSS}</style>
+<style>{CSS}
+{INBOX_CSS}</style>
 </head>
 <body>
 {body}

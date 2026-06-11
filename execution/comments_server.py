@@ -69,6 +69,7 @@ import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
+from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
@@ -348,7 +349,10 @@ def create_app(
         finally:
             conn.close()
         coverage = tier_coverage_summary(repo_root)
-        overview = render_overview_panel(rows, coverage)
+        inbox_html = render_inbox_stream(
+            collect_inbox(db_path, limit=14), db_path=db_path, compact=True
+        )
+        overview = render_overview_panel(rows, coverage, inbox_html=inbox_html)
         return Response(render_shell(overview_html=overview), mimetype="text/html")
 
     @app.route("/api/dashboard", methods=["GET"])

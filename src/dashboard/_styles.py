@@ -186,7 +186,8 @@ a:hover { text-decoration: underline; }
   color: var(--accent); border: 1px solid var(--accent);
   border-radius: 3px; padding: 0 5px; margin-right: 6px;
 }
-/* P4.4 — digest "Open items" panel + per-ticker earnings-prep notes. */
+/* P4.4 — per-ticker earnings-prep notes (the standalone digest panel folded
+   into the unified inbox stream in PR3; these rules still serve prep-notes). */
 .open-items-list, .prep-notes { list-style: none; margin: 0; padding: 0; }
 .open-item {
   display: flex; gap: 8px; align-items: baseline;
