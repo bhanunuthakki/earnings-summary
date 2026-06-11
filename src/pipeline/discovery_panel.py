@@ -35,9 +35,7 @@ _STATUS_FILTERS: tuple[str, ...] = ("live", *CANDIDATE_STATUSES)
 
 _PANEL_STYLE = """<style>
 .dq-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:4px 0 12px; }
-.dq-bar select, .dq-bar input {
-  background:var(--paper, #1a1d23); color:var(--fg); border:1px solid var(--border);
-  border-radius:var(--radius); padding:5px 9px; font-size:var(--fs-body); }
+/* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
 .dq-bar button { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
   border-radius:var(--radius); padding:5px 12px; font-size:var(--fs-body); cursor:pointer;
   transition:filter var(--transition); }

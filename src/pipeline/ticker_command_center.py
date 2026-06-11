@@ -29,6 +29,7 @@ from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
+from ui.controls import controls_css
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
@@ -419,17 +420,15 @@ def build_holding_rail(repo_root: Path, ticker: str) -> HoldingRail:
 # --------------------------------------------------------------------------- #
 _QUICK_NOTE_STYLE = """<style>
 .cc-quicknote .qn-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.cc-quicknote select, .cc-quicknote input, .cc-quicknote textarea {
-  background: var(--paper, #1a1d23); color: var(--fg, #e8e8e3);
-  border: 1px solid var(--border, #2a2c30); border-radius: 6px; padding: 6px 9px;
-  font-size: 12.5px; font-family: inherit; }
+/* Inputs/selects/textarea: skinned by the shared control kit (ui/controls.py). */
 .cc-quicknote textarea { width: 100%; box-sizing: border-box; resize: vertical;
   margin-bottom: 8px; }
 .cc-quicknote .qn-ticker { width: 120px; text-transform: uppercase; }
-.cc-quicknote .qn-save { background: var(--accent, #7aa2f7); color: #0d1117; border: none;
-  padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
-.cc-quicknote .qn-msg { font-size: 12px; }
-.cc-notes-foot { color: var(--muted, #888); font-size: 12px; }
+.cc-quicknote .qn-save { background: var(--accent); color: var(--accent-contrast);
+  border: none; padding: 6px 14px; border-radius: var(--radius); font-weight: 600;
+  font-size: var(--fs-body); cursor: pointer; }
+.cc-quicknote .qn-msg { font-size: var(--fs-caption); }
+.cc-notes-foot { color: var(--muted); font-size: var(--fs-caption); }
 </style>"""
 
 _QUICK_NOTE_SCRIPT = """<script>
@@ -900,26 +899,23 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
 
 _COMBO_STYLE = """<style>
 .cc-combo { position: relative; flex: 1 1 280px; max-width: 420px; min-width: 200px; }
-.cc-combo-input { width: 100%; box-sizing: border-box; background: var(--paper, #1a1d23);
-  color: var(--fg, #e8e8e3); border: 1px solid var(--border, #2a2c30);
-  border-radius: var(--radius, 6px); padding: 6px 11px; font-size: var(--fs-body, 13px);
-  font-family: inherit; }
-.cc-combo-input:focus { outline: none; border-color: var(--accent, #7aa2f7); }
+/* The input itself is skinned by the shared control kit (ui/controls.py);
+   the results list is the kit's .k-menu surface with combo positioning. */
+.cc-combo-input { width: 100%; box-sizing: border-box; padding: 6px 11px; }
 .cc-combo-list { position: absolute; z-index: 25; top: calc(100% + 4px); left: 0; right: 0;
   margin: 0; padding: 4px 0; list-style: none; max-height: 320px; overflow-y: auto;
-  background: var(--surface, #16171a); border: 1px solid var(--border, #2a2c30);
-  border-radius: var(--radius, 6px); box-shadow: 0 12px 32px rgba(0,0,0,0.5); }
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 .cc-combo-list[hidden] { display: none; }
 .cc-combo-list li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
-  cursor: pointer; font-size: var(--fs-body, 13px); }
-.cc-combo-list li.sel, .cc-combo-list li:hover { background: var(--paper, #1a1d23); }
-.cc-combo-tk { font-family: var(--font-mono, monospace); font-weight: 600;
-  color: var(--fg, #e8e8e3); }
-.cc-combo-nm { color: var(--muted, #888); font-size: var(--fs-caption, 11px);
+  cursor: pointer; font-size: var(--fs-body); }
+.cc-combo-list li.sel, .cc-combo-list li:hover { background: var(--paper); }
+.cc-combo-tk { font-family: var(--mono); font-weight: 600; color: var(--fg); }
+.cc-combo-nm { color: var(--muted); font-size: var(--fs-caption);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-combo-none { color: var(--muted, #888); cursor: default; }
+.cc-combo-none { color: var(--muted); cursor: default; }
 .cc-holding-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.cc-holding-hint { color: var(--muted, #888); font-size: var(--fs-caption, 12px); }
+.cc-holding-hint { color: var(--muted); font-size: var(--fs-caption); }
 </style>"""
 
 # Self-contained combobox wiring, re-run on every fragment inject (the shell's
@@ -1405,7 +1401,7 @@ _PAGE_HEAD = (
 """
     + FAVICON_LINK
     + "\n<style>\n"
-    + palette_css("dark").replace("{", "{{").replace("}", "}}")
+    + (palette_css("dark") + controls_css("dark")).replace("{", "{{").replace("}", "}}")
     + """
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
   header {{ margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}

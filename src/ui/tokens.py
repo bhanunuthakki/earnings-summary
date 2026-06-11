@@ -39,6 +39,8 @@ PALETTE_LIGHT: dict[str, str] = {
     "hairline": "#ecebe5",
     "accent": "#1d4ed8",
     "accent-soft": "#eef2ff",
+    # Text/glyph color ON an accent-filled surface (k-btn-primary, badges).
+    "accent-contrast": "#ffffff",
     "ok": "#15803d",
     "warn": "#b97c00",
     "bad": "#b91c1c",
@@ -54,6 +56,8 @@ PALETTE_LIGHT: dict[str, str] = {
     "tone-neu": "#f4f3ef",
     "tone-opt": "#fff8e6",
     "tone-neg": "#fdf2f2",
+    # One popover/menu elevation per theme (combobox lists, peeks, palettes).
+    "shadow-pop": "0 12px 32px rgba(15, 15, 20, 0.18)",
 }
 
 # "white" is the light palette with a brighter page background.
@@ -77,6 +81,8 @@ PALETTE_DARK: dict[str, str] = {
     "hairline": "#1f2127",
     "accent": "#8aa8ff",
     "accent-soft": "#1c2138",
+    # Dark accent is light — ink on it must be near-black, not white.
+    "accent-contrast": "#0c0d10",
     "ok": "#4ade80",
     "warn": "#f5c66a",
     "bad": "#f08a8a",
@@ -92,6 +98,7 @@ PALETTE_DARK: dict[str, str] = {
     "tone-neu": "#1a1d23",
     "tone-opt": "#2b2418",
     "tone-neg": "#2b1a1a",
+    "shadow-pop": "0 12px 32px rgba(0, 0, 0, 0.45)",
 }
 
 FONT_TOKENS: dict[str, str] = {

@@ -200,10 +200,10 @@ _ANALYTICS_CSS = """<style>
   border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
   font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
 .pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
-.pf-btn-apply { background: var(--accent); color: #0d1117; border: none; font-weight: 600; }
-.pf-window input[type="date"] { background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; font-size: var(--fs-caption);
-  font-family: var(--mono); color-scheme: dark; }
+.pf-btn-apply { background: var(--accent); color: var(--accent-contrast); border: none;
+  font-weight: 600; }
+.pf-window input[type="date"] { padding: 3px 6px; font-size: var(--fs-caption);
+  font-family: var(--mono); }
 .pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
   gap: 5px; margin-left: 6px; cursor: help; }
 </style>"""

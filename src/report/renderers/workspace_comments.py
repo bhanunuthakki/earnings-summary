@@ -900,32 +900,23 @@ CSS = r"""
 .cmt-actions button:hover { background: var(--panel); color: var(--ink); }
 
 .cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
-.cmt-form textarea {
-  width: 100%; box-sizing: border-box;
-  background: var(--panel-alt); color: var(--ink);
-  border: 1px solid var(--hairline); border-radius: 4px;
-  padding: 8px 10px; font-family: var(--font-body); font-size: 13px;
-  resize: vertical;
-}
+/* Textarea/select: skinned by the shared control kit (ui/controls.py). */
+.cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-.cmt-form select {
-  flex: 1; background: var(--panel-alt); color: var(--ink);
-  border: 1px solid var(--hairline); border-radius: 4px;
-  padding: 6px 8px; font-size: 12px;
-}
+.cmt-form select { flex: 1; font-size: var(--fs-caption); }
 .cmt-form button[type="submit"] {
-  background: var(--accent, #6db3ff); color: #0d1117;
-  border: none; padding: 6px 14px; border-radius: 4px;
-  font-weight: 600; font-size: 12px; cursor: pointer;
+  background: var(--accent); color: var(--accent-contrast);
+  border: none; padding: 6px 14px; border-radius: var(--radius);
+  font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
 }
 .cmt-form-hint { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 14px; }
 
 /* Floating "+ Comment" button on text selection (Google-Docs style) */
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 .cmt-floater-btn {
-  background: var(--accent, #6db3ff); color: #0d1117;
-  border: none; border-radius: 14px;
-  padding: 6px 12px; font-size: 11.5px; font-weight: 600;
+  background: var(--accent); color: var(--accent-contrast);
+  border: none; border-radius: var(--radius-full);
+  padding: 6px 12px; font-size: var(--fs-caption); font-weight: 600;
   cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
   white-space: nowrap;
 }

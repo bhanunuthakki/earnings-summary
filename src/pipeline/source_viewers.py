@@ -37,6 +37,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
 
 _TRANSCRIPT_DOC_TYPES = frozenset({"earnings_call_transcript", "ir_transcript"})
@@ -148,7 +149,7 @@ def _page(title: str, head_extra: str, body: str) -> str:
         '<html lang="en" data-theme="dark"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{escape(title)}</title>{FAVICON_LINK}"
-        f"<style>{palette_css('dark')}{_PAGE_CSS}</style></head><body>"
+        f"<style>{palette_css('dark')}{controls_css('dark')}{_PAGE_CSS}</style></head><body>"
         f'<div class="sv-head">{head_extra}</div>'
         f'<div class="sv-body">{body}</div>'
         "</body></html>"

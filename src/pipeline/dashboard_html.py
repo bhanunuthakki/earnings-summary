@@ -47,29 +47,29 @@ _ACTIONS_BLOCK = """
 </section>
 <style>
 .actions-section { margin: 0 0 28px; padding: 16px 18px; background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 4px; }
+  border: 1px solid var(--border); border-radius: var(--radius); }
 .actions-section h2 { margin: 0 0 6px; }
-.actions-help { font-size: 12px; color: var(--fg-muted); margin: 0 0 12px; max-width: 760px; }
-.actions-help code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.actions-help { font-size: var(--fs-caption); color: var(--fg-muted); margin: 0 0 12px;
+  max-width: 760px; }
+.actions-help code { font-family: var(--mono); font-size: 0.93em; }
 .actions-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.ir-ticker { width: 170px; padding: 6px 9px; font-size: 13px; border: 1px solid var(--border);
-  border-radius: 4px; text-transform: uppercase;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.ir-quarters-label { font-size: 12px; color: var(--fg-muted); display: inline-flex;
+/* Inputs: skinned by the shared control kit (ui/controls.py). */
+.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mono); }
+.ir-quarters-label { font-size: var(--fs-caption); color: var(--fg-muted); display: inline-flex;
   align-items: center; gap: 6px; }
-.ir-quarters { width: 60px; padding: 6px 8px; font-size: 13px; border: 1px solid var(--border);
-  border-radius: 4px; }
-#ir-submit { padding: 7px 14px; font-size: 13px; font-weight: 600; color: #fff;
-  background: var(--link); border: none; border-radius: 4px; cursor: pointer; }
+.ir-quarters { width: 60px; }
+#ir-submit { padding: 7px 14px; font-size: var(--fs-body); font-weight: 600;
+  color: var(--accent-contrast); background: var(--accent); border: none;
+  border-radius: var(--radius); cursor: pointer; }
 #ir-submit:disabled { opacity: 0.5; cursor: progress; }
-.actions-status { font-size: 12px; font-weight: 500; }
-.actions-status.running { color: #b88a1f; }
-.actions-status.ok { color: #3a8a3a; }
-.actions-status.error { color: #b04040; }
+.actions-status { font-size: var(--fs-caption); font-weight: 500; }
+.actions-status.running { color: var(--warn); }
+.actions-status.ok { color: var(--ok); }
+.actions-status.error { color: var(--bad); }
 .actions-output { margin: 12px 0 0; padding: 10px 12px; max-height: 320px; overflow-y: auto;
-  background: #1c1c1c; color: #e6e6e6; border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  background: var(--bg); color: var(--fg-soft); border-radius: var(--radius);
+  font-family: var(--mono);
+  font-size: var(--fs-caption); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 </style>
 <script>
 (function () {

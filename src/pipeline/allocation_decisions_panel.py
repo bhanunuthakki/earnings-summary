@@ -644,12 +644,14 @@ _PANEL_CSS = """<style>
 .ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px;
   padding: 4px 0; }
 .ad-editor span { color: var(--muted); }
-.ad-editor select, .ad-editor input { background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; font-size: 12px; }
+/* Editor inputs/selects: skinned by the shared control kit (ui/controls.py). */
+.ad-editor select, .ad-editor input { padding: 3px 6px; font-size: var(--fs-caption); }
+.ad-editor select { padding-right: 26px; }
 .ad-editor input.ad-target { width: 70px; }
 .ad-editor input.ad-note-input { flex: 1; min-width: 180px; }
-.ad-save-btn { background: var(--accent); color: #0d1117; border: none; border-radius: 4px;
-  padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ad-save-btn { background: var(--accent); color: var(--accent-contrast); border: none;
+  border-radius: var(--radius); padding: 4px 12px; font-size: var(--fs-caption);
+  font-weight: 600; cursor: pointer; }
 .ad-timeline td.tk { font-weight: 600; white-space: nowrap; }
 .ad-timeline td.when { color: var(--muted); white-space: nowrap; }
 .ad-pill { display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px;

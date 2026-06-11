@@ -105,6 +105,20 @@ def test_scale_tokens_ride_along_in_both_palette_css_modes() -> None:
             assert f"--{name}:" in root, f"--{name} missing from palette_css({mode!r}) :root"
 
 
+def test_accent_contrast_is_ink_on_accent_per_theme() -> None:
+    """UI polish v3: --accent-contrast is the only ink allowed on accent fill.
+    Dark accent is a LIGHT blue, so its contrast ink is near-black; light
+    accent is a dark blue, so its contrast ink is white."""
+    assert PALETTE_DARK["accent-contrast"] == "#0c0d10"
+    assert PALETTE_LIGHT["accent-contrast"] == "#ffffff"
+
+
+def test_shadow_pop_defined_in_both_themes() -> None:
+    for palette in (PALETTE_LIGHT, PALETTE_DARK):
+        assert "shadow-pop" in palette
+        assert "rgba" in palette["shadow-pop"]
+
+
 def test_chart_series_is_six_unique_colors() -> None:
     assert len(CHART_SERIES) == 6
     assert len(set(CHART_SERIES)) == 6

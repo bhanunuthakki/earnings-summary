@@ -35,6 +35,7 @@ from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_score
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
 from pipeline.analytical_dashboard_html import light_markdown_to_html
+from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
 
 _KIND_LABELS: dict[str, str] = {
@@ -341,18 +342,15 @@ _PANEL_CSS = """<style>
 .am-body h3 { font-size: 14px; }
 .am-body ul { padding-left: 20px; }
 .am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
-.am-runbar select { background: var(--paper); color: var(--fg); border: 1px solid var(--border);
-  border-radius: 4px; padding: 4px 8px; font-size: 12px; font-family: var(--mono); }
+.am-runbar select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption);
+  font-family: var(--mono); }
 .am-stance { background: #3b2f14; color: #fbbf24; text-transform: uppercase;
   letter-spacing: 0.4px; font-size: 10.5px; cursor: help; }
 .soc-q { margin: 12px 0; }
 .soc-q label { display: block; font-size: 13px; color: var(--fg); margin-bottom: 6px; }
-.soc-q textarea { width: 100%; background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; font-size: 13px;
-  font-family: var(--sans); resize: vertical; }
+.soc-q textarea { width: 100%; resize: vertical; }
 .soc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
-.soc-controls select { background: var(--paper); color: var(--fg);
-  border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; font-size: 12px; }
+.soc-controls select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption); }
 .soc-status { font-size: 12px; }
 .soc-saved { color: var(--ok); font-size: 13px; }
 .am-track { font-size: 12.5px; margin: 0 0 12px; font-family: var(--mono); }
@@ -583,7 +581,7 @@ def render_socratic_page(ticker: str) -> str:
         '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>{t} · think-through</title>"
         f"{FAVICON_LINK}"
-        f"<style>{palette_css('dark')}{_SOCRATIC_PAGE_CSS}</style>"
+        f"<style>{palette_css('dark')}{controls_css('dark')}{_SOCRATIC_PAGE_CSS}</style>"
         f"{_PANEL_CSS}"
         "</head><body><main>"
         f"<h1>Socratic think-through · {t}</h1>"

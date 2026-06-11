@@ -30,15 +30,18 @@ the deliverable stays a single self-contained HTML file (matches the existing
 
 from __future__ import annotations
 
+from ui.controls import controls_css
 from ui.tokens import palette_css
 
 CSS = (
     "\n/* ============================================================\n"
     "   Tokens — shared palette (single source: src/ui/tokens.py)\n"
+    "   + the shared control kit (src/ui/controls.py)\n"
     "   + workspace-local layout/density tokens.\n"
     "   3 themes (paper · white · dark) · 2 densities.\n"
     "   ============================================================ */\n"
     + palette_css("paper")
+    + controls_css("paper")
     + r"""
 :root {
   --pad-x: 28px;
