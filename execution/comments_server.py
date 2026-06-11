@@ -793,6 +793,35 @@ def create_app(
             render_view_fragment(result, include_chart=include_chart), mimetype="text/html"
         )
 
+    @app.route("/api/viewspec/compile", methods=["POST"])
+    def viewspec_compile_api():
+        """NL → ViewSpec (P5.2). JSON body ``{"query": ..., "tickers": [...]}``
+        (tickers = the panel's current universe, used for vocabulary grounding
+        and as the default when the question names none). Always 200 with a
+        tri-state payload — ``{"status": "ok", "spec": {...}}`` or
+        ``{"status": "budget_skipped" | "error", "message": ...}`` — so the
+        panel degrades to the builder UI instead of surfacing an HTTP error.
+        400 only for a missing query."""
+        from viewspec.nl_compile import compile_nl_to_viewspec
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return ({"error": "query required"}, 400)
+        raw_tickers = body.get("tickers")
+        context = (
+            [str(t) for t in cast("list[object]", raw_tickers)]
+            if isinstance(raw_tickers, list)
+            else []
+        )
+        result = compile_nl_to_viewspec(query, db_path=db_path, context_tickers=context)
+        payload: dict[str, object] = {"status": result.status}
+        if result.message:
+            payload["message"] = result.message
+        if result.spec is not None:
+            payload["spec"] = result.spec.to_dict()
+        return payload
+
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
         """Saved views CRUD (P5.1, saved_views 0079). GET lists; POST
