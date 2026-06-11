@@ -41,6 +41,8 @@ def render_alert_card(
     brief_provenance: Mapping[str, object] | None = None,
     *,
     drawer_open: bool = True,
+    category: str = "",
+    rank_why: str = "",
 ) -> None:
     """Render a single alert card into ``body``.
 
@@ -56,13 +58,21 @@ def render_alert_card(
 
     ``drawer_open=False`` collapses the evidence drawer (the Holding
     rail's compact cards); the digest and feed keep it expanded.
+
+    ``category`` / ``rank_why`` come from the inbox ranker (Inbox v2): the
+    category feeds the chip filtering (``data-cat``), the why-string becomes
+    the trigger badge's "why ranked here" tooltip. Both default empty for
+    callers outside the ranked stream.
     """
     # data-when (naive-UTC seconds) feeds the inbox unread tracking — full
     # cards on /digest and /feed accent the same way the rail's compact ones do.
     fired = alert.fired_at
     if fired.tzinfo is not None:
         fired = fired.astimezone(UTC).replace(tzinfo=None)
-    body.write(f'<div class="alert-card" data-when="{fired.isoformat(timespec="seconds")}">')
+    cat_attr = f' data-cat="{_esc(category)}"' if category else ""
+    body.write(
+        f'<div class="alert-card"{cat_attr} data-when="{fired.isoformat(timespec="seconds")}">'
+    )
     body.write('<div class="alert-card-head">')
     # data-peek-ticker: in the shell, hovering the badge shows the ticker
     # mini-card (UX9); inert markup on the standalone digest/feed pages.
@@ -70,7 +80,8 @@ def render_alert_card(
         f'<span class="ticker-badge" data-peek-ticker="{_esc(alert.ticker)}">'
         f"{_esc(alert.ticker)}</span>"
     )
-    body.write(f'<span class="trigger-badge">{_esc(alert.trigger_kind)}</span>')
+    why_attr = f' title="ranked: {_esc(rank_why)}"' if rank_why else ""
+    body.write(f'<span class="trigger-badge"{why_attr}>{_esc(alert.trigger_kind)}</span>')
     if show_status_badge:
         status_class = f"status-{alert.status}"
         body.write(f'<span class="status-badge {status_class}">{_esc(alert.status)}</span>')

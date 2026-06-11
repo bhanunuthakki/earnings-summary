@@ -306,7 +306,11 @@ def create_app(
             conn.close()
         coverage = tier_coverage_summary(repo_root)
         inbox_html = render_inbox_stream(
-            collect_inbox(db_path, limit=14), db_path=db_path, compact=True, surface="home"
+            collect_inbox(db_path, limit=14),
+            db_path=db_path,
+            compact=True,
+            surface="home",
+            show_filters=True,
         )
         overview = render_overview_panel(rows, coverage, inbox_html=inbox_html)
         return Response(render_shell(overview_html=overview), mimetype="text/html")

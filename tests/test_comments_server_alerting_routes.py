@@ -108,8 +108,8 @@ def test_feed_route_renders_empty_state(client) -> None:
     resp = client.get("/feed")
     assert resp.status_code == 200
     body = resp.data.decode()
-    assert "Alert feed" in body
-    assert "No alerts match" in body  # empty substrate → empty-state document
+    assert "Inbox feed" in body
+    assert "No items match" in body  # empty substrate → empty-state document
 
 
 def test_feed_route_echoes_filters(client) -> None:
@@ -269,3 +269,58 @@ def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path
     assert payload is not None
     assert "cannot transition" in payload["error"]
     assert len(list_entries(ticker="NU", db_path=db_path)) == 1
+
+
+# ----------------------------------------------------------------------------
+# GET / — the Home rail end-to-end (Inbox v2: chips + ranking + quick ✓/✕)
+# ----------------------------------------------------------------------------
+
+
+def test_home_rail_renders_ranked_inbox_with_chips_and_quick_actions(
+    client: FlaskClient, db_path: Path
+) -> None:
+    """GET / inlines the Inbox rail: category filter chips, the unread badge
+    hook, hover quick ✓/✕ on the pending draft, and the per-card ranking
+    tooltip — the route-level integration of the pieces the unit suites lock
+    individually."""
+    import sqlite3
+
+    # The cockpit half of / reads init_db-owned tables the alembic-built
+    # fixture lacks — minimal shapes, mirroring test_comments_server_dashboard.
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS tracked_companies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT DEFAULT 'bhanu',
+            ticker TEXT NOT NULL, name TEXT NOT NULL, list_type TEXT NOT NULL,
+            added_at TIMESTAMP, sec_validated INTEGER DEFAULT 0, ir_url TEXT,
+            instrument_type TEXT, filing_regime TEXT, fiscal_year_end TEXT,
+            fmp_data_saved INTEGER DEFAULT 0, fmp_data_upto TEXT, archived_at TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS transcripts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, document_id INTEGER,
+            ticker TEXT NOT NULL, call_date TIMESTAMP, fiscal_period_type TEXT,
+            period_end TIMESTAMP, source_url TEXT, has_qa_section INTEGER);
+        CREATE TABLE IF NOT EXISTS thesis_evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+            evaluated_at TIMESTAMP NOT NULL, overall_status TEXT NOT NULL,
+            rule_evaluations_json TEXT, run_id TEXT);
+        CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
+            ticker TEXT NOT NULL, endpoint TEXT NOT NULL, period TEXT NOT NULL,
+            status TEXT, http_code INTEGER, record_count INTEGER, earliest_date TEXT,
+            latest_date TEXT, file_path TEXT, file_bytes INTEGER, error_msg TEXT,
+            last_pulled TIMESTAMP);
+        INSERT INTO tracked_companies (ticker, name, list_type, instrument_type)
+            VALUES ('NU', 'Nu Holdings', 'portfolio', 'equity');
+        """
+    )
+    conn.commit()
+    conn.close()
+    action_id = _seed_pending_action(db_path, ticker="NU")
+
+    body = client.get("/").data.decode()
+    assert 'data-ix-badge="home"' in body  # unread count badge hook in the rail head
+    assert 'class="ix-cats"' in body  # category chips on the rail
+    assert 'data-cat="thesis"' in body  # the kpi_inflection alert's facet
+    assert f'data-action-id="{action_id}"' in body  # hover quick ✓/✕
+    assert 'title="ranked: severity' in body  # why-ranked tooltip
+    assert "ix-last-seen:" in body  # INBOX_JS shipped with the rail

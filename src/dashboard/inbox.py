@@ -1,17 +1,26 @@
-"""Unified inbox — ONE deduped stream over alerts, queued-action drafts,
-thesis-ledger entries, and open journal items (UX redesign PR3).
+"""Unified inbox — ONE deduped, categorized, RANKED stream over alerts,
+queued-action drafts, thesis-ledger entries, open journal items, and (while
+fresh) the cross-portfolio synthesis memo's sections (UX redesign PR3 +
+Inbox v2).
 
 The same model renders three ways:
 
   * the Home rail (``compact=True`` — top N, clamped bodies, no drawers),
   * the morning digest's "What changed" section (the since-yesterday slice),
-  * the alert feed page (alerts-only kind filter, full cards).
+  * the feed page (the full stream with filters).
 
 This replaces the old three-surface split where the same queued action
 appeared in the digest's "What's new", the digest's "Outstanding actions",
 AND the feed. Dedupe collapses near-identical bodies — the old digest showed
 one NU thesis update three times because consecutive ledger rows carried the
 same narrative.
+
+Inbox v2 on top: every item carries a **category facet** (News / Earnings /
+Press releases / Rating changes / Thesis changes / Drafts / Watch items /
+Synthesis) rendered as client-side filter chips (``show_filters=True``), and
+the stream is **transparently ranked** within each recency bucket — severity
+x recency decay x position weight x thesis relevance, with the factor
+breakdown as the kind-chip's "why ranked here" tooltip (see ``inbox_rank``).
 """
 
 from __future__ import annotations
@@ -20,7 +29,7 @@ import html
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
@@ -33,6 +42,12 @@ from alerts import (
     list_queued_actions_for_alert,
 )
 from dashboard._card import render_alert_card, render_queued_action
+from dashboard.inbox_rank import (
+    CATEGORY_LABELS,
+    CATEGORY_ORDER,
+    annotate_and_rank,
+    bucket_label,
+)
 from identity import DEFAULT_USER_ID
 from ui.time import stamp_html
 from user_state.ledger import list_recent_entries
@@ -45,20 +60,25 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "bear_append": "Bear-case append",
     "sizing_update": "Sizing change",
     "earnings_prep_append": "Earnings-prep note",
+    "advisor_memo": "Advisor memo",
 }
+
+_DEFAULT_KINDS: tuple[str, ...] = ("alert", "draft", "ledger", "note", "synthesis")
 
 # Cross-kind dedupe survivor order: when near-identical bodies land in the
 # stream under different kinds (the advisor's memory-everywhere write puts one
 # memo line in the ledger AND the journal), keep the kind that carries the
 # most context on its card.
-_KIND_RICHNESS: dict[str, int] = {"alert": 3, "draft": 2, "ledger": 1, "note": 0}
+_KIND_RICHNESS: dict[str, int] = {"alert": 4, "draft": 3, "synthesis": 2, "ledger": 1, "note": 0}
 
 
 @dataclass(frozen=True)
 class InboxItem:
-    """One stream entry. ``kind`` ∈ alert | draft | ledger | note. Alerts carry
-    their row + nested queued actions; standalone drafts (pending actions whose
-    alert fell outside the window) carry just the action."""
+    """One stream entry. ``kind`` ∈ alert | draft | ledger | note | synthesis.
+    Alerts carry their row + nested queued actions; standalone drafts (pending
+    actions whose alert fell outside the window) carry just the action.
+    ``category`` / ``score`` / ``score_why`` are assigned by
+    ``inbox_rank.annotate_and_rank`` (the filter chips + ranking tooltip)."""
 
     kind: str
     ticker: str | None
@@ -69,6 +89,9 @@ class InboxItem:
     alert: AlertRow | None = None
     actions: tuple[QueuedActionRow, ...] = field(default=())
     action: QueuedActionRow | None = None
+    category: str = ""
+    score: float = 0.0
+    score_why: str = ""
 
 
 def _norm_body(text: str) -> str:
@@ -105,23 +128,32 @@ def collect_inbox(
     ticker: str | None = None,
     status: str | None = None,
     trigger_kind: str | None = None,
-    kinds: tuple[str, ...] = ("alert", "draft", "ledger", "note"),
+    kinds: tuple[str, ...] = _DEFAULT_KINDS,
     limit: int = 80,
+    now: datetime | None = None,
+    position_weights: dict[str, float] | None = None,
 ) -> list[InboxItem]:
-    """Build the stream, newest first, deduped.
+    """Build the stream — deduped, categorized, ranked.
 
-    ``since`` windows the EVENT kinds — alerts and ledger entries (the digest
-    slice). Drafts and notes are STANDING items: a pending draft from ten days
-    ago is still waiting on you, so they ignore ``since`` and appear under the
-    "Earlier" bucket instead of vanishing. ``until`` upper-bounds everything
-    (a digest re-generated for a historical date stays honest). ``kinds``
-    filters the sources (the feed passes ``("alert",)``); ``status`` /
-    ``trigger_kind`` apply to alerts only. Best-effort: a missing DB or table
-    yields []. The returned list is capped at ``limit`` after the merge.
+    ``since`` windows the EVENT kinds — alerts, ledger entries, and synthesis
+    sections (the digest slice). Drafts and notes are STANDING items: a pending
+    draft from ten days ago is still waiting on you, so they ignore ``since``
+    and appear under the "Earlier" bucket instead of vanishing. ``until``
+    upper-bounds everything (a digest re-generated for a historical date stays
+    honest). ``kinds`` filters the sources; ``status`` / ``trigger_kind`` apply
+    to alerts only. ``now`` anchors recency decay + bucket order (defaults to
+    UTC now; the digest passes its render date so historical re-renders rank
+    as that morning would have). ``position_weights`` is ticker →
+    fraction-of-book for the ranking factor — ``None`` tries the live tracker
+    (TTL-cached, equal-weight when offline), ``{}`` forces equal weighting.
+    Best-effort: a missing DB or table yields []. The returned list is ordered
+    bucket-major (Today → Earlier), score-descending within each bucket, and
+    capped at ``limit``.
     """
     if db_path is None or not Path(db_path).exists():
         return []
 
+    now_dt = _as_naive_utc(now) if now is not None else datetime.now(UTC).replace(tzinfo=None)
     until_n = _as_naive_utc(until) if until is not None else None
 
     def _in_window(when: datetime, *, windowed: bool) -> bool:
@@ -243,12 +275,19 @@ def collect_inbox(
                 )
             )
 
+    if "synthesis" in kinds and ticker is None:
+        # Portfolio-scope insight: the cross-portfolio synthesis memo's
+        # structured sections, only while the lens output is fresh.
+        for s in _synthesis_items(db_path, now=now_dt):
+            if _in_window(s.when, windowed=True):
+                items.append(s)
+
     # Dedupe: near-identical bodies collapse ACROSS kinds, not just within
     # one — an advisor memo's ledger entry and its journal-observation echo
     # carry the same line under different decorations (see ``_fuzzy_norm``),
     # and the old per-kind key rendered both. The survivor is the RICHEST
-    # kind (alert > draft > ledger > note), newest on ties — so within one
-    # kind this still keeps the newest of texts that repeat across
+    # kind (alert > draft > synthesis > ledger > note), newest on ties — so
+    # within one kind this still keeps the newest of texts that repeat across
     # consecutive runs. Bodyless items (alert cards — their narrative lives
     # in evidence_json) pass through: alerts dedupe upstream on
     # signature_sha already.
@@ -264,24 +303,107 @@ def collect_inbox(
         if cur is None or _KIND_RICHNESS.get(it.kind, 0) > _KIND_RICHNESS.get(cur.kind, 0):
             richest[key] = it
     deduped = passthrough + list(richest.values())
-    deduped.sort(key=lambda it: it.when, reverse=True)
-    return deduped[:limit]
+    # Categorize + score + order (bucket-major, score-desc within buckets) —
+    # the Inbox v2 ranking layer (inbox_rank).
+    ranked = annotate_and_rank(
+        deduped, db_path=Path(db_path), now=now_dt, position_weights=position_weights
+    )
+    return ranked[:limit]
+
+
+# ----------------------------------------------------------------------------
+# Synthesis sections (cross_portfolio_synthesis lens → stream items)
+# ----------------------------------------------------------------------------
+
+_SYNTHESIS_FRESH_DAYS = 7  # the lens runs weekly; older memos are stale insight
+_SYNTHESIS_BODY_CAP = 600
+
+# Heading keyword → stream-item title, in memo order. "What I'd want to spend
+# more time on" stays in the full memo (Portfolio tab) — the stream carries the
+# three actionable sections.
+_SYNTHESIS_HEADINGS: tuple[tuple[str, str], ...] = (
+    ("most-look", "Most-look name"),
+    ("convergence", "Convergence clusters"),
+    ("allocation", "Allocation suggestions"),
+)
+
+
+def _parse_artifact_dt(raw: str) -> datetime | None:
+    try:
+        return _as_naive_utc(datetime.fromisoformat(raw))
+    except ValueError:
+        return None
+
+
+def _plain_text(md: str) -> str:
+    return " ".join(re.sub(r"[*_`#]+", "", md).split())[:_SYNTHESIS_BODY_CAP]
+
+
+def _parse_synthesis_sections(content_md: str) -> list[tuple[str, str]]:
+    """(title, plain-text body) for each recognized ``## `` section."""
+    raw_sections: list[tuple[str, list[str]]] = []
+    for line in content_md.splitlines():
+        if line.lstrip().startswith("## "):
+            raw_sections.append((line.lstrip()[3:].strip(), []))
+        elif raw_sections:
+            raw_sections[-1][1].append(line)
+    out: list[tuple[str, str]] = []
+    for heading, body_lines in raw_sections:
+        body = _plain_text("\n".join(body_lines))
+        if not body:
+            continue
+        low = heading.lower()
+        for key, title in _SYNTHESIS_HEADINGS:
+            if key in low:
+                out.append((title, body))
+                break
+    return out
+
+
+def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
+    """Stream items from the latest cached cross-portfolio synthesis memo,
+    only while it is fresh (≤ ``_SYNTHESIS_FRESH_DAYS`` old). Best-effort:
+    a missing table / artifact / unparsable timestamp yields []."""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        has_artifacts = (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
+            ).fetchone()
+            is not None
+        )
+        if not has_artifacts:
+            return []
+        row = conn.execute(
+            """
+            SELECT content_md, generated_at FROM llm_artifacts
+            WHERE purpose = 'lens:cross_portfolio_synthesis'
+              AND scope = 'portfolio'
+              AND superseded_by_id IS NULL
+            ORDER BY generated_at DESC LIMIT 1
+            """
+        ).fetchone()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    if row is None or not row[0]:
+        return []
+    when = _parse_artifact_dt(str(row[1] or ""))
+    if when is None or now - when > timedelta(days=_SYNTHESIS_FRESH_DAYS):
+        return []
+    return [
+        InboxItem(kind="synthesis", ticker=None, when=when, title=title, body=body)
+        for title, body in _parse_synthesis_sections(str(row[0]))
+    ]
 
 
 # ----------------------------------------------------------------------------
 # Render
 # ----------------------------------------------------------------------------
-
-
-def _bucket(when: datetime, now: datetime) -> str:
-    days = (now.date() - when.date()).days
-    if days <= 0:
-        return "Today"
-    if days == 1:
-        return "Yesterday"
-    if days <= 7:
-        return "This week"
-    return "Earlier"
 
 
 def render_inbox_stream(
@@ -290,30 +412,64 @@ def render_inbox_stream(
     db_path: Path | None = None,
     compact: bool = False,
     show_status_badge: bool = True,
+    show_filters: bool = False,
     now: datetime | None = None,
     surface: str | None = None,
     empty_text: str = "Nothing new — alerts, drafts, thesis changes, and watch items land here.",
 ) -> str:
-    """The stream HTML: recency-grouped cards. ``compact`` is the Home-rail
-    variant — clamped bodies, collapsed evidence, no nested action bodies,
-    hover ✓/✕ quick actions on approvable cards. ``surface`` names the page
-    ("home" | "digest" | "feed") for the unread tracking: INBOX_JS keys its
-    per-surface localStorage last-seen off the ``data-ix-surface`` attr."""
+    """The stream HTML: recency-grouped cards, score-ordered within each
+    bucket. ``compact`` is the Home-rail variant — clamped bodies, collapsed
+    evidence, no nested action bodies, hover ✓/✕ quick actions on approvable
+    cards. ``show_filters`` renders the category chips (client-side filtering
+    via INBOX_JS). ``surface`` names the page ("home" | "digest" | "feed") for
+    the unread tracking: INBOX_JS keys its per-surface localStorage last-seen
+    off the ``data-ix-surface`` attr."""
     if not items:
         return f'<div class="ix-empty">{_esc(empty_text)}</div>'
     now_dt = now or datetime.now(UTC).replace(tzinfo=None)
     out = StringIO()
     surface_attr = f' data-ix-surface="{_esc(surface)}"' if surface else ""
     out.write(f'<div class="ix-stream{" ix-compact" if compact else ""}"{surface_attr}>')
+    if show_filters:
+        _render_category_chips(out, items)
+    # Bucket labels come from inbox_rank.bucket_label — the SAME function the
+    # ranking sort keys on, so the render grouping can never disagree with
+    # the bucket-major order collect_inbox returns.
     current_bucket: str | None = None
     for it in items:
-        b = _bucket(it.when, now_dt)
+        b = bucket_label(it.when, now_dt)
         if b != current_bucket:
             out.write(f'<div class="ix-bucket">{_esc(b)}</div>')
             current_bucket = b
         _render_item(out, it, db_path=db_path, compact=compact, show_status=show_status_badge)
     out.write("</div>")
     return out.getvalue()
+
+
+def _render_category_chips(out: StringIO, items: list[InboxItem]) -> None:
+    """The category filter row: All + one chip per category present, with
+    counts. Filtering is client-side (INBOX_JS toggles ``.ix-hide``) — zero
+    round trips, scoped to this stream."""
+    counts: dict[str, int] = {}
+    for it in items:
+        if it.category:
+            counts[it.category] = counts.get(it.category, 0) + 1
+    if not counts:
+        return
+    out.write('<div class="ix-cats" role="toolbar" aria-label="Filter by category">')
+    out.write(
+        '<button type="button" class="ix-cat is-on" data-cat="*">'
+        f"All <span>{len(items)}</span></button>"
+    )
+    for slug in CATEGORY_ORDER:
+        n = counts.get(slug, 0)
+        if not n:
+            continue
+        out.write(
+            f'<button type="button" class="ix-cat" data-cat="{_esc(slug)}">'
+            f"{_esc(CATEGORY_LABELS[slug])} <span>{n}</span></button>"
+        )
+    out.write("</div>")
 
 
 def _render_item(
@@ -334,18 +490,26 @@ def _render_item(
             show_status_badge=show_status,
             brief_provenance=None,
             drawer_open=False,
+            category=it.category,
+            rank_why=it.score_why,
         )
         return
 
     when_attr = it.when.isoformat(timespec="seconds")
-    out.write(f'<div class="ix-card" data-kind="{_esc(it.kind)}" data-when="{when_attr}">')
+    cat_attr = f' data-cat="{_esc(it.category)}"' if it.category else ""
+    out.write(
+        f'<div class="ix-card" data-kind="{_esc(it.kind)}"{cat_attr} data-when="{when_attr}">'
+    )
     out.write('<div class="ix-head">')
     if it.ticker:
         # data-peek-ticker: hover mini-card in the shell (UX9); inert elsewhere.
         out.write(
             f'<span class="ix-ticker" data-peek-ticker="{_esc(it.ticker)}">{_esc(it.ticker)}</span>'
         )
-    out.write(f'<span class="ix-kind ix-kind-{_esc(it.kind)}">{_esc(_title_for(it))}</span>')
+    why_attr = f' title="ranked: {_esc(it.score_why)}"' if it.score_why else ""
+    out.write(
+        f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_title_for(it))}</span>'
+    )
     if show_status and it.status and it.status not in ("open",):
         out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
     quick_id = _quick_action_id(it) if compact else None
@@ -479,6 +643,18 @@ INBOX_CSS = """
   font-family: var(--mono, monospace); font-size: var(--fs-micro); font-weight: 700;
   line-height: 1.4; vertical-align: 2px; }
 .ix-badge[hidden] { display: none; }
+/* Category filter chips (Inbox v2) — client-side, scoped per stream. */
+.ix-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.ix-cat { font-size: var(--fs-micro); font-weight: 600; background: transparent;
+  color: var(--muted, #888); border: 1px solid var(--border, #2a2c30);
+  border-radius: var(--radius-full); padding: 2px 9px; cursor: pointer;
+  transition: color var(--transition), border-color var(--transition); }
+.ix-cat span { opacity: 0.7; margin-left: 2px; }
+.ix-cat.is-on { color: var(--accent, #7aa2f7); border-color: var(--accent, #7aa2f7); }
+.ix-hide { display: none !important; }
+/* "Why ranked here" — the factor breakdown rides the kind/trigger chip's title. */
+.ix-kind[title], .trigger-badge[title] { cursor: help; }
+.ix-kind-synthesis { color: var(--accent, #7aa2f7); }
 """.strip()
 
 # Behavior for the stream's two client-side features, embedded once per page
@@ -533,6 +709,23 @@ INBOX_JS = r"""
   }
   var streams = document.querySelectorAll('.ix-stream[data-ix-surface]');
   for (var i = 0; i < streams.length; i++) initStream(streams[i]);
+
+  // Category chips (Inbox v2): toggle .ix-hide on the stream's cards —
+  // client-side filtering, scoped to the chip's own stream.
+  document.addEventListener('click', function (ev) {
+    if (!ev.target || !ev.target.closest) return;
+    var chip = ev.target.closest('.ix-cat');
+    if (!chip) return;
+    var stream = chip.closest('.ix-stream');
+    if (!stream) return;
+    var cat = chip.getAttribute('data-cat');
+    var chips = stream.querySelectorAll('.ix-cat');
+    for (var i = 0; i < chips.length; i++) chips[i].classList.toggle('is-on', chips[i] === chip);
+    var cards = stream.querySelectorAll('.ix-card[data-cat], .alert-card[data-cat]');
+    for (var j = 0; j < cards.length; j++) {
+      cards[j].classList.toggle('ix-hide', cat !== '*' && cards[j].getAttribute('data-cat') !== cat);
+    }
+  });
 
   document.addEventListener('click', function (ev) {
     if (!ev.target || !ev.target.closest) return;
