@@ -1,0 +1,222 @@
+{
+  "purpose": "viewspec_compile",
+  "version": 1,
+  "_readme": "Golden cases for the NL->ViewSpec compiler eval (directives/llm_evals_plan.md §4). Every metric token and ticker below exists in the production DB (verified 2026-06-11) so live runs compile AND execute against real data. expected_spec must pass ViewSpec.from_dict — tests/test_llm_evals.py enforces it. periods_flexible=true means the question doesn't pin a display window, so periods differences don't fail the deterministic compare.",
+  "cases": [
+    {
+      "id": "vs-001-level-single",
+      "question": "NU revenue, last 12 quarters",
+      "context_tickers": ["NU"],
+      "expected_spec": {
+        "tickers": ["NU"],
+        "metrics": ["fin:revenue"],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "notes": "baseline: single ticker, single fin metric, pinned window"
+    },
+    {
+      "id": "vs-002-yoy-compare",
+      "question": "revenue growth for NU vs MELI, last 8 quarters",
+      "context_tickers": ["NU", "MELI"],
+      "expected_spec": {
+        "tickers": ["NU", "MELI"],
+        "metrics": ["fin:revenue"],
+        "transform": "yoy",
+        "cadence": "quarterly",
+        "periods": 8
+      },
+      "notes": "growth wording must map to yoy; two tickers"
+    },
+    {
+      "id": "vs-003-margin",
+      "question": "META operating income as a % of revenue, last 12 quarters",
+      "context_tickers": ["META"],
+      "expected_spec": {
+        "tickers": ["META"],
+        "metrics": ["fin:operating_income"],
+        "transform": "margin",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "notes": "'% of revenue' must map to the margin transform; a kpi-margin token pick is a judge-bound near-miss"
+    },
+    {
+      "id": "vs-004-seg-product",
+      "question": "AMZN AWS revenue trend, quarterly",
+      "context_tickers": ["AMZN"],
+      "expected_spec": {
+        "tickers": ["AMZN"],
+        "metrics": ["seg:product:AWS:revenue"],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "periods_flexible": true,
+      "notes": "segment-domain token copy; window unpinned"
+    },
+    {
+      "id": "vs-005-cagr-annual",
+      "question": "3-year revenue CAGR for GOOG, annual view",
+      "context_tickers": ["GOOG"],
+      "expected_spec": {
+        "tickers": ["GOOG"],
+        "metrics": ["fin:revenue"],
+        "transform": "cagr",
+        "cadence": "annual",
+        "periods": 8,
+        "cagr_years": 3
+      },
+      "periods_flexible": true,
+      "notes": "cagr transform + cagr_years from the question; GOOG is the tracked symbol (not GOOGL)"
+    },
+    {
+      "id": "vs-006-kpi",
+      "question": "NU ROE over the last 8 quarters",
+      "context_tickers": ["NU"],
+      "expected_spec": {
+        "tickers": ["NU"],
+        "metrics": ["kpi:ROE"],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 8
+      },
+      "notes": "kpi-domain token copy"
+    },
+    {
+      "id": "vs-007-annual-pinned",
+      "question": "compare gross profit for META and GOOG over the last 3 years, annual",
+      "context_tickers": ["META", "GOOG"],
+      "expected_spec": {
+        "tickers": ["META", "GOOG"],
+        "metrics": ["fin:gross_profit"],
+        "transform": "level",
+        "cadence": "annual",
+        "periods": 3
+      },
+      "notes": "annual cadence with a pinned 3-year window"
+    },
+    {
+      "id": "vs-008-yoy-single",
+      "question": "net income growth YoY for WIX, last 10 quarters",
+      "context_tickers": ["WIX"],
+      "expected_spec": {
+        "tickers": ["WIX"],
+        "metrics": ["fin:net_income"],
+        "transform": "yoy",
+        "cadence": "quarterly",
+        "periods": 10
+      },
+      "notes": "explicit YoY wording, non-default window"
+    },
+    {
+      "id": "vs-009-seg-geo",
+      "question": "AMZN revenue in the United States vs Germany, last 8 quarters",
+      "context_tickers": ["AMZN"],
+      "expected_spec": {
+        "tickers": ["AMZN"],
+        "metrics": [
+          "seg:geography:United States:revenue",
+          "seg:geography:Germany:revenue"
+        ],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 8
+      },
+      "notes": "two geography-segment tokens on one ticker"
+    },
+    {
+      "id": "vs-010-rnd-compare",
+      "question": "R&D spend for META vs GOOG, last 12 quarters",
+      "context_tickers": ["META", "GOOG"],
+      "expected_spec": {
+        "tickers": ["META", "GOOG"],
+        "metrics": ["fin:research_and_development"],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "notes": "colloquial 'R&D spend' must resolve to the vocabulary token"
+    },
+    {
+      "id": "vs-011-eps-annual",
+      "question": "AMZN diluted EPS, annual, last 5 years",
+      "context_tickers": ["AMZN"],
+      "expected_spec": {
+        "tickers": ["AMZN"],
+        "metrics": ["fin:eps_diluted"],
+        "transform": "level",
+        "cadence": "annual",
+        "periods": 5
+      },
+      "notes": "per-share metric, annual, pinned window"
+    },
+    {
+      "id": "vs-012-capex-yoy",
+      "question": "capex growth for AMZN and META, last 8 quarters",
+      "context_tickers": ["AMZN", "META"],
+      "expected_spec": {
+        "tickers": ["AMZN", "META"],
+        "metrics": ["fin:capital_expenditure"],
+        "transform": "yoy",
+        "cadence": "quarterly",
+        "periods": 8
+      },
+      "notes": "'capex' colloquialism + growth wording"
+    },
+    {
+      "id": "vs-013-ebitda-margin",
+      "question": "MELI EBITDA margin, last 12 quarters",
+      "context_tickers": ["MELI"],
+      "expected_spec": {
+        "tickers": ["MELI"],
+        "metrics": ["fin:ebitda"],
+        "transform": "margin",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "notes": "margin-of-EBITDA phrasing; kpi-margin token pick is a judge-bound near-miss"
+    },
+    {
+      "id": "vs-014-annual-default",
+      "question": "NU net income, annual",
+      "context_tickers": ["NU"],
+      "expected_spec": {
+        "tickers": ["NU"],
+        "metrics": ["fin:net_income"],
+        "transform": "level",
+        "cadence": "annual",
+        "periods": 8
+      },
+      "periods_flexible": true,
+      "notes": "annual default window (prompt says 8) — unpinned, so flexible"
+    },
+    {
+      "id": "vs-015-multi-metric",
+      "question": "revenue and net income for NU, last 12 quarters",
+      "context_tickers": ["NU"],
+      "expected_spec": {
+        "tickers": ["NU"],
+        "metrics": ["fin:revenue", "fin:net_income"],
+        "transform": "level",
+        "cadence": "quarterly",
+        "periods": 12
+      },
+      "notes": "two metrics on one ticker"
+    },
+    {
+      "id": "vs-016-default-tickers",
+      "question": "revenue growth, last 8 quarters",
+      "context_tickers": ["NU"],
+      "expected_spec": {
+        "tickers": ["NU"],
+        "metrics": ["fin:revenue"],
+        "transform": "yoy",
+        "cadence": "quarterly",
+        "periods": 8
+      },
+      "notes": "no ticker named — must fall back to the panel's context tickers"
+    }
+  ]
+}

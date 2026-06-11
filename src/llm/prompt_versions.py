@@ -60,6 +60,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # rubric is materially reworded so a re-grade of the same corpus is comparable
     # to the prior verdict instead of being silently confounded by the prompt.
     "backend_compare_judge": "v1",
+    # Eval-harness purposes (src/evals/, directives/llm_evals_plan.md): every
+    # eval run records prompt_version_for(purpose), so bumping here is what
+    # makes a prompt rewrite show up as a comparable A/B slice in
+    # summarize_by_prompt_version. Bump when nl_compile._build_prompt changes
+    # materially.
+    "viewspec_compile": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

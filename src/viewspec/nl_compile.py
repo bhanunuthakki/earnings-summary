@@ -61,12 +61,20 @@ _MAX_VOCAB_SEG = 80
 
 @dataclass(slots=True)
 class NLCompileResult:
-    """What one compile attempt produced — see the module docstring."""
+    """What one compile attempt produced — see the module docstring.
+
+    ``prompt_text`` / ``raw_response`` carry the LAST prompt sent (including
+    any repair feedback) and the model's raw output — transcript capture for
+    the eval harness (src/evals/) and for debugging failed compiles. ``None``
+    when no LLM call was made (empty query, budget skip).
+    """
 
     status: str  # "ok" | "budget_skipped" | "error"
     spec: ViewSpec | None = None
     message: str | None = None
     attempts: int = 0
+    prompt_text: str | None = None
+    raw_response: str | None = None
 
 
 def _strip_fences(raw: str) -> str:
@@ -227,6 +235,7 @@ def compile_nl_to_viewspec(
     attempts = 0
     last_error = ""
     raw = ""
+    ask = prompt
     while attempts < 2:
         attempts += 1
         ask = prompt
@@ -252,6 +261,7 @@ def compile_nl_to_viewspec(
                 status="error",
                 message="The compile call failed — use the builder.",
                 attempts=attempts,
+                prompt_text=ask,
             )
         try:
             spec = _parse_and_validate(raw)
@@ -265,12 +275,16 @@ def compile_nl_to_viewspec(
                 }
             )
             continue
-        return NLCompileResult(status="ok", spec=spec, attempts=attempts)
+        return NLCompileResult(
+            status="ok", spec=spec, attempts=attempts, prompt_text=ask, raw_response=raw
+        )
 
     return NLCompileResult(
         status="error",
         message=f"Could not compile that question ({last_error}) — use the builder.",
         attempts=attempts,
+        prompt_text=ask,
+        raw_response=raw,
     )
 
 
