@@ -53,8 +53,9 @@ _ACTIONS_BLOCK = """
   max-width: 760px; }
 .actions-help code { font-family: var(--mono); font-size: 0.93em; }
 .actions-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-/* Inputs: skinned by the shared control kit (ui/controls.py). */
-.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mono); }
+/* Inputs: skinned by the shared control kit (ui/controls.py). input.ir-ticker
+   outranks the kit's input[type] baseline so the mono face survives. */
+input.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mono); }
 .ir-quarters-label { font-size: var(--fs-caption); color: var(--fg-muted); display: inline-flex;
   align-items: center; gap: 6px; }
 .ir-quarters { width: 60px; }
@@ -195,10 +196,11 @@ _MAINTENANCE_BLOCK = """
   <pre id="maint-output" class="actions-output" hidden></pre>
 </section>
 <style>
-.maint-btn { padding: 6px 11px; font-size: 12px; font-weight: 600; color: #fff;
-  background: var(--link); border: none; border-radius: 4px; cursor: pointer; }
+.maint-btn { padding: 6px 11px; font-size: var(--fs-caption); font-weight: 600;
+  color: var(--accent-contrast); background: var(--accent); border: none;
+  border-radius: var(--radius); cursor: pointer; }
 .maint-btn:disabled { opacity: 0.5; cursor: progress; }
-.maint-sep { color: #ccc; margin: 0 4px; }
+.maint-sep { color: var(--muted); margin: 0 4px; }
 </style>
 <script>
 (function () {

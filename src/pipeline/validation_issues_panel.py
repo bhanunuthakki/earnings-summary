@@ -21,16 +21,17 @@ from html import escape
 from pathlib import Path
 
 _PANEL_STYLE = """<style>
-.vi-table { width:100%; border-collapse:collapse; font-size:13px; }
+.vi-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .vi-table th, .vi-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border,#2a2d31); text-align:left; }
+  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
 .vi-table td.num, .vi-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
-.vi-sev-halt { color:#f0a0a0; font-weight:600; }
-.vi-sev-warn { color:#f5c66a; }
-.vi-raw { font-family:var(--mono,monospace); font-size:11.5px; word-break:break-all; }
-.vi-note { margin-top:14px; padding:10px 13px; background:#1f2125;
-  border:1px solid var(--border,#2a2d31); border-radius:6px; font-size:12.5px; line-height:1.55; }
-.vi-note code { background:#2a2d31; padding:1px 5px; border-radius:3px; }
+.vi-sev-halt { color:var(--bad); font-weight:600; }
+.vi-sev-warn { color:var(--warn); }
+.vi-raw { font-family:var(--mono); font-size:var(--fs-caption); word-break:break-all; }
+.vi-note { margin-top:14px; padding:10px 13px; background:var(--paper);
+  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
+  line-height:1.55; }
+.vi-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
 </style>"""
 
 _DETAIL_LIMIT = 50

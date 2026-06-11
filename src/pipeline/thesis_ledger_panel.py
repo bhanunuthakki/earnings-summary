@@ -29,17 +29,20 @@ _KIND_LABELS: Mapping[str, str] = {
 }
 
 _PANEL_STYLE = """<style>
-.tl-table { width:100%; border-collapse:collapse; font-size:13px; }
+.tl-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .tl-table th, .tl-table td {
-  padding:7px 10px; border-bottom:1px solid var(--border,#2a2d31); text-align:left;
+  padding:7px 10px; border-bottom:1px solid var(--border); text-align:left;
   vertical-align:top; }
-.tl-table td.tk { font-weight:600; white-space:nowrap; }
-.tl-table td.when { color:var(--muted,#9aa0a6); white-space:nowrap; }
-.tl-pill { display:inline-block; padding:2px 9px; border-radius:10px; font-size:11px;
-  font-weight:600; white-space:nowrap; background:#1f2b3a; color:#8fb6e6; }
-.tl-pill.bear_append { background:#3a1f1f; color:#f0a0a0; }
-.tl-pill.thesis_update { background:#14361f; color:#6ee7a0; }
-.tl-body { font-size:12.5px; line-height:1.5; }
+.tl-table td.tk { font-weight:600; white-space:nowrap; font-family:var(--mono); }
+.tl-table td.when { color:var(--muted); white-space:nowrap; }
+.tl-pill { display:inline-block; padding:2px 9px; border-radius:var(--radius-full);
+  font-size:var(--fs-caption); font-weight:600; white-space:nowrap;
+  background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent); }
+.tl-pill.bear_append { background:color-mix(in srgb, var(--bad) 16%, transparent);
+  color:var(--bad); }
+.tl-pill.thesis_update { background:color-mix(in srgb, var(--ok) 16%, transparent);
+  color:var(--ok); }
+.tl-body { font-size:var(--fs-body); line-height:1.5; }
 </style>"""
 
 
@@ -82,7 +85,7 @@ def _kpi_strip(entries: list[ThesisLedgerEntryRow]) -> str:
         f'<div class="kpi-value">{tickers}</div>'
         '<div class="kpi-sub">with a ledger history</div></div>'
         '<div class="kpi-card"><div class="kpi-label">By kind</div>'
-        f'<div class="kpi-value" style="font-size:15px">{escape(top_kinds) or "—"}</div>'
+        f'<div class="kpi-value" style="font-size:var(--fs-section)">{escape(top_kinds) or "—"}</div>'
         '<div class="kpi-sub">most common</div></div>'
         "</div>"
     )

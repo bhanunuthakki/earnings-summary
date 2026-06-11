@@ -83,10 +83,10 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         '<div style="margin-top:12px; display:flex; gap:8px; align-items:center;">'
         '<input id="ts-add-ticker" placeholder="TICKER" style="width:110px; padding:6px 8px;" '
         'aria-label="Ticker symbol">'
-        '<label style="font-size:12.5px;"><input type="checkbox" id="ts-add-bypass"> '
+        '<label style="font-size:var(--fs-body);"><input type="checkbox" id="ts-add-bypass"> '
         "bypass budget</label>"
         '<button id="ts-add-btn" type="button" class="tcc-refresh">Save</button>'
-        '<span id="ts-add-note" class="muted" style="font-size:12px;"></span>'
+        '<span id="ts-add-note" class="muted" style="font-size:var(--fs-caption);"></span>'
         "</div>"
         "</section>" + _SCRIPT
     )

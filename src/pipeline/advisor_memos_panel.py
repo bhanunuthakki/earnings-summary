@@ -307,57 +307,63 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
 
 _PANEL_CSS = """<style>
 .am-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; margin-bottom: 18px; font-size: 12.5px; }
-.am-runbar-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--muted); }
-.am-btn { background: var(--accent); color: #0d1117; border: none; border-radius: 4px;
-  padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+.am-runbar-label { font-family: var(--mono); font-size: var(--fs-caption);
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.am-btn { background: var(--accent); color: var(--accent-contrast); border: none;
+  border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-caption);
+  font-weight: 600; cursor: pointer; }
 .am-btn[disabled] { opacity: 0.45; cursor: wait; }
-.am-note { font-size: 11.5px; }
+.am-note { font-size: var(--fs-caption); }
 .am-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: 4px; font-family: var(--mono);
-  font-size: 11px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
+  font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 .am-screen td { vertical-align: middle; }
 .am-cleared { color: var(--warn); font-weight: 600; }
-.am-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
-  font-weight: 600; white-space: nowrap; }
-.am-pill-cleared { background: #422006; color: var(--warn); }
-.am-pill-held { background: #14361f; color: #6ee7a0; }
-.am-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; margin-bottom: 10px; }
+.am-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
+.am-pill-cleared { background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn); }
+.am-pill-held { background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok); }
+.am-card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; }
 .am-card summary { cursor: pointer; list-style: none; display: flex; align-items: baseline;
   gap: 10px; flex-wrap: wrap; }
 .am-card summary::-webkit-details-marker { display: none; }
 .am-card summary::before { content: '\\25B8  '; color: var(--muted); font-family: var(--mono); }
 .am-card[open] summary::before { content: '\\25BE  '; }
-.am-kind-next_dollar { background: #1f2b3a; color: #8fb6e6; }
-.am-kind-swap_check { background: #2b2440; color: #c4b5fd; }
-.am-kind-socratic { background: #103039; color: #7dd3fc; }
+/* Memo kinds: ONE quiet treatment — the label text differentiates; color is
+   reserved for status/semantics (design_language.md §2). */
+.am-kind-next_dollar, .am-kind-swap_check, .am-kind-socratic {
+  background: transparent; color: var(--muted); border: 1px solid var(--border); }
 .am-scope { font-family: var(--mono); font-weight: 600; }
-.am-title { color: var(--fg-soft, #ccc); font-size: 12.5px; }
-.am-stamp { margin-left: auto; color: var(--muted); font-size: 11px; font-family: var(--mono); }
-.am-body { font-size: 13px; line-height: 1.6; margin-top: 10px; }
-.am-body h2, .am-body h3, .am-body h4 { color: #f5f5f0; margin: 12px 0 4px; }
-.am-body h3 { font-size: 14px; }
+.am-title { color: var(--fg-soft); font-size: var(--fs-body); }
+.am-stamp { margin-left: auto; color: var(--muted); font-size: var(--fs-caption);
+  font-family: var(--mono); }
+.am-body { font-size: var(--fs-body); line-height: 1.6; margin-top: 10px; }
+.am-body h2, .am-body h3, .am-body h4 { color: var(--fg); margin: 12px 0 4px; }
+.am-body h3 { font-size: var(--fs-section); }
 .am-body ul { padding-left: 20px; }
 .am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
 .am-runbar select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption);
   font-family: var(--mono); }
-.am-stance { background: #3b2f14; color: #fbbf24; text-transform: uppercase;
-  letter-spacing: 0.4px; font-size: 10.5px; cursor: help; }
+.am-stance { background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn); text-transform: uppercase;
+  letter-spacing: 0.4px; font-size: var(--fs-micro); cursor: help; }
 .soc-q { margin: 12px 0; }
-.soc-q label { display: block; font-size: 13px; color: var(--fg); margin-bottom: 6px; }
+.soc-q label { display: block; font-size: var(--fs-body); color: var(--fg); margin-bottom: 6px; }
 .soc-q textarea { width: 100%; resize: vertical; }
 .soc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 .soc-controls select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption); }
-.soc-status { font-size: 12px; }
-.soc-saved { color: var(--ok); font-size: 13px; }
-.am-track { font-size: 12.5px; margin: 0 0 12px; font-family: var(--mono); }
-.am-verdict-ok { background: #14361f; color: #6ee7a0; }
-.am-verdict-bad { background: #3a1f1f; color: #f0a0a0; }
-.am-verdict-warn { background: #422006; color: var(--warn); }
-.am-verdict-muted { background: #2a2c30; color: var(--muted); }
+.soc-status { font-size: var(--fs-caption); }
+.soc-saved { color: var(--ok); font-size: var(--fs-body); }
+.am-track { font-size: var(--fs-body); margin: 0 0 12px; font-family: var(--mono); }
+.am-verdict-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.am-verdict-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.am-verdict-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.am-verdict-muted { background: var(--paper); color: var(--muted); }
 </style>"""
 
 # Run-bar wiring: POST the action, stream the job's SSE frames into the log,
@@ -560,13 +566,13 @@ _SOCRATIC_JS = r"""
 _SOCRATIC_PAGE_CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; padding: 28px 24px 64px; font-family: var(--sans);
-  background: var(--bg); color: var(--fg); line-height: 1.55; font-size: 14px; }
+  background: var(--bg); color: var(--fg); line-height: 1.55; font-size: var(--fs-body); }
 main { max-width: 860px; margin: 0 auto; }
-h1 { font-size: 20px; margin: 0 0 4px; }
-h2 { font-size: 17px; margin: 0 0 6px; }
+h1 { font-size: var(--fs-display); margin: 0 0 4px; }
+h2 { font-size: var(--fs-title); margin: 0 0 6px; }
 .panel { background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 18px 20px; margin-bottom: 24px; }
-.panel .sub { color: var(--muted); font-size: 12px; margin: 0 0 14px; }
+  border-radius: var(--radius); padding: 18px 20px; margin-bottom: 24px; }
+.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 14px; }
 .muted { color: var(--muted); }
 """
 

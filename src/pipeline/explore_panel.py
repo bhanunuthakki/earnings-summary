@@ -66,8 +66,8 @@ _PANEL_STYLE = """<style>
 .vx-picker select { width:100%; font-size:var(--fs-caption); }
 .vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .vx-saved { display:inline-flex; align-items:center; border:1px solid var(--border);
-  border-radius:var(--radius); background:var(--paper, #1a1d23); overflow:hidden; }
-.vx-saved button { background:transparent; border:none; color:var(--fg-soft, var(--fg));
+  border-radius:var(--radius); background:var(--paper); overflow:hidden; }
+.vx-saved button { background:transparent; border:none; color:var(--fg-soft);
   font-size:var(--fs-caption); padding:4px 8px; cursor:pointer; transition:color var(--transition); }
 .vx-saved button[data-act="load"]:hover { color:var(--accent); }
 .vx-saved button[data-act="del"] { color:var(--muted); border-left:1px solid var(--border);
@@ -85,7 +85,7 @@ _PANEL_STYLE = """<style>
 .ask-hello { color:var(--muted); font-size:var(--fs-body); line-height:1.5; border:1px dashed var(--border);
   border-radius:var(--radius); padding:14px 16px; }
 .ask-chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.ask-chip { background:var(--paper, #1a1d23); border:1px solid var(--border); color:var(--fg-soft, var(--fg));
+.ask-chip { background:var(--paper); border:1px solid var(--border); color:var(--fg-soft);
   border-radius:var(--radius-full); padding:5px 12px; font-size:var(--fs-caption); cursor:pointer;
   transition:color var(--transition), border-color var(--transition); }
 .ask-chip:hover { border-color:var(--accent); color:var(--accent); }
@@ -106,7 +106,7 @@ _PANEL_STYLE = """<style>
 .ask-cite-row { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
 .ask-cite { font-size:var(--fs-caption); color:var(--accent); border:1px solid var(--border);
   border-radius:var(--radius-full); padding:2px 9px; text-decoration:none;
-  background:var(--paper, #1a1d23); transition:border-color var(--transition); }
+  background:var(--paper); transition:border-color var(--transition); }
 .ask-cite:hover { border-color:var(--accent); }
 .ask-prose a.ask-cite-mark { color:var(--accent); text-decoration:none; font-size:0.85em;
   vertical-align:super; }
@@ -115,12 +115,12 @@ _PANEL_STYLE = """<style>
 .ask-prose p { margin:0 0 8px; }
 .ask-prose ul { margin:4px 0 8px 18px; padding:0; }
 .ask-prose li { margin:2px 0; }
-.ask-prose code { font-family:var(--font-mono, monospace); font-size:0.93em;
+.ask-prose code { font-family:var(--mono); font-size:0.93em;
   background:rgba(255,255,255,0.05); padding:1px 4px; border-radius:3px; }
 .ask-prose pre.ask-code { background:rgba(0,0,0,0.3); border:1px solid var(--border);
   border-radius:var(--radius); padding:8px 10px; overflow-x:auto; font-size:var(--fs-caption);
-  font-family:var(--font-mono, monospace); margin:6px 0; }
-.ask-cmd { font-family:var(--font-mono, monospace); font-size:var(--fs-caption); white-space:pre-wrap;
+  font-family:var(--mono); margin:6px 0; }
+.ask-cmd { font-family:var(--mono); font-size:var(--fs-caption); white-space:pre-wrap;
   color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
 .ask-inputrow input { flex:1; padding:9px 13px; font-size:var(--fs-section); }

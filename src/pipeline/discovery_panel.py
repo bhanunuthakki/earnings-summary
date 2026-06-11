@@ -49,8 +49,8 @@ _PANEL_STYLE = """<style>
 .dq-table th { color:var(--muted); font-size:var(--fs-caption); text-transform:uppercase;
   letter-spacing:.06em; font-weight:600; }
 .dq-table tbody tr:hover td { background:rgba(255,255,255,0.025); }
-.dq-tick { font-family:var(--mono, monospace); font-weight:600; }
-.dq-score { font-family:var(--mono, monospace); }
+.dq-tick { font-family:var(--mono); font-weight:600; }
+.dq-score { font-family:var(--mono); }
 .dq-status { font-size:var(--fs-micro); font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
 .dq-status-new { color:var(--accent); }
 .dq-status-queued { color:var(--warn); }
@@ -58,19 +58,19 @@ _PANEL_STYLE = """<style>
 .dq-status-built { color:var(--ok); }
 .dq-status-dismissed { color:var(--muted); }
 .dq-ev { margin:0; padding-left:16px; }
-.dq-ev li { margin:1px 0; color:var(--fg-soft, var(--fg)); }
-.dq-ev .dq-src { font-family:var(--mono, monospace); font-size:var(--fs-micro); color:var(--muted);
+.dq-ev li { margin:1px 0; color:var(--fg-soft); }
+.dq-ev .dq-src { font-family:var(--mono); font-size:var(--fs-micro); color:var(--muted);
   margin-right:5px; }
 .dq-acts { display:flex; gap:5px; flex-wrap:wrap; }
-.dq-acts button { background:var(--paper, #1a1d23); color:var(--fg-soft, var(--fg));
+.dq-acts button { background:var(--paper); color:var(--fg-soft);
   border:1px solid var(--border); border-radius:var(--radius); padding:3px 9px; font-size:var(--fs-caption);
   cursor:pointer; transition:color var(--transition), border-color var(--transition); }
 .dq-acts button:hover { border-color:var(--accent); color:var(--accent); }
 .dq-acts button[data-act="build"]:hover { border-color:var(--warn); color:var(--warn); }
 .dq-empty { color:var(--muted); padding:18px 0; }
-.dq-log { background:var(--paper, #14161b); border:1px solid var(--border); border-radius:var(--radius);
+.dq-log { background:var(--paper); border:1px solid var(--border); border-radius:var(--radius);
   padding:8px 12px; margin-top:12px; max-height:280px; overflow-y:auto;
-  font-family:var(--mono, monospace); font-size:var(--fs-caption); color:var(--fg-soft, var(--fg));
+  font-family:var(--mono); font-size:var(--fs-caption); color:var(--fg-soft);
   white-space:pre-wrap; display:none; }
 .dq-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
 .dq-warnrow { color:var(--warn); font-size:var(--fs-caption); margin:6px 0; }
