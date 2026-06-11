@@ -56,11 +56,13 @@ MODEL_LADDER: dict[str, ModelCost] = {
     "claude-opus-4-7": ModelCost("claude-opus-4-7", CLAUDE, 5.0, 25.0),
     "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 5.0, 25.0),
     # Gemini consumer-subscription tiers (marginal $0; list price = reference).
+    # Current GA tiers: 3.5-flash (I/O 2026) + 3.1-pro-preview (Pro baseline;
+    # 3-pro-preview was discontinued, no 3.5 Pro exists). Both CLI-verified.
     "gemini-3.5-flash": ModelCost(
         "gemini-3.5-flash", GEMINI, 1.5, 9.0, subscription=True, rate_limited=True
     ),
-    "gemini-2.5-pro": ModelCost(
-        "gemini-2.5-pro", GEMINI, 1.25, 10.0, subscription=True, rate_limited=True
+    "gemini-3.1-pro-preview": ModelCost(
+        "gemini-3.1-pro-preview", GEMINI, 2.0, 12.0, subscription=True, rate_limited=True
     ),
 }
 

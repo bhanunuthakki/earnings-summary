@@ -97,7 +97,7 @@ def _judge_model_for(judge_backend: str) -> str | None:
     # The judge purpose is pinned to Opus on the Claude side; Gemini side resolves
     # to Pro. The driver lets backend_judge resolve it (judge_model is advisory
     # metadata here), so we just label it.
-    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-2.5-pro"
+    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-3.1-pro-preview"
 
 
 def _agreement(judged: list[tuple[str, JudgedPair]], judges: list[str]) -> float:

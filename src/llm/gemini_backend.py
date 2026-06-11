@@ -71,7 +71,9 @@ log = logging.getLogger(__name__)
 # structured calls that run on Haiku under the Claude backend. The tier
 # derivation in gemini_model_for keeps these two aligned with LLM_MODELS so
 # retuning a purpose's Claude tier automatically retunes its Gemini mirror.
-GEMINI_BACKEND_DEFAULT_MODEL = "gemini-2.5-pro"
+# Pro = gemini-3.1-pro-preview (current Pro baseline; gemini-3-pro-preview was
+# discontinued 2026-03 and there is no 3.5 Pro — only 3.5 Flash). CLI-verified.
+GEMINI_BACKEND_DEFAULT_MODEL = "gemini-3.1-pro-preview"
 GEMINI_BACKEND_FAST_MODEL = "gemini-3.5-flash"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
