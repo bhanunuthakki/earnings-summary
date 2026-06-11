@@ -21,9 +21,9 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Iterator
 
 MAX_CONCURRENT_DEFAULT = 3
 POLL_INTERVAL_SEC = 0.1
@@ -40,6 +40,10 @@ class Job:
     started_at: datetime
     lines: list[str] = field(default_factory=list)
     exit_code: int | None = None
+    # Working directory for the subprocess (PR6: the tracker-server job runs
+    # from the sibling checkout so it finds its own .env / data files). None →
+    # inherit this server's cwd, the historical behavior for every other job.
+    cwd: str | None = None
     _process: subprocess.Popen | None = field(default=None, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -57,6 +61,7 @@ class Job:
             text=True,
             encoding="utf-8",
             errors="replace",
+            cwd=self.cwd,
         )
         self._reader = threading.Thread(target=self._consume_output, daemon=True)
         self._reader.start()
@@ -97,7 +102,9 @@ class Job:
         code. Designed for `text/event-stream`.
         """
         sent = 0
-        yield _sse({"event": "start", "job_id": self.job_id, "ticker": self.ticker, "kind": self.kind})
+        yield _sse(
+            {"event": "start", "job_id": self.job_id, "ticker": self.ticker, "kind": self.kind}
+        )
         while True:
             with self._lock:
                 new_lines = self.lines[sent:]
@@ -133,11 +140,18 @@ class Registry:
         self._lock = threading.Lock()
 
     def start(
-        self, *, ticker: str, kind: str, argv: list[str], spawn: bool = True
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
     ) -> Job:
         """Reserve a slot and start the job. Raises RegistryConflict on collision.
 
         `spawn=False` skips subprocess.Popen for tests that mock the runner.
+        `cwd` sets the subprocess working directory (default: inherit).
         """
         ticker = ticker.upper()
         with self._lock:
@@ -165,6 +179,7 @@ class Registry:
                 kind=kind,
                 argv=argv,
                 started_at=datetime.now(UTC),
+                cwd=cwd,
             )
             self._jobs[job_id] = job
             self._slots[slot] = job_id

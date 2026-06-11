@@ -21,6 +21,8 @@ variables, and the chart's series colors come from ``ui.tokens.CHART_SERIES``.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -41,6 +43,7 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
 
 _TAX_LABELS: dict[str, str] = {
@@ -121,7 +124,8 @@ def render_portfolio_panel(
     live = fetch_live_portfolio(api_url=api_url)
     dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
     synthesis = render_panel_fragment(dash, "portfolio") or ""
-    return compose_portfolio_page(analytics, live, synthesis, window=window)
+    insights = render_portfolio_insights(db_path, live)
+    return compose_portfolio_page(analytics, live, synthesis, window=window, insights=insights)
 
 
 def compose_portfolio_page(
@@ -129,6 +133,7 @@ def compose_portfolio_page(
     live: LivePortfolio,
     synthesis: str,
     window: WindowSelection | None = None,
+    insights: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -137,7 +142,9 @@ def compose_portfolio_page(
     single offline note carries the start hint for the whole page (no duplicate
     per-section offline panels). Tracker up but ALL analytics endpoints failing
     (e.g. an older tracker build) → one quiet note instead of five dead
-    sections.
+    sections. ``insights`` (PR6) is the structured synthesis block — thesis
+    health rollup, sector exposure, next-dollar memo — rendered between the
+    live section and the cross-portfolio memo.
     """
     w = window or _DEFAULT_WINDOW
     parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
@@ -151,6 +158,8 @@ def compose_portfolio_page(
             f"{escape(first_error)}.</p></section>"
         )
     parts.append(render_live_portfolio_section(live))
+    if insights:
+        parts.append(insights)
     parts.append(synthesis)
     return "".join(parts)
 
@@ -171,6 +180,20 @@ _ANALYTICS_CSS = """<style>
 .pf-chart { width: 100%; height: auto; display: block; }
 .pf-policy { font-size: 12px; margin: 10px 0 0; }
 .pf-warn { color: var(--warn); }
+.pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0 18px; align-items: start; }
+.pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.pf-th-chip { font-family: var(--mono, monospace); font-size: 12px; text-decoration: none;
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; }
+.pf-th-warn { color: var(--warn); border-color: var(--warn); }
+.pf-th-bad { color: var(--bad); border-color: var(--bad); }
+.pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;
+  align-items: center; font-size: 12.5px; padding: 3px 0; }
+.pf-exp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-exp-bar { background: var(--paper, #1a1d23); border-radius: 4px; height: 9px; overflow: hidden; }
+.pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.pf-exp-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.pf-nd-excerpt { font-size: 13px; line-height: 1.55; }
 .pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 10px 32px; margin-top: 4px; }
 .pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
@@ -277,6 +300,70 @@ _WINDOW_JS = r"""
       document.getElementById('pf-end').value || null,
       backfillChecked()
     );
+  });
+})();
+"""
+
+# One-click tracker start (PR6). Plain string — braces are literal JS.
+_START_TRACKER_JS = """
+(function () {
+  var btn = document.getElementById('pf-start-tracker');
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  var msg = document.getElementById('pf-start-msg');
+  var log = document.getElementById('pf-start-log');
+  function reinject(target, html) {
+    target.innerHTML = html;
+    var scripts = target.querySelectorAll('script');
+    for (var i = 0; i < scripts.length; i++) {
+      var old = scripts[i];
+      var s = document.createElement('script');
+      if (old.src) s.src = old.src; else s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    }
+  }
+  function pollPanel(tries) {
+    if (tries <= 0) {
+      msg.textContent = 'tracker still not reachable — check the log below';
+      btn.disabled = false;
+      return;
+    }
+    fetch('/api/panel/portfolio').then(function (r) { return r.text(); }).then(function (html) {
+      if (html.indexOf('pf-live-offline') === -1) {
+        var card = document.getElementById('pf-live-offline');
+        var target = card ? card.closest('.cc-panel-body') : null;
+        if (target) { reinject(target, html); } else { location.reload(); }
+      } else {
+        setTimeout(function () { pollPanel(tries - 1); }, 3000);
+      }
+    }).catch(function () { setTimeout(function () { pollPanel(tries - 1); }, 3000); });
+  }
+  btn.addEventListener('click', function () {
+    btn.disabled = true;
+    msg.textContent = 'starting…';
+    fetch('/actions/start-tracker', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          msg.textContent = 'error: ' + (res.j.error || 'failed');
+          btn.disabled = false;
+          return;
+        }
+        msg.textContent = 'starting — waiting for :8000 to answer…';
+        log.style.display = 'block';
+        try {
+          var es = new EventSource(res.j.stream_url);
+          es.onmessage = function (ev) {
+            try {
+              var f = JSON.parse(ev.data);
+              if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
+              if (f.event === 'done') { es.close(); }
+            } catch (e) {}
+          };
+        } catch (e) {}
+        pollPanel(30);
+      }).catch(function () { msg.textContent = 'network error'; btn.disabled = false; });
   });
 })();
 """
@@ -720,24 +807,195 @@ def _offline_reason(error: str | None) -> str:
     return "The tracker API request failed on the last check."
 
 
+# ---------------------------------------------------------------------------
+# Portfolio insights (UX redesign PR6) — the structured side of "synthesis":
+# thesis-health rollup, sector exposure, and the latest next-dollar memo,
+# rendered between the live section and the cross-portfolio memo. Each panel
+# hides itself when its substrate is absent (hide-don't-stub).
+# ---------------------------------------------------------------------------
+
+
+def render_portfolio_insights(db_path: Path, live: LivePortfolio) -> str:
+    parts = [
+        _thesis_rollup_panel(db_path),
+        _exposure_panel(db_path, live),
+        _next_dollar_panel(db_path),
+    ]
+    body = "".join(p for p in parts if p)
+    return f'<div class="pf-insights">{body}</div>' if body else ""
+
+
+def _portfolio_tickers(conn: sqlite3.Connection) -> list[str]:
+    try:
+        rows = conn.execute(
+            "SELECT ticker FROM tracked_companies "
+            "WHERE list_type = 'portfolio' AND archived_at IS NULL ORDER BY ticker"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [str(r[0]).upper() for r in rows]
+
+
+def _thesis_rollup_panel(db_path: Path) -> str:
+    """One line of portfolio-level thesis health: OK / WARN / BREACH counts,
+    with the non-OK names as chips deep-linking into their Holding tab."""
+    if not db_path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return ""
+    try:
+        tickers = _portfolio_tickers(conn)
+        if not tickers:
+            return ""
+        latest: dict[str, str] = {}
+        try:
+            rows = conn.execute(
+                "SELECT ticker, overall_status FROM thesis_evaluations "
+                "ORDER BY ticker, evaluated_at DESC"
+            ).fetchall()
+        except sqlite3.Error:
+            return ""
+        for r in rows:
+            t = str(r[0]).upper()
+            if t in tickers and t not in latest and r[1]:
+                latest[t] = str(r[1]).lower()
+    finally:
+        conn.close()
+    if not latest:
+        return ""
+    tones = {"ok": "ok", "intact": "ok", "watch": "warn", "warn": "warn"}
+    flagged = [(t, s) for t, s in sorted(latest.items()) if tones.get(s, "bad") != "ok"]
+    ok_n = len(latest) - len(flagged)
+    chips = "".join(
+        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}">'
+        f"{escape(t)} · {escape(s)}</a>"
+        for t, s in flagged
+    )
+    summary = f"{ok_n} OK · {len(flagged)} flagged" if flagged else f"all {ok_n} OK"
+    return (
+        '<section class="panel"><h2>Thesis health</h2>'
+        f'<p class="sub">Latest evaluation across the portfolio — {escape(summary)}.</p>'
+        + (f'<div class="pf-th-chips">{chips}</div>' if chips else "")
+        + "</section>"
+    )
+
+
+def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
+    """Sector exposure across the book: position-weighted when the tracker is
+    up, name counts otherwise. Sectors come from the cached FMP profiles."""
+    if not db_path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return ""
+    try:
+        tickers = _portfolio_tickers(conn)
+    finally:
+        conn.close()
+    if not tickers:
+        return ""
+    repo_root = db_path.parent.parent
+    weights: dict[str, float] = {}
+    if live.available and live.positions:
+        total = sum(p.market_value or 0.0 for p in live.positions) or 0.0
+        if total > 0:
+            for p in live.positions:
+                if p.ticker:
+                    weights[p.ticker.upper()] = (p.market_value or 0.0) / total
+    by_sector: dict[str, float] = {}
+    for t in tickers:
+        profile = repo_root / "data" / "historical" / "fmp" / f"{t}_profile.json"
+        sector = "Unclassified"
+        if profile.exists():
+            try:
+                payload: object = json.loads(profile.read_text(encoding="utf-8"))
+                rec: object = payload[0] if isinstance(payload, list) and payload else payload
+                if isinstance(rec, dict):
+                    raw = rec.get("sector")  # pyright: ignore[reportUnknownMemberType]
+                    if isinstance(raw, str) and raw.strip():
+                        sector = raw.strip()
+            except (OSError, ValueError):
+                pass
+        by_sector[sector] = by_sector.get(sector, 0.0) + weights.get(t, 1.0 / len(tickers))
+    if not by_sector:
+        return ""
+    mode = "weighted by live position" if weights else "equal-weighted (tracker offline)"
+    top = sorted(by_sector.items(), key=lambda kv: kv[1], reverse=True)
+    rows = "".join(
+        '<div class="pf-exp-row">'
+        f'<span class="pf-exp-label">{escape(sector)}</span>'
+        f'<span class="pf-exp-bar"><span style="width:{share * 100:.0f}%"></span></span>'
+        f'<span class="pf-exp-pct">{share * 100:.0f}%</span>'
+        "</div>"
+        for sector, share in top
+    )
+    return (
+        '<section class="panel"><h2>Exposure</h2>'
+        f'<p class="sub">By FMP sector · {escape(mode)}.</p>'
+        f'<div class="pf-exp">{rows}</div></section>'
+    )
+
+
+def _next_dollar_panel(db_path: Path) -> str:
+    """The latest next-dollar advisor memo, excerpted, deep-linking into the
+    Memos tab for the full record."""
+    if not db_path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return ""
+    try:
+        row = conn.execute(
+            "SELECT title, body_md, created_at FROM advisor_memos "
+            "WHERE kind = 'next_dollar' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    finally:
+        conn.close()
+    if row is None:
+        return ""
+    title, body_md, created_at = str(row[0]), str(row[1]), str(row[2])
+    text = " ".join(body_md.replace("#", " ").replace("*", " ").split())
+    excerpt = text[:420] + ("…" if len(text) > 420 else "")
+    return (
+        '<section class="panel"><h2>Where the next dollar goes</h2>'
+        f'<p class="sub">{escape(title)} · {stamp_html(created_at, mode="date")} · '
+        '<a href="#advisor_memos">full memo →</a></p>'
+        f'<p class="pf-nd-excerpt">{escape(excerpt)}</p></section>'
+    )
+
+
 def render_live_portfolio_section(live: LivePortfolio) -> str:
     """The live-positions panel: total + taxable-bucket KPI strip, a positions
     table with % of portfolio, and the latest transactions. Renders an offline
     note (with the start hint) when the tracker is unreachable."""
     if not live.available:
-        # Humane offline card (PR1): the raw requests repr (pool/retry/memory
-        # address) is developer noise — it moves into the collapsed details.
+        # Humane offline card (PR1) + one-click start (PR6): the button runs
+        # /actions/start-tracker (the tracker's own venv, from its checkout)
+        # and the panel re-fetches itself until :8000 answers. The raw
+        # requests repr stays in the collapsed details.
         return (
-            '<section class="panel"><h2>Live portfolio</h2>'
+            '<section class="panel" id="pf-live-offline"><h2>Live portfolio</h2>'
             '<p class="sub">The portfolio tracker isn\'t running, so live positions, '
             "% of book, and the taxable breakdown aren't shown.</p>"
             f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
-            '<details class="offline-tech"><summary>How to start it · technical detail</summary>'
+            '<p><button type="button" class="pf-btn pf-btn-apply" id="pf-start-tracker">'
+            "▶ Start tracker</button> "
+            '<span class="muted" id="pf-start-msg"></span></p>'
+            '<pre id="pf-start-log" class="cli-hint" '
+            'style="display:none; max-height:180px; overflow:auto"></pre>'
+            '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
             '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '
             "uvicorn portfolio_tracker.api.main:app --port 8000</pre>"
             f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
             f"{f' — {escape(live.error)}' if live.error else ''}</p>"
             "</details>"
+            f"<script>{_START_TRACKER_JS}</script>"
             "</section>"
         )
     if not live.positions:
