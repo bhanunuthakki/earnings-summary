@@ -63,6 +63,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from dashboard.inbox import INBOX_CSS, INBOX_JS
+from dashboard.upcoming import UPCOMING_CSS
 from pipeline.ask_dock import render_ask_dock
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
@@ -175,14 +176,17 @@ def render_overview_panel(
     rows_by_list: dict[str, list[CockpitRow]],
     coverage: dict[str, dict[str, int]] | None,
     inbox_html: str | None = None,
+    upcoming_html: str | None = None,
 ) -> str:
     """The inlined Home tab: the Research cockpit (the landing answer to
     "which holding needs my attention today?") with the tier-coverage strip
     below it, and — when provided — the unified Inbox in a right-hand rail
-    (UX redesign PR3: what changed, beside what you hold). Reuses the existing
-    public seams so there is no second code path for any of this content.
-    (The Ask dock is no longer panel content — it renders once in the shell
-    chrome, see ``render_shell``, so it persists across tab switches.)"""
+    (UX redesign PR3: what changed, beside what you hold), topped by the
+    compact upcoming-earnings strip (``upcoming_html``, the surviving piece
+    of the retired /digest page). Reuses the existing public seams so there
+    is no second code path for any of this content. (The Ask dock is no
+    longer panel content — it renders once in the shell chrome, see
+    ``render_shell``, so it persists across tab switches.)"""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
     from pipeline.research_cockpit import render_research_cockpit
 
@@ -194,11 +198,10 @@ def render_overview_panel(
     # localStorage mark and wires the cards' hover ✓/✕ quick actions.
     rail = (
         '<aside class="cc-home-rail">'
+        f"{upcoming_html or ''}"
         '<div class="cc-home-rail-head">'
         '<h2>Inbox<span class="ix-badge" data-ix-badge="home" hidden></span></h2>'
-        '<span class="cc-home-rail-links">'
-        '<a href="/digest">digest</a> · <a href="/feed">full feed</a>'
-        "</span></div>"
+        '<span class="cc-home-rail-links"><a href="/feed">full feed</a></span></div>'
         f"{inbox_html}"
         f"<script>{INBOX_JS}</script>"
         "</aside>"
@@ -231,7 +234,6 @@ def render_shell(
             f'<div class="cc-topbar"><div class="cc-brand">Command Center</div>'
             f"{_render_section_nav(themes)}"
             f'<nav class="cc-links">'
-            f'<a href="/digest">Morning digest</a>'
             f'<a href="/feed">Alert feed</a>'
             f"</nav>"
             f'<button class="cc-palette-btn" id="cc-palette-open" type="button" '
@@ -736,7 +738,7 @@ td.ticker a:hover { color: var(--link); }
 .rail-note-meta code { font-size: var(--fs-micro); }
 
 /* Alert cards + evidence drawer inside the rail — same class vocabulary the
-   digest/feed render (src/dashboard/_card.py + evidence_drawer.py); rules
+   feed renders (src/dashboard/_card.py + evidence_drawer.py); rules
    lifted from src/dashboard/_styles.py and compacted for the 360px column.
    Palette vars are shared via ui.tokens, so only layout is duplicated. */
 .alert-card { background: var(--surface); border-radius: var(--radius);
@@ -937,6 +939,8 @@ td.ticker a:hover { color: var(--link); }
 """
     + VIEWER_CONTENT_CSS
     + INBOX_CSS
+    + "\n"
+    + UPCOMING_CSS
 ).strip()
 
 
@@ -1255,7 +1259,6 @@ SHELL_JS = r"""
       });
     });
     items.push({ label: 'Settings & maintenance', hint: 'drawer', run: openDrawer });
-    items.push({ label: 'Morning digest', hint: 'page', run: goUrl('/digest') });
     items.push({ label: 'Alert feed', hint: 'page', run: goUrl('/feed') });
     items.push({ label: 'Export CIO workbook', hint: 'download', run: goUrl('/export/cio') });
     return items;

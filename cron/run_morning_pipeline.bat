@@ -1,24 +1,26 @@
 @echo off
 REM Daily 04:00 — the morning pipeline. One orchestrated run that chains:
-REM   1. run_triggers.py   — fan registered triggers across the portfolio +
+REM   1. fetch_news.py     — ingest fresh per-ticker news for the
+REM                          material_news trigger to classify.
+REM   2. run_triggers.py   — fan registered triggers across the portfolio +
 REM                          watchlist + evaluation list, persisting fresh
 REM                          alerts + drafted actions into data/portfolio.db.
-REM   2. build_morning_digest.py — rebuild today's digest HTML from those
-REM                          persisted alerts (data/dashboard/morning/).
-REM   3. build_alert_feed.py     — rebuild the chronological feed HTML
+REM   3. build_alert_feed.py — rebuild the chronological feed HTML
 REM                          (data/dashboard/feed.html).
+REM   4. run_validation_engine.py --gate — population-level data checks.
 REM
-REM Supersedes the standalone run_triggers cron (PR #172): the digest + feed
-REM are now rebuilt in the SAME run that fires the alerts, so a 07:00 read sees
-REM fresh HTML instead of yesterday's. Running at 04:00 leaves ample headroom
-REM for the trigger stage (cost-capped at $10) to finish before any morning
-REM read.
+REM Supersedes the standalone run_triggers cron (PR #172): the feed is rebuilt
+REM in the SAME run that fires the alerts, so a 07:00 read sees fresh HTML
+REM instead of yesterday's. Running at 04:00 leaves ample headroom for the
+REM trigger stage (cost-capped at $10) to finish before any morning read.
+REM (The morning-digest render stage retired with the /digest page 2026-06-11;
+REM the live Home rail serves that view straight from the DB.)
 REM
 REM Resilience: the orchestrator never aborts early. If the trigger stage fails
-REM or times out, the digest + feed still rebuild over whatever alerts already
-REM exist (they are read-only renders). The process exit code is the count of
-REM failed stages, so a non-zero log line flags partial failure for monitoring
-REM while still producing the best-effort digest.
+REM or times out, the feed still rebuilds over whatever alerts already exist
+REM (it is a read-only render). The process exit code is the count of failed
+REM stages, so a non-zero log line flags partial failure for monitoring while
+REM still producing the best-effort feed.
 
 setlocal
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary

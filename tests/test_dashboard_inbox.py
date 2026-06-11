@@ -4,13 +4,13 @@ Inbox v2 coverage: cross-kind fuzzy dedupe (an advisor memo's ledger entry vs
 its journal-observation echo), the Home rail's hover ✓/✕ quick actions, and
 the unread-tracking markup (``data-when`` / ``data-ix-surface`` / INBOX_JS).
 JS behavior is locked via rendered-markup assertions, per repo style. The
-substrate is built via alembic exactly like tests/test_dashboard_digest.py.
+substrate is built via alembic exactly like tests/test_dashboard_feed.py.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,7 +18,7 @@ from alembic.config import Config
 
 from alembic import command
 from alerts import apply_action, fire_alert, queue_action
-from dashboard.inbox import INBOX_JS, collect_inbox, render_inbox_stream
+from dashboard.inbox import INBOX_JS, InboxItem, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from user_state.ledger import append_entry
 from user_state.notes import create_note
@@ -160,7 +160,7 @@ def test_quick_buttons_render_on_standalone_draft_cards(db_path: Path) -> None:
 def test_quick_buttons_absent_off_the_rail_and_for_settled_actions(db_path: Path) -> None:
     action_id = _seed_alert_with_pending_action(db_path)
     items = collect_inbox(db_path)
-    # Full (digest/feed) cards keep the existing <a href="/approve"> links.
+    # Full (feed) cards keep the existing <a href="/approve"> links.
     full = render_inbox_stream(items, db_path=db_path)
     assert 'class="ix-act' not in full
     assert f'href="/approve?action_id={action_id}"' in full
@@ -168,6 +168,42 @@ def test_quick_buttons_absent_off_the_rail_and_for_settled_actions(db_path: Path
     apply_action(action_id, db_path=db_path)
     compact = render_inbox_stream(collect_inbox(db_path), db_path=db_path, compact=True)
     assert 'class="ix-act' not in compact
+
+
+# ----------------------------------------------------------------------------
+# Flat stream (2026-06-11): no recency-bucket headers
+# ----------------------------------------------------------------------------
+
+
+def test_stream_renders_flat_without_bucket_headers() -> None:
+    """Owner feedback 2026-06-11: Today/Yesterday/This week headers wasted
+    screen — the per-card relative stamp (top right) is enough. The stream is
+    one flat list."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    items = [
+        InboxItem(kind="ledger", ticker="NU", when=now, title="Thesis update", body="today"),
+        InboxItem(
+            kind="ledger",
+            ticker="NU",
+            when=now - timedelta(days=3),
+            title="Thesis update",
+            body="three days ago",
+        ),
+        InboxItem(
+            kind="ledger",
+            ticker="NU",
+            when=now - timedelta(days=20),
+            title="Thesis update",
+            body="long ago",
+        ),
+    ]
+    html = render_inbox_stream(items, db_path=None)
+    assert "ix-bucket" not in html
+    for label in ("Today", "Yesterday", "This week", "Earlier"):
+        assert f">{label}<" not in html
+    # All three cards still render, with their stamps.
+    assert html.count('class="ix-card"') == 3
+    assert html.count('data-when="') == 3
 
 
 # ----------------------------------------------------------------------------

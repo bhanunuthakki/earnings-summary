@@ -3,23 +3,22 @@ queued-action drafts, thesis-ledger entries, open journal items, and (while
 fresh) the cross-portfolio synthesis memo's sections (UX redesign PR3 +
 Inbox v2).
 
-The same model renders three ways:
+The same model renders two ways:
 
   * the Home rail (``compact=True`` — top N, clamped bodies, no drawers),
-  * the morning digest's "What changed" section (the since-yesterday slice),
   * the feed page (the full stream with filters).
 
-This replaces the old three-surface split where the same queued action
-appeared in the digest's "What's new", the digest's "Outstanding actions",
-AND the feed. Dedupe collapses near-identical bodies — the old digest showed
-one NU thesis update three times because consecutive ledger rows carried the
-same narrative.
+(The standalone morning-digest page was the third surface; it retired
+2026-06-11 — the Home rail IS the morning view now.) Dedupe collapses
+near-identical bodies — the old digest showed one NU thesis update three
+times because consecutive ledger rows carried the same narrative.
 
 Inbox v2 on top: every item carries a **category facet** (News / Earnings /
 Press releases / Rating changes / Thesis changes / Drafts / Watch items /
 Synthesis) rendered as client-side filter chips (``show_filters=True``), and
-the stream is **transparently ranked** within each recency bucket — severity
-x recency decay x position weight x thesis relevance, with the factor
+the stream is **transparently ranked** as one flat list — severity x recency
+decay x position weight x thesis relevance, score-descending (newest first
+on ties; each card's relative stamp carries the "when") — with the factor
 breakdown as the kind-chip's "why ranked here" tooltip (see ``inbox_rank``).
 """
 
@@ -43,10 +42,10 @@ from alerts import (
 )
 from dashboard._card import render_alert_card, render_queued_action
 from dashboard.inbox_rank import (
+    ADVISOR_MEMO_TITLE,
     CATEGORY_LABELS,
     CATEGORY_ORDER,
     annotate_and_rank,
-    bucket_label,
 )
 from identity import DEFAULT_USER_ID
 from ui.time import stamp_html
@@ -60,7 +59,9 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "bear_append": "Bear-case append",
     "sizing_update": "Sizing change",
     "earnings_prep_append": "Earnings-prep note",
-    "advisor_memo": "Advisor memo",
+    # The shared constant keeps the label in lockstep with inbox_rank's
+    # advisor-memo → synthesis-category refinement.
+    "advisor_memo": ADVISOR_MEMO_TITLE,
 }
 
 _DEFAULT_KINDS: tuple[str, ...] = ("alert", "draft", "ledger", "note", "synthesis")
@@ -136,19 +137,18 @@ def collect_inbox(
     """Build the stream — deduped, categorized, ranked.
 
     ``since`` windows the EVENT kinds — alerts, ledger entries, and synthesis
-    sections (the digest slice). Drafts and notes are STANDING items: a pending
-    draft from ten days ago is still waiting on you, so they ignore ``since``
-    and appear under the "Earlier" bucket instead of vanishing. ``until``
-    upper-bounds everything (a digest re-generated for a historical date stays
+    sections. Drafts and notes are STANDING items: a pending draft from ten
+    days ago is still waiting on you, so they ignore ``since`` and stay in
+    the stream (sinking on recency decay) instead of vanishing. ``until``
+    upper-bounds everything (a stream re-built for a historical date stays
     honest). ``kinds`` filters the sources; ``status`` / ``trigger_kind`` apply
-    to alerts only. ``now`` anchors recency decay + bucket order (defaults to
-    UTC now; the digest passes its render date so historical re-renders rank
-    as that morning would have). ``position_weights`` is ticker →
-    fraction-of-book for the ranking factor — ``None`` tries the live tracker
-    (TTL-cached, equal-weight when offline), ``{}`` forces equal weighting.
-    Best-effort: a missing DB or table yields []. The returned list is ordered
-    bucket-major (Today → Earlier), score-descending within each bucket, and
-    capped at ``limit``.
+    to alerts only. ``now`` anchors recency decay (defaults to UTC now; pass a
+    historical date to rank as that morning would have). ``position_weights``
+    is ticker → fraction-of-book for the ranking factor — ``None`` tries the
+    live tracker (TTL-cached, equal-weight when offline), ``{}`` forces equal
+    weighting. Best-effort: a missing DB or table yields []. The returned list
+    is ordered score-descending (newest first on ties) and capped at
+    ``limit``.
     """
     if db_path is None or not Path(db_path).exists():
         return []
@@ -303,8 +303,8 @@ def collect_inbox(
         if cur is None or _KIND_RICHNESS.get(it.kind, 0) > _KIND_RICHNESS.get(cur.kind, 0):
             richest[key] = it
     deduped = passthrough + list(richest.values())
-    # Categorize + score + order (bucket-major, score-desc within buckets) —
-    # the Inbox v2 ranking layer (inbox_rank).
+    # Categorize + score + order (flat score-desc, newest-first ties) — the
+    # Inbox v2 ranking layer (inbox_rank).
     ranked = annotate_and_rank(
         deduped, db_path=Path(db_path), now=now_dt, position_weights=position_weights
     )
@@ -413,34 +413,25 @@ def render_inbox_stream(
     compact: bool = False,
     show_status_badge: bool = True,
     show_filters: bool = False,
-    now: datetime | None = None,
     surface: str | None = None,
     empty_text: str = "Nothing new — alerts, drafts, thesis changes, and watch items land here.",
 ) -> str:
-    """The stream HTML: recency-grouped cards, score-ordered within each
-    bucket. ``compact`` is the Home-rail variant — clamped bodies, collapsed
-    evidence, no nested action bodies, hover ✓/✕ quick actions on approvable
-    cards. ``show_filters`` renders the category chips (client-side filtering
-    via INBOX_JS). ``surface`` names the page ("home" | "digest" | "feed") for
+    """The stream HTML: ONE flat list in the score order ``collect_inbox``
+    returns — no recency-bucket headers; each card's top-right relative stamp
+    carries the "when". ``compact`` is the Home-rail variant — clamped bodies,
+    collapsed evidence, no nested action bodies, hover ✓/✕ quick actions on
+    approvable cards. ``show_filters`` renders the category chips (client-side
+    filtering via INBOX_JS). ``surface`` names the page ("home" | "feed") for
     the unread tracking: INBOX_JS keys its per-surface localStorage last-seen
     off the ``data-ix-surface`` attr."""
     if not items:
         return f'<div class="ix-empty">{_esc(empty_text)}</div>'
-    now_dt = now or datetime.now(UTC).replace(tzinfo=None)
     out = StringIO()
     surface_attr = f' data-ix-surface="{_esc(surface)}"' if surface else ""
     out.write(f'<div class="ix-stream{" ix-compact" if compact else ""}"{surface_attr}>')
     if show_filters:
         _render_category_chips(out, items)
-    # Bucket labels come from inbox_rank.bucket_label — the SAME function the
-    # ranking sort keys on, so the render grouping can never disagree with
-    # the bucket-major order collect_inbox returns.
-    current_bucket: str | None = None
     for it in items:
-        b = bucket_label(it.when, now_dt)
-        if b != current_bucket:
-            out.write(f'<div class="ix-bucket">{_esc(b)}</div>')
-            current_bucket = b
         _render_item(out, it, db_path=db_path, compact=compact, show_status=show_status_badge)
     out.write("</div>")
     return out.getvalue()
@@ -540,7 +531,7 @@ def _render_item(
         # In the shell, "review" peeks the full alert card (evidence drawer +
         # approve/dismiss) in place via data-peek-url (UX9); the /feed href
         # stays the real destination for middle-click and non-shell surfaces
-        # (the digest has no peek runtime — the attribute is inert there).
+        # (no peek runtime there — the attribute is inert).
         alert_id = (
             it.alert.id
             if it.alert is not None
@@ -589,9 +580,6 @@ def _esc(text: str) -> str:
 
 INBOX_CSS = """
 .ix-stream { display: flex; flex-direction: column; gap: var(--sp-2); }
-.ix-bucket { color: var(--muted, #888); font-size: var(--fs-micro); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.06em; margin: 10px 0 2px; }
-.ix-bucket:first-child { margin-top: 0; }
 .ix-card { border-radius: var(--radius);
   background: var(--surface, #16171a); padding: 9px 12px; }
 .ix-head { display: flex; align-items: baseline; gap: 8px; }
@@ -658,8 +646,8 @@ INBOX_CSS = """
 """.strip()
 
 # Behavior for the stream's two client-side features, embedded once per page
-# that renders an inbox (shell Overview, /digest, /feed). Plain string — its
-# braces must survive f-string assembly untouched.
+# that renders an inbox (shell Overview, /feed). Plain string — its braces
+# must survive f-string assembly untouched.
 #
 # 1. UNREAD — per-surface "since you last looked": cards carry ``data-when``
 #    (naive-UTC seconds, lexicographically comparable); anything newer than

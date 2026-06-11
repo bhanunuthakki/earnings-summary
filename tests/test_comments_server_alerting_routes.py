@@ -1,12 +1,13 @@
 """Route tests for the Personal-CIO alerting surfaces wired into the command
-center: ``GET /digest``, ``/feed``, ``/alerts``, and the queued-action cards'
-one-click ``GET /approve``.
+center: ``GET /feed``, ``/alerts``, the retired ``/digest`` redirect, and the
+queued-action cards' one-click ``GET /approve``.
 
-Before this, the morning-digest / alert-feed renderers were reachable only as
-static files (``data/dashboard/...``) — a user living in the :7421 app never saw
-their alerts. These tests prove the live routes exist and serve the renderers.
-The substrate is built via alembic (stamp the pre-CIO head, upgrade to head),
-mirroring tests/test_dashboard_feed.py.
+Before this, the alert-feed renderer was reachable only as a static file
+(``data/dashboard/...``) — a user living in the :7421 app never saw their
+alerts. These tests prove the live routes exist and serve the renderers. (The
+standalone /digest page retired 2026-06-11; its route stays as a redirect to
+the Home rail.) The substrate is built via alembic (stamp the pre-CIO head,
+upgrade to head), mirroring tests/test_dashboard_feed.py.
 """
 
 from __future__ import annotations
@@ -91,17 +92,14 @@ def _seed_pending_action(
     return qa.id
 
 
-def test_digest_route_renders_html(client) -> None:
-    resp = client.get("/digest")
-    assert resp.status_code == 200
-    assert resp.mimetype == "text/html"
-    assert b"<html" in resp.data.lower()
-
-
-def test_digest_route_tolerates_bad_date(client) -> None:
-    # A malformed ?date= falls back to today rather than 500-ing.
-    resp = client.get("/digest?date=not-a-date")
-    assert resp.status_code == 200
+def test_digest_route_redirects_to_home(client) -> None:
+    """The standalone digest retired (2026-06-11): /digest 302s to the Home
+    rail — old bookmarks (with or without query args) land on the shell,
+    never a 404."""
+    for url in ("/digest", "/digest?date=2026-06-10", "/digest?date=not-a-date"):
+        resp = client.get(url, follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["Location"].endswith("/#home")
 
 
 def test_feed_route_renders_empty_state(client) -> None:
@@ -137,11 +135,11 @@ def test_approve_route_applies_action_and_writes_ledger(client: FlaskClient, db_
     action_id = _seed_pending_action(db_path, ticker="NU")
     resp = client.get(
         f"/approve?action_id={action_id}",
-        headers={"Referer": "http://127.0.0.1:7421/digest?date=2026-06-10"},
+        headers={"Referer": "http://127.0.0.1:7421/feed?ticker=NU"},
     )
     assert resp.status_code == 303
     # Bounced back to the surface the click came from — path + query only.
-    assert resp.headers["Location"].endswith("/digest?date=2026-06-10")
+    assert resp.headers["Location"].endswith("/feed?ticker=NU")
     assert not resp.headers["Location"].startswith("http")
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_APPLIED
     entries = list_entries(ticker="NU", db_path=db_path)
@@ -206,7 +204,7 @@ def test_approve_route_rejects_cross_site_click(client: FlaskClient, db_path: Pa
 
 
 def test_feed_renders_absolute_approve_links(client: FlaskClient, db_path: Path) -> None:
-    # The card renders on /, /digest, AND /feed; a relative "approve?..." href
+    # The card renders on / AND /feed; a relative "approve?..." href
     # resolved to a different (dead) path per surface. It must be absolute.
     action_id = _seed_pending_action(db_path)
     html = client.get("/feed").data.decode()

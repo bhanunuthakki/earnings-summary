@@ -191,20 +191,6 @@ button { transition: color var(--transition), border-color var(--transition),
   color: var(--fg-soft); border: 1px solid var(--border-2);
   border-radius: 3px; padding: 0 5px; margin-right: 6px;
 }
-/* P4.4 — per-ticker earnings-prep notes (the standalone digest panel folded
-   into the unified inbox stream in PR3; these rules still serve prep-notes). */
-.open-items-list, .prep-notes { list-style: none; margin: 0; padding: 0; }
-.open-item {
-  display: flex; gap: 8px; align-items: baseline;
-  padding: 5px 0; border-bottom: 1px solid var(--hairline); font-size: var(--fs-body);
-}
-.open-item:last-child { border-bottom: 0; }
-.oi-ticker { font-family: var(--mono); font-weight: 600; }
-.oi-ticker.oi-portfolio { color: var(--muted); font-weight: 500; }
-.oi-body { flex: 1; color: var(--fg-soft); }
-.oi-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); white-space: nowrap; }
-.prep-notes { margin: 4px 0 2px 18px; }
-.prep-notes li { font-size: var(--fs-caption); color: var(--muted); padding: 2px 0; }
 .evidence-malformed {
   padding: 10px;
   background: rgba(240, 138, 138, 0.08);

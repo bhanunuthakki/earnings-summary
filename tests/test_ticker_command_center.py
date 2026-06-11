@@ -321,7 +321,7 @@ def test_holding_fragment_consolidates_notes_into_shared_drawer(repo: Path) -> N
 
 def test_shared_notes_drawer_surfaces_notes_and_alerts(repo: Path) -> None:
     """The ticker-scoped shared drawer (UX9b) carries the open notes + the
-    digest/feed alert-card shape (evidence drawer collapsed, memo, queued action,
+    feed alert-card shape (evidence drawer collapsed, memo, queued action,
     feed deep link) that the holding rail used to render beside the report."""
     db = repo / "data" / "portfolio.db"
     create_note(

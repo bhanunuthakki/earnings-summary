@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import contextlib
 import json
 import os
 import queue
@@ -77,8 +76,9 @@ from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED  # noqa: E402
 from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
 from ask.engine import AskTurn, fold_events, respond_turn, sanitize_history  # noqa: E402
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
-from dashboard import render_alert_feed, render_morning_digest  # noqa: E402
+from dashboard import render_alert_feed  # noqa: E402
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
+from dashboard.upcoming import render_upcoming_strip  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
@@ -314,7 +314,12 @@ def create_app(
             surface="home",
             show_filters=True,
         )
-        overview = render_overview_panel(rows, coverage, inbox_html=inbox_html)
+        # The compact earnings look-ahead above the rail — the surviving piece
+        # of the retired /digest page.
+        upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date())
+        overview = render_overview_panel(
+            rows, coverage, inbox_html=inbox_html, upcoming_html=upcoming_html
+        )
         return Response(render_shell(overview_html=overview), mimetype="text/html")
 
     @app.route("/api/dashboard", methods=["GET"])
@@ -529,8 +534,8 @@ def create_app(
         if name == "thesis_ledger":
             # The append-only history of every accepted, alert-driven thesis edit
             # (thesis_ledger_entries) — the populated decision history that was
-            # reachable only via the /digest route (v6 re-grade, Richness).
-            # Folded into the Decisions tab (P2.2) but kept serving for old links.
+            # once reachable only via the now-retired /digest page (v6 re-grade,
+            # Richness). Folded into the Decisions tab (P2.2); kept for old links.
             from pipeline.thesis_ledger_panel import render_thesis_ledger_panel
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
@@ -609,26 +614,18 @@ def create_app(
         so existing bookmarks keep working."""
         return redirect("/#holdings")
 
-    # ----- PERSONAL-CIO ALERTING SURFACES (digest / feed) -----
+    # ----- PERSONAL-CIO ALERTING SURFACE (feed) -----
     # Previously emitted only as static files (data/dashboard/...), unreachable
     # from the live command center — so a user living in the app never saw their
-    # alerts. Serve the same renderers as live routes (linked from the shell
-    # topbar). Both are read-only and degrade to a valid empty-state document
-    # when the substrate tables are absent.
+    # alerts. Served live (linked from the shell topbar): read-only, degrading
+    # to a valid empty-state document when the substrate tables are absent.
 
     @app.route("/digest", methods=["GET"])
     def digest_page():
-        """Morning digest (what's new, outstanding actions, recent thesis
-        changes). ``?date=YYYY-MM-DD`` overrides today; ``?user_id=`` scopes it."""
-        render_date = datetime.now(UTC).date()
-        date_arg = request.args.get("date")
-        if date_arg:
-            # Malformed ?date= falls back to today rather than 500-ing.
-            with contextlib.suppress(ValueError):
-                render_date = date.fromisoformat(date_arg)
-        user_id = request.args.get("user_id", DEFAULT_USER_ID)
-        html_text = render_morning_digest(date=render_date, user_id=user_id, db_path=db_path)
-        return Response(html_text, mimetype="text/html")
+        """RETIRED (2026-06-11): the standalone morning digest added nothing
+        over the Home rail — the same unified inbox plus the upcoming-earnings
+        strip live there now. 302 so old bookmarks land on Home."""
+        return redirect("/#home")
 
     @app.route("/feed", methods=["GET"])
     def feed_page():
@@ -656,8 +653,8 @@ def create_app(
 
     @app.route("/approve", methods=["GET", "POST"])
     def approve_or_dismiss_action():
-        """One-click approve / dismiss for the queued-action cards (digest,
-        feed, Holding rail). ``?action_id=N`` approves — writes the downstream
+        """One-click approve / dismiss for the queued-action cards (feed,
+        Home rail, Holding rail). ``?action_id=N`` approves — writes the downstream
         thesis-ledger / sizing-intent row, then marks the action applied, via
         the same shared core as the approve CLI; ``&dismiss=1`` cancels
         instead (no ledger write). GET 303-redirects back to the surface the

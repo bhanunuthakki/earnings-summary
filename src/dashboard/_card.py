@@ -1,10 +1,9 @@
-"""Shared alert-card renderer used by both the digest and the feed.
+"""Shared alert-card renderer used by the feed and the shell rails.
 
 A "card" is one alert + its associated queued actions + the evidence
-drawer. Both surfaces (digest's "what's new" section, feed's chrono-
-logical list) render the same shape — the only difference is whether
-the status badge appears (the digest's "what's new" is pending-only;
-the feed mixes pending/approved/dismissed).
+drawer. Every surface (feed's chronological list, the Home/Holding
+rails' compact variants) renders the same shape — the caller chooses
+whether the status badge appears and whether the drawer starts open.
 """
 
 from __future__ import annotations
@@ -47,9 +46,8 @@ def render_alert_card(
     """Render a single alert card into ``body``.
 
     ``actions`` is the list of queued actions to surface below the
-    evidence drawer (typically pending ones for the digest, all of them
-    for the feed). The caller decides the filter — the renderer just
-    paints whatever it's given.
+    evidence drawer (the feed shows all of them). The caller decides
+    the filter — the renderer just paints whatever it's given.
 
     ``brief_provenance`` is the ticker's latest brief_provenance_log
     payload (see evidence_drawer.load_brief_provenance) so fact_id
@@ -57,7 +55,7 @@ def render_alert_card(
     "no brief provenance" cell.
 
     ``drawer_open=False`` collapses the evidence drawer (the Holding
-    rail's compact cards); the digest and feed keep it expanded.
+    rail's compact cards); the feed keeps it expanded.
 
     ``category`` / ``rank_why`` come from the inbox ranker (Inbox v2): the
     category feeds the chip filtering (``data-cat``), the why-string becomes
@@ -65,7 +63,7 @@ def render_alert_card(
     callers outside the ranked stream.
     """
     # data-when (naive-UTC seconds) feeds the inbox unread tracking — full
-    # cards on /digest and /feed accent the same way the rail's compact ones do.
+    # cards on /feed accent the same way the rail's compact ones do.
     fired = alert.fired_at
     if fired.tzinfo is not None:
         fired = fired.astimezone(UTC).replace(tzinfo=None)
@@ -75,7 +73,7 @@ def render_alert_card(
     )
     body.write('<div class="alert-card-head">')
     # data-peek-ticker: in the shell, hovering the badge shows the ticker
-    # mini-card (UX9); inert markup on the standalone digest/feed pages.
+    # mini-card (UX9); inert markup on the standalone feed page.
     body.write(
         f'<span class="ticker-badge" data-peek-ticker="{_esc(alert.ticker)}">'
         f"{_esc(alert.ticker)}</span>"
@@ -125,7 +123,7 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
     elif qa.status == ACTION_STATUS_CANCELLED:
         body.write(stamp_html(qa.cancelled_at, css="qa-status-cancelled", prefix="cancelled "))
     else:
-        # Absolute hrefs: the card renders on /, /digest, AND /feed, where a
+        # Absolute hrefs: the card renders on / AND /feed, where a
         # relative "approve?..." would resolve to a different (dead) path per
         # surface. The live route is GET /approve (comments_server.py).
         body.write(

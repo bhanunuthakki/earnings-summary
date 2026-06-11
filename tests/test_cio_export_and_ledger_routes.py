@@ -2,9 +2,10 @@
 ``GET /export/cio`` (the .xlsx download) and ``GET /api/panel/thesis_ledger``.
 
 Before this, the CIO .xlsx export existed only as a CLI (unreachable from the
-app), and the populated thesis-ledger history had no command-center tab (only the
-/digest route surfaced it). v6 re-grade, Richness & surfacing. The substrate is
-built via alembic; one ledger entry is seeded so the panel is non-trivial.
+app), and the populated thesis-ledger history had no command-center tab (only
+the since-retired /digest page surfaced it). v6 re-grade, Richness & surfacing.
+The substrate is built via alembic; one ledger entry is seeded so the panel is
+non-trivial.
 """
 
 from __future__ import annotations

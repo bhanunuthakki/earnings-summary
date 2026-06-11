@@ -5,8 +5,8 @@ One row per (ticker, expected_date) observed by the daily refresher
 through the ``sources.earnings_calendar`` preference stack (FMP on-disk cache
 first, yfinance fallback). Readers:
 
-  * ``dashboard.digest`` — "Upcoming this week" real dates (the +91d estimate
-    survives only as a fallback for tickers with no calendar row)
+  * ``dashboard.upcoming`` — the Home rail's earnings strip (the +91d
+    estimate survives only as a fallback for tickers with no calendar row)
   * ``pipeline.research_cockpit`` — the Next ER column
   * portfolio-tracker's read-only bridge (``services/earnings_summary.py``) —
     SELECTs ``ticker, MIN(expected_date)``; revived unchanged by 0082
@@ -71,7 +71,7 @@ def upcoming_by_ticker(conn: sqlite3.Connection, on_or_after: date) -> dict[str,
     """Earliest expected_date >= ``on_or_after`` per ticker.
 
     Tolerant: a pre-0082 DB (no table) or an unparseable date degrades to the
-    ticker being absent, so digest/cockpit renders fall back rather than raise.
+    ticker being absent, so strip/cockpit renders fall back rather than raise.
     """
     try:
         rows = conn.execute(
