@@ -1,9 +1,11 @@
 """Unit tests for daily_fetch_and_brief's material-change + cadence gates.
 
-Covers the B+C gating logic added on top of the brief_dirty queue.
+Covers the B+C gating logic added on top of the brief_dirty queue, and the
+candidate-set resolution (brief_dirty queue + always-on P1).
 """
 from __future__ import annotations
 
+import argparse
 import sqlite3
 import sys
 from datetime import datetime, timedelta
@@ -15,7 +17,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
-from daily_fetch_and_brief import _check_skip_gates, _compute_brief_hash  # noqa: E402
+from daily_fetch_and_brief import (  # noqa: E402
+    _check_skip_gates,
+    _compute_brief_hash,
+    _resolve_tickers,
+)
 
 
 def _bootstrap_min_schema(db_path: Path) -> None:
@@ -34,6 +40,7 @@ def _bootstrap_min_schema(db_path: Path) -> None:
             brief_dirty BOOLEAN DEFAULT 0,
             last_built_at TIMESTAMP,
             last_brief_hash TEXT,
+            processing_tier TEXT,
             UNIQUE(user_id, ticker)
         );
         CREATE TABLE financial_facts (ticker TEXT, period_end TEXT, line_item TEXT);
@@ -55,7 +62,7 @@ def repo_root(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _seed(repo_root: Path, ticker: str, list_type: str, **extras) -> None:
+def _seed(repo_root: Path, ticker: str, list_type: str, **extras: object) -> None:
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     cols = "user_id, ticker, name, list_type"
     placeholders = "?, ?, ?, ?"
@@ -209,3 +216,73 @@ def test_gate_portfolio_with_no_history_does_not_skip(repo_root: Path) -> None:
         assert not skip
     finally:
         conn.close()
+
+
+def _queue_args() -> argparse.Namespace:
+    """Namespace mimicking the no-flag CLI invocation (dirty-queue mode)."""
+    return argparse.Namespace(ticker=None, all_tracked=False, limit=0)
+
+
+def test_resolve_tickers_includes_clean_p1(repo_root: Path) -> None:
+    """A P1 name reaches the candidate set even with brief_dirty=0.
+
+    The daily-freshness strip counts a P1 row fresh only when last_built_at
+    was touched within 24h, and gates B/C only run for candidates — so a P1
+    name must be a candidate every day, dirty or not.
+    """
+    _seed(repo_root, "GOOG", "portfolio", brief_dirty=0, processing_tier="P1")
+    _seed(repo_root, "ABNB", "evaluation", brief_dirty=1, processing_tier="P2")
+    _seed(repo_root, "CLEAN", "evaluation", brief_dirty=0, processing_tier="P2")
+    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        tickers = _resolve_tickers(conn, _queue_args())
+    finally:
+        conn.close()
+    assert "GOOG" in tickers  # clean P1: always a candidate
+    assert "ABNB" in tickers  # dirty P2: queued as before
+    assert "CLEAN" not in tickers  # clean P2: stays out of the queue
+
+
+def test_resolve_tickers_skips_archived_p1(repo_root: Path) -> None:
+    """Archiving wins over the P1 always-on rule."""
+    _seed(
+        repo_root,
+        "GONE",
+        "portfolio",
+        brief_dirty=0,
+        processing_tier="P1",
+        archived_at=datetime.now().isoformat(timespec="seconds"),
+    )
+    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        tickers = _resolve_tickers(conn, _queue_args())
+    finally:
+        conn.close()
+    assert tickers == []
+
+
+def test_resolve_tickers_dirty_only_without_tier_column(tmp_path: Path) -> None:
+    """Pre-0054 schema (no processing_tier column) falls back to dirty-only."""
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE tracked_companies (
+            ticker TEXT NOT NULL, name TEXT, list_type TEXT,
+            archived_at TIMESTAMP, brief_dirty BOOLEAN DEFAULT 0
+        );
+        INSERT INTO tracked_companies (ticker, name, list_type, brief_dirty)
+        VALUES ('DIRT', 'Dirt Co', 'portfolio', 1),
+               ('TIDY', 'Tidy Co', 'portfolio', 0);
+        """
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    try:
+        tickers = _resolve_tickers(conn, _queue_args())
+    finally:
+        conn.close()
+    assert tickers == ["DIRT"]
