@@ -707,20 +707,37 @@ def _ratio(v: float | None, decimals: int = 2) -> str:
     return "—" if v is None else f"{v:.{decimals}f}"
 
 
+def _offline_reason(error: str | None) -> str:
+    """One humane sentence for the offline card; the raw error stays in the
+    details element for whoever actually wants the stack-shaped version."""
+    low = (error or "").lower()
+    if "timed out" in low or "timeout" in low:
+        return "The tracker API didn't respond — it looks like the server isn't up."
+    if "refused" in low or "failed to establish" in low:
+        return "Nothing is listening on the tracker port — the server isn't running."
+    if not error:
+        return "It wasn't reachable on the last check."
+    return "The tracker API request failed on the last check."
+
+
 def render_live_portfolio_section(live: LivePortfolio) -> str:
     """The live-positions panel: total + taxable-bucket KPI strip, a positions
     table with % of portfolio, and the latest transactions. Renders an offline
     note (with the start hint) when the tracker is unreachable."""
     if not live.available:
+        # Humane offline card (PR1): the raw requests repr (pool/retry/memory
+        # address) is developer noise — it moves into the collapsed details.
         return (
             '<section class="panel"><h2>Live portfolio</h2>'
-            '<p class="muted">Portfolio-tracker API not reachable at '
-            f"<code>{escape(live.api_url)}</code>"
-            f"{f' — {escape(live.error)}' if live.error else ''}. "
-            "Start it alongside this app to see live positions, % of book, and the "
-            "taxable breakdown:</p>"
+            '<p class="sub">The portfolio tracker isn\'t running, so live positions, '
+            "% of book, and the taxable breakdown aren't shown.</p>"
+            f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
+            '<details class="offline-tech"><summary>How to start it · technical detail</summary>'
             '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '
             "uvicorn portfolio_tracker.api.main:app --port 8000</pre>"
+            f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
+            f"{f' — {escape(live.error)}' if live.error else ''}</p>"
+            "</details>"
             "</section>"
         )
     if not live.positions:

@@ -28,6 +28,8 @@ from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
+from report.renderers.numfmt import fmt_date
+from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK
 from user_state.notes import AnalystNoteRow, list_notes
 
@@ -337,10 +339,10 @@ def _position_strip(repo_root: Path, t: str) -> PositionStrip:
     last_decision: str | None = None
     if section.open_decisions:
         d = section.open_decisions[0]
-        last_decision = f"{d.action} ({d.decision_date.isoformat()})"
+        last_decision = f"{d.action} ({fmt_date(d.decision_date.isoformat())})"
     elif section.closed_decisions:
         d = section.closed_decisions[0]
-        last_decision = f"{d.action} → {d.outcome_status} ({d.decision_date.isoformat()})"
+        last_decision = f"{d.action} → {d.outcome_status} ({fmt_date(d.decision_date.isoformat())})"
     return PositionStrip(
         available=True,
         held=bool(section.held),
@@ -582,7 +584,7 @@ def render_ticker_html(tcc: TickerCommandCenter, *, generated_at: datetime) -> s
     parts: list[str] = [
         _PAGE_HEAD.format(
             ticker=escape(ident.ticker),
-            generated_at=escape(generated_at.isoformat(timespec="seconds")),
+            generated_at=stamp_html(generated_at, prefix="updated "),
         ),
         f"<header><div><h1>{escape(title)}</h1>",
         '<nav class="top-nav">',
@@ -732,7 +734,7 @@ def _notes_rail_section(notes: list[AnalystNoteRow] | None) -> str:
                 f'<div class="rail-note nk-{escape(n.kind)}">'
                 '<div class="rail-note-head">'
                 f'<span class="rail-note-kind">{escape(n.kind)}</span>'
-                f'<span class="rail-note-when">{escape(n.created_at.date().isoformat())}</span>'
+                f"{stamp_html(n.created_at, mode='date', css='rail-note-when')}"
                 "</div>"
                 f'<div class="rail-note-body">{escape(n.body)}</div>'
                 f'<div class="rail-note-meta">{" · ".join(meta_bits)}</div>'
@@ -796,14 +798,16 @@ def _identity_badges(ident: TickerIdentity) -> str:
 
 
 def _freshness_strip(ident: TickerIdentity) -> str:
+    # Relative stamps ("26d ago") — staleness is the question this strip
+    # answers; the exact instant rides in the tooltip.
     cells = [
-        ("Last build", _date(ident.last_build_at)),
-        ("Last FMP pull", _date(ident.last_fmp_at)),
-        ("Last transcript", ident.last_transcript_period or "—"),
+        ("Last build", stamp_html(ident.last_build_at)),
+        ("Last FMP pull", stamp_html(ident.last_fmp_at)),
+        ("Last transcript", f"<span>{escape(ident.last_transcript_period or '—')}</span>"),
     ]
     inner = "".join(
         f'<div class="fresh-cell"><div class="fresh-label">{escape(lbl)}</div>'
-        f'<div class="fresh-val">{escape(val)}</div></div>'
+        f'<div class="fresh-val">{val}</div></div>'
         for lbl, val in cells
     )
     return f'<div class="fresh-strip">{inner}</div>'
@@ -897,7 +901,7 @@ def _decisions_section(decisions: list[DecisionLite]) -> str:
     if not decisions:
         return ""
     body = "".join(
-        f"<tr><td>{escape(d.made_at[:10])}</td>"
+        f"<tr><td>{_date(d.made_at)}</td>"
         f"<td>{escape(d.recommendation_kind.upper())}"
         f"{f' {d.recommendation_value:g}%' if d.recommendation_value is not None else ''}</td>"
         f"<td>{escape(d.conviction or '—')}</td>"
@@ -954,7 +958,7 @@ def _thesis_section(th: ThesisView) -> str:
     if th.verdict:
         meta.append(f"verdict: <strong>{escape(th.verdict)}</strong>")
     if th.last_updated:
-        meta.append(f"updated {escape(th.last_updated)}")
+        meta.append(stamp_html(th.last_updated, mode="date", prefix="updated "))
     if meta:
         out.append(f'<p class="sub">{" · ".join(meta)}</p>')
     if th.thesis:
@@ -990,9 +994,11 @@ def _thesis_section(th: ThesisView) -> str:
 
 
 def _date(iso: str | None) -> str:
+    """Calendar-date stamp with the exact instant in the tooltip (PR1 human-time
+    convention). Returns HTML — callers embed raw, never re-escape."""
     if not iso:
         return "—"
-    return escape(str(iso)[:10])
+    return stamp_html(str(iso), mode="date")
 
 
 def _money(v: float | None) -> str:

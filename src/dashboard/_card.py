@@ -12,7 +12,6 @@ from __future__ import annotations
 import html
 import json
 from collections.abc import Mapping
-from datetime import datetime
 from io import StringIO
 from typing import cast
 
@@ -23,6 +22,7 @@ from alerts import (
     QueuedActionRow,
 )
 from dashboard.evidence_drawer import render_evidence_drawer
+from ui.time import stamp_html
 
 _ACTION_KIND_LABELS: dict[str, str] = {
     "thesis_update": "Thesis update",
@@ -63,8 +63,7 @@ def render_alert_card(
     if show_status_badge:
         status_class = f"status-{alert.status}"
         body.write(f'<span class="status-badge {status_class}">{_esc(alert.status)}</span>')
-    fired_at_iso = alert.fired_at.isoformat(timespec="seconds")
-    body.write(f'<span class="fired-at">{_esc(fired_at_iso)}</span>')
+    body.write(stamp_html(alert.fired_at, css="fired-at"))
     body.write("</div>")
 
     memo_text = _memo_text_from_evidence(alert.evidence_json)
@@ -100,11 +99,9 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
     body.write(f'<div class="qa-body">{_esc(qa_body)}</div>')
     body.write('<div class="qa-actions">')
     if qa.status == ACTION_STATUS_APPLIED:
-        body.write(f'<span class="qa-status-applied">applied {_esc(_iso(qa.applied_at))}</span>')
+        body.write(stamp_html(qa.applied_at, css="qa-status-applied", prefix="applied "))
     elif qa.status == ACTION_STATUS_CANCELLED:
-        body.write(
-            f'<span class="qa-status-cancelled">cancelled {_esc(_iso(qa.cancelled_at))}</span>'
-        )
+        body.write(stamp_html(qa.cancelled_at, css="qa-status-cancelled", prefix="cancelled "))
     else:
         # Absolute hrefs: the card renders on /, /digest, AND /feed, where a
         # relative "approve?..." would resolve to a different (dead) path per
@@ -168,12 +165,6 @@ def _memo_text_from_evidence(raw: str) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return None
-
-
-def _iso(dt: datetime | None) -> str:
-    if dt is None:
-        return "—"
-    return dt.isoformat(timespec="seconds")
 
 
 def _esc(text: str) -> str:

@@ -162,6 +162,11 @@ def _load_profile_fields(
 
 
 _USD_M = 1_000_000.0
+# The ratios view stores FRACTIONS (operating_income / revenue → 0.062); the
+# display contract is percent POINTS (6.2 + unit "%"). _scale divides, so the
+# fraction→points conversion is a divisor of 0.01. Without this every ratio row
+# rendered 100x too small ("0.1%" for a 6.2% margin).
+_FRACTION_TO_PCT = 0.01
 
 
 def _build_rows(
@@ -282,10 +287,10 @@ def _ratio_row(
         metric=metric,
         unit=unit,
         digits=digits,
-        lfy_minus_2=_annual_scaled(by_period, _at(display_years, 0), col, 1.0),
-        lfy_minus_1=_annual_scaled(by_period, _at(display_years, 1), col, 1.0),
-        lfy=_annual_scaled(by_period, _at(display_years, 2), col, 1.0),
-        ttm=_dict_get(ttm, col),
+        lfy_minus_2=_annual_scaled(by_period, _at(display_years, 0), col, _FRACTION_TO_PCT),
+        lfy_minus_1=_annual_scaled(by_period, _at(display_years, 1), col, _FRACTION_TO_PCT),
+        lfy=_annual_scaled(by_period, _at(display_years, 2), col, _FRACTION_TO_PCT),
+        ttm=_scale(_dict_get(ttm, col), _FRACTION_TO_PCT),
         cagr_3y=None,
     )
 

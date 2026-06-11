@@ -78,6 +78,7 @@ from report.models import (
 )
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
+from report.renderers.numfmt import fmt_date, fmt_reltime
 from report.renderers.workspace_charts import sparkline, verdict_bar
 from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
@@ -224,10 +225,10 @@ def _identity(body: StringIO, spec: ReportSpec) -> None:
     body.write(_verdict_badge(snap.verdict))
     body.write("</div>")
     body.write('<div class="company-meta">')
-    body.write(f"<span>USD · Report dated {spec.generation_date.isoformat()}</span>")
+    body.write(f"<span>USD · Report dated {fmt_date(spec.generation_date.isoformat())}</span>")
     if val.valuation_date is not None:
         body.write('<span class="meta-pip">·</span>')
-        body.write(f"<span>DCF dated {val.valuation_date.isoformat()}</span>")
+        body.write(f"<span>DCF dated {fmt_date(val.valuation_date.isoformat())}</span>")
     body.write("</div></div>")  # /identity-left
 
     # Valuation strip on the right.
@@ -363,7 +364,7 @@ def _news_tab(body: StringIO, section: RecentDevelopmentsSection) -> None:
     body.write('<div class="row-split"><div>')
     eyebrow_bits = ["News & market context"]
     if section.cached_at is not None:
-        eyebrow_bits.append(f"cached {section.cached_at.isoformat(timespec='minutes')}")
+        eyebrow_bits.append(f"cached {fmt_reltime(section.cached_at.isoformat())}")
     body.write(f'<div class="eyebrow">{_esc(" · ".join(eyebrow_bits))}</div>')
     by_section = structure_news_by_section(section, limit_per_section=12)
     total = sum(len(v) for v in by_section.values())
@@ -1989,7 +1990,7 @@ def _thesis_tab(
     body.write('<div class="tab-body">')
     eyebrow_bits = ["Thesis", "Valuation", "Break conditions"]
     if thesis.last_updated is not None:
-        eyebrow_bits.append(f"updated {thesis.last_updated.isoformat()}")
+        eyebrow_bits.append(f"updated {fmt_date(thesis.last_updated.isoformat())}")
     body.write(f'<div class="eyebrow">{_esc(" · ".join(eyebrow_bits))}</div>')
     if thesis.stub_warning:
         body.write(
@@ -2459,7 +2460,7 @@ def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:
             "Universal break rules",
             sub=str(thesis.overall_breach_status),
             as_of=(
-                thesis.last_evaluated_at.isoformat(timespec="minutes")
+                fmt_reltime(thesis.last_evaluated_at.isoformat())
                 if thesis.last_evaluated_at is not None
                 else None
             ),
@@ -2848,7 +2849,7 @@ def _company_tab(
     if cd.source_fiscal_year:
         eyebrow_bits.append(f"FY{cd.source_fiscal_year} 10-K")
     if cd.cached_at is not None:
-        eyebrow_bits.append(f"cached {cd.cached_at.isoformat(timespec='minutes')}")
+        eyebrow_bits.append(f"cached {fmt_reltime(cd.cached_at.isoformat())}")
     body.write(f'<div class="eyebrow">{_esc(" · ".join(eyebrow_bits))}</div>')
     body.write(f'<h2 class="section-title">{_esc(cd.sector or "Company description")}</h2>')
     if cd.industry:
