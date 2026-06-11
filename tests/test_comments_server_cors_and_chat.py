@@ -239,6 +239,18 @@ def test_chat_discovery_command_short_circuits(client: FlaskClient) -> None:
     assert "/discovery" in body
 
 
+def test_chat_drawer_js_carries_engine_contract() -> None:
+    """Ask v2: the drawer client understands the engine's frame vocabulary —
+    stage progress on the hint line, fragment rendering, and the
+    context_spec refinement round-trip (lastSpec from fragment frames)."""
+    from report.renderers import workspace_chat
+
+    assert "context_spec" in workspace_chat.JS
+    assert "'fragment'" in workspace_chat.JS
+    assert "'stage'" in workspace_chat.JS
+    assert "lastSpec" in workspace_chat.JS
+
+
 def test_concurrent_chat_requests_proceed_in_parallel(monkeypatch, client):
     """Two concurrent /chat requests must both reach the LLM call. We
     enforce this with a 2-way Barrier: if the second request is held

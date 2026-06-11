@@ -19,7 +19,8 @@ Design — thin shell + lazy panels:
 * **Five-section IA (UX redesign PR2)**: one sticky top bar carries the
   section nav — Home / Companies / Ask / Portfolio / System — and only the
   active section's sub-tab row renders below it (single-tab sections render
-  none). A Ctrl/Cmd+K command palette jumps to tickers, tabs, and actions.
+  none). A Ctrl/Cmd+K command palette jumps to tickers, tabs, and actions —
+  and hands anything else you type to the Ask tab as a question.
   Legacy hashes (and the section names themselves) remap — see
   ``_LEGACY_PANEL_REDIRECTS``.
 * **The Holding drill-down is dropdown-driven** (``cc-picker``): re-fetches
@@ -1042,6 +1043,16 @@ SHELL_JS = r"""
 
   function goHash(id) { return function () { location.hash = '#' + id; }; }
   function goUrl(url) { return function () { location.href = url; }; }
+  function goAsk(q) {
+    // Hand the typed query to the Ask panel: stash it, jump to #explore,
+    // and poke any already-loaded panel (it consumes the stash at wire-up
+    // when the tab loads lazily — see consumePaletteQuery in explore_panel).
+    return function () {
+      try { sessionStorage.setItem('cc-ask-q', q); } catch (e) {}
+      location.hash = '#explore';
+      window.dispatchEvent(new Event('cc-ask-q'));
+    };
+  }
 
   function palStatic() {
     var items = [];
@@ -1074,6 +1085,11 @@ SHELL_JS = r"""
     }
     palMatches.sort(function (a, b) { return b.s - a.s; });
     palMatches = palMatches.slice(0, 12);
+    if (ql.length >= 3) {
+      // Anything you can type is also a question: the last entry hands the
+      // raw query to the Ask tab (data view or researched answer).
+      palMatches.push({ s: 0, it: { label: 'Ask: “' + q.trim() + '”', hint: 'ask', run: goAsk(q.trim()) } });
+    }
     if (palSel >= palMatches.length) palSel = palMatches.length ? palMatches.length - 1 : 0;
     var html = '';
     for (var j = 0; j < palMatches.length; j++) {
