@@ -90,6 +90,7 @@ from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
     render_holding_fragment,
+    render_holding_picker_band,
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
@@ -570,16 +571,14 @@ def create_app(
     @app.route("/api/panel/holding", methods=["GET"])
     def holding_panel_fragment():
         """The per-holding drill-down as a head/foot-less fragment for the shell's
-        Holding tab: command-center sections (freshness, position, analyses,
-        decisions, artifacts, thesis) + the 5-min reread + report/DCF links + an
-        embedded ``/reports/<t>`` iframe that carries the inline comment/chat/apply
-        pipeline. Requires ``?ticker=`` (the cc-picker supplies it)."""
+        Holding tab: a one-line utility band (search combobox · verdict · freshness ·
+        report/DCF links · Ops/Notes icons) above the embedded ``/reports/<t>``
+        iframe that carries the inline comment/chat/apply pipeline. With no
+        ``?ticker=`` it returns the combobox band alone (UX9c) — the search picker
+        is always present, including before any holding is opened."""
         ticker = request.args.get("ticker")
         if not ticker:
-            return Response(
-                '<div class="cc-empty">Pick a holding from the dropdown above.</div>',
-                mimetype="text/html",
-            )
+            return Response(render_holding_picker_band(repo_root), mimetype="text/html")
         return Response(render_holding_fragment(repo_root, ticker), mimetype="text/html")
 
     @app.route("/api/panel/notes_drawer", methods=["GET"])

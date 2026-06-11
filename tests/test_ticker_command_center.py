@@ -26,6 +26,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
     build_holding_rail,
     build_ticker_command_center,
     render_holding_fragment,
+    render_holding_picker_band,
     render_notes_drawer_fragment,
     render_ticker_fragment,
     render_ticker_html,
@@ -231,20 +232,25 @@ def test_report_date_none_without_brief(tmp_path: Path) -> None:
     assert tcc.report_date is None
 
 
-def test_render_ticker_fragment_is_headless(repo: Path) -> None:
-    """PR4 (report-first): the fragment is a SLIM header — identity, verdict,
-    freshness dot, links, and the two drawer buttons. The old inline
-    position/thesis/analyses sections (duplicates of the embedded report's
-    own tabs) are gone from the inline flow."""
+def test_render_ticker_fragment_is_one_band(repo: Path) -> None:
+    """UX9c: the fragment is ONE ~40px utility band — the search combobox left,
+    verdict · freshness dot · report/DCF links · Ops/Notes icons right. The
+    Notes button opens the shell's shared drawer (data-cc-notes-open), not a
+    holding-local one. The old inline position/thesis/analyses sections stay
+    gone (they're the report's own tabs)."""
     tcc = build_ticker_command_center(repo, "NU")
     frag = render_ticker_fragment(tcc)
     assert "<!doctype" not in frag.lower()
     assert "<html" not in frag.lower()
+    # The combobox replaces the static ticker/name heading and the old cc-picker.
+    assert 'class="cc-combo"' in frag
+    assert 'data-current="NU"' in frag
     assert 'href="/reports/NU"' in frag
     assert 'href="/dcf/NU"' in frag
     assert 'data-tcc-drawer="ops"' in frag
-    assert 'data-tcc-drawer="notes"' in frag
-    assert 'class="cc-fdot' in frag  # freshness dot replaces the 3-card strip
+    assert "data-cc-notes-open" in frag  # Notes opens the SHARED drawer
+    assert 'data-tcc-drawer="notes"' not in frag  # the holding-local one is retired
+    assert 'class="cc-fdot' in frag  # freshness dot
     for gone in ("Analyses run", "Artifacts", "Tier-1 KPIs", "kpi-strip"):
         assert gone not in frag
 
@@ -254,11 +260,15 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     # The full pipeline is carried by an iframe of the workspace report.
     assert 'src="/reports/NU"' in frag
     assert "cc-report-frame" in frag
-    # Ops drawer carries the config/meta sections; the reread is a collapsed fold.
+    # The band's combobox + the Ops drawer (config/meta + the 5-min reread,
+    # folded in from its old inline spot in UX9c).
+    assert 'class="cc-combo"' in frag
     assert 'data-tcc-panel="ops"' in frag
     assert "Analyses run" in frag
-    assert "tcc-reread-fold" in frag
+    assert "5-minute reread" in frag
     assert "Per-holding 5-min rereads" in frag
+    # The reread is no longer an inline fold above the report.
+    assert "tcc-reread-fold" not in frag
 
 
 def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:
@@ -289,7 +299,30 @@ def test_build_holding_rail_reads_open_notes_and_alerts(repo: Path) -> None:
     assert [qa.action_kind for qa in actions] == ["thesis_update"]
 
 
-def test_holding_fragment_surfaces_notes_and_alerts_beside_report(repo: Path) -> None:
+def test_holding_fragment_consolidates_notes_into_shared_drawer(repo: Path) -> None:
+    """UX9c: the holding fragment no longer inlines its own notes/alerts drawer —
+    the band's ✎ button opens the shell's SHARED drawer (data-cc-notes-open),
+    and the report is full-width. The rich notes+alerts rendering lives in the
+    shared drawer fragment (asserted below + by the PR1 notes-drawer tests)."""
+    db = repo / "data" / "portfolio.db"
+    create_note(ticker="NU", kind="watch", body="Watch FX drag on ARPAC next print", db_path=db)
+
+    frag = render_holding_fragment(repo, "NU")
+    assert "data-cc-notes-open" in frag
+    assert 'class="tcc-report-main"' in frag
+    assert 'src="/reports/NU"' in frag
+    # The holding fragment itself no longer carries the notes/alerts rail panels
+    # (the "Recent alerts" h3 in the Ops analyses log is a different thing).
+    assert 'data-tcc-panel="notes"' not in frag
+    assert "Open notes" not in frag
+    assert 'class="alert-card"' not in frag  # the rich note-rail alert cards are gone
+    assert "Watch FX drag on ARPAC next print" not in frag  # note body not inlined
+
+
+def test_shared_notes_drawer_surfaces_notes_and_alerts(repo: Path) -> None:
+    """The ticker-scoped shared drawer (UX9b) carries the open notes + the
+    digest/feed alert-card shape (evidence drawer collapsed, memo, queued action,
+    feed deep link) that the holding rail used to render beside the report."""
     db = repo / "data" / "portfolio.db"
     create_note(
         ticker="NU",
@@ -302,21 +335,12 @@ def test_holding_fragment_surfaces_notes_and_alerts_beside_report(repo: Path) ->
     answered = create_note(ticker="NU", kind="question", body="NIM dip: mix or rate?", db_path=db)
     resolve_note(answered.id, db_path=db)
 
-    frag = render_holding_fragment(repo, "NU")
-    # PR4: notes + alerts ride in the Notes drawer; the report is full-width.
-    assert 'data-tcc-panel="notes"' in frag
-    assert 'class="tcc-report-main"' in frag
-    assert 'src="/reports/NU"' in frag
-    # Open notes panel: the open note (with kind tone + anchor) shows; the
-    # resolved one does not.
+    frag = render_notes_drawer_fragment(repo, "NU")
     assert "Open notes" in frag
     assert "Watch FX drag on ARPAC next print" in frag
     assert "nk-watch" in frag
     assert "earnings.arpac" in frag
-    assert "NIM dip: mix or rate?" not in frag
-    # Recent alerts panel: the digest/feed card shape with the evidence drawer
-    # collapsed (rail density), memo line from evidence.summary, queued action,
-    # and the filtered-feed deep link.
+    assert "NIM dip: mix or rate?" not in frag  # resolved note excluded
     assert "Recent alerts" in frag
     assert 'class="alert-card"' in frag
     assert "ROE inflected down two quarters running" in frag
@@ -326,15 +350,15 @@ def test_holding_fragment_surfaces_notes_and_alerts_beside_report(repo: Path) ->
     assert 'href="/feed?ticker=NU"' in frag
 
 
-def test_holding_rail_empty_states(repo: Path) -> None:
+def test_shared_drawer_empty_states(repo: Path) -> None:
     """No notes / no alerts (for a ticker with none) render the none-yet
     states, not the substrate-unavailable ones."""
-    frag = render_holding_fragment(repo, "MELI")  # seeded DB, nothing for MELI
+    frag = render_notes_drawer_fragment(repo, "MELI")  # seeded DB, nothing for MELI
     assert "No open notes on this name" in frag
     assert "No alerts fired on this name yet" in frag
 
 
-def test_holding_rail_degrades_without_substrate(tmp_path: Path) -> None:
+def test_shared_drawer_degrades_without_substrate(tmp_path: Path) -> None:
     """A DB without the analyst_notes / alerts tables (pre-migration) degrades
     to the unavailable-state per source — never an exception."""
     (tmp_path / "data").mkdir()
@@ -345,7 +369,7 @@ def test_holding_rail_degrades_without_substrate(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
-    frag = render_holding_fragment(tmp_path, "NU")
+    frag = render_notes_drawer_fragment(tmp_path, "NU")
     assert "Notes substrate unavailable" in frag
     assert "Alerts substrate unavailable" in frag
 
@@ -409,21 +433,53 @@ def test_notes_drawer_fragment_missing_db_degrades(tmp_path: Path) -> None:
     assert "Notes substrate unavailable" in frag
 
 
+# ----- Search-first holding combobox (UX9c) -----
+
+
+def test_holding_picker_band_is_search_first(repo: Path) -> None:
+    """The no-ticker band: a combobox (empty current) + a hint, plus its wiring.
+    Navigation is the same #holding=<T> hash the old cc-picker drove."""
+    band = render_holding_picker_band(repo)
+    assert 'class="cc-combo"' in band
+    assert 'data-current=""' in band
+    assert 'role="combobox"' in band
+    assert "Search a ticker or name to open a holding." in band
+    # The widget fetches the shared ticker source and navigates by hash.
+    assert "/api/tickers" in band
+    assert "'#holding=' + encodeURIComponent" in band
+    # Arrow/Enter keyboard selection is wired.
+    assert "ArrowDown" in band
+    assert "ArrowUp" in band
+
+
+def test_holding_band_combobox_prefills_current_ticker(repo: Path) -> None:
+    """A loaded holding's band combobox shows the current ticker · name and
+    carries it as data-current (so re-selecting the same name is a no-op)."""
+    tcc = build_ticker_command_center(repo, "NU")
+    frag = render_ticker_fragment(tcc)
+    assert 'data-current="NU"' in frag
+    assert 'value="NU · Nu Holdings"' in frag
+
+
 def test_holding_panel_endpoint(client) -> None:
-    # No ticker → a pick-a-holding prompt, not a 404.
+    # No ticker → the search combobox band (UX9c), not a 404 or a dropdown stub.
     empty = client.get("/api/panel/holding")
     assert empty.status_code == 200
-    assert "Pick a holding" in empty.get_data(as_text=True)
-    # With a ticker → head/foot-less fragment embedding the report at full
-    # width, with notes + alerts in the Notes drawer (PR4 report-first).
+    empty_body = empty.get_data(as_text=True)
+    assert 'class="cc-combo"' in empty_body
+    assert "Search a ticker or name to open a holding." in empty_body
+    assert "Pick a holding from the dropdown" not in empty_body
+    # With a ticker → head/foot-less fragment: the band (combobox + Ops/Notes)
+    # over the embedded report at full width. Notes ride in the shared drawer.
     resp = client.get("/api/panel/holding?ticker=NU")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "<!doctype" not in body.lower()
+    assert 'class="cc-combo"' in body
+    assert 'data-current="NU"' in body
     assert 'src="/reports/NU"' in body
-    assert 'data-tcc-panel="notes"' in body
-    assert "Open notes" in body
-    assert "Recent alerts" in body
+    assert "data-cc-notes-open" in body  # Notes button → shared drawer
+    assert 'data-tcc-panel="ops"' in body
 
 
 def test_notes_drawer_panel_endpoint(client) -> None:
