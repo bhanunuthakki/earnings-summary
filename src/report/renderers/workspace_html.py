@@ -5,9 +5,12 @@ workspace, monochrome palette, paper/white/dark themes) as a single self-
 contained HTML file. Same contract as ``html.py`` — no runtime JS framework,
 no CDN dependencies beyond the Google Fonts stylesheet.
 
-The design's four tabs (Earnings / Say·Do / Financials / Thesis & Risk) are
-extended so every section of the ReportSpec has a home (News / Decisions /
-Valuation / Bear / Company / Exec Comp / Synthesis / Position / Sources).
+Every section of the ReportSpec has a home. UX9 folds the original 12-14
+section tabs into ~6 grouped top-level tabs (Overview / Quarter / Financials
+/ Research / Position / Sources); inside a multi-section group a slim
+sub-tab pill row switches the section panes client-side. Section panes keep
+their legacy per-section ``data-tab`` ids so saved comment anchors,
+``data-xtab`` cross-links and ``#tab=<id>`` deep links resolve unchanged.
 Sections with no data HIDE rather than stub (P4.2 hide-don't-stub); the
 Governance coverage matrix carries the gap inventory.
 """
@@ -117,6 +120,8 @@ from user_state.notes import AnalystNoteRow
 # A tab tuple: (id, label, optional badge count, render-function-into-body).
 TabRenderFn: TypeAlias = Callable[[StringIO], None]
 TabDef: TypeAlias = tuple[str, str, int | None, TabRenderFn]
+# A grouped top-level tab: (group_id, label, section tabs rendered inside).
+TabGroup: TypeAlias = tuple[str, str, list[TabDef]]
 
 _BOLD_RX = re.compile(r"\*\*([^*]+)\*\*")
 _ITAL_RX = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
@@ -154,17 +159,25 @@ def render(spec: ReportSpec) -> str:
     _kpi_strip(body, spec.thesis.kpi_ledger)
 
     body.write('<div class="l1-tabs-wrap">')
-    tabs = _tab_defs(spec, p3)
-    _tabs(body, tabs)
-    for i, (tid, label, _count, render_fn) in enumerate(tabs):
-        _ = label
-        # First tab is active on load so its pane renders immediately. The tab
-        # BUTTON already gets `active` at i==0 (see _tabs); without the matching
-        # pane class every pane stays display:none until the user clicks one,
-        # which is why the report opened blank on the active tab.
-        active = " active" if i == 0 else ""
-        body.write(f'<div class="tab-pane{active}" data-tab="{_esc(tid)}">')
-        render_fn(body)
+    groups = _tab_groups(spec, p3)
+    _tabs(body, groups)
+    for gi, (gid, _glabel, sections) in enumerate(groups):
+        # First group is active on load so its pane renders immediately. The
+        # tab BUTTON already gets `active` at gi==0 (see _tabs); without the
+        # matching pane class every pane stays display:none until the user
+        # clicks one, which is why the report opened blank on the active tab.
+        g_active = " active" if gi == 0 else ""
+        body.write(f'<div class="tab-group-pane{g_active}" data-tab-group="{_esc(gid)}">')
+        if len(sections) > 1:
+            _subtabs(body, sections)
+        for si, (sid, _slabel, _scount, render_fn) in enumerate(sections):
+            # Section panes keep the legacy per-section `data-tab` ids and the
+            # `tab-pane` class: saved comment anchors (`tab: earnings`) and
+            # data-xtab cross-links resolve against `[data-tab=...].tab-pane`.
+            s_active = " active" if si == 0 else ""
+            body.write(f'<div class="tab-pane subtab-pane{s_active}" data-tab="{_esc(sid)}">')
+            render_fn(body)
+            body.write("</div>")
         body.write("</div>")
     body.write("</div>")  # /l1-tabs-wrap
 
@@ -422,19 +435,20 @@ def _news_tile(body: StringIO, t: NewsTile) -> None:
 
 
 def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
-    """Return [(tab_id, label, count_or_None, render_fn), ...]."""
+    """Return every section tab as [(tab_id, label, count_or_None, render_fn), ...].
+
+    This is the flat per-section inventory; ``_tab_groups`` folds it into the
+    grouped top-level tabs (UX9) and owns ordering + flavor defaults. PR7: the
+    old standalone "Eval Screen" tab folded into the Company tab (description
+    first, numbers + comps right under the pitch), so evaluation lands on one
+    coherent intro.
+    """
     pos = spec.portfolio_position  # narrow for the closure
     eval_snap = spec.evaluation_snapshot
-    tabs: list[TabDef] = []
-    # Tab order: portfolio/watchlist puts thesis first as the analytical
-    # anchor; evaluation reports lead with Company since the reader hasn't
-    # internalized the business yet. PR7: the old standalone "Eval Screen"
-    # tab folded into the Company tab (description first, numbers + comps
-    # right under the pitch), so evaluation lands on one coherent intro.
     is_eval = spec.flavor == ReportFlavor.EVALUATION
     company_eval_snap = eval_snap if is_eval else None
     company_peers = p3.peer_comp if is_eval else None
-    tab_blocks: list[TabDef] = [
+    tabs: list[TabDef] = [
         (
             "thesis",
             "Thesis",
@@ -524,14 +538,6 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             lambda b: _synthesis_tab(b, spec.synthesis),
         ),
     ]
-    if is_eval:
-        # Evaluation reports: Company first (reader is new to the name), then
-        # the rest of the order is preserved.
-        company_block = [t for t in tab_blocks if t[0] == "company"]
-        rest = [t for t in tab_blocks if t[0] != "company"]
-        tabs.extend(company_block + rest)
-    else:
-        tabs.extend(tab_blocks)
     if pos is not None and pos.held:
         tabs.append(("position", "Position", len(pos.accounts), lambda b: _position_tab(b, pos)))
     tabs.append(
@@ -545,16 +551,65 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     return tabs
 
 
-def _tabs(body: StringIO, tabs: list[TabDef]) -> None:
+def _tab_groups(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabGroup]:
+    """Fold the flat section tabs into the ~6 grouped top-level tabs (UX9).
+
+    Group order: portfolio/watchlist leads with Overview (thesis + valuation,
+    the analytical anchor); evaluation reports lead with Research and put
+    Company first inside it, since the reader hasn't internalized the business
+    yet. Single-section groups reuse the section id as the group id so deep
+    links and data-xtab cross-links resolve without a pill row.
+    """
+    by_id = {t[0]: t for t in _tab_defs(spec, p3)}
+    is_eval = spec.flavor == ReportFlavor.EVALUATION
+    research_ids = ["bear", "company", "exec_comp", "synthesis"]
+    if is_eval:
+        research_ids = ["company", "bear", "exec_comp", "synthesis"]
+    research: tuple[str, str, list[str]] = ("research", "Research", research_ids)
+    core: list[tuple[str, str, list[str]]] = [
+        ("overview", "Overview", ["thesis", "valuation"]),
+        ("quarter", "Quarter", ["earnings", "saydo", "news"]),
+        ("financials", "Financials", ["financials"]),
+    ]
+    plan = [research, *core] if is_eval else [*core, research]
+    # Position group only when held (decision history rides along). An exited
+    # name keeps its decision audit as a standalone Decisions tab; a name with
+    # no position and no decisions hides both (P4.2 hide-don't-stub).
+    if "position" in by_id:
+        plan.append(("position", "Position", ["position", "decisions"]))
+    elif by_id["decisions"][2] is not None:
+        plan.append(("decisions", "Decisions", ["decisions"]))
+    plan.append(("sources", "Sources", ["sources"]))
+    return [(gid, label, [by_id[sid] for sid in sids]) for gid, label, sids in plan]
+
+
+def _tabs(body: StringIO, groups: list[TabGroup]) -> None:
     body.write('<div class="tabs">')
-    for i, (tid, label, count, _fn) in enumerate(tabs):
+    for i, (gid, label, sections) in enumerate(groups):
+        # The badge aggregates across the group's sections (None when no
+        # section carries a count).
+        counts = [c for _sid, _slabel, c, _fn in sections if c is not None]
+        count = sum(counts) if counts else None
         cls = "tab active" if i == 0 else "tab"
-        body.write(f'<button class="{cls}" data-tab="{_esc(tid)}">')
+        body.write(f'<button class="{cls}" data-tab="{_esc(gid)}">')
         body.write(f'<span class="tab-label">{_esc(label)}</span>')
         if count is not None:
             body.write(f'<span class="tab-count">{count}</span>')
         body.write("</button>")
     body.write('<div class="tabs-spacer"></div></div>')
+
+
+def _subtabs(body: StringIO, sections: list[TabDef]) -> None:
+    """The slim pill row inside a multi-section group pane."""
+    body.write('<div class="subtabs">')
+    for i, (sid, label, count, _fn) in enumerate(sections):
+        cls = "subtab active" if i == 0 else "subtab"
+        body.write(f'<button class="{cls}" data-subtab="{_esc(sid)}">')
+        body.write(f'<span class="subtab-label">{_esc(label)}</span>')
+        if count is not None:
+            body.write(f'<span class="subtab-count">{count}</span>')
+        body.write("</button>")
+    body.write("</div>")
 
 
 # ---------------------------------------------------------------------------
