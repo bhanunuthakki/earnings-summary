@@ -421,17 +421,24 @@ def stream_response(
     ticker: str,
     report_date: date,
     user_message: str,
+    extra_context: str = "",
 ) -> Iterator[dict[str, object]]:
     """Stream a chat response. Yields:
     {type: "delta", text: "<chunk>"}      — incremental tokens
     {type: "final", text: "<full>"}       — once at end
     {type: "diff_proposal", diff: {...}}  — if the response contained a diff block
     {type: "error", error: "..."}         — on failure
+
+    ``extra_context`` is an optional turn-scoped block appended to the
+    system prompt — the ask engine passes retrieved evidence (Ask v3
+    grounding) through it. It is not persisted with the thread.
     """
     thread = load_thread(repo_root, ticker, report_date)
     thread.append(ChatTurn(role="user", text=user_message))
 
     system_prompt = _system_prompt(repo_root, ticker, report_date)
+    if extra_context:
+        system_prompt = system_prompt + "\n\n" + extra_context
 
     # Assemble the prior conversation as a single user message body. The
     # CLI runs single-turn, so we encode the thread into the prompt itself.
