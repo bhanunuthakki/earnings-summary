@@ -46,6 +46,7 @@ from typing import Literal, cast
 import chat_session
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
+from ask.grounding import build_evidence_block, gather_evidence, used_citation_items
 from dispatch_registry import Registry
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.render import render_view_fragment
@@ -232,7 +233,9 @@ def respond_turn(
         )
         return
 
-    yield from _narrative_events(text, turn, pack, repo_root=repo_root, emit_stage=True)
+    yield from _narrative_events(
+        text, turn, pack, repo_root=repo_root, db_path=db_path, emit_stage=True
+    )
 
 
 def _data_events(
@@ -268,7 +271,9 @@ def _data_events(
             "route": ROUTE_NARRATIVE,
             "note": "no chartable view — answering in prose",
         }
-        yield from _narrative_events(text, turn, pack, repo_root=repo_root, emit_stage=False)
+        yield from _narrative_events(
+            text, turn, pack, repo_root=repo_root, db_path=db_path, emit_stage=False
+        )
         return
 
     spec = result.spec
@@ -286,7 +291,9 @@ def _data_events(
             "route": ROUTE_NARRATIVE,
             "note": "view failed — answering in prose",
         }
-        yield from _narrative_events(text, turn, pack, repo_root=repo_root, emit_stage=False)
+        yield from _narrative_events(
+            text, turn, pack, repo_root=repo_root, db_path=db_path, emit_stage=False
+        )
         return
 
     n_rows = len(view.rows)
@@ -344,24 +351,62 @@ def _narrative_events(
     pack: ContextPack,
     *,
     repo_root: Path,
+    db_path: Path,
     emit_stage: bool,
 ) -> Iterator[dict[str, object]]:
-    """The claude-CLI chat path. Ticker scope = the existing report session
-    (its own system prompt + thread persistence); portfolio scope = the
-    pack's system context + client-supplied history over the raw transport."""
+    """The claude-CLI chat path, grounded (Ask v3). Ticker scope = the
+    existing report session (its own system prompt + thread persistence);
+    portfolio scope = the pack's system context + client-supplied history
+    over the raw transport.
+
+    Before the call, ``ask.grounding`` retrieves numbered evidence (facts /
+    filing sections / transcript lines) for the question; when anything
+    comes back it rides into the prompt under a cite-or-don't-claim
+    contract (the answering stage notes how many sources), and the markers
+    the answer actually used are resolved into a trailing
+    ``{type: "citations", items: [...]}`` event (each item carries the
+    /source/<doc_id> viewer href). No evidence → the turn runs exactly as
+    before: same stage frame, no citations event."""
+    scope_tickers = (
+        [pack.ticker]
+        if pack.scope == "ticker" and pack.ticker
+        else ([t.strip().upper() for t in turn.tickers if t.strip()] or list(pack.default_tickers))
+    )
+    evidence = gather_evidence(
+        text, repo_root=repo_root, db_path=db_path, scope_tickers=scope_tickers
+    )
+    evidence_block = build_evidence_block(evidence)
     if emit_stage:
-        yield {"type": "stage", "stage": "answering", "route": ROUTE_NARRATIVE}
+        stage: dict[str, object] = {"type": "stage", "stage": "answering", "route": ROUTE_NARRATIVE}
+        if evidence:
+            stage["note"] = f"grounded on {len(evidence)} source{'s' if len(evidence) != 1 else ''}"
+        yield stage
 
     if pack.scope == "ticker" and pack.ticker and pack.report_date is not None:
-        yield from chat_session.build_chat_response.stream_response(
+        # extra_context is passed only when evidence exists so monkeypatched
+        # fakes with the original four-kwarg signature keep working.
+        kwargs: dict[str, str] = {"extra_context": evidence_block} if evidence_block else {}
+        final_text_t: str | None = None
+        for event in chat_session.build_chat_response.stream_response(
             repo_root=repo_root,
             ticker=pack.ticker,
             report_date=pack.report_date,
             user_message=text,
-        )
+            **kwargs,
+        ):
+            yield event
+            if event.get("type") == "final":
+                maybe = event.get("text")
+                final_text_t = maybe if isinstance(maybe, str) else None
+        if final_text_t is not None and evidence:
+            used = used_citation_items(final_text_t, evidence)
+            if used:
+                yield {"type": "citations", "items": [item.chip_payload() for item in used]}
         return
 
     system_context = pack.system_context or "You are a portfolio research assistant."
+    if evidence_block:
+        system_context = system_context + "\n\n" + evidence_block
     history = sanitize_history(turn.history)
     thread_text = "\n\n".join(f"[{h['role'].upper()}] {h['text']}" for h in history)
     full_prompt = (
@@ -383,6 +428,10 @@ def _narrative_events(
     if final_text is None:  # defensive: transport always ends in final or error
         return
     yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
+    if evidence:
+        used = used_citation_items(final_text, evidence)
+        if used:
+            yield {"type": "citations", "items": [item.chip_payload() for item in used]}
     diff = chat_session.extract_diff(final_text)
     if diff is not None:
         yield {"type": "diff_proposal", "diff": diff}
@@ -397,6 +446,7 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
     final: dict[str, object] | None = None
     diff: dict[str, object] | None = None
     error: dict[str, object] | None = None
+    citations: list[object] | None = None
     notes: list[str] = []
     for ev in events:
         kind = ev.get("type")
@@ -408,6 +458,10 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
             maybe = ev.get("diff")
             if isinstance(maybe, dict):
                 diff = cast("dict[str, object]", maybe)
+        elif kind == "citations":
+            maybe_items = ev.get("items")
+            if isinstance(maybe_items, list):
+                citations = cast("list[object]", maybe_items)
         elif kind == "error" and error is None:
             error = ev
         elif kind == "stage":
@@ -436,6 +490,8 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
     }
     if notes:
         out["note"] = " · ".join(notes)
+    if citations:
+        out["citations"] = citations
     if diff is not None:
         out["diff"] = diff
     return out

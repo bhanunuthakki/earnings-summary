@@ -16,6 +16,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -28,6 +29,7 @@ from ask.context import (
     tracked_tickers,
 )
 from ask.engine import AskTurn, fold_events, respond_turn, route_turn, sanitize_history
+from ask.grounding import EvidenceItem
 from viewspec.nl_compile import NLCompileResult
 from viewspec.spec import ViewSpec
 
@@ -495,6 +497,147 @@ def test_empty_message_is_an_error(tmp_path: Path, missing_db: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# grounded narrative (Ask v3) — evidence injection + citations event
+# ----------------------------------------------------------------------------
+
+
+def _evidence(n: int) -> EvidenceItem:
+    return EvidenceItem(
+        n=n,
+        kind="fact",
+        label=f"TST · Metric{n}",
+        text=f"TST Metric{n} (newest first): Q1'26 5",
+        doc_id=9,
+        href=f"/source/9?n={n}",
+        source_url=None,
+    )
+
+
+def _stub_gather(*items: EvidenceItem):
+    def fake(
+        question: str, *, repo_root: Path, db_path: Path, scope_tickers: list[str]
+    ) -> list[EvidenceItem]:
+        del question, repo_root, db_path, scope_tickers
+        return list(items)
+
+    return fake
+
+
+def test_portfolio_narrative_grounds_prompt_and_emits_pruned_citations(
+    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1), _evidence(2)))
+    prompts: list[str] = []
+
+    def fake_llm(prompt: str):
+        prompts.append(prompt)
+        yield {"type": "final", "text": "Growth held up well [1]."}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    events = list(
+        respond_turn(
+            AskTurn(text="why is growth holding up?"),
+            _portfolio_pack(),
+            db_path=missing_db,
+            repo_root=tmp_path,
+        )
+    )
+    assert [e["type"] for e in events] == ["stage", "final", "citations"]
+    # The answering stage announces the grounding.
+    assert events[0]["note"] == "grounded on 2 sources"
+    # The evidence block rode into the prompt between pack context and thread.
+    prompt = prompts[0]
+    assert prompt.startswith("PORTFOLIO SYSTEM CONTEXT")
+    assert "EVIDENCE" in prompt
+    assert "[1] TST Metric1" in prompt
+    assert "CITE-OR-SAY-UNSURE" in prompt
+    assert prompt.index("EVIDENCE") < prompt.index("PRIOR THREAD")
+    # Only the marker the answer used survives into the citations event.
+    raw_items = events[-1]["items"]
+    assert isinstance(raw_items, list)
+    items = cast("list[dict[str, object]]", raw_items)
+    assert [c["n"] for c in items] == [1]
+    assert items[0]["href"] == "/source/9?n=1"
+
+
+def test_portfolio_narrative_unused_evidence_emits_no_citations(
+    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1)))
+
+    def fake_llm(prompt: str):
+        yield {"type": "final", "text": "An answer with no markers at all."}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    events = list(
+        respond_turn(
+            AskTurn(text="why is growth holding up?"),
+            _portfolio_pack(),
+            db_path=missing_db,
+            repo_root=tmp_path,
+        )
+    )
+    assert [e["type"] for e in events] == ["stage", "final"]
+
+
+def test_ticker_narrative_passes_evidence_as_extra_context(
+    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ticker scope threads the evidence block through stream_response's
+    extra_context kwarg — passed ONLY when evidence exists (the legacy
+    four-kwarg fakes elsewhere in this suite must keep working)."""
+    monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1)))
+    seen: dict[str, object] = {}
+
+    def fake_stream_response(
+        *,
+        repo_root: Path,
+        ticker: str,
+        report_date: date,
+        user_message: str,
+        extra_context: str = "",
+    ):
+        seen["extra_context"] = extra_context
+        yield {"type": "delta", "text": "NPLs are stable [1]."}
+        yield {"type": "final", "text": "NPLs are stable [1]."}
+
+    monkeypatch.setattr(chat_session.build_chat_response, "stream_response", fake_stream_response)
+    events = list(
+        respond_turn(
+            AskTurn(text="why are NPLs stable?"),
+            build_ticker_pack("NU", RD),
+            db_path=missing_db,
+            repo_root=tmp_path,
+        )
+    )
+    assert "EVIDENCE" in str(seen["extra_context"])
+    assert "[1] TST Metric1" in str(seen["extra_context"])
+    assert [e["type"] for e in events] == ["stage", "delta", "final", "citations"]
+
+
+def test_stream_response_appends_extra_context_to_system_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts: list[str] = []
+
+    def fake_llm(prompt: str):
+        prompts.append(prompt)
+        yield {"type": "final", "text": "answer"}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    events = list(
+        chat_session.stream_response(tmp_path, "NU", RD, "question", extra_context="EXTRA-MARKER")
+    )
+    assert events[-1]["type"] == "final"
+    assert "EXTRA-MARKER" in prompts[0]
+    assert prompts[0].index("EXTRA-MARKER") < prompts[0].index("PRIOR THREAD")
+    # Default call shape (no kwarg) is unchanged.
+    prompts.clear()
+    list(chat_session.stream_response(tmp_path, "NU", RD, "question"))
+    assert "EXTRA-MARKER" not in prompts[0]
+
+
+# ----------------------------------------------------------------------------
 # fold_events — the /api/ask JSON contract
 # ----------------------------------------------------------------------------
 
@@ -530,6 +673,17 @@ def test_fold_events_narrative_with_note_and_diff() -> None:
         "note": "in prose",
         "diff": {"target_path": "thesis"},
     }
+
+
+def test_fold_events_carries_citations() -> None:
+    out = fold_events(
+        [
+            {"type": "stage", "stage": "answering", "route": "narrative"},
+            {"type": "final", "text": "grounded answer [1]", "route": "narrative"},
+            {"type": "citations", "items": [{"n": 1, "label": "L", "href": "/source/9"}]},
+        ]
+    )
+    assert out["citations"] == [{"n": 1, "label": "L", "href": "/source/9"}]
 
 
 def test_fold_events_command_and_errors() -> None:

@@ -105,6 +105,13 @@ _PANEL_STYLE = """<style>
 .ask-actions button:hover { border-color:var(--accent); color:var(--accent); }
 .ask-busy { color:var(--muted); font-size:var(--fs-body); }
 .ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
+.ask-cite-row { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
+.ask-cite { font-size:var(--fs-caption); color:var(--accent); border:1px solid var(--border);
+  border-radius:var(--radius-full); padding:2px 9px; text-decoration:none;
+  background:var(--paper, #1a1d23); transition:border-color var(--transition); }
+.ask-cite:hover { border-color:var(--accent); }
+.ask-prose a.ask-cite-mark { color:var(--accent); text-decoration:none; font-size:0.85em;
+  vertical-align:super; }
 @keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
 .ask-prose { font-size:var(--fs-body); line-height:1.55; color:var(--fg); }
 .ask-prose p { margin:0 0 8px; }
@@ -310,6 +317,30 @@ _PANEL_JS = """
       return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
     }).join('');
   }
+  function askCiteHref(c) {
+    return (c && (c.href || c.source_url)) || '';
+  }
+  function askLinkifyCites(html, items) {
+    var map = {};
+    (items || []).forEach(function (c) { if (c && c.n) map[String(c.n)] = c; });
+    return html.replace(/\\[(\\d{1,2})\\]/g, function (m, n) {
+      var c = map[n];
+      var href = askCiteHref(c);
+      if (!href) return m;
+      return '<a class="ask-cite-mark" href="' + askEsc(href) + '" target="_blank" title="'
+        + askEsc(c.label || '') + '">[' + n + ']</a>';
+    });
+  }
+  function askCiteRowHtml(items) {
+    if (!items || !items.length) return '';
+    var chips = items.map(function (c) {
+      var href = askCiteHref(c);
+      if (!href) return '';
+      return '<a class="ask-cite" href="' + askEsc(href) + '" target="_blank">['
+        + askEsc(String(c.n)) + '] ' + askEsc(c.label || c.kind || 'source') + '</a>';
+    }).join('');
+    return chips ? '<div class="ask-cite-row">' + chips + '</div>' : '';
+  }
   function askRemember(role, text) {
     askHistory.push({role: role, text: String(text || '').slice(0, 1200)});
     if (askHistory.length > 12) askHistory = askHistory.slice(-12);
@@ -350,6 +381,7 @@ _PANEL_JS = """
     var frag = null;
     var note = '';
     var finalEv = null;
+    var citations = [];
     var errored = false;
 
     function busyLine(text) {
@@ -379,6 +411,8 @@ _PANEL_JS = """
         frag = ev;
       } else if (ev.type === 'final') {
         finalEv = ev;
+      } else if (ev.type === 'citations') {
+        citations = ev.items || [];
       } else if (ev.type === 'error') {
         errored = true;
         card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
@@ -407,7 +441,9 @@ _PANEL_JS = """
           card.innerHTML = '<pre class="ask-cmd">' + askEsc(text) + '</pre>';
         } else {
           var noteHtml = note ? '<div class="ask-meta">' + askEsc(note) + '</div>' : '';
-          card.innerHTML = noteHtml + '<div class="ask-prose">' + askMd(text) + '</div>';
+          card.innerHTML = noteHtml
+            + '<div class="ask-prose">' + askLinkifyCites(askMd(text), citations) + '</div>'
+            + askCiteRowHtml(citations);
         }
         askRemember('assistant', text);
       } else {

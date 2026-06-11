@@ -89,6 +89,7 @@ JS = r"""
       appendTurn('user', msg, null);
       var assistantEl = appendTurn('assistant', '', null);
       var streamEl = assistantEl.querySelector('.chat-text');
+      var citations = [];
       hintEl.textContent = 'Working…';
 
       // SSE via fetch + ReadableStream (EventSource doesn't support POST)
@@ -105,6 +106,10 @@ JS = r"""
           return reader.read().then(function(result) {
             if (result.done) {
               streamEl.innerHTML = renderMarkdown(streamEl.textContent);
+              if (citations.length) {
+                streamEl.innerHTML = linkifyCites(streamEl.innerHTML, citations);
+                appendCiteRow(assistantEl, citations);
+              }
               hintEl.textContent = 'Cmd+Enter to send';
               return;
             }
@@ -138,6 +143,10 @@ JS = r"""
                   // Data turns carry no deltas — the final's message line
                   // ("4 series · yoy · quarterly") is the turn's text.
                   if (!streamEl.textContent) streamEl.textContent = ev.text || '';
+                } else if (ev.type === 'citations') {
+                  // Grounded narrative answers (Ask v3): numbered evidence
+                  // the answer cited — rendered as chips at stream close.
+                  citations = ev.items || [];
                 } else if (ev.type === 'diff_proposal') {
                   appendDiffButton(assistantEl, ev.diff);
                 } else if (ev.type === 'error') {
@@ -196,6 +205,39 @@ JS = r"""
           });
         });
       });
+    }
+
+    // ----- Citation chips (grounded answers, Ask v3) -----
+    // The report opens via file://, so viewer hrefs (/source/<doc_id>…)
+    // must be absolute against the research server.
+    function citeHref(c) {
+      var href = (c && (c.href || c.source_url)) || '';
+      if (!href) return '';
+      return /^https?:/.test(href) ? href : (SERVER_URL + href);
+    }
+    function linkifyCites(html, items) {
+      var map = {};
+      items.forEach(function(c) { if (c && c.n) map[String(c.n)] = c; });
+      return html.replace(/\[(\d{1,2})\]/g, function(m, n) {
+        var c = map[n];
+        var href = c ? citeHref(c) : '';
+        if (!href) return m;
+        return '<a class="chat-cite-mark" href="' + escapeHtml(href) + '" target="_blank" title="'
+          + escapeHtml(c.label || '') + '">[' + n + ']</a>';
+      });
+    }
+    function appendCiteRow(turnEl, items) {
+      var chips = items.map(function(c) {
+        var href = citeHref(c);
+        if (!href) return '';
+        return '<a class="chat-cite" href="' + escapeHtml(href) + '" target="_blank">['
+          + escapeHtml(String(c.n)) + '] ' + escapeHtml(c.label || 'source') + '</a>';
+      }).join('');
+      if (!chips) return;
+      var row = document.createElement('div');
+      row.className = 'chat-cite-row';
+      row.innerHTML = chips;
+      turnEl.appendChild(row);
     }
 
     // ----- Tiny Markdown renderer (basic) -----
@@ -323,6 +365,16 @@ CSS = r"""
 .chat-fragment {
   margin-top: 8px; overflow-x: auto; max-width: 100%;
   border-top: 1px solid var(--hairline); padding-top: 8px;
+}
+.chat-cite-row { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+.chat-cite {
+  font-size: 11px; color: var(--link, #6db3ff); border: 1px solid var(--hairline);
+  border-radius: 999px; padding: 2px 9px; text-decoration: none;
+}
+.chat-cite:hover { border-color: var(--link, #6db3ff); }
+.chat-text a.chat-cite-mark {
+  color: var(--link, #6db3ff); text-decoration: none;
+  font-size: 0.85em; vertical-align: super;
 }
 .chat-diff {
   margin-top: 8px; padding: 8px 10px;
