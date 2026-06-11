@@ -563,6 +563,15 @@ def create_app(
                 mimetype="text/html",
             )
 
+        if name == "evals":
+            # LLM eval scores (llm_evals_plan §2.6): latest run per purpose
+            # (+ cost joined from llm_calls), score-by-prompt-version A/B
+            # strip, failed-case drawers, per-purpose error/fallback health,
+            # and run buttons via the jobs SSE machinery.
+            from pipeline.evals_panel import render_evals_panel
+
+            return Response(render_evals_panel(db_path), mimetype="text/html")
+
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,
             render_panel_fragment,
@@ -1784,6 +1793,45 @@ def create_app(
         ]
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/run-eval", methods=["POST", "OPTIONS"])
+    def start_eval_run():
+        """Run one purpose's LLM eval (llm_evals_plan §2.6) as a streamed
+        single-flight job: {"purpose": "viewspec_compile" | "bear_case" |
+        "transcript_summary" | "advisor_next_dollar"}. Runs
+        execution/run_llm_evals.py against this repo's DB; the Evals panel
+        consumes the SSE stream and refetches itself on success. Buttons run
+        the FULL corpus — the weekly cron covers fresh-only (--since-days)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from pipeline.evals_panel import RUNNABLE_PURPOSES
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        purpose = str(body.get("purpose", ""))
+        if purpose not in RUNNABLE_PURPOSES:
+            return ({"error": f"purpose must be one of {list(RUNNABLE_PURPOSES)}"}, 400)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "run_llm_evals.py"),
+            "--purpose",
+            purpose,
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker="_REPO", kind=f"eval-{purpose}", argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
         return (

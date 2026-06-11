@@ -140,6 +140,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             ("section_coverage", "Coverage", "/api/panel/section_coverage", False, False),
             ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
             ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
+            # LLM eval scores (llm_evals_plan §2.6): latest run per purpose +
+            # prompt-version A/B strip + failed-case drawers + call health,
+            # with run buttons over the jobs SSE machinery.
+            ("evals", "Evals", "/api/panel/evals", False, False),
             # Whole-book data-quality state over validation_issues (P3.4) —
             # previously reachable only per-ticker inside workspace reports.
             ("validation", "Validation", "/api/panel/validation", False, False),

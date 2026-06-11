@@ -11,8 +11,12 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -315,3 +319,28 @@ def test_dcf_route_streams_xlsx_when_unlinked(client, tmp_path):
     (dcf_dir / "TEST.xlsx").write_bytes(b"PK\x03\x04 fake xlsx bytes")
     resp = client.get("/dcf/TEST")
     assert resp.status_code == 200
+
+
+def test_run_eval_action_validates_and_starts_job(client: "FlaskClient") -> None:
+    """/actions/run-eval (llm_evals_plan PR 3): rejects unknown purposes,
+    starts a registry job running execution/run_llm_evals.py for known ones."""
+    bad = client.post("/actions/run-eval", json={"purpose": "not_a_purpose"})
+    assert bad.status_code == 400
+    bad_body = cast("dict[str, str]", bad.get_json())
+    assert "purpose must be one of" in bad_body["error"]
+
+    resp = client.post("/actions/run-eval", json={"purpose": "bear_case"})
+    assert resp.status_code == 201
+    body = cast("dict[str, str]", resp.get_json())
+    assert body["kind"] == "eval-bear_case"
+    assert body["stream_url"] == f"/actions/stream/{body['job_id']}"
+
+
+def test_evals_panel_route_serves_fragment(client: "FlaskClient") -> None:
+    """GET /api/panel/evals renders on a minimal DB (no eval tables yet) —
+    the run bar must be present so the first eval can be started from it."""
+    resp = client.get("/api/panel/evals")
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert "ev-runbar" in html
+    assert "No eval runs recorded yet" in html
