@@ -177,7 +177,7 @@ def build_cockpit_rows(
         built: list[CockpitRow] = []
         for row in rows:
             t = row.ticker
-            price, day_move, price_asof = _profile_quote(repo_root, t)
+            price, day_move, price_asof = profile_quote(repo_root, t)
             rule_summary, evaluated_at, rule_tones = evals.get(t, (None, None, {}))
             deltas = _toned(kpi_facts.get(t, []), rule_tones) if t in portfolio_tickers else []
             fv_gap, fair_value, dcf_price, dcf_date = dcf.get(t, (None, None, None, None))
@@ -193,7 +193,7 @@ def build_cockpit_rows(
                     dcf_price=dcf_price,
                     dcf_date=dcf_date,
                     peg_ratio=_peg_ratio(repo_root, t),
-                    next_earnings=next_er.get(t) or _next_earnings(repo_root, t, ref),
+                    next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
@@ -229,8 +229,9 @@ def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None
     the ``ratios`` view's TTM row when financial_facts carries one, else
     summed on the fly from the newest four quarterly rows (sum FCF / sum
     revenue; prod has no TTM facts, so this path is what populates the
-    column). Best-effort — a missing view degrades to {} and the columns
-    render em-dashes.
+    column; semi-annual reporters sum the newest two half-years instead).
+    Best-effort — a missing view degrades to {} and the columns render
+    em-dashes.
     """
     fcf: dict[str, float] = {}
     for r in _safe_rows(
@@ -300,12 +301,21 @@ def _quarter_fcf(row: sqlite3.Row) -> float | None:
     return None
 
 
+_SEMI_ANNUAL_GAP_DAYS = (175, 200)  # half-year period-end spacing (Jun-30 ↔ Dec-31 is 181-184d)
+
+
 def _ttm_fcf_margin(rows: list[tuple[str, float, float | None]]) -> float | None:
     """Sum FCF over revenue across the newest four FCF-bearing quarters.
 
     ``rows`` arrive newest-first. Guards: four distinct quarter-ends spanning
     at most ~11 months (a hole in the window — endpoints 365+ days apart —
     would silently mix two fiscal years) and a positive revenue sum.
+
+    Semi-annual reporters (BHP: FMP lands half-years in the Q2/Q4 slots) fail
+    that span guard by construction — their newest four rows cover two fiscal
+    years — so they fall back to summing the newest TWO rows as the trailing
+    year, qualified by cadence so quarterly series with holes can't sneak in
+    (see ``_semi_annual_pair``).
     """
     window: list[tuple[datetime, float, float]] = []
     for end, rev, q_fcf in rows:
@@ -320,12 +330,46 @@ def _ttm_fcf_margin(rows: list[tuple[str, float, float | None]]) -> float | None
         window.append((dt, rev, q_fcf))
         if len(window) == 4:
             break
-    if len(window) < 4 or (window[0][0] - window[-1][0]).days > 330:
+    if len(window) == 4 and (window[0][0] - window[-1][0]).days <= 330:
+        ttm = window
+    else:
+        ttm = _semi_annual_pair(rows, window)
+    if not ttm:
         return None
-    rev_sum = sum(rev for _, rev, _ in window)
+    rev_sum = sum(rev for _, rev, _ in ttm)
     if rev_sum <= 0:
         return None
-    return sum(f for _, _, f in window) / rev_sum * 100.0
+    return sum(f for _, _, f in ttm) / rev_sum * 100.0
+
+
+def _semi_annual_pair(
+    rows: list[tuple[str, float, float | None]],
+    window: list[tuple[datetime, float, float]],
+) -> list[tuple[datetime, float, float]]:
+    """The newest two FCF-bearing rows when the series is half-yearly, else [].
+
+    Two half-years ending ~180 days apart cover a trailing year. Qualifying
+    needs more than one such gap, though: 90-day quarters with one missing
+    quarter also put the newest two rows ~180 days apart. So the cadence must
+    repeat — window[0]→[1] AND window[1]→[2] both ~175-200 days (a quarterly
+    series with a single hole shows at most one) — and no raw row may sit
+    between the two rows being summed (alternating FCF-less quarters would
+    otherwise mimic the spacing while each row covers only ~90 days).
+    """
+    if len(window) < 3:
+        return []
+    lo, hi = _SEMI_ANNUAL_GAP_DAYS
+    if not all(lo <= (window[i][0] - window[i + 1][0]).days <= hi for i in (0, 1)):
+        return []
+    newer, older = window[0][0], window[1][0]
+    for end, _, _ in rows:
+        try:
+            dt = datetime.fromisoformat(end[:10])
+        except ValueError:
+            continue
+        if older < dt < newer:
+            return []
+    return window[:2]
 
 
 def _company_names(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, str]:
@@ -509,10 +553,12 @@ def _read_json(path: Path) -> object | None:
         return None
 
 
-def _profile_quote(repo_root: Path, ticker: str) -> tuple[float | None, float | None, str | None]:
+def profile_quote(repo_root: Path, ticker: str) -> tuple[float | None, float | None, str | None]:
     """(price, day-move %, as-of) from ``data/historical/fmp/<T>_profile.json``.
     As-of is the file mtime — the price is from the last FMP cycle, which the
-    staleness dot already surfaces; a render path must not hit the network."""
+    staleness dot already surfaces; a render path must not hit the network.
+    Public: the ticker hover mini-card (pipeline.peeks) reads the same quote
+    so it can never disagree with the cockpit row it annotates."""
     path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
     payload = _read_json(path)
     rec: dict[str, object] | None = None
@@ -541,10 +587,11 @@ def _peg_ratio(repo_root: Path, ticker: str) -> float | None:
     return float(v) if isinstance(v, (int, float)) else None
 
 
-def _next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
+def next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
     """Earliest calendar date >= today from the FMP earnings-calendar cache.
     Read-only twin of ``sources.earnings_calendar._try_fmp_cache`` minus its
     ``source_calls`` logging (a dashboard render is not a sourcing decision).
+    Public: shared with the ticker hover mini-card (pipeline.peeks).
     FALLBACK only: ``build_cockpit_rows`` prefers the ``expected_earnings``
     table; this covers pre-0082 DBs and tickers the refresher hasn't seen."""
     payload = _read_json(
@@ -752,9 +799,14 @@ def _earnings_cell(row: CockpitRow, now: datetime) -> str:
 def _inbox_cell(row: CockpitRow) -> str:
     pills: list[str] = []
     if row.pending_alerts:
+        # data-peek-url: the pill peeks the pending cards in place (UX9); the
+        # /feed href stays the real destination for middle-click / new tab.
+        t = escape(row.base.ticker)
         pills.append(
-            f"<a class='pill pill-bad' href='/feed?ticker={escape(row.base.ticker)}"
-            f"&status=pending' title='unreviewed alerts'>{row.pending_alerts} alert"
+            f"<a class='pill pill-bad' href='/feed?ticker={t}&status=pending' "
+            f"data-peek-url='/api/peek/alerts?ticker={t}&status=pending' "
+            f"data-peek-title='Pending alerts · {t}' "
+            f"title='unreviewed alerts'>{row.pending_alerts} alert"
             f"{'s' if row.pending_alerts != 1 else ''}</a>"
         )
     if row.new_docs:

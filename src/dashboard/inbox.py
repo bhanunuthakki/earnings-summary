@@ -341,7 +341,10 @@ def _render_item(
     out.write(f'<div class="ix-card" data-kind="{_esc(it.kind)}" data-when="{when_attr}">')
     out.write('<div class="ix-head">')
     if it.ticker:
-        out.write(f'<span class="ix-ticker">{_esc(it.ticker)}</span>')
+        # data-peek-ticker: hover mini-card in the shell (UX9); inert elsewhere.
+        out.write(
+            f'<span class="ix-ticker" data-peek-ticker="{_esc(it.ticker)}">{_esc(it.ticker)}</span>'
+        )
     out.write(f'<span class="ix-kind ix-kind-{_esc(it.kind)}">{_esc(_title_for(it))}</span>')
     if show_status and it.status and it.status not in ("open",):
         out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
@@ -370,7 +373,21 @@ def _render_item(
         out.write("</div>")
     elif compact and it.kind in ("alert", "draft") and it.status == "pending":
         target = f"/feed?ticker={it.ticker}" if it.ticker else "/feed"
-        out.write(f'<div class="ix-open"><a href="{_esc(target)}">review →</a></div>')
+        # In the shell, "review" peeks the full alert card (evidence drawer +
+        # approve/dismiss) in place via data-peek-url (UX9); the /feed href
+        # stays the real destination for middle-click and non-shell surfaces
+        # (the digest has no peek runtime — the attribute is inert there).
+        alert_id = (
+            it.alert.id
+            if it.alert is not None
+            else (it.action.alert_id if it.action is not None else None)
+        )
+        peek = (
+            f' data-peek-url="/api/peek/alert/{alert_id}" data-peek-title="Review alert"'
+            if alert_id is not None
+            else ""
+        )
+        out.write(f'<div class="ix-open"><a href="{_esc(target)}"{peek}>review →</a></div>')
     out.write("</div>")
 
 

@@ -26,9 +26,10 @@ import json
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Iterator, Literal, cast
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
@@ -302,6 +303,8 @@ chat commands the server handles directly (no LLM): "/discovery list",
 "/discovery queue <T>", "/discovery dismiss <T>", "/discovery build <T>"
 (an eval build is ~25 min + LLM spend; the command is the approval).
 Mention these when the analyst asks about finding or evaluating new names.
+Metric questions ("revenue growth last 8 quarters") render as live data
+views automatically; "/view <question>" forces that path.
 """
 
 
@@ -316,6 +319,7 @@ _DIFF_FENCE_RX = None  # lazy compile
 def _extract_diff(text: str) -> dict[str, object] | None:
     """Pull the optional ```json ... ``` diff block out of a chat response."""
     import re
+
     global _DIFF_FENCE_RX
     if _DIFF_FENCE_RX is None:
         _DIFF_FENCE_RX = re.compile(r"```json\s*(\{[\s\S]*?\})\s*```", re.MULTILINE)
@@ -331,37 +335,18 @@ def _extract_diff(text: str) -> dict[str, object] | None:
     return cast("dict[str, object]", payload).get("diff") if "diff" in payload else None
 
 
-def stream_response(
-    repo_root: Path,
-    ticker: str,
-    report_date: date,
-    user_message: str,
-) -> Iterator[dict[str, object]]:
-    """Stream a chat response. Yields:
-      {type: "delta", text: "<chunk>"}      — incremental tokens
-      {type: "final", text: "<full>"}       — once at end
-      {type: "diff_proposal", diff: {...}}  — if the response contained a diff block
-      {type: "error", error: "..."}         — on failure
-    """
-    thread = load_thread(repo_root, ticker, report_date)
-    thread.append(ChatTurn(role="user", text=user_message))
+# Public name — the ask engine extracts diffs from portfolio-scoped
+# narrative answers it composes itself (src/ask/engine.py).
+extract_diff = _extract_diff
 
-    system_prompt = _system_prompt(repo_root, ticker, report_date)
 
-    # Assemble the prior conversation as a single user message body. The
-    # CLI runs single-turn, so we encode the thread into the prompt itself.
-    thread_text = "\n\n".join(
-        f"[{t.role.upper()}] {t.text}" for t in thread[:-1]
-    )
-    user_block = thread[-1].text
-    full_prompt = (
-        system_prompt
-        + "\n\n---\n\nPRIOR THREAD:\n"
-        + (thread_text or "(first turn)")
-        + "\n\n---\n\nUSER:\n"
-        + user_block
-    )
-
+def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
+    """Low-level transport: stream one assembled prompt through the claude
+    CLI. Yields {type: "delta", text} per chunk, then exactly one of
+    {type: "final", text: "<full>"} or {type: "error", error: "..."}.
+    No thread storage, no diff extraction — callers own session semantics
+    (this module's `stream_response` for the per-report thread; the ask
+    engine's portfolio scope composes its own prompt over it)."""
     claude_bin = shutil.which("claude")
     if claude_bin is None:
         yield {"type": "error", "error": "claude CLI not found in PATH"}
@@ -370,8 +355,15 @@ def stream_response(
     # Filesystem read scope is enforced by --allowedTools Read; the LLM can
     # only read, not write. (Comments + chat writes go through Flask endpoints
     # we control, not through the CLI's Edit tool.)
-    cmd = [claude_bin, "-p", "--output-format", "stream-json",
-           "--allowedTools", "Read", "--verbose"]
+    cmd = [
+        claude_bin,
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--allowedTools",
+        "Read",
+        "--verbose",
+    ]
     try:
         proc = subprocess.Popen(
             cmd,
@@ -421,6 +413,50 @@ def stream_response(
         yield {"type": "error", "error": f"empty response (stderr: {stderr_text})"}
         return
 
+    yield {"type": "final", "text": full_text}
+
+
+def stream_response(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    user_message: str,
+) -> Iterator[dict[str, object]]:
+    """Stream a chat response. Yields:
+    {type: "delta", text: "<chunk>"}      — incremental tokens
+    {type: "final", text: "<full>"}       — once at end
+    {type: "diff_proposal", diff: {...}}  — if the response contained a diff block
+    {type: "error", error: "..."}         — on failure
+    """
+    thread = load_thread(repo_root, ticker, report_date)
+    thread.append(ChatTurn(role="user", text=user_message))
+
+    system_prompt = _system_prompt(repo_root, ticker, report_date)
+
+    # Assemble the prior conversation as a single user message body. The
+    # CLI runs single-turn, so we encode the thread into the prompt itself.
+    thread_text = "\n\n".join(f"[{t.role.upper()}] {t.text}" for t in thread[:-1])
+    user_block = thread[-1].text
+    full_prompt = (
+        system_prompt
+        + "\n\n---\n\nPRIOR THREAD:\n"
+        + (thread_text or "(first turn)")
+        + "\n\n---\n\nUSER:\n"
+        + user_block
+    )
+
+    full_text: str | None = None
+    for event in stream_llm_text(full_prompt):
+        kind = event.get("type")
+        if kind == "final":
+            full_text = cast("str", event["text"])
+        else:
+            yield event
+            if kind == "error":
+                return
+    if full_text is None:  # defensive: transport always ends in final or error
+        return
+
     diff = _extract_diff(full_text)
     assistant_turn = ChatTurn(role="assistant", text=full_text, proposed_diff=diff)
     thread.append(assistant_turn)
@@ -458,31 +494,41 @@ def apply_chat_diff(
     summary = diff.get("summary") or "(no summary)"
 
     if not isinstance(target_file, str) or not isinstance(target_path, str):
-        return {"applied": False, "error": "diff missing target_file or target_path",
-                "summary": str(summary)}
+        return {
+            "applied": False,
+            "error": "diff missing target_file or target_path",
+            "summary": str(summary),
+        }
 
     abs_target = (repo_root / target_file).resolve()
     if not _is_in_writable_scope(repo_root, abs_target):
         return {
-            "applied": False, "error": f"target {target_file} outside writable scope",
+            "applied": False,
+            "error": f"target {target_file} outside writable scope",
             "summary": str(summary),
         }
     if not abs_target.exists():
         return {
-            "applied": False, "error": f"target file does not exist: {target_file}",
+            "applied": False,
+            "error": f"target file does not exist: {target_file}",
             "summary": str(summary),
         }
 
     try:
         payload = json.loads(abs_target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        return {"applied": False, "error": f"could not parse target as JSON: {e}",
-                "summary": str(summary)}
+        return {
+            "applied": False,
+            "error": f"could not parse target as JSON: {e}",
+            "summary": str(summary),
+        }
 
     if "." in target_path or "[" in target_path:
         return {
-            "applied": False, "error": "nested target_path not yet supported",
-            "summary": str(summary), "next_step": "use a top-level key for now",
+            "applied": False,
+            "error": "nested target_path not yet supported",
+            "summary": str(summary),
+            "next_step": "use a top-level key for now",
         }
     if target_path not in payload:
         return {
@@ -493,7 +539,8 @@ def apply_chat_diff(
 
     if dry_run:
         return {
-            "applied": False, "dry_run": True,
+            "applied": False,
+            "dry_run": True,
             "summary": str(summary),
             "old_preview": str(payload[target_path])[:120],
             "new_preview": str(new_value)[:120],
@@ -502,7 +549,8 @@ def apply_chat_diff(
     payload[target_path] = new_value
     abs_target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return {
-        "applied": True, "summary": str(summary),
+        "applied": True,
+        "summary": str(summary),
         "path": str(abs_target.relative_to(repo_root)),
     }
 
@@ -541,25 +589,30 @@ build_chat_response = _BuildChatResponse()
 
 
 __all__ = [
-    "ChatTurn",
     "ChatStore",
+    "ChatTurn",
     "apply_chat_diff",
     "build_chat_response",
+    "extract_diff",
     "load_thread",
     "save_thread",
+    "stream_llm_text",
     "stream_response",
 ]
 
 
 if __name__ == "__main__":  # smoke test
     import argparse
+
     p = argparse.ArgumentParser()
     p.add_argument("--ticker", required=True)
     p.add_argument("--report-date", required=True, type=date.fromisoformat)
     p.add_argument("--message", required=True)
     p.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     args = p.parse_args()
-    for ev in stream_response(args.repo_root.resolve(), args.ticker, args.report_date, args.message):
+    for ev in stream_response(
+        args.repo_root.resolve(), args.ticker, args.report_date, args.message
+    ):
         if ev.get("type") == "delta":
             sys.stdout.write(cast("str", ev["text"]))
             sys.stdout.flush()

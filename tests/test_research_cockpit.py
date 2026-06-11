@@ -395,9 +395,10 @@ def test_eval_fundamentals_ttm_margin_from_quarters(
 
 
 def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
-    """A hole in the quarter window (endpoints a full year apart — BHP-style
-    half-year rows) or fewer than four FCF-bearing quarters -> no margin
-    rather than a mislabeled one."""
+    """A hole in the quarter window (endpoints a full year apart) or fewer
+    than four FCF-bearing quarters -> no margin rather than a mislabeled one.
+    (True half-year reporters take the 2-row fallback instead — see the
+    semi-annual tests below.)"""
     _seed_fact_quarters(
         conn,
         "GAPQ",
@@ -421,6 +422,68 @@ def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
     out = _eval_fundamentals(conn)
     assert out["GAPQ"] == (pytest.approx(20.0), None)
     assert out["FEWQ"][1] is None
+
+
+def test_eval_fundamentals_semi_annual_ttm(conn: sqlite3.Connection) -> None:
+    """Half-year reporters (BHP shape: FMP lands semi-annual periods in the
+    Q2/Q4 slots, period-ends ~180d apart) fail the 4-row span guard but
+    populate from the newest TWO rows; a missing free_cash_flow still derives
+    from OCF + signed capex inside the pair."""
+    _seed_fact_quarters(
+        conn,
+        "SEMI",
+        [
+            ("2025-12-31 00:00:00", "Q2", 120.0, 30.0, -5.0, 25.0),
+            ("2025-06-30 00:00:00", "Q4", 110.0, 25.0, -5.0, None),  # derived: 20
+            ("2024-12-31 00:00:00", "Q2", 105.0, 20.0, -5.0, 15.0),
+            ("2024-06-30 00:00:00", "Q4", 100.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    rev_yoy, margin = _eval_fundamentals(conn)["SEMI"]
+    assert rev_yoy == pytest.approx(120.0 / 105.0 * 100.0 - 100.0)
+    assert margin == pytest.approx(45.0 / 230.0 * 100.0)
+
+
+def test_eval_fundamentals_semi_annual_fallback_guards(conn: sqlite3.Connection) -> None:
+    """The 2-row fallback demands repeating half-year cadence. A quarterly
+    series whose single hole leaves the newest two rows ~180d apart (HOLEQ),
+    alternating FCF-less quarters that mimic the spacing but leave a raw row
+    between the pair (ALTQ), and a two-row series with no third row to
+    corroborate cadence (TWOH) all stay unpopulated."""
+    _seed_fact_quarters(
+        conn,
+        "HOLEQ",
+        [
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            # 2025-12-31 missing -> newest gap ~182d, but the next is ~92d.
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
+            ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    _seed_fact_quarters(
+        conn,
+        "ALTQ",
+        [
+            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
+            ("2025-12-31 00:00:00", "Q4", 110.0, None, None, None),  # revenue only
+            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
+            ("2025-06-30 00:00:00", "Q2", 100.0, None, None, None),  # revenue only
+            ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    _seed_fact_quarters(
+        conn,
+        "TWOH",
+        [
+            ("2025-12-31 00:00:00", "Q2", 120.0, 30.0, -5.0, 25.0),
+            ("2025-06-30 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
+        ],
+    )
+    out = _eval_fundamentals(conn)
+    assert out["HOLEQ"][1] is None
+    assert out["ALTQ"][1] is None
+    assert out["TWOH"][1] is None
 
 
 def test_eval_fundamentals_prefers_ratios_ttm_row(conn: sqlite3.Connection) -> None:

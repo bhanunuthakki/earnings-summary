@@ -29,6 +29,7 @@ from datetime import date
 from html import escape
 from pathlib import Path
 
+from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -194,6 +195,24 @@ _ANALYTICS_CSS = """<style>
 .pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 .pf-exp-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .pf-nd-excerpt { font-size: 13px; line-height: 1.55; }
+.pf-nd-item { border-radius: 6px; }
+.pf-nd-item:hover, .pf-nd-item:focus-within { background: var(--surface); }
+.pf-nd-row { display: grid; grid-template-columns: 56px 1fr 56px 70px; gap: 10px;
+  align-items: center; font-size: 12.5px; padding: 3px 0; }
+.pf-nd-ticker { font-family: var(--mono); }
+.pf-nd-bar { background: var(--paper, #1a1d23); border-radius: 4px; height: 9px; overflow: hidden; }
+.pf-nd-bar span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.pf-nd-alloc { text-align: right; font-variant-numeric: tabular-nums; }
+.pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.pf-nd-wf { display: none; gap: 6px; flex-wrap: wrap; padding: 1px 0 6px; }
+.pf-nd-item:hover .pf-nd-wf, .pf-nd-item:focus-within .pf-nd-wf { display: flex; }
+.pf-nd-chip { font-family: var(--mono, monospace); font-size: 11px; border: 1px solid var(--border);
+  border-radius: 5px; padding: 2px 7px; cursor: help; color: var(--muted); }
+.pf-nd-chip.pos { color: var(--ok); border-color: var(--ok); }
+.pf-nd-chip.neg { color: var(--bad); border-color: var(--bad); }
+.pf-nd-note { font-size: 12px; }
+.pf-nd-hint { font-size: 11.5px; }
+.pf-nd-memo-h { margin-top: 12px; }
 .pf-alloc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 10px 32px; margin-top: 4px; }
 .pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
@@ -819,7 +838,7 @@ def render_portfolio_insights(db_path: Path, live: LivePortfolio) -> str:
     parts = [
         _thesis_rollup_panel(db_path),
         _exposure_panel(db_path, live),
-        _next_dollar_panel(db_path),
+        render_next_dollar_panel(db_path, live),
     ]
     body = "".join(p for p in parts if p)
     return f'<div class="pf-insights">{body}</div>' if body else ""
@@ -869,7 +888,10 @@ def _thesis_rollup_panel(db_path: Path) -> str:
     flagged = [(t, s) for t, s in sorted(latest.items()) if tones.get(s, "bad") != "ok"]
     ok_n = len(latest) - len(flagged)
     chips = "".join(
-        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}">'
+        # data-peek-ticker: the chip text carries " · status", so the hover
+        # mini-card needs the bare symbol spelled out (UX9).
+        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}" '
+        f'data-peek-ticker="{escape(t)}">'
         f"{escape(t)} · {escape(s)}</a>"
         for t, s in flagged
     )
@@ -939,35 +961,141 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
     )
 
 
-def _next_dollar_panel(db_path: Path) -> str:
-    """The latest next-dollar advisor memo, excerpted, deep-linking into the
-    Memos tab for the full record."""
+def render_next_dollar_panel(db_path: Path, live: LivePortfolio | None = None) -> str:
+    """Quantitative next-dollar allocation distribution over the holdings
+    (src/allocation: DCF upside / diversification / macro tilt, z-scored,
+    blended by visible weights, softmaxed — directives/next_dollar_model.md),
+    with the latest advisor memo excerpted below as the narrative layer.
+    Falls back to the memo alone when the model has nothing to score; hides
+    entirely when neither exists. Public for the markup-contract tests
+    (UX9 peeks); ``live`` is optional so those callers don't need a tracker
+    snapshot (None means no live weights — the model goes equal-weight)."""
     if not db_path.exists():
         return ""
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
         return ""
+    memo: tuple[str, str, str] | None = None
     try:
-        row = conn.execute(
-            "SELECT title, body_md, created_at FROM advisor_memos "
-            "WHERE kind = 'next_dollar' ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-    except sqlite3.Error:
-        return ""
+        tickers = _portfolio_tickers(conn)
+        try:
+            row = conn.execute(
+                "SELECT title, body_md, created_at FROM advisor_memos "
+                "WHERE kind = 'next_dollar' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            memo = (str(row[0]), str(row[1]), str(row[2]))
     finally:
         conn.close()
-    if row is None:
+
+    model: NextDollarModel | None = None
+    if tickers:
+        live_values: dict[str, float | None] | None = None
+        if live is not None and live.available and live.positions:
+            live_values = {p.ticker.upper(): p.market_value for p in live.positions if p.ticker}
+        model = build_next_dollar_model(db_path, db_path.parent.parent, tickers, live_values)
+
+    model_html = _next_dollar_distribution(model) if model is not None else ""
+    memo_html = _next_dollar_memo(memo, with_heading=bool(model_html))
+    if not model_html and not memo_html:
         return ""
-    title, body_md, created_at = str(row[0]), str(row[1]), str(row[2])
-    text = " ".join(body_md.replace("#", " ").replace("*", " ").split())
-    excerpt = text[:420] + ("…" if len(text) > 420 else "")
     return (
         '<section class="panel"><h2>Where the next dollar goes</h2>'
-        f'<p class="sub">{escape(title)} · {stamp_html(created_at, mode="date")} · '
-        '<a href="#advisor_memos">full memo →</a></p>'
-        f'<p class="pf-nd-excerpt">{escape(excerpt)}</p></section>'
+        f"{model_html}{memo_html}</section>"
     )
+
+
+def _next_dollar_distribution(model: NextDollarModel) -> str:
+    """The allocation bars + per-holding factor waterfall (hover/focus) +
+    the model's provenance sub-line. Pure HTML over an already-built model."""
+    # round(..., 6) first: 0.30/0.80 floats to 37.4999…, which ':.0f' alone
+    # would render as 37% (and the blend line would sum to 99%).
+    blend = " / ".join(f"{FACTOR_LABELS[k]} {round(w * 100.0, 6):.0f}%" for k, w in model.blend)
+    bits = [f"blend {blend}"]
+    bits.append("tracker-weighted" if model.weights_source == "tracker" else "equal-weighted")
+    if model.prices_through is not None:
+        bits.append(f"daily returns through {model.prices_through.isoformat()}")
+    if model.cov_obs:
+        bits.append(f"{model.cov_obs}d window")
+    if model.portfolio_vol_ann is not None:
+        bits.append(f"book vol {model.portfolio_vol_ann * 100.0:.0f}%/yr")
+    if model.shrinkage is not None:
+        bits.append(f"LW shrink {model.shrinkage:.2f}")
+    sub = f'<p class="sub">Softmax over blended z-scores · {escape(" · ".join(bits))}.</p>'
+
+    warn_lines = [
+        f"{FACTOR_LABELS[k]} hidden — {reason}" for k, reason in model.hidden_factors.items()
+    ]
+    warn_lines.extend(f"{t} not scored — {reason}" for t, reason in sorted(model.excluded.items()))
+    warn_lines.extend(model.notes)
+    warns = "".join(f'<p class="muted pf-nd-note">{escape(w)}</p>' for w in warn_lines)
+
+    active = {k for k, _w in model.blend}
+    max_alloc = max((r.allocation_pct for r in model.rows), default=0.0) or 1.0
+    items: list[str] = []
+    for r in model.rows:
+        width = max(0.0, min(100.0, r.allocation_pct / max_alloc * 100.0))
+        chips: list[str] = []
+        for key in ("ret", "div", "macro"):
+            if key not in active:
+                continue
+            label = FACTOR_LABELS[key]
+            reading = r.reading(key)
+            if reading is None:
+                chips.append(
+                    f'<span class="pf-nd-chip" title="no {escape(label)} data for this '
+                    f'holding — its blend renormalizes over the rest">{escape(label)} —</span>'
+                )
+                continue
+            tone = " pos" if reading.contribution >= 0 else " neg"
+            tip = (
+                f"z {reading.z:+.2f} · weight {round(reading.weight * 100.0, 6):.0f}% · "
+                f"raw {reading.raw * 100.0:+.1f}% · {reading.detail}"
+            )
+            chips.append(
+                f'<span class="pf-nd-chip{tone}" title="{escape(tip)}">'
+                f"{escape(label)} {reading.contribution:+.2f}</span>"
+            )
+        ticker = escape(r.ticker)
+        items.append(
+            '<div class="pf-nd-item" tabindex="0">'
+            '<div class="pf-nd-row">'
+            f'<a class="pf-nd-ticker ticker-link" href="../research/{ticker}/">{ticker}</a>'
+            f'<span class="pf-nd-bar"><span style="width:{width:.1f}%"></span></span>'
+            f'<span class="pf-nd-alloc">{r.allocation_pct:.1f}%</span>'
+            f'<span class="pf-nd-now muted">now {r.current_weight_pct:.1f}%</span>'
+            "</div>"
+            f'<div class="pf-nd-wf">{"".join(chips)}</div>'
+            "</div>"
+        )
+    hint = (
+        '<p class="muted pf-nd-hint">Hover or focus a row for the factor waterfall '
+        "(blend weight x z per factor; raw values in the tooltip).</p>"
+    )
+    return f"{sub}{warns}{''.join(items)}{hint}"
+
+
+def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) -> str:
+    """The latest next-dollar advisor memo, excerpted, deep-linking into the
+    Memos tab. Gets its own sub-heading when it sits under the distribution."""
+    if memo is None:
+        return ""
+    title, body_md, created_at = memo
+    text = " ".join(body_md.replace("#", " ").replace("*", " ").split())
+    excerpt = text[:420] + ("…" if len(text) > 420 else "")
+    meta = (
+        f'<p class="sub">{escape(title)} · {stamp_html(created_at, mode="date")} · '
+        # Peeks the rendered memo in place (UX9); the hash href still lands on
+        # the Memos tab for middle-click / non-shell surfaces.
+        '<a href="#advisor_memos" data-peek-url="/api/peek/memo/next_dollar" '
+        'data-peek-title="Next-dollar memo">full memo →</a></p>'
+    )
+    body = f'<p class="pf-nd-excerpt">{escape(excerpt)}</p>'
+    heading = '<h3 class="panel-h3 pf-nd-memo-h">Advisor memo</h3>' if with_heading else ""
+    return f"{heading}{meta}{body}"
 
 
 def render_live_portfolio_section(live: LivePortfolio) -> str:

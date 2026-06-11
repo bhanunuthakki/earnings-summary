@@ -22,6 +22,7 @@ import threading
 from pathlib import Path
 
 import pytest
+from flask.testing import FlaskClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -93,9 +94,7 @@ def test_cors_no_wildcard_for_non_localhost(client):
 
 
 def test_cors_echoes_whitelisted_origin(monkeypatch, client):
-    monkeypatch.setenv(
-        "COMMENTS_SERVER_CORS_WHITELIST", "https://my.app,https://other.app"
-    )
+    monkeypatch.setenv("COMMENTS_SERVER_CORS_WHITELIST", "https://my.app,https://other.app")
     resp = client.get(
         "/healthz",
         base_url="http://example.com",
@@ -171,9 +170,7 @@ def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
         yield {"type": "delta", "text": "partial"}
         raise RuntimeError("subprocess died")
 
-    monkeypatch.setattr(
-        comments_server.build_chat_response, "stream_response", boom
-    )
+    monkeypatch.setattr(comments_server.build_chat_response, "stream_response", boom)
     resp = client.post(
         "/chat/NU",
         json={"report_date": "2026-05-01", "message": "test"},
@@ -182,6 +179,64 @@ def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
     assert "partial" in body
     assert "chat stream failed" in body
     assert "subprocess died" in body
+
+
+def test_chat_data_question_streams_view_fragment(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient, app_repo: Path
+) -> None:
+    """The unified engine inside /chat/<ticker>: a metric-shaped question
+    routes to the ViewSpec path and streams a fragment frame + the message
+    line as final — no narrative LLM involved (the conftest guard would
+    trip if it were)."""
+    from types import SimpleNamespace
+
+    import ask.engine as ask_engine
+    from viewspec import nl_compile
+    from viewspec.spec import ViewSpec
+
+    spec = ViewSpec.from_dict(
+        {
+            "tickers": ["NU"],
+            "metrics": ["fin:revenue"],
+            "transform": "yoy",
+            "cadence": "quarterly",
+            "periods": 8,
+        }
+    )
+
+    def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
+        return nl_compile.NLCompileResult(status="ok", spec=spec)
+
+    def fake_execute(s: ViewSpec, *, db_path: Path) -> SimpleNamespace:
+        return SimpleNamespace(rows=[object()])
+
+    def fake_render(view: object, **_kw: object) -> str:
+        return "<div>FRAG</div>"
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
+    monkeypatch.setattr(ask_engine, "execute_view", fake_execute)
+    monkeypatch.setattr(ask_engine, "render_view_fragment", fake_render)
+    resp = client.post(
+        "/chat/NU",
+        json={"report_date": "2026-05-01", "message": "NU revenue growth, last 8 quarters"},
+    )
+    body = resp.get_data(as_text=True)
+    assert resp.mimetype == "text/event-stream"
+    assert '"type": "fragment"' in body
+    assert "FRAG" in body
+    assert "1 series" in body
+    # The data turn persisted to the per-report thread (ticker pack).
+    thread_file = app_repo / "data" / "report_chats" / "NU" / "2026-05-01.json"
+    assert thread_file.exists()
+
+
+def test_chat_discovery_command_short_circuits(client: FlaskClient) -> None:
+    """/help answers deterministically through the engine's command route —
+    instant SSE reply, no LLM (conftest guard enforces it)."""
+    resp = client.post("/chat/NU", json={"report_date": "2026-05-01", "message": "/help"})
+    body = resp.get_data(as_text=True)
+    assert '"type": "final"' in body
+    assert "/discovery" in body
 
 
 def test_concurrent_chat_requests_proceed_in_parallel(monkeypatch, client):
