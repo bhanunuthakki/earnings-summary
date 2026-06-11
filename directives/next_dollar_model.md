@@ -90,6 +90,11 @@ momentum(s) = ln(latest / level ~90 calendar days earlier)
 **Populating the substrate:** `python execution/fetch_macro_series.py` (FMP, needs
 `FMP_API_KEY`) then `python execution/compute_macro_sensitivities.py --portfolio`.
 Both tables ship empty until those run; the factor hides itself meanwhile.
+**Refresh cadence:** the `earnings-summary\fetch_macro_series` scheduled task
+(`cron/run_fetch_macro_series.bat`, daily 05:35 local) runs both scripts right after
+the FMP daily quota reset (00:00 UTC) and before the 05:45/06:30 FMP crons consume
+the day's request budget — on a quota-exhausted day the fetch 429s harmlessly and
+the panel keeps the factor hidden (the staleness guard caps drift at 45 days).
 
 ## Standardize → blend → softmax
 
