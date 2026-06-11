@@ -350,11 +350,15 @@ def test_panel_fragment_prereads_ticker_filter(client) -> None:
     assert 'class="reread-card"' not in amd_body
 
 
-def test_panel_fragment_insiders_headless(client) -> None:
-    # No insider_transactions seeded → empty section, but headless + 200.
-    resp = client.get("/api/panel/insiders?ticker=NU")
-    assert resp.status_code == 200
-    assert "<!doctype" not in resp.get_data(as_text=True).lower()
+def test_retired_panel_fragments_404(client) -> None:
+    """P6.1: the theme migration's dead fragment endpoints are retired —
+    insiders / predictions were killed from the nav (P1.1) with no remaining
+    fetchers, and "decisions" was superseded by the Decisions record (P2.2,
+    /api/panel/decisions_record). Their sections still render inside the
+    full static export page (render_html)."""
+    assert client.get("/api/panel/insiders?ticker=NU").status_code == 404
+    assert client.get("/api/panel/predictions").status_code == 404
+    assert client.get("/api/panel/decisions").status_code == 404
 
 
 def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) -> None:

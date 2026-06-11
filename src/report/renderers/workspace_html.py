@@ -6,11 +6,10 @@ contained HTML file. Same contract as ``html.py`` — no runtime JS framework,
 no CDN dependencies beyond the Google Fonts stylesheet.
 
 The design's four tabs (Earnings / Say·Do / Financials / Thesis & Risk) are
-extended with three more (Company / Position / Sources) so every section of
-the ReportSpec has a home. Sections whose pipeline data isn't structured for
-the design's slots (hero quote, Q&A roster, DCF sensitivity, peer comps) fall
-through to discreet "compute pending" stubs rather than getting dropped or
-faked.
+extended so every section of the ReportSpec has a home (News / Decisions /
+Valuation / Bear / Company / Exec Comp / Synthesis / Position / Sources).
+Sections with no data HIDE rather than stub (P4.2 hide-don't-stub); the
+Governance coverage matrix carries the gap inventory.
 """
 
 from __future__ import annotations
@@ -1636,46 +1635,29 @@ def _signals_panel(body: StringIO, signals: SignalsSection) -> None:
     body.write("</div>")
 
 
-_SIGNALS_CARD_BG: dict[str, str] = {
-    "red": "rgba(185,28,28,0.10)",
-    "yellow": "rgba(185,124,0,0.10)",
-    "green": "rgba(29,78,216,0.10)",
-}
-_SIGNALS_CARD_BORDER: dict[str, str] = {
-    "red": "var(--bad)",
-    "yellow": "var(--warn)",
-    "green": "var(--ok)",
-}
+# Severity is expressed through token-backed classes (P6.1 design-debt
+# sweep — these cards previously hardcoded rgba colors + a font stack
+# inline, bypassing the P0.1 palette).
+_SIGNALS_SEVERITIES = frozenset({"red", "yellow", "green"})
+
+
+def _signal_severity_class(severity: str) -> str:
+    return f"sig-{severity}" if severity in _SIGNALS_SEVERITIES else "sig-unknown"
 
 
 def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
-    bg = _SIGNALS_CARD_BG.get(r.severity, "transparent")
-    border = _SIGNALS_CARD_BORDER.get(r.severity, "var(--hairline)")
-    style = (
-        "border:1px solid var(--hairline);"
-        f"border-left:3px solid {border};"
-        f"background:{bg};"
-        "border-radius:6px;padding:10px 12px;font-size:12.5px;"
-    )
     type_label = r.signal_type.replace("_", " ")
-    body.write(f'<div style="{style}">')
+    body.write(f'<div class="signal-card {_signal_severity_class(r.severity)}">')
+    body.write('<div class="signal-card-head">')
     body.write(
-        '<div style="display:flex;justify-content:space-between;'
-        'gap:8px;align-items:baseline;margin-bottom:4px;">'
-    )
-    body.write(
-        f'<span style="font-weight:600;">{_esc(r.metric_name)}</span>'
-        f'<span style="font-size:10.5px;text-transform:uppercase;'
-        f'letter-spacing:0.4px;color:var(--muted);">{_esc(type_label)}</span>'
+        f'<span class="signal-card-metric">{_esc(r.metric_name)}</span>'
+        f'<span class="signal-card-type">{_esc(type_label)}</span>'
     )
     body.write("</div>")
     if r.narrative:
-        body.write(f'<div style="line-height:1.45;margin:4px 0 6px;">{_esc(r.narrative)}</div>')
+        body.write(f'<div class="signal-card-narrative">{_esc(r.narrative)}</div>')
     if r.value_summary:
-        body.write(
-            "<div style=\"font-family:'JetBrains Mono',Consolas,monospace;"
-            f'font-size:11.5px;color:var(--muted);">{_esc(r.value_summary)}</div>'
-        )
+        body.write(f'<div class="signal-card-stat">{_esc(r.value_summary)}</div>')
     body.write("</div>")
 
 
@@ -1686,13 +1668,12 @@ def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
         "<th>Sev</th><th>Metric</th><th>Kind</th><th>Signal</th><th>Narrative</th><th>Stat</th>"
     )
     body.write("</tr></thead><tbody>")
-    sev_color = {"red": "var(--bad)", "yellow": "var(--warn)", "green": "var(--ok)"}
     for r in rows:
-        color = sev_color.get(r.severity, "var(--muted)")
         narrative = _esc(r.narrative) if r.narrative else "—"
         stat = _esc(r.value_summary) if r.value_summary else "—"
         body.write(
-            f'<tr><td style="color:{color};font-weight:600;">{_esc(r.severity)}</td>'
+            f'<tr><td class="signal-sev {_signal_severity_class(r.severity)}">'
+            f"{_esc(r.severity)}</td>"
             f"<td><strong>{_esc(r.metric_name)}</strong></td>"
             f"<td>{_esc(r.metric_kind)}</td>"
             f"<td>{_esc(r.signal_type.replace('_', ' '))}</td>"

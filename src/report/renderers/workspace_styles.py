@@ -524,6 +524,32 @@ details.panel > summary:hover { background: var(--paper); }
   gap: 10px;
   padding: 14px var(--panel-pad-x);
 }
+/* §3.5 signal cards — severity via token-backed classes (P6.1; these
+   previously carried hardcoded inline rgba colors + a literal font stack). */
+.signal-card {
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--hairline);
+  border-radius: 6px; padding: 10px 12px; font-size: 12.5px;
+}
+.signal-card.sig-red { border-left-color: var(--bad); background: var(--tone-neg); }
+.signal-card.sig-yellow { border-left-color: var(--warn); background: var(--tone-opt); }
+.signal-card.sig-green { border-left-color: var(--ok); background: var(--tone-pos); }
+.signal-card-head {
+  display: flex; justify-content: space-between;
+  gap: 8px; align-items: baseline; margin-bottom: 4px;
+}
+.signal-card-metric { font-weight: 600; }
+.signal-card-type {
+  font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.4px; color: var(--muted);
+}
+.signal-card-narrative { line-height: 1.45; margin: 4px 0 6px; }
+.signal-card-stat { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.signal-sev { font-weight: 600; color: var(--muted); }
+.signal-sev.sig-red { color: var(--bad); }
+.signal-sev.sig-yellow { color: var(--warn); }
+.signal-sev.sig-green { color: var(--ok); }
+
 .signals-all { padding: 0 var(--panel-pad-x) 14px; }
 .signals-all > summary {
   cursor: pointer; font-size: 12.5px; color: var(--muted);
@@ -554,8 +580,7 @@ details.panel > summary:hover { background: var(--paper); }
 /* P4.1 canonical table — the ONE data-table class. Variants are modifier
    classes alongside it (.tbl-nowrap for dense numeric grids; semantic
    modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep
-   only their table-specific rules below). The sensitivity matrix
-   (.sens-table) is a heat grid, not a data table, and stays separate. */
+   only their table-specific rules below). */
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th {
   text-align: left; font-size: 10.5px; font-weight: 500;
@@ -584,29 +609,6 @@ details.panel > summary:hover { background: var(--paper); }
   color: var(--muted);
   font-size: 12px;
   font-style: italic;
-}
-
-.quotes {
-  padding: 6px var(--panel-pad-x) var(--panel-pad-y);
-  display: flex; flex-direction: column;
-}
-.quote {
-  padding: 12px 0;
-  border-top: 1px solid var(--hairline);
-}
-.quote:first-child { border-top: 0; padding-top: 8px; }
-.quote-tag {
-  font-family: var(--mono); font-size: 10px; font-weight: 600;
-  letter-spacing: 0.1em; color: var(--accent);
-  text-transform: uppercase; margin-bottom: 7px;
-}
-.quote-body {
-  font-family: var(--serif); font-size: 15px; line-height: 1.45;
-  color: var(--fg);
-}
-.quote-speaker {
-  margin-top: 6px; font-size: 11.5px; color: var(--muted);
-  font-family: var(--mono);
 }
 
 /* Q&A rows: <details class="qa-row"> per question (P4.1 — the canonical
@@ -722,42 +724,6 @@ details.panel > summary:hover { background: var(--paper); }
 .val-row.emph strong { font-size: 16px; font-weight: 600; }
 .val-row.muted { color: var(--muted); }
 .val-row.muted strong { color: var(--muted); }
-
-.sens-wrap { padding: 12px var(--panel-pad-x); }
-.sens-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; }
-.sens-table th {
-  font-weight: 500; padding: 6px 4px;
-  color: var(--muted); font-size: 10px; letter-spacing: 0.04em;
-  text-align: center;
-  background: transparent;
-}
-.sens-table th.col-base { color: var(--accent); font-weight: 600; }
-.sens-table tr.row-base th { color: var(--accent); font-weight: 600; }
-.sens-row-h { text-align: left !important; padding-right: 12px !important; }
-.sens-cell {
-  padding: 7px 4px; text-align: center;
-  font-variant-numeric: tabular-nums;
-  border-radius: 3px;
-}
-.sens-cell.above { color: var(--accent); background: var(--accent-soft); }
-.sens-cell.below { color: var(--muted); background: var(--paper); }
-.sens-cell.base {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-  font-weight: 700;
-}
-.sens-legend {
-  display: flex; gap: 18px; padding-top: 12px;
-  font-size: 11px; color: var(--muted);
-  flex-wrap: wrap;
-}
-.sens-sw {
-  display: inline-block; width: 12px; height: 12px;
-  border-radius: 2px; vertical-align: -2px; margin-right: 6px;
-}
-.sens-sw.above { background: var(--accent-soft); border: 1px solid var(--accent); }
-.sens-sw.below { background: var(--paper); border: 1px solid var(--border-2); }
-.sens-sw.base { background: var(--accent); }
 
 .break-status-ok { color: var(--accent); }
 .break-status-warn { color: var(--warn); }

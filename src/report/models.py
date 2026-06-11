@@ -892,32 +892,6 @@ class AppendixSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Hero quote — single thesis-anchoring quote pulled from the latest call
-# ---------------------------------------------------------------------------
-
-
-class HeroQuote(BaseModel):
-    """A single quote selected by an LLM as the most thesis-relevant line
-    from the most recent earnings call. Used by the workspace renderer's
-    Earnings tab as the hero panel."""
-
-    speaker: str  # full name as it appears in the transcript ("Sundar Pichai")
-    role: str  # title + context ("CEO, Alphabet · Q1 2026 earnings call")
-    body: str  # verbatim quote, with surrounding quote marks stripped
-    rationale: str | None = None  # one-line why-this-matters from the LLM
-    source_quarter: str | None = None
-    source_year: int | None = None
-
-
-class HeroQuoteSection(BaseModel):
-    """Hero-quote container. Used by the workspace renderer."""
-
-    status: SectionStatus
-    missing: MissingReason | None = None
-    quote: HeroQuote | None = None
-
-
-# ---------------------------------------------------------------------------
 # Q&A roster — structured analyst-Q&A rows for the workspace Earnings tab
 # ---------------------------------------------------------------------------
 
@@ -1221,8 +1195,9 @@ class ReportSpec(BaseModel):
     provenance: ProvenanceSection
     appendix: AppendixSection
     # Workspace-renderer-specific sections — None when not produced; renderers
-    # that don't consume them simply ignore the field.
-    hero_quote: HeroQuoteSection | None = None
+    # that don't consume them simply ignore the field. (The hero_quote slot
+    # was retired in P6.1 — defined since the design bundle, never produced
+    # or rendered.)
     qa_roster: QARosterSection | None = None
     filing_intelligence: FilingIntelligenceSection | None = None
     exec_compensation: ExecCompSectionModel | None = None
