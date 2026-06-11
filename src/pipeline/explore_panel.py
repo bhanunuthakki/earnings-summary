@@ -321,6 +321,9 @@ _PANEL_JS = """
     if (askCtx) askCtx.hidden = !on;
   }
 
+  // Ask v2: consume the SSE stream (POST /api/ask/stream) so progress is
+  // real — stage frames drive the busy line, narrative deltas render as
+  // they arrive, fragment/final assemble the answer card at the end.
   function submitAsk(q) {
     if (askBusy) return;
     var query = (q || askInput.value).trim();
@@ -337,46 +340,107 @@ _PANEL_JS = """
     card.innerHTML = '<div class="ask-busy">working<span class="dots"></span></div>';
     askThread.appendChild(card);
     askScroll();
-    var staged = setTimeout(function () {
-      var busy = card.querySelector('.ask-busy');
-      if (busy) busy.innerHTML = 'still working — data views are fast, researched answers can take ~30s<span class="dots"></span>';
-    }, 2500);
     askRemember('user', query);
-    fetch('/api/ask', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec,
-                            history: askHistory.slice(0, -1)})
-    }).then(function (r) { return r.json(); }).then(function (res) {
-      clearTimeout(staged);
+
+    var prose = null;
+    var proseText = '';
+    var frag = null;
+    var note = '';
+    var finalEv = null;
+    var errored = false;
+
+    function busyLine(text) {
+      var busy = card.querySelector('.ask-busy');
+      if (busy) busy.innerHTML = askEsc(text) + '<span class="dots"></span>';
+    }
+    function ensureProse() {
+      if (prose) return;
+      var busy = card.querySelector('.ask-busy');
+      if (busy) busy.remove();
+      prose = document.createElement('div');
+      prose.className = 'ask-prose';
+      card.appendChild(prose);
+    }
+    function handleEvent(ev) {
+      if (ev.type === 'stage') {
+        if (ev.note) note = ev.note;
+        if (ev.stage === 'compiling') busyLine('compiling the view');
+        else if (ev.stage === 'running') busyLine('running the view');
+        else busyLine(ev.note || 'researching — prose answers can take ~30s');
+      } else if (ev.type === 'delta') {
+        ensureProse();
+        proseText += ev.text || '';
+        prose.textContent = proseText;
+        askScroll();
+      } else if (ev.type === 'fragment') {
+        frag = ev;
+      } else if (ev.type === 'final') {
+        finalEv = ev;
+      } else if (ev.type === 'error') {
+        errored = true;
+        card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
+          + askEsc(ev.error || 'Could not answer that — try the advanced builder.')
+          + '</span></div>';
+      }
+    }
+    function finish() {
       askBusy = false;
-      if (res.status === 'ok' && res.kind === 'narrative') {
-        var note = res.note ? '<div class="ask-meta">' + askEsc(res.note) + '</div>' : '';
-        card.innerHTML = note + '<div class="ask-prose">' + askMd(res.text || '') + '</div>';
-        askRemember('assistant', res.text || '');
-      } else if (res.status === 'ok' && res.kind === 'command') {
-        card.innerHTML = '<pre class="ask-cmd">' + askEsc(res.text || '') + '</pre>';
-        askRemember('assistant', res.text || '');
-      } else if (res.status === 'ok' && res.spec) {
-        lastSpec = res.spec;
+      if (errored) { askScroll(); return; }
+      if (frag) {
+        lastSpec = frag.spec || lastSpec;
         setCtx(true);
-        card.innerHTML = '<div class="ask-meta">' + askEsc(res.message || 'done') + '</div>'
-          + (res.fragment || '')
+        var msg = (finalEv && finalEv.text) || 'done';
+        card.innerHTML = '<div class="ask-meta">' + askEsc(msg) + '</div>'
+          + (frag.html || '')
           + '<div class="ask-actions">'
           + '<button type="button" data-ask-act="builder">Open in builder</button>'
           + '<button type="button" data-ask-act="pin">Pin as view</button>'
           + '</div>';
-        card.setAttribute('data-ask-spec', JSON.stringify(res.spec));
-        askRemember('assistant', res.message || 'rendered a data view');
+        card.setAttribute('data-ask-spec', JSON.stringify(frag.spec || {}));
+        askRemember('assistant', msg);
+      } else if (finalEv) {
+        var text = finalEv.text || proseText || '';
+        if (finalEv.route === 'command') {
+          card.innerHTML = '<pre class="ask-cmd">' + askEsc(text) + '</pre>';
+        } else {
+          var noteHtml = note ? '<div class="ask-meta">' + askEsc(note) + '</div>' : '';
+          card.innerHTML = noteHtml + '<div class="ask-prose">' + askMd(text) + '</div>';
+        }
+        askRemember('assistant', text);
       } else {
-        card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
-          + askEsc(res.message || 'Could not answer that — try the advanced builder.')
-          + '</span></div>';
+        card.innerHTML = '<div class="ask-meta"><span class="ask-err">no answer — try again</span></div>';
       }
       askScroll();
+    }
+
+    fetch('/api/ask/stream', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec,
+                            history: askHistory.slice(0, -1)})
+    }).then(function (r) {
+      if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
+      var reader = r.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) { finish(); return; }
+          buffer += decoder.decode(res.value, {stream: true});
+          var parts = buffer.split('\\n\\n');
+          buffer = parts.pop();
+          parts.forEach(function (frame) {
+            var line = frame.replace(/^data:\\s*/, '');
+            if (!line) return;
+            try { handleEvent(JSON.parse(line)); } catch (e) {}
+          });
+          return pump();
+        });
+      }
+      return pump();
     }).catch(function () {
-      clearTimeout(staged);
       askBusy = false;
       card.innerHTML = '<div class="ask-meta"><span class="ask-err">network error — try again</span></div>';
+      askScroll();
     });
   }
 
@@ -409,6 +473,19 @@ _PANEL_JS = """
       }).then(function (r) { if (r.ok) refreshSaved(); });
     }
   });
+
+  // Ctrl/Cmd+K handoff: the shell palette stashes the typed query in
+  // sessionStorage and jumps to #explore; consume it at wire-up (lazy
+  // panel load) or on the palette's event (panel already loaded).
+  function consumePaletteQuery() {
+    var q = null;
+    try { q = sessionStorage.getItem('cc-ask-q'); } catch (e) { return; }
+    if (!q || askBusy) return;
+    try { sessionStorage.removeItem('cc-ask-q'); } catch (e) {}
+    submitAsk(q);
+  }
+  window.addEventListener('cc-ask-q', consumePaletteQuery);
+  consumePaletteQuery();
 })();
 """
 

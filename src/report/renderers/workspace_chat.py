@@ -76,6 +76,11 @@ JS = r"""
       });
 
     // ----- Submit handler -----
+    // lastSpec: the most recent data-view spec this drawer rendered. Sent
+    // as context_spec so short follow-ups ("now annual", "add MELI")
+    // refine the view instead of starting over — same contract as the
+    // Ask tab's thread.
+    var lastSpec = null;
     form.addEventListener('submit', function(ev) {
       ev.preventDefault();
       var msg = form.message.value.trim();
@@ -84,13 +89,13 @@ JS = r"""
       appendTurn('user', msg, null);
       var assistantEl = appendTurn('assistant', '', null);
       var streamEl = assistantEl.querySelector('.chat-text');
-      hintEl.textContent = 'Streaming…';
+      hintEl.textContent = 'Working…';
 
       // SSE via fetch + ReadableStream (EventSource doesn't support POST)
       fetch(SERVER_URL + '/chat/' + TICKER, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({report_date: REPORT_DATE, message: msg}),
+        body: JSON.stringify({report_date: REPORT_DATE, message: msg, context_spec: lastSpec}),
       }).then(function(resp) {
         if (!resp.ok || !resp.body) throw new Error('chat HTTP ' + resp.status);
         var reader = resp.body.getReader();
@@ -110,7 +115,14 @@ JS = r"""
               var line = frame.replace(/^data:\s*/, '');
               try {
                 var ev = JSON.parse(line);
-                if (ev.type === 'delta') {
+                if (ev.type === 'stage') {
+                  // Real progress from the engine: compiling/running a
+                  // data view, or off researching in prose.
+                  hintEl.textContent =
+                    ev.stage === 'compiling' ? 'Compiling the view…'
+                    : ev.stage === 'running' ? 'Running the view…'
+                    : (ev.note || 'Researching — can take ~30s…');
+                } else if (ev.type === 'delta') {
                   streamEl.textContent += ev.text;
                   threadEl.scrollTop = threadEl.scrollHeight;
                 } else if (ev.type === 'fragment') {
@@ -121,6 +133,7 @@ JS = r"""
                   frag.innerHTML = ev.html || '';
                   assistantEl.appendChild(frag);
                   threadEl.scrollTop = threadEl.scrollHeight;
+                  if (ev.spec) lastSpec = ev.spec;
                 } else if (ev.type === 'final') {
                   // Data turns carry no deltas — the final's message line
                   // ("4 series · yoy · quarterly") is the turn's text.

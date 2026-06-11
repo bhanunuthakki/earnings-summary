@@ -371,3 +371,65 @@ def test_ask_endpoint_runs_commands(client: FlaskClient) -> None:
 
 def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
     assert client.post("/api/ask", json={}).status_code == 400
+
+
+# ----------------------------------------------------------------------------
+# /api/ask/stream — the SSE sibling (Ask v2 live progress)
+# ----------------------------------------------------------------------------
+
+
+def test_ask_stream_endpoint_streams_data_frames(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same engine as /api/ask, SSE framing: stage frames lead (the panel's
+    busy line), then the fragment and the final message line."""
+    from viewspec import nl_compile
+    from viewspec.spec import ViewSpec
+
+    def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
+        return nl_compile.NLCompileResult(status="ok", spec=ViewSpec.from_dict(_SPEC))
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
+    res = client.post("/api/ask/stream", json={"query": "TST revenue", "tickers": ["TST"]})
+    assert res.mimetype == "text/event-stream"
+    body = res.get_data(as_text=True)
+    assert '"stage": "compiling"' in body
+    assert '"stage": "running"' in body
+    assert '"type": "fragment"' in body
+    assert "vx-matrix" in body
+    assert '"type": "final"' in body
+
+
+def test_ask_stream_endpoint_streams_narrative_deltas(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Narrative turns stream their prose incrementally over the same SSE
+    channel (the whole point of the streaming sibling)."""
+    import chat_session
+
+    def fake_llm(prompt: str):
+        yield {"type": "delta", "text": "chunk one "}
+        yield {"type": "delta", "text": "chunk two"}
+        yield {"type": "final", "text": "chunk one chunk two"}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+    res = client.post("/api/ask/stream", json={"query": "what should I look at next?"})
+    assert res.mimetype == "text/event-stream"
+    body = res.get_data(as_text=True)
+    assert '"stage": "answering"' in body
+    assert "chunk one" in body
+    assert '"route": "narrative"' in body
+
+
+def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
+    assert client.post("/api/ask/stream", json={}).status_code == 400
+    assert client.open("/api/ask/stream", method="OPTIONS").status_code == 204
+
+
+def test_explore_panel_js_streams_and_consumes_palette_query(db_path: Path) -> None:
+    """Ask v2 panel wiring: the thread consumes the SSE endpoint and picks
+    up the Ctrl+K palette's stashed query at wire-up / on its event."""
+    html_out = render_explore_panel(db_path)
+    assert "/api/ask/stream" in html_out
+    assert "cc-ask-q" in html_out
+    assert "consumePaletteQuery" in html_out

@@ -199,6 +199,17 @@ def test_command_palette_chrome() -> None:
     assert "metaKey" in SHELL_JS  # Cmd+K works on mac keyboards too
 
 
+def test_command_palette_hands_query_to_ask() -> None:
+    """Ask v2: anything typed into the palette is also offered as an Ask
+    question — the entry stashes the query (sessionStorage 'cc-ask-q'),
+    jumps to #explore, and pokes a loaded panel via the 'cc-ask-q' event
+    (the explore panel consumes the stash at wire-up / on the event)."""
+    assert "goAsk" in SHELL_JS
+    assert "'cc-ask-q'" in SHELL_JS
+    assert "'#explore'" in SHELL_JS
+    assert "Ask: " in SHELL_JS  # the dynamic palette entry label
+
+
 def test_render_shell_overview_not_a_lazy_endpoint() -> None:
     """Overview must be inlined, never assigned a /api/panel/ endpoint."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))

@@ -13,7 +13,9 @@ Endpoints:
                               ticker context pack (src/ask/engine.py)
   POST   /chat/<ticker>/apply apply a chatbot-proposed diff (Phase 4)
   POST   /api/ask             one Ask-tab turn — the same engine with the
-                              portfolio context pack
+                              portfolio context pack (single folded payload)
+  POST   /api/ask/stream      streaming sibling of /api/ask (SSE frames —
+                              live stage/delta/fragment progress)
   GET    /healthz             health check
 
 Usage:
@@ -230,6 +232,34 @@ def create_app(
         max_workers=4, thread_name_prefix="comments-server-chat"
     )
     app.config["CHAT_EXECUTOR"] = chat_pool
+
+    def _stream_engine_events(events: Iterator[dict[str, object]]) -> Response:
+        """Pump one ask-engine event stream into an SSE response.
+
+        The narrative path drives an LLM subprocess (Claude CLI) for
+        10-60s; running it inline would pin the Flask request thread for
+        that whole window. Dispatch to the chat pool (the generator body
+        executes lazily, on the pool thread) and pipe its events through
+        a Queue, then drain the queue into SSE frames. Shared by
+        /chat/<ticker> and /api/ask/stream."""
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
+        chat_pool.submit(_drain_events, events, chunks)
+
+        def generate():
+            while True:
+                item = chunks.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     def _open_db() -> sqlite3.Connection:
         conn = sqlite3.connect(str(db_path))
@@ -903,10 +933,41 @@ def create_app(
         400 only for a missing query."""
         if request.method == "OPTIONS":
             return ("", 204)
+        turn = _parse_ask_turn()
+        if turn is None:
+            return ({"error": "query required"}, 400)
+        pack = build_portfolio_pack(repo_root, db_path)
+        events = respond_turn(
+            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
+        )
+        return fold_events(events)
+
+    @app.route("/api/ask/stream", methods=["POST", "OPTIONS"])
+    def ask_stream_api():
+        """Streaming sibling of /api/ask (Ask v2): same engine, same
+        PORTFOLIO pack, but the raw event stream as SSE frames instead of
+        one folded payload — the Ask tab renders live progress (``stage``
+        frames drive the busy line, ``delta`` frames stream prose,
+        ``fragment``/``final`` assemble the answer card). Same frame shapes
+        as /chat/<ticker>."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        turn = _parse_ask_turn()
+        if turn is None:
+            return ({"error": "query required"}, 400)
+        pack = build_portfolio_pack(repo_root, db_path)
+        events = respond_turn(
+            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
+        )
+        return _stream_engine_events(events)
+
+    def _parse_ask_turn() -> AskTurn | None:
+        """The shared /api/ask request shape → AskTurn; None on a missing
+        query (the routes 400)."""
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         query = str(body.get("query") or "").strip()
         if not query:
-            return ({"error": "query required"}, 400)
+            return None
         raw_tickers = body.get("tickers")
         tickers = (
             [str(t) for t in cast("list[object]", raw_tickers)]
@@ -915,17 +976,12 @@ def create_app(
         )
         raw_ctx = body.get("context_spec")
         context_spec = cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None
-        turn = AskTurn(
+        return AskTurn(
             text=query,
             tickers=tickers,
             context_spec=context_spec,
             history=sanitize_history(body.get("history")),
         )
-        pack = build_portfolio_pack(repo_root, db_path)
-        events = respond_turn(
-            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
-        )
-        return fold_events(events)
 
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
@@ -1981,32 +2037,10 @@ def create_app(
         )
         pack = build_ticker_pack(ticker, report_date)
 
-        # The narrative path drives an LLM subprocess (Claude CLI) for
-        # 10-60s; running it inline would pin the Flask request thread
-        # for that whole window. Dispatch to the chat pool (the generator
-        # body executes lazily, on the pool thread) and pipe its events
-        # through a Queue, then drain the queue into SSE frames.
-        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
         events = respond_turn(
             turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
-        chat_pool.submit(_drain_events, events, chunks)
-
-        def generate():
-            while True:
-                item = chunks.get()
-                if item is None:
-                    break
-                yield f"data: {json.dumps(item)}\n\n"
-
-        return Response(
-            stream_with_context(generate()),
-            mimetype="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        return _stream_engine_events(events)
 
     # ----- APPLY (Phase 4) -----
 
