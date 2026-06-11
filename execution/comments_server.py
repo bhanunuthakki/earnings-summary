@@ -90,6 +90,7 @@ from pipeline.research_cockpit import build_cockpit_rows  # noqa: E402
 from pipeline.ticker_command_center import (  # noqa: E402
     build_ticker_command_center,
     render_holding_fragment,
+    render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
 
@@ -580,6 +581,17 @@ def create_app(
                 mimetype="text/html",
             )
         return Response(render_holding_fragment(repo_root, ticker), mimetype="text/html")
+
+    @app.route("/api/panel/notes_drawer", methods=["GET"])
+    def notes_drawer_panel_fragment():
+        """The shell's shared ✎ Notes drawer (UX9b) as a fragment: quick-add
+        (POSTs to /api/notes) above the open-notes list. ``?ticker=`` scopes
+        it to one name (the Holding tab supplies its selection) and adds that
+        name's recent alerts; without it, the newest open notes book-wide."""
+        return Response(
+            render_notes_drawer_fragment(repo_root, request.args.get("ticker")),
+            mimetype="text/html",
+        )
 
     @app.route("/analytical", methods=["GET"])
     def analytical_page():

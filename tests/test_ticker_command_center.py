@@ -26,6 +26,7 @@ from pipeline.ticker_command_center import (  # noqa: E402
     build_holding_rail,
     build_ticker_command_center,
     render_holding_fragment,
+    render_notes_drawer_fragment,
     render_ticker_fragment,
     render_ticker_html,
 )
@@ -360,6 +361,54 @@ def test_holding_rail_missing_db_is_unavailable(tmp_path: Path) -> None:
     assert rail.brief_provenance is None
 
 
+# ----- Shared ✎ Notes drawer fragment (UX9b): quick-add + open notes -----
+
+
+def test_notes_drawer_fragment_global(repo: Path) -> None:
+    """Without a ticker scope: quick-add (all five kinds, empty ticker box)
+    above the newest open notes book-wide — plus the Journal hand-off link.
+    No alerts section (that's the ticker-scoped extra)."""
+    db = repo / "data" / "portfolio.db"
+    create_note(ticker="NU", kind="watch", body="Watch FX drag on ARPAC", db_path=db)
+    create_note(ticker="MELI", kind="question", body="Ads take-rate trajectory?", db_path=db)
+
+    frag = render_notes_drawer_fragment(repo, None)
+    assert "Quick note" in frag
+    for kind in ("question", "decision", "watch", "assumption", "observation"):
+        assert f'value="{kind}"' in frag
+    assert "fetch('/api/notes'" in frag
+    assert "ccReloadNotesDrawer" in frag
+    # Both names' open notes show (book-wide scope), no per-name alerts panel.
+    assert "Watch FX drag on ARPAC" in frag
+    assert "Ads take-rate trajectory?" in frag
+    assert "Recent alerts" not in frag
+    assert 'href="/#journal"' in frag
+
+
+def test_notes_drawer_fragment_ticker_scoped(repo: Path) -> None:
+    """With the Holding tab's ticker: the quick-add pre-fills it, the list
+    narrows to that name, and the name's recent alerts ride along — the
+    content the holding page's PR4 Notes drawer used to carry."""
+    db = repo / "data" / "portfolio.db"
+    create_note(ticker="NU", kind="watch", body="Watch FX drag on ARPAC", db_path=db)
+    create_note(ticker="MELI", kind="question", body="Ads take-rate trajectory?", db_path=db)
+
+    frag = render_notes_drawer_fragment(repo, "nu")  # lowercase in → uppercased
+    assert 'value="NU"' in frag  # quick-add pre-filled
+    assert "Watch FX drag on ARPAC" in frag
+    assert "Ads take-rate trajectory?" not in frag
+    assert "Recent alerts" in frag
+    assert "ROE inflected down two quarters running" in frag  # seeded alert
+
+
+def test_notes_drawer_fragment_missing_db_degrades(tmp_path: Path) -> None:
+    """No DB at all: the quick-add still renders (the POST will surface its
+    own error) and the list shows the substrate-unavailable state."""
+    frag = render_notes_drawer_fragment(tmp_path, None)
+    assert "Quick note" in frag
+    assert "Notes substrate unavailable" in frag
+
+
 def test_holding_panel_endpoint(client) -> None:
     # No ticker → a pick-a-holding prompt, not a 404.
     empty = client.get("/api/panel/holding")
@@ -375,6 +424,19 @@ def test_holding_panel_endpoint(client) -> None:
     assert 'data-tcc-panel="notes"' in body
     assert "Open notes" in body
     assert "Recent alerts" in body
+
+
+def test_notes_drawer_panel_endpoint(client) -> None:
+    plain = client.get("/api/panel/notes_drawer")
+    assert plain.status_code == 200
+    body = plain.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()
+    assert "Quick note" in body
+    scoped = client.get("/api/panel/notes_drawer?ticker=NU")
+    assert scoped.status_code == 200
+    scoped_body = scoped.get_data(as_text=True)
+    assert 'value="NU"' in scoped_body
+    assert "Recent alerts" in scoped_body
 
 
 # ----- live endpoints -----
