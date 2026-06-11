@@ -26,10 +26,13 @@ from alembic import command
 from alerts import fire_alert, queue_action
 from dashboard._card import render_alert_card
 from dashboard.inbox import collect_inbox, render_inbox_stream
+from pipeline.analytical_dashboard_html import render_tier_coverage_strip
 from pipeline.command_center_shell import SHELL_JS, render_shell
 from pipeline.dashboard_status import DashboardRow
+from pipeline.peeks import render_provenance_peek
 from pipeline.portfolio_panel import render_next_dollar_panel
 from pipeline.research_cockpit import CockpitRow, render_research_cockpit
+from pipeline.ticker_command_center import build_ticker_command_center, render_ticker_fragment
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -45,7 +48,16 @@ CREATE TABLE IF NOT EXISTS tracked_companies (
     ticker TEXT PRIMARY KEY,
     name TEXT,
     list_type TEXT NOT NULL DEFAULT 'portfolio',
-    archived_at TEXT
+    archived_at TEXT,
+    last_built_at TEXT
+);
+CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
+    ticker         TEXT    NOT NULL,
+    endpoint       TEXT    NOT NULL,
+    period         TEXT    NOT NULL DEFAULT '',
+    status         TEXT    NOT NULL,
+    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ticker, endpoint, period)
 );
 CREATE TABLE IF NOT EXISTS thesis_evaluations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,6 +352,109 @@ def test_source_fragment_never_redirects_externally(client: FlaskClient, repo: P
 
 
 # ----------------------------------------------------------------------------
+# /api/peek/provenance (UX9d — freshness rows + in-place refresh)
+# ----------------------------------------------------------------------------
+
+
+def _seed_provenance(db_path: Path, ticker: str = "NU") -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, last_built_at) "
+            "VALUES (?, 'Nu Holdings', 'portfolio', '2026-06-09 04:00:00')",
+            (ticker,),
+        )
+        conn.executemany(
+            "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, last_pulled) "
+            "VALUES (?, ?, '', 'ok', ?)",
+            [
+                (ticker, "profile", "2026-06-10 05:10:00"),
+                (ticker, "income_statement", "2026-06-01 05:00:00"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+            "fetched_at, fetch_status) VALUES (?, 'ir', 'ir_presentation', "
+            "'ir_documents/NU/deck.pdf', 'x', '2026-06-08 01:30:00', 'ok')",
+            (ticker,),
+        )
+        conn.execute(
+            "INSERT INTO news (ticker, headline, url, published_at, snippet, source, "
+            "source_feed, fetched_at) VALUES (?, 'NU ships a thing', 'https://x.test/nu-1', "
+            "'2026-06-10 12:00:00', '', 'wire', 'fmp_stock_news', '2026-06-11 02:00:00')",
+            (ticker,),
+        )
+        conn.execute(
+            "INSERT INTO expected_earnings (ticker, expected_date, detected_source, "
+            "first_seen_at, last_seen_at) "
+            "VALUES (?, '2099-08-13', 'fmp_cache', '2026-06-11 05:35:00', '2026-06-11 05:35:00')",
+            (ticker,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_provenance_peek_ticker_rows_ages_buttons(client: FlaskClient, db_path: Path) -> None:
+    _seed_provenance(db_path)
+    resp = client.get("/api/peek/provenance?ticker=nu")  # lowercase: uppercased internally
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
+    assert 'data-prov-scope="NU"' in body
+    for label in ("Report brief", "FMP endpoints", "IR documents", "News", "Earnings calendar"):
+        assert label in body
+    # Ages follow the stamp rules: relative inline, the exact UTC in the tooltip.
+    assert 'title="2026-06-09 04:00 UTC"' in body  # report build
+    assert 'title="2026-06-10 05:10 UTC"' in body  # newest FMP pull
+    assert "2 endpoints · oldest" in body
+    assert "next ER" in body
+    # Refresh buttons POST the EXISTING action endpoints with the right bodies.
+    assert 'data-prov-post="/actions/refresh"' in body
+    assert "&quot;mode&quot;: &quot;stale&quot;" in body
+    assert "&quot;steps&quot;: [&quot;fmp&quot;]" in body
+    assert "&quot;steps&quot;: [&quot;news&quot;]" in body
+    assert 'data-prov-post="/actions/refresh-ir"' in body
+    # The calendar has no on-demand action — cron chip, not a button.
+    assert body.count('data-prov-post="') == 4
+    assert "cc-prov-cron" in body
+    # In-peek SSE wiring (the /actions/stream frame contract) + the deep console path.
+    assert "EventSource" in body
+    assert "cc-prov-log" in body
+    assert 'href="/#actions"' in body
+
+
+def test_provenance_peek_portfolio_variant(client: FlaskClient, db_path: Path) -> None:
+    _seed_provenance(db_path)
+    resp = client.get("/api/peek/provenance")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert 'data-prov-scope="portfolio"' in body
+    assert "1 of 1 built" in body
+    assert "oldest" in body  # the portfolio brief age is the worst case
+    # Per-ticker-only actions don't leak into the portfolio variant; the one
+    # repo-wide doc action (maintenance process_inbox) is the only button.
+    assert "/actions/refresh-ir" not in body
+    assert body.count('data-prov-post="') == 1
+    assert 'data-prov-post="/actions/maintenance"' in body
+    assert "&quot;process_inbox&quot;" in body
+
+
+def test_provenance_peek_degrades_without_data(client: FlaskClient, tmp_path: Path) -> None:
+    # Tables exist but are empty (untracked ticker): em-dash ages, still 200,
+    # buttons still offered.
+    resp = client.get("/api/peek/provenance?ticker=ZZZQ")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "—" in body
+    assert 'data-prov-post="/actions/refresh"' in body
+    # And with no database at all the renderer still produces the fragment.
+    html = render_provenance_peek(tmp_path / "missing" / "portfolio.db", None)
+    assert "cc-prov" in html
+    assert "—" in html
+
+
+# ----------------------------------------------------------------------------
 # Markup contracts: peek triggers keep their real hrefs
 # ----------------------------------------------------------------------------
 
@@ -392,3 +507,44 @@ def test_ticker_badge_carries_hover_attr(db_path: Path) -> None:
     out = StringIO()
     render_alert_card(out, alert, actions=[], show_status_badge=True)
     assert 'data-peek-ticker="NU"' in out.getvalue()
+
+
+def test_cockpit_staleness_dot_opens_provenance_peek() -> None:
+    base = DashboardRow(
+        ticker="NU",
+        list_type="portfolio",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    html = render_research_cockpit({"portfolio": [CockpitRow(base=base)]})
+    assert "data-peek-url='/api/peek/provenance?ticker=NU'" in html
+    assert "data-peek-title='Data provenance · NU'" in html
+    assert "href='/#system'" in html  # real destination preserved for middle-click
+    assert "FMP never" in html  # the tooltip stays the hover layer
+
+
+def test_holding_band_freshness_dot_opens_provenance_peek(repo: Path) -> None:
+    tcc = build_ticker_command_center(repo, "NU")
+    frag = render_ticker_fragment(tcc)
+    assert 'class="cc-fdot' in frag
+    assert 'data-peek-url="/api/peek/provenance?ticker=NU"' in frag
+    assert 'href="/#system"' in frag
+
+
+def test_tier_strip_chips_open_provenance_peek() -> None:
+    html = render_tier_coverage_strip(
+        {
+            "P1": {"fresh": 2, "stale": 0, "total": 2},
+            "P2": {"fresh": 1, "stale": 3, "total": 4},
+            "P3": {"fresh": 0, "stale": 0, "total": 0},
+        }
+    )
+    # Every chip peeks the portfolio-wide provenance card...
+    assert html.count('data-peek-url="/api/peek/provenance"') == 3
+    assert 'href="/#system"' in html
+    # ...while the cron-hint tooltips stay the hover layer.
+    assert 'title="P1 — all fresh"' in html
+    assert "To force-refresh" in html

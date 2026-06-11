@@ -637,6 +637,7 @@ code { font-family: var(--font-mono); font-size: 0.93em; color: var(--fg-soft); 
   text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }
 .tier-chip { font-family: var(--font-mono); font-size: var(--fs-caption); padding: 2px 6px;
   border-radius: 3px; cursor: help; }
+a.tier-chip { text-decoration: none; cursor: pointer; }
 .tier-ok { color: var(--ok); }
 .tier-stale { color: var(--warn); }
 .tier-stale-count { color: var(--bad); font-weight: 600; }

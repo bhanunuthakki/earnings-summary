@@ -1020,7 +1020,9 @@ def _inbox_cell(row: CockpitRow) -> str:
 
 def _staleness_dot(row: CockpitRow, now: datetime) -> str:
     """One dot summarising ops freshness; the per-column detail the old status
-    tables carried lives in the hover title."""
+    tables carried lives in the hover title. Clicking peeks the per-source
+    provenance card (UX9d) — ages + inline refresh — with /#system as the
+    real href for middle-click."""
     fmp_age = _age_days(row.base.fmp_last_pulled, now)
     build_age = _age_days(row.base.last_build_at, now)
     tone = "ok"
@@ -1043,7 +1045,13 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
         elif transcript.has_qa_section is False:
             qa = " (no Q&A)"
         detail.append(f"transcript {transcript.period_end}{qa}")
-    return f"<span class='stale-dot dot-{tone}' title='{escape(' · '.join(detail))}'>&#9679;</span>"
+    t = escape(row.base.ticker)
+    return (
+        f"<a class='stale-dot dot-{tone}' href='/#system' "
+        f"data-peek-url='/api/peek/provenance?ticker={t}' "
+        f"data-peek-title='Data provenance · {t}' "
+        f"title='{escape(' · '.join(detail))}'>&#9679;</a>"
+    )
 
 
 def _age_days(iso: str | None, now: datetime) -> float | None:
@@ -1096,6 +1104,7 @@ a.pill { cursor: pointer; }
 .pill-accent { background: var(--accent-soft); color: var(--accent); }
 .er-soon { color: var(--warn); font-weight: 600; }
 .stale-dot { font-size: var(--fs-micro); cursor: help; }
+a.stale-dot { text-decoration: none; cursor: pointer; }
 .dot-col { text-align: center; width: 28px; }
 .dot-ok { color: var(--ok); }
 .dot-warn { color: var(--warn); }
