@@ -217,7 +217,7 @@ def _discover_active_purposes(
 
 
 def _judge_model_for(judge_backend: str) -> str | None:
-    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-2.5-pro"
+    return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-3.1-pro-preview"
 
 
 def _agreement(judged: list[tuple[str, object]], judges: list[str]) -> float:

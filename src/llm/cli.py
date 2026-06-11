@@ -121,11 +121,15 @@ LLM_MODELS: dict[str, str] = {
     # bucket each target into the right `target_kind` enum value. Haiku
     # under-counted on this task in scratch experimentation.
     "investor_deck_extraction": DEFAULT_MODEL,
-    # Company description is the analytical spine of the memo — Opus follows
-    # nuanced instruction-following ("don't write Wikipedia-style", "anchor
-    # on thesis pillars") far better than Sonnet on this kind of writeup
-    # where the model has a strong prior toward corporate boilerplate.
-    "company_description": "claude-opus-4-7",
+    # Company description is the analytical spine of the memo. Was pinned to
+    # Opus on the belief it followed nuanced instruction far better than Sonnet
+    # — but the model-downgrade eval (directives/model_eval_loop.md, 2026-06-11,
+    # n=4 NU/MELI/NOW/BN, dual judge) contradicted that: Sonnet was at-parity-or-
+    # better (won 4 / Opus 1 / 3 ties), the Gemini judge preferring Sonnet 3/4
+    # and neither judge finding Opus clearly better, often MORE accurate (BN: the
+    # correct $145B insurance-asset figure where Opus misstated it). Switched
+    # down to Sonnet for ~40% lower cost at equal-or-better quality.
+    "company_description": DEFAULT_MODEL,
     # Platform diagram is a narrowly-scoped JSON-output task (one diagram
     # string + one caption string). Sonnet was taking 6-20 min per call and
     # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
