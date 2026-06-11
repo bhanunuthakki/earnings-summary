@@ -365,7 +365,8 @@ def create_app(
         """Cross-ticker analytical overview as JSON: trigger ladder, insider
         activity, predictions, decisions ledger, and the (read-only) LLM
         spend/budget panel, plus tier coverage. Same data the static export
-        and ``GET /analytical`` render — one code path, no divergence.
+        (execution/build_analytical_dashboard.py) renders — one code path,
+        no divergence. (``GET /analytical`` itself is a 302 into the shell.)
 
         Budget WRITES are intentionally not here — dashboard-managed budgets
         (editable caps + modes + override) are owned by the #215 track; this

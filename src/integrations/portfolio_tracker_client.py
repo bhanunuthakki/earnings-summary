@@ -1,7 +1,7 @@
 """REST client for the companion portfolio-tracker FastAPI.
 
 Pulls live positions / transactions / accounts from the sibling project's API
-(default ``http://localhost:8000``) and derives the two things the tracker's raw
+(default ``http://127.0.0.1:8000``) and derives the two things the tracker's raw
 endpoints don't surface directly:
 
 * each holding's ``percent_of_portfolio`` (market value / total book), and
@@ -39,11 +39,21 @@ from urllib.parse import urlencode
 
 import requests
 
-_DEFAULT_API_URL = "http://localhost:8000"
+# 127.0.0.1 (not "localhost"): on Windows a DOWN tracker costs ~2s of
+# OS-level refused-connect retries PER address family, and "localhost"
+# resolves to ::1 + 127.0.0.1 — doubling the burn (measured 4.08s vs 2.07s,
+# P6.1 latency pass). The tracker (uvicorn) binds IPv4 loopback by default.
+_DEFAULT_API_URL = "http://127.0.0.1:8000"
 _TIMEOUT_SECONDS = 4.0
 # The analytics endpoints recompute TWR/alpha/beta over a year of dailies on
 # request — give them more headroom than the instant holdings reads.
 _ANALYTICS_TIMEOUT_SECONDS = 6.0
+# Connect-phase cap, passed as the first half of requests' (connect, read)
+# timeout tuple. A live loopback tracker connects in <1ms; a dead one now
+# fails the whole call group in ~this long instead of riding the OS retry
+# cycle to ~2s — the Portfolio / Decisions landing tabs degrade in ~1s
+# total instead of 8s when the tracker is offline.
+_CONNECT_TIMEOUT_SECONDS = 0.5
 
 _T = TypeVar("_T")
 
@@ -147,7 +157,7 @@ def fetch_live_portfolio(
 
     Never raises on a tracker problem — returns ``available=False`` with an
     ``error`` reason so callers can degrade. ``api_url`` falls back to the
-    ``PORTFOLIO_TRACKER_API_URL`` env var, then ``http://localhost:8000``.
+    ``PORTFOLIO_TRACKER_API_URL`` env var, then ``http://127.0.0.1:8000``.
     """
     base = (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
     try:
@@ -187,7 +197,7 @@ def fetch_live_portfolio(
 
 
 def _get(base: str, path: str, *, timeout: float) -> list[dict[str, object]]:
-    resp = requests.get(base + path, timeout=timeout)
+    resp = requests.get(base + path, timeout=(_CONNECT_TIMEOUT_SECONDS, timeout))
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, list):
@@ -490,7 +500,7 @@ def fetch_portfolio_analytics(
     endpoint degrades to a partial page, not a blank one). A ``ConnectionError``
     short-circuits the remaining calls — the host is down, retrying four more
     times only burns timeouts. ``api_url`` resolves like the live fetch:
-    explicit arg → ``PORTFOLIO_TRACKER_API_URL`` → ``http://localhost:8000``.
+    explicit arg → ``PORTFOLIO_TRACKER_API_URL`` → ``http://127.0.0.1:8000``.
 
     ``start_date`` / ``end_date`` (ISO ``YYYY-MM-DD``) scope the four windowed
     endpoints (``/api/policy`` is window-less); ``include_backfill`` extends
@@ -566,7 +576,7 @@ def fetch_portfolio_analytics(
 
 def _get_obj(base: str, path: str, *, timeout: float) -> dict[str, object]:
     """GET a JSON object (the analytics endpoints' shape; ``_get`` covers lists)."""
-    resp = requests.get(base + path, timeout=timeout)
+    resp = requests.get(base + path, timeout=(_CONNECT_TIMEOUT_SECONDS, timeout))
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, dict):

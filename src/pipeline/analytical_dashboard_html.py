@@ -59,15 +59,18 @@ def render_html(
 
 
 # Command-center panel name -> the build_analytical_dashboard `sections` key it
-# needs. Drives the lazy `GET /api/panel/<name>` fetch: build one section, render
-# one fragment. (Overview / Holding / Portfolio-live tabs are assembled elsewhere.)
+# needs. Drives the lazy `GET /api/panel/<name>` FALLBACK fetch in
+# comments_server — only panels with no dedicated route remain here. P6.1
+# retired the dead entries the theme migration left: insiders / predictions
+# were removed from the nav (P1.1) with no remaining fetchers, and
+# "decisions" was superseded by the Decisions record (P2.2,
+# /api/panel/decisions_record). "prereads" stays: its ?ticker= fragment is a
+# tested HTTP contract and the Holding tab renders the same fragment
+# in-process. "portfolio" short-circuits into its dedicated route before
+# this map is consulted.
 PANEL_TO_SECTION: dict[str, str] = {
-    "portfolio": "portfolio_synthesis",
     "holdings": "trigger_ladder",
     "prereads": "rereads",
-    "insiders": "insider_events",
-    "predictions": "prediction_outcomes",
-    "decisions": "decisions",
     "budget": "llm_budgets",
 }
 
@@ -80,20 +83,19 @@ def render_tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
 
 def render_panel_fragment(dash: AnalyticalDashboard, name: str) -> str | None:
     """Render ONE analytical panel as a head/foot-less HTML fragment — the same
-    ``_<name>_section`` the full page uses, minus the page chrome — for the lazy
-    command-center shell. Returns None for an unknown panel name."""
+    ``_<name>_section`` the full page uses, minus the page chrome. Serves the
+    comments_server fallback route (PANEL_TO_SECTION names) plus two direct
+    in-process callers: portfolio_panel ("portfolio") and the Holding tab
+    ("prereads"). Returns None for an unknown panel name. (The insiders /
+    predictions / decisions fragments were retired in P6.1 — nothing fetched
+    them after the theme migration; their sections still render inside the
+    full static page via ``render_html``.)"""
     if name == "portfolio":
         return _portfolio_synthesis_section(dash.portfolio_synthesis_md)
     if name == "holdings":
         return _trigger_ladder_section(dash.trigger_ladder)
     if name == "prereads":
         return _per_ticker_reread_section(dash.per_ticker_reread)
-    if name == "insiders":
-        return _insider_events_section(dash.insider_events)
-    if name == "predictions":
-        return _predictions_section(dash.prediction_outcomes)
-    if name == "decisions":
-        return _decisions_section(dash.decisions)
     if name == "budget":
         return _llm_budget_section(dash.llm_budgets)
     return None
