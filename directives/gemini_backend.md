@@ -1,0 +1,116 @@
+# Gemini second backend (consumer subscription, eval-gated)
+
+**Decision (2026-06-11):** wire consumer-subscription Gemini as a SECOND LLM
+backend behind `call_llm`. Routing stays Claude-default; a purpose may route to
+Gemini only after the LLM-evals judges grade its per-purpose output quality.
+Long-context / bulk jobs are the natural eventual fit.
+
+Code: `src/llm/gemini_backend.py` (backend) + `src/llm/cli.py` (routing in
+`call_llm`) + `execution/compare_backends.py` (the judging corpus generator).
+
+## The three Gemini touchpoints — don't confuse them
+
+| Touchpoint | Module | Auth / billing | When it runs |
+|---|---|---|---|
+| **Backend** (this doc) | `src/llm/gemini_backend.py` | Consumer OAuth (`gemini` CLI login) — $0 marginal | Purpose in the eval-gated allowlist, or `backend="gemini"` forced |
+| **Fallback** | `src/llm/fallback.py` | `GEMINI_API_KEY` from `.env` — metered API | Only when a CLAUDE call fails operationally |
+| **`.env` key** | `GEMINI_API_KEY=` | feeds the fallback ONLY | Never reaches the backend (stripped from its subprocess env) |
+
+## One-time setup (operator)
+
+1. `npm install -g @google/gemini-cli` (installed 2026-06-11, v0.46.0 — the
+   binary is `C:\Users\bhanu\AppData\Roaming\npm\gemini.cmd`).
+2. **Log in once, interactively:** run `gemini` in any terminal, pick
+   **Login with Google**, complete the browser flow. Credentials cache under
+   `C:\Users\bhanu\.gemini\` and renew themselves. Until this is done, every
+   backend call fails fast with `LLMSetupError` carrying this exact hint
+   (verified: headless auth failures exit 41 in ~6s — no hang, no browser).
+3. Verify: `python execution/compare_backends.py --smoke` — the gemini column
+   should flip from `LLMSetupError` to real responses with latencies.
+
+## Billing guard (the no-silent-API-key invariant)
+
+The backend subprocess **cannot** bill the metered API, by construction —
+mirroring how the canonical claude wrapper guards `ANTHROPIC_API_KEY`:
+
+* `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`,
+  `GOOGLE_GENAI_USE_VERTEXAI` are **stripped** from the subprocess env
+  (the repo's `.env` key stays available to the fallback path only).
+* `GOOGLE_GENAI_USE_GCA=true` **forces** the consumer OAuth (Gemini Code
+  Assist) auth path. No cached login ⇒ fail fast, never key-fallback.
+* `GEMINI_CLI_TRUST_WORKSPACE=true` — headless runs in the backend's neutral
+  cwd are untrusted by default (v0.46 trust gate), which would both block the
+  run and ignore workspace settings. The neutral cwd is an empty temp dir we
+  create, so trusting it is safe.
+* `NO_BROWSER=true` — belt-and-braces against any future interactive-auth
+  attempt from a cron box.
+
+Guarded subprocess mechanics (same Windows gotchas as the claude wrapper):
+absolute `gemini.cmd` path via `shutil.which` (PATHEXT isn't applied to bare
+names), forced UTF-8 with `errors="replace"`, prompt via **stdin** (no `-p`;
+piped stdin enters headless mode and dodges the 32K CreateProcess limit),
+`-o json` envelope parsed for the response + token stats.
+
+**Context isolation:** the neutral cwd carries a `.gemini/settings.json`
+pointing `context.fileName` at a filename that exists nowhere, so neither the
+repo's project context nor the user's global `~/.gemini/GEMINI.md` rulebook
+(~17KB) is injected into backend prompts. Without this every judged output
+would be contaminated by machine-setup instructions.
+
+## Routing policy (the eval gate)
+
+```
+call_llm(prompt, purpose=...)            -> Claude (always, today)
+call_llm(..., backend="gemini")          -> Gemini, forced (compare harness)
+call_llm(purpose in allowlist)           -> Gemini, once judges pass it
+```
+
+* `GEMINI_BACKEND_ALLOWED_PURPOSES` (in `gemini_backend.py`) **ships EMPTY**.
+  Adding a purpose requires: a `compare_backends` corpus for that purpose →
+  the evals-track judges grade Gemini vs Claude on it → the PR adding the
+  purpose links the verdict. `tests/test_gemini_backend.py::
+  test_allowlist_ships_empty` enforces the empty default; it is updated in
+  the same PR that passes an eval.
+* `GEMINI_BACKEND_PURPOSES` env var (comma-separated) merges extra purposes
+  for the current process — the local-trial escape hatch. Never set it in
+  cron/task definitions.
+* An explicit `model=` pin with no explicit backend always stays on Claude.
+* Failure policy: allowlist-routed Gemini calls that fail **operationally**
+  degrade to Claude (enabling a purpose can never break the pipeline);
+  `LLMSetupError` / `LLMBudgetExceeded` propagate per `is_hard_stop`. A
+  **forced** `backend="gemini"` call raises instead of switching — the
+  caller asked for Gemini's answer.
+
+## Models, cost, ledger
+
+* Model resolution: explicit `GEMINI_MODELS` pin → tier derivation from
+  `LLM_MODELS` (Haiku-tier purposes → `gemini-2.5-flash`, everything else →
+  `gemini-2.5-pro`). One table drives both backends' latency tiers.
+* Consumer-tier limits (Login with Google, free individual plan): ~60
+  requests/min, ~1000/day, models can transparently reroute pro→flash under
+  load; a paid Google AI plan raises the caps. Check the plan if bulk jobs
+  start rate-limiting.
+* Every call writes the standard `llm_calls` ledger row: `model` starts with
+  `gemini-` (with `fallback_used` NULL — fallback rows carry
+  `fallback_used='gemini'` instead), token counts mapped from the CLI's
+  session stats (`prompt`→input, `candidates`→output, `cached`→cache-read),
+  and `cost_estimate_usd=0.0` — an explicit zero meaning *measured: free
+  under the subscription*, so budget sums stay correct.
+* Timeout: `GEMINI_CLI_TIMEOUT_SECONDS` env (default 1200s), mirroring
+  `CLAUDE_CLI_TIMEOUT_SECONDS`.
+
+## Producing a judging corpus
+
+```
+# built-in smoke (viewspec_compile x2, transcript_metadata x1):
+python execution/compare_backends.py --smoke
+
+# real purpose, real prompt:
+python execution/compare_backends.py --purpose bear_case --prompt-file p.txt --ticker NU
+```
+
+Records land in `data/backend_compare/compare_<runid>.jsonl` — one record per
+prompt with the full prompt, both responses, models, latencies, errors, and
+(for smoke prompts) the expected answer as judge ground truth. Both sides run
+through `call_llm` with explicit `backend=` so ledger rows and budget gating
+match production behavior exactly.
