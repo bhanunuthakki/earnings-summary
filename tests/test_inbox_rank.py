@@ -14,6 +14,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from alerts import AlertRow
 from dashboard.inbox import InboxItem
 from dashboard.inbox_rank import annotate_and_rank, bucket_label
@@ -154,6 +156,51 @@ def test_future_grades_feed_rows_categorize_as_rating(tmp_path: Path) -> None:
         evidence={"news_id": 7, "headline": "Nu launches savings product"},
     )
     assert _rank([item], db_path=db)[0].category == "rating"
+
+
+def test_yf_grades_feed_rows_categorize_as_rating(tmp_path: Path) -> None:
+    """The live additive grades feed (execution/fetch_yf_grades.py) rides the
+    same source_feed hook as fmp_grades."""
+    db = _news_db(tmp_path, source="Morgan Stanley", source_feed="yf_grades")
+    item = _alert_item(
+        trigger_kind="material_news",
+        evidence={"news_id": 7, "headline": "Nu launches savings product"},
+    )
+    assert _rank([item], db_path=db)[0].category == "rating"
+
+
+@pytest.mark.parametrize(
+    ("headline", "expected"),
+    [
+        # Disclosure-only items (7.01 / 8.01, with or without 9.01 exhibits
+        # boilerplate) read as company-published press.
+        ("8-K 7.01: Regulation FD disclosure — Nu Holdings Ltd.", "press"),
+        ("8-K 8.01, 9.01: other events — Nu Holdings Ltd.", "press"),
+        # Any material item keeps the filing in News — even alongside 8.01.
+        ("8-K 2.01, 9.01: completed acquisition or disposition — Nu Holdings Ltd.", "news"),
+        ("8-K 5.02, 8.01: executive or director change — Nu Holdings Ltd.", "news"),
+        ("8-K/A 4.02: non-reliance on prior financials (restatement) — Nu", "news"),
+        # No parseable item codes -> a corporate event, News.
+        ("8-K: filing — Nu Holdings Ltd.", "news"),
+    ],
+)
+def test_edgar_8k_rows_categorize_by_item_codes(
+    tmp_path: Path, headline: str, expected: str
+) -> None:
+    db = _news_db(tmp_path, source="SEC EDGAR", source_feed="edgar_8k")
+    item = _alert_item(trigger_kind="material_news", evidence={"news_id": 7, "headline": headline})
+    assert _rank([item], db_path=db)[0].category == expected
+
+
+def test_edgar_ownership_rows_stay_news(tmp_path: Path) -> None:
+    """13D/G stake disclosures are market events, not PR — and their headlines
+    must not trip the rating regex or wire heuristics."""
+    db = _news_db(tmp_path, source="SEC EDGAR", source_feed="edgar_13d")
+    item = _alert_item(
+        trigger_kind="material_news",
+        evidence={"news_id": 7, "headline": "SC 13D: activist stake (>5%) disclosed — Nu"},
+    )
+    assert _rank([item], db_path=db)[0].category == "news"
 
 
 # ----------------------------------------------------------------------------
