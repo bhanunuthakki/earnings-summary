@@ -192,9 +192,7 @@ def test_skip_an_eval_rung(
 
     rc = run_calibration_grading.main(["--skip", "eval_transcript_summary"])
     assert rc == 0
-    eval_purposes = [
-        c[c.index("--purpose") + 1] for c in fake.calls if _script_of(c) == EVALS
-    ]
+    eval_purposes = [c[c.index("--purpose") + 1] for c in fake.calls if _script_of(c) == EVALS]
     assert eval_purposes == ["bear_case", "advisor_next_dollar"]
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["eval_transcript_summary"] == "skipped"
