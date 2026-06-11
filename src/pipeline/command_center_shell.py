@@ -40,6 +40,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from html import escape
 
+from dashboard.inbox import INBOX_CSS
 from pipeline.research_cockpit import CockpitRow
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -143,15 +144,29 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
 def render_overview_panel(
     rows_by_list: dict[str, list[CockpitRow]],
     coverage: dict[str, dict[str, int]] | None,
+    inbox_html: str | None = None,
 ) -> str:
-    """The inlined Overview tab: the Research cockpit (the landing answer to
+    """The inlined Home tab: the Research cockpit (the landing answer to
     "which holding needs my attention today?") with the tier-coverage strip
-    below it. Reuses the existing public seams so there is no second code path
-    for any of this content."""
+    below it, and — when provided — the unified Inbox in a right-hand rail
+    (UX redesign PR3: what changed, beside what you hold). Reuses the existing
+    public seams so there is no second code path for any of this content."""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
     from pipeline.research_cockpit import render_research_cockpit
 
-    return render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
+    main = render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
+    if not inbox_html:
+        return main
+    rail = (
+        '<aside class="cc-home-rail">'
+        '<div class="cc-home-rail-head"><h2>Inbox</h2>'
+        '<span class="cc-home-rail-links">'
+        '<a href="/digest">digest</a> · <a href="/feed">full feed</a>'
+        "</span></div>"
+        f"{inbox_html}"
+        "</aside>"
+    )
+    return f'<div class="cc-home-grid"><div class="cc-home-main">{main}</div>{rail}</div>'
 
 
 def render_shell(
@@ -354,6 +369,21 @@ a { color: var(--link); }
 .cc-topnav .cc-tab { border-bottom-width: 2px; }
 
 .cc-panels { padding: 22px 24px 64px; max-width: 1600px; margin: 0 auto; }
+
+/* Home: cockpit + the unified Inbox rail (PR3) */
+.cc-home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 24px;
+  align-items: start; }
+@media (max-width: 1180px) { .cc-home-grid { grid-template-columns: 1fr; } }
+.cc-home-rail { position: sticky; top: 64px; }
+.cc-home-rail-head { display: flex; align-items: baseline; justify-content: space-between;
+  margin-bottom: 8px; }
+.cc-home-rail-head h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.5px;
+  margin: 0; }
+.cc-home-rail-links { font-size: 11.5px; color: var(--muted); }
+.cc-home-rail-links a { color: var(--muted); text-decoration: none; }
+.cc-home-rail-links a:hover { color: var(--link); }
+.cc-home-rail .ix-stream { max-height: calc(100vh - 140px); overflow-y: auto;
+  padding-right: 2px; }
 .cc-panel[hidden] { display: none; }
 .cc-loading, .cc-empty { color: var(--muted); font-size: 13px; padding: 24px 4px; }
 
@@ -699,6 +729,7 @@ td.ticker a:hover { text-decoration: underline; }
   font-family: var(--font-mono); }
 .cc-palette-list li.cc-pal-none { color: var(--muted); cursor: default; }
 """
+    + INBOX_CSS
 ).strip()
 
 

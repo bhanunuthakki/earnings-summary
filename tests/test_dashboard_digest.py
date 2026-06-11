@@ -1,4 +1,4 @@
-"""Tests for src/dashboard/digest.py — the morning digest renderer.
+"""Tests for src/dashboard/digest.py â€” the morning digest renderer.
 
 Each test gets a fresh tmp_path SQLite DB stamped at the prior alembic
 head and upgraded so the 5 Personal CIO tables exist exactly as
@@ -49,15 +49,16 @@ def db_path(tmp_path: Path) -> Path:
 
 def test_empty_db_renders_quiet_message(db_path: Path) -> None:
     html = render_morning_digest(TODAY, db_path=db_path)
-    assert "Nothing fired in the last 24h" in html
-    # Even with no alerts, the digest is still a complete document
+    assert "Nothing changed in the last 24h" in html
+    # Even with no activity, the digest is still a complete document
     assert "<!doctype html>" in html
     assert "</html>" in html
-    # Upcoming stub + the recent-thesis-changes (ledger) panel render
-    # unconditionally; with no ledger entries the panel shows its empty state.
+    # Upcoming renders unconditionally; the old standalone ledger/open-items/
+    # outstanding sections folded into the unified stream (PR3) and are gone.
     assert "Upcoming this week" in html
-    assert "Recent thesis changes" in html
-    assert "No thesis-ledger entries yet" in html
+    assert "Recent thesis changes" not in html
+    assert "Open items" not in html
+    assert "Outstanding queued actions" not in html
 
 
 def _seed_calendar(db_path: Path) -> None:
@@ -97,14 +98,14 @@ def _seed_calendar(db_path: Path) -> None:
 
 def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None:
     """The 'Upcoming this week' section surfaces tracked names whose estimated next
-    earnings (latest release + ~1 quarter) land within the horizon — and excludes
+    earnings (latest release + ~1 quarter) land within the horizon â€” and excludes
     far-out estimates and non-portfolio/evaluation names."""
     _seed_calendar(db_path)
     html = render_morning_digest(TODAY, db_path=db_path)
     assert "est. next earnings" in html
     assert "NU" in html
     assert (TODAY - timedelta(days=80) + timedelta(days=91)).isoformat() in html  # est date
-    # ORCL is beyond the horizon; ZZ is a watchlist name — neither appears as upcoming.
+    # ORCL is beyond the horizon; ZZ is a watchlist name â€” neither appears as upcoming.
     assert "est. next earnings</span></li>" in html
     # Exactly one upcoming item (NU).
     assert html.count("upcoming-item") == 1
@@ -115,17 +116,16 @@ def test_upcoming_section_estimates_tracked_next_earnings(db_path: Path) -> None
 # ----------------------------------------------------------------------------
 
 
-def test_open_items_panel_leads_with_watch_items(db_path: Path) -> None:
-    """The digest's 'Open items' panel surfaces the owner's open notes,
-    watch items + questions before everything else."""
+def test_journal_notes_fold_into_the_stream(db_path: Path) -> None:
+    """PR3: open journal notes are STANDING items â€” they appear in the stream
+    (kind chip + body) regardless of the 24h window, instead of a separate
+    'Open items' section. Notes are stamped now() by the store, so render for
+    today to keep them under the until-bound."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
     from user_state.notes import create_note
 
-    create_note(
-        ticker="NU",
-        kind="observation",
-        body="Brazil credit cycle worth re-reading quarterly.",
-        db_path=db_path,
-    )
     create_note(
         ticker="NU",
         kind="watch",
@@ -138,21 +138,13 @@ def test_open_items_panel_leads_with_watch_items(db_path: Path) -> None:
         body="What is the policy-mix drift this quarter?",
         db_path=db_path,
     )
-    html = render_morning_digest(TODAY, db_path=db_path)
-    assert "Open items" in html
-    assert "3 open" in html
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+    assert "Open items" not in html  # the old section is gone
     assert "Watch risk-adjusted NIM trajectory" in html
     assert "policy-mix drift" in html
-    # Portfolio-level note (ticker=None) labelled as such.
-    assert "PORTFOLIO" in html
-    # Lead ordering: the watch item renders before the observation.
-    assert html.index("Watch risk-adjusted NIM") < html.index("Brazil credit cycle")
-
-
-def test_open_items_panel_empty_state(db_path: Path) -> None:
-    html = render_morning_digest(TODAY, db_path=db_path)
-    assert "Open items" in html
-    assert "No open items in the analyst journal" in html
+    # The note kind renders as the item's chip.
+    assert "watch" in html
+    assert "question" in html
 
 
 def test_upcoming_earnings_leads_with_prep_notes(db_path: Path) -> None:
@@ -235,15 +227,20 @@ def test_two_alerts_in_window_render_as_cards(db_path: Path) -> None:
     assert "Nothing fired in the last 24h" not in html
 
 
-def test_outstanding_actions_section_excludes_alerts_in_whats_new(
+def test_stale_drafts_surface_once_without_duplicating_windowed_alerts(
     db_path: Path,
 ) -> None:
-    """A queued action whose parent alert is already in 'what's new'
-    should NOT also appear in 'outstanding queued actions' — that section
-    is for actions on older alerts (outside the 24h window or fired
-    outside today's render date)."""
-    fired_today = datetime.combine(TODAY, datetime.min.time(), tzinfo=UTC).replace(hour=12)
-    fired_old = datetime.combine(TODAY - timedelta(days=10), datetime.min.time(), tzinfo=UTC)
+    """PR3: a queued action whose parent alert is in the window renders ONCE,
+    nested in that alert's card; a pending draft on an OLDER alert surfaces as
+    a standalone Draft stream item â€” drafts are standing, so the old one
+    appears even though its alert fired outside the window (the separate
+    'Outstanding' section is gone)."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    render_day = _datetime.now(_UTC).date()
+    fired_today = datetime.combine(render_day, datetime.min.time(), tzinfo=UTC).replace(hour=8)
+    fired_old = datetime.combine(render_day - timedelta(days=10), datetime.min.time(), tzinfo=UTC)
 
     new_alert = fire_alert(
         ticker="GOOG",
@@ -274,21 +271,21 @@ def test_outstanding_actions_section_excludes_alerts_in_whats_new(
         db_path=db_path,
     )
 
-    html = render_morning_digest(TODAY, db_path=db_path)
+    html = render_morning_digest(render_day, db_path=db_path)
 
-    # The new alert's action appears (inside its alert card in section 2)
-    assert "covered in section two" in html
-    # The old action appears in section 3
+    # The new alert's action appears exactly once (nested in its alert card).
+    assert html.count("covered in section two") == 1
+    # The old alert's pending draft surfaces as a standalone Draft item even
+    # though its parent alert fired outside the window.
     assert "old draft still outstanding" in html
-    # Section 3 references the old alert's ID
-    assert f"alert #{old_alert.id}" in html
+    assert "Outstanding queued actions" not in html
 
 
 def test_naive_utc_fired_at_in_window_renders(db_path: Path) -> None:
     """Regression for the tz naive/aware crash.
 
     Production triggers persist ``fired_at`` as NAIVE-UTC
-    (``datetime.now(UTC).replace(tzinfo=None)``) — unlike the aware fixtures
+    (``datetime.now(UTC).replace(tzinfo=None)``) â€” unlike the aware fixtures
     the other tests here use. Before the fix, the renderer compared that naive
     value against an aware window bound and raised ``TypeError: can't compare
     offset-naive and offset-aware datetimes``, so the morning digest crashed the
@@ -421,10 +418,10 @@ def test_alerts_older_than_window_are_filtered_out(db_path: Path) -> None:
     assert "very-old-alert-text" not in html
 
 
-def test_thesis_ledger_panel_renders_recent_entries(db_path: Path) -> None:
-    """The 'Recent thesis changes' panel surfaces ledger entries across all
-    holdings — the append-only record of accepted, alert-driven thesis edits
-    that previously had no reader on any surface."""
+def test_thesis_ledger_entries_fold_into_the_stream(db_path: Path) -> None:
+    """PR3: ledger entries created in the window appear as stream items with
+    their entry-kind labels â€” the standalone 'Recent thesis changes' section
+    is gone."""
     from user_state.ledger import append_entry
 
     append_entry(
@@ -440,12 +437,35 @@ def test_thesis_ledger_panel_renders_recent_entries(db_path: Path) -> None:
         db_path=db_path,
     )
 
-    html = render_morning_digest(TODAY, db_path=db_path)
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
 
-    assert "Recent thesis changes" in html
-    assert "No thesis-ledger entries yet" not in html
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+
+    assert "Recent thesis changes" not in html
     assert "ROE inflected below the 18% floor" in html
     assert "Cloud margin softening confirmed" in html
     # Cross-holding: both tickers and their entry-kind labels render.
     assert "Thesis update" in html
-    assert "Bear case" in html
+    assert "Bear-case append" in html
+
+
+def test_duplicate_ledger_bodies_dedupe_in_the_stream(db_path: Path) -> None:
+    """PR3 regression: the old digest showed one NU thesis update three times
+    because consecutive ledger rows carried the same narrative. Near-identical
+    bodies collapse to the newest row."""
+    from datetime import UTC as _UTC
+    from datetime import datetime as _datetime
+
+    from user_state.ledger import append_entry
+
+    for _ in range(3):
+        append_entry(
+            ticker="NU",
+            entry_kind="thesis_update",
+            body="Risk-adjusted NIM contracted 100 bps QoQ to 9.5% - seasonal.",
+            db_path=db_path,
+        )
+
+    html = render_morning_digest(_datetime.now(_UTC).date(), db_path=db_path)
+    assert html.count("Risk-adjusted NIM contracted 100 bps QoQ") == 1

@@ -1,0 +1,369 @@
+"""Unified inbox — ONE deduped stream over alerts, queued-action drafts,
+thesis-ledger entries, and open journal items (UX redesign PR3).
+
+The same model renders three ways:
+
+  * the Home rail (``compact=True`` — top N, clamped bodies, no drawers),
+  * the morning digest's "What changed" section (the since-yesterday slice),
+  * the alert feed page (alerts-only kind filter, full cards).
+
+This replaces the old three-surface split where the same queued action
+appeared in the digest's "What's new", the digest's "Outstanding actions",
+AND the feed. Dedupe collapses near-identical bodies — the old digest showed
+one NU thesis update three times because consecutive ledger rows carried the
+same narrative.
+"""
+
+from __future__ import annotations
+
+import html
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from io import StringIO
+from pathlib import Path
+
+from alerts import (
+    AlertRow,
+    QueuedActionRow,
+    list_alerts,
+    list_pending_actions,
+    list_queued_actions_for_alert,
+)
+from dashboard._card import render_alert_card, render_queued_action
+from identity import DEFAULT_USER_ID
+from ui.time import stamp_html
+from user_state.ledger import list_recent_entries
+from user_state.notes import list_notes
+
+__all__ = ["INBOX_CSS", "InboxItem", "collect_inbox", "render_inbox_stream"]
+
+_LEDGER_KIND_LABELS: dict[str, str] = {
+    "thesis_update": "Thesis update",
+    "bear_append": "Bear-case append",
+    "sizing_update": "Sizing change",
+    "earnings_prep_append": "Earnings-prep note",
+}
+
+
+@dataclass(frozen=True)
+class InboxItem:
+    """One stream entry. ``kind`` ∈ alert | draft | ledger | note. Alerts carry
+    their row + nested queued actions; standalone drafts (pending actions whose
+    alert fell outside the window) carry just the action."""
+
+    kind: str
+    ticker: str | None
+    when: datetime
+    title: str
+    body: str
+    status: str | None = None
+    alert: AlertRow | None = None
+    actions: tuple[QueuedActionRow, ...] = field(default=())
+    action: QueuedActionRow | None = None
+
+
+def _norm_body(text: str) -> str:
+    """Dedupe key normalization: case/whitespace-insensitive head of the body."""
+    return " ".join(text.lower().split())[:120]
+
+
+def _as_naive_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is not None:
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
+
+
+def collect_inbox(
+    db_path: Path | None,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    ticker: str | None = None,
+    status: str | None = None,
+    trigger_kind: str | None = None,
+    kinds: tuple[str, ...] = ("alert", "draft", "ledger", "note"),
+    limit: int = 80,
+) -> list[InboxItem]:
+    """Build the stream, newest first, deduped.
+
+    ``since`` windows the EVENT kinds — alerts and ledger entries (the digest
+    slice). Drafts and notes are STANDING items: a pending draft from ten days
+    ago is still waiting on you, so they ignore ``since`` and appear under the
+    "Earlier" bucket instead of vanishing. ``until`` upper-bounds everything
+    (a digest re-generated for a historical date stays honest). ``kinds``
+    filters the sources (the feed passes ``("alert",)``); ``status`` /
+    ``trigger_kind`` apply to alerts only. Best-effort: a missing DB or table
+    yields []. The returned list is capped at ``limit`` after the merge.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return []
+
+    until_n = _as_naive_utc(until) if until is not None else None
+
+    def _in_window(when: datetime, *, windowed: bool) -> bool:
+        if until_n is not None and when >= until_n:
+            return False
+        return not (windowed and since is not None and when < _as_naive_utc(since))
+
+    items: list[InboxItem] = []
+    shown_alert_ids: set[int] = set()
+
+    if "alert" in kinds:
+        try:
+            alerts = list_alerts(
+                user_id=user_id,
+                ticker=ticker,
+                status=status,
+                since=since,
+                limit=limit,
+                db_path=db_path,
+            )
+        except sqlite3.Error:
+            alerts = []
+        if trigger_kind:
+            alerts = [a for a in alerts if a.trigger_kind == trigger_kind]
+        alerts = [a for a in alerts if _in_window(_as_naive_utc(a.fired_at), windowed=True)]
+        for a in alerts:
+            try:
+                actions = list_queued_actions_for_alert(a.id, db_path=db_path)
+            except sqlite3.Error:
+                actions = []
+            shown_alert_ids.add(a.id)
+            items.append(
+                InboxItem(
+                    kind="alert",
+                    ticker=a.ticker,
+                    when=_as_naive_utc(a.fired_at),
+                    title=a.trigger_kind,
+                    body="",
+                    status=a.status,
+                    alert=a,
+                    actions=tuple(actions),
+                )
+            )
+
+    if "draft" in kinds:
+        # Pending drafts whose parent alert is NOT already in the stream
+        # (older than the window, or filtered out) — the replacement for the
+        # digest's separate "Outstanding actions" section.
+        try:
+            pending = list_pending_actions(user_id=user_id, db_path=db_path)
+        except sqlite3.Error:
+            pending = []
+        ticker_by_alert: dict[int, str] = {}
+        if pending:
+            try:
+                for a in list_alerts(user_id=user_id, limit=500, db_path=db_path):
+                    ticker_by_alert[a.id] = a.ticker
+            except sqlite3.Error:
+                pass
+        for qa in pending:
+            if qa.alert_id in shown_alert_ids:
+                continue
+            qa_ticker = ticker_by_alert.get(qa.alert_id)
+            if ticker is not None and qa_ticker != ticker:
+                continue
+            when = _as_naive_utc(qa.created_at)
+            if not _in_window(when, windowed=False):  # standing: until only
+                continue
+            body = qa.payload.get("body") or qa.payload.get("narrative") or ""
+            items.append(
+                InboxItem(
+                    kind="draft",
+                    ticker=qa_ticker,
+                    when=when,
+                    title=_LEDGER_KIND_LABELS.get(qa.action_kind, qa.action_kind),
+                    body=str(body),
+                    status=qa.status,
+                    action=qa,
+                )
+            )
+
+    if "ledger" in kinds:
+        try:
+            entries = list_recent_entries(user_id=user_id, limit=60, db_path=db_path)
+        except (sqlite3.Error, FileNotFoundError, RuntimeError):
+            entries = []
+        for e in entries:
+            when = _as_naive_utc(e.created_at)
+            if not _in_window(when, windowed=True):
+                continue
+            if ticker is not None and e.ticker != ticker:
+                continue
+            items.append(
+                InboxItem(
+                    kind="ledger",
+                    ticker=e.ticker,
+                    when=when,
+                    title=_LEDGER_KIND_LABELS.get(e.entry_kind, e.entry_kind),
+                    body=e.body,
+                )
+            )
+
+    if "note" in kinds:
+        try:
+            notes = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
+        except sqlite3.Error:
+            notes = []
+        for n in notes:
+            when = _as_naive_utc(n.created_at)
+            if not _in_window(when, windowed=False):  # standing: until only
+                continue
+            items.append(
+                InboxItem(
+                    kind="note",
+                    ticker=n.ticker,
+                    when=when,
+                    title=n.kind,
+                    body=n.body,
+                )
+            )
+
+    # Dedupe: keep the NEWEST of near-identical (kind, ticker, body-head)
+    # rows. Alerts dedupe upstream on signature_sha already — body dedupe is
+    # for ledger/note/draft texts that repeat across consecutive runs.
+    items.sort(key=lambda it: it.when, reverse=True)
+    seen: set[tuple[str, str | None, str]] = set()
+    deduped: list[InboxItem] = []
+    for it in items:
+        key = (it.kind, it.ticker, _norm_body(it.body) if it.body else f"#{id(it.alert)}")
+        if it.body and key in seen:
+            continue
+        seen.add(key)
+        deduped.append(it)
+    return deduped[:limit]
+
+
+# ----------------------------------------------------------------------------
+# Render
+# ----------------------------------------------------------------------------
+
+
+def _bucket(when: datetime, now: datetime) -> str:
+    days = (now.date() - when.date()).days
+    if days <= 0:
+        return "Today"
+    if days == 1:
+        return "Yesterday"
+    if days <= 7:
+        return "This week"
+    return "Earlier"
+
+
+def render_inbox_stream(
+    items: list[InboxItem],
+    *,
+    db_path: Path | None = None,
+    compact: bool = False,
+    show_status_badge: bool = True,
+    now: datetime | None = None,
+    empty_text: str = "Nothing new — alerts, drafts, thesis changes, and watch items land here.",
+) -> str:
+    """The stream HTML: recency-grouped cards. ``compact`` is the Home-rail
+    variant — clamped bodies, collapsed evidence, no nested action bodies."""
+    if not items:
+        return f'<div class="ix-empty">{_esc(empty_text)}</div>'
+    now_dt = now or datetime.now(UTC).replace(tzinfo=None)
+    out = StringIO()
+    out.write(f'<div class="ix-stream{" ix-compact" if compact else ""}">')
+    current_bucket: str | None = None
+    for it in items:
+        b = _bucket(it.when, now_dt)
+        if b != current_bucket:
+            out.write(f'<div class="ix-bucket">{_esc(b)}</div>')
+            current_bucket = b
+        _render_item(out, it, db_path=db_path, compact=compact, show_status=show_status_badge)
+    out.write("</div>")
+    return out.getvalue()
+
+
+def _render_item(
+    out: StringIO,
+    it: InboxItem,
+    *,
+    db_path: Path | None,
+    compact: bool,
+    show_status: bool,
+) -> None:
+    if it.kind == "alert" and it.alert is not None and not compact:
+        # Full alert card (evidence drawer collapsed — the stream is a scan
+        # surface; the drawer is one click away).
+        render_alert_card(
+            out,
+            it.alert,
+            actions=list(it.actions),
+            show_status_badge=show_status,
+            brief_provenance=None,
+            drawer_open=False,
+        )
+        return
+
+    out.write('<div class="ix-card">')
+    out.write('<div class="ix-head">')
+    if it.ticker:
+        out.write(f'<span class="ix-ticker">{_esc(it.ticker)}</span>')
+    out.write(f'<span class="ix-kind ix-kind-{_esc(it.kind)}">{_esc(_title_for(it))}</span>')
+    if show_status and it.status and it.status not in ("open",):
+        out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
+    out.write(stamp_html(it.when, css="ix-when"))
+    out.write("</div>")
+    body = it.body or _alert_memo(it)
+    if body:
+        out.write(f'<div class="ix-body">{_esc(body)}</div>')
+    if not compact and it.kind == "draft" and it.action is not None:
+        out.write('<div class="ix-actions">')
+        render_queued_action(out, it.action)
+        out.write("</div>")
+    elif compact and it.kind in ("alert", "draft") and it.status == "pending":
+        target = f"/feed?ticker={it.ticker}" if it.ticker else "/feed"
+        out.write(f'<div class="ix-open"><a href="{_esc(target)}">review →</a></div>')
+    out.write("</div>")
+
+
+def _title_for(it: InboxItem) -> str:
+    # collect_inbox sets a specific title per kind: alert → trigger kind,
+    # draft/ledger → the action/entry-kind label, note → watch|question|…
+    return it.title
+
+
+def _alert_memo(it: InboxItem) -> str:
+    if it.alert is None:
+        return ""
+    from dashboard._card import _memo_text_from_evidence
+
+    return _memo_text_from_evidence(it.alert.evidence_json) or ""
+
+
+def _esc(text: str) -> str:
+    return html.escape(str(text), quote=True)
+
+
+INBOX_CSS = """
+.ix-stream { display: flex; flex-direction: column; gap: 8px; }
+.ix-bucket { color: var(--muted, #888); font-size: 10.5px; font-family: var(--mono, monospace);
+  text-transform: uppercase; letter-spacing: 0.6px; margin: 10px 0 2px; }
+.ix-bucket:first-child { margin-top: 0; }
+.ix-card { border: 1px solid var(--border, #2a2c30); border-radius: 8px;
+  background: var(--surface, #16171a); padding: 9px 12px; }
+.ix-head { display: flex; align-items: baseline; gap: 8px; }
+.ix-ticker { font-family: var(--mono, monospace); font-weight: 700; font-size: 12px;
+  color: var(--accent, #7aa2f7); }
+.ix-kind { font-size: 10.5px; font-family: var(--mono, monospace); text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted, #888); }
+.ix-status { font-size: 10px; font-family: var(--mono, monospace); border: 1px solid var(--border, #2a2c30);
+  border-radius: 4px; padding: 0 5px; color: var(--muted, #888); }
+.ix-status-pending { color: var(--warn, #fbbf24); border-color: var(--warn, #fbbf24); }
+.ix-status-applied, .ix-status-approved { color: var(--ok, #4ade80); }
+.ix-when { margin-left: auto; color: var(--muted, #888); font-size: 10.5px;
+  font-family: var(--mono, monospace); white-space: nowrap; }
+.ix-body { margin-top: 5px; font-size: 12.5px; line-height: 1.45; color: var(--fg, #e8e8e3);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.ix-compact .ix-body { -webkit-line-clamp: 2; font-size: 12px; }
+.ix-card:hover .ix-body { -webkit-line-clamp: unset; }
+.ix-actions { margin-top: 6px; }
+.ix-open { margin-top: 4px; font-size: 11.5px; }
+.ix-open a { color: var(--accent, #7aa2f7); text-decoration: none; }
+.ix-empty { color: var(--muted, #888); font-size: 12.5px; padding: 14px 4px; }
+""".strip()
