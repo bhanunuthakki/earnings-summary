@@ -367,6 +367,34 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .tab-pane.active { display: block; }
 .tab-body { display: flex; flex-direction: column; gap: var(--gap-lg); }
 
+/* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a
+   multi-section group a slim pill row swaps the section panes. Section
+   panes stay .tab-pane (display + print + comment-anchor scoping reuse the
+   rules above). */
+.tab-group-pane { display: none; }
+.tab-group-pane.active { display: block; }
+.subtabs {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding-top: var(--section-gap);
+}
+.subtab {
+  appearance: none; border: 1px solid var(--border-2);
+  background: var(--surface);
+  padding: 5px 12px 6px;
+  font-family: var(--sans); font-size: 12px; font-weight: 500;
+  color: var(--muted); cursor: pointer; border-radius: 999px;
+  display: flex; align-items: center; gap: 7px;
+  letter-spacing: 0.005em;
+}
+.subtab:hover { color: var(--fg); border-color: var(--fg); }
+.subtab.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+.subtab-count {
+  font-family: var(--mono); font-size: 10px; font-weight: 500;
+  padding: 0 5px; border-radius: 3px;
+  background: var(--paper); color: var(--muted);
+}
+.subtab.active .subtab-count { background: var(--bg); color: var(--fg); }
+
 .eyebrow {
   font-family: var(--mono); font-size: 11px; font-weight: 500;
   letter-spacing: 0.1em; text-transform: uppercase;
@@ -1287,8 +1315,9 @@ a.peer:hover { background: var(--paper); }
    ============================================================ */
 @media print {
   .l1-chrome, .twk-toggle-btn, .twk-panel { display: none; }
+  .tab-group-pane { display: block !important; }
   .tab-pane { display: block !important; padding-top: 16px; break-before: page; }
-  .tabs { display: none; }
+  .tabs, .subtabs { display: none; }
   .news-strip, .kpi-strip, .l1-identity { break-after: avoid; }
 }
 
