@@ -211,7 +211,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
-    """Tickers to refresh this run. Explicit > all-tracked > brief_dirty queue."""
+    """Tickers to refresh this run. Explicit > all-tracked > brief_dirty queue + P1."""
     cursor = conn.cursor()
     if args.ticker:
         return [args.ticker.upper()]
@@ -221,6 +221,20 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
             f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} "
             f"AND (archived_at IS NULL) "
             f"ORDER BY ticker"
+        )
+    elif _has_processing_tier_column(conn):
+        # Dirty queue plus every P1 name. The tier-cadence gate documents "P1
+        # always runs daily", but a dirty-only candidate set leaves P1 out on
+        # days when no fact write happens to land (e.g. every statement
+        # endpoint tier-blocked on the free FMP plan). Gates B + C still make
+        # a no-change P1 day a cheap skip — and the skip itself records
+        # last_built_at, which is what the dashboard's daily-freshness strip
+        # measures.
+        cursor.execute(
+            "SELECT ticker FROM tracked_companies "
+            "WHERE (brief_dirty = 1 OR UPPER(COALESCE(processing_tier, '')) = 'P1') "
+            "AND (archived_at IS NULL) "
+            "ORDER BY ticker"
         )
     else:
         cursor.execute(
@@ -233,6 +247,12 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     if args.limit > 0:
         tickers = tickers[: args.limit]
     return tickers
+
+
+def _has_processing_tier_column(conn: sqlite3.Connection) -> bool:
+    """Mirror of tier_runner's guard — pre-0054 DBs lack processing_tier."""
+    cur = conn.execute("PRAGMA table_info(tracked_companies)")
+    return any(row[1] == "processing_tier" for row in cur.fetchall())
 
 
 def _compute_brief_hash(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> str:
