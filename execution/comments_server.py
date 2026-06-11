@@ -953,6 +953,59 @@ def create_app(
             payload["spec"] = result.spec.to_dict()
         return payload
 
+    @app.route("/api/ask", methods=["POST", "OPTIONS"])
+    def ask_api():
+        """One Ask-thread turn (UX redesign PR5): NL question → compiled
+        ViewSpec → executed view → rendered fragment, in one round trip.
+
+        JSON body ``{"query": ..., "tickers": [...], "context_spec": {...}}``
+        — ``context_spec`` is the previous turn's spec, so follow-ups like
+        "now annual" refine it instead of starting over. Always 200 with a
+        tri-state payload: ``{"status": "ok", "spec", "fragment", "message"}``
+        or ``{"status": "budget_skipped" | "error", "message"}``. 400 only
+        for a missing query."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from viewspec.engine import execute_view
+        from viewspec.nl_compile import compile_nl_to_viewspec
+        from viewspec.render import render_view_fragment
+        from viewspec.spec import ViewSpec, ViewSpecError
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return ({"error": "query required"}, 400)
+        raw_tickers = body.get("tickers")
+        context = (
+            [str(t) for t in cast("list[object]", raw_tickers)]
+            if isinstance(raw_tickers, list)
+            else []
+        )
+        raw_ctx = body.get("context_spec")
+        context_spec = cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None
+        result = compile_nl_to_viewspec(
+            query, db_path=db_path, context_tickers=context, context_spec=context_spec
+        )
+        if result.status != "ok" or result.spec is None:
+            return {"status": result.status, "message": result.message or "compile failed"}
+        try:
+            spec = ViewSpec.from_dict(result.spec.to_dict())
+            view = execute_view(spec, db_path=db_path)
+            fragment = render_view_fragment(view, include_chart=True)
+        except ViewSpecError as exc:
+            return {"status": "error", "message": str(exc)}
+        n_rows = len(view.rows)
+        refined = " (refined the previous view)" if context_spec else ""
+        message = (
+            f"{n_rows} series · {spec.transform} · {spec.cadence}, {spec.periods} periods{refined}"
+        )
+        return {
+            "status": "ok",
+            "spec": result.spec.to_dict(),
+            "fragment": fragment,
+            "message": message,
+        }
+
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
         """Saved views CRUD (P5.1, saved_views 0079). GET lists; POST

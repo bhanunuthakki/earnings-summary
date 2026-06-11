@@ -1,4 +1,13 @@
-"""Research → Explore panel (master build P5.1): the ViewSpec builder UI.
+"""Ask panel (UX redesign PR5 over master build P5.1/P5.2).
+
+Conversational-first: a chat thread where each question compiles to a
+validated ViewSpec, executes, and renders inline as a matrix/chart card
+(``POST /api/ask``). Follow-ups send the previous spec as context so
+"now annual" / "add MELI" refine instead of starting over; every card
+offers "Open in builder" and "Pin as view". The full ViewSpec builder
+survives untouched inside the "Advanced builder" fold below the thread.
+
+Original P5.1 builder notes:
 
 On-the-fly slice-and-dice over financial_facts / kpi_facts / segments:
 pick tickers, pick metrics from the live catalog, pick a transform
@@ -67,6 +76,43 @@ _PANEL_STYLE = """<style>
 .vx-nl { border-bottom:1px solid var(--border); padding-bottom:10px; }
 .vx-nl input[name="nl_query"] { flex:1; min-width:280px; }
 .vx-nl-msg { color:var(--muted); font-size:11.5px; }
+
+/* ---- Ask thread (UX redesign PR5) ---- */
+.ask-thread { display:flex; flex-direction:column; gap:12px; margin:4px 0 14px; }
+.ask-hello { color:var(--muted); font-size:13px; line-height:1.5; border:1px dashed var(--border);
+  border-radius:10px; padding:14px 16px; }
+.ask-chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.ask-chip { background:var(--paper, #1a1d23); border:1px solid var(--border); color:var(--fg-soft, var(--fg));
+  border-radius:14px; padding:5px 12px; font-size:12px; cursor:pointer; }
+.ask-chip:hover { border-color:var(--accent); color:var(--accent); }
+.ask-turn-user { align-self:flex-end; max-width:70%; background:#1c2138; border:1px solid var(--accent);
+  color:var(--fg); border-radius:14px 14px 4px 14px; padding:8px 14px; font-size:13px; }
+.ask-turn-assistant { align-self:stretch; border:1px solid var(--border); background:var(--surface);
+  border-radius:10px; padding:12px 14px; }
+.ask-meta { color:var(--muted); font-size:11.5px; margin-bottom:8px; display:flex; gap:10px;
+  align-items:baseline; flex-wrap:wrap; }
+.ask-meta .ask-err { color:var(--bad); }
+.ask-actions { margin-top:8px; display:flex; gap:8px; }
+.ask-actions button { background:transparent; border:1px solid var(--border); color:var(--muted);
+  border-radius:6px; padding:3px 10px; font-size:11.5px; cursor:pointer; }
+.ask-actions button:hover { border-color:var(--accent); color:var(--accent); }
+.ask-busy { color:var(--muted); font-size:12.5px; }
+.ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
+@keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
+.ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
+.ask-inputrow input { flex:1; background:var(--paper, #1a1d23); color:var(--fg);
+  border:1px solid var(--border); border-radius:8px; padding:9px 13px; font-size:13.5px; }
+.ask-inputrow input:focus { outline:none; border-color:var(--accent); }
+.ask-inputrow button { background:#1c2138; color:var(--accent); border:1px solid var(--accent);
+  border-radius:8px; padding:9px 16px; font-size:13px; cursor:pointer; }
+.ask-ctx { color:var(--muted); font-size:11.5px; }
+.ask-ctx a { color:var(--accent); cursor:pointer; }
+.ask-advanced { border:1px solid var(--border); border-radius:8px; background:var(--surface);
+  padding:0 14px; margin-top:6px; }
+.ask-advanced > summary { cursor:pointer; padding:10px 0; font-size:12.5px; font-weight:600;
+  color:var(--muted); }
+.ask-advanced[open] > summary { color:var(--fg); }
+.ask-advanced .vx-builder { border:none; padding-left:0; padding-right:0; margin-top:0; }
 </style>"""
 
 # Plain string (not an f-string) so braces pass through untouched; the panel
@@ -215,6 +261,108 @@ _PANEL_JS = """
     el('vx-view-name').value = holder.getAttribute('data-view-name') || '';
     applySpec(spec);
   });
+
+  // ---- Ask thread (UX redesign PR5): conversational layer over the same
+  // compile→run pipeline. Follow-ups send the previous spec as context so
+  // "now annual" / "add MELI" refine instead of starting over. ----
+  var askThread = el('ask-thread');
+  var askInput = el('ask-q');
+  var askGo = el('ask-go');
+  var askCtx = el('ask-ctx');
+  var lastSpec = null;
+  var askBusy = false;
+
+  function askEsc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function askScroll() { askThread.scrollTop = askThread.scrollHeight; }
+  function clearHello() {
+    var hello = askThread.querySelector('.ask-hello');
+    if (hello) hello.remove();
+  }
+  function setCtx(on) {
+    lastSpec = on ? lastSpec : null;
+    if (askCtx) askCtx.hidden = !on;
+  }
+
+  function submitAsk(q) {
+    if (askBusy) return;
+    var query = (q || askInput.value).trim();
+    if (!query) { askInput.focus(); return; }
+    askBusy = true;
+    askInput.value = '';
+    clearHello();
+    var user = document.createElement('div');
+    user.className = 'ask-turn-user';
+    user.textContent = query;
+    askThread.appendChild(user);
+    var card = document.createElement('div');
+    card.className = 'ask-turn-assistant';
+    card.innerHTML = '<div class="ask-busy">compiling<span class="dots"></span></div>';
+    askThread.appendChild(card);
+    askScroll();
+    var staged = setTimeout(function () {
+      var busy = card.querySelector('.ask-busy');
+      if (busy) busy.innerHTML = 'running the view<span class="dots"></span>';
+    }, 1400);
+    fetch('/api/ask', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query: query, tickers: tickers(), context_spec: lastSpec})
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      clearTimeout(staged);
+      askBusy = false;
+      if (res.status === 'ok' && res.spec) {
+        lastSpec = res.spec;
+        setCtx(true);
+        card.innerHTML = '<div class="ask-meta">' + askEsc(res.message || 'done') + '</div>'
+          + (res.fragment || '')
+          + '<div class="ask-actions">'
+          + '<button type="button" data-ask-act="builder">Open in builder</button>'
+          + '<button type="button" data-ask-act="pin">Pin as view</button>'
+          + '</div>';
+        card.setAttribute('data-ask-spec', JSON.stringify(res.spec));
+      } else {
+        card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
+          + askEsc(res.message || 'Could not answer that — try the advanced builder.')
+          + '</span></div>';
+      }
+      askScroll();
+    }).catch(function () {
+      clearTimeout(staged);
+      askBusy = false;
+      card.innerHTML = '<div class="ask-meta"><span class="ask-err">network error — try again</span></div>';
+    });
+  }
+
+  if (askGo) askGo.addEventListener('click', function () { submitAsk(); });
+  if (askInput) askInput.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Enter') { ev.preventDefault(); submitAsk(); }
+  });
+  var ctxClear = el('ask-ctx-clear');
+  if (ctxClear) ctxClear.addEventListener('click', function () { setCtx(false); });
+
+  if (askThread) askThread.addEventListener('click', function (ev) {
+    var chip = ev.target.closest('.ask-chip');
+    if (chip) { submitAsk(chip.getAttribute('data-ask-q') || chip.textContent); return; }
+    var act = ev.target.closest('button[data-ask-act]');
+    if (!act) return;
+    var holder = act.closest('[data-ask-spec]');
+    var spec = {};
+    try { spec = JSON.parse(holder ? holder.getAttribute('data-ask-spec') : '{}'); } catch (e) {}
+    if (act.getAttribute('data-ask-act') === 'builder') {
+      var fold = el('ask-advanced');
+      if (fold) fold.open = true;
+      applySpec(spec);
+      if (fold) fold.scrollIntoView({behavior: 'smooth', block: 'start'});
+    } else {
+      var name = window.prompt('Save this view as…');
+      if (!name) return;
+      fetch('/api/views', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name.trim(), spec: spec})
+      }).then(function (r) { if (r.ok) refreshSaved(); });
+    }
+  });
 })();
 """
 
@@ -290,9 +438,35 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     cadence_opts = "".join(f'<option value="{escape(c)}">{escape(c)}</option>' for c in CADENCES)
     tickers_val = escape(", ".join(tickers))
     saved = render_saved_views_list(db_path, user_id=user_id)
+    first = tickers[0] if tickers else "NU"
+    second = tickers[1] if len(tickers) > 1 else "MELI"
     return f"""{_PANEL_STYLE}
-<h2>Explore</h2>
+<h2>Ask</h2>
 <div id="vx-root">
+<div class="ask-thread" id="ask-thread">
+  <div class="ask-hello">Ask about any tracked name — answers come back as live
+ tables and charts with per-number source chips. Follow-ups refine the last answer
+ (&ldquo;now annual&rdquo;, &ldquo;add {escape(second)}&rdquo;, &ldquo;same but as margins&rdquo;).
+    <div class="ask-chips">
+      <button type="button" class="ask-chip"
+        data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">
+        {escape(first)} vs {escape(second)} revenue growth</button>
+      <button type="button" class="ask-chip"
+        data-ask-q="{escape(first)} margins, last 12 quarters">{escape(first)} margins</button>
+      <button type="button" class="ask-chip"
+        data-ask-q="revenue 3-year CAGR for {escape(first)}, {escape(second)}, annual">
+        3y revenue CAGR</button>
+    </div>
+  </div>
+</div>
+<div class="ask-inputrow">
+  <input id="ask-q" placeholder="Ask — e.g. {escape(first)} vs {escape(second)} revenue growth, last 8 quarters" autocomplete="off">
+  <button type="button" id="ask-go">Ask</button>
+  <span class="ask-ctx" id="ask-ctx" hidden>refining the last view &middot;
+ <a id="ask-ctx-clear">start fresh</a></span>
+</div>
+<details class="ask-advanced" id="ask-advanced">
+<summary>Advanced builder &middot; saved views</summary>
 <div class="vx-builder">
   <div class="vx-row vx-nl">
     <label>ask</label>
@@ -335,5 +509,6 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
  bucket a year ago &middot; cagr = trailing N-year compound growth &middot; margin = value
  / revenue. Cross-ticker columns align on calendar buckets derived from each fiscal
  period end. Saved views embed elsewhere via /api/views/&lt;id&gt;/fragment.</p>
+</details>
 </div>
 <script>{_PANEL_JS}</script>"""

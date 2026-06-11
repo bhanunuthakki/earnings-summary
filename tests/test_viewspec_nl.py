@@ -112,6 +112,35 @@ def test_compile_ok_grounds_prompt(db: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert "fin:revenue" in prompts[0]
     assert "revenue growth for TST" in prompts[0]
     assert res.message is None
+    # No context spec → no refine block.
+    assert "Current view" not in prompts[0]
+
+
+def test_compile_context_spec_grounds_refinement(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PR5: the Ask thread sends the previous turn's spec — the prompt must
+    carry it with the refine instruction so "now annual" updates rather than
+    restarts."""
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **_kw: object) -> str:
+        prompts.append(prompt)
+        return _GOOD_SPEC_JSON
+
+    monkeypatch.setattr(nlc, "call_llm", fake_call)
+    prev = {
+        "tickers": ["TST"],
+        "metrics": ["fin:revenue"],
+        "transform": "yoy",
+        "cadence": "quarterly",
+        "periods": 8,
+    }
+    res = nlc.compile_nl_to_viewspec(
+        "now annual", db_path=db, context_tickers=["TST"], context_spec=prev
+    )
+    assert res.status == "ok"
+    assert "Current view" in prompts[0]
+    assert '"transform": "yoy"' in prompts[0]
+    assert "REFINING" in prompts[0]
 
 
 def test_compile_repairs_once_then_succeeds(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

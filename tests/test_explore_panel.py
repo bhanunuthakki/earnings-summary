@@ -135,6 +135,18 @@ def test_explore_panel_renders_with_default_universe(db_path: Path) -> None:
     assert "Save view" in html_out
 
 
+def test_explore_panel_is_ask_first(db_path: Path) -> None:
+    """PR5: the thread + input lead the panel; the full builder survives
+    untouched inside the Advanced fold (same ids, same JS contract)."""
+    html_out = render_explore_panel(db_path)
+    assert 'id="ask-thread"' in html_out
+    assert 'id="ask-q"' in html_out
+    assert "ask-chip" in html_out  # suggestion chips seed the empty thread
+    assert 'class="ask-advanced"' in html_out
+    for builder_id in ("vx-run", "vx-pick-fin", "vx-save", "vx-tickers"):
+        assert f'id="{builder_id}"' in html_out
+
+
 def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:
     page = client.get("/api/panel/explore")
     assert page.status_code == 200
@@ -226,3 +238,66 @@ def test_views_post_validates(client: FlaskClient) -> None:
     bad = client.post("/api/views", json={"name": "x", "spec": {"tickers": ["A"]}})
     assert bad.status_code == 400
     assert "metrics" in bad.get_json()["error"]
+
+
+# ----------------------------------------------------------------------------
+# /api/ask — one Ask-thread turn (PR5)
+# ----------------------------------------------------------------------------
+
+
+def test_ask_endpoint_compiles_runs_and_renders(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compile (mocked) → execute → fragment, one round trip; the previous
+    spec rides through as refine context."""
+    from viewspec import nl_compile
+    from viewspec.spec import ViewSpec
+
+    seen: dict[str, object] = {}
+
+    def fake_compile(
+        query: str,
+        *,
+        db_path: Path,
+        context_tickers: list[str] | None = None,
+        context_spec: dict[str, object] | None = None,
+        run_id: str | None = None,
+    ) -> nl_compile.NLCompileResult:
+        seen["query"] = query
+        seen["context_spec"] = context_spec
+        return nl_compile.NLCompileResult(status="ok", spec=ViewSpec.from_dict(_SPEC))
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
+    res = client.post(
+        "/api/ask",
+        json={"query": "TST revenue", "tickers": ["TST"], "context_spec": {"tickers": ["TST"]}},
+    )
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["status"] == "ok"
+    assert seen["query"] == "TST revenue"
+    assert seen["context_spec"] == {"tickers": ["TST"]}
+    assert "vx-matrix" in body["fragment"]
+    assert body["spec"]["tickers"] == ["TST"]
+    assert "series" in body["message"]
+
+
+def test_ask_endpoint_degrades_on_compile_failure(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from viewspec import nl_compile
+
+    def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
+        return nl_compile.NLCompileResult(status="error", message="no matching metric token")
+
+    monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
+    res = client.post("/api/ask", json={"query": "garbage"})
+    assert res.status_code == 200  # tri-state payload, never a 500
+    body = res.get_json()
+    assert body["status"] == "error"
+    assert "no matching metric token" in body["message"]
+    assert "fragment" not in body
+
+
+def test_ask_endpoint_requires_query(client: FlaskClient) -> None:
+    assert client.post("/api/ask", json={}).status_code == 400
