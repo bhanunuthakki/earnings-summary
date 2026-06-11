@@ -30,7 +30,7 @@ from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from ui.time import stamp_html
-from ui.tokens import FAVICON_LINK
+from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import AnalystNoteRow, list_notes
 
 _DEFAULT_TRACKER_URL = "http://localhost:5173"
@@ -743,31 +743,40 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
 _TCC_DRAWER_STYLE = """<style>
 .cc-holding-head { display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 8px; }
-.cc-fdot { font-size: 13px; cursor: help; margin-left: 6px; }
+.cc-fdot { font-size: var(--fs-body); cursor: help; margin-left: 6px; }
 .fdot-ok { color: var(--ok, #4ade80); }
 .fdot-warn { color: var(--warn, #fbbf24); }
 .fdot-bad { color: var(--bad, #f87171); }
 .tcc-drawer-btn { background: transparent; border: 1px solid var(--border, #2a2c30);
-  color: var(--muted, #888); border-radius: 6px; padding: 4px 10px; font-size: 12px;
-  cursor: pointer; }
+  color: var(--muted, #888); border-radius: var(--radius); padding: 4px 10px;
+  font-size: var(--fs-caption); cursor: pointer;
+  transition: color var(--transition), border-color var(--transition); }
 .tcc-drawer-btn:hover { border-color: var(--accent, #7aa2f7); color: var(--accent, #7aa2f7); }
-.tcc-reread-fold { margin: 10px 0 14px; border: 1px solid var(--border, #2a2c30);
-  border-radius: 8px; background: var(--surface, #16171a); padding: 0 14px; }
-.tcc-reread-fold > summary { cursor: pointer; padding: 10px 0; font-size: 13px;
+.tcc-reread-fold { margin: 10px 0 14px;
+  border-radius: var(--radius); background: var(--surface, #16171a); padding: 0 14px; }
+.tcc-reread-fold > summary { cursor: pointer; padding: 10px 0; font-size: var(--fs-body);
   font-weight: 600; color: var(--muted, #888); }
 .tcc-reread-fold[open] > summary { color: var(--fg, #e8e8e3); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); }
-.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34; }
+.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34;
+  animation: cc-fade-in var(--transition); }
 .tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
   background: var(--bg, #0e0f12); border-left: 1px solid var(--border, #2a2c30); z-index: 35;
-  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35); }
+  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35);
+  animation: cc-slide-in-right var(--transition); }
 .tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
 .tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
   padding: 14px 18px; border-bottom: 1px solid var(--border, #2a2c30); font-weight: 700; }
 .tcc-drawer-close { background: transparent; border: none; color: var(--muted, #888);
-  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px;
+  transition: color var(--transition); }
 .tcc-drawer-close:hover { color: var(--fg, #e8e8e3); }
 .tcc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }
+/* Standardized overlay motion (mirrors the shell keyframes for the
+   standalone /ticker page, which does not load SHELL_CSS). */
+@keyframes cc-slide-in-right { from { transform: translateX(18px); opacity: 0; }
+  to { transform: none; opacity: 1; } }
+@keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
 </style>"""
 
 _TCC_DRAWER_SCRIPT = """<script>
@@ -1132,6 +1141,8 @@ def _size(n: int | None) -> str:
     return f"{n} B"
 
 
+# The whole head goes through str.format(ticker=, generated_at=), so the
+# palette block's literal CSS braces are doubled before splicing.
 _PAGE_HEAD = (
     """<!doctype html>
 <html lang="en">
@@ -1140,40 +1151,43 @@ _PAGE_HEAD = (
 <title>{ticker} · command center</title>
 """
     + FAVICON_LINK
+    + "\n<style>\n"
+    + palette_css("dark").replace("{", "{{").replace("}", "}}")
     + """
-<style>
-  body {{ margin: 0; padding: 24px; font-family: 'Inter', -apple-system, sans-serif; background: #0c0d10; color: #e5e5e2; line-height: 1.5; font-size: 14px; }}
-  header {{ margin-bottom: 20px; border-bottom: 1px solid #2a2c30; padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
-  h1 {{ font-size: 24px; margin: 0 0 4px; font-weight: 600; }}
-  h2 {{ font-size: 17px; margin: 0 0 8px; font-weight: 600; }}
-  .top-nav {{ font-size: 12px; }}
-  .top-nav a {{ color: #6ea8fe; text-decoration: none; }}
+  body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
+  header {{ margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
+  h1 {{ font-size: var(--fs-display); margin: 0 0 4px; font-weight: 600; }}
+  h2 {{ font-size: var(--fs-title); margin: 0 0 8px; font-weight: 600; }}
+  a {{ transition: color var(--transition); }}
+  .top-nav {{ font-size: var(--fs-caption); }}
+  .top-nav a {{ color: var(--accent); text-decoration: none; }}
   .top-nav a:hover {{ text-decoration: underline; }}
   .badges {{ text-align: right; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; background: #2a2c30; margin-left: 4px; }}
-  .badge.b-ok {{ background: #14532d; color: #4ade80; }}
-  .badge.b-warn {{ background: #422006; color: #fbbf24; }}
-  .badge.b-bad {{ background: #450a0a; color: #f87171; }}
-  .panel {{ margin-bottom: 24px; background: #16171a; border: 1px solid #2a2c30; border-radius: 8px; padding: 16px 18px; }}
-  .panel .sub {{ color: #999; font-size: 12px; margin: 0 0 12px; }}
-  .panel-h3 {{ font-size: 13px; margin: 16px 0 6px; color: #f5f5f0; font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.4px; }}
-  .muted {{ color: #888; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th {{ text-align: left; padding: 6px 10px; border-bottom: 2px solid #2a2c30; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: #888; }}
-  td {{ padding: 6px 10px; border-bottom: 1px solid #1f2125; vertical-align: top; }}
-  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  code {{ font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #b8b8b0; }}
-  .pos .kpi-value, td.pos {{ color: #4ade80; }}
-  .neg .kpi-value, td.neg {{ color: #f87171; }}
-  .ok-dot {{ color: #4ade80; }}
+  .badge {{ display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background: var(--border); margin-left: 4px; }}
+  .badge.b-ok {{ background: #14532d; color: var(--ok); }}
+  .badge.b-warn {{ background: #422006; color: var(--warn); }}
+  .badge.b-bad {{ background: #450a0a; color: var(--bad); }}
+  .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
+  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
+  .panel-h3 {{ font-size: var(--fs-body); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
+  .muted {{ color: var(--muted); }}
+  table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
+  th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
+  td {{ padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
+  tbody tr:hover td {{ background: rgba(255,255,255,0.025); }}
+  td.num {{ text-align: right; }}
+  code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
+  .pos .kpi-value, td.pos {{ color: var(--ok); }}
+  .neg .kpi-value, td.neg {{ color: var(--bad); }}
+  .ok-dot {{ color: var(--ok); }}
   .fresh-strip {{ display: flex; gap: 10px; margin-bottom: 22px; }}
-  .fresh-cell {{ background: #16171a; border: 1px solid #2a2c30; border-radius: 6px; padding: 8px 14px; flex: 1; }}
-  .fresh-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; }}
-  .fresh-val {{ font-size: 15px; font-variant-numeric: tabular-nums; }}
+  .fresh-cell {{ background: var(--surface); border-radius: var(--radius); padding: 8px 14px; flex: 1; }}
+  .fresh-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
+  .fresh-val {{ font-size: var(--fs-section); font-variant-numeric: tabular-nums; }}
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }}
-  .kpi-card {{ background: #1f2125; border: 1px solid #2a2c30; border-radius: 6px; padding: 10px 12px; }}
-  .kpi-label {{ font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; }}
-  .kpi-value {{ font-size: 18px; font-weight: 700; margin-top: 2px; }}
+  .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; }}
+  .kpi-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
+  .kpi-value {{ font-size: var(--fs-title); font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }}
   ul {{ margin: 6px 0; padding-left: 20px; }}
   li {{ margin-bottom: 3px; }}
 </style>

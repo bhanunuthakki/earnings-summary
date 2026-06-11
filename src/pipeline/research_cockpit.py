@@ -869,15 +869,17 @@ _COCKPIT_CSS = """
 .cockpit-section h2 { display: flex; align-items: baseline; gap: 6px; }
 .cockpit-table td { white-space: nowrap; }
 .cockpit-table td.kpi-moves { white-space: normal; }
-.cockpit-thin td, .cockpit-thin th { padding: 4px 10px; font-size: 12px; }
-.cockpit-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; cursor: default; }
+/* The Evaluation table is secondary to the Portfolio table — caption-tier
+   type + tighter padding marks it as the lower-importance grid. */
+.cockpit-thin td, .cockpit-thin th { padding: 4px 10px; font-size: var(--fs-caption); }
+.cockpit-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: var(--fs-micro);
+  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; cursor: default; }
 .cockpit-badge.b-ok { background: #14532d; color: var(--ok); }
 .cockpit-badge.b-warn { background: #422006; color: var(--warn); }
 .cockpit-badge.b-bad { background: #450a0a; color: var(--bad); }
-.cockpit-badge.b-muted { background: #2a2c30; color: var(--muted); }
-.kpi-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: 10px;
-  font-size: 11px; font-family: var(--mono); background: var(--paper);
+.cockpit-badge.b-muted { background: var(--border); color: var(--muted); }
+.kpi-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-family: var(--mono); background: var(--paper);
   border: 1px solid var(--border); color: var(--muted); cursor: default; }
 .kpi-chip b { font-weight: 600; color: var(--fg); }
 .kpi-chip.chip-bad { border-color: var(--bad); }
@@ -885,14 +887,14 @@ _COCKPIT_CSS = """
 .kpi-chip.chip-warn { border-color: var(--warn); }
 .kpi-chip.chip-warn b { color: var(--warn); }
 .kpi-chip.chip-ok b { color: var(--ok); }
-.pill { display: inline-block; margin-right: 4px; padding: 1px 7px; border-radius: 10px;
-  font-size: 11px; font-weight: 600; text-decoration: none; cursor: default; }
+.pill { display: inline-block; margin-right: 4px; padding: 1px 7px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; text-decoration: none; cursor: default; }
 a.pill { cursor: pointer; }
 .pill-bad { background: #450a0a; color: var(--bad); }
 .pill-warn { background: #422006; color: var(--warn); }
 .pill-accent { background: var(--accent-soft); color: var(--accent); }
 .er-soon { color: var(--warn); font-weight: 600; }
-.stale-dot { font-size: 10px; cursor: help; }
+.stale-dot { font-size: var(--fs-micro); cursor: help; }
 .dot-col { text-align: center; width: 28px; }
 .dot-ok { color: var(--ok); }
 .dot-warn { color: var(--warn); }
