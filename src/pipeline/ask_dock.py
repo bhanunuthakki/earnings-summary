@@ -17,13 +17,13 @@ explicit header controls, persisted under ``localStorage['askDockMode']``
   overlays (palette, peek, hover card, drawers) keep first claim on the key.
 
 Same engine and SSE contract as the Ask tab (``POST /api/ask/stream``:
-stage/delta/fragment/final/citations/error frames); the dock renders a
-compact thread — prose with citation chips, view fragments inline — and
-keeps a client-side history tail for narrative continuity. The tail also
-persists under ``sessionStorage['cc-ask-dock-tail']`` so a reload replays
-the conversation.
+stage/delta/fragment/final/citations/error/session frames); the dock renders
+a compact thread — prose with citation chips, view fragments inline — and
+uses server-side session persistence when available.  The ``⇿`` button opens
+a thread-list overlay: resume, rename (double-click), or delete past threads;
+a **New thread** button starts a fresh session.
 
-The ⇗ pop-out stashes that history under ``sessionStorage['cc-ask-thread']``
+The ⇗ pop-out stashes history under ``sessionStorage['cc-ask-thread']``
 (plus any pending input under the palette's ``cc-ask-q`` key), minimizes the
 dock, and jumps to ``#explore`` — the Ask panel replays the turns at
 wire-up, so the conversation continues in the full tab.
@@ -49,7 +49,7 @@ _DOCK_CSS = """
 .ask-dock-ctl { color:var(--muted); font-size:var(--fs-body); padding:0 2px;
   text-decoration:none; cursor:pointer; }
 .ask-dock-ctl:hover { color:var(--accent); }
-.ask-dock-body { display:flex; flex-direction:column; max-height:54vh; }
+.ask-dock-body { display:flex; flex-direction:column; max-height:54vh; position:relative; }
 /* min — the slim pill: title only, body folded, controls hidden (the pill
    itself is the restore control). */
 .ask-dock[data-mode="min"] { width:auto; }
@@ -100,6 +100,32 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
 .ask-dock-form button { background:var(--accent-soft); color:var(--accent);
   border:1px solid var(--accent); border-radius:var(--radius); padding:7px 12px;
   font-size:var(--fs-caption); cursor:pointer; }
+/* Thread list overlay — covers the .ask-dock-body while open. */
+.ask-dock-threads { position:absolute; inset:0; background:var(--surface);
+  display:flex; flex-direction:column; z-index:1; }
+.ask-dock-threads[hidden] { display:none; }
+.ask-dock-threads-head { display:flex; align-items:center; gap:8px;
+  padding:8px 12px; border-bottom:1px solid var(--border); background:var(--paper); }
+.ask-dock-threads-title { font-size:var(--fs-caption); font-weight:600;
+  color:var(--fg); flex:1; }
+.ask-dock-threads-list { flex:1; overflow-y:auto; padding:6px 0; }
+.ask-dock-thread-row { display:flex; align-items:center; gap:6px;
+  padding:7px 12px; cursor:pointer; }
+.ask-dock-thread-row:hover { background:var(--paper); }
+.ask-dock-thread-row[data-active="1"] { background:var(--accent-soft); }
+.ask-dock-thread-title { flex:1; font-size:var(--fs-caption); color:var(--fg);
+  overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.ask-dock-thread-date { font-size:var(--fs-micro); color:var(--muted);
+  white-space:nowrap; flex-shrink:0; }
+.ask-dock-thread-del { font-size:var(--fs-micro); color:var(--muted);
+  background:none; border:none; cursor:pointer; padding:2px 4px;
+  flex-shrink:0; line-height:1; }
+.ask-dock-thread-del:hover { color:var(--bad); }
+.ask-dock-thread-rename { flex:1; font-size:var(--fs-caption); color:var(--fg);
+  background:var(--surface); border:1px solid var(--accent);
+  border-radius:var(--radius); padding:2px 6px; }
+.ask-dock-threads-empty { color:var(--muted); font-size:var(--fs-caption);
+  padding:16px 12px; }
 """
 
 # Raw string: JS regexes and \n splits pass through verbatim.
@@ -115,11 +141,22 @@ _DOCK_JS = r"""
   var pop = document.getElementById('ask-dock-pop');
   var minBtn = document.getElementById('ask-dock-min');
   var splitBtn = document.getElementById('ask-dock-split');
+  var threadsBtn = document.getElementById('ask-dock-threads-btn');
+  var threadsPanel = document.getElementById('ask-dock-threads');
+  var threadsList = document.getElementById('ask-dock-threads-list');
+  var threadsClose = document.getElementById('ask-dock-threads-close');
+  var newThreadBtn = document.getElementById('ask-dock-new-thread');
   var TAIL_KEY = 'cc-ask-dock-tail';
+  var SID_KEY = 'cc-ask-session-id';
   var history = [];
   var lastSpec = null;
   var busy = false;
   var expandedMode = 'float';  // the state a pill click restores
+  var currentSessionId = null;
+
+  // Restore session id from sessionStorage so a reload re-attaches to the
+  // same thread without asking the server for a new one.
+  try { currentSessionId = sessionStorage.getItem(SID_KEY) || null; } catch (e) {}
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -166,7 +203,7 @@ _DOCK_JS = r"""
   });
 
   // Header click toggles min <-> the last expanded state; the inline controls
-  // (▁ / ◫ / ⇗) are explicit and excluded from the toggle.
+  // (▁ / ◫ / ⇗ / ⇿) are explicit and excluded from the toggle.
   toggle.addEventListener('click', function (ev) {
     if (ev.target.closest && ev.target.closest('.ask-dock-ctl')) return;
     setMode(dock.dataset.mode === 'min' ? expandedMode : 'min');
@@ -207,8 +244,198 @@ _DOCK_JS = r"""
     window.dispatchEvent(new Event('cc-ask-q'));
   });
 
-  // Replay the persisted tail so a reload keeps the conversation (text only —
-  // view fragments and citation chips live in the turns that produced them).
+  // ---------------------------------------------------------------------------
+  // Thread list overlay (⇿)
+  // ---------------------------------------------------------------------------
+
+  function fmtDate(iso) {
+    if (!iso) return '';
+    try {
+      var d = new Date(iso.replace(' ', 'T') + 'Z');
+      var now = new Date();
+      var diffMs = now - d;
+      var diffDays = Math.floor(diffMs / 86400000);
+      if (diffDays === 0) return 'today';
+      if (diffDays === 1) return 'yesterday';
+      if (diffDays < 7) return diffDays + 'd ago';
+      return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+    } catch (e) { return ''; }
+  }
+
+  function openThreads() {
+    threadsPanel.hidden = false;
+    loadThreadsList();
+  }
+  function closeThreads() {
+    threadsPanel.hidden = true;
+  }
+
+  threadsBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    if (!threadsPanel.hidden) { closeThreads(); return; }
+    openThreads();
+  });
+  threadsClose.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    closeThreads();
+  });
+
+  function loadThreadsList() {
+    threadsList.innerHTML = '';
+    fetch('/api/ask/sessions?limit=40')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data || !data.sessions || !data.sessions.length) {
+          threadsList.innerHTML = '<div class="ask-dock-threads-empty">No saved threads yet.</div>';
+          return;
+        }
+        data.sessions.forEach(function (sess) {
+          threadsList.appendChild(buildThreadRow(sess));
+        });
+      })
+      .catch(function () {
+        threadsList.innerHTML = '<div class="ask-dock-threads-empty">Could not load threads.</div>';
+      });
+  }
+
+  function buildThreadRow(sess) {
+    var row = document.createElement('div');
+    row.className = 'ask-dock-thread-row';
+    row.dataset.sid = sess.id;
+    if (sess.id === currentSessionId) row.dataset.active = '1';
+
+    var titleEl = document.createElement('span');
+    titleEl.className = 'ask-dock-thread-title';
+    titleEl.textContent = sess.title || '(untitled)';
+    titleEl.title = 'Double-click to rename';
+
+    var dateEl = document.createElement('span');
+    dateEl.className = 'ask-dock-thread-date';
+    dateEl.textContent = fmtDate(sess.updated_at);
+
+    var delBtn = document.createElement('button');
+    delBtn.className = 'ask-dock-thread-del';
+    delBtn.type = 'button';
+    delBtn.title = 'Delete thread';
+    delBtn.innerHTML = '&#x2715;';
+
+    row.appendChild(titleEl);
+    row.appendChild(dateEl);
+    row.appendChild(delBtn);
+
+    // Resume on click (but not on the delete button).
+    row.addEventListener('click', function (ev) {
+      if (ev.target === delBtn) return;
+      resumeThread(sess.id);
+    });
+
+    // Inline rename on double-click.
+    titleEl.addEventListener('dblclick', function (ev) {
+      ev.stopPropagation();
+      startInlineRename(row, titleEl, sess.id);
+    });
+
+    delBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      deleteThread(sess.id, row);
+    });
+
+    return row;
+  }
+
+  function startInlineRename(row, titleEl, sid) {
+    var inp = document.createElement('input');
+    inp.className = 'ask-dock-thread-rename';
+    inp.value = titleEl.textContent === '(untitled)' ? '' : titleEl.textContent;
+    inp.placeholder = 'Thread title';
+    row.replaceChild(inp, titleEl);
+    inp.focus();
+    inp.select();
+
+    function commit() {
+      var newTitle = inp.value.trim();
+      if (!newTitle) { row.replaceChild(titleEl, inp); return; }
+      fetch('/api/ask/sessions/' + encodeURIComponent(sid), {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title: newTitle})
+      }).then(function (r) {
+        if (r.ok) titleEl.textContent = newTitle;
+        row.replaceChild(titleEl, inp);
+      }).catch(function () { row.replaceChild(titleEl, inp); });
+    }
+    inp.addEventListener('blur', commit);
+    inp.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); }
+      if (ev.key === 'Escape') { row.replaceChild(titleEl, inp); }
+    });
+  }
+
+  function resumeThread(sid) {
+    closeThreads();
+    fetch('/api/ask/sessions/' + encodeURIComponent(sid))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        currentSessionId = sid;
+        try { sessionStorage.setItem(SID_KEY, sid); } catch (e) {}
+        history = [];
+        try { sessionStorage.removeItem(TAIL_KEY); } catch (e) {}
+        // Render the stored turns.
+        thread.innerHTML = '';
+        var turns = data.turns || [];
+        if (!turns.length) {
+          thread.innerHTML = '<span class="ask-dock-empty">Ask about any tracked name without leaving this tab.</span>';
+          return;
+        }
+        turns.forEach(function (t) {
+          var el = document.createElement('div');
+          if (t.role === 'user') {
+            el.className = 'ask-dock-user';
+            el.textContent = t.text;
+            remember('user', t.text);
+          } else {
+            el.className = 'ask-dock-asst';
+            el.innerHTML = md(t.text);
+            remember('assistant', t.text);
+          }
+          thread.appendChild(el);
+        });
+        scroll();
+      })
+      .catch(function () {});
+  }
+
+  function deleteThread(sid, row) {
+    fetch('/api/ask/sessions/' + encodeURIComponent(sid), {method: 'DELETE'})
+      .then(function (r) {
+        if (r.ok || r.status === 204) {
+          row.remove();
+          if (sid === currentSessionId) { startNewThread(); }
+        }
+      })
+      .catch(function () {});
+  }
+
+  function startNewThread() {
+    currentSessionId = null;
+    try { sessionStorage.removeItem(SID_KEY); } catch (e) {}
+    history = [];
+    try { sessionStorage.removeItem(TAIL_KEY); } catch (e) {}
+    thread.innerHTML = '<span class="ask-dock-empty">Ask about any tracked name without leaving this tab.</span>';
+    closeThreads();
+    input.focus();
+  }
+
+  newThreadBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    startNewThread();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Replay persisted tail
+  // ---------------------------------------------------------------------------
+
   try {
     var tail = JSON.parse(sessionStorage.getItem(TAIL_KEY) || 'null');
     if (tail && tail.length) {
@@ -230,7 +457,10 @@ _DOCK_JS = r"""
     }
   } catch (e) {}
 
-  // Boot state: askDockMode, migrating the legacy boolean askDockOpen once.
+  // ---------------------------------------------------------------------------
+  // Boot state
+  // ---------------------------------------------------------------------------
+
   var boot = null;
   try {
     boot = localStorage.getItem('askDockMode');
@@ -239,6 +469,10 @@ _DOCK_JS = r"""
     }
   } catch (e) { boot = 'min'; }
   setMode(boot, true);
+
+  // ---------------------------------------------------------------------------
+  // Citation row helper
+  // ---------------------------------------------------------------------------
 
   function citeRow(card, items) {
     var chips = (items || []).map(function (c) {
@@ -253,6 +487,10 @@ _DOCK_JS = r"""
     row.innerHTML = chips;
     card.appendChild(row);
   }
+
+  // ---------------------------------------------------------------------------
+  // Submit handler
+  // ---------------------------------------------------------------------------
 
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
@@ -293,7 +531,13 @@ _DOCK_JS = r"""
       return prose;
     }
     function handle(ev2) {
-      if (ev2.type === 'stage') {
+      if (ev2.type === 'session') {
+        // Server assigned a session — capture it for future turns.
+        if (ev2.session_id) {
+          currentSessionId = ev2.session_id;
+          try { sessionStorage.setItem(SID_KEY, ev2.session_id); } catch (e) {}
+        }
+      } else if (ev2.type === 'stage') {
         busyLine(ev2.note || (ev2.stage === 'compiling' ? 'compiling the view'
           : ev2.stage === 'running' ? 'running the view' : 'researching'));
       } else if (ev2.type === 'delta') {
@@ -332,7 +576,8 @@ _DOCK_JS = r"""
     fetch('/api/ask/stream', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: q, tickers: [], context_spec: lastSpec,
-                            history: history.slice(0, -1)})
+                            history: history.slice(0, -1),
+                            session_id: currentSessionId})
     }).then(function (r) {
       if (!r.ok || !r.body) throw new Error('HTTP ' + r.status);
       var reader = r.body.getReader();
@@ -371,6 +616,8 @@ def render_ask_dock() -> str:
   <button type="button" class="ask-dock-head" id="ask-dock-toggle">
     <span class="ask-dock-title">Ask</span>
     <span class="ask-dock-hint">tables for metric questions &middot; cited answers for open ones</span>
+    <span class="ask-dock-ctl" id="ask-dock-threads-btn" role="button"
+      title="Browse saved threads" aria-label="Browse threads">&#x21C6;</span>
     <span class="ask-dock-ctl" id="ask-dock-min" role="button" title="Minimize"
       aria-label="Minimize">&#x2581;</span>
     <span class="ask-dock-ctl ask-dock-splitbtn" id="ask-dock-split" role="button"
@@ -379,6 +626,16 @@ def render_ask_dock() -> str:
       aria-label="Continue in the Ask tab">&#x21D7;</span>
   </button>
   <div class="ask-dock-body" id="ask-dock-body">
+    <div id="ask-dock-threads" class="ask-dock-threads" hidden>
+      <div class="ask-dock-threads-head">
+        <span class="ask-dock-threads-title">Saved threads</span>
+        <button type="button" id="ask-dock-new-thread" class="k-btn k-btn-quiet k-btn-sm">
+          + New thread</button>
+        <span class="ask-dock-ctl" id="ask-dock-threads-close" role="button"
+          title="Close" aria-label="Close threads">&#x2715;</span>
+      </div>
+      <div id="ask-dock-threads-list" class="ask-dock-threads-list"></div>
+    </div>
     <div class="ask-dock-thread" id="ask-dock-thread">
       <span class="ask-dock-empty">Ask about any tracked name without leaving this tab.</span>
     </div>
