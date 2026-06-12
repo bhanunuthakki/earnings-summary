@@ -91,3 +91,24 @@ def _no_real_pack_router_llm(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(ask_router, "call_llm_structured", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same never-spend rule for the claim-grounding audit (S8): the ask
+    engine runs it after every grounded narrative answer, so any test that
+    stubs evidence + transport would otherwise launch a real Haiku
+    subprocess. The block raises at the transport seam;
+    ``extract_claim_map`` catches it (its documented fail-closed contract)
+    and the citations event degrades to the answer-level shape — no spend,
+    prod-faithful behavior. Tests that exercise the map monkeypatch
+    ``ask.claims.call_llm_structured`` themselves."""
+    import ask.claims as ask_claims
+
+    def _blocked(*_a: object, **_k: object) -> object:
+        raise AssertionError(
+            "real claim-grounding LLM invoked in a test — monkeypatch "
+            "ask.claims.call_llm_structured or ask.claims.extract_claim_map"
+        )
+
+    monkeypatch.setattr(ask_claims, "call_llm_structured", _blocked)

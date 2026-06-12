@@ -242,6 +242,16 @@ LLM_MODELS: dict[str, str] = {
     # evals/golden/ask_pack_router.json; budget row seeded by alembic 0089
     # (skip mode — a blown cap disables packs, the turn still answers).
     "ask_pack_router": FAST_CLASSIFIER_MODEL,
+    # Ask claim-grounding audit (src/ask/claims.py, fund-grade build S8):
+    # after a grounded narrative answer streams, one short call re-reads the
+    # answer against its numbered evidence and emits the claims→cites map
+    # (which sentences are factual claims, which evidence backs each).
+    # Copy-the-sentence + pick-from-a-list over a few KB — Haiku-shaped, and
+    # the call sits on the interactive ask path AFTER the final text, so
+    # latency only delays the citation chips, never the answer. Mis-grading
+    # fails closed to answer-level citations (the pre-S8 behavior); budget
+    # row seeded by alembic 0090 (skip mode).
+    "ask_claim_grounding": FAST_CLASSIFIER_MODEL,
     # Pairwise backend judge (src/llm/backend_judge.py): grades Claude-vs-Gemini
     # paired outputs to decide whether a purpose may join the eval-gated Gemini
     # allowlist. Opus on purpose — the judge must out-discriminate BOTH

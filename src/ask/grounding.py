@@ -183,6 +183,12 @@ class EvidenceItem:
     doc_id: int | None
     href: str | None  # /source/<doc_id>[?section=…|#L<n>] — None when unresolved
     source_url: str | None = None
+    # Scored confidence of the newest fact row backing the item (S2's
+    # pipeline.confidence formula, [0, 1]). Only the fact channel carries
+    # one — filings/transcripts/packs are passages, not scored facts — and
+    # legacy DBs without the column leave it None. The citation popover
+    # renders it as a %.
+    confidence: float | None = None
 
     def chip_payload(self) -> dict[str, object]:
         return {
@@ -191,6 +197,7 @@ class EvidenceItem:
             "label": self.label,
             "href": self.href,
             "source_url": self.source_url,
+            "confidence": self.confidence,
         }
 
 
@@ -308,6 +315,19 @@ def _series_rows(
         return []
 
 
+def _series_rows_conf(
+    conn: sqlite3.Connection, sql_tmpl: str, params: tuple[object, ...]
+) -> list[tuple[object, ...]]:
+    """``sql_tmpl`` carries a ``{conf}`` slot for the scored-confidence
+    column (S2). Tried with it first; a legacy DB without the column fails
+    that query, so retry without and pad rows with None — confidence is
+    enrichment, never the reason a fact series goes missing."""
+    rows = _series_rows(conn, sql_tmpl.format(conf=", confidence"), params)
+    if rows:
+        return rows
+    return [(*r, None) for r in _series_rows(conn, sql_tmpl.format(conf=""), params)]
+
+
 def _dedupe_series(
     rows: list[tuple[object, ...]],
 ) -> list[tuple[object, ...]]:
@@ -350,9 +370,9 @@ def _fact_evidence(
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
             rows = _dedupe_series(
-                _series_rows(
+                _series_rows_conf(
                     conn,
-                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id "
+                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
                     "FROM kpi_facts WHERE ticker = ? AND kpi_definition_id = ? "
                     "ORDER BY period_end DESC, id DESC LIMIT 64",
                     (ticker, def_id),
@@ -380,9 +400,9 @@ def _fact_evidence(
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
             rows = _dedupe_series(
-                _series_rows(
+                _series_rows_conf(
                     conn,
-                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id "
+                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
                     "FROM financial_facts WHERE ticker = ? AND line_item = ? "
                     "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
                     "ORDER BY period_end DESC, id DESC LIMIT 64",
@@ -411,6 +431,13 @@ def _fact_item(
     doc_id_raw = rows[0][4]
     doc_id = int(cast("int", doc_id_raw)) if doc_id_raw is not None else None
     doc_type, source_url = _doc_meta(conn, doc_id) if doc_id is not None else (None, None)
+    # Scored confidence (S2) of the newest fact row — the one the chip cites.
+    confidence: float | None = None
+    if len(rows[0]) > 5 and rows[0][5] is not None:
+        try:
+            confidence = float(cast("float", rows[0][5]))
+        except (TypeError, ValueError):
+            confidence = None
     unit_part = f", {unit}" if unit and unit != "actual" else ""
     src_part = f" — source: {doc_type}" if doc_type else ""
     return {
@@ -420,6 +447,7 @@ def _fact_item(
         "doc_id": doc_id,
         "href": f"/source/{doc_id}" if doc_id is not None else None,
         "source_url": source_url,
+        "confidence": confidence,
     }
 
 
@@ -679,6 +707,7 @@ def gather_evidence(
                     doc_id=cast("int | None", item["doc_id"]),
                     href=cast("str | None", item["href"]),
                     source_url=cast("str | None", item["source_url"]),
+                    confidence=cast("float | None", item.get("confidence")),
                 )
             )
         return items
@@ -689,7 +718,7 @@ def gather_evidence(
 
 
 def build_evidence_block(items: list[EvidenceItem]) -> str:
-    """The prompt block: numbered evidence + the citation contract."""
+    """The prompt block: numbered evidence + the per-claim citation contract."""
     if not items:
         return ""
     lines = "\n".join(f"[{item.n}] {item.text}" for item in items)
@@ -699,10 +728,13 @@ immediately after each claim a source supports (e.g. "NPLs rose to 7.2% [1][3]")
 {lines}
 
 CITE-OR-SAY-UNSURE: every figure or quote you take from the evidence above
-must carry its [n] marker. A figure the evidence doesn't cover must either
-come from a file you actually opened with the Read tool — name that file
-inline — or be flagged as unverified. Never invent numbers, and never
-attach [n] to a claim the numbered evidence doesn't support."""
+must carry its [n] marker. Cite PER SENTENCE: each sentence that states a
+figure, fact, or quote carries its own [n] marker(s) — never batch the
+markers at the end of a paragraph, where a reader can't tell which sentence
+they back. A figure the evidence doesn't cover must either come from a file
+you actually opened with the Read tool — name that file inline — or be
+flagged as unverified. Never invent numbers, and never attach [n] to a
+claim the numbered evidence doesn't support."""
 
 
 _MARKER_RX = re.compile(r"\[(\d{1,2})\]")

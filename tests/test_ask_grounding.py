@@ -237,6 +237,7 @@ def test_numbering_is_sequential_and_block_carries_contract(repo: Path) -> None:
     block = build_evidence_block(items)
     assert "[1]" in block
     assert "CITE-OR-SAY-UNSURE" in block
+    assert "Cite PER SENTENCE" in block  # the S8 per-claim contract
     assert "Never invent numbers" in block
     assert build_evidence_block([]) == ""
 
@@ -271,6 +272,39 @@ def test_question_terms_drop_stopwords_and_fold_plurals() -> None:
     assert "operating" in terms
     assert "why" not in terms
     assert "the" not in terms
+
+
+# ----------------------------------------------------------------------------
+# Scored confidence on fact evidence (S2 → S8 citation popover)
+
+
+def test_fact_items_carry_scored_confidence_when_the_column_exists(repo: Path) -> None:
+    """With the S2 confidence column present, the newest fact row's score
+    rides into the EvidenceItem and its chip payload (the citation popover
+    renders it as a %)."""
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("ALTER TABLE kpi_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+    conn.execute("ALTER TABLE financial_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+    conn.execute("UPDATE kpi_facts SET confidence = 0.79 WHERE period_end LIKE '2025-09-30%'")
+    conn.commit()
+    conn.close()
+    items = _gather(repo, "TST total customers and revenue trend")
+    kpi = next(i for i in items if "Customers" in i.label)
+    assert kpi.confidence == 0.79  # the newest row's score, not the default
+    assert kpi.chip_payload()["confidence"] == 0.79
+    fin = next(i for i in items if i.label == "TST · Revenue")
+    assert fin.confidence == 1.0
+
+
+def test_legacy_db_without_confidence_column_still_serves_facts(repo: Path) -> None:
+    """The fixture DDL predates the confidence column — the fact channel
+    must fall back (None confidence) instead of losing the series."""
+    items = _gather(repo, "TST total customers and revenue trend")
+    facts = [i for i in items if i.kind == "fact"]
+    assert facts, items
+    assert all(i.confidence is None for i in facts)
+    assert all(i.chip_payload()["confidence"] is None for i in facts)
 
 
 # ----------------------------------------------------------------------------

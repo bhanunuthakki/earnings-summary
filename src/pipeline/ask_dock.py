@@ -19,9 +19,14 @@ explicit header controls, persisted under ``localStorage['askDockMode']``
 Same engine and SSE contract as the Ask tab (``POST /api/ask/stream``:
 stage/delta/fragment/final/citations/error/session frames); the dock renders
 a compact thread — prose with citation chips, view fragments inline — and
-uses server-side session persistence when available.  The ``⇿`` button opens
-a thread-list overlay: resume, rename (double-click), or delete past threads;
-a **New thread** button starts a fresh session.
+uses server-side session persistence when available.  Grounded answers get
+the shared inline cite marks (``ui.cite_marks``): deltas stream as plain
+text, then the trailing citations event re-renders the finished prose with
+superscript [n] chips whose popover carries the evidence label + S2
+confidence %, plus an "⚠ N unverified" chip when the claim audit flagged
+unsupported claims.  The ``⇿`` button opens a thread-list overlay: resume,
+rename (double-click), or delete past threads; a **New thread** button
+starts a fresh session.
 
 The ⇗ pop-out stashes history under ``sessionStorage['cc-ask-thread']``
 (plus any pending input under the palette's ``cc-ask-q`` key), minimizes the
@@ -35,6 +40,8 @@ Markup is fully self-contained (own ids, own CSS, own IIFE).
 """
 
 from __future__ import annotations
+
+from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
 
 _DOCK_CSS = """
 .ask-dock { position:fixed; right:18px; bottom:14px; width:400px; max-width:calc(100vw - 36px);
@@ -396,7 +403,8 @@ _DOCK_JS = r"""
             remember('user', t.text);
           } else {
             el.className = 'ask-dock-asst';
-            el.innerHTML = md(t.text);
+            el.innerHTML = linkifyProse(md(t.text), t.citations || []);
+            citeRow(el, t.citations || [], []);
             remember('assistant', t.text);
           }
           thread.appendChild(el);
@@ -474,18 +482,25 @@ _DOCK_JS = r"""
   // Citation row helper
   // ---------------------------------------------------------------------------
 
-  function citeRow(card, items) {
+  function citeRow(card, items, claims) {
     var chips = (items || []).map(function (c) {
       var href = (c && (c.href || c.source_url)) || '';
       if (!href) return '';
       return '<a class="ask-dock-cite" href="' + esc(href) + '" target="_blank">['
         + esc(String(c.n)) + '] ' + esc(c.label || 'source') + '</a>';
     }).join('');
-    if (!chips) return;
+    var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
+    if (!chips && !warn) return;
     var row = document.createElement('div');
     row.className = 'ask-dock-cites';
-    row.innerHTML = chips;
+    row.innerHTML = chips + warn;
     card.appendChild(row);
+  }
+  // Inline superscript cite chips (S8): upgrade the finished prose in place
+  // — markers streamed as plain text, chips attach at stream close.
+  function linkifyProse(html, items) {
+    if (!window.ccCiteMarks || !(items || []).length) return html;
+    return window.ccCiteMarks.linkify(html, items);
   }
 
   // ---------------------------------------------------------------------------
@@ -515,6 +530,7 @@ _DOCK_JS = r"""
     var prose = null;
     var proseText = '';
     var citations = [];
+    var claims = [];
     var frag = null;
     var finalEv = null;
     var errored = false;
@@ -549,6 +565,7 @@ _DOCK_JS = r"""
         finalEv = ev2;
       } else if (ev2.type === 'citations') {
         citations = ev2.items || [];
+        claims = ev2.claims || [];
       } else if (ev2.type === 'error') {
         errored = true;
         card.innerHTML = '<span class="ask-dock-err">' + esc(ev2.error || 'failed — try again') + '</span>';
@@ -564,8 +581,8 @@ _DOCK_JS = r"""
         remember('assistant', msg);
       } else if (finalEv) {
         var text = finalEv.text || proseText || '';
-        card.innerHTML = md(text);
-        citeRow(card, citations);
+        card.innerHTML = linkifyProse(md(text), citations);
+        citeRow(card, citations, claims);
         remember('assistant', text);
       } else {
         card.innerHTML = '<span class="ask-dock-err">no answer — try again</span>';
@@ -611,7 +628,8 @@ _DOCK_JS = r"""
 def render_ask_dock() -> str:
     """The dock fragment — markup + scoped CSS + its IIFE, rendered once into
     the shell chrome (outside the panel-swap container)."""
-    return f"""<style>{_DOCK_CSS}</style>
+    return f"""<style>{_DOCK_CSS}{CITE_MARKS_CSS}</style>
+<script>{CITE_MARKS_JS}</script>
 <div class="ask-dock" id="ask-dock" data-mode="min">
   <button type="button" class="ask-dock-head" id="ask-dock-toggle">
     <span class="ask-dock-title">Ask</span>

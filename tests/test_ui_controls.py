@@ -246,6 +246,7 @@ def test_pr3_swept_stylesheets_carry_no_raw_hex() -> None:
     from pipeline import source_viewers
     from report.renderers.workspace_chat import CSS as CHAT_CSS
     from report.renderers.workspace_comments import CSS as COMMENTS_CSS
+    from ui.cite_marks import CITE_MARKS_CSS
     from ui.source_chip import SOURCE_CHIP_CSS
     from viewspec.render import VIEWSPEC_CSS
 
@@ -253,6 +254,7 @@ def test_pr3_swept_stylesheets_carry_no_raw_hex() -> None:
         "inbox": INBOX_CSS,
         "source_viewers": source_viewers._PAGE_CSS,  # pyright: ignore[reportPrivateUsage]
         "source_chip": SOURCE_CHIP_CSS,
+        "cite_marks": CITE_MARKS_CSS,
         "viewspec": VIEWSPEC_CSS,
         "workspace_chat": CHAT_CSS,
         "workspace_comments": COMMENTS_CSS,
