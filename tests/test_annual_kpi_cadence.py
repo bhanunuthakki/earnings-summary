@@ -263,14 +263,16 @@ def test_annual_kpi_raw_for_excludes_interim(conn: sqlite3.Connection) -> None:
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
     raw = _annual_kpi_raw_for(conn, "NU", "Capital adequacy ratio")
     assert raw is not None
-    name, unit, by_year = raw
+    name, unit, by_year, src_by_year = raw
     assert name == _CAR
     assert unit == "%"
     assert by_year == {2023: 13.7, 2024: 18.1, 2025: 16.6}  # interim years not added
+    # No documents table in this fixture -> provenance degrades to empty (S2 PR2).
+    assert src_by_year == {}
 
 
 def test_align_annual_kpis_builds_shared_year_axis() -> None:
-    series, years = _align_annual_kpis([(_CAR, "%", {2023: 13.7, 2024: 18.1, 2025: 16.6})])
+    series, years = _align_annual_kpis([(_CAR, "%", {2023: 13.7, 2024: 18.1, 2025: 16.6}, {})])
     assert years == [2023, 2024, 2025]
     assert len(series) == 1
     assert series[0].values == [13.7, 18.1, 16.6]

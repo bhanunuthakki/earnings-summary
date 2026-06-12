@@ -187,8 +187,12 @@ class SegmentWeighting(BaseModel):
     name: str
     revenue_usd_m: float | None = None  # latest-period revenue in USD millions
     share_pct: float | None = None  # share of the bucket (0..1)
-    operating_income_usd_m: float | None = None  # latest-period segment OI in USD millions; None when segment_facts has no OI row for this segment (typical for geography rows + some sub-segments)
-    oi_share_pct: float | None = None  # share of TOTAL segment OI (0..1); None when total is zero or this row has no OI
+    operating_income_usd_m: float | None = (
+        None  # latest-period segment OI in USD millions; None when segment_facts has no OI row for this segment (typical for geography rows + some sub-segments)
+    )
+    oi_share_pct: float | None = (
+        None  # share of TOTAL segment OI (0..1); None when total is zero or this row has no OI
+    )
     description: str | None = None  # 1-2 sentence segment description from 10-K
 
 
@@ -400,6 +404,15 @@ class KpiSeries(BaseModel):
     # used by the paired-chart renderer to compute YoY%. Empty when KPI lacks
     # 4+ quarters of history.
     levels_full: list[float | None] = Field(default_factory=list)
+    # Per-period provenance aligned to levels_full (KPI chip universality,
+    # S2 PR2) — the kpi_facts twin of QuarterlyLineItem.sources_full. Empty
+    # on older built reports / legacy DBs without a documents table; None
+    # entries where the period has no provenance row. Plain [] defaults
+    # (not Field(default_factory=list)) per the pyright-strict note above.
+    sources_full: list[CellSource | None] = []
+    # Scalar mirror of sources_full[i].confidence for renderers that only
+    # need the per-cell % (heatmap hover/affordance) without the full chip.
+    confidence_full: list[float | None] = []
 
 
 class AnnualKpiSeries(BaseModel):
@@ -420,6 +433,10 @@ class AnnualKpiSeries(BaseModel):
     # strict-clean where the bare-`list` factory reads as list[Unknown].
     years: list[int] = []
     values: list[float | None] = []
+    # Per-year provenance + scored-confidence mirror, aligned to ``years``
+    # (KPI chip universality, S2 PR2 — see KpiSeries.sources_full).
+    sources_full: list[CellSource | None] = []
+    confidence_full: list[float | None] = []
 
 
 class FinancialsSection(BaseModel):
@@ -1147,7 +1164,9 @@ class ExecCompSectionModel(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
-    budget_skip: BudgetSkip | None = None  # set when the alignment-narrative LLM was forgone (budget)
+    budget_skip: BudgetSkip | None = (
+        None  # set when the alignment-narrative LLM was forgone (budget)
+    )
     ticker: str
     fiscal_year_latest: int | None = None
     packages: list[ExecCompRowModel] = Field(default_factory=list)
