@@ -18,16 +18,27 @@ Also provides the edit-preservation primitives the refresher uses:
 ``capture_dashboard`` snapshots the user-owned Dashboard inputs before a rebuild;
 ``inject_dashboard`` writes them back into a freshly-rebuilt workbook (refreshing
 current price from the live quote).
+
+Scenarios + sensitivity (S6): the Dashboard carries a SCENARIOS block whose
+Bull/Bear columns are DELTAS vs the Base yellow cells (``ScenarioDeltas``;
+seeded with the documented ``BULL_SEED``/``BEAR_SEED`` offsets, user-editable,
+preserved across rebuilds). ``scenario_values`` computes all three fair values;
+``sensitivity_grid`` computes the WACC × exit-multiple grid; both are written as
+STATIC cells (``write_computed_outputs``) since the in-sheet formula chain only
+evaluates the Base inputs.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -68,6 +79,30 @@ _DB_MULT = 45
 _DB_TG = 46
 _DB_PRICE = 48
 
+# SCENARIOS block (Dashboard rows 50+): Bull/Bear expressed as DELTAS vs the Base
+# yellow cells, one lever per row. Column C = Bull Δ, column D = Bear Δ (both
+# yellow inputs); row 58 carries the three Python-computed fair values (static —
+# rewritten by every rebuild/refresh, like the Sensitivity grid).
+SCEN_ROW_GROWTH_NEAR = 52  # Δ on every segment's near-term growth (pts)
+SCEN_ROW_GROWTH_TERM = 53  # Δ on every segment's terminal growth (pts)
+SCEN_ROW_MARGIN_NEAR = 54  # Δ on near-term operating margin (pts)
+SCEN_ROW_MARGIN_TERM = 55  # Δ on terminal operating margin (pts)
+SCEN_ROW_EXIT_MULT = 56  # Δ on the exit multiple (turns)
+SCEN_ROW_TG = 57  # Δ on terminal growth g (pts)
+SCEN_FV_ROW = 58  # computed fair value / share: B=Base, C=Bull, D=Bear
+SCEN_COL_BULL = 3  # column C
+SCEN_COL_BEAR = 4  # column D
+_SCEN_DELTA_ROWS: tuple[int, ...] = (
+    SCEN_ROW_GROWTH_NEAR,
+    SCEN_ROW_GROWTH_TERM,
+    SCEN_ROW_MARGIN_NEAR,
+    SCEN_ROW_MARGIN_TERM,
+    SCEN_ROW_EXIT_MULT,
+    SCEN_ROW_TG,
+)
+
+SENSITIVITY_SHEET = "Sensitivity"
+
 # The numeric scalar inputs (Dashboard col B) preserved across a refresh, keyed by
 # row. Current price (row 48) is deliberately excluded — it is a market datum the
 # refresher always refreshes from the live quote, not a user assumption.
@@ -97,6 +132,46 @@ class RedesignError(Exception):
 # --------------------------------------------------------------------------- #
 # Dataclasses
 # --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ScenarioDeltas:
+    """A Bull/Bear scenario as offsets applied on top of the Base inputs.
+
+    Growth deltas apply uniformly to EVERY segment's near-term/terminal growth
+    (the same uniform-shift mechanic the builder uses to reconcile segment
+    momentum to consensus); margin/multiple/g deltas shift the corresponding
+    Dashboard scalar. Expressing scenarios as deltas keeps them meaningful when
+    the user later edits a Base cell — Bull stays "Base + 2pts margin" rather
+    than a stale absolute.
+    """
+
+    growth_near: float = 0.0
+    growth_term: float = 0.0
+    margin_near: float = 0.0
+    margin_term: float = 0.0
+    exit_multiple: float = 0.0
+    terminal_g: float = 0.0
+
+
+# The documented seed offsets a fresh build writes into the Bull/Bear columns —
+# a deliberately moderate spread the user then edits per name.
+BULL_SEED = ScenarioDeltas(
+    growth_near=0.03,
+    growth_term=0.01,
+    margin_near=0.01,
+    margin_term=0.02,
+    exit_multiple=2.0,
+    terminal_g=0.005,
+)
+BEAR_SEED = ScenarioDeltas(
+    growth_near=-0.03,
+    growth_term=-0.01,
+    margin_near=-0.01,
+    margin_term=-0.02,
+    exit_multiple=-2.0,
+    terminal_g=-0.005,
+)
+
+
 @dataclass(frozen=True)
 class RedesignInputs:
     """Everything ``value()`` needs, read from a redesigned workbook.
@@ -132,6 +207,11 @@ class RedesignInputs:
     total_debt_m: float
     diluted_shares_m: float
     fx_to_usd: float
+    # Bull/Bear scenario offsets (Dashboard SCENARIOS block). Frozen instances
+    # are immutable, so the shared seed defaults are safe; a pre-scenario
+    # workbook reads back as the seeds, giving every name a meaningful range.
+    bull_deltas: ScenarioDeltas = BULL_SEED
+    bear_deltas: ScenarioDeltas = BEAR_SEED
 
 
 @dataclass(frozen=True)
@@ -161,13 +241,19 @@ class CapturedDashboard:
 
     ``segment_growth`` is keyed by segment *name* (not row) so it survives FMP
     adding/removing/reordering a segment between refreshes; ``scalars`` is keyed
-    by Dashboard row. Current price is intentionally absent (refreshed live).
+    by Dashboard row. ``scenario_deltas`` is keyed by ``(row, column)`` over the
+    SCENARIOS block's Bull/Bear delta cells; a pre-scenario workbook captures an
+    empty dict, so the rebuilt workbook keeps its seeded defaults. Current price
+    is intentionally absent (refreshed live).
     """
 
     segment_growth: dict[str, tuple[float, float]]
     scalars: dict[int, float]
     terminal_method: str | None
     terminal_basis: str | None
+    scenario_deltas: dict[tuple[int, int], float] = dataclasses.field(
+        default_factory=dict[tuple[int, int], float]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -370,6 +456,8 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         price = _num(dsh, _DB_PRICE, 2)
         method = _text(dsh, _DB_METHOD, 2) or EXIT_MULTIPLE
         basis = _text(dsh, _DB_BASIS, 2) or "EV/EBITDA"
+        bull = _read_scenario_deltas(dsh, SCEN_COL_BULL, BULL_SEED)
+        bear = _read_scenario_deltas(dsh, SCEN_COL_BEAR, BEAR_SEED)
 
         required = {
             "near margin": near_margin,
@@ -478,6 +566,31 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         total_debt_m=debt,
         diluted_shares_m=shares,
         fx_to_usd=fx,
+        bull_deltas=bull,
+        bear_deltas=bear,
+    )
+
+
+def _read_scenario_deltas(dsh: Worksheet, col: int, seed: ScenarioDeltas) -> ScenarioDeltas:
+    """Read one scenario column (Bull or Bear) off the Dashboard SCENARIOS block.
+
+    A blank cell falls back to that lever's seed — so a pre-scenario workbook
+    (no block at all) reads as the full seed offsets, and clearing a single cell
+    restores its documented default on the next refresh rather than silently
+    zeroing the lever.
+    """
+
+    def cell(row: int, default: float) -> float:
+        v = _num(dsh, row, col)
+        return v if v is not None else default
+
+    return ScenarioDeltas(
+        growth_near=cell(SCEN_ROW_GROWTH_NEAR, seed.growth_near),
+        growth_term=cell(SCEN_ROW_GROWTH_TERM, seed.growth_term),
+        margin_near=cell(SCEN_ROW_MARGIN_NEAR, seed.margin_near),
+        margin_term=cell(SCEN_ROW_MARGIN_TERM, seed.margin_term),
+        exit_multiple=cell(SCEN_ROW_EXIT_MULT, seed.exit_multiple),
+        terminal_g=cell(SCEN_ROW_TG, seed.terminal_g),
     )
 
 
@@ -623,6 +736,231 @@ def read_and_value(workbook_path: Path) -> RedesignValuation | None:
 
 
 # --------------------------------------------------------------------------- #
+# Scenarios — Bull/Bear fair values from Base inputs + deltas
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class ScenarioValues:
+    """The three per-share fair values (USD). ``bull``/``bear`` are ``None``
+    when that scenario's shifted inputs are un-valuable (e.g. a Bull terminal g
+    pushed to/above WACC under a perpetuity terminal) — the Base contract is
+    unchanged and still raises for a degenerate Base."""
+
+    base: float
+    bull: float | None
+    bear: float | None
+
+
+def apply_scenario(inp: RedesignInputs, deltas: ScenarioDeltas) -> RedesignInputs:
+    """Base inputs shifted by one scenario's offsets.
+
+    Growth deltas shift every segment uniformly; margin/multiple/g deltas shift
+    the scalar. Deliberately un-clamped: an offset that drives the model out of
+    its domain (negative exit multiple, perpetuity g ≥ WACC) should surface as a
+    degenerate/None scenario value, not be silently repaired.
+    """
+    return dataclasses.replace(
+        inp,
+        near_growth_by_segment={
+            s: g + deltas.growth_near for s, g in inp.near_growth_by_segment.items()
+        },
+        terminal_growth_by_segment={
+            s: g + deltas.growth_term for s, g in inp.terminal_growth_by_segment.items()
+        },
+        near_op_margin=inp.near_op_margin + deltas.margin_near,
+        terminal_op_margin=inp.terminal_op_margin + deltas.margin_term,
+        exit_multiple=inp.exit_multiple + deltas.exit_multiple,
+        terminal_growth_g=inp.terminal_growth_g + deltas.terminal_g,
+    )
+
+
+def scenario_values(inp: RedesignInputs) -> ScenarioValues:
+    """Base/Bull/Bear per-share fair values (USD) from one input set."""
+
+    def shifted(deltas: ScenarioDeltas) -> float | None:
+        try:
+            return value(apply_scenario(inp, deltas)).value_per_share_usd
+        except RedesignError:
+            return None
+
+    return ScenarioValues(
+        base=value(inp).value_per_share_usd,
+        bull=shifted(inp.bull_deltas),
+        bear=shifted(inp.bear_deltas),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Sensitivity — WACC x exit-multiple grid
+# --------------------------------------------------------------------------- #
+_GRID_WACC_STEPS: tuple[float, ...] = (-0.015, -0.01, -0.005, 0.0, 0.005, 0.01, 0.015)
+_GRID_MULT_STEPS: tuple[float, ...] = (-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0)
+
+
+@dataclass(frozen=True)
+class SensitivityGrid:
+    """A static WACC × exit-multiple grid of per-share fair values (USD).
+
+    ``values[i][j]`` is the fair value at ``multiple_axis[i]`` × ``wacc_axis[j]``.
+    Always computed on the exit-multiple terminal (the selected basis) — for a
+    perpetuity-method name the grid is the exit-multiple cross-check, labeled as
+    such on the sheet.
+    """
+
+    wacc_axis: tuple[float, ...]
+    multiple_axis: tuple[float, ...]
+    values: tuple[tuple[float, ...], ...]
+    base_wacc: float
+    base_multiple: float
+    basis: str
+    current_price: float
+
+
+def sensitivity_grid(inp: RedesignInputs) -> SensitivityGrid:
+    """Fair value / share over WACC ± 1.5% (50bp steps) × exit multiple ± 3 turns.
+
+    The center cell is exactly ``value()`` of the Base inputs under an
+    exit-multiple terminal — i.e. the value-of-record for exit-multiple names.
+    """
+    wacc_axis = tuple(inp.wacc + d for d in _GRID_WACC_STEPS)
+    mult_axis = tuple(inp.exit_multiple + d for d in _GRID_MULT_STEPS)
+    rows: list[tuple[float, ...]] = []
+    for mult in mult_axis:
+        row: list[float] = []
+        for wacc in wacc_axis:
+            shifted = dataclasses.replace(
+                inp, wacc=wacc, exit_multiple=mult, terminal_method=EXIT_MULTIPLE
+            )
+            row.append(value(shifted).value_per_share_usd)
+        rows.append(tuple(row))
+    return SensitivityGrid(
+        wacc_axis=wacc_axis,
+        multiple_axis=mult_axis,
+        values=tuple(rows),
+        base_wacc=inp.wacc,
+        base_multiple=inp.exit_multiple,
+        basis=inp.terminal_basis,
+        # The Dashboard price is already USD (the in-sheet upside compares the
+        # FX-converted value/share against it directly) — no FX re-scaling here.
+        current_price=inp.current_price,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Static computed outputs — the Sensitivity sheet + Dashboard scenario values
+# --------------------------------------------------------------------------- #
+_PXS_FMT = '"$"#,##0.00'
+_PCT_FMT = "0.0%"
+_MULT_FMT = '0.0"x"'
+_GRID_ROW0 = 4  # header row of the grid (axis labels); data rows follow
+_GRID_COL0 = 2  # column B = first WACC column
+_HDR_FONT = Font(bold=True)
+_TITLE_FONT = Font(bold=True, size=15)
+_SUB_FONT = Font(italic=True, color="666666")
+_BASE_FILL = PatternFill("solid", fgColor="DDEBF7")  # the builder's ACTH band
+_ABOVE_PRICE_FONT = Font(color="008000")  # green = grid value above current price
+
+
+def write_sensitivity_sheet(wb: Workbook, grid: SensitivityGrid) -> None:
+    """(Re)write the static Sensitivity sheet on an open workbook.
+
+    The grid is Python-computed (openpyxl can't evaluate formulas offline) and
+    rewritten on every rebuild/refresh, so styling is applied directly: the base
+    cell is shaded, values above the current price render green.
+    """
+    if SENSITIVITY_SHEET in wb.sheetnames:
+        idx = wb.sheetnames.index(SENSITIVITY_SHEET)
+        wb.remove(wb[SENSITIVITY_SHEET])
+        ws = wb.create_sheet(SENSITIVITY_SHEET, idx)
+    else:
+        # Fresh insert: directly before Monte Carlo when present, else appended.
+        names = wb.sheetnames
+        idx = names.index("Monte Carlo") if "Monte Carlo" in names else len(names)
+        ws = wb.create_sheet(SENSITIVITY_SHEET, idx)
+
+    ws.sheet_view.showGridLines = False
+    ws.column_dimensions["A"].width = 16
+    for j in range(len(grid.wacc_axis)):
+        ws.column_dimensions[get_column_letter(_GRID_COL0 + j)].width = 11
+
+    ws.cell(1, 1, "Sensitivity — fair value / share (USD)").font = _TITLE_FONT
+    ws.cell(
+        2,
+        1,
+        f"WACC x exit multiple ({grid.basis}). Static grid recomputed by every "
+        "rebuild/refresh — edit the Dashboard, re-run refresh_dcf to update. "
+        "Shaded = base case; green = above current price.",
+    ).font = _SUB_FONT
+
+    corner = ws.cell(_GRID_ROW0, 1, f"{grid.basis} x  \\  WACC")
+    corner.font = _HDR_FONT
+    for j, w in enumerate(grid.wacc_axis):
+        c = ws.cell(_GRID_ROW0, _GRID_COL0 + j, w)
+        c.number_format = _PCT_FMT
+        c.font = _HDR_FONT
+        c.alignment = Alignment(horizontal="right")
+    for i, mult in enumerate(grid.multiple_axis):
+        mc = ws.cell(_GRID_ROW0 + 1 + i, 1, mult)
+        mc.number_format = _MULT_FMT
+        mc.font = _HDR_FONT
+        for j, val in enumerate(grid.values[i]):
+            cell = ws.cell(_GRID_ROW0 + 1 + i, _GRID_COL0 + j, val)
+            cell.number_format = _PXS_FMT
+            if val > grid.current_price:
+                cell.font = _ABOVE_PRICE_FONT
+            if grid.multiple_axis[i] == grid.base_multiple and (
+                grid.wacc_axis[j] == grid.base_wacc
+            ):
+                cell.fill = _BASE_FILL
+
+    price_row = _GRID_ROW0 + len(grid.multiple_axis) + 2
+    ws.cell(price_row, 1, "Current price").font = _HDR_FONT
+    pc = ws.cell(price_row, 2, grid.current_price)
+    pc.number_format = _PXS_FMT
+    base_row = price_row + 1
+    ws.cell(base_row, 1, "Base WACC / multiple").font = _HDR_FONT
+    bw = ws.cell(base_row, 2, grid.base_wacc)
+    bw.number_format = _PCT_FMT
+    bm = ws.cell(base_row, 3, grid.base_multiple)
+    bm.number_format = _MULT_FMT
+
+
+def write_scenario_fair_values(wb: Workbook, sv: ScenarioValues) -> None:
+    """Write the three computed fair values into Dashboard row ``SCEN_FV_ROW``.
+
+    Static literals (not formulas): the in-sheet formula chain only evaluates
+    the Base inputs, so Bull/Bear are Python-computed and refreshed on every
+    rebuild/refresh — same contract as the Sensitivity grid. An un-valuable
+    scenario writes "n/a" so the cell never carries a stale number.
+    """
+    dsh = wb[DASHBOARD_SHEET]
+    for col, val in ((2, sv.base), (SCEN_COL_BULL, sv.bull), (SCEN_COL_BEAR, sv.bear)):
+        cell = dsh.cell(row=SCEN_FV_ROW, column=col, value=val if val is not None else "n/a")
+        if val is not None:
+            cell.number_format = _PXS_FMT
+        cell.font = _HDR_FONT
+
+
+def write_computed_outputs(workbook_path: Path, inp: RedesignInputs) -> ScenarioValues:
+    """Recompute + rewrite the static Python-computed cells from ``inp``.
+
+    Called by the refresher AFTER ``inject_dashboard`` so the scenario fair
+    values (Dashboard row 58) and the Sensitivity grid reflect the user's
+    preserved edits, not the builder's from-scratch defaults. Returns the
+    scenario values so the caller can persist them without re-deriving.
+    """
+    sv = scenario_values(inp)
+    grid = sensitivity_grid(inp)
+    wb = openpyxl.load_workbook(str(workbook_path), data_only=False)
+    try:
+        write_scenario_fair_values(wb, sv)
+        write_sensitivity_sheet(wb, grid)
+        wb.save(str(workbook_path))
+    finally:
+        wb.close()
+    return sv
+
+
+# --------------------------------------------------------------------------- #
 # Edit-preservation — capture the user-owned Dashboard, re-inject after rebuild
 # --------------------------------------------------------------------------- #
 def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
@@ -652,6 +990,12 @@ def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
                 scalars[r] = v
         method = _text(dsh, _DB_METHOD, 2)
         basis = _text(dsh, _DB_BASIS, 2)
+        scenario_deltas: dict[tuple[int, int], float] = {}
+        for r in _SCEN_DELTA_ROWS:
+            for c in (SCEN_COL_BULL, SCEN_COL_BEAR):
+                v = _num(dsh, r, c)
+                if v is not None:
+                    scenario_deltas[(r, c)] = v
     finally:
         wb.close()
     return CapturedDashboard(
@@ -659,6 +1003,7 @@ def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
         scalars=scalars,
         terminal_method=method,
         terminal_basis=basis,
+        scenario_deltas=scenario_deltas,
     )
 
 
@@ -690,6 +1035,8 @@ def inject_dashboard(
                 dsh.cell(row=_DB_METHOD, column=2, value=captured.terminal_method)
             if captured.terminal_basis is not None:
                 dsh.cell(row=_DB_BASIS, column=2, value=captured.terminal_basis)
+            for (r, c), v in captured.scenario_deltas.items():
+                dsh.cell(row=r, column=c, value=v)
         if current_price is not None:
             dsh.cell(row=_DB_PRICE, column=2, value=current_price)
         wb.save(str(workbook_path))

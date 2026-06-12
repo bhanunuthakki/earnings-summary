@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import sys
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
@@ -30,6 +31,14 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+
+# The scenario/sensitivity engine is shared with the reader/refresher so the
+# builder-written static cells and the refresh-rewritten ones come from ONE
+# implementation. Code lives next to this script regardless of DCF_REPO_ROOT
+# (which points at the DATA repo).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from dcf import redesign as redesign_mod
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
@@ -445,6 +454,26 @@ if _opus.get("segments"):
         )
     cda0 = CAPEX_2026_M / _da_2026
     capex_da = fade(cda0, float(_opus.get("terminal_capex_da", 1.05)))
+
+
+def _scen_deltas(raw, seed):
+    """Bull/Bear scenario offsets: the block's `scenario_bull`/`scenario_bear`
+    override (mirrored back by refresh_dcf.sync_assumptions_json, so user edits
+    survive a from-scratch rebuild) over the documented seed defaults."""
+    if not isinstance(raw, dict):
+        return seed
+    return redesign_mod.ScenarioDeltas(
+        growth_near=float(raw.get("growth_near", seed.growth_near)),
+        growth_term=float(raw.get("growth_term", seed.growth_term)),
+        margin_near=float(raw.get("margin_near", seed.margin_near)),
+        margin_term=float(raw.get("margin_term", seed.margin_term)),
+        exit_multiple=float(raw.get("exit_multiple", seed.exit_multiple)),
+        terminal_g=float(raw.get("terminal_g", seed.terminal_g)),
+    )
+
+
+BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
+BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED)
 
 
 def _seg_g(s, j):  # hold near-term ~3y, then fade to terminal (tracks consensus plateau)
@@ -1520,6 +1549,77 @@ put(dsh, 46, 2, TG, fmt=PCT, kind="in")
 put(dsh, 48, 1, "Current price")
 put(dsh, 48, 2, price, fmt=PXS, kind="in")
 
+# --- SCENARIOS: Bull/Bear as user-editable DELTAS vs the Base yellow cells ---
+# Rows/cols are the redesign-module contract (SCEN_ROW_*); the fair-value row is
+# Python-computed (static) — written below via write_scenario_fair_values and
+# rewritten by every refresh from the then-current inputs.
+band(dsh, 50, "SCENARIOS — Bull / Bear offsets vs Base (edit the yellow Δs)", 5)
+for j, h in enumerate(["Scenario lever", "Base", "Bull Δ", "Bear Δ"]):
+    put(dsh, 51, 1 + j, h, bold=True)
+R = redesign_mod
+for row, lab, base_ref, fmt, bull_v, bear_v in [
+    (
+        R.SCEN_ROW_GROWTH_NEAR,
+        "Segment growth, near-term",
+        "per segment",
+        PCT,
+        BULL_D.growth_near,
+        BEAR_D.growth_near,
+    ),
+    (
+        R.SCEN_ROW_GROWTH_TERM,
+        "Segment growth, terminal",
+        "per segment",
+        PCT,
+        BULL_D.growth_term,
+        BEAR_D.growth_term,
+    ),
+    (
+        R.SCEN_ROW_MARGIN_NEAR,
+        "Operating margin, near-term",
+        "=B29",
+        PCT,
+        BULL_D.margin_near,
+        BEAR_D.margin_near,
+    ),
+    (
+        R.SCEN_ROW_MARGIN_TERM,
+        "Operating margin, terminal",
+        "=B30",
+        PCT,
+        BULL_D.margin_term,
+        BEAR_D.margin_term,
+    ),
+    (
+        R.SCEN_ROW_EXIT_MULT,
+        "Exit multiple",
+        "=B45",
+        MULT,
+        BULL_D.exit_multiple,
+        BEAR_D.exit_multiple,
+    ),
+    (R.SCEN_ROW_TG, "Terminal growth (g)", "=B46", PCT, BULL_D.terminal_g, BEAR_D.terminal_g),
+]:
+    put(dsh, row, 1, lab)
+    delta_fmt = f"+{fmt};-{fmt}"  # signed: a Δ of +0.02 renders "+2.0%"
+    if base_ref.startswith("="):
+        put(dsh, row, 2, base_ref, fmt=fmt)
+    else:
+        put(dsh, row, 2, base_ref).font = SUB
+    put(dsh, row, 3, bull_v, fmt=delta_fmt, kind="in")
+    put(dsh, row, 4, bear_v, fmt=delta_fmt, kind="in")
+put(dsh, R.SCEN_FV_ROW, 1, "Fair value / share — Base · Bull · Bear", bold=True)
+put(dsh, R.SCEN_FV_ROW + 1, 1, "Upside vs current price")
+for j, cl in enumerate("BCD"):
+    put(dsh, R.SCEN_FV_ROW + 1, 2 + j, ie(f"{cl}{R.SCEN_FV_ROW}/$B$48-1"), fmt="+0%;(0%)")
+put(
+    dsh,
+    R.SCEN_FV_ROW + 2,
+    1,
+    "Bull/Bear = Base shifted by the Δ columns (uniform across segments). Row 58 + the "
+    "Sensitivity sheet are Python-computed — run refresh_dcf after editing.",
+).font = SUB
+
 ddm = DataValidation(type="list", formula1='"Perpetuity,Exit multiple"', allow_blank=False)
 ddb = DataValidation(type="list", formula1='"EV/EBITDA,EV/Sales,EV/EBIT,EV/FCF"', allow_blank=False)
 dsh.add_data_validation(ddm)
@@ -1607,6 +1707,47 @@ band(cv, 25, "THE STORY (Opus)", 2)
 put(cv, 27, 1, narr or "(Opus narrative)").alignment = WRAP
 cv.merge_cells("A27:B43")
 
+# ===== Scenarios + Sensitivity (Python-computed static cells) =====
+# One engine (src/dcf/redesign.py) serves both the builder and the refresher, so
+# the fresh-build cells and the post-edit refresh rewrites can never drift. The
+# WACC here mirrors the reader's derivation exactly (CAPM + market-value weights
+# with the FINAL tax rate — wacc0 above predates a possible Opus tax override).
+_inp = redesign_mod.RedesignInputs(
+    segments=tuple(PROD),
+    base_revenue_by_segment={s: seg_ann[ly][s] for s in PROD},
+    near_growth_by_segment=dict(g1_def),
+    terminal_growth_by_segment=dict(gT_def),
+    near_op_margin=margin_near_def,
+    terminal_op_margin=margin_term_def,
+    tax_rate=TAX,
+    capex_2026_m=CAPEX_2026_M,
+    terminal_capex_da=capex_da[-1],
+    da_ratio=ratios_ly["da"],
+    # The reader derives this from the Consensus sheet's year headers (≤6
+    # columns), so mirror that here — keeps these static cells byte-identical
+    # to what the first refresh would rewrite.
+    consensus_years=max(2, min(N_FC, len(CYEARS))),
+    wacc=we * ke + (1 - we) * KD * (1 - TAX),
+    beta=BETA,
+    risk_free_rate=RF,
+    equity_risk_premium=ERP,
+    cost_of_debt=KD,
+    terminal_method=OPUS_METHOD,
+    terminal_basis=OPUS_BASIS,
+    exit_multiple=EXIT_MULT,
+    terminal_growth_g=TG,
+    current_price=price,
+    cash_m=cash_now,
+    total_debt_m=debt_now,
+    diluted_shares_m=shares_now,
+    fx_to_usd=FX,
+    bull_deltas=BULL_D,
+    bear_deltas=BEAR_D,
+)
+_sv = redesign_mod.scenario_values(_inp)
+redesign_mod.write_scenario_fair_values(wb, _sv)
+redesign_mod.write_sensitivity_sheet(wb, redesign_mod.sensitivity_grid(_inp))
+
 order = [
     "Cover",
     "Dashboard",
@@ -1616,6 +1757,7 @@ order = [
     "Financials",
     "Consensus",
     "Valuation",
+    "Sensitivity",
     "Monte Carlo",
 ]
 for pos, name in enumerate(order):
@@ -1626,4 +1768,7 @@ wb.save(str(DEST))
 _up = (full_value / price - 1) if price else 0.0
 _seg = "single" if SINGLE_SEG else str(len(PROD))
 print(f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\t{DEST}")
+_b = f"{_sv.bull:.2f}" if _sv.bull is not None else "n/a"
+_r = f"{_sv.bear:.2f}" if _sv.bear is not None else "n/a"
+print(f"SCENARIOS\t{T}\tbase={_sv.base:.2f}\tbull={_b}\tbear={_r}")
 print("consensus years:", CYEARS)
