@@ -115,8 +115,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--coverage",
         action="store_true",
-        help="Print the eval-coverage report (purposes with no eval mode) and exit. "
-        "No LLM spend.",
+        help="Print the eval-coverage report (purposes with no eval mode) and exit. No LLM spend.",
     )
     return parser.parse_args()
 
