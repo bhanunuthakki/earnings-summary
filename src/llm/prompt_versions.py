@@ -134,6 +134,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "saydo_filter": "v2",  # composed anchor block now spotlighted
     "advisor_socratic_questions": "v2",  # composed anchor block now spotlighted
     "advisor_socratic_memo": "v2",  # composed anchor block now spotlighted
+    # The injection-canary golden SET (evals/golden/injection_canaries.json),
+    # not an LLM prompt of its own — versioned so a future canary-set revision
+    # forks the security-pass-rate history cleanly. Bump when cases change.
+    "injection_canaries": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
