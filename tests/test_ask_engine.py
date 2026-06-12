@@ -558,6 +558,10 @@ def test_portfolio_narrative_grounds_prompt_and_emits_pruned_citations(
     items = cast("list[dict[str, object]]", raw_items)
     assert [c["n"] for c in items] == [1]
     assert items[0]["href"] == "/source/9?n=1"
+    # The claim audit is blocked by the conftest seam here → the event fails
+    # closed to the legacy answer-level shape (S8 contract).
+    assert events[-1]["grounding"] == "answer_level"
+    assert "claims" not in events[-1]
 
 
 def test_portfolio_narrative_unused_evidence_emits_no_citations(
@@ -578,6 +582,54 @@ def test_portfolio_narrative_unused_evidence_emits_no_citations(
         )
     )
     assert [e["type"] for e in events] == ["stage", "final"]
+
+
+def test_portfolio_narrative_per_claim_event_reconciles_and_recovers(
+    tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The S8 happy path: the claim audit succeeds, inline markers win over
+    the map's cites, and an unmarked sentence RECOVERS its cite — so item
+    [2] joins the event even though the answer text never wrote ``[2]``."""
+    monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1), _evidence(2)))
+
+    def fake_llm(prompt: str):
+        yield {"type": "final", "text": "Growth held up well [1]. Margins expanded by 300bps."}
+
+    monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
+
+    def fake_struct(prompt: str, **kwargs: object) -> object:
+        assert kwargs.get("purpose") == "ask_claim_grounding"
+        return {
+            "claims": [
+                {"quote": "Growth held up well", "cites": [2], "supported": True},
+                {"quote": "Margins expanded by 300bps", "cites": [2], "supported": True},
+            ]
+        }
+
+    monkeypatch.setattr("ask.claims.call_llm_structured", fake_struct)
+    events = list(
+        respond_turn(
+            AskTurn(text="why is growth holding up?"),
+            _portfolio_pack(),
+            db_path=missing_db,
+            repo_root=tmp_path,
+        )
+    )
+    cit = events[-1]
+    assert cit["type"] == "citations"
+    assert cit["grounding"] == "per_claim"
+    raw_items = cit["items"]
+    assert isinstance(raw_items, list)
+    items = cast("list[dict[str, object]]", raw_items)
+    assert [c["n"] for c in items] == [1, 2]
+    raw_claims = cit["claims"]
+    assert isinstance(raw_claims, list)
+    claims = cast("list[dict[str, object]]", raw_claims)
+    # Inline [1] beats the map's [2] on the first sentence; the unmarked
+    # second sentence takes the map's recovered cite.
+    assert claims[0]["cites"] == [1]
+    assert claims[1]["cites"] == [2]
+    assert all(c["supported"] is True for c in claims)
 
 
 def test_ticker_narrative_passes_evidence_as_extra_context(
@@ -684,6 +736,26 @@ def test_fold_events_carries_citations() -> None:
         ]
     )
     assert out["citations"] == [{"n": 1, "label": "L", "href": "/source/9"}]
+    # Legacy answer-level event: no claims/grounding keys invented.
+    assert "claims" not in out
+    assert "grounding" not in out
+
+
+def test_fold_events_carries_per_claim_grounding() -> None:
+    claims = [{"text": "Revenue grew [1].", "cites": [1], "supported": True}]
+    out = fold_events(
+        [
+            {"type": "final", "text": "Revenue grew [1].", "route": "narrative"},
+            {
+                "type": "citations",
+                "items": [{"n": 1, "label": "L", "href": "/source/9"}],
+                "claims": claims,
+                "grounding": "per_claim",
+            },
+        ]
+    )
+    assert out["claims"] == claims
+    assert out["grounding"] == "per_claim"
 
 
 def test_fold_events_command_and_errors() -> None:

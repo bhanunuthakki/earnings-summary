@@ -29,6 +29,11 @@ old clients ignore unknown types):
   {type: "delta", text}                  — incremental narrative tokens
   {type: "fragment", html, spec}         — a rendered data view
   {type: "final", text, route}           — once, on success
+  {type: "citations", items, claims?, grounding?}
+                                         — grounded narrative answers: the
+                                           evidence the answer cited, plus
+                                           (S8) the per-claim map when the
+                                           grounding audit succeeded
   {type: "diff_proposal", diff}          — narrative edit proposal
   {type: "error", error, code?}          — on failure
 """
@@ -44,9 +49,10 @@ from pathlib import Path
 from typing import Literal, cast
 
 import chat_session
+from ask.claims import build_citations_payload
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
-from ask.grounding import build_evidence_block, gather_evidence, used_citation_items
+from ask.grounding import build_evidence_block, gather_evidence
 from ask.store import append_turn as _store_append_turn
 from ask.store import load_recent_history as _store_load_history
 from dispatch_registry import Registry
@@ -381,12 +387,15 @@ def _narrative_events(
 
     Before the call, ``ask.grounding`` retrieves numbered evidence (facts /
     filing sections / transcript lines) for the question; when anything
-    comes back it rides into the prompt under a cite-or-don't-claim
-    contract (the answering stage notes how many sources), and the markers
-    the answer actually used are resolved into a trailing
-    ``{type: "citations", items: [...]}`` event (each item carries the
-    /source/<doc_id> viewer href). No evidence → the turn runs exactly as
-    before: same stage frame, no citations event."""
+    comes back it rides into the prompt under a per-claim cite-or-don't-
+    claim contract (the answering stage notes how many sources). After the
+    answer, ``ask.claims.build_citations_payload`` resolves what it cited —
+    inline markers reconciled against a fast-model claims→cites map — into
+    a trailing ``{type: "citations", items, claims?, grounding}`` event
+    (each item carries the /source/<doc_id> viewer href + the S2 scored
+    confidence; the map fails closed to the legacy answer-level ``items``).
+    No evidence → the turn runs exactly as before: same stage frame, no
+    citations event."""
     scope_tickers = (
         [pack.ticker]
         if pack.scope == "ticker" and pack.ticker
@@ -419,9 +428,9 @@ def _narrative_events(
                 maybe = event.get("text")
                 final_text_t = maybe if isinstance(maybe, str) else None
         if final_text_t is not None and evidence:
-            used = used_citation_items(final_text_t, evidence)
-            if used:
-                yield {"type": "citations", "items": [item.chip_payload() for item in used]}
+            payload = build_citations_payload(final_text_t, evidence, db_path=db_path)
+            if payload is not None:
+                yield {"type": "citations", **payload}
         return
 
     system_context = pack.system_context or "You are a portfolio research assistant."
@@ -470,12 +479,14 @@ def _narrative_events(
         return
     yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
 
-    citations_payload: list[object] | None = None
+    citations_items: list[object] | None = None
     if evidence:
-        used = used_citation_items(final_text, evidence)
-        if used:
-            citations_payload = [item.chip_payload() for item in used]
-            yield {"type": "citations", "items": citations_payload}
+        payload = build_citations_payload(final_text, evidence, db_path=db_path)
+        if payload is not None:
+            maybe_items = payload.get("items")
+            if isinstance(maybe_items, list) and maybe_items:
+                citations_items = cast("list[object]", maybe_items)
+            yield {"type": "citations", **payload}
 
     # Persist the assistant turn after a successful response.
     if turn.session_id:
@@ -484,7 +495,7 @@ def _narrative_events(
                 session_id=turn.session_id,
                 role="assistant",
                 text=final_text,
-                citations=citations_payload,
+                citations=citations_items,
                 db_path=db_path,
             )
         except Exception:
@@ -505,6 +516,8 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
     diff: dict[str, object] | None = None
     error: dict[str, object] | None = None
     citations: list[object] | None = None
+    claims: list[object] | None = None
+    grounding: str | None = None
     notes: list[str] = []
     for ev in events:
         kind = ev.get("type")
@@ -520,6 +533,12 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
             maybe_items = ev.get("items")
             if isinstance(maybe_items, list):
                 citations = cast("list[object]", maybe_items)
+            maybe_claims = ev.get("claims")
+            if isinstance(maybe_claims, list):
+                claims = cast("list[object]", maybe_claims)
+            maybe_grounding = ev.get("grounding")
+            if isinstance(maybe_grounding, str):
+                grounding = maybe_grounding
         elif kind == "error" and error is None:
             error = ev
         elif kind == "stage":
@@ -550,6 +569,10 @@ def fold_events(events: Iterable[dict[str, object]]) -> dict[str, object]:
         out["note"] = " · ".join(notes)
     if citations:
         out["citations"] = citations
+    if claims is not None:
+        out["claims"] = claims
+    if grounding is not None:
+        out["grounding"] = grounding
     if diff is not None:
         out["diff"] = diff
     return out

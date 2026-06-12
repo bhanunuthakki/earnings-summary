@@ -7,9 +7,20 @@ ticker context pack. Renders Markdown responses (basic — code fences +
 bold + lists), live data-view fragments (`fragment` events, when a metric
 question routes to the ViewSpec path), and an "Apply this change" button
 when the response includes a `diff_proposal` event.
+
+Grounded answers (Ask v3 / S8): deltas stream as plain text, then the
+trailing ``citations`` event re-renders the finished prose through the
+shared ``ui.cite_marks`` helper — superscript [n] chips whose popover
+carries the evidence label + S2 confidence %, hrefs made absolute against
+the research server (the report opens via file://), plus an
+"⚠ N unverified" chip when the claim audit flagged unsupported claims.
 """
 
-JS = r"""
+from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
+
+JS = (
+    CITE_MARKS_JS
+    + r"""
 (function() {
   // Wait until the comments module has set up boot data.
   function init() {
@@ -90,6 +101,7 @@ JS = r"""
       var assistantEl = appendTurn('assistant', '', null);
       var streamEl = assistantEl.querySelector('.chat-text');
       var citations = [];
+      var claims = [];
       hintEl.textContent = 'Working…';
 
       // SSE via fetch + ReadableStream (EventSource doesn't support POST)
@@ -106,9 +118,9 @@ JS = r"""
           return reader.read().then(function(result) {
             if (result.done) {
               streamEl.innerHTML = renderMarkdown(streamEl.textContent);
-              if (citations.length) {
+              if (citations.length || claims.length) {
                 streamEl.innerHTML = linkifyCites(streamEl.innerHTML, citations);
-                appendCiteRow(assistantEl, citations);
+                appendCiteRow(assistantEl, citations, claims);
               }
               hintEl.textContent = 'Cmd+Enter to send';
               return;
@@ -147,6 +159,7 @@ JS = r"""
                   // Grounded narrative answers (Ask v3): numbered evidence
                   // the answer cited — rendered as chips at stream close.
                   citations = ev.items || [];
+                  claims = ev.claims || [];
                 } else if (ev.type === 'diff_proposal') {
                   appendDiffButton(assistantEl, ev.diff);
                 } else if (ev.type === 'error') {
@@ -216,27 +229,23 @@ JS = r"""
       return /^https?:/.test(href) ? href : (SERVER_URL + href);
     }
     function linkifyCites(html, items) {
-      var map = {};
-      items.forEach(function(c) { if (c && c.n) map[String(c.n)] = c; });
-      return html.replace(/\[(\d{1,2})\]/g, function(m, n) {
-        var c = map[n];
-        var href = c ? citeHref(c) : '';
-        if (!href) return m;
-        return '<a class="chat-cite-mark" href="' + escapeHtml(href) + '" target="_blank" title="'
-          + escapeHtml(c.label || '') + '">[' + n + ']</a>';
-      });
+      // Shared inline cite chips (ui.cite_marks) — hrefBase makes the
+      // /source/<doc_id> viewer links absolute against the research server.
+      if (!window.ccCiteMarks || !(items || []).length) return html;
+      return window.ccCiteMarks.linkify(html, items, {hrefBase: SERVER_URL});
     }
-    function appendCiteRow(turnEl, items) {
+    function appendCiteRow(turnEl, items, claims) {
       var chips = items.map(function(c) {
         var href = citeHref(c);
         if (!href) return '';
         return '<a class="chat-cite" href="' + escapeHtml(href) + '" target="_blank">['
           + escapeHtml(String(c.n)) + '] ' + escapeHtml(c.label || 'source') + '</a>';
       }).join('');
-      if (!chips) return;
+      var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
+      if (!chips && !warn) return;
       var row = document.createElement('div');
       row.className = 'chat-cite-row';
-      row.innerHTML = chips;
+      row.innerHTML = chips + warn;
       turnEl.appendChild(row);
     }
 
@@ -279,8 +288,11 @@ JS = r"""
   }
 })();
 """
+)
 
-CSS = r"""
+CSS = (
+    CITE_MARKS_CSS
+    + r"""
 /* ============================================================
    Chat drawer
    ============================================================ */
@@ -372,10 +384,6 @@ CSS = r"""
   border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none;
 }
 .chat-cite:hover { border-color: var(--link); }
-.chat-text a.chat-cite-mark {
-  color: var(--link); text-decoration: none;
-  font-size: 0.85em; vertical-align: super;
-}
 .chat-diff {
   margin-top: 8px; padding: 8px 10px;
   background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
@@ -415,3 +423,4 @@ CSS = r"""
   font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
 }
 """
+)

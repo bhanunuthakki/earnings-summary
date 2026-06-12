@@ -73,6 +73,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # catalog/rules are materially rewritten, then re-run
     # `run_llm_evals.py --purpose ask_pack_router`.
     "ask_pack_router": "v1",
+    # Ask claim-grounding audit (src/ask/claims.py, S8). Bump when
+    # _build_prompt's rules are materially rewritten — the citation-accuracy
+    # golden set scores this purpose, so the version keys its score history.
+    "ask_claim_grounding": "v1",
     # Rubric-audited prose purposes (mode B, PR 2): their audit runs are keyed
     # to these versions, so bump when generate_summary's prompt /
     # _NEXT_DOLLAR_PROMPT is materially rewritten and the score history forks

@@ -41,6 +41,7 @@ from html import escape
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
+from ui.cite_marks import CITE_MARKS_SNIPPET
 from user_state.saved_views import SavedViewRow, list_views
 from viewspec.engine import metric_catalog
 from viewspec.spec import CADENCES, TRANSFORMS
@@ -108,8 +109,6 @@ _PANEL_STYLE = """<style>
   border-radius:var(--radius-full); padding:2px 9px; text-decoration:none;
   background:var(--paper); transition:border-color var(--transition); }
 .ask-cite:hover { border-color:var(--accent); }
-.ask-prose a.ask-cite-mark { color:var(--accent); text-decoration:none; font-size:0.85em;
-  vertical-align:super; }
 @keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
 .ask-prose { font-size:var(--fs-body); line-height:1.55; color:var(--fg); }
 .ask-prose p { margin:0 0 8px; }
@@ -401,26 +400,21 @@ _PANEL_JS = """
   function askCiteHref(c) {
     return (c && (c.href || c.source_url)) || '';
   }
+  // Inline superscript cite chips (S8): the shared ui.cite_marks helper
+  // upgrades the finished prose; popovers carry label + S2 confidence %.
   function askLinkifyCites(html, items) {
-    var map = {};
-    (items || []).forEach(function (c) { if (c && c.n) map[String(c.n)] = c; });
-    return html.replace(/\\[(\\d{1,2})\\]/g, function (m, n) {
-      var c = map[n];
-      var href = askCiteHref(c);
-      if (!href) return m;
-      return '<a class="ask-cite-mark" href="' + askEsc(href) + '" target="_blank" title="'
-        + askEsc(c.label || '') + '">[' + n + ']</a>';
-    });
+    if (!window.ccCiteMarks || !(items || []).length) return html;
+    return window.ccCiteMarks.linkify(html, items);
   }
-  function askCiteRowHtml(items) {
-    if (!items || !items.length) return '';
-    var chips = items.map(function (c) {
+  function askCiteRowHtml(items, claims) {
+    var chips = (items || []).map(function (c) {
       var href = askCiteHref(c);
       if (!href) return '';
       return '<a class="ask-cite" href="' + askEsc(href) + '" target="_blank">['
         + askEsc(String(c.n)) + '] ' + askEsc(c.label || c.kind || 'source') + '</a>';
     }).join('');
-    return chips ? '<div class="ask-cite-row">' + chips + '</div>' : '';
+    var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
+    return (chips || warn) ? '<div class="ask-cite-row">' + chips + warn + '</div>' : '';
   }
   function askActionsHtml() {
     return '<div class="ask-actions">'
@@ -470,6 +464,7 @@ _PANEL_JS = """
     var note = '';
     var finalEv = null;
     var citations = [];
+    var claims = [];
     var errored = false;
 
     function busyLine(text) {
@@ -501,6 +496,7 @@ _PANEL_JS = """
         finalEv = ev;
       } else if (ev.type === 'citations') {
         citations = ev.items || [];
+        claims = ev.claims || [];
       } else if (ev.type === 'error') {
         errored = true;
         card.innerHTML = '<div class="ask-meta"><span class="ask-err">'
@@ -528,7 +524,7 @@ _PANEL_JS = """
           var noteHtml = note ? '<div class="ask-meta">' + askEsc(note) + '</div>' : '';
           card.innerHTML = noteHtml
             + '<div class="ask-prose">' + askLinkifyCites(askMd(text), citations) + '</div>'
-            + askCiteRowHtml(citations);
+            + askCiteRowHtml(citations, claims);
         }
         askRemember('assistant', text);
       } else {
@@ -741,6 +737,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     first = tickers[0] if tickers else "NU"
     second = tickers[1] if len(tickers) > 1 else "MELI"
     return f"""{_PANEL_STYLE}
+{CITE_MARKS_SNIPPET}
 <h2>Ask</h2>
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">

@@ -47,6 +47,22 @@ def test_dock_fragment_is_self_contained() -> None:
         assert marker in html
 
 
+def test_dock_renders_inline_cite_marks_with_claims() -> None:
+    """Grounded answers get the shared inline cite chips (S8): the fragment
+    embeds ui.cite_marks (self-guarded global + popover CSS), upgrades the
+    finished prose through it, captures the event's claims, and surfaces the
+    unverified-claims chip in the cite row."""
+    html = render_ask_dock()
+    # The shared helper rides in the fragment — popover anatomy included.
+    assert "window.ccCiteMarks" in html
+    assert ".cite-pop" in html
+    assert "confidence " in html  # the popover's S2 confidence % line
+    # The finish path linkifies prose and threads claims into the cite row.
+    assert "linkifyProse(md(text), citations)" in html
+    assert "claims = ev2.claims || []" in html
+    assert "unverifiedChipHtml" in html
+
+
 def test_dock_popout_hands_thread_to_the_ask_tab() -> None:
     """The ⇗ pop-out uses the palette's handoff contract: thread under
     cc-ask-thread, pending input under cc-ask-q, jump to #explore + event —
