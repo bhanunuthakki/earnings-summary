@@ -9,8 +9,8 @@ self-contained page showing:
   - Recently reported (last 45 days), for context
   - Tickers without calendar data
 
-Each row links to the latest output/research/{TICKER}/{DATE}_report.html if one
-exists. Re-run any time; the file is overwritten in place.
+Each row links to the latest output/research/{TICKER}/{DATE}_workspace.html if
+one exists. Re-run any time; the file is overwritten in place.
 
 Usage:
     python execution/build_earnings_calendar.py
@@ -161,16 +161,17 @@ def _latest_report(repo_root: Path, ticker: str) -> tuple[str, str] | None:
     """Return (date_iso, relative_path_from_output_dir) for the latest report.
 
     Returns None if no report exists. The relative path is relative to
-    output/ so the calendar HTML can link to research/{TICKER}/{DATE}_report.html.
+    output/ so the calendar HTML can link to
+    research/{TICKER}/{DATE}_workspace.html.
     """
     research_dir = repo_root / "output" / "research" / ticker
     if not research_dir.exists():
         return None
     reports: list[tuple[date, Path]] = []
     for p in research_dir.iterdir():
-        if not p.is_file() or not p.name.endswith("_report.html"):
+        if not p.is_file() or not p.name.endswith("_workspace.html"):
             continue
-        stem = p.name.replace("_report.html", "")
+        stem = p.name.replace("_workspace.html", "")
         try:
             d = datetime.strptime(stem, "%Y-%m-%d").date()
         except ValueError:

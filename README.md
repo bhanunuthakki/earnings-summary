@@ -155,7 +155,7 @@ Every ticker gets a per-day workspace at `output/research/<TICKER>/<YYYY-MM-DD>_
 | **Position** (when held) | Shares, cost basis, P&L, transactions, open vs closed decisions | `portfolio_positions` + `decisions` |
 | **Sources** (Provenance) | Coverage matrix, validation issues, source-doc audit, restatement chain links | `quarterly_artifacts` + `documents` + `validation_issues` |
 
-A simpler `<DATE>_report.html` (the legacy non-tabbed renderer) and matching `.md` + `_sections.json` + `_dcf.xlsx` are also emitted on every build. The workspace HTML is the primary user-facing surface.
+A matching `<DATE>_report.md` + `<DATE>_sections.json` are also emitted on every build. The workspace HTML is the only HTML report — the legacy non-tabbed `<DATE>_report.html` renderer was retired.
 
 ---
 

@@ -224,7 +224,7 @@ def do_build(ticker: str, p: dict) -> dict:
         ticker,
         "--enable-llm",
         "--renderer",
-        "both",
+        "workspace",
         "--repo-root",
         str(MAIN),
         "--allow-untracked",

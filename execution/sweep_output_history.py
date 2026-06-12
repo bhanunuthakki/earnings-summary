@@ -3,10 +3,9 @@ output/research/<TICKER>/archive/, leaving only the latest of each artifact
 kind at the top level.
 
 "Kind" is the filename suffix after the `YYYY-MM-DD_` date prefix
-(e.g. `report.html`, `eval_report.html`, `dcf.xlsx`, `workspace.html`). Each
-kind is tracked independently, so the freshest standard report AND the
-freshest eval report AND the freshest portfolio report all survive at the
-top level even when they were produced on different dates.
+(e.g. `workspace.html`, `report.md`, `dcf.xlsx`, `sections.json`). Each
+kind is tracked independently, so the freshest file of every kind survives
+at the top level even when they were produced on different dates.
 
 Files without a `YYYY-MM-DD_` prefix are ignored — non-dated artifacts (e.g.
 a top-level `index.html`) survive any run. The `archive/` subdirectory itself

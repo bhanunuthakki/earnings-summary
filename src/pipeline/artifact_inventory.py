@@ -39,7 +39,6 @@ def build_artifact_inventory(repo_root: Path, ticker: str) -> list[Artifact]:
     research = f"output/research/{t}"
     out: list[Artifact] = [
         _latest(repo_root, "Brief", "Workspace report (HTML)", f"{research}/*_workspace.html"),
-        _latest(repo_root, "Brief", "Legacy report (HTML)", f"{research}/*_report.html"),
         _latest(repo_root, "Brief", "Report (Markdown)", f"{research}/*_report.md"),
         _latest(repo_root, "Brief", "Sections (JSON)", f"{research}/*_sections.json"),
         _latest(repo_root, "Valuation", "Reference DCF dump (xlsx)", f"{research}/*_dcf.xlsx"),

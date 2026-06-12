@@ -1,6 +1,6 @@
 """Renderers surface "forgone due to budget" (PR2): a brief-level header rollup
-plus a distinct per-section banner, across all 3 brief renderers (markdown /
-html / workspace). Tests the new render helpers directly, matching the repo's
+plus a distinct per-section banner, across both brief renderers (markdown /
+workspace). Tests the new render helpers directly, matching the repo's
 render-helper test convention.
 """
 
@@ -9,7 +9,6 @@ from __future__ import annotations
 from io import StringIO
 
 from report.models import BudgetSkip, MissingReason, SectionStatus
-from report.renderers import html as html_r
 from report.renderers import markdown as md_r
 from report.renderers import workspace_html as ws_r
 
@@ -71,35 +70,6 @@ def test_markdown_missing_block_budget_is_distinct() -> None:
     assert "Forgone to stay under budget" in s
     assert "Override" in s
     assert "Pending stage" not in s  # NOT the generic pipeline-gap banner
-
-
-# ---------------------------------------------------------------------------
-# html
-# ---------------------------------------------------------------------------
-
-
-def test_html_forgone_callout() -> None:
-    out = StringIO()
-    html_r._forgone_callout(out, _skips())
-    s = out.getvalue()
-    assert "2 analyses forgone to stay under budget" in s
-    assert "Bear case (§7)" in s
-
-
-def test_html_forgone_callout_empty() -> None:
-    out = StringIO()
-    html_r._forgone_callout(out, [])
-    assert out.getvalue() == ""
-
-
-def test_html_missing_callout_budget_is_distinct() -> None:
-    out = StringIO()
-    short = html_r._missing_callout(out, SectionStatus.BUDGET_SKIPPED, _budget_missing())
-    s = out.getvalue()
-    assert short is True
-    assert "Forgone to stay under budget" in s
-    assert "Override" in s
-    assert "Pending stage" not in s
 
 
 # ---------------------------------------------------------------------------

@@ -408,7 +408,7 @@ script directly when you need flags the `.bat` doesn't expose.
 
 | Script | When to use |
 |---|---|
-| `execution/build_artifacts.py` | Build report. Flags: `--ticker`, `--all-tracked`, `--enable-llm`, `--renderer {default,workspace,both}`, `--flavor {portfolio,evaluation}`, `--news-days N`, `--refresh-news` |
+| `execution/build_artifacts.py` | Build report. Flags: `--ticker`, `--all-tracked`, `--enable-llm`, `--flavor {portfolio,evaluation}`, `--news-days N`, `--refresh-news` (`--renderer` is a compatibility no-op — workspace is the only renderer) |
 | `execution/fetch_fmp_historical_data.py` | FMP refresh. Flags: `--ticker`, `--all`, `--limit N` |
 | `execution/save_fmp_data.py` | Full FMP endpoint sweep (more granular than fetch_fmp_historical_data). Flags: `--tickers`, `--portfolio`, `--watchlist`, `--evaluation`, `--all`, `--skip-existing`, `--max-calls N` |
 | `execution/backfill_transcripts.py` | Pull missing transcripts |

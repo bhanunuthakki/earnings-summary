@@ -30,7 +30,7 @@ data/
 transcripts/
 
 # Generated brief artifacts written by execution/build_artifacts.py
-# (output/research/<TICKER>/<DATE>_report.html etc.). Reproducible from
+# (output/research/<TICKER>/<DATE>_workspace.html etc.). Reproducible from
 # data/ + transcripts/ + micro_thesis/.
 output/
 

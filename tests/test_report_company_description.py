@@ -25,7 +25,6 @@ from report.models import (
     SectionStatus,
     SegmentWeighting,
 )
-from report.renderers.html import _company_description as _company_description_html
 from report.renderers.markdown import _company_description as _company_description_md
 from report.sections.company_description import build as build_company_description
 
@@ -281,41 +280,6 @@ def test_ok_without_segment_facts_still_renders_descriptions(tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 # Renderers — shape contract
 # ---------------------------------------------------------------------------
-
-
-def test_html_renderer_emits_expandable_details(tmp_path: Path) -> None:
-    """OK section renders an always-visible elevator pitch + a <details> block."""
-    repo = _create_repo(tmp_path)
-    _write_cache(repo, "TEST", _CACHED_RESULT)
-    _seed_segment_rows(
-        repo, "TEST", "revenue_by_product", [("2024-12-31", "Cloud", 1.0)]
-    )
-    section = build_company_description("TEST", repo)
-    out = StringIO()
-    _company_description_html(out, section)
-    html = out.getvalue()
-    # Always-visible elements
-    assert 'company-pitch' in html
-    assert 'TestCo provides cloud + internet services' in html
-    # Expandable block + its summary
-    assert '<details class="company-details">' in html
-    assert 'Segment weighting (latest quarter)' in html
-    # Anchor matches the nav
-    assert 'id="company-description"' in html
-    # Share bar emitted with the live %
-    assert 'share-fill' in html
-
-
-def test_html_renderer_missing_data_shows_fix_callout(tmp_path: Path) -> None:
-    repo = _create_repo(tmp_path)
-    section = build_company_description("AAPL", repo)
-    out = StringIO()
-    _company_description_html(out, section)
-    html = out.getvalue()
-    # Missing-data callout
-    assert "extract_company_description.py" in html
-    # No expandable details when there's nothing to expand
-    assert "<details" not in html
 
 
 def test_markdown_renderer_emits_pipe_tables(tmp_path: Path) -> None:

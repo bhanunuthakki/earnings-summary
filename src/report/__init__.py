@@ -1,8 +1,8 @@
 """Research-report package.
 
 Builds the per-ticker artifacts from the unified data layer:
-  - long-form Markdown / PDF research doc  (renderers.markdown / .pdf)
-  - HTML / workspace brief                  (renderers.html / .workspace_html)
+  - long-form Markdown research doc         (renderers.markdown)
+  - tabbed workspace brief (HTML)           (renderers.workspace_html)
   - frontend section payloads (sections.json) (renderers.sections_json)
 
 The DCF model is the redesigned workbook at `dcf/<TICKER>.xlsx` (built by

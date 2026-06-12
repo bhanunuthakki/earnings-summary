@@ -1,11 +1,11 @@
-"""Tests for the §2 thesis break-rule two-tier renderer.
+"""Tests for the §2 thesis break-rule two-tier renderer (markdown).
 
 Covers the split into "Catastrophic tripwires" (universal) and "Thesis breakers"
 (business_model) introduced when the universal GAAP-margin rules were retired in
 favor of per-ticker rules. Pins:
   - Both tiers render under the same column contract.
   - Empty tiers are fully suppressed (no heading, no table).
-  - Universal tier renders before business_model tier in both formats.
+  - Universal tier renders before business_model tier.
   - Pre-tier persisted rows default to business_model (back-compat).
 """
 
@@ -20,7 +20,6 @@ from report.models import (
     SoftRuleEvaluation,
     ThesisSection,
 )
-from report.renderers.html import _break_rules_block as _html_break_rules
 from report.renderers.markdown import _break_rules_block as _md_break_rules
 
 
@@ -59,50 +58,7 @@ def _section(evals: list[BreakRuleEvaluation]) -> ThesisSection:
     )
 
 
-def test_html_renders_universal_table_when_only_universal_present() -> None:
-    """Only universal rules -> one 'Catastrophic tripwires' table, no 'Thesis
-    breakers' heading."""
-    s = _section([_ev("rev_decline", "Revenue YoY", "universal")])
-    out = StringIO()
-    _html_break_rules(out, s, "TEST")
-    html = out.getvalue()
-    assert "Catastrophic tripwires" in html
-    assert "Thesis breakers" not in html
-    assert "Revenue YoY" in html
-
-
-def test_html_renders_business_table_when_only_business_present() -> None:
-    """Only business_model rules -> 'Thesis breakers' table only.
-
-    Important for RBRK-style names whose universal tripwires don't fire on the
-    pre-existing data (e.g. revenue growth is +46%) but per-ticker rules do.
-    """
-    s = _section([_ev("nrr_below_115", "NRR", "business_model")])
-    out = StringIO()
-    _html_break_rules(out, s, "RBRK")
-    html = out.getvalue()
-    assert "Thesis breakers" in html
-    assert "Catastrophic tripwires" not in html
-    assert "NRR" in html
-
-
-def test_html_renders_both_tables_in_universal_first_order() -> None:
-    """Universal table appears BEFORE business_model — catastrophic first."""
-    s = _section(
-        [
-            _ev("rev_decline", "Revenue YoY", "universal"),
-            _ev("nrr_below_115", "NRR", "business_model"),
-        ]
-    )
-    out = StringIO()
-    _html_break_rules(out, s, "RBRK")
-    html = out.getvalue()
-    universal_idx = html.index("Catastrophic tripwires")
-    business_idx = html.index("Thesis breakers")
-    assert universal_idx < business_idx
-
-
-def test_html_back_compat_pre_tier_evaluations_render_as_business_model() -> None:
+def test_markdown_back_compat_pre_tier_evaluations_render_as_business_model() -> None:
     """A persisted thesis_evaluation written before the tier field existed has
     no tier on the wire — the parser defaults it to business_model, and that
     rule renders under 'Thesis breakers', not 'Catastrophic tripwires'.
@@ -124,13 +80,13 @@ def test_html_back_compat_pre_tier_evaluations_render_as_business_model() -> Non
     assert legacy.tier == "business_model"
     s = _section([legacy])
     out = StringIO()
-    _html_break_rules(out, s, "TEST")
-    html = out.getvalue()
-    assert "Thesis breakers" in html
-    assert "Catastrophic tripwires" not in html
+    _md_break_rules(out, s)
+    md = out.getvalue()
+    assert "Thesis breakers" in md
+    assert "Catastrophic tripwires" not in md
 
 
-def test_html_unknown_status_with_no_evals_renders_callout() -> None:
+def test_markdown_unknown_status_with_no_evals_renders_callout() -> None:
     """No evaluation row in DB + unknown status -> 'Not yet evaluated' callout."""
     s = ThesisSection(
         status="missing_data",  # type: ignore[arg-type]
@@ -138,15 +94,15 @@ def test_html_unknown_status_with_no_evals_renders_callout() -> None:
         break_rule_evaluations=[],
     )
     out = StringIO()
-    _html_break_rules(out, s, "TEST")
-    html = out.getvalue()
-    assert "Not yet evaluated" in html
-    assert "Catastrophic" not in html
-    assert "Thesis breakers" not in html
+    _md_break_rules(out, s)
+    md = out.getvalue()
+    assert "Not yet evaluated" in md
+    assert "Catastrophic" not in md
+    assert "Thesis breakers" not in md
 
 
-def test_markdown_mirrors_html_two_tier_split() -> None:
-    """Markdown renderer produces the same two-section layout with #### headings."""
+def test_markdown_renders_two_tier_split() -> None:
+    """Markdown renderer produces the two-section layout with #### headings."""
     s = _section(
         [
             _ev("rev_decline", "Revenue YoY", "universal"),
@@ -187,30 +143,10 @@ def _section_with_soft(soft: list[SoftRuleEvaluation]) -> ThesisSection:
     )
 
 
-def test_html_renders_soft_signals_block_when_rules_present() -> None:
-    """Soft rule fires -> 'Soft signals' heading + the evidence string."""
-    soft = [
-        SoftRuleEvaluation(
-            rule_name="growth_decel_2q",
-            status="yellow",
-            evidence="Revenue YoY decel 1000→460 bps",
-            details={},
-        )
-    ]
-    out = StringIO()
-    _html_break_rules(out, _section_with_soft(soft), "VEEV")
-    html_out = out.getvalue()
-    assert "Soft signals" in html_out
-    assert "growth_decel_2q" in html_out
-    assert "Revenue YoY decel" in html_out
-    # Yellow signal gets the 'partial' badge class (the warn palette).
-    assert "status-partial" in html_out
-
-
-def test_html_suppresses_soft_signals_block_when_empty() -> None:
+def test_markdown_suppresses_soft_signals_block_when_empty() -> None:
     """No soft rules -> no 'Soft signals' heading. Backwards-compatible."""
     out = StringIO()
-    _html_break_rules(out, _section_with_soft([]), "VEEV")
+    _md_break_rules(out, _section_with_soft([]))
     assert "Soft signals" not in out.getvalue()
 
 

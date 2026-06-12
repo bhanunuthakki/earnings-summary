@@ -1,9 +1,9 @@
-"""Tests for the §6 surprise-scorecard header — builder + markdown + HTML.
+"""Tests for the §6 surprise-scorecard header — builder + markdown renderer.
 
 Covers the new `surprise_scorecard` field on `EarningsSection` and its
-rendering in both target formats. The post-FMP-lapse case (revenue side
-all-NULL) gets explicit coverage to verify the "source coverage absent"
-fallback row instead of a misleading 0% beat rate.
+rendering. The post-FMP-lapse case (revenue side all-NULL) gets explicit
+coverage to verify the "source coverage absent" fallback row instead of a
+misleading 0% beat rate.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from report.models import EarningsSection, SectionStatus, SurpriseScorecardCard
-from report.renderers.html import _surprise_scorecard_block as _html_block
 from report.renderers.markdown import _surprise_scorecard_block as _md_block
 from report.sections.earnings import _build_surprise_card
 
@@ -190,49 +189,6 @@ def test_md_renderer_revenue_no_data_row() -> None:
     assert "Revenue | 0 | 0 | 0.0%" not in s
 
 
-# --- HTML renderer ----------------------------------------------------------
-
-
-def test_html_renderer_skips_when_none() -> None:
-    out = StringIO()
-    _html_block(out, None)
-    assert out.getvalue() == ""
-
-
-def test_html_renderer_full_card() -> None:
-    out = StringIO()
-    card = SurpriseScorecardCard(
-        total_quarters=8,
-        eps_beats=7, eps_misses=1, eps_no_data=0,
-        eps_beat_rate_pct=87.5, eps_avg_surprise_pct=14.07, eps_latest_surprise_pct=9.1,
-        revenue_beats=8, revenue_misses=0, revenue_no_data=0,
-        revenue_beat_rate_pct=100.0, revenue_avg_surprise_pct=2.74, revenue_latest_surprise_pct=5.6,
-    )
-    _html_block(out, card)
-    s = out.getvalue()
-    assert "Analyst surprise — last 8 reported quarters" in s
-    assert "<td>EPS</td>" in s
-    assert "<td>+87.5%</td>" in s
-    assert "<td>Revenue</td>" in s
-    assert "<td>+100.0%</td>" in s
-    assert '<div class="table-wrap"><table>' in s
-
-
-def test_html_renderer_revenue_no_data_row() -> None:
-    out = StringIO()
-    card = SurpriseScorecardCard(
-        total_quarters=4,
-        eps_beats=3, eps_misses=1, eps_no_data=0,
-        eps_beat_rate_pct=75.0, eps_avg_surprise_pct=7.0, eps_latest_surprise_pct=8.0,
-        revenue_beats=0, revenue_misses=0, revenue_no_data=4,
-    )
-    _html_block(out, card)
-    s = out.getvalue()
-    assert "source coverage absent" in s
-    # Revenue row should be all em-dashes
-    assert "<td>Revenue</td><td>—</td><td>—</td><td>—</td><td>—</td>" in s
-
-
 # --- EarningsSection model — surprise_scorecard field defaults --------------
 
 
@@ -274,29 +230,3 @@ def test_md_renders_scorecard_even_when_section_is_missing_data() -> None:
     assert scorecard_pos > -1, "scorecard should render even under MISSING_DATA"
     assert missing_pos > -1, "missing-data callout should still render"
     assert scorecard_pos < missing_pos, "scorecard must come before the missing callout"
-
-
-def test_html_renders_scorecard_even_when_section_is_missing_data() -> None:
-    """Same contract as the markdown variant — keep the two renderers aligned."""
-    from report.models import MissingReason
-    from report.renderers.html import _earnings as html_earnings
-
-    out = StringIO()
-    section = EarningsSection(
-        status=SectionStatus.MISSING_DATA,
-        missing=MissingReason(stage="SYNTHESIZE", fix_command="...", detail="..."),
-        surprise_scorecard=SurpriseScorecardCard(
-            total_quarters=4,
-            eps_beats=3, eps_misses=1, eps_no_data=0,
-            eps_beat_rate_pct=75.0,
-            revenue_beats=4, revenue_misses=0, revenue_no_data=0,
-            revenue_beat_rate_pct=100.0,
-        ),
-    )
-    html_earnings(out, section)
-    s = out.getvalue()
-    scorecard_pos = s.find("Analyst surprise — last 4")
-    missing_pos = s.find("SYNTHESIZE")
-    assert scorecard_pos > -1
-    assert missing_pos > -1
-    assert scorecard_pos < missing_pos

@@ -1,11 +1,13 @@
 """Build the unified research artifacts for a ticker.
 
-Emits four files under output/research/{TICKER}/{DATE}_*:
-  - {DATE}_report.html        long-form research doc (HTML, primary deliverable;
-                              full transcripts embedded in §10 — single self-contained file)
+Emits three files under output/research/{TICKER}/{DATE}_*:
+  - {DATE}_workspace.html     tabbed workspace report (HTML, primary deliverable;
+                              self-contained — opens via file:// or /reports/<ticker>)
   - {DATE}_report.md          markdown source (diff-friendly)
   - {DATE}_sections.json      frontend section payloads (consumed by /api/research/<ticker>)
-  - {DATE}_dcf.xlsx           DCF workbook with supporting tabs
+
+The DCF workbook is referenced, not re-rendered: the canonical copy lives at
+dcf/{TICKER}.xlsx (refreshed by execution/refresh_dcf.py).
 
 Usage:
     python execution/build_artifacts.py --ticker GOOG
@@ -39,7 +41,6 @@ from models.companies import InstrumentType  # noqa: E402
 from report.builder import build_report  # noqa: E402
 from report.models import ReportFlavor  # noqa: E402
 from report.renderers.etf_markdown import render as render_etf_markdown  # noqa: E402
-from report.renderers.html import render as render_html  # noqa: E402
 from report.renderers.markdown import render as render_markdown  # noqa: E402
 from report.renderers.sections_json import render as render_sections_json  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
@@ -177,7 +178,6 @@ def main() -> int:
             refresh_news=args.refresh_news,
             flavor=flavor,
             trigger=args.trigger,
-            renderer=args.renderer,
             force_budget_bypass=args.force_budget_bypass,
             force_refresh=args.force_refresh,
         )
@@ -258,12 +258,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--renderer",
         choices=("default", "workspace", "both"),
-        default="default",
+        default="workspace",
         help=(
-            "Which HTML renderer to emit. 'default' (current behavior) writes "
-            "{DATE}_report.html via the legacy long-form renderer. 'workspace' "
-            "writes {DATE}_workspace.html via the tabbed workspace renderer. "
-            "'both' writes both files."
+            "Compatibility no-op. The legacy long-form renderer was retired; "
+            "every value emits only {DATE}_workspace.html via the tabbed "
+            "workspace renderer. 'default'/'both' remain accepted so existing "
+            "scripts and scheduled tasks don't crash."
         ),
     )
     parser.add_argument(
@@ -325,14 +325,12 @@ def _build_one(
     refresh_news: bool = False,
     flavor: ReportFlavor = ReportFlavor.PORTFOLIO,
     trigger: str = "manual",
-    renderer: str = "default",
     force_budget_bypass: bool = False,
     force_refresh: bool = False,
 ) -> dict[str, object]:
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     today = date.today().isoformat()
-    html_path = out_dir / f"{today}_report.html"
     workspace_html_path = out_dir / f"{today}_workspace.html"
     md_path = out_dir / f"{today}_report.md"
     json_path = out_dir / f"{today}_sections.json"
@@ -386,16 +384,11 @@ def _build_one(
         force_refresh=force_refresh,
     )
 
-    if renderer in ("default", "both"):
-        html_path.write_text(render_html(spec), encoding="utf-8")
-        _emit("wrote_html", {"ticker": ticker, "path": str(html_path)})
-
-    if renderer in ("workspace", "both"):
-        workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
-        _emit(
-            "wrote_workspace_html",
-            {"ticker": ticker, "path": str(workspace_html_path)},
-        )
+    workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
+    _emit(
+        "wrote_workspace_html",
+        {"ticker": ticker, "path": str(workspace_html_path)},
+    )
 
     md_path.write_text(render_markdown(spec), encoding="utf-8")
     _emit("wrote_markdown", {"ticker": ticker, "path": str(md_path)})
@@ -416,10 +409,9 @@ def _build_one(
         "bear_case": spec.bear_case.status.value,
         "provenance": spec.provenance.status.value,
     }
-    # Pick the canonical artifact path: prefer workspace when rendered,
-    # otherwise fall back to the long-form HTML. Provenance rows always point
-    # at a real file so audit consumers can deep-link.
-    canonical_artifact = workspace_html_path if renderer in ("workspace", "both") else html_path
+    # Provenance rows always point at the workspace HTML — the only rendered
+    # report — so audit consumers can deep-link.
+    canonical_artifact = workspace_html_path
     per_metric_provenance = _collect_per_metric_provenance(ticker, repo_root)
     _log_brief_provenance(
         repo_root=repo_root,
@@ -433,8 +425,7 @@ def _build_one(
 
     return {
         "ticker": ticker,
-        "report_html": str(html_path) if renderer in ("default", "both") else None,
-        "workspace_html": str(workspace_html_path) if renderer in ("workspace", "both") else None,
+        "workspace_html": str(workspace_html_path),
         "report_md": str(md_path),
         "sections_json": str(json_path),
         "dcf_xlsx": str(canonical_dcf),
