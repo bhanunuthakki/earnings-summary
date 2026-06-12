@@ -101,14 +101,10 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
     out.write(f"## Your position in {spec.ticker}\n\n")
     if pp.held and pp.total_market_value is not None:
         pct_str = (
-            f"{pp.total_unrealized_pct * 100:+.1f}%"
-            if pp.total_unrealized_pct is not None
-            else "—"
+            f"{pp.total_unrealized_pct * 100:+.1f}%" if pp.total_unrealized_pct is not None else "—"
         )
         pnl_str = (
-            f"${pp.total_unrealized_pnl:+,.0f}"
-            if pp.total_unrealized_pnl is not None
-            else "—"
+            f"${pp.total_unrealized_pnl:+,.0f}" if pp.total_unrealized_pnl is not None else "—"
         )
         out.write(
             f"**{pp.total_quantity:,.4f} sh** · "
@@ -130,7 +126,9 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                 else "—"
             )
             src = a.cost_basis_source or "broker"
-            out.write(f"| {a.account_name} | {a.quantity:,.4f} | {cost_s} | {value_s} | {pnl_s} | {src} |\n")
+            out.write(
+                f"| {a.account_name} | {a.quantity:,.4f} | {cost_s} | {value_s} | {pnl_s} | {src} |\n"
+            )
         out.write("\n")
     if pp.recent_transactions:
         out.write("**Recent activity**\n\n")
@@ -170,7 +168,9 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                 f"{d.thesis[:160]}{'…' if len(d.thesis) > 160 else ''}{outcome_when}\n"
             )
             if d.outcome_notes:
-                out.write(f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n")
+                out.write(
+                    f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n"
+                )
         out.write("\n")
     out.write("---\n\n")
 
@@ -268,6 +268,15 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
     out.write("| Metric | Value |\n|---|---|\n")
     if v.consolidated_npv_per_share is not None:
         out.write(f"| Fair value / share | ${v.consolidated_npv_per_share:,.2f} |\n")
+    if v.bull_npv_per_share is not None or v.bear_npv_per_share is not None:
+        # S6 scenario range; an un-valuable scenario reads "n/a".
+        def _fv(x: float | None) -> str:
+            return f"${x:,.2f}" if x is not None else "n/a"
+
+        out.write(
+            f"| Scenario range (bear / base / bull) | {_fv(v.bear_npv_per_share)} / "
+            f"{_fv(v.consolidated_npv_per_share)} / {_fv(v.bull_npv_per_share)} |\n"
+        )
     if v.current_price is not None:
         suffix = ""
         if v.live_price_at is not None:
@@ -452,21 +461,15 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
     business = [ev for ev in s.break_rule_evaluations if ev.tier == "business_model"]
     if universal:
         out.write("#### Catastrophic tripwires\n\n")
-        out.write(
-            "_Narrow universal set — should fire only on a fundamental break._\n\n"
-        )
+        out.write("_Narrow universal set — should fire only on a fundamental break._\n\n")
         _break_rule_table_md(out, universal)
     if business:
         out.write("#### Thesis breakers\n\n")
-        out.write(
-            "_Per-ticker rules calibrated to this business's unit economics._\n\n"
-        )
+        out.write("_Per-ticker rules calibrated to this business's unit economics._\n\n")
         _break_rule_table_md(out, business)
     if s.soft_rule_evaluations:
         out.write("#### Soft signals\n\n")
-        out.write(
-            "_Predicate-style watch signals — never escalate past YELLOW._\n\n"
-        )
+        out.write("_Predicate-style watch signals — never escalate past YELLOW._\n\n")
         _soft_rule_table_md(out, s.soft_rule_evaluations)
 
 
@@ -560,9 +563,7 @@ def _signals(out: StringIO, s: SignalsSection) -> None:
             type_s = r.signal_type.replace("_", " ")
             narrative = r.narrative or "(no narrative)"
             stat = f" ({r.value_summary})" if r.value_summary else ""
-            out.write(
-                f"- {tag} **{r.metric_name}** · _{type_s}_ — {narrative}{stat}\n"
-            )
+            out.write(f"- {tag} **{r.metric_name}** · _{type_s}_ — {narrative}{stat}\n")
         out.write("\n")
     total = len(s.red_signals) + len(s.yellow_signals) + len(s.green_signals)
     out.write(f"<details><summary>All signals ({total})</summary>\n\n")
@@ -678,7 +679,7 @@ def _theme_block(out: StringIO, theme) -> None:
     out.write(f"- **{theme.theme_name}** ({theme.last_4q_count} mentions{sparkline})\n")
     for ev in theme.evidence:
         speaker = f"{ev.speaker} · " if ev.speaker else ""
-        out.write(f"  - > _\"{ev.text}\"_ — {speaker}{ev.period}\n")
+        out.write(f'  - > _"{ev.text}"_ — {speaker}{ev.period}\n')
     out.write("\n")
 
 

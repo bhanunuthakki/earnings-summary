@@ -177,7 +177,8 @@ def _valuation_snapshot(
         """
         SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
                shares_outstanding, breakdown_json,
-               live_price, live_price_at, over_under_pct, mos_bar_used
+               live_price, live_price_at, over_under_pct, mos_bar_used,
+               assumption_snapshot_json
         FROM dcf_runs
         WHERE ticker = ?
         LIMIT 1
@@ -208,6 +209,7 @@ def _valuation_snapshot(
     live_price_at = _parse_iso_datetime(row["live_price_at"])
     upside = -over_under if over_under is not None else None
     trigger = _trigger_status(over_under, mos_bar_used, held=held)
+    bull_fv, bear_fv = _scenario_range(row["assumption_snapshot_json"])
 
     return ValuationSnapshot(
         consolidated_npv_per_share=cons_npv_per_share,
@@ -223,7 +225,39 @@ def _valuation_snapshot(
         mos_bar=mos_bar_used,
         trigger_status=trigger,
         live_price_at=live_price_at,
+        bull_npv_per_share=bull_fv,
+        bear_npv_per_share=bear_fv,
     )
+
+
+def _scenario_range(snapshot_json: object) -> tuple[float | None, float | None]:
+    """(bull, bear) per-share fair values from a dcf_runs assumption snapshot.
+
+    The "scenarios" block is written by execution/refresh_dcf.py for the
+    redesigned FCFF archetype; rows that predate it (or other archetypes) have
+    none — both values None and the card keeps its single-point readout. An
+    un-valuable scenario is persisted as null and stays None here.
+    """
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None, None
+    try:
+        data: object = json.loads(snapshot_json)
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    scenarios = cast("dict[str, object]", data).get("scenarios")
+    if not isinstance(scenarios, dict):
+        return None, None
+
+    def fair_value(key: str) -> float | None:
+        block = cast("dict[str, object]", scenarios).get(key)
+        if not isinstance(block, dict):
+            return None
+        v = cast("dict[str, object]", block).get("fair_value_per_share_usd")
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    return fair_value("bull"), fair_value("bear")
 
 
 def _mos_bar(holdings: dict[str, object] | None) -> float | None:
@@ -343,9 +377,7 @@ def _recent_decisions(ticker: str, repo_root: Path) -> list[DecisionBadge]:
     badges: list[DecisionBadge] = []
     for r in rows:
         raw = r.outcome_label if r.outcome_label in _VALID_OUTCOME_LABELS else "pending"
-        outcome = cast(
-            'Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]', raw
-        )
+        outcome = cast('Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]', raw)
         badges.append(
             DecisionBadge(
                 date_short=r.made_at.strftime("%Y-%m"),
