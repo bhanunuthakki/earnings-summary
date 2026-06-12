@@ -78,6 +78,7 @@ from report.models import (
     SynthesisSection,
     ThesisSection,
     ValuationBasisSection,
+    ValuationSnapshot,
 )
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
@@ -2483,11 +2484,20 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         )
         + '<div class="val-stack">'
     )
-    _val_row(body, "Consolidated NPV / share", _fmt_price(v.consolidated_npv_per_share))
+    # S6: when the dcf_runs snapshot carries Bull/Bear scenario values, the
+    # single-point readout becomes a bear·base·bull range with upside at each;
+    # runs predating scenarios (or non-FCFF archetypes) keep the legacy row.
+    has_range = v.bull_npv_per_share is not None or v.bear_npv_per_share is not None
+    if has_range:
+        _scenario_range_block(body, v)
+    else:
+        _val_row(body, "Consolidated NPV / share", _fmt_price(v.consolidated_npv_per_share))
     if v.sum_of_segments_npv_per_share is not None:
         _val_row(body, "Sum-of-segments NPV", _fmt_price(v.sum_of_segments_npv_per_share))
     _val_row(body, "Current price", _fmt_price(v.current_price), emph=True)
-    if v.current_price and v.consolidated_npv_per_share:
+    if not has_range and v.current_price and v.consolidated_npv_per_share:
+        # The range block already shows upside per scenario — this legacy row
+        # would just duplicate its Base cell.
         implied = (v.consolidated_npv_per_share - v.current_price) / v.current_price * 100
         _val_row(body, "Implied vs consolidated", f"{implied:+.0f}%")
     if v.mos_bar is not None:
@@ -2535,6 +2545,61 @@ def _val_row(
     if muted:
         cls += " muted"
     body.write(f'<div class="{cls}"><span>{_esc(label)}</span><strong>{_esc(value)}</strong></div>')
+
+
+def _scenario_range_block(body: StringIO, v: ValuationSnapshot) -> None:
+    """Bear · Base · Bull fair values with upside at each, plus a bear→bull
+    track showing where the live price sits in the range.
+
+    Base is ``consolidated_npv_per_share`` (the dcf_runs value-of-record);
+    Bull/Bear come from the run's scenario snapshot. An un-valuable scenario
+    (persisted as null) renders an em-dash cell; the track only draws when both
+    ends and the price exist.
+    """
+    price = v.current_price
+    cells: list[tuple[str, str, float | None]] = [
+        ("bear", "Bear", v.bear_npv_per_share),
+        ("base", "Base", v.consolidated_npv_per_share),
+        ("bull", "Bull", v.bull_npv_per_share),
+    ]
+    body.write('<div class="scenario-range">')
+    for key, label, fair_value in cells:
+        body.write(f'<div class="scenario-cell {key}">')
+        body.write(f'<div class="scenario-label">{_esc(label)}</div>')
+        body.write(f"<strong>{_esc(_fmt_price(fair_value))}</strong>")
+        if fair_value is not None and price:
+            up = (fair_value - price) / price * 100
+            tone = "pos" if up >= 0 else "neg"
+            body.write(f'<span class="scenario-upside {tone}">{up:+.0f}%</span>')
+        else:
+            body.write('<span class="scenario-upside muted">—</span>')
+        body.write("</div>")
+    body.write("</div>")
+
+    bear, bull = v.bear_npv_per_share, v.bull_npv_per_share
+    if bear is not None and bull is not None and bull > bear and price:
+
+        def pct_pos(x: float) -> float:
+            return max(2.0, min(98.0, (x - bear) / (bull - bear) * 100))
+
+        body.write('<div class="scenario-bar"><div class="scenario-bar-track">')
+        base = v.consolidated_npv_per_share
+        if base is not None:
+            body.write(
+                f'<div class="scenario-bar-base" style="left:{pct_pos(base):.1f}%" '
+                f'title="Base {_esc(_fmt_price(base))}"></div>'
+            )
+        body.write(
+            f'<div class="scenario-bar-price" style="left:{pct_pos(price):.1f}%" '
+            f'title="Price {_esc(_fmt_price(price))}"></div>'
+        )
+        body.write("</div>")
+        body.write(
+            '<div class="scenario-bar-legend">'
+            f"<span>price ▍{_esc(_fmt_price(price))}</span>"
+            "<span>bear → bull</span></div>"
+        )
+        body.write("</div>")
 
 
 def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:

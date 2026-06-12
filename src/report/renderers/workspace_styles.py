@@ -793,6 +793,40 @@ details.panel > summary:hover { background: var(--paper); }
 .val-row.muted { color: var(--muted); }
 .val-row.muted strong { color: var(--muted); }
 
+/* S6 — Bear · Base · Bull scenario range on the valuation card */
+.scenario-range { display: flex; border-bottom: 1px solid var(--hairline); }
+.scenario-cell {
+  flex: 1; display: flex; flex-direction: column; gap: 2px;
+  padding: 10px var(--panel-pad-x) 8px;
+}
+.scenario-cell + .scenario-cell { border-left: 1px solid var(--hairline); }
+.scenario-label {
+  font-size: var(--fs-micro); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+}
+.scenario-cell.bear .scenario-label { color: var(--neg); }
+.scenario-cell.bull .scenario-label { color: var(--pos); }
+.scenario-cell strong { font-family: var(--mono); font-size: 15px; font-weight: 500; }
+.scenario-cell.base strong { font-size: 16px; font-weight: 600; }
+.scenario-upside { font-family: var(--mono); font-size: var(--fs-caption); }
+.scenario-upside.pos { color: var(--pos); }
+.scenario-upside.neg { color: var(--neg); }
+.scenario-upside.muted { color: var(--muted); }
+.scenario-bar { padding: 10px var(--panel-pad-x) 12px; border-bottom: 1px solid var(--hairline); }
+.scenario-bar-track {
+  position: relative; height: 6px; border-radius: var(--radius-full);
+  background: linear-gradient(90deg, var(--tone-neg), var(--tone-pos));
+}
+.scenario-bar-price {
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  border-radius: 1px; background: var(--fg);
+}
+.scenario-bar-base { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--muted-2); }
+.scenario-bar-legend {
+  display: flex; justify-content: space-between; margin-top: 4px;
+  font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted);
+}
+
 .break-status-ok { color: var(--accent); }
 .break-status-warn { color: var(--warn); }
 .break-status-breach { color: var(--bad); }

@@ -87,6 +87,13 @@ class ValuationSnapshot(BaseModel):
     )
     live_price_at: datetime | None = None  # timestamp on dcf_runs.live_price
 
+    # S6 — Bull/Bear scenario fair values, parsed from dcf_runs.
+    # assumption_snapshot_json["scenarios"] (written by refresh_dcf). None when
+    # the run predates scenarios or that scenario was un-valuable;
+    # consolidated_npv_per_share stays the Base value.
+    bull_npv_per_share: float | None = None
+    bear_npv_per_share: float | None = None
+
 
 class KpiSnapshotRow(BaseModel):
     name: str
