@@ -264,15 +264,17 @@ def render_shell(
             f'<a href="/feed">Alert feed</a>'
             f"</nav>"
             f'<button class="cc-palette-btn" id="cc-palette-open" type="button" '
+            f'aria-label="Command palette (Ctrl+K)" '
             f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">⌘K</button>'
             f"{_render_system_button(themes)}"
             f'<button class="cc-notes-btn" id="cc-notes-toggle" type="button" '
+            f'aria-label="Quick notes" '
             f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
             f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
             f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
             f"{stamp}</div>",
             _render_subnav_rows(themes),
-            '<main class="cc-panels">',
+            '<main class="cc-panels" id="cc-main" tabindex="-1">',
             _render_panels(flat_tabs, overview_html),
             "</main>",
             _SETTINGS_DRAWER_HTML,
@@ -302,7 +304,7 @@ def render_shell(
 # pre-S14 cc-drawer-sec:<endpoint> localStorage keys migrate on first read).
 _SETTINGS_DRAWER_HTML = (
     '<div class="cc-drawer-scrim" id="cc-drawer-scrim" hidden></div>'
-    '<aside class="cc-drawer" id="cc-drawer" hidden aria-label="Settings">'
+    '<aside class="cc-drawer" id="cc-drawer" role="dialog" aria-modal="true" hidden aria-label="Settings">'
     '<div class="cc-drawer-head"><span>Settings &amp; maintenance</span>'
     '<button class="cc-drawer-close" id="cc-drawer-close" type="button" '
     'aria-label="Close">&times;</button></div>'
@@ -327,7 +329,7 @@ _SETTINGS_DRAWER_HTML = (
 # calls window.ccReloadNotesDrawer (exposed by SHELL_JS) after a save.
 _NOTES_DRAWER_HTML = (
     '<div class="cc-drawer-scrim" id="cc-notes-scrim" hidden></div>'
-    '<aside class="cc-drawer cc-notes-drawer" id="cc-notes-drawer" hidden aria-label="Notes">'
+    '<aside class="cc-drawer cc-notes-drawer" id="cc-notes-drawer" role="dialog" aria-modal="true" hidden aria-label="Notes">'
     '<div class="cc-drawer-head"><span>Notes</span>'
     '<button class="cc-drawer-close" id="cc-notes-close" type="button" '
     'aria-label="Close">&times;</button></div>'
@@ -388,10 +390,14 @@ def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
     out: list[str] = []
     for tid, _tlabel, subs in themes:
         single = ' data-single="1"' if len(subs) <= 1 else ""
-        out.append(f'<nav class="cc-tabs cc-subtabs" data-cc-theme="{escape(tid)}"{single} hidden>')
+        out.append(
+            f'<nav class="cc-tabs cc-subtabs" role="tablist" data-cc-theme="{escape(tid)}"{single} hidden>'
+        )
         for pid, label, _endpoint, _picker, _required in subs:
             out.append(
                 f'<button class="cc-tab" type="button" role="tab" '
+                f'id="cc-tab-{escape(pid)}" aria-selected="false" '
+                f'aria-controls="cc-panel-{escape(pid)}" '
                 f'data-tab-target="{escape(pid)}" data-cc-theme="{escape(tid)}">'
                 f"{escape(label)}</button>"
             )
@@ -405,11 +411,13 @@ def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
 # URL.
 _PALETTE_HTML = (
     '<div class="cc-palette-scrim" id="cc-palette-scrim" hidden></div>'
-    '<div class="cc-palette" id="cc-palette" hidden role="dialog" aria-label="Command palette">'
-    '<input id="cc-palette-input" type="text" '
+    '<div class="cc-palette" id="cc-palette" hidden role="dialog" aria-modal="true" aria-label="Command palette">'
+    '<input id="cc-palette-input" type="text" role="combobox" '
+    'aria-label="Search commands, tickers and views" '
+    'aria-expanded="false" aria-controls="cc-palette-list" aria-autocomplete="list" '
     'placeholder="Jump to a ticker, tab, note, or view — or just ask…" '
     'autocomplete="off" spellcheck="false">'
-    '<ul id="cc-palette-list" class="cc-palette-list"></ul>'
+    '<ul id="cc-palette-list" class="cc-palette-list" role="listbox"></ul>'
     "</div>"
 )
 
@@ -421,7 +429,7 @@ _PALETTE_HTML = (
 # re-execution path the lazy panels use.
 _PEEK_HTML = (
     '<div class="cc-peek-scrim" id="cc-peek-scrim" hidden></div>'
-    '<div class="cc-peek" id="cc-peek" hidden role="dialog" aria-label="Quick look">'
+    '<div class="cc-peek" id="cc-peek" hidden role="dialog" aria-modal="true" aria-label="Quick look">'
     '<div class="cc-peek-head">'
     '<span class="cc-peek-title" id="cc-peek-title"></span>'
     '<a class="cc-peek-openfull" id="cc-peek-openfull" href="#" hidden>open full ↗</a>'
@@ -509,7 +517,9 @@ def _render_panels(
     for pid, _label, endpoint, picker, _required in tabs:
         if pid == "overview":
             out.append(
-                f'<section class="cc-panel" data-panel="{escape(pid)}" data-loaded="1">'
+                f'<section class="cc-panel" role="tabpanel" id="cc-panel-{escape(pid)}" '
+                f'aria-labelledby="cc-tab-{escape(pid)}" '
+                f'data-panel="{escape(pid)}" data-loaded="1">'
                 f'<div class="cc-panel-body">{overview_html}</div></section>'
             )
             continue
@@ -522,7 +532,9 @@ def _render_panels(
         pk = ' data-picker="1"' if picker else ""
         skel = _skeleton_html(_SKELETON_KINDS.get(pid, "table"))
         out.append(
-            f'<section class="cc-panel" data-panel="{escape(pid)}"{ep}{pk} '
+            f'<section class="cc-panel" role="tabpanel" id="cc-panel-{escape(pid)}" '
+            f'aria-labelledby="cc-tab-{escape(pid)}" '
+            f'data-panel="{escape(pid)}"{ep}{pk} '
             f'data-loaded="0" data-current-ticker="" hidden>'
             f'<div class="cc-panel-body">{skel}</div>'
             "</section>"
@@ -564,6 +576,17 @@ button { transition: color var(--transition), border-color var(--transition),
 @keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop-in { from { transform: translateX(-50%) scale(0.985); opacity: 0; }
   to { transform: translateX(-50%) scale(1); opacity: 1; } }
+
+/* Skip link — visible on :focus so keyboard users can bypass the top bar */
+.cc-skip { position: absolute; top: -200px; left: 0; z-index: 100;
+  background: var(--accent); color: var(--accent-contrast);
+  padding: 8px 16px; border-radius: 0 0 var(--radius) 0; font-weight: 600;
+  text-decoration: none; font-size: var(--fs-body); }
+.cc-skip:focus-visible { top: 0; outline: none; }
+
+/* Visually hidden but available to assistive technology */
+.cc-sr-only { position: absolute; width: 1px; height: 1px; padding: 0;
+  margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
 /* One sticky top bar: brand + section nav + utility links. The only other
    chrome is the active section's single sub-row (suppressed entirely for
@@ -650,6 +673,9 @@ button { transition: color var(--transition), border-color var(--transition),
 @media (prefers-reduced-motion: reduce) {
   .cc-skel-line, .cc-skel-row, .cc-skel-kpi, .cc-skel-card, .cc-skel-input,
   .cc-skel-chip, .cc-skel-band, .cc-skel-frame, .cc-loading::after { animation: none; }
+  .cc-drawer, .cc-drawer-scrim,
+  .cc-palette, .cc-palette-scrim,
+  .cc-peek, .cc-peek-scrim { animation: none; transition-duration: 0.01ms; }
 }
 
 /* The Holding tab's ticker picker is now a search combobox inside the holding
@@ -1154,6 +1180,33 @@ SHELL_JS = r"""
   // deep-links also auto-open the drawer after landing on Governance.
   var DRAWER_OPENERS = { budget: 1, actions: 1 };
 
+  // ----- Accessibility helpers -----
+  var liveRegion = document.getElementById('cc-live');
+  function announce(msg) {
+    if (!liveRegion) return;
+    liveRegion.textContent = '';
+    // Flush so the same message can re-announce.
+    setTimeout(function () { liveRegion.textContent = msg; }, 50);
+  }
+
+  function focusableIn(container) {
+    return Array.prototype.slice.call(container.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),' +
+      'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    ));
+  }
+
+  function trapFocus(container, ev) {
+    var els = focusableIn(container);
+    if (!els.length) return;
+    var first = els[0], last = els[els.length - 1];
+    if (ev.shiftKey) {
+      if (document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    }
+  }
+
   function firstPanelOfTheme(tid) {
     for (var i = 0; i < tabs.length; i++) {
       if (tabs[i].getAttribute('data-cc-theme') === tid) {
@@ -1283,6 +1336,7 @@ SHELL_JS = r"""
       if (served === 'prefetch') return;  // just fetched — skip revalidation
     } else {
       body.innerHTML = skelFor(pid);
+      announce((pid || 'panel') + ' loading…');
     }
 
     var tFetch = performance.now();
@@ -1315,10 +1369,14 @@ SHELL_JS = r"""
         injectHtml(body, res.html);
         panel.setAttribute('data-current-ticker', ticker || '');
         record(pid, 'cold', fetchMs, performance.now() - tR2, performance.now() - t0, 200);
+        announce((pid || 'panel') + ' ready');
       }
       cacheSet(key, entry);
     }).catch(function (e) {
-      if (!served) body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+      if (!served) {
+        body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+        announce((pid || 'panel') + ' failed to load');
+      }
     });
   }
 
@@ -1382,11 +1440,14 @@ SHELL_JS = r"""
     tabs.forEach(function (t) {
       var on = t.getAttribute('data-tab-target') === panelId;
       t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
       if (on) activeTheme = t.getAttribute('data-cc-theme');
     });
     if (activeTheme) {
       themeTabs.forEach(function (t) {
-        t.classList.toggle('active', t.getAttribute('data-theme-target') === activeTheme);
+        var on = t.getAttribute('data-theme-target') === activeTheme;
+        t.classList.toggle('active', on);
+        t.setAttribute('aria-selected', on ? 'true' : 'false');
       });
       // While a specific holding is open (Holding panel + a ticker), suppress
       // the Companies sub-row for a clean reading view (UX9c) — the band's
@@ -1442,6 +1503,7 @@ SHELL_JS = r"""
   // ----- Settings drawer (P3.4) -----
   var drawer = document.getElementById('cc-drawer');
   var drawerScrim = document.getElementById('cc-drawer-scrim');
+  var drawerOpener = null;  // element to restore focus to on close
 
   function loadDrawerSection(sec) {
     if (!sec || sec.getAttribute('data-loaded') === '1') return;
@@ -1463,8 +1525,11 @@ SHELL_JS = r"""
   function openDrawer() {
     if (!drawer) return;
     closeNotesDrawer();  // one right-drawer at a time
+    drawerOpener = document.activeElement;
     drawer.hidden = false;
     if (drawerScrim) drawerScrim.hidden = false;
+    var closeBtn = document.getElementById('cc-drawer-close');
+    if (closeBtn) closeBtn.focus();
     var secs = drawer.querySelectorAll('.cc-drawer-sec[open]');
     for (var i = 0; i < secs.length; i++) loadDrawerSection(secs[i]);
   }
@@ -1472,6 +1537,7 @@ SHELL_JS = r"""
   function closeDrawer() {
     if (drawer) drawer.hidden = true;
     if (drawerScrim) drawerScrim.hidden = true;
+    if (drawerOpener && drawerOpener.focus) { drawerOpener.focus(); drawerOpener = null; }
   }
 
   var settingsBtn = document.getElementById('cc-settings-toggle');
@@ -1490,6 +1556,7 @@ SHELL_JS = r"""
   var notesDrawer = document.getElementById('cc-notes-drawer');
   var notesScrim = document.getElementById('cc-notes-scrim');
   var notesBody = document.getElementById('cc-notes-drawer-body');
+  var notesOpener = null;
 
   function holdingTicker() {
     // The drawer's ticker scope: the Holding panel's current selection, but
@@ -1519,14 +1586,18 @@ SHELL_JS = r"""
     if (!notesDrawer) return;
     closeDrawer();
     closePalette();
+    notesOpener = document.activeElement;
     notesDrawer.hidden = false;
     if (notesScrim) notesScrim.hidden = false;
+    var closeBtn = document.getElementById('cc-notes-close');
+    if (closeBtn) closeBtn.focus();
     loadNotesDrawer();
   }
 
   function closeNotesDrawer() {
     if (notesDrawer) notesDrawer.hidden = true;
     if (notesScrim) notesScrim.hidden = true;
+    if (notesOpener && notesOpener.focus) { notesOpener.focus(); notesOpener = null; }
   }
 
   var notesBtn = document.getElementById('cc-notes-toggle');
@@ -1557,6 +1628,7 @@ SHELL_JS = r"""
   var palItems = [];
   var palMatches = [];
   var palSel = 0;
+  var palOpener = null;
 
   function escHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1634,6 +1706,8 @@ SHELL_JS = r"""
     var html = '';
     for (var j = 0; j < palMatches.length; j++) {
       var it = palMatches[j].it;
+      var isSel = j === palSel;
+      var optId = 'cc-pal-opt-' + j;
       // Ticker rows render the canonical two-part label (mono symbol +
       // muted name) instead of one concatenated string.
       var labelHtml = it.tick
@@ -1641,19 +1715,26 @@ SHELL_JS = r"""
           + (it.name ? '<span class="k-tick-name">' + escHtml(it.name) + '</span>' : '')
           + '</span>'
         : '<span>' + escHtml(it.label) + '</span>';
-      html += '<li class="' + (j === palSel ? 'sel' : '') + '" data-idx="' + j + '">'
+      html += '<li id="' + optId + '" role="option" aria-selected="' + (isSel ? 'true' : 'false') + '"'
+        + ' class="' + (isSel ? 'sel' : '') + '" data-idx="' + j + '">'
         + labelHtml
         + '<span class="cc-pal-hint">' + escHtml(it.hint) + '</span></li>';
     }
     palList.innerHTML = html || '<li class="cc-pal-none">No matches.</li>';
+    if (palInput) {
+      var selId = palMatches.length ? 'cc-pal-opt-' + palSel : '';
+      palInput.setAttribute('aria-activedescendant', selId);
+    }
   }
 
   function openPalette() {
     if (!pal) return;
     closeDrawer();
     closeNotesDrawer();
+    palOpener = document.activeElement;
     pal.hidden = false;
     if (palScrim) palScrim.hidden = false;
+    if (palInput) palInput.setAttribute('aria-expanded', 'true');
     palInput.value = '';
     palSel = 0;
     palItems = palStatic();
@@ -1700,6 +1781,8 @@ SHELL_JS = r"""
   function closePalette() {
     if (pal) pal.hidden = true;
     if (palScrim) palScrim.hidden = true;
+    if (palInput) palInput.setAttribute('aria-expanded', 'false');
+    if (palOpener && palOpener.focus) { palOpener.focus(); palOpener = null; }
   }
 
   function runPalSelection() {
@@ -1741,6 +1824,7 @@ SHELL_JS = r"""
   var peekFull = document.getElementById('cc-peek-openfull');
   var peekSeq = 0;       // stale-response guard across rapid open/close
   var peekFragUrl = null;  // current fragment URL (re-fetched after approve/dismiss)
+  var peekOpener = null;
 
   function positionPeek(anchor) {
     var w = Math.min(680, Math.round(window.innerWidth * 0.92));
@@ -1786,6 +1870,7 @@ SHELL_JS = r"""
     if (!peek) return;
     opts = opts || {};
     closeHover();
+    peekOpener = document.activeElement;
     peekTitle.textContent = opts.title || 'Quick look';
     if (opts.fullHref) { peekFull.href = opts.fullHref; peekFull.hidden = false; }
     else { peekFull.hidden = true; }
@@ -1793,6 +1878,8 @@ SHELL_JS = r"""
     peekScrim.hidden = false;
     positionPeek(opts.anchor || null);
     loadPeek(fragUrl, opts.anchorId || null);
+    var closeBtn = document.getElementById('cc-peek-close');
+    if (closeBtn) closeBtn.focus();
   }
 
   function closePeek() {
@@ -1802,6 +1889,7 @@ SHELL_JS = r"""
     peekBody.innerHTML = '';
     peekFragUrl = null;
     peekSeq++;
+    if (peekOpener && peekOpener.focus) { peekOpener.focus(); peekOpener = null; }
   }
 
   // /source/<id>[?...][#L<n>] -> its fragment variant + the line to highlight.
@@ -1974,6 +2062,14 @@ SHELL_JS = r"""
       else if (hovercard && !hovercard.hidden) closeHover();
       else if (notesDrawer && !notesDrawer.hidden) closeNotesDrawer();
       else closeDrawer();
+      return;
+    }
+    // Tab focus trap: keep Tab cycling inside whichever modal dialog is open.
+    if (ev.key === 'Tab') {
+      if (pal && !pal.hidden) { trapFocus(pal, ev); return; }
+      if (peek && !peek.hidden) { trapFocus(peek, ev); return; }
+      if (drawer && !drawer.hidden) { trapFocus(drawer, ev); return; }
+      if (notesDrawer && !notesDrawer.hidden) { trapFocus(notesDrawer, ev); return; }
     }
   });
   // Drawer sections ship collapsed; each remembers its own open/closed state
@@ -2062,6 +2158,8 @@ _DOC_HEAD = (
 <style>{css}</style>
 </head>
 <body>
+<a class="cc-skip" href="#cc-main">Skip to content</a>
+<div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
 """.replace("{css}", SHELL_CSS)
 )
 
