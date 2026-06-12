@@ -54,6 +54,7 @@ GOLDEN_PURPOSES = (
     "ask_pack_router",
     "ask_evidence_followup",
     "ask_claim_grounding",
+    "injection_canaries",
 )
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
@@ -233,6 +234,20 @@ def main() -> int:
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
                 include_answer_cases=not args.no_judge,
+            )
+        elif args.purpose == "injection_canaries":
+            # Security invariant graded by code (no canary leak / no spurious
+            # fire) over the production paths — no judge, --no-judge is a no-op.
+            from evals.injection_canaries import GOLDEN_DIR as CANARY_DIR
+            from evals.injection_canaries import run_canary_eval
+
+            golden_path = (
+                args.golden or (PROJECT_ROOT / CANARY_DIR / "injection_canaries.json")
+            ).resolve()
+            summary = run_canary_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
             )
         else:
             # Fast classifiers (PR 4): deterministic golden sets, no judge —
