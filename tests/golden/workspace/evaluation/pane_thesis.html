@@ -1,0 +1,349 @@
+<div class="tab-pane subtab-pane active" data-tab="thesis">
+<div class="tab-body">
+<div class="eyebrow">Thesis · Valuation · Break conditions · updated May 20, 2026</div>
+<p class="lede">**Platform compounding:** TEST converts category share into pricing power.
+
+- Net revenue retention stays above 115%
+- Subscription gross margin holds the high-70s
+- Services stays a sidecar, not the growth engine</p>
+<div class="grid-thesis-top">
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Valuation summary</span>
+<span class="panel-meta">
+<span class="panel-asof">as of 2026-05-28</span>
+<span class="panel-sub">FCFF DCF</span>
+</span>
+</div>
+<div class="val-stack">
+<div class="scenario-range">
+<div class="scenario-cell bear">
+<div class="scenario-label">Bear</div>
+<strong>$58</strong>
+<span class="scenario-upside neg">-20%</span>
+</div>
+<div class="scenario-cell base">
+<div class="scenario-label">Base</div>
+<strong>$86</strong>
+<span class="scenario-upside pos">+19%</span>
+</div>
+<div class="scenario-cell bull">
+<div class="scenario-label">Bull</div>
+<strong>$104</strong>
+<span class="scenario-upside pos">+44%</span>
+</div>
+</div>
+<div class="scenario-bar">
+<div class="scenario-bar-track">
+<div class="scenario-bar-base" style="left:60.9%" title="Base $86">
+</div>
+<div class="scenario-bar-price" style="left:31.3%" title="Price $72">
+</div>
+</div>
+<div class="scenario-bar-legend">
+<span>price ▍$72</span>
+<span>bear → bull</span>
+</div>
+</div>
+<div class="val-row emph">
+<span>Current price</span>
+<strong>$72</strong>
+</div>
+<div class="val-row">
+<span>Margin-of-safety bar</span>
+<strong>25%</strong>
+</div>
+<div class="val-row">
+<span>Trigger status</span>
+<strong>HOLD</strong>
+</div>
+<div class="val-row muted">
+<span>Assumptions JSON</span>
+<strong>synced · 2026-06-01</strong>
+</div>
+<div class="val-row muted">
+<span>DCF model</span>
+<strong>
+<a href="https://docs.google.com/spreadsheets/d/test-sheet-id" target="_blank" rel="noopener">Open in Google Sheets ↗</a>
+</strong>
+</div>
+</div>
+</div>
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Universal break rules</span>
+<span class="panel-meta">
+<span class="panel-asof">as of [RELTIME]</span>
+<span class="panel-sub">warn</span>
+</span>
+</div>
+<table class="tbl">
+<thead>
+<tr>
+<th>Rule</th>
+<th class="num">Latest</th>
+<th class="num">Threshold</th>
+<th class="num">Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="break-row">
+<td>
+<strong>fcf (4q)</strong>
+<div class="muted xsmall">Catastrophic tripwire only — not thesis-calibrated.</div>
+</td>
+<td class="num">312.0</td>
+<td class="num muted">lt 0.0</td>
+<td class="num break-status-ok">OK</td>
+</tr>
+<tr class="break-detail">
+<td colspan="4">
+<span class="xsmall mono muted">2026-03: 312.0 · FCF positive in all of the last 4 quarters.</span>
+</td>
+</tr>
+<tr class="break-row">
+<td>
+<strong>Net revenue retention (2q)</strong>
+<div class="muted xsmall">The compounding engine: expansion within installed base.</div>
+</td>
+<td class="num">117.0</td>
+<td class="num muted">lt 110.0</td>
+<td class="num break-status-warn">WARN</td>
+</tr>
+<tr class="break-detail">
+<td colspan="4">
+<span class="xsmall mono muted">2025-12: 117.5  2026-03: 117.0 · Latest 117.0 vs floor 110.0 — slope negative 6 quarters running.</span>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Soft signals</span>
+<span class="panel-meta">
+<span class="panel-sub">1 of 2 fired</span>
+</span>
+</div>
+<table class="tbl">
+<thead>
+<tr>
+<th>Rule</th>
+<th>Evidence</th>
+<th class="num">Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="break-row">
+<td>
+<strong>revenue_decel_watch</strong>
+</td>
+<td>
+<span class="xsmall muted">YoY growth decelerated 240bps over two quarters.</span>
+</td>
+<td class="num break-status-warn">YELLOW</td>
+</tr>
+<tr class="break-row">
+<td>
+<strong>sbc_ratio_watch</strong>
+</td>
+<td>
+<span class="xsmall muted">SBC/revenue flat at 11% — within band.</span>
+</td>
+<td class="num break-status-ok">OK</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="panel decision-history-panel">
+<div class="panel-head">
+<span class="panel-title">Recent decisions</span>
+<span class="panel-meta">
+<span class="panel-sub">last 2 recommendations</span>
+</span>
+</div>
+<div class="decision-list">
+<div class="decision-badge outcome-pending" title="Added on the post-print dip; thesis KPIs intact.">
+<span class="decision-date mono">2026-04</span>
+<span class="decision-kind">ADD</span>
+<span class="decision-outcome">pending</span>
+</div>
+<div class="decision-badge outcome-correct" title="Held through the services reorg noise.">
+<span class="decision-date mono">2025-11</span>
+<span class="decision-kind">HOLD</span>
+<span class="decision-outcome">correct</span>
+</div>
+</div>
+</div>
+<div class="panel macro-sens-panel">
+<div class="panel-head">
+<span class="panel-title">Macro factor sensitivity</span>
+<span class="panel-meta">
+<span class="panel-sub">2 factors · lookback 365d</span>
+</span>
+</div>
+<table class="tbl">
+<thead>
+<tr>
+<th>Macro factor</th>
+<th class="num">β</th>
+<th class="num">R²</th>
+<th class="num">Lookback</th>
+<th>Computed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dgs10</td>
+<td class="num ">-0.42</td>
+<td class="num">.31</td>
+<td class="num">365d</td>
+<td class="mono xsmall">2026-06-01</td>
+</tr>
+<tr>
+<td>Dtwexbgs</td>
+<td class="num muted">-0.18</td>
+<td class="num">.12</td>
+<td class="num">365d</td>
+<td class="mono xsmall">2026-06-01</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="grid-thesis-hygiene">
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Break conditions</span>
+<span class="panel-meta">
+<span class="panel-sub">thesis-breaker thresholds</span>
+</span>
+</div>
+<ul class="thesis-list">
+<li>NRR below 110% for two consecutive quarters</li>
+<li>Subscription gross margin below 72%</li>
+</ul>
+</div>
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Qualitative breakers</span>
+<span class="panel-meta">
+<span class="panel-sub">non-quantitative thesis risks</span>
+</span>
+</div>
+<ul class="thesis-list">
+<li>Founder-CEO departure</li>
+<li>Forced platform unbundling</li>
+</ul>
+</div>
+<div class="panel">
+<div class="panel-head">
+<span class="panel-title">Competitive watchlist</span>
+<span class="panel-meta">
+<span class="panel-sub">rivals to monitor</span>
+</span>
+</div>
+<ul class="thesis-list">
+<li>RIVL</li>
+<li>MEGA</li>
+</ul>
+</div>
+</div>
+<details class="panel" open id="panel-kpi-ledger">
+<summary class="panel-head">
+<span class="panel-title">KPI ledger detail</span>
+<span class="panel-meta">
+<a class="panel-xlink" href="#" data-xtab="valuation">valuation →</a>
+<span class="panel-sub">3 tracked</span>
+</span>
+</summary>
+<div class="table-scroll">
+<table class="tbl tbl-nowrap kpi-ledger-table">
+<thead>
+<tr>
+<th>KPI</th>
+<th>Tier</th>
+<th>Unit</th>
+<th class="num">Latest</th>
+<th>Trend</th>
+<th>Status</th>
+<th>Break condition</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr class="kpi-ledger-row" data-commentable="true" data-anchor-type="kpi_ledger_row" data-anchor-key="Net revenue retention" data-anchor-tab="thesis">
+<td>
+<strong>Net revenue retention</strong>
+<div class="ledger-def muted xsmall">Trailing-12M expansion net of churn, subscription cohorts only.</div>
+</td>
+<td>tier 1</td>
+<td>%</td>
+<td class="num" title="NRR remained above 117% in the quarter.">117 <span class="muted xsmall">2026-03</span>
+</td>
+<td class="ledger-trend">
+<span class="ledger-spark">
+<svg width="84" height="22" style="overflow:visible;display:block" aria-hidden="true">
+<path d="M1.0,2.0 L17.4,6.5 L33.8,11.0 L50.2,15.5 L66.6,17.8 L83.0,20.0 L83.0,22 L1.0,22 Z" fill="currentColor" opacity="0.18" />
+<path d="M1.0,2.0 L17.4,6.5 L33.8,11.0 L50.2,15.5 L66.6,17.8 L83.0,20.0" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" />
+<circle cx="83.0" cy="20.0" r="2" fill="currentColor" />
+</svg>
+</span> <span class="ledger-delta neg">↓ 3pp YoY</span>
+</td>
+<td class="num pos">GREEN</td>
+<td>&lt; 110% for 2Q</td>
+<td>
+</td>
+</tr>
+<tr class="kpi-ledger-row" data-commentable="true" data-anchor-type="kpi_ledger_row" data-anchor-key="Subscription gross margin" data-anchor-tab="thesis">
+<td>
+<strong>Subscription gross margin</strong>
+<div class="ledger-def muted xsmall">Subscription revenue less hosting + support delivery cost.</div>
+</td>
+<td>tier 1</td>
+<td>%</td>
+<td class="num">75.4 <span class="muted xsmall">2026-03</span>
+</td>
+<td class="ledger-trend">
+<span class="ledger-spark">
+<svg width="84" height="22" style="overflow:visible;display:block" aria-hidden="true">
+<path d="M1.0,2.0 L21.5,6.5 L42.0,11.0 L62.5,14.8 L83.0,20.0 L83.0,22 L1.0,22 Z" fill="currentColor" opacity="0.18" />
+<path d="M1.0,2.0 L21.5,6.5 L42.0,11.0 L62.5,14.8 L83.0,20.0" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" />
+<circle cx="83.0" cy="20.0" r="2" fill="currentColor" />
+</svg>
+</span> <span class="ledger-delta neg">↓ 2.4pp YoY</span>
+</td>
+<td class="num warn">YELLOW</td>
+<td>&lt; 72%</td>
+<td>
+</td>
+</tr>
+<tr class="kpi-ledger-row ledger-stale-row" data-commentable="true" data-anchor-type="kpi_ledger_row" data-anchor-key="Services attach rate" data-anchor-tab="thesis">
+<td>
+<strong>Services attach rate</strong>
+</td>
+<td>tier 2</td>
+<td>%</td>
+<td class="num">31 <span class="muted xsmall">2025-06</span> <span class="ledger-stale" title="Latest fact is older than ~2 quarters — may not reflect the current period">stale</span>
+</td>
+<td class="ledger-trend">
+<span class="ledger-spark">
+<svg width="84" height="22" style="overflow:visible;display:block" aria-hidden="true">
+<path d="M1.0,2.0 L83.0,20.0 L83.0,22 L1.0,22 Z" fill="currentColor" opacity="0.18" />
+<path d="M1.0,2.0 L83.0,20.0" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" />
+<circle cx="83.0" cy="20.0" r="2" fill="currentColor" />
+</svg>
+</span> <span class="ledger-delta neg">↓ 3pp QoQ</span>
+</td>
+<td class="num neg">RED</td>
+<td>
+</td>
+<td>
+</td>
+</tr>
+</tbody>
+</table>
+</div>
+</details>
+</div>
+</div>
