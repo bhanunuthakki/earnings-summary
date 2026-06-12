@@ -1,0 +1,53 @@
+{
+  "purpose": "ask_evidence_followup",
+  "version": 1,
+  "_readme": "Golden cases for the S7 agentic evidence loop. Each case drives the PRODUCTION ask path (respond_turn, portfolio pack) end-to-end with real LLM calls and grades the loop's behavior deterministically from the event stream — no judge. expect_loop=true cases are authored so ONE-SHOT RETRIEVAL IS PROVABLY INSUFFICIENT (they name transcript quarters older than the latest two, or filings older than the newest on disk — the only periods gather_evidence can reach); checks: the loop triggers, terminates within the round cap, the final answer is prose, and it cites round-2 evidence (a marker above the round-1 count; expect_new_kinds narrows which channel must have delivered it). expect_loop=null (graceful) cases are 'latest call/filing' questions where one-shot retrieval is borderline — the keyword scorer may surface the operator intro instead of the asked content, so the model legitimately fetches more on some runs and not others; checks: only the universal bounds (prose answer, within the round cap, telemetry present). expect_loop=false (strict no-loop) is supported by the grader and unit-tested, but no live case uses it: with a noisy keyword scorer no live question reliably avoids the loop. Questions MUST route narrative — tests/test_llm_evals_ask_loop.py enforces it at authoring time.",
+  "cases": [
+    {
+      "id": "al-001-older-quarter-transcript",
+      "question": "What did NU management say about asset quality and NPLs on the Q1 2025 earnings call?",
+      "expect_loop": true,
+      "tickers": ["NU"],
+      "expect_new_kinds": ["transcript"],
+      "notes": "Q1 2025 is the third-newest call — one-shot transcript retrieval only reaches the latest two (Q1 2026, Q4 2025), so answering requires a period-targeted follow-up."
+    },
+    {
+      "id": "al-002-older-filing-year",
+      "question": "Summarize what management said about logistics investment in MELI's FY2023 10-K — the older filing, not the latest one.",
+      "expect_loop": true,
+      "tickers": ["MELI"],
+      "expect_new_kinds": ["filing"],
+      "notes": "One-shot filing retrieval reads only the newest 10-K/10-Q on disk; FY2023 needs the year-targeted follow-up path."
+    },
+    {
+      "id": "al-003-cross-quarter-comparison",
+      "question": "Walk me through how NU management's framing of credit provisioning changed between the Q1 2025 call and the Q1 2026 call.",
+      "expect_loop": true,
+      "tickers": ["NU"],
+      "expect_new_kinds": ["transcript"],
+      "notes": "The comparison's older leg (Q1 2025) is beyond the latest-two window — the flagship multi-quarter-comparison failure mode this loop exists for."
+    },
+    {
+      "id": "al-004-q4-2024-takerate",
+      "question": "What did MELI management say about take rate and monetization on the Q4 2024 earnings call?",
+      "expect_loop": true,
+      "tickers": ["MELI"],
+      "expect_new_kinds": ["transcript"],
+      "notes": "Q4 2024 is four calls back; unreachable one-shot."
+    },
+    {
+      "id": "al-005-latest-call-graceful",
+      "question": "What did NU management say about credit quality on the latest earnings call?",
+      "expect_loop": null,
+      "tickers": ["NU"],
+      "notes": "Graceful: the latest call is within one-shot reach, but the keyword scorer often surfaces the operator intro / Q&A logistics rather than the credit-quality remarks, so the model legitimately requests more (observed 2026-06-12: looped once, round-2 added nothing, answered from round-1 — bounded and correct). Only the universal checks apply."
+    },
+    {
+      "id": "al-006-latest-filing-graceful",
+      "question": "Summarize the main risk factors in MELI's latest 10-K.",
+      "expect_loop": null,
+      "tickers": ["MELI"],
+      "notes": "Graceful: the newest 10-K is the one-shot filing default, but section scoring may surface cybersecurity/cover ahead of the risk-factors section, so the model legitimately fetches more (observed 2026-06-12: looped, pulled an additional filing section, used it). Only the universal checks apply."
+    }
+  ]
+}

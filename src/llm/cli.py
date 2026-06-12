@@ -252,6 +252,15 @@ LLM_MODELS: dict[str, str] = {
     # fails closed to answer-level citations (the pre-S8 behavior); budget
     # row seeded by alembic 0090 (skip mode).
     "ask_claim_grounding": FAST_CLASSIFIER_MODEL,
+    # Ask evidence follow-up (src/ask/followup.py, fund-grade build S7): when
+    # a narrative ask turn's first pass replies with a structured evidence
+    # request instead of an answer, the engine retrieves the requested items
+    # and makes this call (≤2 per turn) over the augmented evidence. It IS
+    # the user-facing narrative answer, so it stays on the Sonnet chat tier —
+    # downgrading it would make looped answers visibly worse than one-shot
+    # ones. Budget row seeded by alembic 0091 (skip mode — a blown cap
+    # disables the loop, turns fall back to one-shot retrieval).
+    "ask_evidence_followup": DEFAULT_MODEL,
     # Pairwise backend judge (src/llm/backend_judge.py): grades Claude-vs-Gemini
     # paired outputs to decide whether a purpose may join the eval-gated Gemini
     # allowlist. Opus on purpose — the judge must out-discriminate BOTH

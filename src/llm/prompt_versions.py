@@ -85,6 +85,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # _build_prompt's rules are materially rewritten — the citation-accuracy
     # golden set scores this purpose, so the version keys its score history.
     "ask_claim_grounding": "v1",
+    # Ask evidence follow-up loop (src/ask/followup.py, S7). Bump when
+    # need_protocol_block / _compose_followup_prompt are materially
+    # rewritten, then re-run `run_llm_evals.py --purpose
+    # ask_evidence_followup`.
+    "ask_evidence_followup": "v1",
     # Rubric-audited prose purposes (mode B, PR 2): their audit runs are keyed
     # to these versions, so bump when generate_summary's prompt /
     # _NEXT_DOLLAR_PROMPT is materially rewritten and the score history forks

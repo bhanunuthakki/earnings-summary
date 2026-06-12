@@ -31,6 +31,12 @@ Everything is best-effort and read-only: a missing DB, table, or file —
 or any pack-channel failure — silently contributes nothing. The one LLM
 call here is the pack router (see ``ask.router`` for its budget gate and
 fail-closed contract); document retrieval itself never calls a model.
+
+The agentic follow-up loop (``ask.followup``, S7) re-enters through
+``gather_requested_evidence``: the model names channel/ticker/period
+explicitly (``EvidenceNeed``), which reaches transcripts and filings OLDER
+than the latest ones the one-shot pass is limited to; new items continue
+the [n] numbering so round-2 evidence cites like round-1 evidence.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from ask.packs import load_packs
+from ask.packs import PACK_KEYS, load_packs
 from ask.router import route_packs
 
 log = logging.getLogger(__name__)
@@ -201,6 +207,27 @@ class EvidenceItem:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceNeed:
+    """One validated retrieval request from the model (S7 agentic loop).
+
+    ``kind`` is closed over the document channels ("fact" | "filing" |
+    "transcript") plus the portfolio pack keys (``ask.packs.PACK_KEYS``).
+    ``period`` is free-text ("Q1 2025", "FY2024") parsed best-effort by
+    ``_parse_period`` — it is what lets a follow-up round reach transcripts
+    and filings OLDER than the latest ones the one-shot pass is limited to.
+    """
+
+    kind: str
+    ticker: str | None = None
+    period: str | None = None
+    query: str = ""
+
+
+NEED_DOC_KINDS = frozenset({"fact", "filing", "transcript"})
+NEED_KINDS = NEED_DOC_KINDS | frozenset(PACK_KEYS)
+
+
 # ---------------------------------------------------------------------------
 # Question terms + metric matching
 # ---------------------------------------------------------------------------
@@ -234,6 +261,33 @@ def _label_core(label: str) -> str:
 
 def _phrase_in(question_squashed: str, phrase: str) -> bool:
     return len(phrase) >= 3 and f" {phrase} " in f" {question_squashed} "
+
+
+_PERIOD_FULL_YEAR_RX = re.compile(r"(20\d{2})")
+_PERIOD_SHORT_YEAR_RX = re.compile(r"'(\d{2})")
+# (?!\d) so "1Q25" doesn't read as Q2 — the digits after Q are the year there.
+_PERIOD_Q_BEFORE_RX = re.compile(r"q\s*([1-4])(?!\d)", re.IGNORECASE)
+_PERIOD_Q_AFTER_RX = re.compile(r"([1-4])\s*q", re.IGNORECASE)
+
+
+def _parse_period(period: str | None) -> tuple[int | None, int | None]:
+    """Best-effort (year, quarter) from a free-text period — "Q1 2025",
+    "FY2024", "Q1'25", "1Q25" all resolve; anything unparseable is (None,
+    None), which downstream means "latest" (the one-shot default)."""
+    if not period:
+        return (None, None)
+    s = period.strip()
+    year: int | None = None
+    m = _PERIOD_FULL_YEAR_RX.search(s)
+    if m:
+        year = int(m.group(1))
+    else:
+        m2 = _PERIOD_SHORT_YEAR_RX.search(s) or re.search(r"[qQ](\d{2})$", s)
+        if m2:
+            year = 2000 + int(m2.group(1))
+    mq = _PERIOD_Q_BEFORE_RX.search(s) or _PERIOD_Q_AFTER_RX.search(s)
+    quarter = int(mq.group(1)) if mq else None
+    return (year, quarter)
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +563,70 @@ def _filing_doc_id(conn: sqlite3.Connection | None, repo_root: Path, path: Path)
     return int(row[0]) if row else None
 
 
+def _filing_paths_for_year(repo_root: Path, ticker: str, year: int) -> list[tuple[str, int, Path]]:
+    """[(form, year, path)] for one specific fiscal year — the follow-up
+    loop's reach into filings older than the newest pair on disk."""
+    base = repo_root / "data" / "historical" / "fmp"
+    out: list[tuple[str, int, Path]] = []
+    for form in ("10k", "10q"):
+        path = base / f"{ticker}_form_{form}_{year}.json"
+        if path.exists():
+            out.append((form, year, path))
+    return out
+
+
+def _scored_filing_sections(
+    conn: sqlite3.Connection | None,
+    repo_root: Path,
+    terms: list[str],
+    ticker: str,
+    paths: list[tuple[str, int, Path]],
+) -> list[tuple[int, dict[str, object]]]:
+    """Keyword-score every section across the given filing files."""
+    scored: list[tuple[int, dict[str, object]]] = []
+    for form, year, path in paths:
+        try:
+            raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        if not isinstance(raw_payload, dict):
+            continue
+        payload = cast("dict[str, object]", raw_payload)
+        doc_id = _filing_doc_id(conn, repo_root, path)
+        for section, value in payload.items():
+            if section in _FILING_META_KEYS:
+                continue
+            text = _flatten_section(value)
+            if not text:
+                continue
+            squashed = _squash(section + " " + text[:8000])
+            score = sum(1 for t in terms if f" {t} " in f" {squashed} ")
+            score += 2 * sum(1 for t in terms if f" {t} " in f" {_squash(section)} ")
+            if score <= 0:
+                continue
+            form_label = "10-K" if form == "10k" else "10-Q"
+            snippet = " ".join(text.split())[:_FILING_SNIPPET_CHARS]
+            href = (
+                f"/source/{doc_id}?section={urllib.parse.quote(section)}"
+                if doc_id is not None
+                else None
+            )
+            scored.append(
+                (
+                    score,
+                    {
+                        "kind": "filing",
+                        "label": f"{ticker} {form_label} FY{year} · {section}",
+                        "text": f'{ticker} {form_label} FY{year}, section "{section}": {snippet}',
+                        "doc_id": doc_id,
+                        "href": href,
+                        "source_url": None,
+                    },
+                )
+            )
+    return scored
+
+
 def _filing_evidence(
     conn: sqlite3.Connection | None,
     repo_root: Path,
@@ -519,46 +637,11 @@ def _filing_evidence(
         return []
     scored: list[tuple[int, dict[str, object]]] = []
     for ticker in tickers:
-        for form, year, path in _latest_filing_paths(repo_root, ticker):
-            try:
-                raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-                continue
-            if not isinstance(raw_payload, dict):
-                continue
-            payload = cast("dict[str, object]", raw_payload)
-            doc_id = _filing_doc_id(conn, repo_root, path)
-            for section, value in payload.items():
-                if section in _FILING_META_KEYS:
-                    continue
-                text = _flatten_section(value)
-                if not text:
-                    continue
-                squashed = _squash(section + " " + text[:8000])
-                score = sum(1 for t in terms if f" {t} " in f" {squashed} ")
-                score += 2 * sum(1 for t in terms if f" {t} " in f" {_squash(section)} ")
-                if score <= 0:
-                    continue
-                form_label = "10-K" if form == "10k" else "10-Q"
-                snippet = " ".join(text.split())[:_FILING_SNIPPET_CHARS]
-                href = (
-                    f"/source/{doc_id}?section={urllib.parse.quote(section)}"
-                    if doc_id is not None
-                    else None
-                )
-                scored.append(
-                    (
-                        score,
-                        {
-                            "kind": "filing",
-                            "label": f"{ticker} {form_label} FY{year} · {section}",
-                            "text": f'{ticker} {form_label} FY{year}, section "{section}": {snippet}',
-                            "doc_id": doc_id,
-                            "href": href,
-                            "source_url": None,
-                        },
-                    )
-                )
+        scored.extend(
+            _scored_filing_sections(
+                conn, repo_root, terms, ticker, _latest_filing_paths(repo_root, ticker)
+            )
+        )
     scored.sort(key=lambda s: s[0], reverse=True)
     return [item for _, item in scored[:_MAX_FILING_ITEMS]]
 
@@ -568,20 +651,98 @@ def _filing_evidence(
 # ---------------------------------------------------------------------------
 
 
-def _latest_transcript_docs(
-    conn: sqlite3.Connection, ticker: str, limit: int = 2
+def _transcript_docs(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    year: int | None = None,
+    quarter: int | None = None,
+    limit: int = 2,
 ) -> list[tuple[int, str, str, str]]:
-    """[(document_id, file_path, fiscal_period_type, period_end)] newest first."""
+    """[(document_id, file_path, fiscal_period_type, period_end)] newest
+    first. ``year``/``quarter`` narrow to a specific call — the follow-up
+    loop's reach beyond the latest two (period_end years are calendar)."""
+    clauses = ["t.ticker = ?"]
+    params: list[object] = [ticker]
+    if year is not None:
+        clauses.append("substr(t.period_end, 1, 4) = ?")
+        params.append(str(year))
+    if quarter is not None:
+        clauses.append("t.fiscal_period_type = ?")
+        params.append(f"Q{quarter}")
+    params.append(limit)
     try:
         rows = conn.execute(
             "SELECT t.document_id, d.file_path, t.fiscal_period_type, t.period_end "
             "FROM transcripts t JOIN documents d ON d.id = t.document_id "
-            "WHERE t.ticker = ? ORDER BY t.period_end DESC LIMIT ?",
-            (ticker, limit),
+            f"WHERE {' AND '.join(clauses)} ORDER BY t.period_end DESC LIMIT ?",
+            tuple(params),
         ).fetchall()
     except sqlite3.Error:
         return []
     return [(int(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or "")) for r in rows]
+
+
+def _scored_transcript_lines(
+    repo_root: Path,
+    terms: list[str],
+    ticker: str,
+    docs: list[tuple[int, str, str, str]],
+) -> list[tuple[int, dict[str, object]]]:
+    """Keyword-score every substantive line across the given transcript docs."""
+    scored: list[tuple[int, dict[str, object]]] = []
+    for doc_id, file_path, fpt, period_end in docs:
+        path = repo_root / file_path
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        call_label = _period_label(period_end, fpt)
+        for line_no, line in enumerate(lines, start=1):
+            flat = " ".join(line.split())
+            if len(flat) < 40:  # skip headers/blank/speaker-only lines
+                continue
+            squashed = f" {_squash(flat)} "
+            score = sum(1 for t in terms if f" {t} " in squashed)
+            if score <= 0:
+                continue
+            snippet = flat[:_TRANSCRIPT_SNIPPET_CHARS]
+            scored.append(
+                (
+                    score,
+                    {
+                        "kind": "transcript",
+                        "label": f"{ticker} {call_label} call · L{line_no}",
+                        "text": f"{ticker} {call_label} earnings call, line {line_no}: {snippet}",
+                        "doc_id": doc_id,
+                        "href": f"/source/{doc_id}#L{line_no}",
+                        "source_url": None,
+                    },
+                )
+            )
+    return scored
+
+
+def _dedupe_transcript_hits(
+    scored: list[tuple[int, dict[str, object]]], limit: int
+) -> list[dict[str, object]]:
+    """Top hits, one line per (doc, neighborhood) — adjacent lines repeat
+    the same point. ``scored`` need not be pre-sorted."""
+    ordered = sorted(scored, key=lambda s: s[0], reverse=True)
+    out: list[dict[str, object]] = []
+    taken: list[tuple[int | None, int]] = []
+    for _, item in ordered:
+        href = str(item["href"] or "")
+        m = re.search(r"#L(\d+)$", href)
+        line_no = int(m.group(1)) if m else 0
+        key_doc = cast("int | None", item["doc_id"])
+        if any(d == key_doc and abs(line_no - ln) <= 2 for d, ln in taken):
+            continue
+        taken.append((key_doc, line_no))
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _transcript_evidence(
@@ -594,51 +755,10 @@ def _transcript_evidence(
         return []
     scored: list[tuple[int, dict[str, object]]] = []
     for ticker in tickers:
-        for doc_id, file_path, fpt, period_end in _latest_transcript_docs(conn, ticker):
-            path = repo_root / file_path
-            try:
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            call_label = _period_label(period_end, fpt)
-            for line_no, line in enumerate(lines, start=1):
-                flat = " ".join(line.split())
-                if len(flat) < 40:  # skip headers/blank/speaker-only lines
-                    continue
-                squashed = f" {_squash(flat)} "
-                score = sum(1 for t in terms if f" {t} " in squashed)
-                if score <= 0:
-                    continue
-                snippet = flat[:_TRANSCRIPT_SNIPPET_CHARS]
-                scored.append(
-                    (
-                        score,
-                        {
-                            "kind": "transcript",
-                            "label": f"{ticker} {call_label} call · L{line_no}",
-                            "text": f"{ticker} {call_label} earnings call, line {line_no}: {snippet}",
-                            "doc_id": doc_id,
-                            "href": f"/source/{doc_id}#L{line_no}",
-                            "source_url": None,
-                        },
-                    )
-                )
-    scored.sort(key=lambda s: s[0], reverse=True)
-    # One line per (doc, neighborhood) — adjacent lines repeat the same point.
-    out: list[dict[str, object]] = []
-    taken: list[tuple[int | None, int]] = []
-    for _, item in scored:
-        href = str(item["href"] or "")
-        m = re.search(r"#L(\d+)$", href)
-        line_no = int(m.group(1)) if m else 0
-        key_doc = cast("int | None", item["doc_id"])
-        if any(d == key_doc and abs(line_no - ln) <= 2 for d, ln in taken):
-            continue
-        taken.append((key_doc, line_no))
-        out.append(item)
-        if len(out) >= _MAX_TRANSCRIPT_ITEMS:
-            break
-    return out
+        scored.extend(
+            _scored_transcript_lines(repo_root, terms, ticker, _transcript_docs(conn, ticker))
+        )
+    return _dedupe_transcript_hits(scored, _MAX_TRANSCRIPT_ITEMS)
 
 
 # ---------------------------------------------------------------------------
@@ -717,6 +837,125 @@ def gather_evidence(
         return []
 
 
+# Follow-up retrieval caps (S7 agentic loop): each round may add at most
+# this many items / this much text — the per-round token budget.
+_MAX_NEW_ITEMS_PER_ROUND = 6
+_MAX_ITEMS_PER_NEED = 2
+_NEW_EVIDENCE_CHAR_BUDGET = 6000
+
+
+def gather_requested_evidence(
+    needs: list[EvidenceNeed],
+    *,
+    question: str,
+    repo_root: Path,
+    db_path: Path,
+    scope_tickers: list[str],
+    existing: list[EvidenceItem],
+    max_items: int = _MAX_NEW_ITEMS_PER_ROUND,
+) -> list[EvidenceItem]:
+    """Targeted retrieval for one follow-up round (S7 agentic loop).
+
+    Unlike :func:`gather_evidence` (which guesses channels and periods from
+    the question), each ``EvidenceNeed`` names its channel explicitly, and
+    ``period`` reaches transcripts/filings OLDER than the latest ones the
+    one-shot pass is limited to. New items continue the numbering after
+    ``existing`` so they join the same cite-or-don't-claim system; items
+    duplicating something already presented are dropped. Best-effort and
+    read-only — any failure contributes nothing, never raises.
+    """
+    try:
+        scope = [t.strip().upper() for t in scope_tickers if t.strip()][:_MAX_TICKERS]
+        fallback_terms = question_terms(question)
+
+        raw: list[dict[str, object]] = []
+        # Portfolio packs: one load_packs call over the distinct pack kinds,
+        # focused on the tickers those needs name (empty → portfolio-wide).
+        pack_kinds = list(dict.fromkeys(n.kind for n in needs if n.kind in PACK_KEYS))
+        if pack_kinds:
+            focus = list(dict.fromkeys(n.ticker for n in needs if n.kind in PACK_KEYS and n.ticker))
+            try:
+                raw.extend(load_packs(tuple(pack_kinds), db_path=db_path, focus_tickers=focus))
+            except Exception:
+                log.warning({"event": "ask_followup_pack_channel_failed"}, exc_info=True)
+
+        conn = _connect(db_path)
+        try:
+            for need in needs:
+                if need.kind not in NEED_DOC_KINDS:
+                    continue
+                tickers = [need.ticker] if need.ticker else scope
+                if not tickers:
+                    continue
+                terms = question_terms(need.query) or fallback_terms
+                year, quarter = _parse_period(need.period)
+                if need.kind == "fact" and conn is not None:
+                    query_squashed = (
+                        _squash(need.query) if need.query.strip() else _squash(question)
+                    )
+                    raw.extend(_fact_evidence(conn, query_squashed, tickers))
+                elif need.kind == "filing":
+                    for ticker in tickers:
+                        paths = (
+                            _filing_paths_for_year(repo_root, ticker, year)
+                            if year is not None
+                            else _latest_filing_paths(repo_root, ticker)
+                        )
+                        scored = _scored_filing_sections(conn, repo_root, terms, ticker, paths)
+                        scored.sort(key=lambda s: s[0], reverse=True)
+                        raw.extend(item for _, item in scored[:_MAX_ITEMS_PER_NEED])
+                elif need.kind == "transcript" and conn is not None:
+                    for ticker in tickers:
+                        docs = _transcript_docs(
+                            conn,
+                            ticker,
+                            year=year,
+                            quarter=quarter,
+                            limit=4 if (year is not None or quarter is not None) else 2,
+                        )
+                        scored = _scored_transcript_lines(repo_root, terms, ticker, docs)
+                        raw.extend(_dedupe_transcript_hits(scored, _MAX_ITEMS_PER_NEED))
+        finally:
+            if conn is not None:
+                conn.close()
+
+        seen_keys = {(it.kind, it.label) for it in existing}
+        seen_hrefs = {it.href for it in existing if it.href}
+        start = max((it.n for it in existing), default=0) + 1
+        out: list[EvidenceItem] = []
+        budget = _NEW_EVIDENCE_CHAR_BUDGET
+        for item in raw:
+            kind = str(item["kind"])
+            label = str(item["label"])
+            href = cast("str | None", item["href"])
+            if (kind, label) in seen_keys or (href is not None and href in seen_hrefs):
+                continue
+            text = str(item["text"])
+            if len(text) > budget:
+                continue
+            budget -= len(text)
+            seen_keys.add((kind, label))
+            if href is not None:
+                seen_hrefs.add(href)
+            out.append(
+                EvidenceItem(
+                    n=start + len(out),
+                    kind=kind,
+                    label=label,
+                    text=text,
+                    doc_id=cast("int | None", item["doc_id"]),
+                    href=href,
+                    source_url=cast("str | None", item["source_url"]),
+                )
+            )
+            if len(out) >= max_items:
+                break
+        return out
+    except Exception:
+        log.warning({"event": "ask_followup_retrieval_failed"}, exc_info=True)
+        return []
+
+
 def build_evidence_block(items: list[EvidenceItem]) -> str:
     """The prompt block: numbered evidence + the per-claim citation contract."""
     if not items:
@@ -749,9 +988,13 @@ def used_citation_items(final_text: str, items: list[EvidenceItem]) -> list[Evid
 
 
 __all__ = [
+    "NEED_DOC_KINDS",
+    "NEED_KINDS",
     "EvidenceItem",
+    "EvidenceNeed",
     "build_evidence_block",
     "gather_evidence",
+    "gather_requested_evidence",
     "question_terms",
     "used_citation_items",
 ]

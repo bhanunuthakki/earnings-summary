@@ -25,10 +25,14 @@ but the data path can't answer a narrative question at all.
 Event vocabulary (a superset of the report drawer's existing SSE frames —
 old clients ignore unknown types):
 
-  {type: "stage", stage: "compiling"|"running"|"answering", route, note?}
+  {type: "stage", stage: "compiling"|"running"|"answering"|"retrieving",
+   route, note?}                         — "retrieving" = the S7 evidence
+                                           loop is fetching more evidence
   {type: "delta", text}                  — incremental narrative tokens
   {type: "fragment", html, spec}         — a rendered data view
   {type: "final", text, route}           — once, on success
+  {type: "grounding", rounds, evidence_total, evidence_new,
+   evidence_round1}                      — S7 loop telemetry (armed turns only)
   {type: "citations", items, claims?, grounding?}
                                          — grounded narrative answers: the
                                            evidence the answer cited, plus
@@ -42,7 +46,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Collection, Iterable, Iterator
+from collections.abc import Collection, Generator, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -52,7 +56,13 @@ import chat_session
 from ask.claims import build_citations_payload
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
-from ask.grounding import build_evidence_block, gather_evidence
+from ask.followup import (
+    followup_armed,
+    need_protocol_block,
+    parse_need_request,
+    run_followup_rounds,
+)
+from ask.grounding import EvidenceItem, build_evidence_block, gather_evidence
 from ask.store import append_turn as _store_append_turn
 from ask.store import load_recent_history as _store_load_history
 from dispatch_registry import Registry
@@ -371,6 +381,122 @@ def _persist_data_turn(
         )
 
 
+def _gate_events(
+    events: Iterable[dict[str, object]],
+    *,
+    sniff: bool,
+) -> Generator[
+    dict[str, object],
+    None,
+    tuple[str | None, list[dict[str, object]], list[dict[str, object]]],
+]:
+    """Forward transport frames while intercepting the final (S7 loop gate).
+
+    Returns ``(final_text, held_deltas, trailing)``; ``final_text`` is None
+    only when an error frame ended the stream (already yielded). With
+    ``sniff`` on, delta frames are withheld while the response head still
+    looks like JSON (a possible need-request) and returned in ``held_deltas``
+    — the caller flushes them for a real answer or discards them for a
+    need-request. Prose answers decide on the first non-blank chunk, so
+    normal streaming UX is unchanged. ``trailing`` collects frames emitted
+    after the source's final (e.g. diff_proposal) for re-emission."""
+    held: list[dict[str, object]] = []
+    trailing: list[dict[str, object]] = []
+    final_text: str | None = None
+    decided = "undecided" if sniff else "stream"
+    head = ""
+    for ev in events:
+        kind = ev.get("type")
+        if final_text is not None:
+            if kind == "error":
+                yield ev
+                return (None, held, trailing)
+            trailing.append(ev)
+            continue
+        if kind == "delta":
+            if decided == "stream":
+                yield ev
+                continue
+            held.append(ev)
+            if decided == "undecided":
+                head += str(ev.get("text") or "")
+                stripped = head.lstrip()
+                if stripped:
+                    # "`" covers ```-fenced JSON; "{" a bare object.
+                    if stripped.startswith(("{", "`")):
+                        decided = "buffer"
+                    else:
+                        decided = "stream"
+                        yield from held
+                        held = []
+            continue
+        if kind == "final":
+            maybe = ev.get("text")
+            final_text = maybe if isinstance(maybe, str) else ""
+            continue
+        if kind == "error":
+            yield ev
+            return (None, held, trailing)
+        yield ev
+    return (final_text, held, trailing)
+
+
+def _grounding_event(rounds: int, items: list[EvidenceItem], new_items: int) -> dict[str, object]:
+    """The loop's telemetry frame — consumed by the eval harness and free
+    for the dock to surface; old clients ignore unknown event types."""
+    return {
+        "type": "grounding",
+        "rounds": rounds,
+        "evidence_total": len(items),
+        "evidence_new": new_items,
+        "evidence_round1": len(items) - new_items,
+    }
+
+
+def _ticker_prior_thread_text(
+    repo_root: Path, ticker: str, report_date: date, user_text: str, need_text: str
+) -> str:
+    """The prior-thread block for ticker-scope follow-up rounds: the
+    persisted thread minus this turn's two entries (``stream_response``
+    saved the user message and the need-request before the gate caught it)."""
+    try:
+        turns = chat_session.load_thread(repo_root, ticker, report_date)
+    except Exception:
+        return ""
+    if turns and turns[-1].role == "assistant" and turns[-1].text.strip() == need_text.strip():
+        turns = turns[:-1]
+    if turns and turns[-1].role == "user" and turns[-1].text.strip() == user_text.strip():
+        turns = turns[:-1]
+    return "\n\n".join(f"[{t.role.upper()}] {t.text}" for t in turns)
+
+
+def _repair_ticker_thread(
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    need_text: str,
+    replacement: str,
+    diff: dict[str, object] | None = None,
+) -> None:
+    """Swap the persisted need-request JSON for the loop's real outcome.
+    ``stream_response`` saved the raw JSON as the assistant turn before the
+    loop ran; left in place it would poison the next turn's prior-thread
+    context. Best-effort: a fake transport that didn't persist (tests) or a
+    racing write makes this a no-op."""
+    try:
+        turns = chat_session.load_thread(repo_root, ticker, report_date)
+        for t in reversed(turns):
+            if t.role == "assistant" and t.text.strip() == need_text.strip():
+                t.text = replacement
+                t.proposed_diff = diff
+                break
+        else:
+            return
+        chat_session.save_thread(repo_root, ticker, report_date, turns)
+    except Exception:
+        log.warning({"event": "ask_followup_thread_repair_failed", "ticker": ticker}, exc_info=True)
+
+
 def _narrative_events(
     text: str,
     turn: AskTurn,
@@ -380,22 +506,30 @@ def _narrative_events(
     db_path: Path,
     emit_stage: bool,
 ) -> Iterator[dict[str, object]]:
-    """The claude-CLI chat path, grounded (Ask v3). Ticker scope = the
-    existing report session (its own system prompt + thread persistence);
-    portfolio scope = the pack's system context + client-supplied history
-    over the raw transport.
+    """The claude-CLI chat path, grounded (Ask v3) + the agentic evidence
+    loop (S7). Ticker scope = the existing report session (its own system
+    prompt + thread persistence); portfolio scope = the pack's system
+    context + server/client history over the raw transport.
 
-    Before the call, ``ask.grounding`` retrieves numbered evidence (facts /
-    filing sections / transcript lines) for the question; when anything
-    comes back it rides into the prompt under a per-claim cite-or-don't-
-    claim contract (the answering stage notes how many sources). After the
-    answer, ``ask.claims.build_citations_payload`` resolves what it cited —
-    inline markers reconciled against a fast-model claims→cites map — into
-    a trailing ``{type: "citations", items, claims?, grounding}`` event
-    (each item carries the /source/<doc_id> viewer href + the S2 scored
-    confidence; the map fails closed to the legacy answer-level ``items``).
-    No evidence → the turn runs exactly as before: same stage frame, no
-    citations event."""
+    filing sections / transcript lines / portfolio packs) for the question;
+    when anything comes back it rides into the prompt under a per-claim
+    cite-or-don't-claim contract (the answering stage notes how many
+    sources). After the answer, ``ask.claims.build_citations_payload``
+    resolves what it cited — inline markers reconciled against a fast-model
+    claims→cites map — into a trailing
+    ``{type: "citations", items, claims?, grounding}`` event (each item
+    carries the /source/<doc_id> viewer href + the S2 scored confidence; the
+    map fails closed to the legacy answer-level ``items``).
+
+    When ``ask.followup`` is armed (DB present, purpose under budget) the
+    prompt additionally offers the NEED protocol: pass 1 may reply with a
+    schema-validated evidence request instead of an answer, in which case
+    the engine retrieves the requested items (period-aware — the reach
+    one-shot retrieval lacks), emits ``stage: "retrieving"`` progress, and
+    makes a ledger-attributed follow-up call (≤2 rounds, then forced to
+    answer with what exists). Round-2 evidence joins the same [n] citation
+    numbering and the same S8 per-claim audit. Not armed → turns behave
+    exactly as before S7."""
     scope_tickers = (
         [pack.ticker]
         if pack.scope == "ticker" and pack.ticker
@@ -405,6 +539,7 @@ def _narrative_events(
         text, repo_root=repo_root, db_path=db_path, scope_tickers=scope_tickers
     )
     evidence_block = build_evidence_block(evidence)
+    armed = followup_armed(db_path)
     if emit_stage:
         stage: dict[str, object] = {"type": "stage", "stage": "answering", "route": ROUTE_NARRATIVE}
         if evidence:
@@ -412,30 +547,25 @@ def _narrative_events(
         yield stage
 
     if pack.scope == "ticker" and pack.ticker and pack.report_date is not None:
-        # extra_context is passed only when evidence exists so monkeypatched
-        # fakes with the original four-kwarg signature keep working.
-        kwargs: dict[str, str] = {"extra_context": evidence_block} if evidence_block else {}
-        final_text_t: str | None = None
-        for event in chat_session.build_chat_response.stream_response(
+        yield from _ticker_narrative_events(
+            text,
+            pack.ticker,
+            pack.report_date,
             repo_root=repo_root,
-            ticker=pack.ticker,
-            report_date=pack.report_date,
-            user_message=text,
-            **kwargs,
-        ):
-            yield event
-            if event.get("type") == "final":
-                maybe = event.get("text")
-                final_text_t = maybe if isinstance(maybe, str) else None
-        if final_text_t is not None and evidence:
-            payload = build_citations_payload(final_text_t, evidence, db_path=db_path)
-            if payload is not None:
-                yield {"type": "citations", **payload}
+            db_path=db_path,
+            evidence=evidence,
+            evidence_block=evidence_block,
+            armed=armed,
+            scope_tickers=scope_tickers,
+        )
         return
 
-    system_context = pack.system_context or "You are a portfolio research assistant."
+    base_context = pack.system_context or "You are a portfolio research assistant."
+    system_context = base_context
     if evidence_block:
         system_context = system_context + "\n\n" + evidence_block
+    if armed:
+        system_context = system_context + "\n\n" + need_protocol_block()
 
     # Server-side history: when the turn carries a session_id, load the stored
     # thread from ask_turns (authoritative) instead of trusting the client tail.
@@ -466,22 +596,47 @@ def _narrative_events(
         + "\n\n---\n\nUSER:\n"
         + text
     )
-    final_text: str | None = None
-    for event in chat_session.stream_llm_text(full_prompt):
-        kind = event.get("type")
-        if kind == "final":
-            final_text = cast("str", event["text"])
-        else:
-            yield event
-            if kind == "error":
-                return
-    if final_text is None:  # defensive: transport always ends in final or error
+    final_text, held, _trailing = yield from _gate_events(
+        chat_session.stream_llm_text(full_prompt), sniff=armed
+    )
+    if final_text is None:  # error frame already yielded / defensive no-final
         return
-    yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
 
+    items_all = evidence
+    rounds = 0
+    new_count = 0
+    needs = parse_need_request(final_text) if armed else None
+    if needs is not None:
+        outcome = yield from run_followup_rounds(
+            question=text,
+            needs=needs,
+            items=evidence,
+            base_context=base_context,
+            thread_text=thread_text,
+            repo_root=repo_root,
+            db_path=db_path,
+            scope_tickers=scope_tickers,
+            ledger_ticker=scope_tickers[0] if len(scope_tickers) == 1 else None,
+        )
+        if outcome.final_text is None:
+            yield {"type": "error", "error": outcome.error or "evidence follow-up failed"}
+            return
+        final_text = outcome.final_text
+        items_all, rounds, new_count = outcome.items, outcome.rounds, outcome.new_items
+        # The follow-up answer arrives whole (call_llm is single-shot) —
+        # one delta keeps stream-rendering clients working.
+        yield {"type": "delta", "text": final_text}
+    else:
+        yield from held  # deltas withheld while the head looked like JSON
+    yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
+    if armed:
+        yield _grounding_event(rounds, items_all, new_count)
+
+    # S8 per-claim citations over the FULL augmented evidence — round-2
+    # items get the same claims→cites audit as round-1.
     citations_items: list[object] | None = None
-    if evidence:
-        payload = build_citations_payload(final_text, evidence, db_path=db_path)
+    if items_all:
+        payload = build_citations_payload(final_text, items_all, db_path=db_path)
         if payload is not None:
             maybe_items = payload.get("items")
             if isinstance(maybe_items, list) and maybe_items:
@@ -502,6 +657,88 @@ def _narrative_events(
             log.warning({"event": "ask_store_asst_turn_failed", "sid": turn.session_id})
 
     diff = chat_session.extract_diff(final_text)
+    if diff is not None:
+        yield {"type": "diff_proposal", "diff": diff}
+
+
+def _ticker_narrative_events(
+    text: str,
+    ticker: str,
+    report_date: date,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    evidence: list[EvidenceItem],
+    evidence_block: str,
+    armed: bool,
+    scope_tickers: list[str],
+) -> Iterator[dict[str, object]]:
+    """Ticker scope: ``chat_session.stream_response`` owns the system prompt
+    and thread persistence; the S7 gate intercepts its final to run the
+    evidence loop, then repairs the persisted thread (the need-request JSON
+    must not stand as the saved assistant turn)."""
+    # Armed turns always carry extra_context (the NEED protocol rides with
+    # any evidence) — test fakes of stream_response must accept the kwarg.
+    protocol = need_protocol_block() if armed else ""
+    extra = "\n\n".join(b for b in (evidence_block, protocol) if b)
+    kwargs: dict[str, str] = {"extra_context": extra} if extra else {}
+    final_text, held, trailing = yield from _gate_events(
+        chat_session.build_chat_response.stream_response(
+            repo_root=repo_root,
+            ticker=ticker,
+            report_date=report_date,
+            user_message=text,
+            **kwargs,
+        ),
+        sniff=armed,
+    )
+    if final_text is None:
+        return
+
+    needs = parse_need_request(final_text) if armed else None
+    if needs is None:
+        yield from held
+        yield {"type": "final", "text": final_text}
+        yield from trailing  # e.g. the session's own diff_proposal
+        if armed:
+            yield _grounding_event(0, evidence, 0)
+        if evidence:
+            payload = build_citations_payload(final_text, evidence, db_path=db_path)
+            if payload is not None:
+                yield {"type": "citations", **payload}
+        return
+
+    outcome = yield from run_followup_rounds(
+        question=text,
+        needs=needs,
+        items=evidence,
+        base_context=chat_session.build_system_prompt(repo_root, ticker, report_date),
+        thread_text=_ticker_prior_thread_text(repo_root, ticker, report_date, text, final_text),
+        repo_root=repo_root,
+        db_path=db_path,
+        scope_tickers=scope_tickers,
+        ledger_ticker=ticker,
+    )
+    if outcome.final_text is None:
+        _repair_ticker_thread(
+            repo_root,
+            ticker,
+            report_date,
+            final_text,
+            "(requested additional evidence, but the follow-up failed — please ask again)",
+        )
+        yield {"type": "error", "error": outcome.error or "evidence follow-up failed"}
+        return
+
+    diff = chat_session.extract_diff(outcome.final_text)
+    _repair_ticker_thread(repo_root, ticker, report_date, final_text, outcome.final_text, diff=diff)
+    yield {"type": "delta", "text": outcome.final_text}
+    yield {"type": "final", "text": outcome.final_text}
+    yield _grounding_event(outcome.rounds, outcome.items, outcome.new_items)
+    # Round-2 evidence enters the S8 per-claim citation audit too.
+    payload = build_citations_payload(outcome.final_text, outcome.items, db_path=db_path)
+    if payload is not None:
+        yield {"type": "citations", **payload}
     if diff is not None:
         yield {"type": "diff_proposal", "diff": diff}
 
