@@ -8,7 +8,7 @@ stale HTML. This orchestrator chains the stages into one scheduled run. (The
 morning-digest render stage retired with the standalone /digest page,
 2026-06-11 — the live Home rail serves that view straight from the DB.)
 
-Five stages run in sequence as subprocess-isolated children:
+Six stages run in sequence as subprocess-isolated children:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
      ``news`` table so the material_news trigger has stories to classify;
@@ -16,6 +16,9 @@ Five stages run in sequence as subprocess-isolated children:
   0b. decisions -- ``record_decisions.py`` (record memo verdicts into the
      ``decisions`` ledger + extract falsifiable "what would change my mind"
      conditions, so the decision_condition trigger evaluates fresh rows).
+  0c. lifecycle -- ``sync_position_lifecycle.py`` (reconcile the
+     position_entries entry/exit ledger against the portfolio list + tracker
+     holdings, snapshotting the fresh stage-0b conditions at entry).
   1. triggers -- ``run_triggers.py`` (the long pole; fans LLM-backed sensors
      across the portfolio, cost-capped via ``--max-cost-usd``).
   2. feed     -- ``build_alert_feed.py``.
@@ -93,12 +96,17 @@ _VALIDATE_TIMEOUT_S = 600
 # falsifiable conditions for NEW decisions only (one Haiku call each, ≤50 per
 # run). Normal mornings touch 0-2 rows; 15 min covers a backfill day.
 _DECISIONS_TIMEOUT_S = 900
+# Stage 0c (lifecycle) reconciles position_entries against the portfolio list
+# + tracker holdings — pure SQLite + one loopback HTTP group (sub-second
+# connect cap when the tracker is down). 2 min is generous.
+_LIFECYCLE_TIMEOUT_S = 120
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
 STAGE_PREFLIGHT = "stage_preflight"
 STAGE_NEWS = "stage_0_news"
 STAGE_DECISIONS = "stage_0b_decisions"
+STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
@@ -106,6 +114,7 @@ _ALL_STAGE_KEYS = (
     STAGE_PREFLIGHT,
     STAGE_NEWS,
     STAGE_DECISIONS,
+    STAGE_LIFECYCLE,
     STAGE_TRIGGERS,
     STAGE_FEED,
     STAGE_VALIDATE,
@@ -230,6 +239,23 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *decisions_db_args,
                 ],
                 timeout_s=_DECISIONS_TIMEOUT_S,
+            )
+        )
+        # Stage 0c -- position-lifecycle reconciler (S5 PR2): opens/closes
+        # position_entries on portfolio transitions, snapshotting the fresh
+        # stage-0b conditions at entry. Skipped with triggers (same
+        # re-render-only rationale). Takes --user-id + --db-path.
+        lifecycle_args = ["--user-id", args.user_id, *decisions_db_args]
+        stages.append(
+            _Stage(
+                key=STAGE_LIFECYCLE,
+                label="Stage 0c - position lifecycle (sync_position_lifecycle.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "sync_position_lifecycle.py"),
+                    *lifecycle_args,
+                ],
+                timeout_s=_LIFECYCLE_TIMEOUT_S,
             )
         )
 

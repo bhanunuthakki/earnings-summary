@@ -204,6 +204,7 @@ def test_swept_panel_stylesheets_carry_no_raw_hex() -> None:
         explore_panel,
         ir_coverage_panel,
         journal_panel,
+        position_lifecycle_panel,
         restatements_panel,
         section_coverage_panel,
         source_calls_panel,
@@ -223,6 +224,7 @@ def test_swept_panel_stylesheets_carry_no_raw_hex() -> None:
         "discovery": discovery_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
         "explore": explore_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
         "cron_health": cron_health_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
+        "position_lifecycle": position_lifecycle_panel._PANEL_STYLE,  # pyright: ignore[reportPrivateUsage]
         "allocation": allocation_decisions_panel._PANEL_CSS,  # pyright: ignore[reportPrivateUsage]
         "advisor_memos": advisor_memos_panel._PANEL_CSS  # pyright: ignore[reportPrivateUsage]
         + advisor_memos_panel._SOCRATIC_PAGE_CSS,  # pyright: ignore[reportPrivateUsage]
