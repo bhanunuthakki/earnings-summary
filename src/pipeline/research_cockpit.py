@@ -390,22 +390,86 @@ def _safe_rows(
     return cur.fetchall()
 
 
+# _eval_fundamentals reads financial_facts directly instead of the metrics /
+# ratios views. Two reasons. Speed: the views ROW_NUMBER() over the ENTIRE
+# facts table on every query (~12s against prod's 726k rows, twice — the
+# whole landing-page budget); the same dedup restricted to the four line
+# items these pivots consume runs in well under a second. Correctness: the
+# view's MAX(period_end) spans all ~35 line items, so a stray row that files
+# a different quarter under the same (fiscal-year, period-type) slot — FMP
+# and SEC disagree on fiscal-quarter labels for off-calendar reporters —
+# stamps the group with another quarter's date and falsely trips the YoY/TTM
+# window guards below (MU/TOL/VEEV rendered em-dashes for exactly this).
+# The dedup CTE otherwise mirrors the metrics-view DDL (alembic 0075): one
+# winner per (ticker, fiscal_year, fiscal_period_type, line_item), newest
+# source doc first.
+_QUARTER_FUNDAMENTALS_SQL = """
+WITH dedup AS (
+    SELECT ticker,
+           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
+           fiscal_period_type, line_item, value, period_end,
+           ROW_NUMBER() OVER (
+               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
+                            fiscal_period_type, line_item
+               ORDER BY source_doc_id DESC, period_end DESC
+           ) AS rn
+    FROM financial_facts
+    WHERE fiscal_period_type LIKE 'Q%'
+      AND line_item IN ('revenue', 'free_cash_flow', 'operating_cash_flow',
+                        'capital_expenditure')
+)
+SELECT ticker,
+       MAX(period_end) AS period_end,
+       MAX(CASE WHEN line_item = 'revenue' THEN value END) AS revenue,
+       MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS free_cash_flow,
+       MAX(CASE WHEN line_item = 'operating_cash_flow' THEN value END) AS operating_cash_flow,
+       MAX(CASE WHEN line_item = 'capital_expenditure' THEN value END) AS capex
+FROM dedup
+WHERE rn = 1
+GROUP BY ticker, fiscal_year, fiscal_period_type
+HAVING MAX(CASE WHEN line_item = 'revenue' THEN value END) IS NOT NULL
+ORDER BY ticker, period_end DESC
+"""
+
+# fcf_margin = free_cash_flow / revenue, the ratios-view formula, on TTM rows
+# only (prod has none — the quarterly-sum fallback is the populated path).
+_TTM_FCF_MARGIN_SQL = """
+WITH dedup AS (
+    SELECT ticker,
+           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
+           line_item, value,
+           ROW_NUMBER() OVER (
+               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
+                            fiscal_period_type, line_item
+               ORDER BY source_doc_id DESC, period_end DESC
+           ) AS rn
+    FROM financial_facts
+    WHERE fiscal_period_type = 'TTM'
+      AND line_item IN ('revenue', 'free_cash_flow')
+)
+SELECT ticker,
+       CAST(MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS REAL)
+           / NULLIF(MAX(CASE WHEN line_item = 'revenue' THEN value END), 0) AS fcf_margin
+FROM dedup
+WHERE rn = 1
+GROUP BY ticker, fiscal_year
+ORDER BY ticker, fiscal_year
+"""
+
+
 def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None, float | None]]:
     """(rev_yoy_pct, fcf_margin_pct) per ticker for the eval table (PR7).
 
-    Revenue YoY: latest quarterly ``metrics`` row vs the first row at least
-    ~11 months older (calendar-quarter aligned in practice). FCF margin: TTM —
-    the ``ratios`` view's TTM row when financial_facts carries one, else
-    summed on the fly from the newest four quarterly rows (sum FCF / sum
-    revenue; prod has no TTM facts, so this path is what populates the
-    column; semi-annual reporters sum the newest two half-years instead).
-    Best-effort — a missing view degrades to {} and the columns render
-    em-dashes.
+    Revenue YoY: latest quarterly row vs the first row at least ~11 months
+    older (calendar-quarter aligned in practice). FCF margin: TTM — a TTM
+    facts row when financial_facts carries one, else summed on the fly from
+    the newest four quarterly rows (sum FCF / sum revenue; prod has no TTM
+    facts, so this path is what populates the column; semi-annual reporters
+    sum the newest two half-years instead). Best-effort — a missing table
+    degrades to {} and the columns render em-dashes.
     """
     fcf: dict[str, float] = {}
-    for r in _safe_rows(
-        conn, "SELECT ticker, fcf_margin FROM ratios WHERE fiscal_period_type = 'TTM'"
-    ):
+    for r in _safe_rows(conn, _TTM_FCF_MARGIN_SQL):
         try:
             if r["fcf_margin"] is not None:
                 fcf[str(r["ticker"]).upper()] = float(r["fcf_margin"]) * 100.0
@@ -413,12 +477,7 @@ def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None
             continue
 
     by_ticker: dict[str, list[tuple[str, float, float | None]]] = {}
-    for r in _safe_rows(
-        conn,
-        "SELECT ticker, period_end, revenue, free_cash_flow, operating_cash_flow, capex "
-        "FROM metrics WHERE fiscal_period_type LIKE 'Q%' AND revenue IS NOT NULL "
-        "ORDER BY ticker, period_end DESC",
-    ):
+    for r in _safe_rows(conn, _QUARTER_FUNDAMENTALS_SQL):
         try:
             rev = float(r["revenue"])
         except (TypeError, ValueError):
