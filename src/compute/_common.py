@@ -15,7 +15,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
+from models.documents import SourceQualityTier
 from models.facts import Currency, FactLocator, FinancialFact, FiscalPeriodType, Unit
+from pipeline.confidence import score_confidence
 from pipeline.restatement_detector import insert_with_restatement_detection
 
 
@@ -60,7 +62,11 @@ def extract_facts_with_spec(
     the exact cell of the cached endpoint response (data_provenance.md §7).
     """
     period_end = datetime.fromisoformat(record.date)
-    period_type = period_type_override if period_type_override is not None else FiscalPeriodType(record.period)
+    period_type = (
+        period_type_override
+        if period_type_override is not None
+        else FiscalPeriodType(record.period)
+    )
     currency = parse_currency(record.reportedCurrency)
 
     facts: list[FinancialFact] = []
@@ -95,6 +101,7 @@ def insert_financial_facts(
     facts: list[FinancialFact],
     *,
     extracted_by: str,
+    tier: SourceQualityTier | None = None,
 ) -> int:
     """Bulk-insert facts. Returns rowcount actually inserted.
 
@@ -107,9 +114,18 @@ def insert_financial_facts(
 
     `extracted_by` is required — the audit-trail column is meaningless if
     callers leave it NULL.
+
+    `tier` is the source document's quality tier; when given, facts still
+    carrying the model's unset 1.0 default get the deterministic
+    `pipeline.confidence.score_confidence(tier, extracted_by)` prior instead
+    (validation-issue penalties fold in later via the backfill — issues
+    can't exist yet for rows being written right now). A fact whose builder
+    set an explicit non-default confidence keeps it.
     """
+    scored = score_confidence(tier=tier, extracted_by=extracted_by) if tier is not None else None
     inserted = 0
     for f in facts:
+        confidence = scored if (scored is not None and f.confidence == 1.0) else f.confidence
         new_id, _ = insert_with_restatement_detection(
             conn,
             ticker=f.ticker,
@@ -120,7 +136,7 @@ def insert_financial_facts(
             currency=f.currency.value if f.currency is not None else None,
             unit=f.unit.value,
             source_doc_id=f.source_doc_id,
-            confidence=f.confidence,
+            confidence=confidence,
             extracted_by=extracted_by,
             locator=f.locator.to_json() if f.locator is not None else None,
         )

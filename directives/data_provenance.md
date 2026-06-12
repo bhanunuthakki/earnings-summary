@@ -156,3 +156,28 @@ Rules:
 | `compute/s1_financials.py` | none — the text-region parser carries no stable line anchor; S-1 facts are provisional and superseded by real filings | n/a |
 
 Facts written before P3.2 keep NULL locators; there is no retroactive fact-locator backfill (re-extraction naturally repopulates).
+
+## 8. Per-fact confidence scoring (fund-grade build S2)
+
+`financial_facts.confidence` / `kpi_facts.confidence` is a **scored** value, not a schema default. The single source of truth is `src/pipeline/confidence.py::score_confidence`:
+
+```
+confidence = clamp( tier_base + method_delta − unresolved-issue penalties ) × llm_self_report
+```
+
+| component | values |
+|---|---|
+| `tier_base` (documents.source_quality_tier) | sec_official 0.98 · fmp_normalized 0.92 · llm_extracted 0.75 · yfinance_fallback 0.70 · s1_provisional 0.65 · unknown 0.70 |
+| `method_delta` (fact's `extracted_by`, via `classify_extraction_method`) | deterministic mapping +0.02 · manual 0.00 · LLM −0.05 · unknown −0.02 |
+| issue penalty (per unresolved `validation_issues` row matching the fact) | source_disagreement 0.15 · magnitude_jump 0.10 · plausible_range 0.10 · unit_mismatch 0.10 · other 0.05; `halt` severity doubles; total capped at 0.40 |
+| `llm_self_report` | the extractor's per-value confidence (`KpiValue.confidence`), folded in at ingest by `persist_manifest`; 1.0 for deterministic writers |
+| clamp | [0.05, 1.0], rounded to 4 decimals |
+
+Reference points: SEC XBRL fact = **1.00**; FMP fact = **0.94**; the same FMP fact under one unresolved cross-source disagreement = **0.79**; plain LLM extraction at default self-report = **0.665**.
+
+Wiring:
+
+- **Ingest** — every writer stores the tier+method prior (`compute/_common.insert_financial_facts(tier=...)`, `pipeline/sec_xbrl.py`, `compute/fmp_derived_kpis.py`, `pipeline/kpi_persistence.persist_manifest`). Issue penalties cannot apply at ingest (validation runs after persist).
+- **Reconciliation** — `python execution/backfill_confidence.py --apply` rescores both tables from current tiers + unresolved issues; idempotent (pure formula, second run over an unchanged DB writes nothing). Re-run after validation passes.
+- **Preservation** — LLM-method rows already carrying a non-default confidence are self-scored extractions; the backfill never rescores them (the self-report is not recoverable from the stored product).
+- **UI** — the source chip (`src/ui/source_chip.py`) shows the % in its popover and hover title; below `LOW_CONFIDENCE_THRESHOLD = 0.8` the chip takes a warn-tinted dashed border (the subtle low-confidence cell affordance).

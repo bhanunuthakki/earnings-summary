@@ -43,6 +43,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from compute._common import insert_financial_facts, load_document_row
+from models.documents import SourceQualityTier
 from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
 
 log = logging.getLogger(__name__)
@@ -77,13 +78,25 @@ _OPERATIONS_SPEC: list[_SpecEntry] = [
     ("eq", "net income", ["net_income"], Unit.ACTUAL, 1000),
     ("sw", "net loss per share attributable to common", ["eps", "eps_diluted"], Unit.ACTUAL, 1),
     ("sw", "net income per share attributable to common", ["eps", "eps_diluted"], Unit.ACTUAL, 1),
-    ("sw", "weighted average shares", ["weighted_avg_shares", "weighted_avg_shares_diluted"], Unit.COUNT, 1000),
+    (
+        "sw",
+        "weighted average shares",
+        ["weighted_avg_shares", "weighted_avg_shares_diluted"],
+        Unit.COUNT,
+        1000,
+    ),
 ]
 
 _BALANCE_SHEET_SPEC: list[_SpecEntry] = [
     ("eq", "cash and cash equivalents", ["cash_and_equivalents"], Unit.ACTUAL, 1000),
     ("eq", "total current assets", ["total_current_assets"], Unit.ACTUAL, 1000),
-    ("eq", "operating leases right of use assets", ["operating_lease_rou_asset"], Unit.ACTUAL, 1000),
+    (
+        "eq",
+        "operating leases right of use assets",
+        ["operating_lease_rou_asset"],
+        Unit.ACTUAL,
+        1000,
+    ),
     ("eq", "total assets", ["total_assets"], Unit.ACTUAL, 1000),
     ("eq", "accounts payable", ["accounts_payable"], Unit.ACTUAL, 1000),
     ("eq", "total current liabilities", ["total_current_liabilities"], Unit.ACTUAL, 1000),
@@ -96,17 +109,53 @@ _BALANCE_SHEET_SPEC: list[_SpecEntry] = [
 _CASHFLOW_SPEC: list[_SpecEntry] = [
     ("eq", "net loss", ["net_income_cf"], Unit.ACTUAL, 1000),
     ("eq", "net income", ["net_income_cf"], Unit.ACTUAL, 1000),
-    ("eq", "depreciation and amortization", ["depreciation_and_amortization_cf"], Unit.ACTUAL, 1000),
+    (
+        "eq",
+        "depreciation and amortization",
+        ["depreciation_and_amortization_cf"],
+        Unit.ACTUAL,
+        1000,
+    ),
     ("eq", "stock-based compensation", ["stock_based_compensation"], Unit.ACTUAL, 1000),
-    ("sw", "net cash used in operating activities", ["operating_cash_flow", "net_cash_from_operating"], Unit.ACTUAL, 1000),
-    ("sw", "net cash provided by operating activities", ["operating_cash_flow", "net_cash_from_operating"], Unit.ACTUAL, 1000),
+    (
+        "sw",
+        "net cash used in operating activities",
+        ["operating_cash_flow", "net_cash_from_operating"],
+        Unit.ACTUAL,
+        1000,
+    ),
+    (
+        "sw",
+        "net cash provided by operating activities",
+        ["operating_cash_flow", "net_cash_from_operating"],
+        Unit.ACTUAL,
+        1000,
+    ),
     ("eq", "capital expenditures", ["capital_expenditure"], Unit.ACTUAL, 1000),
     ("sw", "net cash used in investing activities", ["net_cash_from_investing"], Unit.ACTUAL, 1000),
-    ("sw", "net cash provided by investing activities", ["net_cash_from_investing"], Unit.ACTUAL, 1000),
-    ("sw", "net cash provided by financing activities", ["net_cash_from_financing"], Unit.ACTUAL, 1000),
+    (
+        "sw",
+        "net cash provided by investing activities",
+        ["net_cash_from_investing"],
+        Unit.ACTUAL,
+        1000,
+    ),
+    (
+        "sw",
+        "net cash provided by financing activities",
+        ["net_cash_from_financing"],
+        Unit.ACTUAL,
+        1000,
+    ),
     ("sw", "net cash used in financing activities", ["net_cash_from_financing"], Unit.ACTUAL, 1000),
     ("sw", "net change in cash", ["net_change_in_cash"], Unit.ACTUAL, 1000),
-    ("sw", "cash and cash equivalents and restricted cash at end of period", ["cash_at_end_of_period"], Unit.ACTUAL, 1000),
+    (
+        "sw",
+        "cash and cash equivalents and restricted cash at end of period",
+        ["cash_at_end_of_period"],
+        Unit.ACTUAL,
+        1000,
+    ),
 ]
 
 
@@ -209,7 +258,8 @@ def _find_statement_regions(lines: list[str]) -> dict[str, tuple[int, int]]:
     """
     start = _audited_section_start(lines)
     boundaries = [
-        i for i in range(start + 1, len(lines))
+        i
+        for i in range(start + 1, len(lines))
         if _SECTION_BOUNDARY_RX.match(lines[i].strip()) and ".." not in lines[i]
     ]
     regions: dict[str, tuple[int, int]] = {}
@@ -240,7 +290,7 @@ def _parse_period_columns(region: list[str]) -> list[datetime]:
     if anchor is None:
         return []
     years: list[datetime] = []
-    for ln in region[anchor + 1:]:
+    for ln in region[anchor + 1 :]:
         s = ln.strip()
         if not s:
             continue
@@ -306,9 +356,7 @@ def _iter_data_lines(region: list[str], data_start: int):
             i += 1
 
 
-def _parse_statement(
-    region: list[str], spec: list[_SpecEntry]
-) -> list[S1Datum]:
+def _parse_statement(region: list[str], spec: list[_SpecEntry]) -> list[S1Datum]:
     """Parse one statement region into S1Datum rows using its label spec."""
     periods = _parse_period_columns(region)
     if not periods:
@@ -440,6 +488,8 @@ def extract_s1_financial_facts(
     text = (project_root / file_path_str).read_text(encoding="utf-8")
     data = parse_s1_text(text)
     facts = build_financial_facts(data, source_doc_id=document_id, ticker=ticker)
-    inserted = insert_financial_facts(conn, facts, extracted_by=EXTRACTED_BY)
+    inserted = insert_financial_facts(
+        conn, facts, extracted_by=EXTRACTED_BY, tier=SourceQualityTier.S1_PROVISIONAL
+    )
     conn.commit()
     return inserted

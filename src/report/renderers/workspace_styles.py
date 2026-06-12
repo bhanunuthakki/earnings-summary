@@ -149,6 +149,9 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
 .src-yfinance-fallback, .src-s1-provisional { color: var(--muted-2); }
+/* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell
+   affordance — warn-tinted dashed border, overriding the tier color. */
+.src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
 .src-pop-body {
   position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
   min-width: 220px; max-width: 340px; padding: 8px 10px;
