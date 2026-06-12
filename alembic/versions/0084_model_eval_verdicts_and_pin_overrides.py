@@ -25,8 +25,14 @@ Why store verdicts in the DB instead of on disk:
   and the switch loop reads an arbitrary lookback window from a single query.
 
 Revision ID: 0084_model_eval_verdicts_and_pin_overrides
-Revises: 0083_eval_runs
+Revises: 0084_model_eval_verdicts
 Create Date: 2026-06-11
+
+Re-parented off 0084_model_eval_verdicts (was 0083_eval_runs): #440 and #443
+landed sibling migrations off the same parent, leaving two alembic heads and
+failing every `upgrade head` in CI. The table creations here were already
+idempotent against the twin (the author anticipated the content collision),
+so a linear chain is the whole fix.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0084_model_eval_verdicts_and_pin_overrides"
-down_revision: str | Sequence[str] | None = "0083_eval_runs"
+down_revision: str | Sequence[str] | None = "0084_model_eval_verdicts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
