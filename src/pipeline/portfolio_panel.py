@@ -42,6 +42,7 @@ from html import escape
 from pathlib import Path
 
 from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
+from attribution import PositionAttribution
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -115,13 +116,16 @@ def render_portfolio_panel(
     start_date: str | None = None,
     end_date: str | None = None,
     include_backfill: bool = False,
+    db_path: Path | None = None,
 ) -> str:
     """The Portfolio → Performance tab fragment: tracker analytics (performance /
     risk / positioning / alpha) over the requested window, then the live
     positions/taxable view. The window args come from the page's own window bar
     (via ``/api/panel/portfolio`` query params) and pass through to the tracker
-    verbatim after validation. The synthesis layer lives on its own sub-tab —
-    ``render_portfolio_synthesis_panel``."""
+    verbatim after validation. ``db_path`` (S15) joins the per-position
+    attribution narratives onto the alpha numbers — None keeps the page
+    tracker-pure (the pre-S15 shape). The synthesis layer lives on its own
+    sub-tab — ``render_portfolio_synthesis_panel``."""
     window = validated_window(start_date, end_date, include_backfill)
     analytics = fetch_portfolio_analytics(
         api_url=api_url,
@@ -130,13 +134,19 @@ def render_portfolio_panel(
         include_backfill=window.include_backfill,
     )
     live = fetch_live_portfolio(api_url=api_url)
-    return compose_portfolio_page(analytics, live, window=window)
+    attributions: list[PositionAttribution] | None = None
+    if db_path is not None and db_path.exists():
+        from attribution import attributions_for_book
+
+        attributions = attributions_for_book(db_path=db_path, alpha=analytics.position_alpha)
+    return compose_portfolio_page(analytics, live, window=window, attributions=attributions)
 
 
 def compose_portfolio_page(
     analytics: PortfolioAnalytics,
     live: LivePortfolio,
     window: WindowSelection | None = None,
+    attributions: list[PositionAttribution] | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -145,7 +155,8 @@ def compose_portfolio_page(
     single offline note carries the start hint for the whole page (no duplicate
     per-section offline panels). Tracker up but ALL analytics endpoints failing
     (e.g. an older tracker build) → one quiet note instead of five dead
-    sections.
+    sections. ``attributions`` (S15) renders the per-position narrative block
+    after the analytics sections; None/empty hides it.
     """
     w = window or _DEFAULT_WINDOW
     parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
@@ -158,6 +169,10 @@ def compose_portfolio_page(
             '<p class="muted">The tracker is reachable but its analytics endpoints aren\'t — '
             f"{escape(first_error)}.</p></section>"
         )
+    if attributions:
+        from pipeline.attribution_panel import render_book_attribution_section
+
+        parts.append(render_book_attribution_section(attributions))
     parts.append(render_live_portfolio_section(live))
     return "".join(parts)
 

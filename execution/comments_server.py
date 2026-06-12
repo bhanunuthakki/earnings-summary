@@ -463,7 +463,9 @@ def create_app(
         404 for an unknown panel."""
         if name == "portfolio":
             # Portfolio → Performance: tracker analytics + live positions /
-            # % of book / taxable breakdown from the companion tracker.
+            # % of book / taxable breakdown from the companion tracker, plus
+            # the per-position attribution narratives (S15 — db_path joins
+            # lifecycle entries + thesis events onto the alpha rows).
             # Degrades when the tracker is offline. ``?start_date`` /
             # ``?end_date`` / ``?include_backfill`` re-window the tracker
             # analytics — the page's own window bar drives these. (The
@@ -475,6 +477,7 @@ def create_app(
                     start_date=request.args.get("start_date"),
                     end_date=request.args.get("end_date"),
                     include_backfill=request.args.get("include_backfill") in ("1", "true", "True"),
+                    db_path=db_path,
                 ),
                 mimetype="text/html",
             )

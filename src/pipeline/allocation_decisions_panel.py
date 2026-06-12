@@ -53,6 +53,7 @@ from html import escape
 from pathlib import Path
 from statistics import median
 
+from decision_calibration import CalibrationStats, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -430,7 +431,10 @@ def render_allocation_decisions_panel(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha
     )
     timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
-    return compose_decisions_page(audit, timeline, live, analytics.position_alpha)
+    calibration = build_calibration(db_path=db_path)
+    return compose_decisions_page(
+        audit, timeline, live, analytics.position_alpha, calibration=calibration
+    )
 
 
 def compose_decisions_page(
@@ -438,12 +442,15 @@ def compose_decisions_page(
     timeline: list[TimelineEvent],
     live: LivePortfolio,
     alpha: PositionAlpha | None,
+    calibration: CalibrationStats | None = None,
 ) -> str:
-    """Pure page assembly (testable without network or DB)."""
+    """Pure page assembly (testable without network or DB). ``calibration``
+    None (pre-0046 substrate) hides the section entirely."""
     return "".join(
         [
             _PANEL_CSS,
             _audit_section(audit, live, alpha),
+            _calibration_section(calibration) if calibration is not None else "",
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
         ]
@@ -583,6 +590,120 @@ def _audit_row(r: SizingAuditRow) -> str:
     return main + editor
 
 
+_OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
+
+
+def _calibration_section(stats: CalibrationStats) -> str:
+    """The decisions-history analysis (S15 PR2): hit rate by conviction,
+    action mix + reversal track record, time-to-outcome. Deterministic
+    aggregates only — the sub-line states the denominator rule."""
+    head = (
+        '<section class="panel"><h2>Decision calibration</h2>'
+        '<p class="sub">How the recorded recommendations actually graded — by stated '
+        "conviction, by your response to them, and by how long a call takes to resolve. "
+        "Hit rate = correct &divide; graded (correct + wrong + mixed); pending and "
+        "unfalsifiable calls are shown but never scored.</p>"
+    )
+    if stats.total == 0:
+        return (
+            f"{head}"
+            '<p class="muted">No decisions recorded yet. The morning pipeline\'s stage 0b '
+            "extracts ADD/TRIM/HOLD/SELL verdicts from five-minute rereads and Socratic "
+            "memos into the ledger; grading accrues via the outcome rung.</p></section>"
+        )
+
+    hit = f"{stats.overall_hit_rate * 100.0:.0f}%" if stats.overall_hit_rate is not None else "—"
+    rev_n = len(stats.reversals)
+    kpis = (
+        '<div class="adc-kpis">'
+        f'<span class="adc-kpi"><b>{stats.total}</b> decisions</span>'
+        f'<span class="adc-kpi"><b>{stats.graded}</b> graded</span>'
+        f'<span class="adc-kpi"><b>{hit}</b> hit rate</span>'
+        f'<span class="adc-kpi"><b>{rev_n}</b> reversed'
+        + (
+            f" ({stats.reversals_vindicated} vindicated &middot; {stats.reversals_cost} cost)"
+            if rev_n
+            else ""
+        )
+        + "</span></div>"
+    )
+
+    conviction_rows = "".join(
+        "<tr>"
+        f"<td>{escape(b.conviction)}</td>"
+        f'<td class="num">{b.graded}</td>'
+        f'<td class="num"><span class="pos">{b.correct}</span></td>'
+        f'<td class="num"><span class="neg">{b.wrong}</span></td>'
+        f'<td class="num">{b.mixed}</td>'
+        f'<td class="num muted">{b.ungraded}</td>'
+        f'<td class="num">{f"{b.hit_rate * 100.0:.0f}%" if b.hit_rate is not None else "&mdash;"}'
+        "</td></tr>"
+        for b in stats.by_conviction
+    )
+    conviction_table = (
+        '<table class="ad-table adc-table"><thead><tr>'
+        '<th>Conviction</th><th class="num">Graded</th><th class="num">Correct</th>'
+        '<th class="num">Wrong</th><th class="num">Mixed</th><th class="num">Ungraded</th>'
+        '<th class="num">Hit rate</th>'
+        f"</tr></thead><tbody>{conviction_rows}</tbody></table>"
+        if conviction_rows
+        else ""
+    )
+
+    mix_bits = " &middot; ".join(
+        f"{label} {stats.action_mix.get(key, 0)}"
+        for key, label in (
+            ("followed", "followed"),
+            ("partial", "partial"),
+            ("ignored", "ignored"),
+            ("reversed", "reversed"),
+            ("unacted", "no action recorded"),
+        )
+        if stats.action_mix.get(key, 0)
+    )
+    mix_line = (
+        f'<p class="adc-line">Your response to recommendations: {mix_bits}.</p>' if mix_bits else ""
+    )
+
+    timing_bits = " &middot; ".join(
+        f"{t.kind.upper()} avg {t.avg_days:.0f}d, median {t.median_days:.0f}d (n={t.n})"
+        for t in stats.time_to_outcome
+    )
+    timing_line = f'<p class="adc-line">Time to outcome: {timing_bits}.</p>' if timing_bits else ""
+
+    reversal_rows = "".join(
+        "<tr>"
+        f'<td class="when">{escape(r.made_at)}</td>'
+        f'<td class="tk">{escape(r.ticker)}</td>'
+        f"<td>{escape(r.kind.upper())}</td>"
+        f"<td>{_reversal_verdict(r.outcome_label, r.vindicated)}</td>"
+        "</tr>"
+        for r in stats.reversals[:8]
+    )
+    reversal_table = (
+        '<h3 class="adc-sub">Reversals</h3>'
+        '<table class="ad-timeline adc-table"><thead><tr>'
+        "<th>Made</th><th>Ticker</th><th>Call</th><th>How it graded</th>"
+        f"</tr></thead><tbody>{reversal_rows}</tbody></table>"
+        if reversal_rows
+        else ""
+    )
+
+    return f"{head}{kpis}{conviction_table}{mix_line}{timing_line}{reversal_table}</section>"
+
+
+def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str:
+    if outcome_label is None:
+        return '<span class="muted">unresolved</span>'
+    tone = _OUTCOME_TONE.get(outcome_label, "muted")
+    badge = f'<span class="ad-badge b-{tone}">{escape(outcome_label)}</span>'
+    if vindicated is True:
+        return f'{badge} <span class="pos">reversal vindicated</span>'
+    if vindicated is False:
+        return f'{badge} <span class="neg">reversal cost</span>'
+    return badge
+
+
 def _timeline_section(timeline: list[TimelineEvent]) -> str:
     head = (
         '<section class="panel"><h2>Decisions timeline</h2>'
@@ -656,6 +777,14 @@ _PANEL_CSS = """<style>
   font-weight: 600; cursor: pointer; }
 .ad-timeline td.tk { font-weight: 600; white-space: nowrap; font-family: var(--mono); }
 .ad-timeline td.when { color: var(--muted); white-space: nowrap; }
+/* Decision calibration (S15): KPI strip + compact aggregate tables. */
+.adc-kpis { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px;
+  font-size: var(--fs-body); color: var(--muted); }
+.adc-kpi b { color: var(--fg); font-variant-numeric: tabular-nums; margin-right: 4px; }
+.adc-table { margin-bottom: 10px; }
+.adc-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
+.adc-sub { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
 /* Timeline kinds: semantic tones where they exist (bear=bad, thesis=ok);
    the rest stay one quiet treatment — color is for meaning, not category. */
 .ad-pill { display: inline-block; padding: 2px 9px; border-radius: var(--radius-full);

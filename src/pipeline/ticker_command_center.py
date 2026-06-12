@@ -856,6 +856,7 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     from identity import DEFAULT_USER_ID
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
+    from pipeline.attribution_panel import render_attribution_section
     from pipeline.position_lifecycle_panel import render_position_lifecycle_section
 
     t = ticker.upper()
@@ -878,6 +879,10 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
             # post-exit grading. Live-rendered, between the reread and the
             # operational sections — analytical content leads the drawer.
             render_position_lifecycle_section(db_path, t, user_id=DEFAULT_USER_ID),
+            # What drove this position's window alpha (S15 PR2): tracker
+            # dollar alpha + entry posture + thesis/alert/decision events,
+            # phrased deterministically. Degrades tracker-offline.
+            render_attribution_section(db_path, t, user_id=DEFAULT_USER_ID),
             _freshness_strip(tcc.identity),
             _refresh_section(t),
             _dcf_sheets_section(t),
