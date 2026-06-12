@@ -1,0 +1,155 @@
+{
+  "purpose": "ask_pack_router",
+  "version": 1,
+  "_readme": "Golden cases for the ask pack router (fund-grade build S4). Two case modes share the file: mode=router pins the classifier's pack selection for one question (scored set-vs-set: pass = exact match, score = Jaccard so a near-miss beats garbage); mode=grounded runs the PRODUCTION route_packs -> load_packs chain against the live DB and checks contract invariants (selected_includes <= the live selection; require_kinds present among loaded items — only packs certain to materialize belong there: holdings/performance always emit an item when selected, even tracker-offline; every loaded kind was selected; item text non-empty and within its char budget). expected_packs/selected_includes/require_kinds entries must be PACK_KEYS members — tests/test_llm_evals_ask_router.py enforces it.",
+  "cases": [
+    {
+      "id": "rt-001-fundamentals-transcript",
+      "mode": "router",
+      "question": "What did NU management say about credit quality on the last call?",
+      "expected_packs": [],
+      "notes": "transcript question — document evidence only"
+    },
+    {
+      "id": "rt-002-fundamentals-filing",
+      "mode": "router",
+      "question": "Summarize META's latest 10-K risk factors.",
+      "expected_packs": [],
+      "notes": "filing question — empty selection is the correct answer"
+    },
+    {
+      "id": "rt-003-cost-basis",
+      "mode": "router",
+      "question": "What's my cost basis on NU?",
+      "expected_packs": ["holdings"],
+      "notes": "cost basis lives only in the tracker holdings pack"
+    },
+    {
+      "id": "rt-004-biggest-position",
+      "mode": "router",
+      "question": "What's my biggest position right now?",
+      "expected_packs": ["holdings"],
+      "notes": "pure weights question"
+    },
+    {
+      "id": "rt-005-swap",
+      "mode": "router",
+      "question": "Should I trim MELI and add TSM with the proceeds?",
+      "expected_packs": ["holdings", "conviction", "dcf"],
+      "notes": "the flagship swap question — sizing rule: holdings + dcf + conviction"
+    },
+    {
+      "id": "rt-006-size-up",
+      "mode": "router",
+      "question": "Should I size NU up to 15% of the book?",
+      "expected_packs": ["holdings", "conviction", "dcf"],
+      "notes": "sizing against a stated target"
+    },
+    {
+      "id": "rt-007-valuation-screen",
+      "mode": "router",
+      "question": "Which names trade furthest below model fair value?",
+      "expected_packs": ["dcf"],
+      "notes": "valuation-gap screen — dcf alone answers it"
+    },
+    {
+      "id": "rt-008-vs-spy",
+      "mode": "router",
+      "question": "How am I doing against SPY this year?",
+      "expected_packs": ["performance"],
+      "notes": "benchmark-relative results"
+    },
+    {
+      "id": "rt-009-working-dragging",
+      "mode": "router",
+      "question": "What's working and what's dragging in the book this year?",
+      "expected_packs": ["performance", "holdings"],
+      "notes": "results + which positions — the 'usually with holdings' rule"
+    },
+    {
+      "id": "rt-010-past-decision",
+      "mode": "router",
+      "question": "What did I decide about MELI last quarter, and did it play out?",
+      "expected_packs": ["decisions"],
+      "notes": "decision ledger with outcomes"
+    },
+    {
+      "id": "rt-011-open-questions",
+      "mode": "router",
+      "question": "What open questions am I carrying on NU?",
+      "expected_packs": ["journal"],
+      "notes": "journal memory question"
+    },
+    {
+      "id": "rt-012-concentration",
+      "mode": "router",
+      "question": "Am I too concentrated?",
+      "expected_packs": ["performance", "holdings"],
+      "notes": "concentration stats live in the performance pack; holdings names the weights"
+    },
+    {
+      "id": "rt-013-stated-conviction",
+      "mode": "router",
+      "question": "Remind me of my conviction and target weight on NU.",
+      "expected_packs": ["conviction"],
+      "notes": "the analyst's own stated posture"
+    },
+    {
+      "id": "rt-014-cheap-vs-dcf",
+      "mode": "router",
+      "question": "Is NU cheap relative to your DCF right now?",
+      "expected_packs": ["dcf"],
+      "notes": "single-name valuation gap"
+    },
+    {
+      "id": "rt-015-fundamentals-metric",
+      "mode": "router",
+      "question": "Walk me through MELI's take-rate trend from the filings.",
+      "expected_packs": [],
+      "notes": "company metric narrative — no portfolio state needed"
+    },
+    {
+      "id": "rt-016-position-alpha",
+      "mode": "router",
+      "question": "Did adding NU actually beat just buying SPY?",
+      "expected_packs": ["performance"],
+      "notes": "per-position alpha vs cashflow-matched benchmark"
+    },
+    {
+      "id": "gr-001-trim-grounded",
+      "mode": "grounded",
+      "question": "Should I trim NU here?",
+      "focus_tickers": ["NU"],
+      "selected_includes": ["holdings", "dcf"],
+      "require_kinds": ["dcf", "holdings"],
+      "notes": "NU has dcf_runs rows on the prod DB; holdings always materializes (offline item if the tracker is down)"
+    },
+    {
+      "id": "gr-002-cost-basis-grounded",
+      "mode": "grounded",
+      "question": "What's my cost basis and unrealized P&L on MELI?",
+      "focus_tickers": ["MELI"],
+      "selected_includes": ["holdings"],
+      "require_kinds": ["holdings"],
+      "notes": "holdings selection + the item materializing either live or as an explicit offline marker"
+    },
+    {
+      "id": "gr-003-decisions-grounded",
+      "mode": "grounded",
+      "question": "What have I decided about NU in the past, and how did those calls work out?",
+      "focus_tickers": ["NU"],
+      "selected_includes": ["decisions"],
+      "require_kinds": [],
+      "notes": "decisions must be SELECTED; materialization not required — the prod decisions table is legitimately empty until decision_extractor runs (verified 2026-06-12), and an empty store correctly contributes nothing"
+    },
+    {
+      "id": "gr-004-journal-grounded",
+      "mode": "grounded",
+      "question": "What open watch-items am I carrying across the book?",
+      "focus_tickers": [],
+      "selected_includes": ["journal"],
+      "require_kinds": [],
+      "notes": "journal must be selected; presence not required (open notes can legitimately be zero at any moment)"
+    }
+  ]
+}

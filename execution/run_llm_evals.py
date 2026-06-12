@@ -51,6 +51,7 @@ GOLDEN_PURPOSES = (
     "intake_classifier",
     "news_structuring",
     "decision_conditions_extract",
+    "ask_pack_router",
 )
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
@@ -186,6 +187,19 @@ def main() -> int:
                 code_root=PROJECT_ROOT,  # the sha of the code/prompt under eval, not the data repo
                 limit=args.limit,
                 judge=None if args.no_judge else run_judge,
+            )
+        elif args.purpose == "ask_pack_router":
+            # Set-vs-set + contract grading, no judge — --no-judge is a no-op
+            # here like the other deterministic golden purposes.
+            from evals.ask_router import DEFAULT_GOLDEN_RELPATH as ROUTER_GOLDEN
+            from evals.ask_router import run_ask_router_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / ROUTER_GOLDEN)).resolve()
+            summary = run_ask_router_eval(
+                db_path=db_path,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
             )
         else:
             # Fast classifiers (PR 4): deterministic golden sets, no judge —
