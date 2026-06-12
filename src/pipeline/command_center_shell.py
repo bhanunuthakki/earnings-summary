@@ -593,7 +593,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-home-rail-links { font-size: var(--fs-caption); color: var(--muted); }
 .cc-home-rail-links a { color: var(--muted); text-decoration: none; }
 .cc-home-rail-links a:hover { color: var(--link); }
-.cc-home-rail .ix-stream { max-height: calc(100vh - 140px); overflow-y: auto;
+.cc-home-rail .ix-stream { max-height: calc(100vh - 140px); max-height: calc(100dvh - 140px); overflow-y: auto;
   padding-right: 2px; }
 .cc-panel[hidden] { display: none; }
 .cc-loading, .cc-empty { color: var(--muted); font-size: var(--fs-body); padding: 24px 4px; }
@@ -632,7 +632,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-skel-chips { display: flex; gap: var(--sp-2); margin-bottom: 18px; }
 .cc-skel-chip { height: 20px; width: 92px; border-radius: var(--radius-full); }
 .cc-skel-band { height: 36px; margin-bottom: 14px; }
-.cc-skel-frame { height: calc(100vh - 280px); min-height: 360px; }
+.cc-skel-frame { height: calc(100vh - 280px); height: calc(100dvh - 280px); min-height: 360px; }
 @media (prefers-reduced-motion: reduce) {
   .cc-skel-line, .cc-skel-row, .cc-skel-kpi, .cc-skel-card, .cc-skel-input,
   .cc-skel-chip, .cc-skel-band, .cc-skel-frame, .cc-loading::after { animation: none; }
@@ -743,7 +743,7 @@ code { font-family: var(--font-mono); font-size: 0.93em; color: var(--fg-soft); 
 .budget-table td code { font-family: var(--font-mono); font-size: 0.93em; color: var(--ink); background: transparent; padding: 0; }
 .burn-cell { width: 200px; padding: 6px 10px; }
 .burn-bar { width: 100%; height: 8px; background: var(--paper); border-radius: var(--radius-full); overflow: hidden; }
-.burn-fill { height: 100%; transition: width 0.2s; }
+.burn-fill { height: 100%; }
 .burn-ok { background: var(--ok); }
 .burn-warn { background: var(--warn); }
 .burn-over { background: var(--bad); }
@@ -820,7 +820,7 @@ td.ticker a:hover { color: var(--link); }
   cursor: pointer; margin-right: 4px; }
 .artifact-table code { background: transparent; padding: 0; }
 .cc-report-embed { padding-bottom: 8px; }
-.cc-report-frame { width: 100%; height: calc(100vh - 220px); min-height: 560px;
+.cc-report-frame { width: 100%; height: calc(100vh - 220px); height: calc(100dvh - 220px); min-height: 560px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg);
   margin-top: 6px; }
 
@@ -832,7 +832,7 @@ td.ticker a:hover { color: var(--link); }
   gap: 18px; align-items: start; }
 .cc-holding-main { min-width: 0; }
 .cc-holding-rail { display: flex; flex-direction: column; gap: 18px;
-  max-height: calc(100vh - 150px); overflow-y: auto; position: sticky; top: 88px; }
+  max-height: calc(100vh - 150px); max-height: calc(100dvh - 150px); overflow-y: auto; position: sticky; top: 88px; }
 .cc-rail-panel { margin-bottom: 0; padding: 14px 16px; }
 .cc-rail-panel h2 { font-size: var(--fs-section); }
 @media (max-width: 1100px) {
@@ -1008,7 +1008,7 @@ td.ticker a:hover { color: var(--link); }
 /* The palette field is the dialog's own chrome — no kit focus ring. */
 .cc-palette input:focus-visible { border-color: var(--border); border-bottom-color: var(--accent);
   box-shadow: none; }
-.cc-palette-list { list-style: none; margin: 0; padding: 6px 0; max-height: 46vh;
+.cc-palette-list { list-style: none; margin: 0; padding: 6px 0; max-height: 46vh; max-height: 46dvh;
   overflow-y: auto; }
 .cc-palette-list li { display: flex; justify-content: space-between; gap: 12px;
   padding: 8px 16px; font-size: var(--fs-body); cursor: pointer; color: var(--ink);
@@ -1065,6 +1065,39 @@ td.ticker a:hover { color: var(--link); }
 .cc-mini-open { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
   font-size: var(--fs-caption); }
 .cc-mini-open a { color: var(--accent); text-decoration: none; }
+
+/* ============================================================
+   Responsive + touch-aware overrides (S16 PR1)
+   ============================================================ */
+
+/* Narrow topbar at ≤900: stamp + links go; nav already overflow-x auto. */
+@media (max-width: 900px) {
+  .cc-stamp, .cc-links { display: none; }
+  .cc-topbar { padding: 8px 16px; }
+}
+
+/* Tablet portrait + phone: compress panels, full-width drawers, safe-area. */
+@media (max-width: 768px) {
+  .cc-panels { padding: 14px 16px 48px; }
+  .cc-drawer { width: 100%; border-left: none; }
+  .cc-notes-drawer { width: 100%; }
+  .cc-drawer-body { padding-bottom: max(40px, env(safe-area-inset-bottom, 40px)); }
+  .cc-palette { top: 6vh; }
+}
+
+/* Horizontal table scroll on smaller screens (prevents viewport overflow). */
+@media (max-width: 1024px) {
+  .panel table, .list-section table {
+    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Touch targets: give interactive chrome a comfortable tap area. */
+@media (pointer: coarse) {
+  .k-btn, .cc-tab, .cc-drawer-close, .cc-peek-close,
+  .cc-settings-btn, .cc-notes-btn, .cc-system-btn { min-height: 44px; }
+  a.tier-chip { min-height: 44px; display: inline-flex; align-items: center; }
+}
 """
     + VIEWER_CONTENT_CSS
     + INBOX_CSS

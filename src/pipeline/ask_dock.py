@@ -44,7 +44,7 @@ from __future__ import annotations
 from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
 
 _DOCK_CSS = """
-.ask-dock { position:fixed; right:18px; bottom:14px; width:400px; max-width:calc(100vw - 36px);
+.ask-dock { position:fixed; right:18px; bottom:14px; bottom:calc(14px + env(safe-area-inset-bottom, 0px)); width:400px; max-width:calc(100vw - 36px);
   z-index:35; border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); box-shadow:0 16px 48px rgba(0,0,0,0.55);
   display:flex; flex-direction:column; overflow:hidden; }
@@ -56,7 +56,7 @@ _DOCK_CSS = """
 .ask-dock-ctl { color:var(--muted); font-size:var(--fs-body); padding:0 2px;
   text-decoration:none; cursor:pointer; }
 .ask-dock-ctl:hover { color:var(--accent); }
-.ask-dock-body { display:flex; flex-direction:column; max-height:54vh; position:relative; }
+.ask-dock-body { display:flex; flex-direction:column; max-height:54vh; max-height:54dvh; position:relative; }
 /* min — the slim pill: title only, body folded, controls hidden (the pill
    itself is the restore control). */
 .ask-dock[data-mode="min"] { width:auto; }

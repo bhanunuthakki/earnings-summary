@@ -1039,7 +1039,7 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
   font-size: var(--fs-caption); cursor: pointer;
   transition: color var(--transition), border-color var(--transition); }
 .tcc-drawer-btn:hover { border-color: var(--accent); color: var(--accent); }
-.tcc-report-main .cc-report-frame { height: calc(100vh - 200px); }
+.tcc-report-main .cc-report-frame { height: calc(100vh - 200px); height: calc(100dvh - 200px); }
 .tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34;
   animation: cc-fade-in var(--transition); }
 .tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
