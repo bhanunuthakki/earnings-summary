@@ -40,6 +40,9 @@ from llm.calibration import VersionSummary, summarize_by_prompt_version
 # (asserted in tests so the two can't drift).
 RUNNABLE_PURPOSES: tuple[str, ...] = (
     "viewspec_compile",
+    "transcript_metadata",
+    "intake_classifier",
+    "news_structuring",
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",

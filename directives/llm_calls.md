@@ -75,6 +75,39 @@ response = call_llm(prompt, purpose="bear_case")
 - Caller-side response parsing (the LLM didn't follow your output format).
 - JSON-fence wrapping when you asked for strict JSON.
 
+## Structured output (JSON-expecting calls)
+
+New call sites that expect JSON should route through
+`llm.structured.call_llm_structured(prompt, purpose=..., expect="object"|"array",
+required_keys=(...))` instead of hand-rolling fence-strip + `json.loads` +
+`except`. It gives you the proven retry-with-feedback (one re-ask telling the
+model its previous response wasn't valid JSON) and it is LOUD on final
+failure (`StructuredParseError`) — never return a `{}`/`[]`/`None` that is
+indistinguishable from a real "nothing found" (the silent-empty pathology,
+llm_evals_plan §5.4; `risk_factor_classify` used to persist fabricated
+"other" categories this way). Existing sites migrate opportunistically.
+
+## Prompt-change workflow (the regression gate)
+
+Materially rewriting a prompt is a measurable change, not a vibe
+(directives/llm_evals_plan.md §2.4). The loop:
+
+1. Edit the prompt.
+2. Bump its entry in `src/llm/prompt_versions.py` (`"v1"` → `"v2"`);
+   unregistered purposes get registered on first bump.
+3. Run its eval against the production DB:
+   `python execution/run_llm_evals.py --purpose <p> --min-score 0.8
+   --repo-root <MAIN repo>` — exit 3 means the rewrite regressed below the
+   bar; don't merge it. (Which purposes have eval coverage:
+   `python execution/run_llm_evals.py --coverage`.)
+4. Compare versions: the System → Evals panel's "Score by prompt version"
+   strip (or `summarize_by_prompt_version`) shows v2 vs v1 side by side.
+   First real win of this loop: viewspec_compile v2 scored 16/16 vs v1's
+   13/16 (#427).
+
+The gate is a pre-merge MANUAL step — LLM calls in CI are forbidden /
+monkeypatched by design.
+
 ## Migration history
 
 This directive supersedes the inconsistent state where scripts called

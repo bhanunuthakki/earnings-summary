@@ -1,0 +1,34 @@
+{
+  "purpose": "intake_classifier",
+  "notes": "Mode-A golden set for classify_intake_document (llm_evals_plan PR 4). Each case carries the function's three inputs (filename, text excerpt, filename hint); expected pins ticker + doc_type + period_end. confidence/reasoning are free. Deterministic field compare — doc_type comes from a closed enum, period_end from the prompt's own fiscal mapping.",
+  "cases": [
+    {
+      "id": "ic-001-press-release",
+      "filename": "NU_Q1_2026_results.pdf",
+      "hint": {"ticker": "NU", "quarter": 1, "year": 2026},
+      "text": "Nu Holdings Ltd. Reports First Quarter 2026 Financial Results\n\nSao Paulo, May 13, 2026 — Nu Holdings Ltd. (NYSE: NU) today announced financial results for the quarter ended March 31, 2026. Revenue reached $3.7 billion, up 35% year-over-year on an FX-neutral basis, and the company added 4.6 million customers in the quarter, ending at 124 million. Net income was $720 million. Monthly average revenue per active customer expanded to $12.1.\n\nFirst Quarter 2026 Highlights:\n- Customer growth: 124.0 million customers, up 17% YoY\n- Gross profit of $1.7 billion, gross margin 46%",
+      "expected": {"ticker": "NU", "doc_type": "ir_press_release", "period_end": "2026-03-31"}
+    },
+    {
+      "id": "ic-002-transcript",
+      "filename": "veeva_q3_call.txt",
+      "hint": {},
+      "text": "Veeva Systems Third Quarter Fiscal 2026 Earnings Conference Call\nDecember 3, 2025\n\nOperator: Good afternoon. Welcome to Veeva's fiscal 2026 third quarter earnings call.\n\nPeter Gassner — Chief Executive Officer: Thank you, and welcome everyone. Q3 was a strong quarter, with total revenue of $780 million ahead of our guidance.\n\nAnalyst (Morgan Stanley): Peter, can you talk about the Vault CRM migration cadence?\n\nPeter Gassner: Sure. Migrations are tracking ahead of plan...",
+      "expected": {"ticker": "VEEV", "doc_type": "earnings_call_transcript", "period_end": "2025-10-31"}
+    },
+    {
+      "id": "ic-003-investor-update-letter",
+      "filename": "MELI_shareholder_letter_Q4_2025.pdf",
+      "hint": {"ticker": "MELI", "quarter": 4, "year": 2025},
+      "text": "MercadoLibre, Inc.\nLetter to Shareholders — Fourth Quarter 2025\n\nDear Shareholders,\n\nWe closed 2025 with strong momentum across commerce and fintech. In the fourth quarter, ended December 31, 2025, gross merchandise volume grew 29% FX-neutral, while Mercado Pago's total payment volume rose 41%. Credit portfolio reached $7.8 billion with an NPL ratio improving quarter over quarter. We continued to invest in logistics: same-day or next-day delivery now covers 83% of shipments.\n\nOur strategy remains unchanged: deepen the ecosystem, expand credit prudently, and compound the network effects of our marketplace across Latin America. Below we review the quarter in detail, segment by segment, and outline our investment priorities for 2026.",
+      "expected": {"ticker": "MELI", "doc_type": "ir_investor_update", "period_end": "2025-12-31"}
+    },
+    {
+      "id": "ic-004-event-deck",
+      "filename": "google_io_strategy_2026.pdf",
+      "hint": {},
+      "text": "Alphabet Investor Day 2026\nMountain View — April 9, 2026\n\nSlide 2: Our multi-year framework\n- Search: AI Overviews monetization at scale\n- Cloud: path to $100B+ annual run-rate\n- Capital allocation: disciplined capex envelope of $90-95B\n\nSlide 3: Gemini across every surface\n[chart: tokens served per day, 2024-2026]\n\nSlide 4: Waymo expansion roadmap — 15 new metros by 2027\n\nSlide 5: Long-term operating margin framework",
+      "expected": {"ticker": "GOOG", "doc_type": "ir_event", "period_end": "2026-04-09"}
+    }
+  ]
+}

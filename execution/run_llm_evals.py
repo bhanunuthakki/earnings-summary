@@ -2,9 +2,11 @@
 
 Two modes, one harness:
 
-* mode A (live golden set) — `viewspec_compile`: generates fresh outputs
-  through the PRODUCTION call path and grades them against the checked-in
-  golden set, judge only on ambiguous divergence.
+* mode A (live golden set) — `viewspec_compile` (compile→execute→compare→
+  judge-on-divergence) and the fast classifiers `transcript_metadata` /
+  `intake_classifier` / `news_structuring` (deterministic compare /
+  output-contract invariants; no judge — closed-form ground truth): fresh
+  outputs through the PRODUCTION call path vs the checked-in golden set.
 * mode B (rubric audit) — `bear_case` / `transcript_summary` /
   `advisor_next_dollar`: judges REAL production artifacts facet-by-facet
   against the versioned rubric in evals/rubrics/<purpose>.md.
@@ -13,13 +15,17 @@ Both persist the run + per-case transcripts to eval_runs/eval_case_results
 (alembic 0083) and bridge the run average into prompt_calibration_scores so
 `summarize_by_prompt_version` compares prompt versions.
 
+`--coverage` prints the eval-coverage report instead (which purposes have NO
+eval mode — the analogue of the unknown-purpose model warning).
+
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
     python execution/run_llm_evals.py --purpose bear_case \
         --repo-root C:/Users/Bhanu/.gemini/antigravity/scratch/earnings-summary --limit 5
     python execution/run_llm_evals.py --purpose transcript_summary --since-days 7
-    python execution/run_llm_evals.py --purpose viewspec_compile --no-persist --limit 3
+    python execution/run_llm_evals.py --purpose intake_classifier --no-persist
     python execution/run_llm_evals.py --purpose viewspec_compile --min-score 0.8  # gate
+    python execution/run_llm_evals.py --coverage
 
 Exit codes: 0 ok (including an empty audit corpus — nothing to grade) · 1 hard
 failure (bad golden set/rubric, missing DB/tables, abort) · 3 ran fine but
@@ -39,7 +45,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 log = logging.getLogger("run_llm_evals")
 
-GOLDEN_PURPOSES = ("viewspec_compile",)
+GOLDEN_PURPOSES = (
+    "viewspec_compile",
+    "transcript_metadata",
+    "intake_classifier",
+    "news_structuring",
+)
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 
@@ -50,9 +61,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--purpose",
-        required=True,
+        default=None,
         choices=PURPOSES,
-        help="Which purpose's eval to run (graders live in src/evals/).",
+        help="Which purpose's eval to run (graders live in src/evals/). "
+        "Required unless --coverage.",
     )
     parser.add_argument(
         "--repo-root",
@@ -100,6 +112,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Gate mode: exit 3 when avg_score falls below this threshold.",
     )
+    parser.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Print the eval-coverage report (purposes with no eval mode) and exit. No LLM spend.",
+    )
     return parser.parse_args()
 
 
@@ -119,6 +136,18 @@ def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
     db_path = repo_root / "data" / "portfolio.db"
+
+    if args.coverage:
+        # Observability only — works without a DB (registry-derived universe;
+        # observed call counts just come back 0).
+        from evals.coverage import eval_coverage, render_coverage_text
+
+        print(render_coverage_text(eval_coverage(db_path)))
+        return 0
+
+    if not args.purpose:
+        print("ERROR: --purpose is required (or pass --coverage).", file=sys.stderr)
+        return 1
     if not db_path.exists():
         print(f"ERROR: no DB at {db_path}", file=sys.stderr)
         return 1
@@ -145,7 +174,7 @@ def main() -> int:
                 limit=args.limit,
                 since_days=args.since_days,
             )
-        else:
+        elif args.purpose == "viewspec_compile":
             from evals.judge import run_judge
             from evals.viewspec_compile import DEFAULT_GOLDEN_RELPATH, run_viewspec_eval
 
@@ -156,6 +185,20 @@ def main() -> int:
                 code_root=PROJECT_ROOT,  # the sha of the code/prompt under eval, not the data repo
                 limit=args.limit,
                 judge=None if args.no_judge else run_judge,
+            )
+        else:
+            # Fast classifiers (PR 4): deterministic golden sets, no judge —
+            # --no-judge is a no-op here rather than an error.
+            from evals.golden_classifiers import GOLDEN_DIR, run_classifier_eval
+
+            golden_path = (
+                args.golden or (PROJECT_ROOT / GOLDEN_DIR / f"{args.purpose}.json")
+            ).resolve()
+            summary = run_classifier_eval(
+                args.purpose,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
             )
     except (EvalAbortError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

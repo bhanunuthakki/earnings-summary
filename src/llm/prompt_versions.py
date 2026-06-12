@@ -76,6 +76,14 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # graders — one entry governs both its grading modes.)
     "transcript_summary": "v1",
     "advisor_next_dollar": "v1",
+    # Golden-set classifier purposes (mode A, PR 4). Bump when the prompt in
+    # identify_transcript_metadata / classify_intake_document /
+    # structure_recent_news_json is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose <p> --min-score ...` per the prompt-change
+    # workflow in directives/llm_calls.md.
+    "transcript_metadata": "v1",
+    "intake_classifier": "v1",
+    "news_structuring": "v1",
     # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
     # templates). Bump when either judge prompt is materially reworded so
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay

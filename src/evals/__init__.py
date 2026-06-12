@@ -28,16 +28,26 @@ Layout:
     rubric_judge     — mode-B engine: rubric parse/validate, facet-scored
                        judging (fail-closed, hard stops abort), run
                        orchestration.
+    golden_classifiers — mode-A graders for the fast classifiers
+                       (transcript_metadata / intake_classifier /
+                       news_structuring): deterministic compares + the
+                       news output-contract invariants; no judge.
+    coverage         — the eval-coverage report: purposes with NO eval
+                       mode, the analogue of the unknown-purpose model
+                       warning.
 
-CLI: execution/run_llm_evals.py. Judge agreement is itself audited by
-execution/spot_check_eval_judge.py. Scores land in eval_runs and bridge into
-prompt_calibration_scores so summarize_by_prompt_version compares prompt
-versions with no new read-side code.
+CLI: execution/run_llm_evals.py (`--coverage` for the gap report). Judge
+agreement is itself audited by execution/spot_check_eval_judge.py. Scores
+land in eval_runs and bridge into prompt_calibration_scores so
+summarize_by_prompt_version compares prompt versions with no new read-side
+code.
 """
 
 from __future__ import annotations
 
 from evals.corpora import CORPUS_LOADERS, AuditItem
+from evals.coverage import CoverageRow, eval_coverage
+from evals.golden_classifiers import CLASSIFIER_PURPOSES, run_classifier_eval
 from evals.harness import CaseResult, EvalAbortError, EvalRunSummary, persist_summary
 from evals.judge import JudgeOutcome, JudgeVerdict, run_judge
 from evals.rubric_judge import AUDIT_SPECS, Rubric, RubricVerdict, load_rubric, run_rubric_eval
@@ -45,9 +55,11 @@ from evals.viewspec_compile import GoldenCase, load_golden, run_viewspec_eval, s
 
 __all__ = [
     "AUDIT_SPECS",
+    "CLASSIFIER_PURPOSES",
     "CORPUS_LOADERS",
     "AuditItem",
     "CaseResult",
+    "CoverageRow",
     "EvalAbortError",
     "EvalRunSummary",
     "GoldenCase",
@@ -55,9 +67,11 @@ __all__ = [
     "JudgeVerdict",
     "Rubric",
     "RubricVerdict",
+    "eval_coverage",
     "load_golden",
     "load_rubric",
     "persist_summary",
+    "run_classifier_eval",
     "run_judge",
     "run_rubric_eval",
     "run_viewspec_eval",

@@ -1018,6 +1018,11 @@ def identify_transcript_metadata(text_snippet):
     try:
         return call_llm(prompt + text_snippet[:2000], purpose="transcript_metadata").strip()
     except Exception as e:
+        # Hard stops (budget cap / missing CLI) must not masquerade as a
+        # legitimate "UNKNOWN" classification — that's the silent-empty
+        # pathology (llm_evals_plan §5.4). Transient failures still degrade.
+        if is_hard_stop(e):
+            raise
         log.error(f"Error identifying metadata: {e}")
         return "UNKNOWN"
 
@@ -1296,6 +1301,10 @@ def structure_recent_news_json(
         try:
             raw = call_llm_with_web(body, purpose="news_structuring", ticker=ticker)
         except Exception as exc:
+            # Hard stops propagate — a budget cap returning [] would read as
+            # "no determinable news" downstream (llm_evals_plan §5.4).
+            if is_hard_stop(exc):
+                raise
             log.warning(
                 f"news_structuring web call failed for {ticker} (attempt {attempt + 1}): {exc}"
             )
@@ -1927,6 +1936,10 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
             raw = JSON_FENCE_RE.sub("", raw).strip()
         return json.loads(raw)
     except Exception as e:
+        # Hard stops propagate — a budget cap returning None would be
+        # indistinguishable from "could not classify" (llm_evals_plan §5.4).
+        if is_hard_stop(e):
+            raise
         log.error(f"classify_intake_document failed: {e}")
         return None
 

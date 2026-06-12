@@ -1,0 +1,16 @@
+{
+  "purpose": "news_structuring",
+  "notes": "Mode-A CONTRACT eval for structure_recent_news_json (llm_evals_plan PR 4). Live web output can't be pinned to an expected value, so each case grades the prompt's own HARD RULES as code-checked invariants over whatever rows come back: every row is an object with non-empty headline + http(s) url + 'YYYY-MM-DD HH:MM:SS' published_at + tz in {UTC, ET} + non-future date + non-empty source. An empty array is a PASS ('no determinable news' is a valid answer). Cases cost real web-search spend (Opus + capped web budget) — keep the set small.",
+  "cases": [
+    {
+      "id": "ns-001-portfolio-name",
+      "ticker": "NU",
+      "news_days": 3
+    },
+    {
+      "id": "ns-002-megacap",
+      "ticker": "GOOGL",
+      "news_days": 2
+    }
+  ]
+}
