@@ -244,8 +244,9 @@ def _seed_verdicts(
     incumbent: str,
     verdicts: list[str],
 ) -> None:
-    """Insert model_eval_verdicts rows (oldest first in the list → newest last
-    so the ORDER BY recorded_at DESC query sees list[-1] as the 'latest')."""
+    """Insert model_eval_verdicts rows in the canonical sweep schema
+    (0084_model_eval_verdicts), oldest first in the list → newest last so
+    the ORDER BY evaluated_at DESC query sees list[-1] as the 'latest'."""
     from datetime import datetime, timedelta
 
     conn = sqlite3.connect(str(db_path))
@@ -254,10 +255,11 @@ def _seed_verdicts(
         conn.execute(
             """
             INSERT INTO model_eval_verdicts
-                (purpose, candidate, incumbent, verdict, run_id, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (purpose, incumbent_model, candidate_model, verdict,
+                 judge_agreement, n_cases, n_parity, evaluated_at, summary_json)
+            VALUES (?, ?, ?, ?, 0.9, 16, 15, ?, ?)
             """,
-            (purpose, candidate, incumbent, verdict, f"run{i:04d}", ts),
+            (purpose, incumbent, candidate, verdict, ts, f'{{"run_id": "run{i:04d}"}}'),
         )
     conn.commit()
     conn.close()

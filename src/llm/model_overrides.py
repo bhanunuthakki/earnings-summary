@@ -169,33 +169,40 @@ def record_verdict(
 ) -> None:
     """Persist one CandidateVerdict result to ``model_eval_verdicts``.
 
-    Called by ``execution/run_model_eval_sweep.py`` (PR2) and by
-    ``execution/apply_model_switches.py`` when it wants to record a verdict
-    inline.  Callers supply ``recorded_at`` implicitly as now-UTC.
+    Writes the CANONICAL sweep schema (0084_model_eval_verdicts, the table
+    ``execution/run_model_eval_sweep.py`` fills weekly) — this helper
+    originally targeted a divergent column set from the #441+#443 parallel
+    chips, which severed the loop. ``run_id`` and the raw ``parity_rate``
+    ride in ``summary_json``; ``n_parity`` is derived from them for the
+    NOT NULL count column.
     """
     path = _resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("record_verdict: no DB path available")
     now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    n_parity = (
+        round(parity_rate * n_cases) if parity_rate is not None and n_cases is not None else 0
+    )
+    summary = json.dumps({"run_id": run_id, "parity_rate": parity_rate}, ensure_ascii=False)
     conn = sqlite3.connect(str(path), timeout=10.0)
     try:
         conn.execute(
             """
             INSERT INTO model_eval_verdicts
-                (purpose, candidate, incumbent, verdict, run_id,
-                 parity_rate, judge_agreement, n_cases, recorded_at)
+                (purpose, incumbent_model, candidate_model, verdict,
+                 judge_agreement, n_cases, n_parity, evaluated_at, summary_json)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 purpose,
-                candidate,
                 incumbent,
+                candidate,
                 verdict,
-                run_id,
-                parity_rate,
-                judge_agreement,
-                n_cases,
+                judge_agreement if judge_agreement is not None else 0.0,
+                n_cases if n_cases is not None else 0,
+                n_parity,
                 now_iso,
+                summary,
             ),
         )
         conn.commit()

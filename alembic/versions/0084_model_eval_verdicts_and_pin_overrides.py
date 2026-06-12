@@ -1,10 +1,11 @@
-"""model_eval_verdicts + model_pin_overrides — auto-switch infra for the model-eval loop.
+"""model_pin_overrides — auto-switch infra for the model-eval loop.
 
-Two tables that together form the closed-loop model-selection system
-(directives/model_eval_loop.md):
+Completes the closed-loop model-selection system
+(directives/model_eval_loop.md) on top of the parent revision's
+``model_eval_verdicts``:
 
-``model_eval_verdicts`` (what the PR2 sweep cron would write; idempotent
-guard so when PR2 lands it skips this table):
+``model_eval_verdicts`` (created by the PARENT revision,
+0084_model_eval_verdicts / #441 — the sweep cron's accumulation sink):
   One row per (purpose, candidate) CandidateVerdict from a sweep run.
   A rolling window of these tells ``apply_model_switches`` whether the
   evidence for a downgrade is consistent enough to act on.
@@ -55,28 +56,14 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     existing = set(inspector.get_table_names())
 
-    if "model_eval_verdicts" not in existing:
-        op.create_table(
-            "model_eval_verdicts",
-            sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-            sa.Column("purpose", sa.Text(), nullable=False),
-            sa.Column("candidate", sa.Text(), nullable=False),
-            sa.Column("incumbent", sa.Text(), nullable=False),
-            # 'SWITCH_DOWN' | 'KEEP_INCUMBENT' | 'HOLD' | 'INSUFFICIENT_DATA'
-            sa.Column("verdict", sa.Text(), nullable=False),
-            sa.Column("run_id", sa.Text(), nullable=False),
-            sa.Column("parity_rate", sa.Float(), nullable=True),
-            sa.Column("judge_agreement", sa.Float(), nullable=True),
-            sa.Column("n_cases", sa.Integer(), nullable=True),
-            # Naive UTC ISO-8601 string (project naive-UTC convention).
-            sa.Column("recorded_at", sa.Text(), nullable=False),
-        )
-        op.create_index(
-            "ix_mev_purpose_candidate_recorded",
-            "model_eval_verdicts",
-            ["purpose", "candidate", sa.text("recorded_at DESC")],
-        )
-        op.create_index("ix_mev_run_id", "model_eval_verdicts", ["run_id"])
+    # model_eval_verdicts is created by the PARENT revision
+    # (0084_model_eval_verdicts, #441) in the canonical sweep schema
+    # (incumbent_model / candidate_model / n_parity / evaluated_at /
+    # summary_json). This revision originally carried its own incompatible
+    # creation block (candidate / incumbent / recorded_at — the #441+#443
+    # parallel-chip divergence); the readers/writers in
+    # apply_model_switches.py + llm.model_overrides now target the parent's
+    # schema, so this revision only adds model_pin_overrides.
 
     if "model_pin_overrides" not in existing:
         op.create_table(
@@ -115,9 +102,5 @@ def downgrade() -> None:
             if any(i["name"] == idx_name for i in inspector.get_indexes("model_pin_overrides")):
                 op.drop_index(idx_name, table_name="model_pin_overrides")
         op.drop_table("model_pin_overrides")
-
-    if "model_eval_verdicts" in existing:
-        for idx_name in ("ix_mev_run_id", "ix_mev_purpose_candidate_recorded"):
-            if any(i["name"] == idx_name for i in inspector.get_indexes("model_eval_verdicts")):
-                op.drop_index(idx_name, table_name="model_eval_verdicts")
-        op.drop_table("model_eval_verdicts")
+    # model_eval_verdicts belongs to the parent revision — its downgrade
+    # drops it.
