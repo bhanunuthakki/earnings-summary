@@ -112,18 +112,21 @@ def _passes_reconciliation(
     if seg_total <= cap:
         return True
     sys.stderr.write(
-        json.dumps({
-            "event": "segment_record_rejected",
-            "reason": "sum_exceeds_revenue",
-            "ticker": record.symbol.upper(),
-            "period_end": record.date,
-            "period_type": record.period,
-            "metric": metric,
-            "segment_sum": str(seg_total),
-            "revenue": str(revenue),
-            "ratio": float(seg_total / revenue),
-            "source_doc_id": source_doc_id,
-        }) + "\n"
+        json.dumps(
+            {
+                "event": "segment_record_rejected",
+                "reason": "sum_exceeds_revenue",
+                "ticker": record.symbol.upper(),
+                "period_end": record.date,
+                "period_type": record.period,
+                "metric": metric,
+                "segment_sum": str(seg_total),
+                "revenue": str(revenue),
+                "ratio": float(seg_total / revenue),
+                "source_doc_id": source_doc_id,
+            }
+        )
+        + "\n"
     )
     return False
 

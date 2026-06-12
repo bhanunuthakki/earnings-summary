@@ -154,7 +154,9 @@ def detect_trend(series: list[Observation]) -> dict[str, object]:
 
     y = _values(series)
     if not _is_finite(y):
-        return cast("dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"})
+        return cast(
+            "dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"}
+        )
 
     slope, _, r2 = _linreg(y)
     p_value = _mann_kendall_p(y)
@@ -217,7 +219,9 @@ def _ruptures_inflection(y: np.ndarray) -> int | None:
         # Pick the strongest changepoint = the one with the largest pre/post mean delta
         best_cp = max(interior, key=lambda c: abs(float(y[:c].mean()) - float(y[c:].mean())))
         return int(best_cp)
-    except Exception as exc:  # broad except: degrade to fallback when ruptures throws on edge inputs
+    except (
+        Exception
+    ) as exc:  # broad except: degrade to fallback when ruptures throws on edge inputs
         log.debug({"event": "ruptures_failed", "error": str(exc)})
         return None
 
@@ -271,7 +275,9 @@ def detect_inflection(series: list[Observation]) -> dict[str, object]:
 
     y = _values(series)
     if not _is_finite(y):
-        return cast("dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"})
+        return cast(
+            "dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"}
+        )
 
     method = "ruptures"
     cp = _ruptures_inflection(y)
@@ -431,7 +437,9 @@ def seasonal_decompose(series: list[Observation], period: int = 4) -> dict[str, 
 
     y = _values(series)
     if not _is_finite(y):
-        return cast("dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"})
+        return cast(
+            "dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"}
+        )
 
     method = "classical"
     trend = seasonal = residual = None
@@ -536,9 +544,7 @@ def correlation_matrix(
     # Inner join on period_end across all loaded series. The reduce is split
     # out so pyright infers the element type of the intersection (set.intersection
     # over *args defeats its inference).
-    period_sets: list[set[datetime]] = [
-        {o.period_end for o in s} for s in series_by_kpi.values()
-    ]
+    period_sets: list[set[datetime]] = [{o.period_end for o in s} for s in series_by_kpi.values()]
     intersection: set[datetime] = period_sets[0].copy()
     for ps in period_sets[1:]:
         intersection &= ps
@@ -621,7 +627,9 @@ def yoy_acceleration(series: list[Observation]) -> dict[str, object]:
 
     y = _values(series)
     if not _is_finite(y):
-        return cast("dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"})
+        return cast(
+            "dict[str, object]", {"insufficient_data": True, "n": n, "reason": "non_finite_values"}
+        )
 
     # YoY: value[t] vs value[t-4]
     yoy: list[dict[str, object]] = []

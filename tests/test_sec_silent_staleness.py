@@ -35,9 +35,7 @@ def _build_schema(conn: sqlite3.Connection, *, with_brief_dirty: bool) -> None:
             "  ticker TEXT NOT NULL UNIQUE"
             ")"
         )
-    conn.execute(
-        "INSERT INTO tracked_companies (ticker) VALUES ('AMZN'), ('GOOG')"
-    )
+    conn.execute("INSERT INTO tracked_companies (ticker) VALUES ('AMZN'), ('GOOG')")
     conn.commit()
 
 

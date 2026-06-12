@@ -118,8 +118,12 @@ def test_aggregate_all_nulls_yields_none_rates() -> None:
 def test_aggregate_empty_list() -> None:
     metric = _aggregate_one_side([], latest_value=None)
     assert metric == SurpriseMetric(
-        beats=0, misses=0, no_data=0,
-        beat_rate_pct=None, avg_surprise_pct=None, latest_surprise_pct=None,
+        beats=0,
+        misses=0,
+        no_data=0,
+        beat_rate_pct=None,
+        avg_surprise_pct=None,
+        latest_surprise_pct=None,
     )
 
 

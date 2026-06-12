@@ -79,9 +79,7 @@ _LTM_KEY_METRICS_FIELDS: dict[str, str] = {
     "EV/FCF": "evToFreeCashFlow",
 }
 
-_NTM_MULTIPLES: frozenset[str] = frozenset(
-    {"EV/NTM Revenue", "EV/NTM EBITDA", "P/E (NTM)"}
-)
+_NTM_MULTIPLES: frozenset[str] = frozenset({"EV/NTM Revenue", "EV/NTM EBITDA", "P/E (NTM)"})
 
 # Bump when the computed payload shape changes (new derived fields) so existing
 # caches recompute on their next --enable-llm build even though the underlying
@@ -129,9 +127,7 @@ def extract_for_ticker(
     ticker = ticker.upper()
     cache_path = _cache_path(repo_root, ticker)
 
-    key_metrics = _load_quarterly(
-        repo_root, ticker, "key_metrics_quarterly.json"
-    )
+    key_metrics = _load_quarterly(repo_root, ticker, "key_metrics_quarterly.json")
     if not key_metrics:
         return ValuationBasisResult(
             ticker=ticker,
@@ -208,8 +204,7 @@ def extract_for_ticker(
             return ValuationBasisResult(
                 ticker=ticker,
                 skipped_reason=(
-                    "LLM returned an empty, non-JSON, or non-object "
-                    "multiple-selection response"
+                    "LLM returned an empty, non-JSON, or non-object multiple-selection response"
                 ),
                 cache_sha256=inputs_sha,
             )
@@ -227,9 +222,7 @@ def extract_for_ticker(
     hist_values = [h.value for h in history if h.value is not None]
     hist_min = min(hist_values) if hist_values else None
     hist_max = max(hist_values) if hist_values else None
-    hist_median = (
-        sorted(hist_values)[len(hist_values) // 2] if hist_values else None
-    )
+    hist_median = sorted(hist_values)[len(hist_values) // 2] if hist_values else None
     rich_cheap = _rich_cheap_verdict(current_value, hist_median, hist_min, hist_max)
     peg_ratio, peg_growth_pct = _compute_peg(multiple_name, current_value, analyst_annual, income_q)
 
@@ -383,13 +376,13 @@ def _financial_profile_md(
             if prior_rev:
                 yoy = (rev - prior_rev) / prior_rev * 100
         out.append(f"- Latest quarter ({latest.get('date')}):")
-        out.append(f"  - Revenue: ${rev/1e9:.2f}B" if rev else "  - Revenue: n/a")
+        out.append(f"  - Revenue: ${rev / 1e9:.2f}B" if rev else "  - Revenue: n/a")
         if yoy is not None:
             out.append(f"  - Revenue YoY: {yoy:+.1f}%")
         if op_margin is not None:
             out.append(f"  - Operating margin: {op_margin:.1f}%")
         if net_inc is not None:
-            out.append(f"  - Net income: ${net_inc/1e9:.2f}B")
+            out.append(f"  - Net income: ${net_inc / 1e9:.2f}B")
         if eps is not None:
             out.append(f"  - EPS: ${eps:.2f}")
     if key_metrics:
@@ -397,9 +390,9 @@ def _financial_profile_md(
         ev = _float(latest_km.get("enterpriseValue"))
         mcap = _float(latest_km.get("marketCap"))
         if mcap:
-            out.append(f"  - Market cap: ${mcap/1e9:.1f}B")
+            out.append(f"  - Market cap: ${mcap / 1e9:.1f}B")
         if ev:
-            out.append(f"  - Enterprise value: ${ev/1e9:.1f}B")
+            out.append(f"  - Enterprise value: ${ev / 1e9:.1f}B")
         # Current LTM multiples (whatever FMP populated)
         for label, field_name in (
             ("EV/LTM Revenue", "evToSales"),
@@ -434,7 +427,13 @@ def _available_estimates_md(annual_estimates: list[dict[str, object]]) -> str:
     ):
         v = _float(nxt.get(field_name))
         if v is not None:
-            unit = "$" + (f"{v/1e9:.2f}B" if abs(v) > 1e9 else f"{v/1e6:.0f}M" if abs(v) > 1e6 else f"{v:.2f}")
+            unit = "$" + (
+                f"{v / 1e9:.2f}B"
+                if abs(v) > 1e9
+                else f"{v / 1e6:.0f}M"
+                if abs(v) > 1e6
+                else f"{v:.2f}"
+            )
             if label == "EPS":
                 unit = f"${v:.2f}"
             lines.append(f"  - {label}: {unit}")
@@ -458,9 +457,7 @@ def _compute_series(
         return (None, None, [])
 
     if multiple_name in _NTM_MULTIPLES:
-        return _compute_ntm_multiple(
-            multiple_name, key_metrics, analyst_annual, income_q
-        )
+        return _compute_ntm_multiple(multiple_name, key_metrics, analyst_annual, income_q)
 
     field_name = _LTM_KEY_METRICS_FIELDS.get(multiple_name)
     if field_name is None:
@@ -484,9 +481,7 @@ def _compute_series(
             v = None
         # Manual fallback for P/B and P/TBV from balance sheet.
         if v is None and multiple_name in ("P/B", "P/TBV"):
-            v = _manual_book_multiple(
-                multiple_name, row, balance_by_date.get(pe)
-            )
+            v = _manual_book_multiple(multiple_name, row, balance_by_date.get(pe))
         history.append(ValuationHistPoint(period_end=pe, value=v))
     history.reverse()  # oldest-first for the sparkline
     current = history[-1].value if history else None
@@ -584,9 +579,7 @@ def _compute_ntm_multiple(
     history: list[ValuationHistPoint] = []
     for row in key_metrics[:12]:
         pe = str(row.get("date") or "")
-        v = _compute_realized_forward_value(
-            multiple_name, row, income_by_date
-        )
+        v = _compute_realized_forward_value(multiple_name, row, income_by_date)
         if v is None:
             # Fall back to LTM proxy if forward window isn't available.
             v = _float(row.get(ltm_field))
@@ -779,7 +772,9 @@ def _str_or_none(v: object) -> str | None:
 def _format_value(v: float | None, multiple_name: str | None) -> str | None:
     if v is None:
         return None
-    if multiple_name and ("P/E" in multiple_name or "EV/" in multiple_name or "P/" in multiple_name):
+    if multiple_name and (
+        "P/E" in multiple_name or "EV/" in multiple_name or "P/" in multiple_name
+    ):
         return f"{v:.1f}x"
     return f"{v:.2f}"
 

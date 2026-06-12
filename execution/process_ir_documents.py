@@ -120,13 +120,20 @@ def _mark_processed(doc: dict) -> None:
         sha8 = Path(doc["local_path"]).stem.split("__")[-1]
         index_manager.mark_event_processed(doc["ticker"], doc["event_date"], sha8)
         return
-    index_manager.mark_document_processed(doc["ticker"], doc["year"], doc["quarter"], doc["doc_type"])
+    index_manager.mark_document_processed(
+        doc["ticker"], doc["year"], doc["quarter"], doc["doc_type"]
+    )
 
 
 def _doc_log_fields(doc: dict) -> dict:
     if _is_event(doc):
         return {"ticker": doc["ticker"], "event_date": doc["event_date"], "doc_type": "event"}
-    return {"ticker": doc["ticker"], "quarter": doc["quarter"], "year": doc["year"], "doc_type": doc["doc_type"]}
+    return {
+        "ticker": doc["ticker"],
+        "quarter": doc["quarter"],
+        "year": doc["year"],
+        "doc_type": doc["doc_type"],
+    }
 
 
 def extract_text(local_path: str) -> str:
@@ -250,17 +257,30 @@ def run_for_ticker(
         if ok:
             success += 1
 
-    print(json.dumps({"ticker": ticker, "total": len(docs), "success": success, "failed": len(docs) - success}))
+    print(
+        json.dumps(
+            {
+                "ticker": ticker,
+                "total": len(docs),
+                "success": success,
+                "failed": len(docs) - success,
+            }
+        )
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="LLM-process downloaded IR documents.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", type=str, help="Company ticker to process")
-    group.add_argument("--all", action="store_true", help="Process all tickers with unprocessed documents")
+    group.add_argument(
+        "--all", action="store_true", help="Process all tickers with unprocessed documents"
+    )
     parser.add_argument("--quarter", type=str, help="Filter to a specific quarter (e.g. Q3)")
     parser.add_argument("--year", type=str, help="Filter to a specific year (e.g. 2025)")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be processed without calling LLM")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show what would be processed without calling LLM"
+    )
     parser.add_argument(
         "--regenerate-missing",
         action="store_true",
@@ -274,8 +294,7 @@ def main() -> None:
 
     if args.all:
         unprocessed = (
-            index_manager.get_unprocessed_documents()
-            + index_manager.get_unprocessed_events()
+            index_manager.get_unprocessed_documents() + index_manager.get_unprocessed_events()
         )
         tickers = sorted({d["ticker"] for d in unprocessed})
         if not tickers:

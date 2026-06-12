@@ -214,9 +214,7 @@ _claude_cli_path: str | None = None
 # ---------------------------------------------------------------------------
 
 
-def _build_pairwise_analysis_prompt(
-    prev_summary, curr_summary, anchor_block: str = ""
-) -> str:
+def _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block: str = "") -> str:
     """Compose the SayDo pairwise prompt without issuing the LLM call.
 
     Extracted so the synchronous (`generate_pairwise_analysis`) and batch
@@ -273,7 +271,9 @@ def _build_pairwise_analysis_prompt(
     """
 
 
-def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None):
+def generate_pairwise_analysis(
+    prev_summary, curr_summary, anchor_block: str = "", ticker: str | None = None
+):
     """
     Generates a specific "Say-Do" analysis comparing two sequential quarters.
 
@@ -283,9 +283,7 @@ def generate_pairwise_analysis(prev_summary, curr_summary, anchor_block: str = "
     tier-1 KPIs and named bear-case failure modes. Empty string → no anchor
     block injected (back-compat for watchlist tickers).
     """
-    prompt = _build_pairwise_analysis_prompt(
-        prev_summary, curr_summary, anchor_block=anchor_block
-    )
+    prompt = _build_pairwise_analysis_prompt(prev_summary, curr_summary, anchor_block=anchor_block)
     prev_q_str = f"{prev_summary['quarter']} {prev_summary['year']}"
     curr_q_str = f"{curr_summary['quarter']} {curr_summary['year']}"
     try:
@@ -1424,10 +1422,7 @@ def generate_bear_case(
 
             stats_lines = _statistical_patterns_block(repo_root, ticker, {})
         except Exception as exc:  # never block the bear-case build
-            log.debug(
-                f"bear_case stats block skipped for {ticker}: "
-                f"{type(exc).__name__}: {exc}"
-            )
+            log.debug(f"bear_case stats block skipped for {ticker}: {type(exc).__name__}: {exc}")
             stats_lines = []
     stats_block = (
         "\nRECENT STATISTICAL PATTERNS (computed; trust over the raw table):\n"
@@ -2192,12 +2187,16 @@ def extract_qa_vs_prepared_themes(
             )
         if isinstance(qa, str) and qa.strip():
             any_qa = True
-            qa_blocks.append(
-                f"### {period} — analyst Q&A\n{qa[:_THEMES_SECTION_CHAR_CAP]}\n"
-            )
+            qa_blocks.append(f"### {period} — analyst Q&A\n{qa[:_THEMES_SECTION_CHAR_CAP]}\n")
 
-    prepared_block = "\n".join(prepared_blocks) if prepared_blocks else "(no prepared-remarks segments available across the window)"
-    qa_block = "\n".join(qa_blocks) if qa_blocks else "(no Q&A segments available across the window)"
+    prepared_block = (
+        "\n".join(prepared_blocks)
+        if prepared_blocks
+        else "(no prepared-remarks segments available across the window)"
+    )
+    qa_block = (
+        "\n".join(qa_blocks) if qa_blocks else "(no Q&A segments available across the window)"
+    )
     periods = [str(t.get("period") or "") for t in transcripts]
     periods_csv = ", ".join(periods)
 

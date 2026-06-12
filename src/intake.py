@@ -215,7 +215,9 @@ def _classify(source: Path, full_text: str) -> tuple[IntakeClassification | None
     try:
         classification = IntakeClassification.model_validate(raw)
     except ValidationError as e:
-        log.warning({"event": "classification_validation_failed", "file": source.name, "error": str(e)})
+        log.warning(
+            {"event": "classification_validation_failed", "file": source.name, "error": str(e)}
+        )
         return None, "validation_failed"
 
     if classification.confidence < CONFIDENCE_THRESHOLD:
@@ -281,30 +283,44 @@ def _file_to_ir_layout(
             source.unlink()
             _clear_error_marker(source)
         return IntakeResult(
-            source=source, classification=classification, dest=dest,
-            sha256=sha, skipped=True, skip_reason="duplicate",
+            source=source,
+            classification=classification,
+            dest=dest,
+            sha256=sha,
+            skipped=True,
+            skip_reason="duplicate",
         )
 
     if dry_run:
         log.info({"event": "dry_run_plan", "source": source.name, "dest": str(dest)})
         return IntakeResult(
-            source=source, classification=classification, dest=dest,
-            sha256=sha, skipped=False, skip_reason=None,
+            source=source,
+            classification=classification,
+            dest=dest,
+            sha256=sha,
+            skipped=False,
+            skip_reason=None,
         )
 
     shutil.move(str(source), str(dest))
     _register_classified(classification, dest, sha)
     _clear_error_marker(source)
-    log.info({
-        "event": "intake_filed",
-        "source": source.name,
-        "dest": str(dest),
-        "doc_type": classification.doc_type.value,
-        "ticker": classification.ticker,
-    })
+    log.info(
+        {
+            "event": "intake_filed",
+            "source": source.name,
+            "dest": str(dest),
+            "doc_type": classification.doc_type.value,
+            "ticker": classification.ticker,
+        }
+    )
     return IntakeResult(
-        source=source, classification=classification, dest=dest,
-        sha256=sha, skipped=False, skip_reason=None,
+        source=source,
+        classification=classification,
+        dest=dest,
+        sha256=sha,
+        skipped=False,
+        skip_reason=None,
     )
 
 
@@ -324,8 +340,12 @@ def intake_pdf(source: Path, dry_run: bool = False) -> IntakeResult:
     if skip:
         write_error_marker(source, skip, filename_hint(source.name), full_text[:200])
         return IntakeResult(
-            source=source, classification=classification, dest=None,
-            sha256=None, skipped=True, skip_reason=skip,
+            source=source,
+            classification=classification,
+            dest=None,
+            sha256=None,
+            skipped=True,
+            skip_reason=skip,
         )
     assert classification is not None  # narrowed by `not skip`
     return _file_to_ir_layout(source, classification, ".pdf", dry_run)
@@ -337,8 +357,12 @@ def intake_text_transcript(source: Path, dry_run: bool = False) -> IntakeResult:
     if skip:
         write_error_marker(source, skip, filename_hint(source.name), full_text[:200])
         return IntakeResult(
-            source=source, classification=classification, dest=None,
-            sha256=None, skipped=True, skip_reason=skip,
+            source=source,
+            classification=classification,
+            dest=None,
+            sha256=None,
+            skipped=True,
+            skip_reason=skip,
         )
     assert classification is not None
     return _file_to_ir_layout(source, classification, source.suffix.lower(), dry_run)
@@ -355,12 +379,19 @@ def intake_audio(source: Path, dry_run: bool = False) -> IntakeResult:
     if hint.ticker_hint is None or hint.quarter_hint is None or hint.year_hint is None:
         write_error_marker(source, "audio_filename_unclassifiable", hint, "")
         return IntakeResult(
-            source=source, classification=None, dest=None,
-            sha256=None, skipped=True, skip_reason="audio_filename_unclassifiable",
+            source=source,
+            classification=None,
+            dest=None,
+            sha256=None,
+            skipped=True,
+            skip_reason="audio_filename_unclassifiable",
         )
 
     TRANSCRIPTS_RAW_DIR.mkdir(parents=True, exist_ok=True)
-    dest = TRANSCRIPTS_RAW_DIR / f"{hint.ticker_hint}_Q{hint.quarter_hint}_{hint.year_hint}{source.suffix.lower()}"
+    dest = (
+        TRANSCRIPTS_RAW_DIR
+        / f"{hint.ticker_hint}_Q{hint.quarter_hint}_{hint.year_hint}{source.suffix.lower()}"
+    )
 
     if dest.exists():
         log.info({"event": "duplicate_skip", "source": source.name, "dest": str(dest)})
@@ -368,23 +399,35 @@ def intake_audio(source: Path, dry_run: bool = False) -> IntakeResult:
             source.unlink()
             _clear_error_marker(source)
         return IntakeResult(
-            source=source, classification=None, dest=dest,
-            sha256=None, skipped=True, skip_reason="duplicate",
+            source=source,
+            classification=None,
+            dest=dest,
+            sha256=None,
+            skipped=True,
+            skip_reason="duplicate",
         )
 
     if dry_run:
         log.info({"event": "dry_run_plan", "source": source.name, "dest": str(dest)})
         return IntakeResult(
-            source=source, classification=None, dest=dest,
-            sha256=None, skipped=False, skip_reason=None,
+            source=source,
+            classification=None,
+            dest=dest,
+            sha256=None,
+            skipped=False,
+            skip_reason=None,
         )
 
     shutil.move(str(source), str(dest))
     _clear_error_marker(source)
     log.info({"event": "audio_filed", "source": source.name, "dest": str(dest)})
     return IntakeResult(
-        source=source, classification=None, dest=dest,
-        sha256=None, skipped=False, skip_reason=None,
+        source=source,
+        classification=None,
+        dest=dest,
+        sha256=None,
+        skipped=False,
+        skip_reason=None,
     )
 
 

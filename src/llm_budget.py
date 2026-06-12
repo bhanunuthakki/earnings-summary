@@ -171,9 +171,7 @@ def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str
     return "block" if hard_block else "warn"
 
 
-def _load_budget(
-    purpose: str, *, db_path: Path | str | None = None
-) -> _BudgetRow | None:
+def _load_budget(purpose: str, *, db_path: Path | str | None = None) -> _BudgetRow | None:
     """Look up the budget row for `purpose`, falling back to '__default__'.
     Returns None when neither row exists (no migrations run, or seed
     missing). Read failures return None — the enforcer fails open."""
@@ -544,9 +542,7 @@ def set_mode(
     an invalid mode. Used by the manage_llm_budget CLI + the dashboard panel.
     """
     if mode not in _VALID_MODES:
-        raise ValueError(
-            f"invalid on_exceed mode {mode!r}; expected one of {sorted(_VALID_MODES)}"
-        )
+        raise ValueError(f"invalid on_exceed mode {mode!r}; expected one of {sorted(_VALID_MODES)}")
     path = _resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
@@ -646,11 +642,7 @@ def month_report(
     out: list[dict[str, object]] = []
     for r in rows:
         spend = Decimal(str(r["spend"] or 0)).quantize(_DECIMAL_QUANT)
-        cap = (
-            Decimal(str(r["cap"])).quantize(_DECIMAL_QUANT)
-            if r["cap"] is not None
-            else None
-        )
+        cap = Decimal(str(r["cap"])).quantize(_DECIMAL_QUANT) if r["cap"] is not None else None
         headroom = _headroom_pct(spend, cap) if cap is not None else None
         out.append(
             {

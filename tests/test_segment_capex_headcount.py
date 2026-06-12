@@ -504,25 +504,28 @@ def test_extract_segment_oi_facts_writes_capex_to_junction(tmp_path: Path) -> No
     (tmp_path / "data" / "historical" / "fmp").mkdir(parents=True)
     json_path = tmp_path / "data" / "historical" / "fmp" / "AMZN_form_10k_2024.json"
     import json
+
     json_path.write_text(
-        json.dumps({
-            "Segment Information - Reconci_3": [
-                {
-                    "Segment Information - Reconciliation of Property and Equipment "
-                    "Additions - $ in Millions": ["12 Months Ended"]
-                },
-                {"items": ["Dec. 31, 2024"]},
-                {"Operating Segments | North America": [_NBSP]},
-                {"Segment Reporting Information [Line Items]": [_NBSP]},
-                {"Property and equipment additions": [24_348]},
-                {"Operating Segments | International": [_NBSP]},
-                {"Segment Reporting Information [Line Items]": [_NBSP]},
-                {"Property and equipment additions": [6_643]},
-                {"Operating Segments | AWS": [_NBSP]},
-                {"Segment Reporting Information [Line Items]": [_NBSP]},
-                {"Property and equipment additions": [53_267]},
-            ]
-        }),
+        json.dumps(
+            {
+                "Segment Information - Reconci_3": [
+                    {
+                        "Segment Information - Reconciliation of Property and Equipment "
+                        "Additions - $ in Millions": ["12 Months Ended"]
+                    },
+                    {"items": ["Dec. 31, 2024"]},
+                    {"Operating Segments | North America": [_NBSP]},
+                    {"Segment Reporting Information [Line Items]": [_NBSP]},
+                    {"Property and equipment additions": [24_348]},
+                    {"Operating Segments | International": [_NBSP]},
+                    {"Segment Reporting Information [Line Items]": [_NBSP]},
+                    {"Property and equipment additions": [6_643]},
+                    {"Operating Segments | AWS": [_NBSP]},
+                    {"Segment Reporting Information [Line Items]": [_NBSP]},
+                    {"Property and equipment additions": [53_267]},
+                ]
+            }
+        ),
         encoding="utf-8",
     )
     db_path = tmp_path / "data" / "portfolio.db"
@@ -590,11 +593,7 @@ def test_amzn_shaped_fixture_produces_capex_for_aws_intl_na() -> None:
         ]
     }
     facts = extract_segment_oi_from_record(record, source_doc_id=99, ticker="AMZN")
-    capex = {
-        (f.segment_name, f.period_end.year): f
-        for f in facts
-        if f.metric == "capex"
-    }
+    capex = {(f.segment_name, f.period_end.year): f for f in facts if f.metric == "capex"}
     # All three primary segments present for 2024.
     assert ("AWS", 2024) in capex
     assert ("North America", 2024) in capex

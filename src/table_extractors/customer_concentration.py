@@ -142,9 +142,7 @@ def extract(
             notes="no filing text available",
         )
 
-    prompt = _PROMPT.format(
-        ticker=ticker, fiscal_year=fiscal_year, filing_text=filing_text
-    )
+    prompt = _PROMPT.format(ticker=ticker, fiscal_year=fiscal_year, filing_text=filing_text)
 
     try:
         raw = call_llm(
@@ -295,18 +293,12 @@ def _persist(
             else:
                 continue
         revenue_raw = row.get("revenue_amount")
-        revenue_amount = (
-            float(revenue_raw)
-            if isinstance(revenue_raw, (int, float))
-            else None
-        )
+        revenue_amount = float(revenue_raw) if isinstance(revenue_raw, (int, float)) else None
         anonymized = bool(row.get("anonymized"))
         if not anonymized:
             anonymized = bool(_ANONYMIZED_RX.match(label))
         source_excerpt_raw = row.get("source_excerpt") or ""
-        source_excerpt = (
-            source_excerpt_raw if isinstance(source_excerpt_raw, str) else ""
-        )[:1024]
+        source_excerpt = (source_excerpt_raw if isinstance(source_excerpt_raw, str) else "")[:1024]
 
         customer_entity_id = _resolve_or_create_customer(
             label=label,

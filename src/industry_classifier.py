@@ -158,9 +158,24 @@ _HYPERSCALER_TICKERS = frozenset({"AMZN", "GOOG", "GOOGL", "MSFT", "META"})
 # cases. Extend it when new SaaS tickers are added to entity_seed.
 _SOFTWARE_SAAS_TICKERS = frozenset(
     {
-        "CFLT", "CRM", "CRWD", "DDOG", "ESTC", "FTNT", "GTLB", "KVYO",
-        "MDB", "NET", "NOW", "OKTA", "PANW", "RBRK", "SNOW", "VEEV",
-        "WIX", "ZS",
+        "CFLT",
+        "CRM",
+        "CRWD",
+        "DDOG",
+        "ESTC",
+        "FTNT",
+        "GTLB",
+        "KVYO",
+        "MDB",
+        "NET",
+        "NOW",
+        "OKTA",
+        "PANW",
+        "RBRK",
+        "SNOW",
+        "VEEV",
+        "WIX",
+        "ZS",
     },
 )
 
@@ -272,7 +287,8 @@ def _lookup_sector_name(ticker: str, repo_root: Path) -> tuple[str | None, str |
 
 
 def _lookup_sector_from_db(
-    ticker: str, repo_root: Path,
+    ticker: str,
+    repo_root: Path,
 ) -> tuple[str | None, str | None]:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
@@ -478,7 +494,7 @@ def _parse_expected_range(raw: object) -> tuple[float | None, float | None] | No
 
 
 _INLINE_LIST_RX = re.compile(r"^\[(.*)\]$")
-_BARE_SCALAR_RX = re.compile(r'^(?:null|true|false|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$')
+_BARE_SCALAR_RX = re.compile(r"^(?:null|true|false|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)$")
 
 
 def _parse_template_yaml(raw: str) -> dict[str, object]:
@@ -514,7 +530,10 @@ def _parse_template_yaml(raw: str) -> dict[str, object]:
 
 
 def _parse_block(
-    lines: list[str], start: int, *, parent_indent: int,
+    lines: list[str],
+    start: int,
+    *,
+    parent_indent: int,
 ) -> tuple[object, int]:
     """Parse an indented block starting at lines[start].
 
@@ -533,7 +552,10 @@ def _parse_block(
 
 
 def _parse_list(
-    lines: list[str], start: int, *, list_indent: int,
+    lines: list[str],
+    start: int,
+    *,
+    list_indent: int,
 ) -> tuple[list[object], int]:
     items: list[object] = []
     i = start
@@ -596,7 +618,10 @@ def _parse_list(
 
 
 def _parse_mapping(
-    lines: list[str], start: int, *, map_indent: int,
+    lines: list[str],
+    start: int,
+    *,
+    map_indent: int,
 ) -> tuple[dict[str, object], int]:
     result: dict[str, object] = {}
     i = start

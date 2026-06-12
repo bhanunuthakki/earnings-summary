@@ -188,8 +188,15 @@ def _patents_for_applications(
     if not headers:
         return []
     idx = {h: i for i, h in enumerate(headers)}
-    needed = ("Appl_No", "Patent_No", "Patent_Expire_Date_Text", "Drug_Substance_Flag",
-              "Drug_Product_Flag", "Patent_Use_Code", "Delist_Flag")
+    needed = (
+        "Appl_No",
+        "Patent_No",
+        "Patent_Expire_Date_Text",
+        "Drug_Substance_Flag",
+        "Drug_Product_Flag",
+        "Patent_Use_Code",
+        "Delist_Flag",
+    )
     for n in needed:
         if n not in idx:
             raise ValueError(f"Orange Book patent.txt missing column {n!r}; have {headers}")
@@ -340,10 +347,18 @@ def write_outputs(
         json.dump([r.model_dump(mode="json") for r in records], f, indent=2)
 
     succeeded = sorted(
-        {r.jurisdiction for r in records if r.extension_status is not ExtensionStatus.MANUAL_CHECK_REQUIRED}
+        {
+            r.jurisdiction
+            for r in records
+            if r.extension_status is not ExtensionStatus.MANUAL_CHECK_REQUIRED
+        }
     )
     manual = sorted(
-        {r.jurisdiction for r in records if r.extension_status is ExtensionStatus.MANUAL_CHECK_REQUIRED}
+        {
+            r.jurisdiction
+            for r in records
+            if r.extension_status is ExtensionStatus.MANUAL_CHECK_REQUIRED
+        }
     )
     summary = PatentFetchSummary(
         molecule=molecule,
@@ -377,7 +392,9 @@ def parse_jurisdictions(value: str | None) -> list[Jurisdiction]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fetch drug patent status across jurisdictions.")
-    parser.add_argument("--molecule", required=True, help="Active molecule (e.g. semaglutide, tirzepatide)")
+    parser.add_argument(
+        "--molecule", required=True, help="Active molecule (e.g. semaglutide, tirzepatide)"
+    )
     parser.add_argument(
         "--jurisdictions",
         type=str,

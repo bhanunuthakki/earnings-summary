@@ -49,11 +49,16 @@ def main() -> int:
         for r in rows:
             outcome_counts[r["outcome"]] = outcome_counts.get(r["outcome"], 0) + 1
 
-        print(json.dumps({
-            "matched": len(rows),
-            "by_outcome": outcome_counts,
-            "results": rows,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "matched": len(rows),
+                    "by_outcome": outcome_counts,
+                    "results": rows,
+                },
+                indent=2,
+            )
+        )
         return 0
     finally:
         conn.close()

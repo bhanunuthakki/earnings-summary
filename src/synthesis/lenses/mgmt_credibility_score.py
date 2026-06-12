@@ -105,12 +105,15 @@ def _ctx_mgmt_credibility(ticker: str | None, repo_root: Path) -> LensContext | 
         f"unfalsifiable={histo.get('unfalsifiable', 0)} · pending={histo.get('pending', 0)} "
         f"(graded total: {total_graded}, hit rate: {hit_rate:.1f}%)"
     )
-    recent_block = "\n".join(
-        f"- {str(r['made_at'])[:10]} → {str(r['target_period'] or '?')[:10]} · "
-        f"**{(r['outcome'] or 'pending').upper()}** · "
-        f"{(r['prediction_md'] or '')[:160]}"
-        for r in recent_rows
-    ) or "(no recent commitments)"
+    recent_block = (
+        "\n".join(
+            f"- {str(r['made_at'])[:10]} → {str(r['target_period'] or '?')[:10]} · "
+            f"**{(r['outcome'] or 'pending').upper()}** · "
+            f"{(r['prediction_md'] or '')[:160]}"
+            for r in recent_rows
+        )
+        or "(no recent commitments)"
+    )
     return LensContext(
         ticker=ticker,
         template_kwargs={

@@ -99,9 +99,7 @@ def main() -> int:
     out_path.write_text(html_text, encoding="utf-8")
 
     rel = _relpath(out_path, PROJECT_ROOT)
-    sys.stdout.write(
-        f"Wrote {rel} ({len(html_text):,} chars; absolute: {out_path})\n"
-    )
+    sys.stdout.write(f"Wrote {rel} ({len(html_text):,} chars; absolute: {out_path})\n")
     return 0
 
 

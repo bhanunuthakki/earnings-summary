@@ -111,9 +111,7 @@ def test_does_not_touch_other_tickers(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    flipped = mark_artifacts_dirty_for_fact_change(
-        ticker="META", reason="rebuild", db_path=db
-    )
+    flipped = mark_artifacts_dirty_for_fact_change(ticker="META", reason="rebuild", db_path=db)
     assert flipped == 1
 
     conn = sqlite3.connect(str(db))
@@ -137,9 +135,7 @@ def test_skips_superseded_rows(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    flipped = mark_artifacts_dirty_for_fact_change(
-        ticker="NU", reason="rebuild", db_path=db
-    )
+    flipped = mark_artifacts_dirty_for_fact_change(ticker="NU", reason="rebuild", db_path=db)
     # Only the live (non-superseded) row should flip.
     assert flipped == 1
 
@@ -159,9 +155,7 @@ def test_skips_already_dirty(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    flipped = mark_artifacts_dirty_for_fact_change(
-        ticker="AMZN", reason="rebuild", db_path=db
-    )
+    flipped = mark_artifacts_dirty_for_fact_change(ticker="AMZN", reason="rebuild", db_path=db)
     assert flipped == 0  # already dirty
 
 
@@ -169,7 +163,5 @@ def test_returns_zero_on_missing_table(tmp_path: Path) -> None:
     """Synthetic env without migration 0035 — must not crash."""
     db = tmp_path / "portfolio.db"
     sqlite3.connect(str(db)).close()  # create empty DB
-    flipped = mark_artifacts_dirty_for_fact_change(
-        ticker="META", reason="rebuild", db_path=db
-    )
+    flipped = mark_artifacts_dirty_for_fact_change(ticker="META", reason="rebuild", db_path=db)
     assert flipped == 0

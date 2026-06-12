@@ -22,9 +22,17 @@ EXPECTED_SCENARIO_IDS = {
 }
 
 EXPECTED_SERIES_IDS = {
-    "fed_funds", "us_10y", "vix",
-    "usd_brl", "usd_inr", "usd_eur", "usd_cad", "usd_twd",
-    "brent", "copper", "gold",
+    "fed_funds",
+    "us_10y",
+    "vix",
+    "usd_brl",
+    "usd_inr",
+    "usd_eur",
+    "usd_cad",
+    "usd_twd",
+    "brent",
+    "copper",
+    "gold",
     "sox",
 }
 
@@ -43,12 +51,8 @@ def test_scenarios_have_well_formed_shocks() -> None:
             assert shock.series_id in REGISTRY, (
                 f"{sid} shocks {shock.series_id} which is not in the series registry"
             )
-            assert shock.unit in ("bps", "pct", "absolute"), (
-                f"{sid}: invalid unit {shock.unit}"
-            )
-            assert shock.direction in ("up", "down"), (
-                f"{sid}: invalid direction {shock.direction}"
-            )
+            assert shock.unit in ("bps", "pct", "absolute"), f"{sid}: invalid unit {shock.unit}"
+            assert shock.direction in ("up", "down"), f"{sid}: invalid direction {shock.direction}"
             assert shock.magnitude >= 0  # magnitude is non-negative; direction carries sign
 
 

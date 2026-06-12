@@ -55,9 +55,7 @@ the data is sparse (few holdings disclose), say so plainly — don't pad.
 """
 
 
-def _ctx_customer_concentration_risk(
-    ticker: str | None, repo_root: Path
-) -> LensContext | None:
+def _ctx_customer_concentration_risk(ticker: str | None, repo_root: Path) -> LensContext | None:
     """Read every customer_concentrations row for portfolio holdings and
     bucket into named vs anonymized. Returns None when there are no rows
     at all (lens skipped until the extractor has populated something)."""
@@ -93,20 +91,22 @@ def _ctx_customer_concentration_risk(
         ticker_, fiscal_period, label, pct, rev_amt, ent_id, excerpt = r
         pct_str = f"{float(pct) * 100:.1f}%" if pct is not None else "?"
         rev_str = (
-            f"${float(rev_amt) / 1e3:.1f}B" if rev_amt and float(rev_amt) >= 1e3
-            else f"${float(rev_amt):.0f}M" if rev_amt
+            f"${float(rev_amt) / 1e3:.1f}B"
+            if rev_amt and float(rev_amt) >= 1e3
+            else f"${float(rev_amt):.0f}M"
+            if rev_amt
             else "?"
         )
-        line = (
-            f"- {ticker_} FY{fiscal_period} · {label} · {pct_str} of revenue · {rev_str}"
-        )
+        line = f"- {ticker_} FY{fiscal_period} · {label} · {pct_str} of revenue · {rev_str}"
         if excerpt:
             line += f"\n    > {str(excerpt)[:200]}"
         # Anonymized when the entity row has the meta flag, or the label
         # matches the well-known anonymized patterns we tag at extraction.
         is_anon = bool(
             ent_id is None
-            and any(s in str(label).lower() for s in ("customer ", "a major", "a single", "undisclosed"))
+            and any(
+                s in str(label).lower() for s in ("customer ", "a major", "a single", "undisclosed")
+            )
         )
         (anon_lines if is_anon else named_lines).append(line)
     return LensContext(

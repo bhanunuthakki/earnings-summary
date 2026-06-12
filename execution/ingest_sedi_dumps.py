@@ -30,9 +30,7 @@ from sedi_adapter import ingest_sedi_dump  # noqa: E402
 log = logging.getLogger("ingest_sedi")
 
 # The Canadian-domiciled holdings (anything we expect to find SEDI data for).
-SEDI_TARGETS = [
-    "BN", "BAM", "BEPC", "BIPC", "ENB", "TRP", "FNV", "HBM", "IVN", "TECK", "WPM"
-]
+SEDI_TARGETS = ["BN", "BAM", "BEPC", "BIPC", "ENB", "TRP", "FNV", "HBM", "IVN", "TECK", "WPM"]
 
 
 def main() -> int:

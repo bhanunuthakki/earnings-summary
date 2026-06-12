@@ -50,9 +50,7 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
     with open(holdings_path, encoding="utf-8") as f:
         holdings = json.load(f)
 
-    overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(
-        ticker, repo_root
-    )
+    overall, evaluations, soft_evaluations, evaluated_at = _load_break_rule_state(ticker, repo_root)
     ledger = _build_ledger(ticker, repo_root, holdings, evaluations)
     thesis_text, stub_warning = _split_stub_warning(holdings)
 
@@ -73,9 +71,7 @@ def build(ticker: str, repo_root: Path) -> ThesisSection:
     )
 
 
-def _ts_context_md(
-    ticker: str, repo_root: Path, holdings: dict[str, object]
-) -> str:
+def _ts_context_md(ticker: str, repo_root: Path, holdings: dict[str, object]) -> str:
     """Render persisted signals for tier-1 KPIs + headline P&L lines.
 
     The block is the high-leverage TS surface for §2: the thesis
@@ -96,16 +92,16 @@ def _ts_context_md(
                 seen.add(name)
     grouped = load_signals_for_metrics(ticker, names, repo_root=repo_root)
     flat = [s for metric in grouped.values() for s in metric]
-    return format_signals_as_prompt_block(
-        flat, heading="Time-Series Context (last computed)"
-    )
+    return format_signals_as_prompt_block(flat, heading="Time-Series Context (last computed)")
 
 
-_STUB_STATUS_VALUES = frozenset({
-    "stub_regenerated_from_corruption",
-    "needs_user_review",
-    "stub",
-})
+_STUB_STATUS_VALUES = frozenset(
+    {
+        "stub_regenerated_from_corruption",
+        "needs_user_review",
+        "stub",
+    }
+)
 
 # Stale inline marker from commit 7b56cae's repair pass — strip it from the thesis
 # text and lift it into a separate banner so the thesis paragraph reads cleanly.
@@ -126,7 +122,8 @@ def _split_stub_warning(holdings: dict[str, object]) -> tuple[str | None, str | 
     status_field = holdings.get("_status")
     explicit = (
         str(status_field).strip()
-        if isinstance(status_field, str) and str(status_field).strip().lower() in _STUB_STATUS_VALUES
+        if isinstance(status_field, str)
+        and str(status_field).strip().lower() in _STUB_STATUS_VALUES
         else None
     )
 
@@ -419,9 +416,7 @@ def _load_break_rule_state(
             except (TypeError, ValueError):
                 soft_payload = []
             soft_evaluations = [
-                _parse_soft_evaluation(item)
-                for item in soft_payload
-                if isinstance(item, dict)
+                _parse_soft_evaluation(item) for item in soft_payload if isinstance(item, dict)
             ]
     return (overall, evaluations, soft_evaluations, evaluated_at)
 
@@ -434,9 +429,7 @@ def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
     status_raw = str(raw.get("status", "green")).lower()
     status: Literal["green", "yellow"] = "yellow" if status_raw == "yellow" else "green"
     details_raw = raw.get("details")
-    details: dict[str, object] = (
-        details_raw if isinstance(details_raw, dict) else {}
-    )
+    details: dict[str, object] = details_raw if isinstance(details_raw, dict) else {}
     return SoftRuleEvaluation(
         rule_name=str(raw.get("rule_name", "")),
         status=status,
@@ -536,7 +529,9 @@ def _kpi_history_conn(
         c["name"] == "source_excerpt"
         for c in cursor.execute("PRAGMA table_info(kpi_facts)").fetchall()
     )
-    cols = "f.period_end, f.value" + (", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt")
+    cols = "f.period_end, f.value" + (
+        ", f.source_excerpt" if has_excerpt_col else ", NULL AS source_excerpt"
+    )
     # Annual-cadence KPI → read FY rows only (clean annual sparkline + YoY).
     period_filter = ""
     params: list[object] = [ticker.upper(), resolved_name]

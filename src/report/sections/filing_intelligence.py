@@ -121,7 +121,11 @@ def build(ticker: str, repo_root: Path) -> FilingIntelligenceSection:
             description=_str_or_none(metric_raw.get("description")),
         ),
         executive_comp=ExecutiveCompAlignmentDetail(
-            metrics_used=[s for s in cast("list[object]", comp_raw.get("metrics_used") or []) if isinstance(s, str)],
+            metrics_used=[
+                s
+                for s in cast("list[object]", comp_raw.get("metrics_used") or [])
+                if isinstance(s, str)
+            ],
             targets_and_thresholds=_str_or_none(comp_raw.get("targets_and_thresholds")),
             alignment_verdict=_str_or_none(comp_raw.get("alignment_verdict")),
         ),

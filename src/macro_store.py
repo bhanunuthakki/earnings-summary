@@ -192,9 +192,7 @@ def fetch_series(
         conn.close()
 
 
-def latest_series_value(
-    *, series_id: str, db_path: Path | str | None = None
-) -> SeriesPoint | None:
+def latest_series_value(*, series_id: str, db_path: Path | str | None = None) -> SeriesPoint | None:
     pts = fetch_series(series_id=series_id, lookback_days=None, db_path=db_path)
     return pts[0] if pts else None
 
@@ -305,11 +303,7 @@ def fetch_sensitivities(
         out: list[Sensitivity] = []
         for r in rows:
             ca = r["computed_at"]
-            ca_dt = (
-                datetime.fromisoformat(str(ca))
-                if ca is not None
-                else datetime.now(UTC)
-            )
+            ca_dt = datetime.fromisoformat(str(ca)) if ca is not None else datetime.now(UTC)
             out.append(
                 Sensitivity(
                     id=int(r["id"]),
@@ -443,9 +437,7 @@ def compute_sensitivities(
         ser_weekly = _weekly_returns(series)
         if len(ser_weekly) < min_observations:
             continue
-        ser_by_week = {
-            (d.isocalendar().year, d.isocalendar().week): r for d, r in ser_weekly
-        }
+        ser_by_week = {(d.isocalendar().year, d.isocalendar().week): r for d, r in ser_weekly}
         # Match on overlapping weeks.
         common = sorted(set(tkr_by_week) & set(ser_by_week))
         if len(common) < min_observations:

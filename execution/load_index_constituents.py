@@ -47,8 +47,7 @@ DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 
 SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 RUSSELL_URL = (
-    "https://raw.githubusercontent.com/ikoniaris/Russell2000/master/"
-    "russell_2000_components.csv"
+    "https://raw.githubusercontent.com/ikoniaris/Russell2000/master/russell_2000_components.csv"
 )
 WIKIPEDIA_UA = "earnings-summary/1.0 (constituent loader)"
 
@@ -98,9 +97,7 @@ def fetch_russell2000() -> list[tuple[str, str]]:
     resp.raise_for_status()
     df = pd.read_csv(StringIO(resp.text))
     if "Ticker" not in df.columns or "Name" not in df.columns:
-        raise LoaderError(
-            f"Russell 2000 CSV missing Ticker/Name columns; got {list(df.columns)}"
-        )
+        raise LoaderError(f"Russell 2000 CSV missing Ticker/Name columns; got {list(df.columns)}")
     out: list[tuple[str, str]] = []
     for _, row in df.iterrows():
         sym = _normalize(str(row["Ticker"]))

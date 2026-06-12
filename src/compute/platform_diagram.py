@@ -242,7 +242,7 @@ def _strip_header(text: str) -> str:
     idx = text.find(marker)
     if idx == -1:
         return text
-    return text[idx + len(marker):]
+    return text[idx + len(marker) :]
 
 
 def _call_llm(

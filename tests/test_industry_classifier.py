@@ -71,8 +71,8 @@ from industry_classifier import (  # noqa: E402
         # Negative cases — known sectors but not a match for any template
         ("COST", None),  # Consumer Staples, no template
         ("ISRG", None),  # Health Care but medical device, not pharma
-        ("FCX", None),   # Materials but pure miner, not royalty
-        ("BAM", None),   # Financials but asset manager, not bank
+        ("FCX", None),  # Materials but pure miner, not royalty
+        ("BAM", None),  # Financials but asset manager, not bank
         ("AMAT", None),  # Technology but semiconductor, not software_saas
         ("UNKNOWN_TICKER", None),
     ],
@@ -193,7 +193,11 @@ def test_classify_falls_back_to_seed_when_db_missing(tmp_path: Path) -> None:
 def test_all_five_templates_present() -> None:
     slugs = available_industries(PROJECT_ROOT)
     assert set(slugs) == {
-        "software_saas", "bank", "pharma", "commodity_royalty", "hyperscaler",
+        "software_saas",
+        "bank",
+        "pharma",
+        "commodity_royalty",
+        "hyperscaler",
     }
 
 

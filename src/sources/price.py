@@ -37,7 +37,7 @@ class LivePrice:
 
     price: float
     fetched_at: datetime  # UTC
-    source_name: str      # "yfinance" | "fmp_cache"
+    source_name: str  # "yfinance" | "fmp_cache"
 
 
 def read_live_price(repo_root: Path, ticker: str) -> LivePrice | None:
@@ -74,7 +74,11 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
         price: float | None = None
         fast = getattr(tkr, "fast_info", None)
         if fast is not None:
-            raw = getattr(fast, "last_price", None) or fast.get("last_price") if hasattr(fast, "get") else None
+            raw = (
+                getattr(fast, "last_price", None) or fast.get("last_price")
+                if hasattr(fast, "get")
+                else None
+            )
             if isinstance(raw, (int, float)) and raw > 0:
                 price = float(raw)
 

@@ -49,10 +49,44 @@ log = logging.getLogger("extract_risk_factors")
 
 
 _CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "regulatory": ["regulation", "regulator", "antitrust", "compliance", "DOJ", "FTC", "EU", "GDPR", "ESG", "tax law"],
-    "operational": ["operations", "infrastructure", "supply chain", "datacenter", "workforce", "talent"],
-    "technology": ["cybersecurity", "AI", "data", "intellectual property", "patent", "cyber", "security breach"],
-    "financial": ["liquidity", "interest rate", "credit", "debt", "covenant", "currency", "foreign exchange"],
+    "regulatory": [
+        "regulation",
+        "regulator",
+        "antitrust",
+        "compliance",
+        "DOJ",
+        "FTC",
+        "EU",
+        "GDPR",
+        "ESG",
+        "tax law",
+    ],
+    "operational": [
+        "operations",
+        "infrastructure",
+        "supply chain",
+        "datacenter",
+        "workforce",
+        "talent",
+    ],
+    "technology": [
+        "cybersecurity",
+        "AI",
+        "data",
+        "intellectual property",
+        "patent",
+        "cyber",
+        "security breach",
+    ],
+    "financial": [
+        "liquidity",
+        "interest rate",
+        "credit",
+        "debt",
+        "covenant",
+        "currency",
+        "foreign exchange",
+    ],
     "macro": ["macroeconomic", "recession", "inflation", "geopolitical", "war", "trade", "tariff"],
     "litigation": ["litigation", "lawsuit", "claim", "court", "settlement", "judgment"],
     "competition": ["competitor", "competition", "market share", "pricing pressure"],
@@ -196,9 +230,7 @@ def extract_for_ticker(
     # Otherwise it dispatches to fetch_latest_10k_text. fiscal_year is honored
     # only on the 10-K path — S-1s aren't keyed by fiscal year.
     if fiscal_year is None:
-        result = load_canonical_narrative(
-            ticker=ticker, repo_root=repo_root, user_agent=user_agent
-        )
+        result = load_canonical_narrative(ticker=ticker, repo_root=repo_root, user_agent=user_agent)
     else:
         result = fetch_latest_10k_text(
             ticker=ticker,
@@ -261,7 +293,11 @@ def extract_for_ticker(
 
     conn = sqlite3.connect(str(db_path))
     try:
-        prior = _prior_year_index(conn, ticker=ticker, fiscal_year=result.fiscal_year) if do_diff else {}
+        prior = (
+            _prior_year_index(conn, ticker=ticker, fiscal_year=result.fiscal_year)
+            if do_diff
+            else {}
+        )
         inserted = 0
         for ordinal, (heading, body) in enumerate(risks):
             body_sha = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -355,12 +391,16 @@ def main() -> int:
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker.")
     g.add_argument("--all-portfolio", action="store_true", help="Run for all portfolio holdings.")
-    g.add_argument("--all-watchlist", action="store_true", help="Run for all watchlist tickers too.")
-    parser.add_argument("--fiscal-year", type=int, default=None, help="Specific fiscal year (default: latest).")
-    parser.add_argument("--no-diff", action="store_true", help="Skip year-over-year diff (no LLM diff calls).")
-    parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root."
+    g.add_argument(
+        "--all-watchlist", action="store_true", help="Run for all watchlist tickers too."
     )
+    parser.add_argument(
+        "--fiscal-year", type=int, default=None, help="Specific fiscal year (default: latest)."
+    )
+    parser.add_argument(
+        "--no-diff", action="store_true", help="Skip year-over-year diff (no LLM diff calls)."
+    )
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root.")
     parser.add_argument(
         "--user-agent",
         default=os.environ.get(

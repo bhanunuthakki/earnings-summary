@@ -262,9 +262,7 @@ def extract_for_transcript(
     `llm_call` is injected so tests can stub the LLM. In production callers
     pass `llm_client._call_claude` (or any function that takes a prompt string
     and returns the model's response text)."""
-    cur = conn.execute(
-        "SELECT t.ticker FROM transcripts t WHERE t.id = ?", (transcript_id,)
-    )
+    cur = conn.execute("SELECT t.ticker FROM transcripts t WHERE t.id = ?", (transcript_id,))
     row = cur.fetchone()
     if row is None:
         raise ValueError(f"transcript_id={transcript_id} not found")
@@ -272,9 +270,7 @@ def extract_for_transcript(
 
     transcript_data = fetch_transcript_text_and_segment(conn, transcript_id)
     if transcript_data is None:
-        raise ValueError(
-            f"transcript_id={transcript_id} has no transcript_segments rows"
-        )
+        raise ValueError(f"transcript_id={transcript_id} has no transcript_segments rows")
     text, segment_id, period_end = transcript_data
     catalog = fetch_kpi_catalog(conn, ticker)
 

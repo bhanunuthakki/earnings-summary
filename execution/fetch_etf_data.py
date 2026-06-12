@@ -69,13 +69,15 @@ def parse_etf_info(payload: object, ticker: str, fetched_at: datetime) -> EtfPro
         name=_str(record.get("name")),
         issuer=_str(record.get("etfCompany")) or _str(record.get("issuer")),
         expense_ratio=_pct_to_decimal(record.get("expenseRatio")),
-        aum_usd_m=_aum_to_millions(record.get("aum")) or _aum_to_millions(record.get("assetsUnderManagement")),
+        aum_usd_m=_aum_to_millions(record.get("aum"))
+        or _aum_to_millions(record.get("assetsUnderManagement")),
         inception_date=_iso_date(record.get("inceptionDate")),
         asset_class=_str(record.get("assetClass")),
         benchmark_index=_str(record.get("etfIndex")) or _str(record.get("benchmark")),
         domicile=_str(record.get("domicile")),
         listed_exchange=_str(record.get("exchange")),
-        distribution_yield=_pct_to_decimal(record.get("yield")) or _pct_to_decimal(record.get("dividendYield")),
+        distribution_yield=_pct_to_decimal(record.get("yield"))
+        or _pct_to_decimal(record.get("dividendYield")),
         description=_str(record.get("description")),
         sector_label=_str(record.get("sectorsList")) or _str(record.get("sector")),
         nav=_float(record.get("nav")),
@@ -218,9 +220,7 @@ def ingest_live(
     )
 
 
-def _fmp_get(
-    session: "requests.Session", api_key: str, ticker: str, path: str
-) -> object:
+def _fmp_get(session: "requests.Session", api_key: str, ticker: str, path: str) -> object:
     """Try /stable (then /api/v3 unless stable-only); return first 200 JSON body."""
     import requests
 

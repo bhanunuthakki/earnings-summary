@@ -320,9 +320,7 @@ def test_bear_case_empty_signals_produces_no_block(
         ticker="EMPTY",
         repo_root=repo,
         enable_llm=True,
-        thesis=ThesisSection(
-            status=SectionStatus.OK, thesis_full="t", break_conditions=["x"]
-        ),
+        thesis=ThesisSection(status=SectionStatus.OK, thesis_full="t", break_conditions=["x"]),
         financials=FinancialsSection(status=SectionStatus.MISSING_DATA),
         segments=SegmentsSection(status=SectionStatus.MISSING_DATA),
         earnings=EarningsSection(status=SectionStatus.MISSING_DATA),
@@ -511,8 +509,7 @@ def test_segments_section_populates_ts_context_with_segment_signals_only(
     # because the load_segment_signals path is independent of segment_periods.
     conn = sqlite3.connect(str(repo_with_signals / "data" / "portfolio.db"))
     conn.execute(
-        "INSERT INTO segment_periods (ticker, period_end, fiscal_period_type) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO segment_periods (ticker, period_end, fiscal_period_type) VALUES (?, ?, ?)",
         ("TST", "2026-03-31", "Q1"),
     )
     period_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -542,8 +539,7 @@ def test_segments_section_empty_signals_yields_empty_string(tmp_path: Path) -> N
     # and we can read the (empty) ts_context_md field.
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
     conn.execute(
-        "INSERT INTO segment_periods (ticker, period_end, fiscal_period_type) "
-        "VALUES (?, ?, ?)",
+        "INSERT INTO segment_periods (ticker, period_end, fiscal_period_type) VALUES (?, ?, ?)",
         ("EMPTY", "2026-03-31", "Q1"),
     )
     period_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]

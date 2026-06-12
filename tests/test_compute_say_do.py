@@ -126,35 +126,63 @@ def conn() -> sqlite3.Connection:
 def test_classify_outcome_ge_hit() -> None:
     """target=10 ge, realized=11 -> HIT (1/10 over = 10%, but 10% threshold for BEAT means >=10% so it's BEAT)."""
     # Boundary: exactly 10% over -> BEAT
-    assert _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("11")) == CommitmentOutcome.BEAT
+    assert (
+        _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("11"))
+        == CommitmentOutcome.BEAT
+    )
     # 5% over -> HIT
-    assert _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("10.5")) == CommitmentOutcome.HIT
+    assert (
+        _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("10.5"))
+        == CommitmentOutcome.HIT
+    )
 
 
 def test_classify_outcome_ge_miss() -> None:
-    assert _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("9")) == CommitmentOutcome.MISS
+    assert (
+        _classify_outcome(comparator=Comparator.GE, target=Decimal("10"), realized=Decimal("9"))
+        == CommitmentOutcome.MISS
+    )
 
 
 def test_classify_outcome_lt_inverted() -> None:
     """LT/LE: realized below target by >=10% => BEAT, below but <10% => HIT, above => MISS."""
-    assert _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("11")) == CommitmentOutcome.MISS
-    assert _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("9.5")) == CommitmentOutcome.HIT
-    assert _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("8")) == CommitmentOutcome.BEAT
+    assert (
+        _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("11"))
+        == CommitmentOutcome.MISS
+    )
+    assert (
+        _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("9.5"))
+        == CommitmentOutcome.HIT
+    )
+    assert (
+        _classify_outcome(comparator=Comparator.LT, target=Decimal("10"), realized=Decimal("8"))
+        == CommitmentOutcome.BEAT
+    )
 
 
 def test_classify_outcome_eq_tolerance() -> None:
     """EQ: |realized - target| <= 5% of target -> HIT, else MISS."""
-    assert _classify_outcome(comparator=Comparator.EQ, target=Decimal("100"), realized=Decimal("103")) == CommitmentOutcome.HIT
-    assert _classify_outcome(comparator=Comparator.EQ, target=Decimal("100"), realized=Decimal("110")) == CommitmentOutcome.MISS
+    assert (
+        _classify_outcome(comparator=Comparator.EQ, target=Decimal("100"), realized=Decimal("103"))
+        == CommitmentOutcome.HIT
+    )
+    assert (
+        _classify_outcome(comparator=Comparator.EQ, target=Decimal("100"), realized=Decimal("110"))
+        == CommitmentOutcome.MISS
+    )
 
 
 def test_persist_commitment_writes_row(conn: sqlite3.Connection) -> None:
     seg = _seed_segment(conn, "MELI")
     commitment = CommitmentInput(
-        ticker="MELI", period_made=datetime(2024, 9, 30),
-        transcript_segment_id=seg, period_target=datetime(2024, 12, 31),
-        kpi_name="Operating Margin", comparator=Comparator.GE,
-        target_value=Decimal("13"), unit=Unit.PERCENT,
+        ticker="MELI",
+        period_made=datetime(2024, 9, 30),
+        transcript_segment_id=seg,
+        period_target=datetime(2024, 12, 31),
+        kpi_name="Operating Margin",
+        comparator=Comparator.GE,
+        target_value=Decimal("13"),
+        unit=Unit.PERCENT,
         narrative="we expect mid-teens margins by Q4",
     )
     cid = persist_commitment(conn, commitment=commitment)
@@ -168,10 +196,14 @@ def test_persist_commitment_writes_row(conn: sqlite3.Connection) -> None:
 def test_persist_commitment_rejects_unknown_segment(conn: sqlite3.Connection) -> None:
     """Unknown transcript_segment_id raises rather than silently dropping."""
     commitment = CommitmentInput(
-        ticker="X", period_made=datetime(2024, 9, 30),
-        transcript_segment_id=99999, period_target=datetime(2024, 12, 31),
-        kpi_name="x", comparator=Comparator.GE,
-        target_value=Decimal("1"), unit=Unit.PERCENT,
+        ticker="X",
+        period_made=datetime(2024, 9, 30),
+        transcript_segment_id=99999,
+        period_target=datetime(2024, 12, 31),
+        kpi_name="x",
+        comparator=Comparator.GE,
+        target_value=Decimal("1"),
+        unit=Unit.PERCENT,
         narrative="x",
     )
     with pytest.raises(ValueError, match="does not exist"):
@@ -180,20 +212,32 @@ def test_persist_commitment_rejects_unknown_segment(conn: sqlite3.Connection) ->
 
 def test_persist_manifest_handles_multiple(conn: sqlite3.Connection) -> None:
     seg = _seed_segment(conn, "MELI")
-    manifest = CommitmentExtractionManifest(commitments=[
-        CommitmentInput(
-            ticker="MELI", period_made=datetime(2024, 9, 30),
-            transcript_segment_id=seg, period_target=datetime(2024, 12, 31),
-            kpi_name="A", comparator=Comparator.GE,
-            target_value=Decimal("10"), unit=Unit.PERCENT, narrative="a",
-        ),
-        CommitmentInput(
-            ticker="MELI", period_made=datetime(2024, 9, 30),
-            transcript_segment_id=seg, period_target=datetime(2024, 12, 31),
-            kpi_name="B", comparator=Comparator.LT,
-            target_value=Decimal("5"), unit=Unit.PERCENT, narrative="b",
-        ),
-    ])
+    manifest = CommitmentExtractionManifest(
+        commitments=[
+            CommitmentInput(
+                ticker="MELI",
+                period_made=datetime(2024, 9, 30),
+                transcript_segment_id=seg,
+                period_target=datetime(2024, 12, 31),
+                kpi_name="A",
+                comparator=Comparator.GE,
+                target_value=Decimal("10"),
+                unit=Unit.PERCENT,
+                narrative="a",
+            ),
+            CommitmentInput(
+                ticker="MELI",
+                period_made=datetime(2024, 9, 30),
+                transcript_segment_id=seg,
+                period_target=datetime(2024, 12, 31),
+                kpi_name="B",
+                comparator=Comparator.LT,
+                target_value=Decimal("5"),
+                unit=Unit.PERCENT,
+                narrative="b",
+            ),
+        ]
+    )
     ids = persist_manifest(conn, manifest)
     assert len(ids) == 2
 
@@ -201,12 +245,20 @@ def test_persist_manifest_handles_multiple(conn: sqlite3.Connection) -> None:
 def test_match_pending_marks_no_data_when_kpi_missing(conn: sqlite3.Connection) -> None:
     """If kpi_facts has no row for the period, outcome=NO_DATA."""
     seg = _seed_segment(conn, "X")
-    persist_commitment(conn, commitment=CommitmentInput(
-        ticker="X", period_made=datetime(2024, 9, 30),
-        transcript_segment_id=seg, period_target=datetime(2024, 12, 31),
-        kpi_name="Missing KPI", comparator=Comparator.GE,
-        target_value=Decimal("10"), unit=Unit.PERCENT, narrative="x",
-    ))
+    persist_commitment(
+        conn,
+        commitment=CommitmentInput(
+            ticker="X",
+            period_made=datetime(2024, 9, 30),
+            transcript_segment_id=seg,
+            period_target=datetime(2024, 12, 31),
+            kpi_name="Missing KPI",
+            comparator=Comparator.GE,
+            target_value=Decimal("10"),
+            unit=Unit.PERCENT,
+            narrative="x",
+        ),
+    )
     conn.commit()
     results = match_pending(conn, ticker="X")
     assert len(results) == 1
@@ -236,16 +288,26 @@ def test_match_pending_full_cycle(conn: sqlite3.Connection) -> None:
     )
     seg = _seed_segment(conn, "MELI")
     _seed_kpi_fact(
-        conn, ticker="MELI", kpi_name="Operating Margin",
-        value=Decimal("13.5"), period_end=datetime(2024, 12, 31),
+        conn,
+        ticker="MELI",
+        kpi_name="Operating Margin",
+        value=Decimal("13.5"),
+        period_end=datetime(2024, 12, 31),
     )
-    persist_commitment(conn, commitment=CommitmentInput(
-        ticker="MELI", period_made=datetime(2024, 9, 30),
-        transcript_segment_id=seg, period_target=datetime(2024, 12, 31),
-        kpi_name="Operating Margin", comparator=Comparator.GE,
-        target_value=Decimal("13"), unit=Unit.PERCENT,
-        narrative="we expect mid-teens margins by Q4",
-    ))
+    persist_commitment(
+        conn,
+        commitment=CommitmentInput(
+            ticker="MELI",
+            period_made=datetime(2024, 9, 30),
+            transcript_segment_id=seg,
+            period_target=datetime(2024, 12, 31),
+            kpi_name="Operating Margin",
+            comparator=Comparator.GE,
+            target_value=Decimal("13"),
+            unit=Unit.PERCENT,
+            narrative="we expect mid-teens margins by Q4",
+        ),
+    )
     conn.commit()
 
     results = match_pending(conn, ticker="MELI")

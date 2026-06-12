@@ -61,13 +61,9 @@ class CommitmentExtractionManifest(BaseModel):
     commitments: list[CommitmentInput]
 
 
-def _validate_segment_exists(
-    conn: sqlite3.Connection, segment_id: int
-) -> None:
+def _validate_segment_exists(conn: sqlite3.Connection, segment_id: int) -> None:
     """Raise if the transcript_segment_id doesn't reference a real row."""
-    cur = conn.execute(
-        "SELECT 1 FROM transcript_segments WHERE id = ? LIMIT 1", (segment_id,)
-    )
+    cur = conn.execute("SELECT 1 FROM transcript_segments WHERE id = ? LIMIT 1", (segment_id,))
     if cur.fetchone() is None:
         raise ValueError(f"transcript_segment_id={segment_id} does not exist")
 
@@ -158,9 +154,7 @@ def _row_to_commitment(row) -> CommitmentRow:
         pm = datetime.fromisoformat(pm)
     if isinstance(pt, str):
         pt = datetime.fromisoformat(pt)
-    realized = (
-        Decimal(str(row["realized_value"])) if row["realized_value"] is not None else None
-    )
+    realized = Decimal(str(row["realized_value"])) if row["realized_value"] is not None else None
     outcome = CommitmentOutcome(row["outcome"]) if row["outcome"] is not None else None
     return CommitmentRow(
         id=int(row["id"]),
@@ -237,9 +231,7 @@ class MatchResult:
     outcome: CommitmentOutcome
 
 
-def match_commitment(
-    conn: sqlite3.Connection, commitment: CommitmentRow
-) -> MatchResult:
+def match_commitment(conn: sqlite3.Connection, commitment: CommitmentRow) -> MatchResult:
     """Look up the realized value, classify outcome, and persist back to the row."""
     looked_up = _lookup_realized_value(
         conn,
@@ -274,7 +266,7 @@ def match_commitment(
             commitment.id,
         ),
     )
-    
+
     # Persist to saydo_historical_metrics ledger if the table exists (supports test db isolation)
     table_check = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='saydo_historical_metrics'"
@@ -283,7 +275,12 @@ def match_commitment(
         cur_hist = conn.execute(
             "SELECT id FROM saydo_historical_metrics "
             "WHERE ticker = ? AND period_made = ? AND period_target = ? AND kpi_name = ?",
-            (commitment.ticker, commitment.period_made, commitment.period_target, commitment.kpi_name),
+            (
+                commitment.ticker,
+                commitment.period_made,
+                commitment.period_target,
+                commitment.kpi_name,
+            ),
         )
         existing = cur_hist.fetchone()
         if existing:
@@ -321,7 +318,7 @@ def match_commitment(
                     datetime.now(),
                 ),
             )
-            
+
     conn.commit()
     return MatchResult(
         commitment_id=commitment.id,

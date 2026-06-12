@@ -150,7 +150,11 @@ def _ctx_llm_calibration(ticker: str | None, repo_root: Path) -> LensContext | N
         sample_lines.append(
             f"- {str(r['made_at'])[:10]} · {r['ticker']} · "
             f"**{r['recommendation_kind'].upper()}**"
-            + (f" {float(r['recommendation_value'])}%" if r["recommendation_value"] is not None else "")
+            + (
+                f" {float(r['recommendation_value'])}%"
+                if r["recommendation_value"] is not None
+                else ""
+            )
             + f" · conv={r['conviction'] or '?'} · outcome={r['outcome_label'] or 'pending'} ({pct_str})"
         )
     sample_block = "\n".join(sample_lines) if sample_lines else "(no recent decisions)"

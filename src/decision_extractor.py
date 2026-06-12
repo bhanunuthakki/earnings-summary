@@ -212,9 +212,7 @@ def _excerpt_after_recommendation(body: str, start_offset: int) -> str:
     return para[:512]
 
 
-def _llm_fallback_extract(
-    *, body: str, ticker: str, source_lens: str
-) -> list[DecisionCandidate]:
+def _llm_fallback_extract(*, body: str, ticker: str, source_lens: str) -> list[DecisionCandidate]:
     """Haiku-fallback for the rare case where the regex misses a present
     recommendation. Returns at most one candidate. Defensive against
     JSON-decoding failures and unknown kinds."""
@@ -279,7 +277,9 @@ Paragraph:
         value = float(raw_value)
     conviction_raw = d.get("conviction")
     conviction = (
-        conviction_raw if isinstance(conviction_raw, str) and conviction_raw in {"low", "medium", "high"} else None
+        conviction_raw
+        if isinstance(conviction_raw, str) and conviction_raw in {"low", "medium", "high"}
+        else None
     )
     return [
         DecisionCandidate(

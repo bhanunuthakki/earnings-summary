@@ -89,16 +89,19 @@ def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> object
         log.info({"event": "macro_fetch_error", "url": url, "error": _redact(exc)})
         return None
     if resp.status_code == 429:
-        log.warning(
-            {"event": "macro_rate_limited", "url": url, "status": resp.status_code}
-        )
+        log.warning({"event": "macro_rate_limited", "url": url, "status": resp.status_code})
         return "RATE_LIMITED"
     try:
         resp.raise_for_status()
         return resp.json()
     except requests.HTTPError as exc:
         log.info(
-            {"event": "macro_http_error", "url": url, "status": resp.status_code, "error": _redact(exc)}
+            {
+                "event": "macro_http_error",
+                "url": url,
+                "status": resp.status_code,
+                "error": _redact(exc),
+            }
         )
         return None
     except Exception as exc:  # noqa: BLE001 — JSON decode + other parse failures
@@ -151,9 +154,7 @@ def _parse_float(raw: object) -> float | None:
     return f
 
 
-def _populate_one_series(
-    series: SeriesSpec, *, dry_run: bool, sleep_seconds: float
-) -> int:
+def _populate_one_series(series: SeriesSpec, *, dry_run: bool, sleep_seconds: float) -> int:
     """Try each provider in order. Returns the number of rows persisted (0
     means every candidate failed for this series)."""
     for provider in series.providers:
@@ -196,7 +197,11 @@ def _populate_one_series(
             )
             return n_written
     log.warning(
-        {"event": "macro_series_empty", "series_id": series.series_id, "tried": len(series.providers)}
+        {
+            "event": "macro_series_empty",
+            "series_id": series.series_id,
+            "tried": len(series.providers),
+        }
     )
     return 0
 
@@ -207,9 +212,7 @@ def main() -> int:
         "--series",
         help="Comma-separated series_ids. Omit for all 12.",
     )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Parse but don't write to DB."
-    )
+    parser.add_argument("--dry-run", action="store_true", help="Parse but don't write to DB.")
     parser.add_argument(
         "--sleep",
         type=float,
@@ -237,7 +240,9 @@ def main() -> int:
         ids = list(REGISTRY.keys())
 
     if not FMP_API_KEY:
-        print("Warning: FMP_API_KEY not set in .env — every series will be skipped.", file=sys.stderr)
+        print(
+            "Warning: FMP_API_KEY not set in .env — every series will be skipped.", file=sys.stderr
+        )
 
     summary: dict[str, int] = {}
     for sid in ids:

@@ -145,7 +145,11 @@ def test_parse_themes_response_well_formed() -> None:
                     "theme_name": "CapEx trajectory",
                     "mentions_per_quarter": {"Q4 2025": 2, "Q1 2026": 3},
                     "evidence": [
-                        {"period": "Q1 2026", "speaker": "Anat", "text": "CapEx will increase significantly."}
+                        {
+                            "period": "Q1 2026",
+                            "speaker": "Anat",
+                            "text": "CapEx will increase significantly.",
+                        }
                     ],
                 }
             ],
@@ -154,7 +158,11 @@ def test_parse_themes_response_well_formed() -> None:
                     "theme_name": "AI compute capacity",
                     "mentions_per_quarter": {"Q1 2026": 4},
                     "evidence": [
-                        {"period": "Q1 2026", "speaker": "Brian (MS)", "text": "Help us think about TPUs."}
+                        {
+                            "period": "Q1 2026",
+                            "speaker": "Brian (MS)",
+                            "text": "Help us think about TPUs.",
+                        }
                     ],
                 }
             ],
@@ -207,7 +215,9 @@ def test_parse_themes_response_honors_explicit_last_4q_count() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_transcripts_dir(repo_root: Path, ticker: str, quarters: list[tuple[int, int, str]]) -> None:
+def _seed_transcripts_dir(
+    repo_root: Path, ticker: str, quarters: list[tuple[int, int, str]]
+) -> None:
     """Write transcripts/processed/<TICKER>_Q<n>_<Y>.txt files with given content."""
     d = repo_root / "transcripts" / "processed"
     d.mkdir(parents=True, exist_ok=True)
@@ -215,7 +225,9 @@ def _seed_transcripts_dir(repo_root: Path, ticker: str, quarters: list[tuple[int
         (d / f"{ticker}_Q{q}_{y}.txt").write_text(content, encoding="utf-8")
 
 
-def _seed_transcripts_db(repo_root: Path, ticker: str, rows: list[tuple[int, int, bool | None]]) -> None:
+def _seed_transcripts_db(
+    repo_root: Path, ticker: str, rows: list[tuple[int, int, bool | None]]
+) -> None:
     """Seed a minimal portfolio.db with transcripts rows carrying has_qa_section flags.
 
     Also creates an empty `earnings_surprises` table so the §6 surprise-card
@@ -269,17 +281,16 @@ def _aggregator_qa(period: str, body: str) -> str:
 
 
 def _callstreet_full(prepared: str, qa: str) -> str:
-    return (
-        f"MANAGEMENT DISCUSSION SECTION\n\n{prepared}\n\n"
-        f"QUESTION AND ANSWER SECTION\n\n{qa}\n"
-    )
+    return f"MANAGEMENT DISCUSSION SECTION\n\n{prepared}\n\nQUESTION AND ANSWER SECTION\n\n{qa}\n"
 
 
 def _mock_themes_response(prepared: list[dict[str, Any]], qa: list[dict[str, Any]]) -> str:
     return json.dumps({"prepared_themes": prepared, "qa_themes": qa})
 
 
-def test_build_themes_mixed_qa_flags_populates_both_sides(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_themes_mixed_qa_flags_populates_both_sides(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     ticker = "ACME"
@@ -290,14 +301,22 @@ def test_build_themes_mixed_qa_flags_populates_both_sides(monkeypatch: pytest.Mo
         [
             (2, 2025, _aggregator_qa("Q2 2025", "B Brian: question about cloud.")),
             (3, 2025, _aggregator_qa("Q3 2025", "B Brian: another cloud question.")),
-            (4, 2025, _callstreet_full(
-                "Operator: welcome. CEO: revenue grew 20%, margins expanded.",
-                "Analyst: TPU pricing? CFO: opportunistic."
-            )),
-            (1, 2026, _callstreet_full(
-                "CEO: Q1 was strong, GCP up 35%.",
-                "Analyst: Capex 2027? Anat: it will increase significantly."
-            )),
+            (
+                4,
+                2025,
+                _callstreet_full(
+                    "Operator: welcome. CEO: revenue grew 20%, margins expanded.",
+                    "Analyst: TPU pricing? CFO: opportunistic.",
+                ),
+            ),
+            (
+                1,
+                2026,
+                _callstreet_full(
+                    "CEO: Q1 was strong, GCP up 35%.",
+                    "Analyst: Capex 2027? Anat: it will increase significantly.",
+                ),
+            ),
         ],
     )
     _seed_transcripts_db(
@@ -366,7 +385,9 @@ def test_build_themes_mixed_qa_flags_populates_both_sides(monkeypatch: pytest.Mo
     assert section.themes_note is None
 
 
-def test_build_themes_no_qa_falls_back_to_prepared_only_with_note(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_themes_no_qa_falls_back_to_prepared_only_with_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     ticker = "PREP"
@@ -424,7 +445,9 @@ def test_build_themes_no_qa_falls_back_to_prepared_only_with_note(monkeypatch: p
     assert "Q&A" in section.themes_note
 
 
-def test_build_themes_defensively_drops_qa_themes_when_no_source_qa(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_themes_defensively_drops_qa_themes_when_no_source_qa(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """If the LLM ignores the empty-side instruction and returns qa themes
     anyway, the builder forces them to [] because we know there was no
     source material to ground them in."""
@@ -434,15 +457,15 @@ def test_build_themes_defensively_drops_qa_themes_when_no_source_qa(monkeypatch:
     _seed_transcripts_dir(repo, ticker, [(1, 2026, "Operator: welcome. CEO: Q1 was good.")])
     _seed_transcripts_db(repo, ticker, [(1, 2026, False)])
 
-    def fake_extractor(
-        _t: str, _x: list[dict[str, Any]], ts_signals_md: str = ""
-    ) -> str:
+    def fake_extractor(_t: str, _x: list[dict[str, Any]], ts_signals_md: str = "") -> str:
         return _mock_themes_response(
-            prepared=[
-                {"theme_name": "P", "mentions_per_quarter": {"Q1 2026": 1}, "evidence": []}
-            ],
+            prepared=[{"theme_name": "P", "mentions_per_quarter": {"Q1 2026": 1}, "evidence": []}],
             qa=[
-                {"theme_name": "Made-up QA theme", "mentions_per_quarter": {"Q1 2026": 1}, "evidence": []}
+                {
+                    "theme_name": "Made-up QA theme",
+                    "mentions_per_quarter": {"Q1 2026": 1},
+                    "evidence": [],
+                }
             ],
         )
 
@@ -452,7 +475,9 @@ def test_build_themes_defensively_drops_qa_themes_when_no_source_qa(monkeypatch:
 
     section = build(ticker, repo, enable_llm=True)
     assert section.prepared_remarks_themes
-    assert section.qa_themes == [], "qa themes must be force-dropped when no Q&A source material exists"
+    assert section.qa_themes == [], (
+        "qa themes must be force-dropped when no Q&A source material exists"
+    )
 
 
 def test_build_themes_disabled_when_enable_llm_false(tmp_path: Path) -> None:
@@ -468,7 +493,9 @@ def test_build_themes_disabled_when_enable_llm_false(tmp_path: Path) -> None:
     assert section.themes_note is None
 
 
-def test_build_themes_uses_cache_on_second_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_themes_uses_cache_on_second_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     ticker = "CACHE"
@@ -477,14 +504,16 @@ def test_build_themes_uses_cache_on_second_call(monkeypatch: pytest.MonkeyPatch,
 
     call_count = {"n": 0}
 
-    def fake_extractor(
-        _t: str, _x: list[dict[str, Any]], ts_signals_md: str = ""
-    ) -> str:
+    def fake_extractor(_t: str, _x: list[dict[str, Any]], ts_signals_md: str = "") -> str:
         call_count["n"] += 1
         return _mock_themes_response(
             prepared=[],
             qa=[
-                {"theme_name": "Question shape", "mentions_per_quarter": {"Q1 2026": 1}, "evidence": []}
+                {
+                    "theme_name": "Question shape",
+                    "mentions_per_quarter": {"Q1 2026": 1},
+                    "evidence": [],
+                }
             ],
         )
 

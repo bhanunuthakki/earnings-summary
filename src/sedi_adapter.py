@@ -140,8 +140,10 @@ def ingest_sedi_dump(
             price_raw = r.get("unit_price")
             total_raw = r.get("total_consideration")
             price = float(price_raw) if isinstance(price_raw, (int, float)) else None
-            total = float(total_raw) if isinstance(total_raw, (int, float)) else (
-                shares * price if price is not None else None
+            total = (
+                float(total_raw)
+                if isinstance(total_raw, (int, float))
+                else (shares * price if price is not None else None)
             )
             owned_after_raw = r.get("shares_owned_after")
             owned_after = (
@@ -155,7 +157,9 @@ def ingest_sedi_dump(
                     insider_relation=str(r.get("relationship") or "") or None,
                     transaction_date=tx_date,
                     filing_date=filing_date or tx_date,
-                    transaction_type=_map_sedi_type(str(r.get("nature_of_transaction_code") or "99")),
+                    transaction_type=_map_sedi_type(
+                        str(r.get("nature_of_transaction_code") or "99")
+                    ),
                     shares=shares,
                     price_per_share=price,
                     transaction_value=total,

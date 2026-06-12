@@ -86,9 +86,7 @@ with the thesis." That's also a view.
 """
 
 
-def _ctx_portfolio_macro_stress(
-    *, scenario_obj: object, repo_root: Path
-) -> LensContext | None:
+def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> LensContext | None:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
@@ -153,7 +151,9 @@ def _ctx_portfolio_macro_stress(
 
     scenario_id = str(getattr(scenario_obj, "id", "scenario"))
     portfolio_summary = "\n\n".join(port_lines) if port_lines else "(no portfolio holdings)"
-    stress_grid = "\n".join(grid_lines) if grid_lines else "(no sensitivities computed for any holding)"
+    stress_grid = (
+        "\n".join(grid_lines) if grid_lines else "(no sensitivities computed for any holding)"
+    )
     return LensContext(
         ticker=None,
         template_kwargs={
@@ -193,15 +193,11 @@ def run_portfolio_macro_stress_lens(
         return None
     effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
     if not force:
-        existing = read_current(
-            ticker=None, purpose=purpose, scope="portfolio", db_path=db_path
-        )
+        existing = read_current(ticker=None, purpose=purpose, scope="portfolio", db_path=db_path)
         if existing is not None and not existing.dirty:
             new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
             if new_sha == existing.input_sha256:
-                log.info(
-                    {"event": "portfolio_macro_stress_cache_hit", "scenario": scenario_id}
-                )
+                log.info({"event": "portfolio_macro_stress_cache_hit", "scenario": scenario_id})
                 return existing
     try:
         prompt = _PROMPT_PORTFOLIO_MACRO_STRESS.format(**ctx.template_kwargs)
@@ -210,7 +206,11 @@ def run_portfolio_macro_stress_lens(
         return None
     try:
         content = call_llm(
-            compose_brief_prompt(prompt), purpose=purpose, ticker=None, scope="portfolio", model=model
+            compose_brief_prompt(prompt),
+            purpose=purpose,
+            ticker=None,
+            scope="portfolio",
+            model=model,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning({"event": "portfolio_macro_stress_llm_failed", "error": str(exc)})

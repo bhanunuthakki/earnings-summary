@@ -43,7 +43,7 @@ _RatingValue = Literal["MET", "MISSED", "EXCEEDED", "MIXED", "unknown"]
 def build(ticker: str, repo_root: Path) -> SayDoSection:
     tmp_dir = repo_root / ".tmp"
     cards = _scan(tmp_dir, ticker)
-    
+
     historical_metrics: list[SayDoHistoricalMetric] = []
     conn = open_repo_db(repo_root)
     if conn:
@@ -63,8 +63,10 @@ def build(ticker: str, repo_root: Path) -> SayDoSection:
                         pm = datetime.fromisoformat(pm)
                     if isinstance(pt, str):
                         pt = datetime.fromisoformat(pt)
-                    
-                    realized = float(row["realized_value"]) if row["realized_value"] is not None else None
+
+                    realized = (
+                        float(row["realized_value"]) if row["realized_value"] is not None else None
+                    )
                     historical_metrics.append(
                         SayDoHistoricalMetric(
                             id=int(row["id"]),
@@ -140,7 +142,7 @@ def _parse_rating(text: str) -> _RatingValue:
         next_sec_idx = verdict_sec.lower().find("###", 10)
         if next_sec_idx != -1:
             verdict_sec = verdict_sec[:next_sec_idx]
-        
+
         # Find first bolded word MET/MISSED/EXCEEDED/MIXED
         m = re.search(r"\*\*(MET|MISSED|EXCEEDED|MIXED)\*\*", verdict_sec, re.IGNORECASE)
         if m:
@@ -154,12 +156,12 @@ def _parse_rating(text: str) -> _RatingValue:
     m = _RATING_RX.search(text)
     if m:
         return cast(_RatingValue, m.group(1).upper())
-        
+
     # 3. Global bold word fallback
     m = re.search(r"\*\*(MET|MISSED|EXCEEDED|MIXED)\*\*", text, re.IGNORECASE)
     if m:
         return cast(_RatingValue, m.group(1).upper())
-        
+
     return "unknown"
 
 
@@ -171,23 +173,23 @@ def _parse_attribution(text: str) -> str | None:
         next_sec_idx = loop_sec.lower().find("###", 10)
         if next_sec_idx != -1:
             loop_sec = loop_sec[:next_sec_idx]
-            
+
         # Find Resolution: paragraph
         res_idx = loop_sec.lower().find("**resolution:**")
         if res_idx != -1:
-            res_part = loop_sec[res_idx + 15:].strip()
+            res_part = loop_sec[res_idx + 15 :].strip()
             p = res_part.split("\n\n")[0].strip()
             p = p.replace("**", "").replace("_", "").strip()
             p = re.sub(r"\s+", " ", p)
             return p
-            
+
         # If no Resolution, grab Net Conviction line
         net_conv_idx = loop_sec.lower().find("**net conviction:")
         if net_conv_idx != -1:
             line = loop_sec[net_conv_idx:].split("\n")[0].strip()
             line = line.replace("**", "").replace("_", "").strip()
             return line
-            
+
     # 2. Try traditional label (only matching if it doesn't look like a header)
     for line in text.splitlines():
         if line.strip().startswith("###"):
@@ -197,7 +199,7 @@ def _parse_attribution(text: str) -> str | None:
             extracted = m.group(1).replace("**", "").strip()
             extracted = re.sub(r"\s+", " ", extracted).strip()
             return extracted or None
-            
+
     return None
 
 
@@ -205,11 +207,11 @@ def _parse_thesis_view(text: str) -> str | None:
     # 1. Parse under Thesis Impact (block-based)
     idx = text.lower().find("### 5. thesis impact")
     if idx != -1:
-        impact_sec = text[idx + 20:].strip()
+        impact_sec = text[idx + 20 :].strip()
         next_sec_idx = impact_sec.lower().find("###")
         if next_sec_idx != -1:
             impact_sec = impact_sec[:next_sec_idx]
-            
+
         paragraphs = [p.strip() for p in impact_sec.split("\n\n") if p.strip()]
         if paragraphs:
             p = paragraphs[0].replace("**", "").replace("_", "").strip()
@@ -225,5 +227,5 @@ def _parse_thesis_view(text: str) -> str | None:
             extracted = m.group(1).replace("**", "").strip()
             extracted = re.sub(r"\s+", " ", extracted).strip()
             return extracted or None
-            
+
     return None

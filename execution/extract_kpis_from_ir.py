@@ -135,9 +135,7 @@ def _apply_manifest(
                 error_msg=f"doc#{m.source_doc_id}: {type(e).__name__}: {e}"[:500],
             )
             failed += 1
-            sys.stderr.write(
-                f"FAILED {m.ticker} doc#{m.source_doc_id}: {type(e).__name__}: {e}\n"
-            )
+            sys.stderr.write(f"FAILED {m.ticker} doc#{m.source_doc_id}: {type(e).__name__}: {e}\n")
             continue
         record_stage(
             conn,

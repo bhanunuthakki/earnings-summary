@@ -130,8 +130,7 @@ def fetch_qa(spec: FetchQaSpec, force: bool = False) -> FetchQaResult | None:
     )
     if qa_result.status == QaStatus.OK:
         print(
-            f"[done] {output_path.name}  source={source_label}  "
-            f"qa_chars={len(hit.qa_text)}  qa=ok"
+            f"[done] {output_path.name}  source={source_label}  qa_chars={len(hit.qa_text)}  qa=ok"
         )
     else:
         print(
@@ -159,11 +158,13 @@ def main() -> None:
     parser.add_argument("--year", required=True, type=int)
     parser.add_argument("--quarter", required=True, type=int, choices=[1, 2, 3, 4])
     parser.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="Overwrite an existing transcript file.",
     )
     parser.add_argument(
-        "--list-sources", action="store_true",
+        "--list-sources",
+        action="store_true",
         help="Print the configured aggregator chain and exit.",
     )
     args = parser.parse_args()

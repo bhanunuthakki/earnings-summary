@@ -464,7 +464,9 @@ def test_correlation_matrix_missing_kpis_insufficient_data(tmp_path: Path) -> No
 
 def test_load_financial_series_returns_sorted_observations(tmp_path: Path) -> None:
     db = _facts_db(tmp_path)
-    _insert_financial(db, "TEST", "revenue", [100.0, 110.0, 120.0, 130.0, 140.0, 150.0, 160.0, 170.0])
+    _insert_financial(
+        db, "TEST", "revenue", [100.0, 110.0, 120.0, 130.0, 140.0, 150.0, 160.0, 170.0]
+    )
     s = load_financial_series("TEST", "revenue", db_path=db)
     assert len(s) == 8
     # Strictly ascending period_end
@@ -476,9 +478,7 @@ def test_load_financial_series_returns_sorted_observations(tmp_path: Path) -> No
 def test_load_financial_series_dedupes_across_source_docs(tmp_path: Path) -> None:
     """Multiple source_doc_id rows per period collapse to one observation."""
     db = _facts_db(tmp_path)
-    _insert_financial(
-        db, "TEST", "revenue", [100.0, 110.0, 120.0, 130.0], source_doc_ids=[1, 2, 3]
-    )
+    _insert_financial(db, "TEST", "revenue", [100.0, 110.0, 120.0, 130.0], source_doc_ids=[1, 2, 3])
     s = load_financial_series("TEST", "revenue", db_path=db)
     assert len(s) == 4  # not 12
     assert [obs.value for obs in s] == [100.0, 110.0, 120.0, 130.0]

@@ -134,11 +134,7 @@ def record(
         return None
     try:
         # Idempotency check
-        if (
-            source_doc_id is not None
-            and kpi_name is not None
-            and target_period is not None
-        ):
+        if source_doc_id is not None and kpi_name is not None and target_period is not None:
             existing = conn.execute(
                 """
                 SELECT id FROM predictions
@@ -326,10 +322,7 @@ def outcome_summary(
             )
             params = (ticker, source_kind)
         else:
-            sql = (
-                "SELECT outcome, COUNT(*) FROM predictions "
-                "WHERE ticker = ? GROUP BY outcome"
-            )
+            sql = "SELECT outcome, COUNT(*) FROM predictions WHERE ticker = ? GROUP BY outcome"
             params = (ticker,)
         rows = conn.execute(sql, params).fetchall()
         return {r[0]: int(r[1]) for r in rows}
@@ -356,7 +349,9 @@ def _row_to_prediction(row: sqlite3.Row) -> Prediction:
         realized_value=float(row["realized_value"]) if row["realized_value"] is not None else None,
         realized_doc_id=row["realized_doc_id"],
         outcome=row["outcome"],
-        outcome_confidence=float(row["outcome_confidence"]) if row["outcome_confidence"] is not None else None,
+        outcome_confidence=float(row["outcome_confidence"])
+        if row["outcome_confidence"] is not None
+        else None,
         evaluated_at=_parse_dt(row["evaluated_at"]),
         notes=row["notes"],
     )

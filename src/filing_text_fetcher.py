@@ -110,7 +110,9 @@ def fetch_latest_10k_text(
     try:
         payload = _http_get_json(submissions_url, user_agent=ua)
     except Exception as exc:  # noqa: BLE001 — log + return
-        log.warning({"event": "filing_text_submissions_failed", "ticker": ticker, "error": str(exc)})
+        log.warning(
+            {"event": "filing_text_submissions_failed", "ticker": ticker, "error": str(exc)}
+        )
         return None
 
     recent = (payload.get("filings") or {}).get("recent") or {}
@@ -153,9 +155,7 @@ def fetch_latest_10k_text(
 
     # Cache check
     fy_int = _parse_fy(target_report) or 0
-    cache_path = (
-        cache_dir / f"{ticker}_10k_{fy_int}.txt" if cache_dir is not None else None
-    )
+    cache_path = cache_dir / f"{ticker}_10k_{fy_int}.txt" if cache_dir is not None else None
     text: str | None = None
     if cache_path is not None and cache_path.exists():
         try:
@@ -168,7 +168,9 @@ def fetch_latest_10k_text(
         try:
             html = _http_get_text(primary_url, user_agent=ua, timeout=60.0)
         except Exception as exc:  # noqa: BLE001
-            log.warning({"event": "filing_text_html_fetch_failed", "ticker": ticker, "error": str(exc)})
+            log.warning(
+                {"event": "filing_text_html_fetch_failed", "ticker": ticker, "error": str(exc)}
+            )
             return None
         text = _strip_html(html)
         if cache_path is not None:
@@ -490,9 +492,7 @@ def fetch_latest_s1_text(
     acc_clean = target_accession.replace("-", "")
     primary_url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc_clean}/{target_doc}"
     fy_int = _parse_fy(target_report) or _parse_fy(target_date) or 0
-    cache_path = (
-        cache_dir / f"{ticker}_s1_{fy_int}.txt" if cache_dir is not None else None
-    )
+    cache_path = cache_dir / f"{ticker}_s1_{fy_int}.txt" if cache_dir is not None else None
 
     text: str | None = None
     if cache_path is not None and cache_path.exists():
@@ -617,7 +617,7 @@ def _extract_between(text: str, start_rx: re.Pattern, end_rx: re.Pattern) -> str
     m_start = start_rx.search(text)
     if m_start is None:
         return None
-    after = text[m_start.end():]
+    after = text[m_start.end() :]
     m_end = end_rx.search(after)
     if m_end is None:
         # No end marker — take up to next 200KB as a reasonable cap
@@ -703,7 +703,9 @@ def load_canonical_narrative(
     s1_cache_rel: str | None = None
     if holdings_path.exists():
         try:
-            payload = cast("dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8")))
+            payload = cast(
+                "dict[str, object]", json.loads(holdings_path.read_text(encoding="utf-8"))
+            )
             raw_anchor = payload.get("data_anchor")
             if isinstance(raw_anchor, str) and raw_anchor.strip():
                 data_anchor = raw_anchor.strip().lower()
@@ -711,7 +713,13 @@ def load_canonical_narrative(
             if isinstance(raw_cache, str) and raw_cache.strip():
                 s1_cache_rel = raw_cache.strip()
         except (OSError, json.JSONDecodeError) as exc:
-            log.debug({"event": "canonical_narrative_holdings_read_failed", "ticker": ticker, "error": str(exc)})
+            log.debug(
+                {
+                    "event": "canonical_narrative_holdings_read_failed",
+                    "ticker": ticker,
+                    "error": str(exc),
+                }
+            )
 
     cache_dir = repo_root / "data" / "sec_text"
 
@@ -724,7 +732,14 @@ def load_canonical_narrative(
                 try:
                     text = cache_path.read_text(encoding="utf-8")
                 except OSError as exc:
-                    log.debug({"event": "s1_cache_read_failed", "ticker": ticker, "path": str(cache_path), "error": str(exc)})
+                    log.debug(
+                        {
+                            "event": "s1_cache_read_failed",
+                            "ticker": ticker,
+                            "path": str(cache_path),
+                            "error": str(exc),
+                        }
+                    )
                     text = ""
                 if text.strip():
                     item_1a, item_7, item_8 = _extract_s1_sections(text, ticker=ticker)
@@ -743,10 +758,6 @@ def load_canonical_narrative(
                         item_8_text=item_8,
                     )
         # Cache miss — fall through to the SEC fetcher (which also caches).
-        return fetch_latest_s1_text(
-            ticker=ticker, user_agent=user_agent, cache_dir=cache_dir
-        )
+        return fetch_latest_s1_text(ticker=ticker, user_agent=user_agent, cache_dir=cache_dir)
 
-    return fetch_latest_10k_text(
-        ticker=ticker, user_agent=user_agent, cache_dir=cache_dir
-    )
+    return fetch_latest_10k_text(ticker=ticker, user_agent=user_agent, cache_dir=cache_dir)

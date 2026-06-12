@@ -69,10 +69,14 @@ def _hit(release: date, source: str = "fmp_calendar") -> SurpriseHit:
         release_date=release,
         eps_estimate=Decimal("0.9"),
         eps_actual=Decimal("1.0"),
-        revenue_estimate=None, revenue_actual=None,
-        eps_surprise_pct=Decimal("11.11"), revenue_surprise_pct=None,
-        num_analysts_eps=None, num_analysts_revenue=None,
-        source_name=source, source_url=None,
+        revenue_estimate=None,
+        revenue_actual=None,
+        eps_surprise_pct=Decimal("11.11"),
+        revenue_surprise_pct=None,
+        num_analysts_eps=None,
+        num_analysts_revenue=None,
+        source_name=source,
+        source_url=None,
     )
 
 
@@ -106,15 +110,19 @@ def test_resolve_tickers_active_universe(tmp_path: Path, monkeypatch: pytest.Mon
     """Resolver returns portfolio + watchlist + evaluation tickers; excludes
     archived rows."""
     db_path = tmp_path / "portfolio.db"
-    _seed_tracked_companies(db_path, [
-        ("AAPL", "portfolio", None),
-        ("MSFT", "watchlist", None),
-        ("NVDA", "evaluation", None),
-        ("ZZZZ", "pending", None),       # not in ACTIVE list types
-        ("XXXX", "portfolio", "2024-01-01"),  # archived
-    ])
+    _seed_tracked_companies(
+        db_path,
+        [
+            ("AAPL", "portfolio", None),
+            ("MSFT", "watchlist", None),
+            ("NVDA", "evaluation", None),
+            ("ZZZZ", "pending", None),  # not in ACTIVE list types
+            ("XXXX", "portfolio", "2024-01-01"),  # archived
+        ],
+    )
     # Re-point db module to the fixture DB
     import db
+
     monkeypatch.setattr(db, "DB_PATH", str(db_path))
 
     mod = _load_module()
@@ -126,11 +134,15 @@ def test_resolve_tickers_single_ticker_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db_path = tmp_path / "portfolio.db"
-    _seed_tracked_companies(db_path, [
-        ("AAPL", "portfolio", None),
-        ("MSFT", "watchlist", None),
-    ])
+    _seed_tracked_companies(
+        db_path,
+        [
+            ("AAPL", "portfolio", None),
+            ("MSFT", "watchlist", None),
+        ],
+    )
     import db
+
     monkeypatch.setattr(db, "DB_PATH", str(db_path))
     mod = _load_module()
     assert mod._resolve_tickers("AAPL") == ["AAPL"]
@@ -209,8 +221,11 @@ def test_backfill_one_dry_run_writes_nothing(tmp_path: Path) -> None:
     mod = _load_module()
     src = SurpriseSource(name="fmp_calendar", fetch_all=lambda _t: [_hit(date(2024, 3, 1))])
     result = mod._backfill_one(
-        ticker="WIX", sources=[src],
-        surprise_dir=tmp_path / "surprise", lookback=4, dry_run=True,
+        ticker="WIX",
+        sources=[src],
+        surprise_dir=tmp_path / "surprise",
+        lookback=4,
+        dry_run=True,
     )
     assert result.hits_written == 1
     # Directory not created
@@ -227,8 +242,11 @@ def test_backfill_one_captures_source_exception(tmp_path: Path) -> None:
 
     src = SurpriseSource(name="fmp_calendar", fetch_all=explode)
     result = mod._backfill_one(
-        ticker="WIX", sources=[src],
-        surprise_dir=tmp_path / "surprise", lookback=4, dry_run=False,
+        ticker="WIX",
+        sources=[src],
+        surprise_dir=tmp_path / "surprise",
+        lookback=4,
+        dry_run=False,
     )
     assert result.error is not None
     assert "RuntimeError" in result.error
@@ -240,17 +258,26 @@ def test_backfill_one_attribution_across_sources(tmp_path: Path) -> None:
     """Telemetry should show which source contributed how many records in
     the trimmed window — that's what tells you FMP-loss impact."""
     mod = _load_module()
-    src1 = SurpriseSource(name="fmp_calendar", fetch_all=lambda _t: [
-        _hit(date(2024, 6, 1), source="fmp_calendar"),
-        _hit(date(2024, 9, 1), source="fmp_calendar"),
-    ])
-    src2 = SurpriseSource(name="yfinance", fetch_all=lambda _t: [
-        _hit(date(2024, 3, 1), source="yfinance"),
-        _hit(date(2024, 9, 1), source="yfinance"),  # duplicate — primary wins
-    ])
+    src1 = SurpriseSource(
+        name="fmp_calendar",
+        fetch_all=lambda _t: [
+            _hit(date(2024, 6, 1), source="fmp_calendar"),
+            _hit(date(2024, 9, 1), source="fmp_calendar"),
+        ],
+    )
+    src2 = SurpriseSource(
+        name="yfinance",
+        fetch_all=lambda _t: [
+            _hit(date(2024, 3, 1), source="yfinance"),
+            _hit(date(2024, 9, 1), source="yfinance"),  # duplicate — primary wins
+        ],
+    )
     result = mod._backfill_one(
-        ticker="WIX", sources=[src1, src2],
-        surprise_dir=tmp_path / "surprise", lookback=10, dry_run=False,
+        ticker="WIX",
+        sources=[src1, src2],
+        surprise_dir=tmp_path / "surprise",
+        lookback=10,
+        dry_run=False,
     )
     assert result.hits_written == 3
     assert result.sources_per_hit == {"fmp_calendar": 2, "yfinance": 1}

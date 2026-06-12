@@ -106,9 +106,7 @@ def _resolve(override: Path | str | None) -> Path | None:
         return None
 
 
-def upsert_package(
-    package: ExecCompPackage, *, db_path: Path | str | None = None
-) -> int | None:
+def upsert_package(package: ExecCompPackage, *, db_path: Path | str | None = None) -> int | None:
     """Insert or replace (on natural key: ticker + fiscal_year + executive_name)."""
     conn = _open(db_path)
     if conn is None:
@@ -145,7 +143,9 @@ def upsert_package(
                     package.cash_bonus_target,
                     package.cash_bonus_actual,
                     package.equity_grant_value,
-                    json.dumps(package.equity_grant_breakdown) if package.equity_grant_breakdown else None,
+                    json.dumps(package.equity_grant_breakdown)
+                    if package.equity_grant_breakdown
+                    else None,
                     package.other_comp,
                     package.total_comp_granted,
                     package.total_comp_realized,
@@ -192,7 +192,9 @@ def upsert_package(
                 package.cash_bonus_target,
                 package.cash_bonus_actual,
                 package.equity_grant_value,
-                json.dumps(package.equity_grant_breakdown) if package.equity_grant_breakdown else None,
+                json.dumps(package.equity_grant_breakdown)
+                if package.equity_grant_breakdown
+                else None,
                 package.other_comp,
                 package.total_comp_granted,
                 package.total_comp_realized,

@@ -31,9 +31,11 @@ def test_unknown_ticker_is_silent_noop(monkeypatch, tmp_path: Path) -> None:  # 
 
     def _fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(cmd)
+
         class _R:
             returncode = 0
             stderr = ""
+
         return _R()
 
     monkeypatch.setattr(build_artifacts.subprocess, "run", _fake_run)
@@ -47,9 +49,11 @@ def test_mapped_ticker_invokes_subprocess(monkeypatch, tmp_path: Path) -> None: 
 
     def _fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
         captured.append(cmd)
+
         class _R:
             returncode = 0
             stderr = ""
+
         return _R()
 
     monkeypatch.setattr(build_artifacts.subprocess, "run", _fake_run)

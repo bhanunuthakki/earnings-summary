@@ -86,9 +86,7 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-def _insert_doc(
-    conn: sqlite3.Connection, ticker: str, file_path: str
-) -> int:
+def _insert_doc(conn: sqlite3.Connection, ticker: str, file_path: str) -> int:
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size) "
@@ -101,8 +99,12 @@ def _insert_doc(
 def _insert_fact(
     conn: sqlite3.Connection,
     *,
-    ticker: str, period_end: datetime, fpt: str, line_item: str,
-    value: float, source_doc_id: int,
+    ticker: str,
+    period_end: datetime,
+    fpt: str,
+    line_item: str,
+    value: float,
+    source_doc_id: int,
 ) -> None:
     conn.execute(
         "INSERT INTO financial_facts "
@@ -116,7 +118,8 @@ def test_derive_for_facts_emits_three_margin_metrics_per_period() -> None:
     """One QuarterlyFacts -> 3 margin rows (no YoY without prior year)."""
     facts = [
         QuarterlyFacts(
-            ticker="MELI", period_end=datetime(2024, 12, 31),
+            ticker="MELI",
+            period_end=datetime(2024, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
             revenue=Decimal("6059000000"),
             operating_income=Decimal("820000000"),
@@ -138,7 +141,8 @@ def test_derive_operating_margin_value_is_correct() -> None:
     """820M / 6059M = 13.535...% — matches the MELI Q4'24 published number 13.5%."""
     facts = [
         QuarterlyFacts(
-            ticker="MELI", period_end=datetime(2024, 12, 31),
+            ticker="MELI",
+            period_end=datetime(2024, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
             revenue=Decimal("6059000000"),
             operating_income=Decimal("820000000"),
@@ -158,16 +162,24 @@ def test_derive_revenue_yoy_compares_same_quarter_one_year_apart() -> None:
     """Q4'24 vs Q4'23: 96% if revenue went 100 -> 196."""
     facts = [
         QuarterlyFacts(
-            ticker="X", period_end=datetime(2023, 12, 31),
+            ticker="X",
+            period_end=datetime(2023, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
-            revenue=Decimal("100"), operating_income=Decimal("10"),
-            net_income=Decimal("8"), gross_profit=Decimal("40"), source_doc_id=1,
+            revenue=Decimal("100"),
+            operating_income=Decimal("10"),
+            net_income=Decimal("8"),
+            gross_profit=Decimal("40"),
+            source_doc_id=1,
         ),
         QuarterlyFacts(
-            ticker="X", period_end=datetime(2024, 12, 31),
+            ticker="X",
+            period_end=datetime(2024, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
-            revenue=Decimal("196"), operating_income=Decimal("20"),
-            net_income=Decimal("15"), gross_profit=Decimal("80"), source_doc_id=2,
+            revenue=Decimal("196"),
+            operating_income=Decimal("20"),
+            net_income=Decimal("15"),
+            gross_profit=Decimal("80"),
+            source_doc_id=2,
         ),
     ]
     rows = derive_for_facts(facts)
@@ -181,16 +193,24 @@ def test_derive_skips_yoy_when_year_gap_is_not_exactly_one() -> None:
     """If only Q4'23 and Q4'25 exist (gap year), no YoY emitted."""
     facts = [
         QuarterlyFacts(
-            ticker="X", period_end=datetime(2023, 12, 31),
+            ticker="X",
+            period_end=datetime(2023, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
-            revenue=Decimal("100"), operating_income=Decimal("10"),
-            net_income=Decimal("8"), gross_profit=Decimal("40"), source_doc_id=1,
+            revenue=Decimal("100"),
+            operating_income=Decimal("10"),
+            net_income=Decimal("8"),
+            gross_profit=Decimal("40"),
+            source_doc_id=1,
         ),
         QuarterlyFacts(
-            ticker="X", period_end=datetime(2025, 12, 31),
+            ticker="X",
+            period_end=datetime(2025, 12, 31),
             fiscal_period_type=FiscalPeriodType.Q4,
-            revenue=Decimal("200"), operating_income=Decimal("20"),
-            net_income=Decimal("15"), gross_profit=Decimal("80"), source_doc_id=2,
+            revenue=Decimal("200"),
+            operating_income=Decimal("20"),
+            net_income=Decimal("15"),
+            gross_profit=Decimal("80"),
+            source_doc_id=2,
         ),
     ]
     rows = derive_for_facts(facts)
@@ -205,11 +225,40 @@ def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) 
     ttm_doc = _insert_doc(conn, "X", "data/historical/fmp/X_income_statement_ttm.json")
 
     pe = datetime(2024, 12, 31)
-    for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
-        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=quarterly_doc)
+    for line, val in [
+        ("revenue", 100),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+    ]:
+        _insert_fact(
+            conn,
+            ticker="X",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=quarterly_doc,
+        )
         # Annual + TTM rows would pollute if not filtered
-        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val * 10, source_doc_id=annual_doc)
-        _insert_fact(conn, ticker="X", period_end=pe, fpt="Q4", line_item=line, value=val * 4, source_doc_id=ttm_doc)
+        _insert_fact(
+            conn,
+            ticker="X",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val * 10,
+            source_doc_id=annual_doc,
+        )
+        _insert_fact(
+            conn,
+            ticker="X",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val * 4,
+            source_doc_id=ttm_doc,
+        )
     conn.commit()
 
     emitted, inserted = derive_for_ticker(conn, "X")
@@ -221,16 +270,29 @@ def test_derive_for_ticker_filters_to_quarterly_files(conn: sqlite3.Connection) 
     ).fetchall()
     by_name = {dict(r)["name"]: Decimal(str(dict(r)["value"])) for r in rows}
     assert by_name[KPI_OPERATING_MARGIN_GAAP] == Decimal("20")  # 20/100*100
-    assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")        # 15/100*100
-    assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")      # 40/100*100
+    assert by_name[KPI_NET_MARGIN_GAAP] == Decimal("15")  # 15/100*100
+    assert by_name[KPI_GROSS_MARGIN_GAAP] == Decimal("40")  # 40/100*100
 
 
 def test_derive_for_ticker_idempotent(conn: sqlite3.Connection) -> None:
     """Re-running derivation inserts no duplicates (UNIQUE index dedupes)."""
     doc_id = _insert_doc(conn, "Y", "data/historical/fmp/Y_income_statement_quarterly.json")
     pe = datetime(2024, 12, 31)
-    for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
-        _insert_fact(conn, ticker="Y", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    for line, val in [
+        ("revenue", 100),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+    ]:
+        _insert_fact(
+            conn,
+            ticker="Y",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
     conn.commit()
 
     _, inserted_first = derive_for_ticker(conn, "Y")
@@ -247,7 +309,15 @@ def test_derive_for_ticker_skips_period_missing_required_line_items(
     pe = datetime(2024, 12, 31)
     # Missing gross_profit
     for line, val in [("revenue", 100), ("operating_income", 20), ("net_income", 15)]:
-        _insert_fact(conn, ticker="Z", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+        _insert_fact(
+            conn,
+            ticker="Z",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
     conn.commit()
 
     emitted, inserted = derive_for_ticker(conn, "Z")
@@ -259,8 +329,21 @@ def test_derive_for_ticker_skips_when_revenue_zero(conn: sqlite3.Connection) -> 
     """Zero revenue would divide by zero — period is skipped, no validation error."""
     doc_id = _insert_doc(conn, "Z", "data/historical/fmp/Z_income_statement_quarterly.json")
     pe = datetime(2024, 12, 31)
-    for line, val in [("revenue", 0), ("operating_income", 20), ("net_income", 15), ("gross_profit", 40)]:
-        _insert_fact(conn, ticker="Z", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+    for line, val in [
+        ("revenue", 0),
+        ("operating_income", 20),
+        ("net_income", 15),
+        ("gross_profit", 40),
+    ]:
+        _insert_fact(
+            conn,
+            ticker="Z",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
     conn.commit()
     emitted, _inserted = derive_for_ticker(conn, "Z")
     assert emitted == 0
@@ -285,7 +368,15 @@ def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
         ("capital_expenditure", 0),
         ("free_cash_flow", 0),
     ]:
-        _insert_fact(conn, ticker="NTDOY", period_end=pe, fpt="Q3", line_item=line, value=val, source_doc_id=doc_id)
+        _insert_fact(
+            conn,
+            ticker="NTDOY",
+            period_end=pe,
+            fpt="Q3",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
     conn.commit()
 
     emitted, inserted = derive_for_ticker(conn, "NTDOY")
@@ -294,7 +385,8 @@ def test_derive_drops_cashflow_when_all_three_line_items_are_zero(
     assert emitted == 3
     assert inserted == 3
     names = [
-        r["name"] for r in conn.execute(
+        r["name"]
+        for r in conn.execute(
             "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd "
             "ON kd.id = kf.kpi_definition_id WHERE kf.ticker='NTDOY'"
         ).fetchall()
@@ -317,15 +409,24 @@ def test_derive_does_not_drop_cashflow_when_only_capex_is_zero(
         ("net_income", 15),
         ("gross_profit", 40),
         ("operating_cash_flow", 18),  # real
-        ("capital_expenditure", 0),   # asset-light, legitimately zero
-        ("free_cash_flow", 18),       # real
+        ("capital_expenditure", 0),  # asset-light, legitimately zero
+        ("free_cash_flow", 18),  # real
     ]:
-        _insert_fact(conn, ticker="Y", period_end=pe, fpt="Q4", line_item=line, value=val, source_doc_id=doc_id)
+        _insert_fact(
+            conn,
+            ticker="Y",
+            period_end=pe,
+            fpt="Q4",
+            line_item=line,
+            value=val,
+            source_doc_id=doc_id,
+        )
     conn.commit()
 
     derive_for_ticker(conn, "Y")
     names = [
-        r["name"] for r in conn.execute(
+        r["name"]
+        for r in conn.execute(
             "SELECT kd.name FROM kpi_facts kf JOIN kpi_definitions kd "
             "ON kd.id = kf.kpi_definition_id WHERE kf.ticker='Y'"
         ).fetchall()
@@ -390,11 +491,35 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
     dims = [
         # (period_key, dim_type, dim_name, junction_metric, value)
         (("AMZN", datetime(2023, 12, 31), "Q4"), "product", "AWS", "revenue", 20_000_000_000),
-        (("AMZN", datetime(2023, 12, 31), "Q4"), "business_unit", "AWS", "operating_income", 5_000_000_000),
+        (
+            ("AMZN", datetime(2023, 12, 31), "Q4"),
+            "business_unit",
+            "AWS",
+            "operating_income",
+            5_000_000_000,
+        ),
         (("AMZN", datetime(2024, 12, 31), "Q4"), "product", "AWS", "revenue", 30_000_000_000),
-        (("AMZN", datetime(2024, 12, 31), "Q4"), "business_unit", "AWS", "operating_income", 12_000_000_000),
-        (("AMZN", datetime(2024, 12, 31), "Q4"), "product", "North America", "revenue", 100_000_000_000),
-        (("AMZN", datetime(2024, 12, 31), "Q4"), "business_unit", "North America", "operating_income", 5_000_000_000),
+        (
+            ("AMZN", datetime(2024, 12, 31), "Q4"),
+            "business_unit",
+            "AWS",
+            "operating_income",
+            12_000_000_000,
+        ),
+        (
+            ("AMZN", datetime(2024, 12, 31), "Q4"),
+            "product",
+            "North America",
+            "revenue",
+            100_000_000_000,
+        ),
+        (
+            ("AMZN", datetime(2024, 12, 31), "Q4"),
+            "business_unit",
+            "North America",
+            "operating_income",
+            5_000_000_000,
+        ),
     ]
     conn.executemany(
         "INSERT INTO segment_dimensions "
@@ -407,26 +532,36 @@ def test_derive_segment_kpis_amzn(conn: sqlite3.Connection) -> None:
     conn.commit()
 
     from compute.fmp_derived_kpis import _derive_segment_kpis
+
     derived = _derive_segment_kpis(conn, "AMZN")
-    
+
     by_name_and_pe: dict[tuple[str, datetime], Decimal] = {
         (r.name, r.period_end): r.value for r in derived
     }
-    
+
     assert by_name_and_pe[("AWS operating margin", datetime(2023, 12, 31))] == Decimal("25")
     assert by_name_and_pe[("AWS Operating Margin", datetime(2023, 12, 31))] == Decimal("25")
-    
+
     assert by_name_and_pe[("AWS operating margin", datetime(2024, 12, 31))] == Decimal("40")
     assert by_name_and_pe[("AWS Operating Margin", datetime(2024, 12, 31))] == Decimal("40")
-    
-    assert by_name_and_pe[("North America retail operating margin", datetime(2024, 12, 31))] == Decimal("5")
-    assert by_name_and_pe[("North America Retail Operating Margin", datetime(2024, 12, 31))] == Decimal("5")
-    
+
+    assert by_name_and_pe[
+        ("North America retail operating margin", datetime(2024, 12, 31))
+    ] == Decimal("5")
+    assert by_name_and_pe[
+        ("North America Retail Operating Margin", datetime(2024, 12, 31))
+    ] == Decimal("5")
+
     assert by_name_and_pe[("AWS revenue growth (YoY)", datetime(2024, 12, 31))] == Decimal("50")
     assert by_name_and_pe[("AWS Revenue YoY Growth", datetime(2024, 12, 31))] == Decimal("50")
 
 
-_FPT = {1: FiscalPeriodType.Q1, 2: FiscalPeriodType.Q2, 3: FiscalPeriodType.Q3, 4: FiscalPeriodType.Q4}
+_FPT = {
+    1: FiscalPeriodType.Q1,
+    2: FiscalPeriodType.Q2,
+    3: FiscalPeriodType.Q3,
+    4: FiscalPeriodType.Q4,
+}
 _QUARTER_END = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
 
 

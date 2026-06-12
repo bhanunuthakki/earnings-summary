@@ -5,6 +5,7 @@ their first 10-Q is ingested) must NOT re-run the full onboard hourly, but the
 "auto-onboard the moment data arrives" path must stay intact — so they're
 deferred to a daily cadence, never hard-skipped.
 """
+
 from __future__ import annotations
 
 import importlib.util

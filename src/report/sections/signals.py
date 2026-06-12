@@ -91,18 +91,14 @@ def _fetch_signal_rows(conn: sqlite3.Connection, ticker: str) -> list[SignalRow]
         if severity not in ("green", "yellow", "red"):
             continue
         try:
-            payload = cast(
-                "dict[str, object]", json.loads(str(r["value_json"]))
-            )
+            payload = cast("dict[str, object]", json.loads(str(r["value_json"])))
         except (TypeError, ValueError, json.JSONDecodeError):
             payload = {}
         magnitude = _magnitude_for(signal_type, payload)
         out.append(
             SignalRow(
                 metric_name=str(r["metric_name"]),
-                metric_kind=cast(
-                    "str", r["metric_kind"]
-                ),  # CHECK constraint guarantees enum
+                metric_kind=cast("str", r["metric_kind"]),  # CHECK constraint guarantees enum
                 signal_type=cast("str", signal_type),
                 severity=cast("str", severity),
                 narrative=r["narrative"],

@@ -94,9 +94,7 @@ def build(ticker: str, repo_root: Path) -> PortfolioPositionSection:
     )
 
 
-def _holding_accounts(
-    conn: sqlite3.Connection, ticker: str
-) -> list[PortfolioPositionAccountRow]:
+def _holding_accounts(conn: sqlite3.Connection, ticker: str) -> list[PortfolioPositionAccountRow]:
     """Latest snapshot per (account, security) for the ticker, with the
     cost-basis-override merge logic (override wins when present)."""
     ticker_norm = ticker.upper().strip()

@@ -93,11 +93,13 @@ def main() -> int:
                 stats = ingest_for_ticker(conn, ticker=ticker, project_root=PROJECT_ROOT)
             except OSError as e:
                 # Transient: network / filesystem. Continue with next ticker.
-                rows.append({
-                    "ticker": ticker,
-                    "error": f"OSError: {e}"[:200],
-                    "class": "transient",
-                })
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "error": f"OSError: {e}"[:200],
+                        "class": "transient",
+                    }
+                )
                 failed += 1
                 continue
             except (ValueError, KeyError) as e:
@@ -105,23 +107,19 @@ def main() -> int:
                 # Per GEMINI.md, capture the raw response location so the
                 # operator can inspect it before re-running.
                 raw_path = (
-                    PROJECT_ROOT
-                    / "data"
-                    / "historical"
-                    / "sec"
-                    / f"{ticker}_companyfacts.json"
+                    PROJECT_ROOT / "data" / "historical" / "sec" / f"{ticker}_companyfacts.json"
                 )
-                rows.append({
-                    "ticker": ticker,
-                    "error": f"{type(e).__name__}: {e}"[:200],
-                    "class": "schema_drift",
-                    "raw_response_path": str(raw_path) if raw_path.exists() else None,
-                })
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "error": f"{type(e).__name__}: {e}"[:200],
+                        "class": "schema_drift",
+                        "raw_response_path": str(raw_path) if raw_path.exists() else None,
+                    }
+                )
                 failed += 1
                 continue
-            silent_staleness = (
-                stats.accessions_inserted > 0 and stats.facts_inserted == 0
-            )
+            silent_staleness = stats.accessions_inserted > 0 and stats.facts_inserted == 0
             flagged_dirty = False
             artifacts_flipped = 0
             if silent_staleness:
@@ -133,39 +131,52 @@ def main() -> int:
                     reason="sec_silent_staleness",
                     db_path=args.db,
                 )
-            rows.append({
-                "ticker": ticker,
-                "accessions_registered": stats.accessions_inserted,
-                "facts_inserted": stats.facts_inserted,
-                "silent_staleness": silent_staleness,
-                "brief_dirty_forced": flagged_dirty,
-                "llm_artifacts_marked_dirty": artifacts_flipped,
-            })
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "accessions_registered": stats.accessions_inserted,
+                    "facts_inserted": stats.facts_inserted,
+                    "silent_staleness": silent_staleness,
+                    "brief_dirty_forced": flagged_dirty,
+                    "llm_artifacts_marked_dirty": artifacts_flipped,
+                }
+            )
             if silent_staleness:
                 # Emit a watch event so cron logs surface the divergence
                 # (filings landed but no facts extracted) for operator review.
                 sys.stderr.write(
-                    json.dumps({
-                        "event": "sec_silent_staleness_detected",
-                        "ticker": ticker,
-                        "accessions_registered": stats.accessions_inserted,
-                        "brief_dirty_forced": flagged_dirty,
-                        "llm_artifacts_marked_dirty": artifacts_flipped,
-                    }) + "\n"
+                    json.dumps(
+                        {
+                            "event": "sec_silent_staleness_detected",
+                            "ticker": ticker,
+                            "accessions_registered": stats.accessions_inserted,
+                            "brief_dirty_forced": flagged_dirty,
+                            "llm_artifacts_marked_dirty": artifacts_flipped,
+                        }
+                    )
+                    + "\n"
                 )
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
-        end_run(conn, run_id, terminal,
-                error_summary=f"{failed} tickers failed" if failed else None)
+        end_run(
+            conn, run_id, terminal, error_summary=f"{failed} tickers failed" if failed else None
+        )
 
         total_accessions = sum(r.get("accessions_registered", 0) for r in rows)
         total_facts = sum(r.get("facts_inserted", 0) for r in rows)
-        print(json.dumps({
-            "run_id": run_id, "tickers": len(tickers), "failed": failed,
-            "total_accessions_registered": total_accessions,
-            "total_facts_inserted": total_facts,
-            "rows": rows,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "tickers": len(tickers),
+                    "failed": failed,
+                    "total_accessions_registered": total_accessions,
+                    "total_facts_inserted": total_facts,
+                    "rows": rows,
+                },
+                indent=2,
+            )
+        )
         return 0 if failed == 0 else 1
     finally:
         conn.close()

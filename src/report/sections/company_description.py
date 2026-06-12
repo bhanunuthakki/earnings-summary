@@ -41,9 +41,7 @@ def build(ticker: str, repo_root: Path) -> CompanyDescriptionSection:
             status=SectionStatus.MISSING_DATA,
             missing=missing(
                 stage="SYNTHESIZE(company_description)",
-                fix_command=(
-                    f"python execution/extract_company_description.py --ticker {ticker}"
-                ),
+                fix_command=(f"python execution/extract_company_description.py --ticker {ticker}"),
                 detail=(
                     "Reads the latest 10-K (data/historical/fmp/) + profile.json, "
                     "calls Claude Sonnet to synthesize the description, "
@@ -184,9 +182,7 @@ def _build_weighting_rows(
     # the column when no row in the table has OI.
     oi_by_name: dict[str, float] = {}
     if include_operating_income:
-        oi_by_name = _latest_period_totals(
-            ticker, repo_root, "operating_income", rules
-        )
+        oi_by_name = _latest_period_totals(ticker, repo_root, "operating_income", rules)
     oi_total = sum(abs(v) for v in oi_by_name.values()) if oi_by_name else 0.0
     oi_lookup_normalized = {_normalize_oi_key(k): v for k, v in oi_by_name.items()}
 
@@ -219,13 +215,9 @@ def _build_weighting_rows(
                 name=name,
                 revenue_usd_m=value / 1_000_000.0,
                 share_pct=share,
-                operating_income_usd_m=(
-                    oi_value / 1_000_000.0 if oi_value is not None else None
-                ),
+                operating_income_usd_m=(oi_value / 1_000_000.0 if oi_value is not None else None),
                 oi_share_pct=(
-                    abs(oi_value) / oi_total
-                    if oi_value is not None and oi_total > 0
-                    else None
+                    abs(oi_value) / oi_total if oi_value is not None and oi_total > 0 else None
                 ),
                 description=description_by_name.get(name),
             )
@@ -236,14 +228,8 @@ def _build_weighting_rows(
                 name=f"Other ({other_count} < 1%)",
                 revenue_usd_m=other_rev / 1_000_000.0,
                 share_pct=abs(other_rev) / total,
-                operating_income_usd_m=(
-                    other_oi / 1_000_000.0 if other_oi != 0 else None
-                ),
-                oi_share_pct=(
-                    abs(other_oi) / oi_total
-                    if other_oi != 0 and oi_total > 0
-                    else None
-                ),
+                operating_income_usd_m=(other_oi / 1_000_000.0 if other_oi != 0 else None),
+                oi_share_pct=(abs(other_oi) / oi_total if other_oi != 0 and oi_total > 0 else None),
                 description=None,
             )
         )
@@ -282,9 +268,7 @@ def _latest_period_totals(
     return dict(canonical_by_quarter[latest_q])
 
 
-def _load_rows(
-    conn: sqlite3.Connection, ticker: str, metric: str
-) -> list[dict[str, object]]:
+def _load_rows(conn: sqlite3.Connection, ticker: str, metric: str) -> list[dict[str, object]]:
     """Read segment cells matching a legacy `segment_facts` metric.
 
     Maps the legacy metric to the junction's (dim_type, metric) pair before

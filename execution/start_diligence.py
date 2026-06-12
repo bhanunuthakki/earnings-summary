@@ -124,10 +124,12 @@ def build_holdings_schema(ticker: str, name: str) -> dict[str, object]:
 
     tier_2_seeds: list[dict[str, str]] = []
     for seg in segments:
-        tier_2_seeds.append({
-            "name": f"{seg} segment revenue + margin",
-            "source": "earnings release segment",
-        })
+        tier_2_seeds.append(
+            {
+                "name": f"{seg} segment revenue + margin",
+                "source": "earnings release segment",
+            }
+        )
 
     return {
         "ticker": ticker,
@@ -218,12 +220,17 @@ def build_checklist_markdown(ticker: str, name: str, schema: dict[str, object]) 
     description = structural.get("description_excerpt") or "—"
     peers = schema.get("competitive_watchlist", [])
     segments = [
-        kpi.get("name", "") for kpi in schema.get("tier_2_kpis", [])
+        kpi.get("name", "")
+        for kpi in schema.get("tier_2_kpis", [])
         if kpi.get("name") and kpi.get("name") != _TBV
     ]
 
     peer_block = ", ".join(peers[:8]) if peers else "—"
-    segment_block = "\n".join(f"- {s}" for s in segments) if segments else "- (no segment disclosure detected in FMP cache)"
+    segment_block = (
+        "\n".join(f"- {s}" for s in segments)
+        if segments
+        else "- (no segment disclosure detected in FMP cache)"
+    )
 
     return f"""# {ticker} — Pre-trade Diligence Checklist
 
@@ -403,10 +410,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Bootstrap one ticker by symbol")
-    g.add_argument("--next", type=int, metavar="N",
-                   help="Pick top-N watchlist tickers without a holdings JSON")
-    ap.add_argument("--force", action="store_true",
-                    help="Overwrite existing holdings JSON / checklist")
+    g.add_argument(
+        "--next", type=int, metavar="N", help="Pick top-N watchlist tickers without a holdings JSON"
+    )
+    ap.add_argument(
+        "--force", action="store_true", help="Overwrite existing holdings JSON / checklist"
+    )
     ap.add_argument("--db", default=str(DB_PATH))
     args = ap.parse_args()
 
@@ -414,8 +423,10 @@ def main() -> int:
     try:
         if args.ticker:
             cur = conn.cursor()
-            cur.execute("SELECT ticker, name FROM tracked_companies WHERE ticker = ?",
-                        (args.ticker.upper(),))
+            cur.execute(
+                "SELECT ticker, name FROM tracked_companies WHERE ticker = ?",
+                (args.ticker.upper(),),
+            )
             row = cur.fetchone()
             if row is None:
                 print(json.dumps({"error": f"ticker {args.ticker} not in tracked_companies"}))

@@ -57,46 +57,131 @@ class FileSpec(TypedDict):
 OVERRIDES: dict[str, dict[str, FileSpec]] = {
     "BN": {
         "BN_2025-Investor-Day-Presentation.pdf": {
-            "quarter": "Q3", "year": "2025", "doc_type": "presentation",
+            "quarter": "Q3",
+            "year": "2025",
+            "doc_type": "presentation",
             "note": "Investor Day deck (Sept 2025) — not a quarterly earnings deck",
         },
         "BN_2025-AGM-Presentation.pdf": {
-            "quarter": "Q2", "year": "2025", "doc_type": "presentation",
+            "quarter": "Q2",
+            "year": "2025",
+            "doc_type": "presentation",
             "note": "AGM deck (May 2025) — not a quarterly earnings deck",
         },
     },
     "MELI": {
-        "MELI_Q1-2025-Earnings-Presentation.pdf": {"quarter": "Q1", "year": "2025", "doc_type": "presentation", "note": ""},
-        "MELI_Q2-2025-Earnings-Presentation.pdf": {"quarter": "Q2", "year": "2025", "doc_type": "presentation", "note": ""},
-        "MELI_Q3-2025-Earnings-Presentation.pdf": {"quarter": "Q3", "year": "2025", "doc_type": "presentation", "note": ""},
-        "MELI_Q4-2025-Earnings-Presentation.pdf": {"quarter": "Q4", "year": "2025", "doc_type": "presentation", "note": ""},
+        "MELI_Q1-2025-Earnings-Presentation.pdf": {
+            "quarter": "Q1",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "MELI_Q2-2025-Earnings-Presentation.pdf": {
+            "quarter": "Q2",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "MELI_Q3-2025-Earnings-Presentation.pdf": {
+            "quarter": "Q3",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "MELI_Q4-2025-Earnings-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
         "MELI_10-K-Annual-Report-FY2025.pdf": {
-            "quarter": "Q4", "year": "2025", "doc_type": "press_release",
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "press_release",
             "note": "10-K FY2025 — covers Q4'25 results and full year",
         },
     },
     "NOW": {
-        "NOW_Q4-2025-Earnings-Results.pdf": {"quarter": "Q4", "year": "2025", "doc_type": "press_release", "note": ""},
-        "NOW_Q4-2025-Investor-Presentation.pdf": {"quarter": "Q4", "year": "2025", "doc_type": "presentation", "note": ""},
+        "NOW_Q4-2025-Earnings-Results.pdf": {
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "press_release",
+            "note": "",
+        },
+        "NOW_Q4-2025-Investor-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
         "NOW-ER-Q1-FY26.pdf": {
-            "quarter": "Q1", "year": "2026", "doc_type": "press_release",
+            "quarter": "Q1",
+            "year": "2026",
+            "doc_type": "press_release",
             "note": "Q1 FY26 earnings release (NOW fiscal calendar = calendar)",
         },
-        "ServiceNow-1Q26-Investor-Presentation.pdf": {"quarter": "Q1", "year": "2026", "doc_type": "presentation", "note": ""},
+        "ServiceNow-1Q26-Investor-Presentation.pdf": {
+            "quarter": "Q1",
+            "year": "2026",
+            "doc_type": "presentation",
+            "note": "",
+        },
     },
     "NU": {
-        "NU_1Q25-Earnings-Presentation.pdf": {"quarter": "Q1", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NU_2Q25-Earnings-Presentation.pdf": {"quarter": "Q2", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NU_3Q25-Earnings-Presentation.pdf": {"quarter": "Q3", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NU_4Q25-Earnings-Presentation.pdf": {"quarter": "Q4", "year": "2025", "doc_type": "presentation", "note": ""},
+        "NU_1Q25-Earnings-Presentation.pdf": {
+            "quarter": "Q1",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NU_2Q25-Earnings-Presentation.pdf": {
+            "quarter": "Q2",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NU_3Q25-Earnings-Presentation.pdf": {
+            "quarter": "Q3",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NU_4Q25-Earnings-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
     },
     "NVO": {
-        "NVO_Q1-2025-Investor-Presentation.pdf": {"quarter": "Q1", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NVO_Q2-2025-Investor-Presentation.pdf": {"quarter": "Q2", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NVO_Q3-2025-Investor-Presentation.pdf": {"quarter": "Q3", "year": "2025", "doc_type": "presentation", "note": ""},
-        "NVO_FY2025-Q4-Investor-Presentation.pdf": {"quarter": "Q4", "year": "2025", "doc_type": "presentation", "note": ""},
+        "NVO_Q1-2025-Investor-Presentation.pdf": {
+            "quarter": "Q1",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NVO_Q2-2025-Investor-Presentation.pdf": {
+            "quarter": "Q2",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NVO_Q3-2025-Investor-Presentation.pdf": {
+            "quarter": "Q3",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
+        "NVO_FY2025-Q4-Investor-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "presentation",
+            "note": "",
+        },
         "Novo 25 Annual Report.pdf": {
-            "quarter": "Q4", "year": "2025", "doc_type": "press_release",
+            "quarter": "Q4",
+            "year": "2025",
+            "doc_type": "press_release",
             "note": "FY2025 Annual Report — covers Q4'25 results and full year",
         },
     },
@@ -107,19 +192,35 @@ OVERRIDES: dict[str, dict[str, FileSpec]] = {
         # summarizer was tuned for. The 10-Q remains in micro_thesis/sources/RBRK/ for manual
         # reference but is excluded from the index until a proper 'filing' doc_type lands.
         "RBRK_Q4-FY2026-Press-Release.pdf": {
-            "quarter": "Q4", "year": "2026", "doc_type": "press_release",
+            "quarter": "Q4",
+            "year": "2026",
+            "doc_type": "press_release",
             "note": "Q4 FY2026 (RBRK FY ends Jan; Q4 FY26 ≈ Feb–Apr 2026)",
         },
-        "RBRK_Q4-FY2026-Earnings-Presentation.pdf": {"quarter": "Q4", "year": "2026", "doc_type": "presentation", "note": ""},
+        "RBRK_Q4-FY2026-Earnings-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2026",
+            "doc_type": "presentation",
+            "note": "",
+        },
     },
     "VEEV": {
         "VEEV_Q4-FY2026-Earnings-Release.pdf": {
-            "quarter": "Q4", "year": "2026", "doc_type": "press_release",
+            "quarter": "Q4",
+            "year": "2026",
+            "doc_type": "press_release",
             "note": "Q4 FY2026 (VEEV FY ends Jan; Q4 FY26 ≈ Nov 2025–Jan 2026)",
         },
-        "VEEV_Q4-FY2026-Earnings-Presentation.pdf": {"quarter": "Q4", "year": "2026", "doc_type": "presentation", "note": ""},
+        "VEEV_Q4-FY2026-Earnings-Presentation.pdf": {
+            "quarter": "Q4",
+            "year": "2026",
+            "doc_type": "presentation",
+            "note": "",
+        },
         "VEEV_Q4-FY2026-Prepared-Remarks.pdf": {
-            "quarter": "Q4", "year": "2026", "doc_type": "transcript",
+            "quarter": "Q4",
+            "year": "2026",
+            "doc_type": "transcript",
             "note": "Prepared remarks (proxy for transcript — Q&A absent)",
         },
     },
@@ -139,7 +240,9 @@ def dedupe_by_size(pdfs: list[Path], overrides: dict[str, FileSpec]) -> list[Pat
     return sorted(keep)
 
 
-def detect_key_collisions(ticker: str, deduped: list[Path], overrides: dict[str, FileSpec]) -> list[tuple[str, list[str]]]:
+def detect_key_collisions(
+    ticker: str, deduped: list[Path], overrides: dict[str, FileSpec]
+) -> list[tuple[str, list[str]]]:
     """
     Find any (year, quarter, doc_type) keys that would be assigned by ≥2 files.
     The document_index is keyed on this tuple, so collisions silently overwrite.
@@ -160,7 +263,13 @@ def register_for_ticker(ticker: str, dry_run: bool = False) -> dict:
     ticker_dir = SOURCES_DIR / ticker
     if not ticker_dir.exists():
         log.warning({"event": "no_source_dir", "ticker": ticker, "path": str(ticker_dir)})
-        return {"ticker": ticker, "registered": 0, "skipped_existing": 0, "no_override": [], "collisions": []}
+        return {
+            "ticker": ticker,
+            "registered": 0,
+            "skipped_existing": 0,
+            "no_override": [],
+            "collisions": [],
+        }
 
     overrides = OVERRIDES.get(ticker, {})
     if not overrides:
@@ -192,23 +301,29 @@ def register_for_ticker(ticker: str, dry_run: bool = False) -> dict:
             log.warning({"event": "no_override", "ticker": ticker, "file": pdf.name})
             continue
 
-        existing = index_manager.has_document(ticker, spec["year"], spec["quarter"], spec["doc_type"])
+        existing = index_manager.has_document(
+            ticker, spec["year"], spec["quarter"], spec["doc_type"]
+        )
         if existing and existing.get("local_path") == str(pdf):
             skipped_existing += 1
-            log.info({
-                "event": "already_registered",
-                "ticker": ticker,
-                "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
-            })
+            log.info(
+                {
+                    "event": "already_registered",
+                    "ticker": ticker,
+                    "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
+                }
+            )
             continue
 
         if dry_run:
-            log.info({
-                "event": "would_register",
-                "ticker": ticker,
-                "file": pdf.name,
-                "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
-            })
+            log.info(
+                {
+                    "event": "would_register",
+                    "ticker": ticker,
+                    "file": pdf.name,
+                    "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
+                }
+            )
             registered += 1
             continue
 
@@ -221,12 +336,14 @@ def register_for_ticker(ticker: str, dry_run: bool = False) -> dict:
             note=spec["note"] or None,
             processed=False,
         )
-        log.info({
-            "event": "registered",
-            "ticker": ticker,
-            "file": pdf.name,
-            "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
-        })
+        log.info(
+            {
+                "event": "registered",
+                "ticker": ticker,
+                "file": pdf.name,
+                "key": f"{ticker}_{spec['year']}_{spec['quarter']}_{spec['doc_type']}",
+            }
+        )
         registered += 1
 
     return {
@@ -243,8 +360,14 @@ def main() -> None:
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", type=str, help="Ticker to register (e.g. RBRK)")
-    group.add_argument("--all", action="store_true", help="Register all tickers with override entries")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would be registered without writing the index")
+    group.add_argument(
+        "--all", action="store_true", help="Register all tickers with override entries"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be registered without writing the index",
+    )
     args = parser.parse_args()
 
     tickers = sorted(OVERRIDES.keys()) if args.all else [args.ticker.upper()]

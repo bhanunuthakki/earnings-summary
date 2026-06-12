@@ -33,6 +33,7 @@ def _data_anchor(ticker: str, repo_root: Path) -> str:
         return raw.strip().lower()
     return "10k"
 
+
 _PROMPT_FILING_DIFF = """You are narrating the year-over-year 10-K Item 1A risk-factor changes for
 {ticker}. The schema's `risk_factors` table has new/removed/reworded
 markers from automated diffing; your job is to read those and tell the

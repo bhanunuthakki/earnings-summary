@@ -150,7 +150,10 @@ def test_p2_skipped_on_daily_when_fresh(repo_root: Path, now: datetime) -> None:
     """P2 with a 3-day-old build is still within the 7d daily-skip window."""
     three_days = (now - timedelta(days=3)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "ABNB", "P2", last_built_at=three_days,
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "P2",
+        last_built_at=three_days,
         list_type="watchlist",
     )
     assert "ABNB" not in tickers_due_for_refresh(repo_root, "daily", now=now)
@@ -160,7 +163,10 @@ def test_p2_due_on_daily_when_stale(repo_root: Path, now: datetime) -> None:
     """P2 last built 10 days ago — past the 7-day daily threshold → due."""
     ten_days = (now - timedelta(days=10)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "ABNB", "P2", last_built_at=ten_days,
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "P2",
+        last_built_at=ten_days,
         list_type="watchlist",
     )
     assert "ABNB" in tickers_due_for_refresh(repo_root, "daily", now=now)
@@ -170,7 +176,10 @@ def test_p3_skipped_on_daily_when_within_30d(repo_root: Path, now: datetime) -> 
     """P3 with 20-day-old build → within 30d daily threshold → skipped."""
     twenty_days = (now - timedelta(days=20)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "MSFT", "P3", last_built_at=twenty_days,
+        repo_root / "data" / "portfolio.db",
+        "MSFT",
+        "P3",
+        last_built_at=twenty_days,
         list_type="index_member",
     )
     assert "MSFT" not in tickers_due_for_refresh(repo_root, "daily", now=now)
@@ -180,7 +189,10 @@ def test_p3_due_on_daily_when_over_30d(repo_root: Path, now: datetime) -> None:
     """P3 with 40-day-old build → past 30d threshold → due."""
     forty_days = (now - timedelta(days=40)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "MSFT", "P3", last_built_at=forty_days,
+        repo_root / "data" / "portfolio.db",
+        "MSFT",
+        "P3",
+        last_built_at=forty_days,
         list_type="index_member",
     )
     assert "MSFT" in tickers_due_for_refresh(repo_root, "daily", now=now)
@@ -198,7 +210,10 @@ def test_archived_excluded(repo_root: Path, now: datetime) -> None:
     """Archived tickers are excluded even if they would otherwise be due."""
     archived_at = "2026-04-01"
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "OLDIE", "P1", last_built_at=None,
+        repo_root / "data" / "portfolio.db",
+        "OLDIE",
+        "P1",
+        last_built_at=None,
         archived_at=archived_at,
     )
     assert "OLDIE" not in tickers_due_for_refresh(repo_root, "daily", now=now)
@@ -208,7 +223,10 @@ def test_weekly_cadence_p2_threshold_30d(repo_root: Path, now: datetime) -> None
     """Weekly cron tick: P2 threshold is 30d (monthly catch-up), not 7d."""
     fifteen_days = (now - timedelta(days=15)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "ABNB", "P2", last_built_at=fifteen_days,
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "P2",
+        last_built_at=fifteen_days,
     )
     # Within 30d → skipped on weekly cadence (even though 15d > daily's 7d).
     assert "ABNB" not in tickers_due_for_refresh(repo_root, "weekly", now=now)
@@ -229,7 +247,10 @@ def test_monthly_cadence_p3_threshold_365d(repo_root: Path, now: datetime) -> No
     """Monthly cron: P3 threshold 365d. A 100-day-old P3 is NOT due."""
     hundred_days = (now - timedelta(days=100)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "MSFT", "P3", last_built_at=hundred_days,
+        repo_root / "data" / "portfolio.db",
+        "MSFT",
+        "P3",
+        last_built_at=hundred_days,
     )
     assert "MSFT" not in tickers_due_for_refresh(repo_root, "monthly", now=now)
 
@@ -250,11 +271,16 @@ def test_lens_regen_skipped_when_recent(repo_root: Path, now: datetime) -> None:
     (P2 weekly threshold is 30d)."""
     fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "ABNB", "P2", last_built_at=fresh,
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "P2",
+        last_built_at=fresh,
     )
     three_days_ago = (now - timedelta(days=3)).isoformat(timespec="seconds")
     _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db", "ABNB", "five_min_reread",
+        repo_root / "data" / "portfolio.db",
+        "ABNB",
+        "five_min_reread",
         generated_at=three_days_ago,
     )
     due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "weekly", now=now)
@@ -265,18 +291,26 @@ def test_lens_regen_ignores_superseded(repo_root: Path, now: datetime) -> None:
     """Superseded artifact rows are ignored (the current row decides freshness)."""
     fresh = (now - timedelta(hours=1)).isoformat(timespec="seconds")
     _seed_ticker(
-        repo_root / "data" / "portfolio.db", "TICK", "P2", last_built_at=fresh,
+        repo_root / "data" / "portfolio.db",
+        "TICK",
+        "P2",
+        last_built_at=fresh,
         list_type="watchlist",
     )
     very_old = (now - timedelta(days=60)).isoformat(timespec="seconds")
     recent = (now - timedelta(days=2)).isoformat(timespec="seconds")
     # Superseded old row + current fresh row → should be skipped on daily (P2 cadence 7d)
     _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db", "TICK", "five_min_reread",
-        generated_at=very_old, superseded=True,
+        repo_root / "data" / "portfolio.db",
+        "TICK",
+        "five_min_reread",
+        generated_at=very_old,
+        superseded=True,
     )
     _seed_lens_artifact(
-        repo_root / "data" / "portfolio.db", "TICK", "five_min_reread",
+        repo_root / "data" / "portfolio.db",
+        "TICK",
+        "five_min_reread",
         generated_at=recent,
     )
     due = tickers_due_for_lens_regen(repo_root, "five_min_reread", "daily", now=now)

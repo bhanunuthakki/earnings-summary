@@ -38,9 +38,9 @@ from onboard_ticker import (  # noqa: E402
 
 def _create_test_db(db_path: Path) -> None:
     """Create the minimal schema the template applier needs:
-      - entities + entity_aliases (for upsert_entity)
-      - concepts (entity_store opens it but doesn't need rows)
-      - tracked_companies with processing_tier (migration 0044's column)
+    - entities + entity_aliases (for upsert_entity)
+    - concepts (entity_store opens it but doesn't need rows)
+    - tracked_companies with processing_tier (migration 0044's column)
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -123,7 +123,8 @@ def env(tmp_path: Path) -> dict[str, Path]:
     industry_link.mkdir()
     for yaml_file in real_industry_dir.glob("*.yaml"):
         (industry_link / yaml_file.name).write_text(
-            yaml_file.read_text(encoding="utf-8"), encoding="utf-8",
+            yaml_file.read_text(encoding="utf-8"),
+            encoding="utf-8",
         )
     return {
         "repo_root": tmp_path,
@@ -390,7 +391,8 @@ def test_apply_template_creates_holdings_dir_if_missing(tmp_path: Path) -> None:
     industry_dir.mkdir(parents=True)
     for yaml_file in (PROJECT_ROOT / "templates" / "industry").glob("*.yaml"):
         (industry_dir / yaml_file.name).write_text(
-            yaml_file.read_text(encoding="utf-8"), encoding="utf-8",
+            yaml_file.read_text(encoding="utf-8"),
+            encoding="utf-8",
         )
     db_path = repo_root / "data" / "portfolio.db"
     _create_test_db(db_path)
@@ -415,6 +417,7 @@ def test_apply_template_creates_holdings_dir_if_missing(tmp_path: Path) -> None:
 
 def test_merge_tier_1_kpis_appends_to_empty_list() -> None:
     from industry_classifier import load_template
+
     t = load_template("hyperscaler", PROJECT_ROOT)
     holdings: dict[str, object] = {"tier_1_kpis": []}
     added, kept = _merge_tier_1_kpis(holdings, t)
@@ -428,6 +431,7 @@ def test_merge_tier_1_kpis_appends_to_empty_list() -> None:
 def test_merge_tier_1_kpis_handles_missing_field() -> None:
     """tier_1_kpis missing entirely → treated as empty."""
     from industry_classifier import load_template
+
     t = load_template("hyperscaler", PROJECT_ROOT)
     holdings: dict[str, object] = {"name": "Foo"}
     added, kept = _merge_tier_1_kpis(holdings, t)
@@ -438,6 +442,7 @@ def test_merge_tier_1_kpis_handles_missing_field() -> None:
 
 def test_merge_tier_1_kpis_alias_match_is_case_insensitive() -> None:
     from industry_classifier import load_template
+
     t = load_template("software_saas", PROJECT_ROOT)
     holdings: dict[str, object] = {
         "tier_1_kpis": [{"name": "ndr", "current": "120%"}],  # lowercase alias

@@ -133,9 +133,7 @@ def main() -> int:
             continue
 
         log.info({"event": "lens_run_start", "ticker": ticker, "lens": lens_name})
-        result = run_lens(
-            lens, ticker=ticker, repo_root=args.repo_root, force=args.force
-        )
+        result = run_lens(lens, ticker=ticker, repo_root=args.repo_root, force=args.force)
         if result is None:
             log.warning({"event": "lens_run_skipped", "ticker": ticker, "lens": lens_name})
             n_skipped += 1
@@ -152,9 +150,7 @@ def main() -> int:
         )
         n_fresh += 1
 
-    print(
-        f"\nLens run complete · {n_fresh} produced · {n_skipped} skipped (insufficient data)"
-    )
+    print(f"\nLens run complete · {n_fresh} produced · {n_skipped} skipped (insufficient data)")
     return 0
 
 

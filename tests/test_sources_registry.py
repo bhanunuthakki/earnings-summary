@@ -5,6 +5,7 @@ Verifies:
   - log_call swallows DB errors silently (never raises into the fetch path)
   - CallStatus enum values are stable (queried by analytics)
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -56,7 +57,9 @@ def test_log_call_inserts_row(tmp_path: Path) -> None:
             notes="test row",
         )
         conn = sqlite3.connect(str(db_path))
-        row = conn.execute("SELECT source_name, kind, ticker, status, latency_ms FROM source_calls").fetchone()
+        row = conn.execute(
+            "SELECT source_name, kind, ticker, status, latency_ms FROM source_calls"
+        ).fetchone()
         conn.close()
         assert row == ("yfinance", "live_price", "GOOG", "ok", 42)
     finally:

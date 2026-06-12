@@ -272,11 +272,11 @@ Return ONLY the valid JSON object. No markdown fence, no commentary, no conversa
     raw = call_llm(prompt, purpose="strategic_analysis").strip()
     if raw.startswith("```"):
         raw = JSON_FENCE_RE.sub("", raw).strip()
-    
+
     # Parse and validate schema
     parsed = json.loads(raw)
     validated = FilingIntelligenceSummary(**parsed)
-    
+
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     result = FilingIntelligenceResult(
@@ -289,7 +289,7 @@ Return ONLY the valid JSON object. No markdown fence, no commentary, no conversa
         model=DEFAULT_MODEL,
         summary=validated.model_dump(),
     )
-    
+
     cache_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
     return result
 
@@ -317,13 +317,20 @@ def main() -> int:
         print(f"[skip] {args.ticker}: {result.skipped_reason}")
         return 0
 
-    print(json.dumps({
-        "ticker": result.ticker,
-        "fiscal_year": result.fiscal_year,
-        "elapsed_ms": result.elapsed_ms,
-        "total_wall_seconds": f"{elapsed:.2f}",
-        "signals_found": len(result.summary.get("investment_signals") or []) if result.summary else 0,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "ticker": result.ticker,
+                "fiscal_year": result.fiscal_year,
+                "elapsed_ms": result.elapsed_ms,
+                "total_wall_seconds": f"{elapsed:.2f}",
+                "signals_found": len(result.summary.get("investment_signals") or [])
+                if result.summary
+                else 0,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

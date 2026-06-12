@@ -121,15 +121,21 @@ def test_fmp_source_parses_reported_records(tmp_path: Path) -> None:
         "WIX",
         [
             {
-                "symbol": "WIX", "date": "2025-08-06",
-                "epsActual": 2.28, "epsEstimated": 1.75,
-                "revenueActual": 489930000, "revenueEstimated": 502532690,
+                "symbol": "WIX",
+                "date": "2025-08-06",
+                "epsActual": 2.28,
+                "epsEstimated": 1.75,
+                "revenueActual": 489930000,
+                "revenueEstimated": 502532690,
                 "lastUpdated": "2025-11-06",
             },
             {
-                "symbol": "WIX", "date": "2025-11-19",
-                "epsActual": 1.68, "epsEstimated": 1.54,
-                "revenueActual": 505194000, "revenueEstimated": 502431131,
+                "symbol": "WIX",
+                "date": "2025-11-19",
+                "epsActual": 1.68,
+                "epsEstimated": 1.54,
+                "revenueActual": 505194000,
+                "revenueEstimated": 502431131,
                 "lastUpdated": "2026-02-18",
             },
         ],
@@ -158,14 +164,20 @@ def test_fmp_source_skips_forward_dated_rows(tmp_path: Path) -> None:
         "WIX",
         [
             {
-                "symbol": "WIX", "date": "2026-08-12",
-                "epsActual": None, "epsEstimated": 1.54,
-                "revenueActual": None, "revenueEstimated": 562009700,
+                "symbol": "WIX",
+                "date": "2026-08-12",
+                "epsActual": None,
+                "epsEstimated": 1.54,
+                "revenueActual": None,
+                "revenueEstimated": 562009700,
             },
             {
-                "symbol": "WIX", "date": "2025-08-06",
-                "epsActual": 2.28, "epsEstimated": 1.75,
-                "revenueActual": 489930000, "revenueEstimated": 502532690,
+                "symbol": "WIX",
+                "date": "2025-08-06",
+                "epsActual": 2.28,
+                "epsEstimated": 1.75,
+                "revenueActual": 489930000,
+                "revenueEstimated": 502532690,
             },
         ],
     )
@@ -252,10 +264,12 @@ def test_yfinance_source_no_module_returns_empty(monkeypatch: pytest.MonkeyPatch
 
 
 def test_yfinance_source_parses_dataframe(monkeypatch: pytest.MonkeyPatch) -> None:
-    df = _make_yf_df([
-        ("2025-08-06", 1.75, 2.28),
-        ("2025-05-21", 1.65, 1.55),
-    ])
+    df = _make_yf_df(
+        [
+            ("2025-08-06", 1.75, 2.28),
+            ("2025-05-21", 1.65, 1.55),
+        ]
+    )
     _install_fake_yfinance(monkeypatch, df)
     hits = yfinance_earnings_dates_records("WIX")
     assert len(hits) == 2
@@ -272,10 +286,12 @@ def test_yfinance_source_parses_dataframe(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_yfinance_source_skips_forward_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Forward-dated rows (estimate present, Reported EPS NaN) must be skipped."""
-    df = _make_yf_df([
-        ("2026-08-12", 1.54, None),  # forward — Reported EPS is missing
-        ("2025-08-06", 1.75, 2.28),  # reported
-    ])
+    df = _make_yf_df(
+        [
+            ("2026-08-12", 1.54, None),  # forward — Reported EPS is missing
+            ("2025-08-06", 1.75, 2.28),  # reported
+        ]
+    )
     _install_fake_yfinance(monkeypatch, df)
     hits = yfinance_earnings_dates_records("WIX")
     assert len(hits) == 1
@@ -315,10 +331,14 @@ def _hit(release: date, source: str, eps_actual: float | None = 1.0) -> Surprise
         release_date=release,
         eps_estimate=Decimal("0.9"),
         eps_actual=Decimal(str(eps_actual)) if eps_actual is not None else None,
-        revenue_estimate=None, revenue_actual=None,
-        eps_surprise_pct=None, revenue_surprise_pct=None,
-        num_analysts_eps=None, num_analysts_revenue=None,
-        source_name=source, source_url=None,
+        revenue_estimate=None,
+        revenue_actual=None,
+        eps_surprise_pct=None,
+        revenue_surprise_pct=None,
+        num_analysts_eps=None,
+        num_analysts_revenue=None,
+        source_name=source,
+        source_url=None,
     )
 
 
@@ -334,10 +354,13 @@ def test_dispatcher_first_source_wins() -> None:
 def test_dispatcher_backup_fills_gaps() -> None:
     """Backup source contributes records the primary doesn't have."""
     src1 = SurpriseSource(name="primary", fetch_all=lambda _t: [_hit(date(2025, 8, 6), "primary")])
-    src2 = SurpriseSource(name="backup", fetch_all=lambda _t: [
-        _hit(date(2025, 8, 6), "backup"),
-        _hit(date(2024, 8, 6), "backup"),  # not in primary
-    ])
+    src2 = SurpriseSource(
+        name="backup",
+        fetch_all=lambda _t: [
+            _hit(date(2025, 8, 6), "backup"),
+            _hit(date(2024, 8, 6), "backup"),  # not in primary
+        ],
+    )
     merged, _ = fetch_surprises_with_fallback("X", sources=[src1, src2])
     assert len(merged) == 2
     # Sorted oldest-first

@@ -173,9 +173,7 @@ def extract_for_ticker(
         period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
 
-        already_extracted = _already_extracted_kpis(
-            conn, ticker, period_end, tier_1_names
-        )
+        already_extracted = _already_extracted_kpis(conn, ticker, period_end, tier_1_names)
         missing = [n for n in tier_1_names if n not in already_extracted]
         if not missing and not refresh:
             log.quarters_skipped_no_missing.append(period_label)
@@ -398,9 +396,7 @@ def _ensure_summary_document_row(
     """Insert documents row for the summary file if not already present, return id."""
     raw = path.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
-    existing = conn.execute(
-        "SELECT id FROM documents WHERE sha256 = ?", (sha,)
-    ).fetchone()
+    existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
     if existing is not None:
         return int(existing["id"])
     common_args = (

@@ -232,8 +232,10 @@ def extract_for_ticker(
 
         # Skip-if-already-done check: if we have rows for this (ticker,
         # deck_doc_id) tuple and force_refresh is False, no LLM spend.
-        if not force_refresh and deck.deck_doc_id is not None and _has_existing_rows(
-            db=db, ticker=ticker_u, deck_doc_id=deck.deck_doc_id
+        if (
+            not force_refresh
+            and deck.deck_doc_id is not None
+            and _has_existing_rows(db=db, ticker=ticker_u, deck_doc_id=deck.deck_doc_id)
         ):
             log.info(
                 {
@@ -314,9 +316,7 @@ def extract_for_ticker(
 # ---------------------------------------------------------------------------
 
 
-def _discover_decks(
-    *, ir_dir: Path, ticker: str, db: Path
-) -> Iterable[_DiscoveredDeck]:
+def _discover_decks(*, ir_dir: Path, ticker: str, db: Path) -> Iterable[_DiscoveredDeck]:
     """Walk ir_documents/<TICKER>/ + ir_documents/<TICKER>/*/ for deck-shaped PDFs.
 
     Yields one _DiscoveredDeck per qualifying file, with deck_doc_id resolved
@@ -337,9 +337,7 @@ def _discover_decks(
             pdf, sha_to_doc_id=sha_to_doc_id, path_to_doc_id=path_to_doc_id
         )
         period_label = pdf.parent.name if pdf.parent != base else "unknown"
-        yield _DiscoveredDeck(
-            path=pdf, deck_doc_id=deck_doc_id, period_label=period_label
-        )
+        yield _DiscoveredDeck(path=pdf, deck_doc_id=deck_doc_id, period_label=period_label)
 
 
 def _is_deck_file(path: Path) -> bool:
@@ -363,9 +361,7 @@ def _is_deck_file(path: Path) -> bool:
     return False
 
 
-def _doc_id_lookup_maps(
-    *, db: Path, ticker: str
-) -> tuple[dict[str, int], dict[str, int]]:
+def _doc_id_lookup_maps(*, db: Path, ticker: str) -> tuple[dict[str, int], dict[str, int]]:
     """Load (sha256 → doc_id) and (relative_path → doc_id) maps for ticker.
 
     Defensive: returns empty maps when the DB / table is missing. The
@@ -468,9 +464,7 @@ def _read_deck_text(pdf: Path) -> str:
     try:
         raw = extract_text_from_pdf(str(pdf))
     except Exception as exc:  # noqa: BLE001 — pypdf raises many types
-        log.warning(
-            {"event": "pdf_text_failed", "path": str(pdf), "error": str(exc)[:200]}
-        )
+        log.warning({"event": "pdf_text_failed", "path": str(pdf), "error": str(exc)[:200]})
         return ""
     if not raw:
         return ""
@@ -562,9 +556,7 @@ def _persist(
                 continue
             target_kind = target_kind_raw.strip()
             if target_kind not in _VALID_KINDS:
-                log.debug(
-                    {"event": "deck_unknown_target_kind", "kind": target_kind_raw}
-                )
+                log.debug({"event": "deck_unknown_target_kind", "kind": target_kind_raw})
                 continue
             narrative = narrative_raw.strip()
             if not narrative:
@@ -580,11 +572,7 @@ def _persist(
                 else None
             )
             confidence_raw = row.get("confidence")
-            confidence = (
-                float(confidence_raw)
-                if isinstance(confidence_raw, (int, float))
-                else 1.0
-            )
+            confidence = float(confidence_raw) if isinstance(confidence_raw, (int, float)) else 1.0
             confidence = max(0.0, min(1.0, confidence))
 
             if has_strategic:
@@ -690,9 +678,7 @@ def _coerce_target_value(value: object) -> float | None:
 # parse leaves the row in strategic_targets only.
 _PERIOD_FY_RX = re.compile(r"^(?:FY)?\s*(20\d\d)$", re.IGNORECASE)
 _PERIOD_YEAR_RX = re.compile(r"^(20\d\d)$")
-_PERIOD_QX_YYYY_RX = re.compile(
-    r"^(Q[1-4])\s*[/\s]*(?:FY)?(20\d\d)$", re.IGNORECASE
-)
+_PERIOD_QX_YYYY_RX = re.compile(r"^(Q[1-4])\s*[/\s]*(?:FY)?(20\d\d)$", re.IGNORECASE)
 _PERIOD_BY_YEAR_RX = re.compile(r"^(?:by|through)\s+(20\d\d)$", re.IGNORECASE)
 
 

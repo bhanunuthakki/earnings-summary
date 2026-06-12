@@ -109,9 +109,7 @@ def extract_for_ticker(
         ]
 
     fy_for_dispatch = resolved_fy if resolved_fy is not None else fiscal_year
-    filing_doc_id = _lookup_doc_id(
-        db=db, ticker=ticker_u, fiscal_year=fy_for_dispatch
-    )
+    filing_doc_id = _lookup_doc_id(db=db, ticker=ticker_u, fiscal_year=fy_for_dispatch)
 
     outcomes: list[ExtractionOutcome] = []
     for tk in requested:
@@ -128,7 +126,12 @@ def extract_for_ticker(
             )
         except Exception as exc:  # noqa: BLE001
             log.warning(
-                {"event": "extractor_raised", "table_kind": tk, "ticker": ticker_u, "error": str(exc)}
+                {
+                    "event": "extractor_raised",
+                    "table_kind": tk,
+                    "ticker": ticker_u,
+                    "error": str(exc),
+                }
             )
             outcome = ExtractionOutcome(
                 table_kind=entry.table_kind,

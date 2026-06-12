@@ -74,9 +74,7 @@ def _backfill_one(
 ) -> tuple[str, int, int, str | None]:
     """Backfill a single ticker. Returns (ticker, fetched_count, inserted_count, error)."""
     try:
-        txs = fetch_form4_from_edgar(
-            ticker=ticker, since=since, until=until, user_agent=user_agent
-        )
+        txs = fetch_form4_from_edgar(ticker=ticker, since=since, until=until, user_agent=user_agent)
         if dry_run:
             return (ticker, len(txs), 0, None)
         inserted = upsert(txs, db_path=db_path)

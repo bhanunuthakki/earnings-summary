@@ -57,9 +57,9 @@ Cadence = Literal["daily", "weekly", "monthly"]
 # Per-tier age thresholds in days. None on the diagonal means "always due"
 # (P1 + daily cron — no last_built_at age check).
 _DUE_THRESHOLDS_DAYS: dict[Cadence, dict[str, int | None]] = {
-    "daily":   {"P1": None, "P2": 7,  "P3": 30},
-    "weekly":  {"P1": 7,    "P2": 30, "P3": 90},
-    "monthly": {"P1": 30,   "P2": 90, "P3": 365},
+    "daily": {"P1": None, "P2": 7, "P3": 30},
+    "weekly": {"P1": 7, "P2": 30, "P3": 90},
+    "monthly": {"P1": 30, "P2": 90, "P3": 365},
 }
 
 
@@ -250,8 +250,7 @@ def tier_coverage_summary(
         if not _has_processing_tier_column(conn):
             return out
         rows = conn.execute(
-            "SELECT processing_tier, last_built_at FROM tracked_companies "
-            "WHERE archived_at IS NULL"
+            "SELECT processing_tier, last_built_at FROM tracked_companies WHERE archived_at IS NULL"
         ).fetchall()
 
     for r in rows:

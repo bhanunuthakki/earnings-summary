@@ -51,19 +51,27 @@ def main() -> int:
         kept, archived = archive_ticker_history(ticker_dir, dry_run=args.dry_run)
         total_archived += archived
         if archived or args.verbose:
-            print(json.dumps({
-                "event": "archived_ticker",
-                "ticker": ticker_dir.name,
-                "kept_files": kept,
-                "archived_files": archived,
-            }))
+            print(
+                json.dumps(
+                    {
+                        "event": "archived_ticker",
+                        "ticker": ticker_dir.name,
+                        "kept_files": kept,
+                        "archived_files": archived,
+                    }
+                )
+            )
 
-    print(json.dumps({
-        "event": "done",
-        "tickers": len(ticker_dirs),
-        "archived_files": total_archived,
-        "dry_run": args.dry_run,
-    }))
+    print(
+        json.dumps(
+            {
+                "event": "done",
+                "tickers": len(ticker_dirs),
+                "archived_files": total_archived,
+                "dry_run": args.dry_run,
+            }
+        )
+    )
     return 0
 
 
@@ -117,10 +125,7 @@ def _resolve_ticker_dirs(research_dir: Path, ticker: str | None) -> list[Path]:
     if ticker:
         td = research_dir / ticker.upper()
         return [td] if td.is_dir() else []
-    return sorted(
-        p for p in research_dir.iterdir()
-        if p.is_dir() and p.name != ARCHIVE_DIRNAME
-    )
+    return sorted(p for p in research_dir.iterdir() if p.is_dir() and p.name != ARCHIVE_DIRNAME)
 
 
 def _parse_args() -> argparse.Namespace:

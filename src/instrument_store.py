@@ -92,7 +92,9 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             "issuer": profile.issuer,
             "expense_ratio": profile.expense_ratio,
             "aum_usd_m": profile.aum_usd_m,
-            "inception_date": profile.inception_date.isoformat() if profile.inception_date else None,
+            "inception_date": profile.inception_date.isoformat()
+            if profile.inception_date
+            else None,
             "asset_class": profile.asset_class,
             "benchmark_index": profile.benchmark_index,
             "domicile": profile.domicile,
@@ -265,9 +267,7 @@ def get_etf_holdings(
     return out
 
 
-def list_instruments_by_kind(
-    conn: sqlite3.Connection, kind: InstrumentType
-) -> list[str]:
+def list_instruments_by_kind(conn: sqlite3.Connection, kind: InstrumentType) -> list[str]:
     """Tickers in `tracked_companies` whose instrument_type == kind."""
     cur = conn.cursor()
     cur.execute(

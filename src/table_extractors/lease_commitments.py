@@ -51,9 +51,21 @@ _LADDER_LABEL_RULES: list[tuple[re.Pattern[str], str]] = [
     # is what _classify_label converts to a Y1..Y5/Thereafter offset.
     (re.compile(r"^\s*(?:fiscal(?:\s+year)?\s+|year\s+)?(20\d\d|19\d\d)\s*$", re.I), "YEAR"),
     (re.compile(r"thereafter", re.I), "Thereafter"),
-    (re.compile(r"total\s+(?:future\s+|operating\s+|finance\s+)?lease\s+payments|total\s+undiscounted", re.I), "TotalPayments"),
+    (
+        re.compile(
+            r"total\s+(?:future\s+|operating\s+|finance\s+)?lease\s+payments|total\s+undiscounted",
+            re.I,
+        ),
+        "TotalPayments",
+    ),
     (re.compile(r"less\s+imputed\s+interest|imputed\s+interest", re.I), "ImputedInterest"),
-    (re.compile(r"total\s+(?:operating\s+|finance\s+)?lease\s+liabilit|net\s+lease\s+liabilit|lease\s+liability\s+balance", re.I), "LeaseLiability"),
+    (
+        re.compile(
+            r"total\s+(?:operating\s+|finance\s+)?lease\s+liabilit|net\s+lease\s+liabilit|lease\s+liability\s+balance",
+            re.I,
+        ),
+        "LeaseLiability",
+    ),
 ]
 
 
@@ -228,9 +240,7 @@ def _classify_lease_type(axis_path: list[str]) -> str | None:
     return None
 
 
-def _infer_fallback_lease_type(
-    inner_title: str, rows: list[XbrlRow]
-) -> str | None:
+def _infer_fallback_lease_type(inner_title: str, rows: list[XbrlRow]) -> str | None:
     """When the section has no Operating/Finance axis marker (VEEV pattern),
     infer lease_type from the section title or the row labels.
 
@@ -262,9 +272,7 @@ def _infer_fallback_lease_type(
     return None
 
 
-def _classify_label(
-    label: str, *, fiscal_year: int
-) -> tuple[str | None, int | None]:
+def _classify_label(label: str, *, fiscal_year: int) -> tuple[str | None, int | None]:
     """Map a row label to (ladder_year, calendar_year).
 
     Returns (None, None) if the label doesn't match any known ladder row.
@@ -304,9 +312,7 @@ def _infer_as_of(period_label: str, fiscal_year: int) -> date:
     return date(fiscal_year, 12, 31)
 
 
-def _persist(
-    rows: list[dict[str, object]], *, db_path: Path
-) -> tuple[int, int]:
+def _persist(rows: list[dict[str, object]], *, db_path: Path) -> tuple[int, int]:
     """Insert rows into lease_commitments + log to extractions. Returns
     (n_inserted, n_extractions_logged)."""
     if not rows or not db_path.exists():

@@ -3,6 +3,7 @@
 Tests focus on the SQL `find_pending_tickers` selector — the rest of the
 script is subprocess plumbing covered by integration tests in CI.
 """
+
 from __future__ import annotations
 
 import importlib.util

@@ -373,10 +373,7 @@ def test_load_financial_fact_provenance_prefers_higher_tier_within_period(
 
 
 def test_load_financial_fact_provenance_missing_db_returns_none(tmp_path: Path) -> None:
-    assert (
-        load_financial_fact_provenance("TEST", "revenue", db_path=tmp_path / "no.db")
-        is None
-    )
+    assert load_financial_fact_provenance("TEST", "revenue", db_path=tmp_path / "no.db") is None
 
 
 # ---------------------------------------------------------------------------
@@ -484,8 +481,7 @@ def test_log_brief_provenance_writes_per_metric(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db))
     try:
         rows = conn.execute(
-            "SELECT sources_used, sections_status FROM brief_provenance_log "
-            "WHERE ticker = 'GOOG'"
+            "SELECT sources_used, sections_status FROM brief_provenance_log WHERE ticker = 'GOOG'"
         ).fetchall()
     finally:
         conn.close()

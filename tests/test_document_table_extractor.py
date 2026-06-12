@@ -147,8 +147,11 @@ def _seed_fmp_json(repo_root: Path, ticker: str, year: int) -> Path:
         "symbol": ticker,
         "year": str(year),
         "Leases - Future Minimum Lease P": [
-            {f"Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions":
-                [f"Dec. 31, {year}"]},
+            {
+                f"Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions": [
+                    f"Dec. 31, {year}"
+                ]
+            },
             {"Operating Leases": ["\xa0"]},
             {f"{year + 1}": [1000]},
             {f"{year + 2}": [800]},
@@ -219,8 +222,10 @@ def test_extract_for_ticker_returns_no_data_when_no_fmp_cached(
 ) -> None:
     # No JSON seeded.
     outcomes = dte.extract_for_ticker(
-        ticker="UNKNOWN", fiscal_year=2024,
-        table_kinds=["lease_commitments"], repo_root=repo_root,
+        ticker="UNKNOWN",
+        fiscal_year=2024,
+        table_kinds=["lease_commitments"],
+        repo_root=repo_root,
     )
     assert len(outcomes) == 1
     assert outcomes[0].status == "no_data"
@@ -232,14 +237,17 @@ def test_extract_for_ticker_returns_no_data_when_requested_fy_missing(
 ) -> None:
     _seed_fmp_json(repo_root, "GOOG", 2024)
     outcomes = dte.extract_for_ticker(
-        ticker="GOOG", fiscal_year=2099,  # not on disk
-        table_kinds=["lease_commitments"], repo_root=repo_root,
+        ticker="GOOG",
+        fiscal_year=2099,  # not on disk
+        table_kinds=["lease_commitments"],
+        repo_root=repo_root,
     )
     assert outcomes[0].status == "no_data"
 
 
 def test_extract_for_ticker_runs_all_registered_by_default(
-    repo_root: Path, monkeypatch: pytest.MonkeyPatch,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Mock the LLM so the customer_concentration extractor doesn't make
     # a real call. The lease extractor is deterministic.
@@ -249,7 +257,9 @@ def test_extract_for_ticker_runs_all_registered_by_default(
     )
     _seed_fmp_json(repo_root, "GOOG", 2024)
     outcomes = dte.extract_for_ticker(
-        ticker="GOOG", fiscal_year=2024, table_kinds=None,
+        ticker="GOOG",
+        fiscal_year=2024,
+        table_kinds=None,
         repo_root=repo_root,
     )
     # Both registered extractors should have been called.
@@ -260,7 +270,8 @@ def test_extract_for_ticker_runs_all_registered_by_default(
 def test_extract_for_ticker_rejects_unknown_kind(repo_root: Path) -> None:
     with pytest.raises(ValueError, match="unknown table_kind"):
         dte.extract_for_ticker(
-            ticker="GOOG", fiscal_year=2024,
+            ticker="GOOG",
+            fiscal_year=2024,
             table_kinds=["nonexistent_kind"],
             repo_root=repo_root,
         )
@@ -271,8 +282,10 @@ def test_extract_for_ticker_resolves_doc_id_from_documents_table(
 ) -> None:
     _seed_fmp_json(repo_root, "GOOG", 2024)
     outcomes = dte.extract_for_ticker(
-        ticker="GOOG", fiscal_year=2024,
-        table_kinds=["lease_commitments"], repo_root=repo_root,
+        ticker="GOOG",
+        fiscal_year=2024,
+        table_kinds=["lease_commitments"],
+        repo_root=repo_root,
     )
     assert outcomes[0].n_extractions_logged == 9  # all rows logged with the seeded doc_id
 
@@ -324,8 +337,10 @@ def test_extract_for_ticker_handles_missing_documents_table_gracefully(
         conn.close()
     _seed_fmp_json(tmp_path, "GOOG", 2024)
     outcomes = dte.extract_for_ticker(
-        ticker="GOOG", fiscal_year=2024,
-        table_kinds=["lease_commitments"], repo_root=tmp_path,
+        ticker="GOOG",
+        fiscal_year=2024,
+        table_kinds=["lease_commitments"],
+        repo_root=tmp_path,
     )
     # Typed rows landed even though doc_id resolution failed silently.
     assert outcomes[0].n_rows_inserted == 9

@@ -72,7 +72,9 @@ def main() -> int:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
     g.add_argument("--all", action="store_true", help="All tracked portfolio + watchlist tickers")

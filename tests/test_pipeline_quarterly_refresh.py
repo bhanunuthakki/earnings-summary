@@ -166,12 +166,22 @@ def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
         "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1, ?)",
-        (ticker, f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
-         "a" * 64, datetime.now(), datetime(2024, 12, 31)),
+        (
+            ticker,
+            f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
+            "a" * 64,
+            datetime.now(),
+            datetime(2024, 12, 31),
+        ),
     )
     doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
     pe = datetime(2024, 12, 31)
-    for line, val in [("revenue", 1000), ("operating_income", 200), ("net_income", 150), ("gross_profit", 500)]:
+    for line, val in [
+        ("revenue", 1000),
+        ("operating_income", 200),
+        ("net_income", 150),
+        ("gross_profit", 500),
+    ]:
         conn.execute(
             "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
             "line_item, value, currency, unit, source_doc_id) "
@@ -187,8 +197,14 @@ def _seed_ir_pdf(conn: sqlite3.Connection, ticker: str, doc_type: str = "ir_pres
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
         "VALUES (?, 'ir_doc', ?, ?, ?, ?, 'ok', 1, ?)",
-        (ticker, doc_type, f"ir_documents/{ticker}/2024-12-31/x.pdf",
-         "b" * 64, datetime.now(), datetime(2024, 12, 31)),
+        (
+            ticker,
+            doc_type,
+            f"ir_documents/{ticker}/2024-12-31/x.pdf",
+            "b" * 64,
+            datetime.now(),
+            datetime(2024, 12, 31),
+        ),
     )
     conn.commit()
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
@@ -226,7 +242,11 @@ def test_refresh_ticker_runs_seven_stages_by_default(
     _write_holdings(tmp_path, "X", threshold=0)
 
     report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     stage_names = [s.name for s in report.stages]
     assert stage_names == [
@@ -256,8 +276,12 @@ def test_refresh_ticker_includes_sec_stage_when_opt_in(
 
     monkeypatch.setattr(qr_mod, "ingest_sec_for_ticker", fake_ingest)
     report = refresh_ticker(
-        conn, ticker="MELI", project_root=tmp_path, holdings_dir=tmp_path,
-        run_id="r1", fetch_sec=True,
+        conn,
+        ticker="MELI",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
+        fetch_sec=True,
     )
     stage_names = [s.name for s in report.stages]
     assert stage_names[0] == StageName.FETCH_SEC_XBRL
@@ -270,8 +294,12 @@ def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
     _seed_thesis_state(conn, "FLKR")
     _write_holdings(tmp_path, "FLKR", threshold=0)
     report = refresh_ticker(
-        conn, ticker="FLKR", project_root=tmp_path, holdings_dir=tmp_path,
-        run_id="r1", fetch_sec=True,
+        conn,
+        ticker="FLKR",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
+        fetch_sec=True,
     )
     sec_stage = next(s for s in report.stages if s.name == StageName.FETCH_SEC_XBRL)
     assert sec_stage.status == StageStatus.SKIPPED
@@ -286,7 +314,11 @@ def test_refresh_ticker_derives_kpis_when_facts_present(
     _write_holdings(tmp_path, "X", threshold=0)
 
     report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     derive_stage = next(s for s in report.stages if s.name == StageName.DERIVE_FMP_KPIS)
     assert derive_stage.status == StageStatus.OK
@@ -301,30 +333,34 @@ def test_refresh_ticker_skips_derive_when_no_facts(
     _write_holdings(tmp_path, "Y", threshold=0)
 
     report = refresh_ticker(
-        conn, ticker="Y", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="Y",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     derive_stage = next(s for s in report.stages if s.name == StageName.DERIVE_FMP_KPIS)
     assert derive_stage.status == StageStatus.SKIPPED
 
 
-def test_refresh_ticker_detects_status_change(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_refresh_ticker_detects_status_change(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """Prior status OK + new BREACH eval -> breach_status_changed = True."""
     _seed_thesis_state(conn, "X", status=BreachStatus.OK)
     _seed_quarterly_income(conn, "X")
     _write_holdings(tmp_path, "X", threshold=50)  # 200/1000=20%, < 50% -> BREACH
 
     report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     assert report.breach_status == BreachStatus.BREACH
     assert report.breach_status_changed is True
 
 
-def test_refresh_ticker_surfaces_pending_ir_pdfs(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_refresh_ticker_surfaces_pending_ir_pdfs(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """IR PDFs without kpi_facts show up as pending LLM work."""
     _seed_thesis_state(conn, "X")
     _seed_ir_pdf(conn, "X", "ir_press_release")
@@ -332,7 +368,11 @@ def test_refresh_ticker_surfaces_pending_ir_pdfs(
     _write_holdings(tmp_path, "X", threshold=0)
 
     report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     pdf_items = [p for p in report.pending_work if p.kind == "ir_pdf_kpi_extraction"]
     assert len(pdf_items) == 2
@@ -367,7 +407,11 @@ def test_refresh_ticker_surfaces_pending_transcripts(
     conn.commit()
 
     report = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     transcript_items = [
         p for p in report.pending_work if p.kind == "transcript_commitment_extraction"
@@ -375,19 +419,25 @@ def test_refresh_ticker_surfaces_pending_transcripts(
     assert len(transcript_items) == 1
 
 
-def test_refresh_ticker_idempotent_on_rerun(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_refresh_ticker_idempotent_on_rerun(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """Running the DAG twice in a row produces zero new rows on the second run."""
     _seed_thesis_state(conn, "X")
     _seed_quarterly_income(conn, "X")
     _write_holdings(tmp_path, "X", threshold=0)
 
     refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     second = refresh_ticker(
-        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r2",
+        conn,
+        ticker="X",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r2",
     )
     derive_stage = next(s for s in second.stages if s.name == StageName.DERIVE_FMP_KPIS)
     # Re-derivation produces the same kpi_facts; UNIQUE index dedupes
@@ -402,7 +452,11 @@ def test_refresh_ticker_handles_missing_holdings_gracefully(
     _seed_thesis_state(conn, "Z")
     # No holdings JSON written
     report = refresh_ticker(
-        conn, ticker="Z", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1",
+        conn,
+        ticker="Z",
+        project_root=tmp_path,
+        holdings_dir=tmp_path,
+        run_id="r1",
     )
     eval_stage = next(s for s in report.stages if s.name == StageName.EVALUATE_THESIS)
     assert eval_stage.status == StageStatus.SKIPPED

@@ -243,9 +243,7 @@ def test_writer_accepts_multi_dim_cross_tab(conn: sqlite3.Connection) -> None:
         ],
     )
     conn.commit()
-    assert conn.execute(
-        "SELECT COUNT(*) FROM segment_dimensions"
-    ).fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -267,9 +265,7 @@ def test_segment_fact_to_dimension_maps_revenue_by_geography() -> None:
 
 
 def test_segment_fact_to_dimension_maps_operating_income() -> None:
-    d = segment_fact_to_dimension(
-        "Google Services", "operating_income", Decimal("50_000_000_000")
-    )
+    d = segment_fact_to_dimension("Google Services", "operating_income", Decimal("50_000_000_000"))
     assert d.dim_type == SegmentDimType.BUSINESS_UNIT
     assert d.metric == "operating_income"
 
@@ -316,9 +312,7 @@ def _seed_quarterly_series(conn: sqlite3.Connection, *, ticker: str, doc_id: int
     conn.commit()
 
 
-def test_loader_returns_ascending_observations(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_loader_returns_ascending_observations(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """Loader queries return Observation[] aligned with single-dim loader."""
     _seed_quarterly_series(conn, ticker="GOOG", doc_id=1)
     # Persist the in-memory DB to a temp file (loaders open-by-path).
@@ -341,22 +335,26 @@ def test_loader_missing_tables_returns_empty(tmp_path: Path) -> None:
     bare.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
     bare.commit()
     bare.close()
-    assert load_segment_junction_series(
-        "AMZN", dims=[("product", "AWS")], metric="revenue", db_path=db_path
-    ) == []
+    assert (
+        load_segment_junction_series(
+            "AMZN", dims=[("product", "AWS")], metric="revenue", db_path=db_path
+        )
+        == []
+    )
 
 
-def test_loader_unknown_ticker_returns_empty(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_loader_unknown_ticker_returns_empty(conn: sqlite3.Connection, tmp_path: Path) -> None:
     _seed_quarterly_series(conn, ticker="GOOG", doc_id=1)
     db_path = tmp_path / "portfolio.db"
     disk = sqlite3.connect(str(db_path))
     conn.backup(disk)
     disk.close()
-    assert load_segment_junction_series(
-        "MSFT", dims=[("product", "Cloud")], metric="revenue", db_path=db_path
-    ) == []
+    assert (
+        load_segment_junction_series(
+            "MSFT", dims=[("product", "Cloud")], metric="revenue", db_path=db_path
+        )
+        == []
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -364,9 +362,7 @@ def test_loader_unknown_ticker_returns_empty(
 # ---------------------------------------------------------------------------
 
 
-def test_loader_multi_dim_filters_with_and(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_loader_multi_dim_filters_with_and(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """Two dim filters return periods where BOTH labels appear under the same period."""
     _insert_document(conn, doc_id=1, ticker="AMZN")
     # Q3'25: AWS-in-US present
@@ -478,9 +474,7 @@ def test_load_segment_series_translates_legacy_metric(
     conn.backup(disk)
     disk.close()
 
-    obs = load_segment_series(
-        "GOOG", "Google Cloud", "revenue_by_product", db_path=db_path
-    )
+    obs = load_segment_series("GOOG", "Google Cloud", "revenue_by_product", db_path=db_path)
     assert [o.value for o in obs] == [10.0, 11.0]
 
 
@@ -489,23 +483,77 @@ def test_load_segment_series_translates_legacy_metric(
 # ---------------------------------------------------------------------------
 
 
-def test_backfill_matches_unique_period_tuples(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_backfill_matches_unique_period_tuples(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """SELECT COUNT(*) FROM segment_periods WHERE ticker='AMZN' equals the
     number of distinct (period, source_doc_id) tuples in segment_facts."""
     _insert_document(conn, doc_id=10, ticker="AMZN")
     _insert_document(conn, doc_id=20, ticker="AMZN")
     legacy_rows: list[tuple[str, datetime, str, str, str, str, int]] = [
         # doc 10, 3 segments × 1 period = 3 facts, 1 unique period tuple
-        ("AMZN", datetime(2025, 9, 30), "Q3", "Amazon Web Services", "revenue_by_product", "33000000000", 10),
-        ("AMZN", datetime(2025, 9, 30), "Q3", "International", "revenue_by_product", "40000000000", 10),
-        ("AMZN", datetime(2025, 9, 30), "Q3", "North America", "revenue_by_product", "106000000000", 10),
+        (
+            "AMZN",
+            datetime(2025, 9, 30),
+            "Q3",
+            "Amazon Web Services",
+            "revenue_by_product",
+            "33000000000",
+            10,
+        ),
+        (
+            "AMZN",
+            datetime(2025, 9, 30),
+            "Q3",
+            "International",
+            "revenue_by_product",
+            "40000000000",
+            10,
+        ),
+        (
+            "AMZN",
+            datetime(2025, 9, 30),
+            "Q3",
+            "North America",
+            "revenue_by_product",
+            "106000000000",
+            10,
+        ),
         # doc 20, 2 segments × 2 periods = 4 facts, 2 unique period tuples
-        ("AMZN", datetime(2025, 9, 30), "Q3", "United States", "revenue_by_geography", "120000000000", 20),
-        ("AMZN", datetime(2025, 9, 30), "Q3", "Rest of World", "revenue_by_geography", "59000000000", 20),
-        ("AMZN", datetime(2025, 12, 31), "Q4", "United States", "revenue_by_geography", "130000000000", 20),
-        ("AMZN", datetime(2025, 12, 31), "Q4", "Rest of World", "revenue_by_geography", "65000000000", 20),
+        (
+            "AMZN",
+            datetime(2025, 9, 30),
+            "Q3",
+            "United States",
+            "revenue_by_geography",
+            "120000000000",
+            20,
+        ),
+        (
+            "AMZN",
+            datetime(2025, 9, 30),
+            "Q3",
+            "Rest of World",
+            "revenue_by_geography",
+            "59000000000",
+            20,
+        ),
+        (
+            "AMZN",
+            datetime(2025, 12, 31),
+            "Q4",
+            "United States",
+            "revenue_by_geography",
+            "130000000000",
+            20,
+        ),
+        (
+            "AMZN",
+            datetime(2025, 12, 31),
+            "Q4",
+            "Rest of World",
+            "revenue_by_geography",
+            "65000000000",
+            20,
+        ),
     ]
     conn.executemany(
         "INSERT INTO segment_facts "

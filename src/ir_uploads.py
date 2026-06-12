@@ -37,6 +37,7 @@ log = logging.getLogger(__name__)
 # Issuer / ticker registry
 # ---------------------------------------------------------------------------
 
+
 # (ticker, fiscal_calendar_id, ordered list of issuer-name substrings that
 # appear in cover-page text). Order matters: more specific names first to
 # avoid false-positive collisions (e.g. "Mercado Libre" before "MELI").
@@ -57,48 +58,72 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("RBRK", _CAL_RUBRIK, ("Rubrik",)),
     ("NOW", _CAL_CALENDAR, ("ServiceNow",)),
     ("WIX", _CAL_CALENDAR, ("Wix.com", "Wix Ltd", "Wix's", "Wix ", "WIX ")),
-    ("NVO", _CAL_NVO, (
-        "Novo Nordisk",
-        "Amounts in DKK million",
-        "Amounts are in DKK",
-        "Amounts  in  DKK",
-    )),
+    (
+        "NVO",
+        _CAL_NVO,
+        (
+            "Novo Nordisk",
+            "Amounts in DKK million",
+            "Amounts are in DKK",
+            "Amounts  in  DKK",
+        ),
+    ),
     ("GOOG", _CAL_CALENDAR, ("Alphabet Inc", "Alphabet's")),
-    ("META", _CAL_CALENDAR, (
-        "Meta Platforms",
-        "Meta Reports",
-        "Meta Earnings",
-        "investor.atmeta.com",
-        "atmeta.com",
-    )),
+    (
+        "META",
+        _CAL_CALENDAR,
+        (
+            "Meta Platforms",
+            "Meta Reports",
+            "Meta Earnings",
+            "investor.atmeta.com",
+            "atmeta.com",
+        ),
+    ),
     ("AMZN", _CAL_CALENDAR, ("Amazon.com", "AMAZON.COM")),
     ("VEEV", _CAL_VEEV, ("Veeva Systems", "Veeva ")),
     ("BN", _CAL_CALENDAR, ("Brookfield Corporation", "Brookfield Asset Management")),
     ("LLY", _CAL_CALENDAR, ("Eli Lilly and Company", "Eli Lilly", "Lilly ")),
-    ("ABNB", _CAL_CALENDAR, (
-        "Airbnb, Inc.",
-        "Airbnb Inc.",
-        "Airbnb (ABNB)",
-        "Airbnb's",
-    )),
-    ("BKNG", _CAL_CALENDAR, (
-        "Booking Holdings, Inc.",
-        "Booking Holdings Inc.",
-        "Booking Holdings",
-        "Booking.com Holdings",
-    )),
-    ("SOFI", _CAL_CALENDAR, (
-        "SoFi Technologies",
-        "Social Finance, Inc.",
-        "SoFi Reports",
-        "SoFi's",
-    )),
-    ("DLO", _CAL_CALENDAR, (
-        "DLocal Limited",
-        "(NASDAQ:DLO)",
-        "dLocal",
-        "DLocal",
-    )),
+    (
+        "ABNB",
+        _CAL_CALENDAR,
+        (
+            "Airbnb, Inc.",
+            "Airbnb Inc.",
+            "Airbnb (ABNB)",
+            "Airbnb's",
+        ),
+    ),
+    (
+        "BKNG",
+        _CAL_CALENDAR,
+        (
+            "Booking Holdings, Inc.",
+            "Booking Holdings Inc.",
+            "Booking Holdings",
+            "Booking.com Holdings",
+        ),
+    ),
+    (
+        "SOFI",
+        _CAL_CALENDAR,
+        (
+            "SoFi Technologies",
+            "Social Finance, Inc.",
+            "SoFi Reports",
+            "SoFi's",
+        ),
+    ),
+    (
+        "DLO",
+        _CAL_CALENDAR,
+        (
+            "DLocal Limited",
+            "(NASDAQ:DLO)",
+            "dLocal",
+            "DLocal",
+        ),
+    ),
     # Evaluation list (added for the headless IR-document auto-fetch path). The
     # auto-fetch flow attributes the ticker from the crawl (a trusted hint), so
     # these issuer-name substrings matter mainly for *manual* uploads of these
@@ -141,17 +166,27 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     # broad phrases that often appear in disclaimers (e.g. "Conference Call",
     # "Annual Report") sit at the end so they only fire when nothing more
     # decisive matched.
-
     # ---- SEC filing covers: anchored to the first ~500 chars so disclaimer
     # mentions ("filing on Form 10-K for the period end…") in IR presentations
     # don't false-positive as 10-K/10-Q filings. Real SEC filings put the form
     # designator on the cover page within the first few hundred chars. ----
-    (DocType.SEC_10Q, re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?Q\b", re.IGNORECASE), "sec_form_10q"),
-    (DocType.SEC_10K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?K\b", re.IGNORECASE), "sec_form_10k"),
-    (DocType.SEC_20F, re.compile(r"\A[\s\S]{0,500}\bFORM\s+20-?F\b", re.IGNORECASE), "sec_form_20f"),
+    (
+        DocType.SEC_10Q,
+        re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?Q\b", re.IGNORECASE),
+        "sec_form_10q",
+    ),
+    (
+        DocType.SEC_10K,
+        re.compile(r"\A[\s\S]{0,500}\bFORM\s+10-?K\b", re.IGNORECASE),
+        "sec_form_10k",
+    ),
+    (
+        DocType.SEC_20F,
+        re.compile(r"\A[\s\S]{0,500}\bFORM\s+20-?F\b", re.IGNORECASE),
+        "sec_form_20f",
+    ),
     (DocType.SEC_8K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+8-?K\b", re.IGNORECASE), "sec_form_8k"),
     (DocType.SEC_6K, re.compile(r"\A[\s\S]{0,500}\bFORM\s+6-?K\b", re.IGNORECASE), "sec_form_6k"),
-
     # ---- Transcripts: only the strongest cover-page signals up-front. ----
     (
         DocType.IR_TRANSCRIPT,
@@ -170,7 +205,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         re.compile(r"\bCorrected\s+Transcript\b|FactSet\s+CallStreet", re.IGNORECASE),
         "transcript_factset",
     ),
-
     # ---- Shareholder letters first: their bodies contain press-release-
     # style "today reported financial results" language verbatim, so the
     # cover-page title has to win over those broader signals. ----
@@ -182,7 +216,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         ),
         "shareholder_letter_label",
     ),
-
     # ---- Non-quarterly events: investor days, AGMs, capital markets days,
     # broker conferences. Period_end on these rows is the event date, not a
     # fiscal-quarter end (handled in `classify_ir_file`). ----
@@ -199,7 +232,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         ),
         "conference_label",
     ),
-
     # ---- Presentations: cover-page titles. ----
     (
         DocType.IR_PRESENTATION,
@@ -216,7 +248,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         re.compile(r"\bCompany\s+Overview\b", re.IGNORECASE),
         "company_overview_label",
     ),
-
     # ---- Press releases: opening-paragraph / dateline signals. ----
     (
         DocType.IR_PRESS_RELEASE,
@@ -256,7 +287,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         ),
         "press_release_dateline",
     ),
-
     # ---- Loose transcript fallback: only fires when none of the above
     # presentation/press-release/transcript-title rules matched. Disclaimers
     # in presentations and press releases routinely mention "earnings
@@ -266,7 +296,6 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
         re.compile(r"\b(Earnings\s+Conference\s+Call|Conference\s+Call)\b", re.IGNORECASE),
         "transcript_phrase",
     ),
-
     # ---- Annual report tightened to require year context, so it doesn't
     # misfire on disclaimer phrases like "annual report on Form 20-F". ----
     (
@@ -385,10 +414,18 @@ _RX_EVENT_DATE = re.compile(
 )
 
 _MONTH_TO_Q: dict[str, int] = {
-    "january": 1, "february": 1, "march": 1,
-    "april": 2, "may": 2, "june": 2,
-    "july": 3, "august": 3, "september": 3,
-    "october": 4, "november": 4, "december": 4,
+    "january": 1,
+    "february": 1,
+    "march": 1,
+    "april": 2,
+    "may": 2,
+    "june": 2,
+    "july": 3,
+    "august": 3,
+    "september": 3,
+    "october": 4,
+    "november": 4,
+    "december": 4,
 }
 
 
@@ -854,8 +891,18 @@ def _detect_period(
 
 
 _MONTH_TO_NUM: dict[str, int] = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
 }
 
 
@@ -916,7 +963,9 @@ def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]
     rx_year_q = re.compile(r"\b(?P<y>20\d{2})[-_]?q(?P<q>[1-4])\b", re.IGNORECASE)
     m_year_q = rx_year_q.search(name)
     if m_year_q:
-        return (int(m_year_q.group("y")), int(m_year_q.group("q"))), [f"filename_period:{m_year_q.group(0)!r}"]
+        return (int(m_year_q.group("y")), int(m_year_q.group("q"))), [
+            f"filename_period:{m_year_q.group(0)!r}"
+        ]
     rx4 = re.compile(r"annual[-_\s]report[-_\s](?P<y>20\d{2})", re.IGNORECASE)
     m4 = rx4.search(name)
     if m4:
@@ -1067,8 +1116,7 @@ def classify_ir_file(
 
     confidence = (
         Confidence.HIGH
-        if (file_ev and (fname_yq or content_yq))
-        or (content_ev and content_yq)
+        if (file_ev and (fname_yq or content_yq)) or (content_ev and content_yq)
         else Confidence.MEDIUM
     )
 
@@ -1146,7 +1194,9 @@ def parse_canonical_path(path: Path, root: Path) -> CategorizationResult | None:
     except ValueError:
         cal = _CAL_CALENDAR
     quarter = _quarter_for_period_end(cal, period_end)
-    period_label = _period_label(cal, period_end.year, quarter) if quarter else period_end.isoformat()
+    period_label = (
+        _period_label(cal, period_end.year, quarter) if quarter else period_end.isoformat()
+    )
     return CategorizationResult(
         ticker=m["ticker"],
         doc_type=doc_type,

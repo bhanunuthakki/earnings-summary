@@ -66,10 +66,16 @@ class _KpiRangeBound:
 
 
 _KPI_RANGES: dict[Unit, _KpiRangeBound] = {
-    Unit.PERCENT: _KpiRangeBound(unit=Unit.PERCENT, min_value=Decimal(-1000), max_value=Decimal(1000)),
+    Unit.PERCENT: _KpiRangeBound(
+        unit=Unit.PERCENT, min_value=Decimal(-1000), max_value=Decimal(1000)
+    ),
     Unit.RATIO: _KpiRangeBound(unit=Unit.RATIO, min_value=Decimal(-100), max_value=Decimal(100)),
-    Unit.BPS: _KpiRangeBound(unit=Unit.BPS, min_value=Decimal(-100_000), max_value=Decimal(100_000)),
-    Unit.COUNT: _KpiRangeBound(unit=Unit.COUNT, min_value=Decimal(0), max_value=Decimal(10_000_000_000)),
+    Unit.BPS: _KpiRangeBound(
+        unit=Unit.BPS, min_value=Decimal(-100_000), max_value=Decimal(100_000)
+    ),
+    Unit.COUNT: _KpiRangeBound(
+        unit=Unit.COUNT, min_value=Decimal(0), max_value=Decimal(10_000_000_000)
+    ),
 }
 
 
@@ -101,8 +107,11 @@ def _check_financial_fact_ranges(
         value = Decimal(str(row["value"]))
         if bound.min_value is not None and value < bound.min_value:
             record_validation_issue(
-                conn, run_id=run_id, source_doc_id=int(row["source_doc_id"]),
-                ticker=row["ticker"], severity=Severity.WARN,
+                conn,
+                run_id=run_id,
+                source_doc_id=int(row["source_doc_id"]),
+                ticker=row["ticker"],
+                severity=Severity.WARN,
                 rule=ValidationRule.PLAUSIBLE_RANGE,
                 raw_value=f"{row['line_item']}={value}",
                 expected=f">= {bound.min_value}",
@@ -110,8 +119,11 @@ def _check_financial_fact_ranges(
             inserted += 1
         elif bound.max_value is not None and value > bound.max_value:
             record_validation_issue(
-                conn, run_id=run_id, source_doc_id=int(row["source_doc_id"]),
-                ticker=row["ticker"], severity=Severity.WARN,
+                conn,
+                run_id=run_id,
+                source_doc_id=int(row["source_doc_id"]),
+                ticker=row["ticker"],
+                severity=Severity.WARN,
                 rule=ValidationRule.PLAUSIBLE_RANGE,
                 raw_value=f"{row['line_item']}={value}",
                 expected=f"<= {bound.max_value}",
@@ -150,8 +162,11 @@ def _check_kpi_fact_ranges(
         if value < bound.min_value or value > bound.max_value:
             severity = Severity.WARN
             record_validation_issue(
-                conn, run_id=run_id, source_doc_id=int(row["source_doc_id"]),
-                ticker=row["ticker"], severity=severity,
+                conn,
+                run_id=run_id,
+                source_doc_id=int(row["source_doc_id"]),
+                ticker=row["ticker"],
+                severity=severity,
                 rule=ValidationRule.PLAUSIBLE_RANGE,
                 raw_value=f"{row['name']}={value} {unit.value}",
                 expected=f"[{bound.min_value}, {bound.max_value}]",
@@ -164,7 +179,10 @@ def _check_kpi_fact_ranges(
 
 
 def _check_magnitude_jumps(
-    conn: sqlite3.Connection, *, run_id: str, ticker: str | None,
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ticker: str | None,
     multiplier: Decimal = Decimal(5),
 ) -> CheckOutcome:
     """Insert MAGNITUDE_JUMP issues for sequential same-key values that differ by > multiplier×.
@@ -206,8 +224,11 @@ def _check_magnitude_jumps(
                 pe = curr["period_end"]
                 pe_str = pe[:10] if isinstance(pe, str) else pe.date().isoformat()
                 record_validation_issue(
-                    conn, run_id=run_id, source_doc_id=int(curr["source_doc_id"]),
-                    ticker=str(curr["ticker"]), severity=Severity.WARN,
+                    conn,
+                    run_id=run_id,
+                    source_doc_id=int(curr["source_doc_id"]),
+                    ticker=str(curr["ticker"]),
+                    severity=Severity.WARN,
                     rule=ValidationRule.MAGNITUDE_JUMP,
                     raw_value=(
                         f"{curr['line_item']} prior={prev_val} current={curr_val} "
@@ -223,7 +244,10 @@ def _check_magnitude_jumps(
 
 
 def _check_source_disagreement(
-    conn: sqlite3.Connection, *, run_id: str, ticker: str | None,
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ticker: str | None,
     tolerance_pct: Decimal = Decimal("0.5"),
 ) -> CheckOutcome:
     """Insert SOURCE_DISAGREEMENT for same (ticker, period_end, fiscal_period_type, line_item)
@@ -264,11 +288,13 @@ def _check_source_disagreement(
         per_source_type: dict[str, dict[str, object]] = {}
         for e in entries:
             st = str(e["source_type"])
-            if st not in per_source_type or int(e["source_doc_id"]) > int(per_source_type[st]["source_doc_id"]):
+            if st not in per_source_type or int(e["source_doc_id"]) > int(
+                per_source_type[st]["source_doc_id"]
+            ):
                 per_source_type[st] = e
         reps = list(per_source_type.values())
         for i, a in enumerate(reps):
-            for b in reps[i + 1:]:
+            for b in reps[i + 1 :]:
                 a_val = abs(Decimal(str(a["value"])))
                 b_val = abs(Decimal(str(b["value"])))
                 if max(a_val, b_val) == 0:
@@ -278,7 +304,8 @@ def _check_source_disagreement(
                     pe = a["period_end"]
                     pe_str = pe[:10] if isinstance(pe, str) else pe.date().isoformat()
                     record_validation_issue(
-                        conn, run_id=run_id,
+                        conn,
+                        run_id=run_id,
                         source_doc_id=int(a["source_doc_id"]),
                         ticker=str(a["ticker"]),
                         severity=Severity.WARN,
@@ -295,7 +322,8 @@ def _check_source_disagreement(
     conn.commit()
     return CheckOutcome(
         rule=ValidationRule.SOURCE_DISAGREEMENT,
-        issues_inserted=inserted, rows_examined=examined,
+        issues_inserted=inserted,
+        rows_examined=examined,
     )
 
 
@@ -323,6 +351,8 @@ def run_all_checks(
     outcomes.append(_check_magnitude_jumps(conn, run_id=run_id, ticker=ticker))
     outcomes.append(_check_source_disagreement(conn, run_id=run_id, ticker=ticker))
     return ValidationReport(
-        run_id=run_id, started_at=started_at, ended_at=datetime.now(),
+        run_id=run_id,
+        started_at=started_at,
+        ended_at=datetime.now(),
         outcomes=tuple(outcomes),
     )

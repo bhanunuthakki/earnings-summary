@@ -285,9 +285,7 @@ def test_ok_without_segment_facts_still_renders_descriptions(tmp_path: Path) -> 
 def test_markdown_renderer_emits_pipe_tables(tmp_path: Path) -> None:
     repo = _create_repo(tmp_path)
     _write_cache(repo, "TEST", _CACHED_RESULT)
-    _seed_segment_rows(
-        repo, "TEST", "revenue_by_product", [("2024-12-31", "Cloud", 1.0)]
-    )
+    _seed_segment_rows(repo, "TEST", "revenue_by_product", [("2024-12-31", "Cloud", 1.0)])
     _seed_segment_rows(
         repo,
         "TEST",
@@ -314,9 +312,7 @@ def test_markdown_renderer_emits_pipe_tables(tmp_path: Path) -> None:
 def _write_diagram_cache(repo: Path, ticker: str, payload: dict[str, object]) -> None:
     diagram_dir = repo / "data" / "platform_diagram"
     diagram_dir.mkdir(parents=True, exist_ok=True)
-    (diagram_dir / f"{ticker.upper()}.json").write_text(
-        json.dumps(payload), encoding="utf-8"
-    )
+    (diagram_dir / f"{ticker.upper()}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
 _DIAGRAM_PAYLOAD: dict[str, object] = {

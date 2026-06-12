@@ -84,7 +84,9 @@ def test_extract_handles_10q_quarterly_periods() -> None:
         "Operating Income by Segment - $ in Millions": [
             {
                 "Operating Income by Segment - $ in Millions": [
-                    "3 Months Ended", None, "9 Months Ended"
+                    "3 Months Ended",
+                    None,
+                    "9 Months Ended",
                 ]
             },
             {"items": ["Sep. 30, 2024", "Sep. 30, 2023", "Sep. 30, 2024", "Sep. 30, 2023"]},
@@ -117,9 +119,12 @@ def test_extract_handles_10q_quarterly_periods() -> None:
     for f in facts:
         # The 9M columns held 81418 / 60596 / 88427 / 69128 / 4019 / 852 — none should appear
         assert f.value not in {
-            Decimal("81418000000"), Decimal("60596000000"),
-            Decimal("88427000000"), Decimal("69128000000"),
-            Decimal("4019000000"), Decimal("852000000"),
+            Decimal("81418000000"),
+            Decimal("60596000000"),
+            Decimal("88427000000"),
+            Decimal("69128000000"),
+            Decimal("4019000000"),
+            Decimal("852000000"),
         }
 
 

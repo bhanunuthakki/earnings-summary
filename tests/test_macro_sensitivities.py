@@ -138,8 +138,7 @@ def test_compute_sensitivities_multiple_series() -> None:
     macro_a_lvl = _gen_series_from_returns(macro_a_rets, start=4.0)
     macro_b_lvl = _gen_series_from_returns(macro_b_rets, start=80.0)
     tkr_rets = [
-        0.4 * a + (-0.8) * b + rng.gauss(0.0, 0.001)
-        for a, b in zip(macro_a_rets, macro_b_rets)
+        0.4 * a + (-0.8) * b + rng.gauss(0.0, 0.001) for a, b in zip(macro_a_rets, macro_b_rets)
     ]
     tkr_lvl = _gen_series_from_returns(tkr_rets, start=100.0)
 

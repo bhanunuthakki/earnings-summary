@@ -83,9 +83,7 @@ def record_llm_call(
                 cache_creation_input_tokens=cast(
                     "int | None", usage.get("cache_creation_input_tokens")
                 ),
-                cache_read_input_tokens=cast(
-                    "int | None", usage.get("cache_read_input_tokens")
-                ),
+                cache_read_input_tokens=cast("int | None", usage.get("cache_read_input_tokens")),
                 output_tokens=cast("int | None", usage.get("output_tokens")),
                 cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
                 fallback_used=fallback_used,

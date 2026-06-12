@@ -98,13 +98,14 @@ DEFAULT_BEAM_SIZE = 1
 
 
 class TranscriptSource(str, Enum):
-    YT_DLP_WHISPER_URL = "yt_dlp_whisper_url"          # explicit URL provided
-    YT_DLP_WHISPER_SEARCH = "yt_dlp_whisper_search"    # picked via smart search
-    YT_DLP_WHISPER_LINKS = "yt_dlp_whisper_links"      # picked from links file
+    YT_DLP_WHISPER_URL = "yt_dlp_whisper_url"  # explicit URL provided
+    YT_DLP_WHISPER_SEARCH = "yt_dlp_whisper_search"  # picked via smart search
+    YT_DLP_WHISPER_LINKS = "yt_dlp_whisper_links"  # picked from links file
 
 
 class FetchSpec(BaseModel):
     """One quarter's fetch input — validated before any network/disk work."""
+
     ticker: str
     year: int = Field(ge=2000, le=2100)
     quarter: int = Field(ge=1, le=4)
@@ -282,10 +283,7 @@ def _transcribe(
 ) -> None:
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
     segments, _info = model.transcribe(str(audio_path), beam_size=beam_size)
-    lines = [
-        f"[{seg.start:.2f}s -> {seg.end:.2f}s] {seg.text}"
-        for seg in segments
-    ]
+    lines = [f"[{seg.start:.2f}s -> {seg.end:.2f}s] {seg.text}" for seg in segments]
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -304,7 +302,9 @@ def _ensure_qa_recorded(
         # validate_transcript can route. Caller will overwrite with real source
         # if it just produced the file; backfill leaves "unknown_legacy".
         index_manager.register_transcript(
-            canonical_ticker, year, qlabel,
+            canonical_ticker,
+            year,
+            qlabel,
             source="unknown_legacy",
             filepath=output_path.name,
             has_qa=None,
@@ -321,7 +321,9 @@ def _ensure_qa_recorded(
             section = None
         if section is not None:
             index_manager.register_transcript(
-                canonical_ticker, year, qlabel,
+                canonical_ticker,
+                year,
+                qlabel,
                 source=entry.get("source") or "unknown_legacy",
                 filepath=output_path.name,
                 has_qa=qa_status_to_db_value(section.status),
@@ -340,7 +342,9 @@ def _ensure_qa_recorded(
 
     result = validate_transcript(output_path, entry.get("source") or "unknown_legacy")
     index_manager.update_transcript_qa(
-        canonical_ticker, year, qlabel,
+        canonical_ticker,
+        year,
+        qlabel,
         qa_status=result.status.value,
         qa_details=result.model_dump(mode="json"),
     )
@@ -439,10 +443,7 @@ def fetch_and_transcribe(
 
     if qa_result.status == QaStatus.OK:
         audio_path.unlink(missing_ok=True)
-        print(
-            f"[done] {output_path}  qa=ok  has_qa={qa_section.status.value}  "
-            f"audio_cleaned"
-        )
+        print(f"[done] {output_path}  qa=ok  has_qa={qa_section.status.value}  audio_cleaned")
     else:
         print(
             f"[done-qa-failed] {output_path}  qa=failed  "
@@ -535,11 +536,17 @@ def run_from_manifest(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch earnings call audio and transcribe locally.")
+    parser = argparse.ArgumentParser(
+        description="Fetch earnings call audio and transcribe locally."
+    )
     parser.add_argument("--ticker", help="Stock ticker symbol (single-quarter mode)")
     parser.add_argument("--year", type=int, help="Year (single-quarter mode)")
-    parser.add_argument("--quarter", type=int, choices=[1, 2, 3, 4], help="Quarter (single-quarter mode)")
-    parser.add_argument("--url", help="Explicit YouTube URL (skips search). Requires --ticker/--year/--quarter.")
+    parser.add_argument(
+        "--quarter", type=int, choices=[1, 2, 3, 4], help="Quarter (single-quarter mode)"
+    )
+    parser.add_argument(
+        "--url", help="Explicit YouTube URL (skips search). Requires --ticker/--year/--quarter."
+    )
     parser.add_argument(
         "--links-file",
         help="JSON manifest path (batch mode). Mutually exclusive with --url.",
@@ -551,20 +558,20 @@ def main() -> None:
     parser.add_argument(
         "--ffmpeg-location",
         help="Directory containing ffmpeg.exe. Falls back to FFMPEG_LOCATION env, "
-             "then C:/ffmpeg/bin on Windows, then PATH.",
+        "then C:/ffmpeg/bin on Windows, then PATH.",
     )
     parser.add_argument(
         "--whisper-model",
         default=os.environ.get("WHISPER_MODEL", DEFAULT_WHISPER_MODEL),
         help=f"faster-whisper model name (default: {DEFAULT_WHISPER_MODEL}; "
-             f"set WHISPER_MODEL env to override).",
+        f"set WHISPER_MODEL env to override).",
     )
     parser.add_argument(
         "--beam-size",
         type=int,
         default=int(os.environ.get("WHISPER_BEAM_SIZE", DEFAULT_BEAM_SIZE)),
         help=f"Whisper decode beam size (default: {DEFAULT_BEAM_SIZE}; "
-             f"set WHISPER_BEAM_SIZE env to override). Greedy=1; raise for accuracy.",
+        f"set WHISPER_BEAM_SIZE env to override). Greedy=1; raise for accuracy.",
     )
     args = parser.parse_args()
 

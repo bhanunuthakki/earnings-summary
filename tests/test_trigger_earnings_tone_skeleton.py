@@ -35,11 +35,7 @@ from triggers import (
 )
 
 PROMPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "src"
-    / "triggers"
-    / "_prompts"
-    / "earnings_tone_diff.txt"
+    Path(__file__).resolve().parents[1] / "src" / "triggers" / "_prompts" / "earnings_tone_diff.txt"
 )
 
 

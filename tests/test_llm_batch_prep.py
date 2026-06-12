@@ -30,15 +30,18 @@ def test_saydo_custom_id_matches_synchronous_filename_stem() -> None:
     synchronous path writes — otherwise post-batch landing can't drop into
     the existing cache shape."""
     cid = saydo_custom_id(
-        ticker="META", prev_quarter="Q3", prev_year=2025,
-        curr_quarter="Q4", curr_year=2025,
+        ticker="META",
+        prev_quarter="Q3",
+        prev_year=2025,
+        curr_quarter="Q4",
+        curr_year=2025,
     )
     assert cid == "SayDo_META_Q3_2025_Q4_2025"
 
 
 def test_batch_request_jsonl_shape_matches_anthropic_schema() -> None:
     """Schema is fixed by the Anthropic API:
-       {"custom_id": str, "params": {"model", "max_tokens", "messages"}}
+    {"custom_id": str, "params": {"model", "max_tokens", "messages"}}
     """
     req = BatchRequest(custom_id="SayDo_X", prompt="hello")
     payload = to_jsonl_payload(req)

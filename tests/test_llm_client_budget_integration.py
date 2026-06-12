@@ -98,9 +98,7 @@ def _seed_db(
     that current_month_spend(purpose) returns `spent_usd`."""
     conn = sqlite3.connect(str(path))
     try:
-        conn.executescript(
-            _CREATE_LLM_CALLS + _CREATE_LLM_BUDGETS + _CREATE_LLM_BUDGET_ALERTS
-        )
+        conn.executescript(_CREATE_LLM_CALLS + _CREATE_LLM_BUDGETS + _CREATE_LLM_BUDGET_ALERTS)
         now = datetime.now(UTC).isoformat()
         conn.execute(
             """
@@ -253,7 +251,8 @@ def test_soft_cap_logs_and_proceeds(
     # Warning must mention soft cap exceeded (record vs string contents
     # in caplog requires the message to have rendered).
     matching = [
-        r for r in caplog.records
+        r
+        for r in caplog.records
         if isinstance(r.msg, dict) and r.msg.get("event") == "llm_budget_soft_cap_exceeded"
     ]
     assert len(matching) == 1
@@ -283,9 +282,9 @@ def test_warn_threshold_records_alert(
 
     # Warn log fired
     warn_records = [
-        r for r in caplog.records
-        if isinstance(r.msg, dict)
-        and r.msg.get("event") == "llm_budget_warn_threshold"
+        r
+        for r in caplog.records
+        if isinstance(r.msg, dict) and r.msg.get("event") == "llm_budget_warn_threshold"
     ]
     assert len(warn_records) == 1
 
@@ -315,9 +314,7 @@ def test_warn_threshold_alert_dedupes_across_calls(
     call_llm("third", purpose="bear_case")
     conn = sqlite3.connect(str(db_patch))
     try:
-        rows = conn.execute(
-            "SELECT * FROM llm_budget_alerts WHERE threshold_pct = 0.8"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM llm_budget_alerts WHERE threshold_pct = 0.8").fetchall()
     finally:
         conn.close()
     assert len(rows) == 1

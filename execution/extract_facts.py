@@ -74,12 +74,8 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     """Return the list of tickers to extract for, per CLI args."""
     if args.ticker:
         return [args.ticker.upper()]
-    list_types = (
-        frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
-    )
-    companies = tracked_companies_for_user(
-        conn, only_classified=True, list_types=list_types
-    )
+    list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES
+    companies = tracked_companies_for_user(conn, only_classified=True, list_types=list_types)
     return [c.ticker for c in companies]
 
 

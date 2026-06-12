@@ -38,12 +38,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", help="Single ticker to derive for")
-    group.add_argument(
-        "--all", action="store_true", help="All classified tracked companies"
-    )
-    parser.add_argument(
-        "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db")
-    )
+    group.add_argument("--all", action="store_true", help="All classified tracked companies")
+    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     args = parser.parse_args()
 
     conn = open_db(args.db)
@@ -64,7 +60,11 @@ def main() -> int:
             except (ValueError, KeyError) as e:
                 failed += 1
                 record_stage(
-                    conn, run_id, ticker, StageName.COMPUTE, StageStatus.FAILED,
+                    conn,
+                    run_id,
+                    ticker,
+                    StageName.COMPUTE,
+                    StageStatus.FAILED,
                     error_msg=f"{type(e).__name__}: {e}"[:500],
                 )
                 sys.stderr.write(f"FAILED {ticker}: {type(e).__name__}: {e}\n")
@@ -73,22 +73,29 @@ def main() -> int:
             status = StageStatus.OK if emitted > 0 else StageStatus.SKIPPED
             record_stage(conn, run_id, ticker, StageName.COMPUTE, status)
             total_inserted += inserted
-            per_ticker.append({
-                "ticker": ticker,
-                "rows_emitted": emitted,
-                "rows_inserted": inserted,
-            })
+            per_ticker.append(
+                {
+                    "ticker": ticker,
+                    "rows_emitted": emitted,
+                    "rows_inserted": inserted,
+                }
+            )
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(conn, run_id, terminal, error_summary=f"{failed} failed" if failed else None)
 
-        print(json.dumps({
-            "run_id": run_id,
-            "tickers_processed": len(per_ticker),
-            "total_kpi_rows_inserted": total_inserted,
-            "failed": failed,
-            "per_ticker": per_ticker,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "tickers_processed": len(per_ticker),
+                    "total_kpi_rows_inserted": total_inserted,
+                    "failed": failed,
+                    "per_ticker": per_ticker,
+                },
+                indent=2,
+            )
+        )
         return 0 if failed == 0 else 1
     finally:
         conn.close()

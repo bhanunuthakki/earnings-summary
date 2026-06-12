@@ -90,9 +90,7 @@ def test_scan_transcripts_processed_wins_on_collision(tmp_path: Path) -> None:
     result = _scan_transcripts(tmp_path / "transcripts", "GOOG")
 
     chosen = Path(result[(1, 2026)])
-    assert chosen.parent.name == "processed", (
-        f"expected processed/ to win, got {chosen}"
-    )
+    assert chosen.parent.name == "processed", f"expected processed/ to win, got {chosen}"
     assert chosen.read_text(encoding="utf-8") == "processed-canonical"
 
 
@@ -152,9 +150,7 @@ def test_db_scan_processed_dir_unions_both_dirs(
     }
 
 
-def test_db_scan_processed_dir_no_dirs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_db_scan_processed_dir_no_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import db
     from db import _scan_processed_dir
     from models.artifacts import ArtifactFlags
@@ -190,12 +186,8 @@ def test_latest_transcripts_unions_and_sorts_desc(tmp_path: Path) -> None:
 def test_latest_transcripts_processed_wins_collision(tmp_path: Path) -> None:
     from compute.platform_diagram import _latest_transcripts
 
-    _make(
-        tmp_path / "transcripts" / "processed" / "GOOG_Q1_2026.txt", "canonical"
-    )
-    _make(
-        tmp_path / "transcripts" / "raw" / "GOOG_Q1_2026.txt", "staging"
-    )
+    _make(tmp_path / "transcripts" / "processed" / "GOOG_Q1_2026.txt", "canonical")
+    _make(tmp_path / "transcripts" / "raw" / "GOOG_Q1_2026.txt", "staging")
 
     out = _latest_transcripts(tmp_path, "GOOG", n=1)
 

@@ -511,15 +511,13 @@ def _build_secondary_expansions(
     # disclose both. For tickers with only annual data (the common 10-K
     # case), the annual rows survive unmodified.
     annual_set = set(ANNUAL_PERIOD_TYPES)
-    sorted_rows = sorted(
-        rows, key=lambda r: 0 if str(r["fiscal_period_type"]) in annual_set else 1
-    )
+    sorted_rows = sorted(rows, key=lambda r: 0 if str(r["fiscal_period_type"]) in annual_set else 1)
 
     # Group by (dim_type, metric) so AWS_revenue-by-geography is its own
     # expansion, distinct from the global revenue-by-geography table that
     # already appears in the primary grids.
-    by_axis: dict[tuple[str, str], dict[str, dict[tuple[int, int], float]]] = (
-        defaultdict(lambda: defaultdict(dict))
+    by_axis: dict[tuple[str, str], dict[str, dict[tuple[int, int], float]]] = defaultdict(
+        lambda: defaultdict(dict)
     )
     for r in sorted_rows:
         dim_type = str(r["dim_type"])
@@ -558,11 +556,7 @@ def _build_secondary_expansions(
             )
         if not rows_out:
             continue
-        rows_out.sort(
-            key=lambda s: -(
-                next((v for v in reversed(s.values) if v is not None), 0.0)
-            )
-        )
+        rows_out.sort(key=lambda s: -(next((v for v in reversed(s.values) if v is not None), 0.0)))
         # When the metric encodes a specific subject (e.g. 'AWS_revenue' →
         # parent="AWS"), surface that as the parent_label so the renderer can
         # caption the expansion as "by geography under AWS". Cells with the

@@ -99,8 +99,8 @@ class TierConfig:
     """FMP subscription tier limits + sensible default rate."""
 
     name: str
-    calls_per_day: int      # daily cap; sys.maxsize for unlimited
-    calls_per_sec: float    # rate-limit target
+    calls_per_day: int  # daily cap; sys.maxsize for unlimited
+    calls_per_sec: float  # rate-limit target
 
 
 _UNLIMITED = sys.maxsize
@@ -108,8 +108,8 @@ _UNLIMITED = sys.maxsize
 TIERS: dict[str, TierConfig] = {
     # free == post-downgrade: 250/day, and save_fmp_data/fetch_etf_data drop the
     # v3/v4 rungs (they 403 globally on free) when FMP_TIER=free is propagated.
-    "free":    TierConfig("free",    calls_per_day=250,        calls_per_sec=4.0),
-    "basic":   TierConfig("basic",   calls_per_day=250,        calls_per_sec=4.0),
+    "free": TierConfig("free", calls_per_day=250, calls_per_sec=4.0),
+    "basic": TierConfig("basic", calls_per_day=250, calls_per_sec=4.0),
     "starter": TierConfig("starter", calls_per_day=_UNLIMITED, calls_per_sec=5.0),
     "premium": TierConfig("premium", calls_per_day=_UNLIMITED, calls_per_sec=12.0),
 }
@@ -131,47 +131,47 @@ def resolve_tier(explicit: str | None) -> TierConfig:
 # `none` = tracked but de-emphasized; refresh quarterly to keep history alive
 # without burning budget on names the user isn't actively analyzing.
 _LIST_TYPE_BASE_FRESH_H: dict[str, int] = {
-    "portfolio":    24,
-    "watchlist":    24,
-    "evaluation":   24,
-    "none":         24 * 90,
-    "etf":          24 * 30,
+    "portfolio": 24,
+    "watchlist": 24,
+    "evaluation": 24,
+    "none": 24 * 90,
+    "etf": 24 * 30,
     "index_member": 24 * 30,
 }
 
 # Endpoint classification — drives priority weights and cadence multipliers.
 # An endpoint's class is matched by substring on the path; first match wins.
 _ENDPOINT_CLASSES: list[tuple[str, str]] = [
-    ("discounted-cash-flow",    "time_sensitive"),
-    ("ratings",                 "time_sensitive"),
-    ("grades",                  "time_sensitive"),
-    ("price-target",            "time_sensitive"),
-    ("ratios-ttm",              "time_sensitive"),
-    ("metrics-ttm",             "time_sensitive"),
-    ("statements-ttm",          "time_sensitive"),
-    ("statement-ttm",           "time_sensitive"),
-    ("financial-scores",        "time_sensitive"),
-    ("profile",                 "time_sensitive"),
-    ("shares-float",            "time_sensitive"),
-    ("market-capitalization",   "time_sensitive"),
-    ("analyst-estimates",       "time_sensitive"),
-    ("price-eod",               "time_sensitive"),
-    ("growth",                  "growth"),
-    ("segmentation",            "segment"),
-    ("segments",                "segment"),
-    ("statement",               "statement"),
-    ("balance-sheet",           "statement"),
-    ("cashflow",                "statement"),
-    ("income-",                 "statement"),
-    ("ratios",                  "statement"),
-    ("key-metrics",             "statement"),
-    ("enterprise-values",       "statement"),
-    ("owner-earnings",          "statement"),
-    ("financial-reports",       "statement"),
-    ("form-10-k-json",          "statement"),
-    ("peers",                   "reference"),
-    ("executives",              "reference"),
-    ("employee",                "reference"),
+    ("discounted-cash-flow", "time_sensitive"),
+    ("ratings", "time_sensitive"),
+    ("grades", "time_sensitive"),
+    ("price-target", "time_sensitive"),
+    ("ratios-ttm", "time_sensitive"),
+    ("metrics-ttm", "time_sensitive"),
+    ("statements-ttm", "time_sensitive"),
+    ("statement-ttm", "time_sensitive"),
+    ("financial-scores", "time_sensitive"),
+    ("profile", "time_sensitive"),
+    ("shares-float", "time_sensitive"),
+    ("market-capitalization", "time_sensitive"),
+    ("analyst-estimates", "time_sensitive"),
+    ("price-eod", "time_sensitive"),
+    ("growth", "growth"),
+    ("segmentation", "segment"),
+    ("segments", "segment"),
+    ("statement", "statement"),
+    ("balance-sheet", "statement"),
+    ("cashflow", "statement"),
+    ("income-", "statement"),
+    ("ratios", "statement"),
+    ("key-metrics", "statement"),
+    ("enterprise-values", "statement"),
+    ("owner-earnings", "statement"),
+    ("financial-reports", "statement"),
+    ("form-10-k-json", "statement"),
+    ("peers", "reference"),
+    ("executives", "reference"),
+    ("employee", "reference"),
 ]
 
 # Cadence multipliers per endpoint class. 1.0 = use list_type default freshness;
@@ -182,43 +182,43 @@ _ENDPOINT_CLASSES: list[tuple[str, str]] = [
 # when editing the policy.
 _CLASS_CADENCE_MULT: dict[str, float] = {
     "time_sensitive": float(_cadence_policy.TIME_SENSITIVE_STALE_DAYS),
-    "growth":         float(_cadence_policy.GROWTH_STALE_DAYS),
-    "segment":        float(_cadence_policy.STATEMENT_STALE_DAYS),
-    "statement":      float(_cadence_policy.STATEMENT_STALE_DAYS),
-    "reference":      float(_cadence_policy.REFERENCE_STALE_DAYS),
+    "growth": float(_cadence_policy.GROWTH_STALE_DAYS),
+    "segment": float(_cadence_policy.STATEMENT_STALE_DAYS),
+    "statement": float(_cadence_policy.STATEMENT_STALE_DAYS),
+    "reference": float(_cadence_policy.REFERENCE_STALE_DAYS),
 }
 
 _CLASS_PRIORITY_WEIGHT: dict[str, int] = {
     "time_sensitive": 0,
-    "growth":         100,
-    "segment":        200,
-    "statement":      300,
-    "reference":      400,
+    "growth": 100,
+    "segment": 200,
+    "statement": 300,
+    "reference": 400,
 }
 
 _LIST_TYPE_PRIORITY_WEIGHT: dict[str, int] = {
-    "portfolio":    0,
-    "evaluation":   500,
-    "watchlist":    1000,
-    "none":         2000,
-    "etf":          3000,
+    "portfolio": 0,
+    "evaluation": 500,
+    "watchlist": 1000,
+    "none": 2000,
+    "etf": 3000,
     "index_member": 4000,
 }
 
 # Status -> bucket. Drives priority bonus and retry eligibility.
 _BUCKET_PRIORITY_BONUS: dict[str, int] = {
-    "missing":         -50,   # never-pulled: do these first
-    "stale":           0,
-    "failed_recent":   _UNLIMITED,  # don't retry within retry_window
-    "failed_retry_ok": 30,    # error/forbidden but enough time has passed
-    "fresh":           _UNLIMITED,  # never queue
+    "missing": -50,  # never-pulled: do these first
+    "stale": 0,
+    "failed_recent": _UNLIMITED,  # don't retry within retry_window
+    "failed_retry_ok": 30,  # error/forbidden but enough time has passed
+    "fresh": _UNLIMITED,  # never queue
 }
 
 # How long to wait before retrying a failed endpoint, by failure class.
 _RETRY_WINDOW_DAYS: dict[str, int] = {
-    "forbidden": 30,   # tier-restricted: don't hammer until tier likely changed
-    "error":     1,    # transient errors: try again tomorrow
-    "empty":     7,    # endpoint returned empty list; rare but real
+    "forbidden": 30,  # tier-restricted: don't hammer until tier likely changed
+    "error": 1,  # transient errors: try again tomorrow
+    "empty": 7,  # endpoint returned empty list; rare but real
 }
 
 
@@ -248,7 +248,7 @@ class QueueItem:
     period: str
     suffix: str
     endpoint_class: str
-    bucket: str               # missing | stale | failed_retry_ok | failed_recent | fresh
+    bucket: str  # missing | stale | failed_retry_ok | failed_recent | fresh
     last_pulled: datetime | None
     last_status: str | None
     days_overdue: int
@@ -268,15 +268,14 @@ class AuditReport:
         return [i for i in self.items if i.bucket in ("missing", "stale", "failed_retry_ok")]
 
 
-def _all_active_tickers(conn: sqlite3.Connection,
-                        only_list_types: frozenset[str] | None,
-                        explicit_tickers: list[str] | None) -> list[tuple[str, str]]:
+def _all_active_tickers(
+    conn: sqlite3.Connection,
+    only_list_types: frozenset[str] | None,
+    explicit_tickers: list[str] | None,
+) -> list[tuple[str, str]]:
     """Return [(ticker, list_type), ...] for active (non-archived) rows."""
     cur = conn.cursor()
-    sql = (
-        "SELECT ticker, list_type FROM tracked_companies "
-        "WHERE archived_at IS NULL"
-    )
+    sql = "SELECT ticker, list_type FROM tracked_companies WHERE archived_at IS NULL"
     params: list[object] = []
     if only_list_types:
         placeholders = ",".join("?" for _ in only_list_types)
@@ -360,7 +359,7 @@ def _priority(list_type: str, endpoint_class: str, bucket: str, days_overdue: in
         _LIST_TYPE_PRIORITY_WEIGHT.get(list_type, 9000)
         + _CLASS_PRIORITY_WEIGHT.get(endpoint_class, 500)
         + _BUCKET_PRIORITY_BONUS.get(bucket, 0)
-        - min(days_overdue, 99)   # more overdue = higher priority (subtract)
+        - min(days_overdue, 99)  # more overdue = higher priority (subtract)
     )
 
 
@@ -394,26 +393,29 @@ def audit(
             # Earnings-calendar hint: force time-sensitive endpoints to stale
             # for tickers reporting in the next 7 days (or recently reported).
             ticker_force = force or (
-                ticker in forced_tickers and endpoint_class in ("time_sensitive", "statement", "segment")
+                ticker in forced_tickers
+                and endpoint_class in ("time_sensitive", "statement", "segment")
             )
 
             bucket, days_overdue = _classify_into_bucket(
                 list_type, endpoint, endpoint_class, status, last_pulled, now, ticker_force
             )
             priority = _priority(list_type, endpoint_class, bucket, days_overdue)
-            items.append(QueueItem(
-                ticker=ticker,
-                list_type=list_type,
-                endpoint=endpoint,
-                period=period,
-                suffix=suffix,
-                endpoint_class=endpoint_class,
-                bucket=bucket,
-                last_pulled=last_pulled,
-                last_status=status,
-                days_overdue=days_overdue,
-                priority=priority,
-            ))
+            items.append(
+                QueueItem(
+                    ticker=ticker,
+                    list_type=list_type,
+                    endpoint=endpoint,
+                    period=period,
+                    suffix=suffix,
+                    endpoint_class=endpoint_class,
+                    bucket=bucket,
+                    last_pulled=last_pulled,
+                    last_status=status,
+                    days_overdue=days_overdue,
+                    priority=priority,
+                )
+            )
 
     counts: dict[str, int] = {}
     for item in items:
@@ -473,7 +475,9 @@ def _pid_alive(pid: int) -> bool:
         try:
             r = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return str(pid) in r.stdout
         except (subprocess.SubprocessError, OSError):
@@ -564,25 +568,36 @@ def cmd_status(args: argparse.Namespace) -> int:
             queue_summary["error"] = "unreadable"
 
     lock_owner = _read_lock_owner()
-    print(json.dumps({
-        "tier": tier.name,
-        "tier_caps": {
-            "calls_per_day": (tier.calls_per_day if tier.calls_per_day < _UNLIMITED else "unlimited"),
-            "calls_per_sec": tier.calls_per_sec,
-        },
-        "budget_today": {
-            "used": used,
-            "remaining": (remaining if remaining < _UNLIMITED else "unlimited"),
-        },
-        "lock": {"owner_pid": lock_owner, "alive": _pid_alive(lock_owner) if lock_owner else False},
-        "queue": queue_summary,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "tier": tier.name,
+                "tier_caps": {
+                    "calls_per_day": (
+                        tier.calls_per_day if tier.calls_per_day < _UNLIMITED else "unlimited"
+                    ),
+                    "calls_per_sec": tier.calls_per_sec,
+                },
+                "budget_today": {
+                    "used": used,
+                    "remaining": (remaining if remaining < _UNLIMITED else "unlimited"),
+                },
+                "lock": {
+                    "owner_pid": lock_owner,
+                    "alive": _pid_alive(lock_owner) if lock_owner else False,
+                },
+                "queue": queue_summary,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
 def cmd_archive(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
     import db as portfolio_db  # noqa: E402
+
     archived = portfolio_db.archive_company(args.ticker)
     print(json.dumps({"ticker": args.ticker.upper(), "archived": archived}))
     return 0 if archived else 1
@@ -591,6 +606,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
 def cmd_reactivate(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
     import db as portfolio_db  # noqa: E402
+
     reactivated = portfolio_db.reactivate_company(args.ticker)
     print(json.dumps({"ticker": args.ticker.upper(), "reactivated": reactivated}))
     return 0 if reactivated else 1
@@ -623,8 +639,10 @@ def _maybe_refresh_earnings_hints() -> None:
     try:
         subprocess.run(
             [sys.executable, str(script)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=False, timeout=30,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=30,
         )
     except (subprocess.SubprocessError, OSError) as e:
         sys.stderr.write(f"[hints] surrogate failed: {type(e).__name__}: {e}\n")
@@ -654,12 +672,17 @@ def _run_under_lock(args: argparse.Namespace) -> int:
     # exhaust 5+). We use 1.0 as the conservative estimate so we don't undershoot.
     budget = args.max_calls if args.max_calls is not None else remaining_budget(tier)
     if budget <= 0:
-        print(json.dumps({
-            "event": "budget_exhausted",
-            "tier": tier.name,
-            "deferred": len(queueable),
-            "audit_counts": report.counts,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "event": "budget_exhausted",
+                    "tier": tier.name,
+                    "deferred": len(queueable),
+                    "audit_counts": report.counts,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     capped = queueable[:budget]
@@ -667,24 +690,32 @@ def _run_under_lock(args: argparse.Namespace) -> int:
 
     manifest_entries = [i.to_manifest_entry() for i in capped]
     QUEUE_PATH.write_text(
-        json.dumps({
-            "generated_at": report.generated_at.isoformat(timespec="seconds"),
-            "tier": tier.name,
-            "items": manifest_entries,
-            "deferred": deferred,
-            "audit_counts": report.counts,
-        }, indent=2),
+        json.dumps(
+            {
+                "generated_at": report.generated_at.isoformat(timespec="seconds"),
+                "tier": tier.name,
+                "items": manifest_entries,
+                "deferred": deferred,
+                "audit_counts": report.counts,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
     if args.dry_run:
-        print(json.dumps({
-            "dry_run": True,
-            "tier": tier.name,
-            "would_dispatch": len(capped),
-            "deferred": deferred,
-            "audit_counts": report.counts,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "dry_run": True,
+                    "tier": tier.name,
+                    "would_dispatch": len(capped),
+                    "deferred": deferred,
+                    "audit_counts": report.counts,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     # Set rate limit env var for save_fmp_data's TokenBucket, and propagate the
@@ -697,25 +728,38 @@ def _run_under_lock(args: argparse.Namespace) -> int:
     cmd = [
         sys.executable,
         str(PROJECT_ROOT / "execution" / "save_fmp_data.py"),
-        "--manifest", str(QUEUE_PATH),
-        "--max-calls", str(budget),
+        "--manifest",
+        str(QUEUE_PATH),
+        "--max-calls",
+        str(budget),
     ]
     log_path = CACHE_DIR / f"run_{report.generated_at.strftime('%Y%m%dT%H%M%S')}.log"
     with log_path.open("w", encoding="utf-8") as logf:
-        logf.write(f"# refresh_cache: tier={tier.name} budget={budget} dispatch={len(capped)} deferred={deferred}\n")
+        logf.write(
+            f"# refresh_cache: tier={tier.name} budget={budget} dispatch={len(capped)} deferred={deferred}\n"
+        )
         logf.flush()
         proc = subprocess.run(
-            cmd, stdout=logf, stderr=subprocess.STDOUT, check=False, env=env,
+            cmd,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            check=False,
+            env=env,
         )
 
-    print(json.dumps({
-        "tier": tier.name,
-        "dispatched": len(capped),
-        "deferred": deferred,
-        "fetcher_exit_code": proc.returncode,
-        "log": str(log_path.relative_to(PROJECT_ROOT)),
-        "audit_counts": report.counts,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "tier": tier.name,
+                "dispatched": len(capped),
+                "deferred": deferred,
+                "fetcher_exit_code": proc.returncode,
+                "log": str(log_path.relative_to(PROJECT_ROOT)),
+                "audit_counts": report.counts,
+            },
+            indent=2,
+        )
+    )
     return proc.returncode
 
 
@@ -748,8 +792,10 @@ def _spawn_background(args: argparse.Namespace) -> int:
     with log_path.open("w", encoding="utf-8") as logf:
         subprocess.Popen(
             forwarded,
-            stdout=logf, stderr=subprocess.STDOUT,
-            close_fds=True, creationflags=creationflags,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            close_fds=True,
+            creationflags=creationflags,
         )
     print(json.dumps({"spawned_background": True, "log": str(log_path)}))
     return 0
@@ -773,21 +819,23 @@ def main() -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--db", default=str(DB_PATH))
     common.add_argument("--tier", choices=sorted(TIERS))
-    common.add_argument("--force", action="store_true",
-                        help="Ignore cadence; queue every endpoint in scope")
+    common.add_argument(
+        "--force", action="store_true", help="Ignore cadence; queue every endpoint in scope"
+    )
     common.add_argument("--tickers", help="Comma-separated tickers (subset filter)")
-    common.add_argument("--only", choices=sorted(_LIST_TYPE_BASE_FRESH_H),
-                        help="Restrict to one list_type tier")
-    common.add_argument("--max-calls", type=int, default=None,
-                        help="Override tier daily cap for this invocation")
+    common.add_argument(
+        "--only", choices=sorted(_LIST_TYPE_BASE_FRESH_H), help="Restrict to one list_type tier"
+    )
+    common.add_argument(
+        "--max-calls", type=int, default=None, help="Override tier daily cap for this invocation"
+    )
 
     p_run = sub.add_parser("run", parents=[common], help="Audit + dispatch (default)")
-    p_run.add_argument("--dry-run", action="store_true",
-                       help="Audit and write queue.json but don't invoke fetcher")
-    p_run.add_argument("--background", action="store_true",
-                       help="Detach and exit immediately")
-    p_run.add_argument("--background-child", action="store_true",
-                       help=argparse.SUPPRESS)
+    p_run.add_argument(
+        "--dry-run", action="store_true", help="Audit and write queue.json but don't invoke fetcher"
+    )
+    p_run.add_argument("--background", action="store_true", help="Detach and exit immediately")
+    p_run.add_argument("--background-child", action="store_true", help=argparse.SUPPRESS)
 
     sub.add_parser("audit", parents=[common], help="Audit only (no fetch)")
 

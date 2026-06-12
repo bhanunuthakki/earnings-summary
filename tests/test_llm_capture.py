@@ -76,7 +76,9 @@ def test_capture_exchange_writes_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path
     )
     files = list(tmp_path.glob("capture_*.jsonl"))
     assert len(files) == 1
-    rows = [json.loads(ln) for ln in files[0].read_text(encoding="utf-8").splitlines() if ln.strip()]
+    rows = [
+        json.loads(ln) for ln in files[0].read_text(encoding="utf-8").splitlines() if ln.strip()
+    ]
     assert len(rows) == 1
     row = cast("dict[str, object]", rows[0])
     assert row["prompt"] == "the prompt" and row["response"] == "the answer"
@@ -88,7 +90,13 @@ def test_capture_exchange_writes_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path
 def test_capture_exchange_noop_when_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(capture.LLM_CAPTURE_DIR_ENV, raising=False)
     capture.capture_exchange(
-        prompt="p", response="a", purpose="bear_case", ticker=None, scope=None, model="m", run_id=None
+        prompt="p",
+        response="a",
+        purpose="bear_case",
+        ticker=None,
+        scope=None,
+        model="m",
+        run_id=None,
     )
     assert list(tmp_path.glob("*.jsonl")) == []
 
@@ -114,7 +122,13 @@ def test_capture_exchange_never_raises(monkeypatch: pytest.MonkeyPatch, tmp_path
     blocker.write_text("x", encoding="utf-8")
     monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(blocker / "sub"))
     capture.capture_exchange(
-        prompt="p", response="a", purpose="bear_case", ticker=None, scope=None, model="m", run_id=None
+        prompt="p",
+        response="a",
+        purpose="bear_case",
+        ticker=None,
+        scope=None,
+        model="m",
+        run_id=None,
     )  # must not raise
 
 

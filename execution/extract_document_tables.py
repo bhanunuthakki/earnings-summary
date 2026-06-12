@@ -62,7 +62,9 @@ def main() -> int:
     )
     parser.add_argument("--fiscal-year", type=int, default=None)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--list-kinds", action="store_true", help="Print registered table_kinds and exit.")
+    parser.add_argument(
+        "--list-kinds", action="store_true", help="Print registered table_kinds and exit."
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 

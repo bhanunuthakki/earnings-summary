@@ -241,9 +241,7 @@ def _do_dismiss_alert(alert_id: int, db_path: Path | None) -> int:
     if cancelled_ids:
         sys.stdout.write(f": {cancelled_ids}")
     if skipped_ids:
-        sys.stdout.write(
-            f"; skipped {len(skipped_ids)} non-pending action(s): {skipped_ids}"
-        )
+        sys.stdout.write(f"; skipped {len(skipped_ids)} non-pending action(s): {skipped_ids}")
     sys.stdout.write(".\n")
     return 0
 
@@ -253,9 +251,7 @@ def _do_dismiss_alert(alert_id: int, db_path: Path | None) -> int:
 # ----------------------------------------------------------------------------
 
 
-def _write_ledger_entry(
-    qa: QueuedActionRow, db_path: Path | None
-) -> ThesisLedgerEntryRow:
+def _write_ledger_entry(qa: QueuedActionRow, db_path: Path | None) -> ThesisLedgerEntryRow:
     """Write one thesis_ledger_entries row from a queued_action payload.
 
     Payload shape (drafter-owned):
@@ -278,9 +274,7 @@ def _write_ledger_entry(
     )
 
 
-def _write_sizing_intent(
-    qa: QueuedActionRow, db_path: Path | None
-) -> PositionSizingIntentRow:
+def _write_sizing_intent(qa: QueuedActionRow, db_path: Path | None) -> PositionSizingIntentRow:
     """Write one position_sizing_intent row from a queued_action payload.
 
     Payload shape (expected):
@@ -374,9 +368,7 @@ def _resolve_db_path(repo_root: Path, override: Path | None) -> Path | None:
     return candidate if candidate.exists() else None
 
 
-def _fetch_action_or_raise(
-    action_id: int, db_path: Path | None
-) -> QueuedActionRow:
+def _fetch_action_or_raise(action_id: int, db_path: Path | None) -> QueuedActionRow:
     """Fetch one queued_action row, surfacing LookupError if missing.
 
     The CRUD module's transition functions already raise LookupError on

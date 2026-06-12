@@ -158,46 +158,44 @@ def test_extract_persists_strategic_targets_and_forward_statements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     db_path, _deck_path, deck_doc_id = db_with_deck
-    monkeypatch.setattr(
-        deck_mod, "extract_text_from_pdf", _mock_pdf_text("dummy deck text body")
-    )
+    monkeypatch.setattr(deck_mod, "extract_text_from_pdf", _mock_pdf_text("dummy deck text body"))
     monkeypatch.setattr(
         deck_mod,
         "call_llm",
-        _mock_llm([
-            {
-                "target_kind": "revenue",
-                "target_value": 50000,
-                "target_unit": "USD_M",
-                "target_period": "FY2027",
-                "target_currency": "USD",
-                "narrative_excerpt": "We're targeting $50B in run-rate revenue by FY2027",
-                "confidence": 1.0,
-            },
-            {
-                "target_kind": "fcf_margin",
-                "target_value": 30,
-                "target_unit": "%",
-                "target_period": "LT",
-                "target_currency": None,
-                "narrative_excerpt": "Long-term FCF margin target of 30%",
-                "confidence": 1.0,
-            },
-            {
-                "target_kind": "strategic_priority",
-                "target_value": None,
-                "target_unit": "qualitative",
-                "target_period": "LT",
-                "target_currency": None,
-                "narrative_excerpt": "Expand into emerging markets via local partnerships",
-                "confidence": 0.8,
-            },
-        ]),
+        _mock_llm(
+            [
+                {
+                    "target_kind": "revenue",
+                    "target_value": 50000,
+                    "target_unit": "USD_M",
+                    "target_period": "FY2027",
+                    "target_currency": "USD",
+                    "narrative_excerpt": "We're targeting $50B in run-rate revenue by FY2027",
+                    "confidence": 1.0,
+                },
+                {
+                    "target_kind": "fcf_margin",
+                    "target_value": 30,
+                    "target_unit": "%",
+                    "target_period": "LT",
+                    "target_currency": None,
+                    "narrative_excerpt": "Long-term FCF margin target of 30%",
+                    "confidence": 1.0,
+                },
+                {
+                    "target_kind": "strategic_priority",
+                    "target_value": None,
+                    "target_unit": "qualitative",
+                    "target_period": "LT",
+                    "target_currency": None,
+                    "narrative_excerpt": "Expand into emerging markets via local partnerships",
+                    "confidence": 0.8,
+                },
+            ]
+        ),
     )
 
-    counts = deck_mod.extract_for_ticker(
-        "ABNB", db_path, repo_root=tmp_path
-    )
+    counts = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
     assert counts["decks_found"] == 1
     assert counts["decks_processed"] == 1
     assert counts["rows_inserted"] == 3
@@ -300,22 +298,24 @@ def test_dedupe_via_unique_index_on_rerun(
     monkeypatch.setattr(
         deck_mod,
         "call_llm",
-        _mock_llm([{
-            "target_kind": "revenue",
-            "target_value": 50000,
-            "target_unit": "USD_M",
-            "target_period": "FY2027",
-            "target_currency": "USD",
-            "narrative_excerpt": "Revenue target of $50B by FY2027",
-            "confidence": 1.0,
-        }]),
+        _mock_llm(
+            [
+                {
+                    "target_kind": "revenue",
+                    "target_value": 50000,
+                    "target_unit": "USD_M",
+                    "target_period": "FY2027",
+                    "target_currency": "USD",
+                    "narrative_excerpt": "Revenue target of $50B by FY2027",
+                    "confidence": 1.0,
+                }
+            ]
+        ),
     )
 
     out1 = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
     out2 = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
-    out3 = deck_mod.extract_for_ticker(
-        "ABNB", db_path, repo_root=tmp_path, force_refresh=True
-    )
+    out3 = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path, force_refresh=True)
 
     assert out1["rows_inserted"] == 1
     # Second run skips the LLM entirely because rows already exist for the
@@ -398,26 +398,28 @@ def test_unknown_target_kind_skipped(
     monkeypatch.setattr(
         deck_mod,
         "call_llm",
-        _mock_llm([
-            {
-                "target_kind": "made_up_kind",  # not in _VALID_KINDS
-                "target_value": 1,
-                "target_unit": "%",
-                "target_period": "FY2027",
-                "target_currency": None,
-                "narrative_excerpt": "Some bogus target",
-                "confidence": 1.0,
-            },
-            {
-                "target_kind": "oi_margin",  # valid
-                "target_value": 25,
-                "target_unit": "%",
-                "target_period": "FY2027",
-                "target_currency": None,
-                "narrative_excerpt": "OI margin target of 25% by FY2027",
-                "confidence": 1.0,
-            },
-        ]),
+        _mock_llm(
+            [
+                {
+                    "target_kind": "made_up_kind",  # not in _VALID_KINDS
+                    "target_value": 1,
+                    "target_unit": "%",
+                    "target_period": "FY2027",
+                    "target_currency": None,
+                    "narrative_excerpt": "Some bogus target",
+                    "confidence": 1.0,
+                },
+                {
+                    "target_kind": "oi_margin",  # valid
+                    "target_value": 25,
+                    "target_unit": "%",
+                    "target_period": "FY2027",
+                    "target_currency": None,
+                    "narrative_excerpt": "OI margin target of 25% by FY2027",
+                    "confidence": 1.0,
+                },
+            ]
+        ),
     )
     counts = deck_mod.extract_for_ticker("ABNB", db_path, repo_root=tmp_path)
     assert counts["rows_inserted"] == 1

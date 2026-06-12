@@ -3,6 +3,7 @@
 Covers the B+C gating logic added on top of the brief_dirty queue, and the
 candidate-set resolution (brief_dirty queue + always-on P1).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -135,8 +136,12 @@ def test_gate_no_material_change_skips_recent_build(repo_root: Path) -> None:
         )
         conn.commit()
         skip, reason, _ = _check_skip_gates(
-            conn, "GOOG", repo_root,
-            force=False, eval_cadence_days=7, no_change_ttl_days=7,
+            conn,
+            "GOOG",
+            repo_root,
+            force=False,
+            eval_cadence_days=7,
+            no_change_ttl_days=7,
         )
         assert skip
         assert reason is not None and "no_material_change" in reason
@@ -159,8 +164,12 @@ def test_gate_force_bypasses_skip(repo_root: Path) -> None:
         )
         conn.commit()
         skip, _reason, _ = _check_skip_gates(
-            conn, "GOOG", repo_root,
-            force=True, eval_cadence_days=7, no_change_ttl_days=7,
+            conn,
+            "GOOG",
+            repo_root,
+            force=True,
+            eval_cadence_days=7,
+            no_change_ttl_days=7,
         )
         assert not skip
     finally:
@@ -173,11 +182,20 @@ def test_gate_evaluation_cadence_skips_when_recent(repo_root: Path) -> None:
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     conn.row_factory = sqlite3.Row
     try:
-        _seed(repo_root, "ABNB", "evaluation",
-              last_built_at=two_days_ago, last_brief_hash="stale_hash")
+        _seed(
+            repo_root,
+            "ABNB",
+            "evaluation",
+            last_built_at=two_days_ago,
+            last_brief_hash="stale_hash",
+        )
         skip, reason, _ = _check_skip_gates(
-            conn, "ABNB", repo_root,
-            force=False, eval_cadence_days=7, no_change_ttl_days=7,
+            conn,
+            "ABNB",
+            repo_root,
+            force=False,
+            eval_cadence_days=7,
+            no_change_ttl_days=7,
         )
         assert skip
         assert reason is not None and "evaluation_cadence" in reason
@@ -191,12 +209,21 @@ def test_gate_evaluation_cadence_does_not_skip_when_old(repo_root: Path) -> None
     conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
     conn.row_factory = sqlite3.Row
     try:
-        _seed(repo_root, "ABNB", "evaluation",
-              last_built_at=ten_days_ago, last_brief_hash="stale_hash")
+        _seed(
+            repo_root,
+            "ABNB",
+            "evaluation",
+            last_built_at=ten_days_ago,
+            last_brief_hash="stale_hash",
+        )
         # Hash will differ from "stale_hash" because we compute it fresh
         skip, _reason, _ = _check_skip_gates(
-            conn, "ABNB", repo_root,
-            force=False, eval_cadence_days=7, no_change_ttl_days=7,
+            conn,
+            "ABNB",
+            repo_root,
+            force=False,
+            eval_cadence_days=7,
+            no_change_ttl_days=7,
         )
         assert not skip
     finally:
@@ -210,8 +237,12 @@ def test_gate_portfolio_with_no_history_does_not_skip(repo_root: Path) -> None:
     try:
         _seed(repo_root, "GOOG", "portfolio")
         skip, _reason, _ = _check_skip_gates(
-            conn, "GOOG", repo_root,
-            force=False, eval_cadence_days=7, no_change_ttl_days=7,
+            conn,
+            "GOOG",
+            repo_root,
+            force=False,
+            eval_cadence_days=7,
+            no_change_ttl_days=7,
         )
         assert not skip
     finally:

@@ -309,12 +309,8 @@ def test_upsert_concept_creates_with_self_alias(db: Path) -> None:
 def test_resolve_concept_ticker_specific_wins(db: Path) -> None:
     cid_universal = upsert_concept(canonical_name="Customers", db_path=db)
     cid_nu = upsert_concept(canonical_name="NU Active Customers", db_path=db)
-    record_concept_alias(
-        concept_id=cid_nu, ticker="NU", alias_text="customers", db_path=db
-    )
-    record_concept_alias(
-        concept_id=cid_universal, ticker=None, alias_text="customers", db_path=db
-    )
+    record_concept_alias(concept_id=cid_nu, ticker="NU", alias_text="customers", db_path=db)
+    record_concept_alias(concept_id=cid_universal, ticker=None, alias_text="customers", db_path=db)
 
     # Without ticker → universal wins
     assert resolve_concept("customers", db_path=db) == cid_universal
@@ -385,6 +381,7 @@ def test_record_extraction_stores_payload(db: Path) -> None:
             "SELECT payload_json, char_offset_start FROM extractions WHERE id = ?", (eid,)
         ).fetchone()
         import json
+
         payload = json.loads(row[0])
         assert payload["kpi_name"] == "cloud revenue"
         assert row[1] == 1023
@@ -459,9 +456,7 @@ def test_pending_proposals_lists_only_pending(db: Path) -> None:
         db_path=db,
     )
     pending = pending_proposals(db_path=db)
-    names = [
-        p.payload.get("canonical_name") for p in pending if isinstance(p.payload, dict)
-    ]
+    names = [p.payload.get("canonical_name") for p in pending if isinstance(p.payload, dict)]
     assert "NeedsReview" in names
     assert "AutoApplied" not in names
 
@@ -475,9 +470,7 @@ def test_decide_proposal_apply_executes_payload(db: Path) -> None:
     )
     assert status == "pending_review"
 
-    ok = decide_proposal(
-        proposal_id=pid or 0, decision="apply", decided_by="user", db_path=db
-    )
+    ok = decide_proposal(proposal_id=pid or 0, decision="apply", decided_by="user", db_path=db)
     assert ok is True
     assert resolve_entity("NeedsReview", db_path=db) is not None
 
@@ -489,9 +482,7 @@ def test_decide_proposal_reject_no_schema_effect(db: Path) -> None:
         confidence=0.65,
         db_path=db,
     )
-    decide_proposal(
-        proposal_id=pid or 0, decision="reject", decided_by="user", db_path=db
-    )
+    decide_proposal(proposal_id=pid or 0, decision="reject", decided_by="user", db_path=db)
     assert resolve_entity("RejectedName", db_path=db) is None
 
 

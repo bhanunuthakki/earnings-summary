@@ -63,7 +63,9 @@ log = logging.getLogger(__name__)
 _SUMMARY_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
 )
-_TRANSCRIPT_RX = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.(?:txt|pdf)$")
+_TRANSCRIPT_RX = re.compile(
+    r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.(?:txt|pdf)$"
+)
 
 MAX_CARDS = 8
 RECENT_FULL_COUNT = 3  # most recent N quarters get full content in §5
@@ -129,7 +131,9 @@ def build(
         )
 
     # Oldest → newest first, then take last MAX_CARDS, then reverse for display.
-    keys_old_to_new = sorted(set(summaries.keys()) | set(transcripts.keys()), key=lambda k: (k[1], k[0]))[-MAX_CARDS:]
+    keys_old_to_new = sorted(
+        set(summaries.keys()) | set(transcripts.keys()), key=lambda k: (k[1], k[0])
+    )[-MAX_CARDS:]
     cards_old_to_new = [_make_card(q, y, summaries, transcripts) for q, y in keys_old_to_new]
 
     full_old_to_new = cards_old_to_new[-RECENT_FULL_COUNT:]
@@ -376,15 +380,15 @@ def _build_themes(
             log.warning({"event": "earnings_themes_split_import_failed", "error": str(exc)})
             return [], [], None
         try:
-            response = extract_qa_vs_prepared_themes(
-                ticker, payload, ts_signals_md=ts_block
-            )
+            response = extract_qa_vs_prepared_themes(ticker, payload, ts_signals_md=ts_block)
         except Exception as exc:  # surface but don't break the rest of §5
             # Hard stops (monthly budget cap, CLI not installed) must propagate
             # — re-running won't help and degrading would mask an over-budget run.
             if is_hard_stop(exc):
                 raise
-            log.error({"event": "earnings_themes_split_failed", "ticker": ticker, "error": str(exc)})
+            log.error(
+                {"event": "earnings_themes_split_failed", "ticker": ticker, "error": str(exc)}
+            )
             return [], [], None
         # Parse at SECTION scope, separate from the call's exception handler
         # above. `_parse_themes_response` is internally total today (it returns
@@ -422,7 +426,9 @@ def _build_themes(
     elif prepared_present_count == 0 and qa_present_count > 0:
         note = "No prepared-remarks sections available in transcripts."
     elif prepared_present_count == 0 and qa_present_count == 0:
-        note = "Transcripts available but no recognizable prepared-remarks or Q&A sections detected."
+        note = (
+            "Transcripts available but no recognizable prepared-remarks or Q&A sections detected."
+        )
 
     return prepared_themes, qa_themes, note
 
@@ -452,7 +458,9 @@ def _load_has_qa_flags(
                     (ticker.upper(), f"Q{q}"),
                 ).fetchall()
             except sqlite3.Error as exc:
-                log.debug({"event": "themes_qa_flag_lookup_failed", "ticker": ticker, "error": str(exc)})
+                log.debug(
+                    {"event": "themes_qa_flag_lookup_failed", "ticker": ticker, "error": str(exc)}
+                )
                 continue
             # Pick the row whose period_end falls in the requested fiscal year.
             # Calendar-year fallback: the filename `_QN_YYYY` carries the
@@ -525,27 +533,27 @@ def _split_transcript_sections(
     if _AGGREGATOR_QA_ONLY_BANNER.search(text):
         marker = _AGGREGATOR_QA_SEGMENT_MARKER.search(text)
         if marker is not None:
-            qa_body = text[marker.end():].strip()
+            qa_body = text[marker.end() :].strip()
         else:
             # Banner present but no explicit marker — treat everything after
             # the banner line as Q&A.
             banner = _AGGREGATOR_QA_ONLY_BANNER.search(text)
             assert banner is not None
-            after_banner = text[banner.end():]
+            after_banner = text[banner.end() :]
             nl = after_banner.find("\n")
-            qa_body = (after_banner[nl + 1:] if nl >= 0 else after_banner).strip()
+            qa_body = (after_banner[nl + 1 :] if nl >= 0 else after_banner).strip()
         return None, qa_body or None
 
     cs_match = _CALLSTREET_QA_HEADER.search(text)
     if cs_match is not None:
         prepared = text[: cs_match.start()].strip()
-        qa = text[cs_match.end():].strip()
+        qa = text[cs_match.end() :].strip()
         return (prepared or None), (qa or None)
 
     marker = _AGGREGATOR_QA_SEGMENT_MARKER.search(text)
     if marker is not None:
         prepared = text[: marker.start()].strip()
-        qa = text[marker.end():].strip()
+        qa = text[marker.end() :].strip()
         return (prepared or None), (qa or None)
 
     # Free-form full transcripts (no explicit section header) sometimes
@@ -554,7 +562,7 @@ def _split_transcript_sections(
     first_q = _OPERATOR_FIRST_QUESTION.search(text)
     if first_q is not None:
         prepared = text[: first_q.start()].strip()
-        qa = text[first_q.start():].strip()
+        qa = text[first_q.start() :].strip()
         return (prepared or None), (qa or None)
 
     if has_qa_flag is True:
@@ -765,7 +773,11 @@ def _coerce_theme_list(raw: object) -> list[ThemeRollup]:
             cnt = cnt_raw
         else:
             try:
-                cnt = int(cast("int | str", cnt_raw)) if cnt_raw is not None else sum(mentions.values())
+                cnt = (
+                    int(cast("int | str", cnt_raw))
+                    if cnt_raw is not None
+                    else sum(mentions.values())
+                )
             except (TypeError, ValueError):
                 cnt = sum(mentions.values())
         evidence_raw = e.get("evidence")
@@ -784,7 +796,9 @@ def _coerce_theme_list(raw: object) -> list[ThemeRollup]:
                     QuoteSnippet(
                         period=period.strip(),
                         text=text_val.strip(),
-                        speaker=speaker.strip() if isinstance(speaker, str) and speaker.strip() else None,
+                        speaker=speaker.strip()
+                        if isinstance(speaker, str) and speaker.strip()
+                        else None,
                     )
                 )
         out.append(
