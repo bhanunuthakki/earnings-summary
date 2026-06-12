@@ -47,6 +47,8 @@ import chat_session
 from ask.commands import COMMAND_PREFIXES, run_chat_command
 from ask.context import ContextPack, tracked_tickers
 from ask.grounding import build_evidence_block, gather_evidence, used_citation_items
+from ask.store import append_turn as _store_append_turn
+from ask.store import load_recent_history as _store_load_history
 from dispatch_registry import Registry
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.render import render_view_fragment
@@ -93,8 +95,13 @@ class AskTurn:
     tickers: list[str] = field(default_factory=list[str])
     # The previous turn's view spec — "now annual" refines instead of restarting.
     context_spec: dict[str, object] | None = None
-    # Client-supplied thread tail for scopes without server-side persistence.
+    # Client-supplied thread tail — used ONLY when session_id is absent (legacy /
+    # first-turn fallback).  When session_id is set the engine loads history from
+    # ask_turns instead, so the client can never supply a corrupted tail.
     history: list[dict[str, str]] = field(default_factory=list[dict[str, str]])
+    # Server-side session for portfolio-scope persistence.  None → the engine
+    # falls back to the client-supplied history tail (pre-S3 / ticker scope).
+    session_id: str | None = None
 
 
 def sanitize_history(raw: object) -> list[dict[str, str]]:
@@ -314,6 +321,19 @@ def _data_events(
     # not strand the thread write inside a suspended generator.
     if pack.persist and pack.ticker and pack.report_date is not None:
         _persist_data_turn(repo_root, pack.ticker, pack.report_date, turn.text, message)
+    # Portfolio-scope data turns: record the exchange so the session thread
+    # stays continuous for the narrative path's history loading.
+    if turn.session_id and pack.scope == "portfolio":
+        data_label = f"{message} (rendered as a live data view)"
+        try:
+            _store_append_turn(
+                session_id=turn.session_id, role="user", text=turn.text, db_path=db_path
+            )
+            _store_append_turn(
+                session_id=turn.session_id, role="assistant", text=data_label, db_path=db_path
+            )
+        except Exception:
+            log.warning({"event": "ask_store_data_turn_failed", "sid": turn.session_id})
     yield {"type": "fragment", "html": fragment, "spec": spec_dict}
     yield {"type": "final", "text": message, "route": ROUTE_DATA}
 
@@ -407,7 +427,26 @@ def _narrative_events(
     system_context = pack.system_context or "You are a portfolio research assistant."
     if evidence_block:
         system_context = system_context + "\n\n" + evidence_block
-    history = sanitize_history(turn.history)
+
+    # Server-side history: when the turn carries a session_id, load the stored
+    # thread from ask_turns (authoritative) instead of trusting the client tail.
+    if turn.session_id:
+        server_hist = _store_load_history(turn.session_id, db_path=db_path)
+        history = sanitize_history(server_hist)
+        # Persist the user turn immediately so the audit trail is never missing
+        # even if the assistant side errors.
+        try:
+            _store_append_turn(
+                session_id=turn.session_id,
+                role="user",
+                text=text,
+                db_path=db_path,
+            )
+        except Exception:
+            log.warning({"event": "ask_store_user_turn_failed", "sid": turn.session_id})
+    else:
+        history = sanitize_history(turn.history)
+
     thread_text = "\n\n".join(f"[{h['role'].upper()}] {h['text']}" for h in history)
     full_prompt = (
         system_context
@@ -428,10 +467,27 @@ def _narrative_events(
     if final_text is None:  # defensive: transport always ends in final or error
         return
     yield {"type": "final", "text": final_text, "route": ROUTE_NARRATIVE}
+
+    citations_payload: list[object] | None = None
     if evidence:
         used = used_citation_items(final_text, evidence)
         if used:
-            yield {"type": "citations", "items": [item.chip_payload() for item in used]}
+            citations_payload = [item.chip_payload() for item in used]
+            yield {"type": "citations", "items": citations_payload}
+
+    # Persist the assistant turn after a successful response.
+    if turn.session_id:
+        try:
+            _store_append_turn(
+                session_id=turn.session_id,
+                role="assistant",
+                text=final_text,
+                citations=citations_payload,
+                db_path=db_path,
+            )
+        except Exception:
+            log.warning({"event": "ask_store_asst_turn_failed", "sid": turn.session_id})
+
     diff = chat_session.extract_diff(final_text)
     if diff is not None:
         yield {"type": "diff_proposal", "diff": diff}
