@@ -720,7 +720,7 @@ def _timeline_section(timeline: list[TimelineEvent]) -> str:
         "<tr>"
         f'<td class="when">{escape(e.when.date().isoformat())}</td>'
         f'<td class="tk">{escape(e.ticker or "—")}</td>'
-        f'<td><span class="ad-pill p-{escape(e.kind)}">{escape(e.label)}</span></td>'
+        f'<td><span class="p-pill ad-pill p-{escape(e.kind)}">{escape(e.label)}</span></td>'
         f'<td class="ad-body">{escape(e.body)}</td>'
         "</tr>"
         for e in timeline
@@ -787,9 +787,7 @@ _PANEL_CSS = """<style>
   text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
 /* Timeline kinds: semantic tones where they exist (bear=bad, thesis=ok);
    the rest stay one quiet treatment — color is for meaning, not category. */
-.ad-pill { display: inline-block; padding: 2px 9px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
-  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.ad-pill { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .ad-pill.p-bear_append { background: color-mix(in srgb, var(--bad) 16%, transparent);
   color: var(--bad); }
 .ad-pill.p-thesis_update { background: color-mix(in srgb, var(--ok) 16%, transparent);

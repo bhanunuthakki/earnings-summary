@@ -21,10 +21,6 @@ from html import escape
 from pathlib import Path
 
 _PANEL_STYLE = """<style>
-.vi-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.vi-table th, .vi-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.vi-table td.num, .vi-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .vi-sev-halt { color:var(--bad); font-weight:600; }
 .vi-sev-warn { color:var(--warn); }
 .vi-raw { font-family:var(--mono); font-size:var(--fs-caption); word-break:break-all; }
@@ -193,7 +189,7 @@ def _rule_table(ov: ValidationOverview) -> str:
     )
     return (
         "<h3>Open issues by rule</h3>"
-        '<table class="vi-table"><thead><tr>'
+        '<table class="p-table"><thead><tr>'
         '<th>Rule</th><th>Severity</th><th class="num">Open</th>'
         f"</tr></thead><tbody>{rows}</tbody></table>"
     )
@@ -219,7 +215,7 @@ def _detail_table(ov: ValidationOverview) -> str:
     )
     return (
         "<h3>Latest open issues</h3>"
-        '<table class="vi-table"><thead><tr>'
+        '<table class="p-table"><thead><tr>'
         "<th>Ticker</th><th>Severity</th><th>Rule</th><th>Value</th><th>Expected</th>"
         '<th class="num">Raised</th>'
         f"</tr></thead><tbody>{rows}</tbody></table>{capped}"

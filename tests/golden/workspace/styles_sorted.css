@@ -298,6 +298,8 @@
 .overlay-stat span { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .overlay-stat strong { font-family: var(--mono); font-size: 22px; font-weight: 500; color: var(--fg); margin-top: 2px; }
 .overlay-stat { position: absolute; top: 14px; right: 30px; display: flex; flex-direction: column; align-items: flex-end; }
+.p-table td.num, .p-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.p-table th, .p-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .panel-asof { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted-2); white-space: nowrap; }
 .panel-budget { border-left: 3px solid var(--warn); }
 .panel-empty-body { padding: 12px var(--panel-pad-x); font-size: 12.5px; color: var(--muted); line-height: 1.55; background: var(--paper); }
@@ -529,6 +531,8 @@
 /* ---- field/section caption ---- */ .k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 /* ---- form-control baseline (kit): kill the native look everywhere ---- */ select, textarea, input[type="text"], input[type="search"], input[type="number"], input[type="date"], input[type="email"], input[type="url"], input[type="password"], input:not([type]) { font: inherit; font-size: var(--fs-body); color: var(--fg); background-color: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; transition: border-color var(--transition), box-shadow var(--transition); }
 /* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */ @media (max-width: 768px) { input, select, textarea { font-size: 16px; } }
+/* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */ .p-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
+/* ---- pipeline panel table (canonical layout for command-center tabs) ---- */ .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 /* ---- shared popover list (combobox results, palette rows) ---- */ .k-menu { margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */ .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
 /* ============================================================ Chat drawer ============================================================ */ .chat-drawer { position: fixed; bottom: 16px; right: calc(var(--sidebar-open-width, 0px) + 16px); z-index: 95; transition: right 0.2s ease; }

@@ -24,10 +24,6 @@ from sources.registry import (
 )
 
 _PANEL_STYLE = """<style>
-.sc-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.sc-table th, .sc-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.sc-table td.num, .sc-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .sc-table td.src { font-weight:600; }
 .sc-skip-hi { color:var(--ok); }
 .sc-skip-lo { color:var(--muted); }
@@ -98,7 +94,7 @@ resets with the server.</p>
     var head = '<p class="sub">Perceived activation p50 <strong>' + esc(ms(j.perceived_p50_ms)) +
       '</strong> · p95 <strong>' + esc(ms(j.perceived_p95_ms)) + '</strong> over ' +
       esc(j.samples) + ' samples (revalidations excluded).</p>';
-    var html = '<table class="sc-table"><thead><tr><th>Panel</th><th>Path</th>' +
+    var html = '<table class="p-table sc-table"><thead><tr><th>Panel</th><th>Path</th>' +
       '<th class="num">Loads</th><th class="num">p50 ms</th><th class="num">p95 ms</th>' +
       '</tr></thead><tbody>';
     rows.forEach(function (r) {
@@ -145,7 +141,7 @@ def _kpi_strip(ov: CacheEffectivenessOverview) -> str:
 def _source_table(rows: list[SourceCallSummary]) -> str:
     body = "".join(_row(r) for r in rows)
     return (
-        '<table class="sc-table"><thead><tr>'
+        '<table class="p-table sc-table"><thead><tr>'
         "<th>Source</th><th>Kind</th>"
         '<th class="num">Calls</th><th class="num">Skip%</th><th class="num">Err%</th>'
         '<th class="num">Saved</th><th class="num">p50 ms</th><th class="num">Records</th>'

@@ -42,12 +42,6 @@ _ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
 _BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
 
 _PANEL_STYLE = """<style>
-.dcv-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.dcv-table th, .dcv-table td {
-  padding:5px 9px; border-bottom:1px solid var(--border); text-align:left;
-  vertical-align:top; }
-.dcv-table td.num, .dcv-table th.num {
-  text-align:right; font-variant-numeric:tabular-nums; }
 .dcv-tick { font-weight:600; white-space:nowrap; }
 .dcv-ok   { color:var(--ok); font-weight:600; }
 .dcv-warn { color:var(--warn); font-weight:600; }
@@ -478,7 +472,7 @@ def render_dcf_coverage_panel(db_path: Path, repo_root: Path) -> str:
             "Refresh a name with "
             "<code>python execution/refresh_dcf.py --ticker T</code>.</p>",
             _kpi_strip(rows, today),
-            '<table class="dcv-table"><thead><tr>'
+            '<table class="p-table"><thead><tr>'
             "<th>Ticker</th><th>List</th><th>Model</th><th>Workbook</th>"
             "<th>Last valued</th><th>Assumptions</th><th>JSON sync</th><th>Note</th>"
             "</tr></thead><tbody>",

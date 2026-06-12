@@ -29,15 +29,9 @@ _KIND_LABELS: Mapping[str, str] = {
 }
 
 _PANEL_STYLE = """<style>
-.tl-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.tl-table th, .tl-table td {
-  padding:7px 10px; border-bottom:1px solid var(--border); text-align:left;
-  vertical-align:top; }
 .tl-table td.tk { font-weight:600; white-space:nowrap; font-family:var(--mono); }
 .tl-table td.when { color:var(--muted); white-space:nowrap; }
-.tl-pill { display:inline-block; padding:2px 9px; border-radius:var(--radius-full);
-  font-size:var(--fs-caption); font-weight:600; white-space:nowrap;
-  background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent); }
+.tl-pill { background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent); }
 .tl-pill.bear_append { background:color-mix(in srgb, var(--bad) 16%, transparent);
   color:var(--bad); }
 .tl-pill.thesis_update { background:color-mix(in srgb, var(--ok) 16%, transparent);
@@ -94,7 +88,7 @@ def _kpi_strip(entries: list[ThesisLedgerEntryRow]) -> str:
 def _ledger_table(entries: list[ThesisLedgerEntryRow]) -> str:
     body = "".join(_row(e) for e in entries)
     return (
-        '<table class="tl-table"><thead><tr>'
+        '<table class="p-table tl-table"><thead><tr>'
         "<th>Date</th><th>Ticker</th><th>Kind</th><th>Change</th>"
         "</tr></thead><tbody>"
         f"{body}</tbody></table>"
@@ -109,7 +103,7 @@ def _row(e: ThesisLedgerEntryRow) -> str:
         "<tr>"
         f'<td class="when">{when}</td>'
         f'<td class="tk">{escape(e.ticker)}</td>'
-        f'<td><span class="tl-pill {pill_cls}">{escape(label)}</span></td>'
+        f'<td><span class="p-pill tl-pill {pill_cls}">{escape(label)}</span></td>'
         f'<td class="tl-body">{escape(e.body)}</td>'
         "</tr>"
     )
