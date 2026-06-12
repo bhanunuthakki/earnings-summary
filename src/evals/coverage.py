@@ -33,8 +33,10 @@ from llm.cli import LLM_MODELS
 from llm.prompt_versions import registered_purposes
 
 # Mode-A purposes with checked-in golden sets. viewspec is the pilot grader;
-# the classifier trio landed in PR 4.
-GOLDEN_PURPOSES: frozenset[str] = frozenset({"viewspec_compile", *CLASSIFIER_PURPOSES})
+# the classifier trio landed in PR 4; ask_pack_router (evals.ask_router) in S4.
+GOLDEN_PURPOSES: frozenset[str] = frozenset(
+    {"viewspec_compile", "ask_pack_router", *CLASSIFIER_PURPOSES}
+)
 
 # Mode-C outcome graders (execution/run_calibration_grading.py rungs 1-3).
 # decision_audit / management_prediction are score LABELS those graders
