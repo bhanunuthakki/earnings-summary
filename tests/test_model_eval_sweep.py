@@ -3,7 +3,7 @@
 Mocks LLM calls so the test suite doesn't need a live Claude binary. Verifies:
 - capture-file loading and deduplication
 - active-purpose discovery (with and without a DB)
-- verdicts accumulate correctly via _insert_verdict
+- verdicts accumulate correctly via model_overrides.record_verdict
 - no-persist mode writes nothing
 - cron files exist and are syntactically valid
 """
@@ -111,14 +111,16 @@ def minimal_db(tmp_path: Path) -> Path:
         CREATE TABLE model_eval_verdicts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             purpose TEXT NOT NULL,
-            incumbent_model TEXT NOT NULL,
-            candidate_model TEXT NOT NULL,
+            candidate TEXT NOT NULL,
+            incumbent TEXT NOT NULL,
             verdict TEXT NOT NULL,
-            judge_agreement REAL NOT NULL,
-            n_cases INTEGER NOT NULL,
-            n_parity INTEGER NOT NULL,
-            evaluated_at TEXT NOT NULL,
-            summary_json TEXT
+            run_id TEXT NOT NULL,
+            parity_rate REAL,
+            judge_agreement REAL,
+            n_cases INTEGER,
+            n_parity INTEGER,
+            summary_json TEXT,
+            recorded_at TEXT NOT NULL
         )
         """
     )
@@ -283,7 +285,6 @@ def test_discover_active_purposes_filters_to_explicit(sweep: Any, minimal_db: Pa
 
 
 def test_insert_verdict_accumulates(sweep: Any, minimal_db: Path) -> None:
-    from datetime import datetime
 
     from llm.model_eval import KEEP_INCUMBENT, CandidateVerdict
 
@@ -300,9 +301,22 @@ def test_insert_verdict_accumulates(sweep: Any, minimal_db: Path) -> None:
         recommendation=KEEP_INCUMBENT,
         reason="incumbent winning majority",
     )
-    at = datetime(2026, 6, 11, 3, 0, 0)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)  # second INSERT
+    # The sweep persists through the single canonical writer (post-reconciliation).
+    from llm.model_overrides import record_verdict
+
+    for _ in range(2):  # rolling INSERT, not upsert
+        record_verdict(
+            purpose=verdict.purpose,
+            candidate=verdict.candidate,
+            incumbent=verdict.incumbent,
+            verdict=verdict.recommendation,
+            run_id="run0001",
+            parity_rate=verdict.parity_rate,
+            judge_agreement=verdict.judge_agreement,
+            n_cases=verdict.n,
+            n_parity=verdict.candidate_wins + verdict.ties,
+            db_path=minimal_db,
+        )
 
     conn = sqlite3.connect(str(minimal_db))
     rows = conn.execute("SELECT * FROM model_eval_verdicts").fetchall()
@@ -311,7 +325,6 @@ def test_insert_verdict_accumulates(sweep: Any, minimal_db: Path) -> None:
 
 
 def test_insert_verdict_fields(sweep: Any, minimal_db: Path) -> None:
-    from datetime import datetime
 
     from llm.model_eval import SWITCH_DOWN, CandidateVerdict
 
@@ -328,21 +341,39 @@ def test_insert_verdict_fields(sweep: Any, minimal_db: Path) -> None:
         recommendation=SWITCH_DOWN,
         reason="haiku holds parity",
     )
-    at = datetime(2026, 6, 11, 4, 0, 0)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)
+    from llm.model_overrides import record_verdict
+
+    record_verdict(
+        purpose=verdict.purpose,
+        candidate=verdict.candidate,
+        incumbent=verdict.incumbent,
+        verdict=verdict.recommendation,
+        run_id="run0002",
+        parity_rate=verdict.parity_rate,
+        judge_agreement=verdict.judge_agreement,
+        n_cases=verdict.n,
+        n_parity=verdict.candidate_wins + verdict.ties,
+        summary_json=json.dumps({"recommendation": verdict.recommendation}),
+        db_path=minimal_db,
+    )
 
     conn = sqlite3.connect(str(minimal_db))
-    row = conn.execute("SELECT * FROM model_eval_verdicts").fetchone()
+    # Schema B column order: id, purpose, candidate, incumbent, verdict, run_id,
+    # parity_rate, judge_agreement, n_cases, n_parity, summary_json, recorded_at.
+    row = conn.execute(
+        "SELECT purpose, candidate, incumbent, verdict, judge_agreement, n_cases, "
+        "n_parity, summary_json FROM model_eval_verdicts"
+    ).fetchone()
     conn.close()
 
-    assert row[1] == "transcript_summary"  # purpose
-    assert row[2] == "claude-sonnet-4-6"  # incumbent_model
-    assert row[3] == "claude-haiku-4-5-20251001"  # candidate_model
-    assert row[4] == SWITCH_DOWN  # verdict
-    assert abs(row[5] - 0.8) < 0.001  # judge_agreement
-    assert row[6] == 6  # n_cases
-    assert row[7] == 5  # n_parity (wins + ties)
-    summary = json.loads(row[9])  # summary_json
+    assert row[0] == "transcript_summary"  # purpose
+    assert row[1] == "claude-haiku-4-5-20251001"  # candidate
+    assert row[2] == "claude-sonnet-4-6"  # incumbent
+    assert row[3] == SWITCH_DOWN  # verdict
+    assert abs(row[4] - 0.8) < 0.001  # judge_agreement
+    assert row[5] == 6  # n_cases
+    assert row[6] == 5  # n_parity (wins + ties)
+    summary = json.loads(row[7])  # summary_json
     assert summary["recommendation"] == SWITCH_DOWN
 
 
