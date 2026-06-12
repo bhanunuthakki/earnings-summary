@@ -1,12 +1,11 @@
 """§3 Financials — last 12 quarters wide-form + last 10 FY (workbook only).
 
-Quarterly: pull 16 quarters from the metrics view, dedupe to one row per
-calendar quarter (the view holds both 'Q1' and 'quarterly' fiscal_period_type
-buckets — picking just one drops columns, so we COALESCE non-null fields
-across all rows for the same calendar quarter), display the most recent 12,
-and compute QoQ / YoY / 1Y-TTM CAGR / 3Y-TTM CAGR.
+Quarterly: pull one deduped row per calendar quarter straight from
+``financial_facts`` (NOT the ``metrics`` view — see ``_load_quarterly`` for
+why the view cross-labels quarters for off-calendar reporters), display the
+most recent 12, and compute QoQ / YoY / 1Y-TTM CAGR / 3Y-TTM CAGR.
 
-Annual: pull 10 fiscal years from the metrics view (fiscal_period_type IN
+Annual: pull 10 fiscal years from ``financial_facts`` (fiscal_period_type IN
 ('FY','annual')) for the workbook's Annual_Financials tab. Display only —
 no growth columns at the annual cadence.
 """
@@ -91,9 +90,14 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
             "no DB at data/portfolio.db",
             "alembic upgrade head && python execution/extract_facts.py --ticker " + ticker.upper(),
         )
-    if not has_table(conn, "metrics"):
+    if not has_table(conn, "financial_facts"):
         conn.close()
-        return _missing("metrics view absent", "alembic upgrade head", "Migration 0012 creates the metrics view.")
+        return _missing(
+            "financial_facts table absent",
+            "alembic upgrade head && python execution/extract_facts.py --ticker " + ticker.upper(),
+            "§3 reads facts directly — the metrics view's MAX(period_end) cross-labels "
+            "fiscal quarters for off-calendar reporters.",
+        )
 
     quarterly_rows = _load_quarterly(conn, ticker)
     annual_rows = _load_annual(conn, ticker)
@@ -441,17 +445,80 @@ def _pretty_unit(raw_unit: str) -> str:
 # Quarterly path
 # ---------------------------------------------------------------------------
 
+# The line-item pivot §3 renders, named exactly as the old ``metrics`` view
+# named its columns (so every downstream consumer — _LINE_ITEM_SPECS, the
+# currency pluck, the per-cell provenance keys — is unchanged). ``capex``
+# aliases the ``capital_expenditure`` line_item, matching the view. Each
+# ``MAX(CASE …)`` selects the single non-null value of the one rn=1 winner per
+# line_item in the group (it is a pick-the-non-null, NOT a numeric/string max).
+_FACT_PIVOT = """
+    MAX(period_end) AS period_end,
+    MAX(currency) AS currency,
+    MAX(fiscal_period_type) AS fiscal_period_type,
+    MAX(CASE WHEN line_item = 'revenue' THEN value END) AS revenue,
+    MAX(CASE WHEN line_item = 'gross_profit' THEN value END) AS gross_profit,
+    MAX(CASE WHEN line_item = 'operating_income' THEN value END) AS operating_income,
+    MAX(CASE WHEN line_item = 'net_income' THEN value END) AS net_income,
+    MAX(CASE WHEN line_item = 'eps_diluted' THEN value END) AS eps_diluted,
+    MAX(CASE WHEN line_item = 'operating_cash_flow' THEN value END) AS operating_cash_flow,
+    MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS free_cash_flow,
+    MAX(CASE WHEN line_item = 'capital_expenditure' THEN value END) AS capex
+""".strip()
+
+# Quarterly facts keyed by CALENDAR QUARTER derived from the actual period_end
+# date — deliberately NOT the ``metrics`` view. The view groups by
+# (fiscal_year=substr(period_end,1,4), fiscal_period_type) and stamps each
+# group with MAX(period_end) over all ~35 line items. For off-calendar
+# fiscal-year reporters FMP and SEC disagree on the fiscal-quarter LABEL, so a
+# single mislabeled fact (e.g. AMAT's Q4-ending net_income filed under 'Q3' in
+# SEC companyfacts) drags the whole group's period_end — and, because each
+# line_item's winner is picked independently, sometimes its VALUES — into the
+# wrong quarter. In prod this shifted/collided/dropped quarters for AMAT, MU,
+# TOL, VEEV (COST, off by only a few days, was unaffected). Keying identity off
+# the real period_end DATE instead makes the wrong fiscal_period_type
+# label inert and scopes MAX(period_end) within the quarter. PR #452 took the
+# research cockpit off the same view for the same reason. Bonus: filtering
+# ticker inside the scan is ~70x faster than the view's ROW_NUMBER() over all
+# ~726k facts. Day-level period-end wobble within a quarter (FMP vs SEC ±1 day)
+# is folded into the calendar-quarter GROUP BY here, and _dedupe_by_calendar_quarter
+# stays downstream as a defensive pass-through.
+_QUARTERLY_FACTS_SQL = """
+WITH dedup AS (
+    SELECT
+        period_end, currency, fiscal_period_type, line_item, value,
+        CAST(substr(period_end, 1, 4) AS INTEGER) AS cal_year,
+        (CAST(substr(period_end, 6, 2) AS INTEGER) - 1) / 3 + 1 AS cal_quarter,
+        ROW_NUMBER() OVER (
+            PARTITION BY
+                CAST(substr(period_end, 1, 4) AS INTEGER),
+                (CAST(substr(period_end, 6, 2) AS INTEGER) - 1) / 3 + 1,
+                line_item
+            ORDER BY source_doc_id DESC, period_end DESC
+        ) AS rn
+    FROM financial_facts
+    WHERE ticker = ? AND fiscal_period_type IN ({marks})
+)
+SELECT
+{pivot}
+FROM dedup
+WHERE rn = 1
+GROUP BY cal_year, cal_quarter
+ORDER BY period_end DESC
+LIMIT ?
+"""
+
 
 def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
-    """Pull a generous window of quarterly rows (we'll dedupe in Python)."""
+    """One deduped row per calendar quarter, read straight from financial_facts.
+
+    See ``_QUARTERLY_FACTS_SQL`` for why this bypasses the ``metrics`` view.
+    Over-pulls a generous window; ``_dedupe_by_calendar_quarter`` runs
+    downstream as a defensive pass-through (the SQL already returns one row per
+    calendar quarter)."""
     placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
     cursor = conn.cursor()
     cursor.execute(
-        f"""
-        SELECT * FROM metrics
-        WHERE ticker = ? AND fiscal_period_type IN ({placeholders})
-        ORDER BY period_end DESC LIMIT ?
-        """,
+        _QUARTERLY_FACTS_SQL.format(marks=placeholders, pivot=_FACT_PIVOT),
         (ticker.upper(), *QUARTERLY_PERIOD_TYPES, UNDERLYING_QUARTERS * 4),
     )
     rows = [dict(r) for r in cursor.fetchall()]
@@ -462,8 +529,10 @@ def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, obj
 def _dedupe_by_calendar_quarter(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Merge rows that share a calendar quarter — first non-null wins per column.
 
-    Prefer rows with a 'Qx' fiscal_period_type over 'quarterly' (the SEC XBRL
-    bucket tends to carry fewer line items than the FMP 'Qx' rows).
+    ``_load_quarterly`` already returns one row per calendar quarter, so this is
+    now a defensive pass-through; it remains as a safety net that would still
+    coalesce should two rows ever land in the same calendar quarter, preferring
+    a 'Qx' fiscal_period_type over 'quarterly'.
     """
     groups: dict[tuple[int, int], list[dict[str, object]]] = {}
     for r in rows:
@@ -471,7 +540,7 @@ def _dedupe_by_calendar_quarter(rows: list[dict[str, object]]) -> list[dict[str,
         groups.setdefault(key, []).append(r)
 
     merged: list[dict[str, object]] = []
-    for key, group in sorted(groups.items()):
+    for _key, group in sorted(groups.items()):
         ordered = sorted(group, key=_priority)
         merged.append(_coalesce_rows(ordered))
     return merged
@@ -511,15 +580,39 @@ def _to_display(value: object, column: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 
+# One deduped row per fiscal year, read straight from financial_facts (same
+# direct-read rationale as the quarterly path). The annual axis only ever uses
+# the period_end YEAR (substr 1..4), so it was never quarter-cross-labeled —
+# but reading facts directly keeps §3 entirely off the slow/date-buggy view on
+# one code path. fiscal_year = the period_end's calendar year, exactly the
+# view's grouping, so values are byte-for-byte unchanged from the view here.
+_ANNUAL_FACTS_SQL = """
+WITH dedup AS (
+    SELECT
+        period_end, currency, fiscal_period_type, line_item, value,
+        CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
+        ROW_NUMBER() OVER (
+            PARTITION BY CAST(substr(period_end, 1, 4) AS INTEGER), line_item
+            ORDER BY source_doc_id DESC, period_end DESC
+        ) AS rn
+    FROM financial_facts
+    WHERE ticker = ? AND fiscal_period_type IN ({marks})
+)
+SELECT
+{pivot}
+FROM dedup
+WHERE rn = 1
+GROUP BY fiscal_year
+ORDER BY period_end DESC
+LIMIT ?
+"""
+
+
 def _load_annual(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object]]:
     placeholders = ",".join("?" * len(ANNUAL_PERIOD_TYPES))
     cursor = conn.cursor()
     cursor.execute(
-        f"""
-        SELECT * FROM metrics
-        WHERE ticker = ? AND fiscal_period_type IN ({placeholders})
-        ORDER BY period_end DESC LIMIT ?
-        """,
+        _ANNUAL_FACTS_SQL.format(marks=placeholders, pivot=_FACT_PIVOT),
         (ticker.upper(), *ANNUAL_PERIOD_TYPES, ANNUAL_HISTORY_YEARS * 3),
     )
     rows = [dict(r) for r in cursor.fetchall()]
