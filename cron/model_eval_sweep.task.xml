@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Sunday 02:00 — weekly model-downgrade evaluation sweep. Evaluates whether cheaper candidate models (Haiku, Gemini) reach parity with the incumbent pin for each active LLM purpose, using real prompt cases from capture JSONL files. Writes rolling history to model_eval_verdicts. Results are advisory: SWITCH_DOWN verdicts require a human PR to apply.</Description>
+    <Description>Sunday 02:00 — weekly model-eval loop (harvest -> sweep -> AUTO-SWITCH). Harvests a rotating 2-ticker sample (force-refresh) into capture JSONL, evaluates every cheaper candidate (Haiku, Gemini 3.1 Pro / 3.5 Flash) vs the incumbent pin per active purpose, writes rolling verdicts (+ full per-case rationale) to model_eval_verdicts, then auto-applies: a model_pin_overrides row after 3 consecutive SWITCH_DOWN, revert after 3 consecutive KEEP_INCUMBENT. Conservative, reversible, fully audited (model_eval_verdicts + model_pin_overrides + alerts).</Description>
     <URI>\earnings-summary\model_eval_sweep</URI>
   </RegistrationInfo>
   <Triggers>
@@ -38,7 +38,7 @@
     <Hidden>false</Hidden>
     <RunOnlyIfIdle>false</RunOnlyIfIdle>
     <WakeToRun>true</WakeToRun>
-    <ExecutionTimeLimit>PT3H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT4H</ExecutionTimeLimit>
     <Priority>7</Priority>
     <RestartOnFailure>
       <Interval>PT1H</Interval>
@@ -47,7 +47,7 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_model_eval_sweep.bat</Command>
+      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_weekly_model_eval.bat</Command>
     </Exec>
   </Actions>
 </Task>
