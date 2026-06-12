@@ -13,9 +13,12 @@ from llm import prompt_versions
 from llm.prompt_versions import prompt_version_for
 
 
-def test_registered_purposes_default_v1() -> None:
-    assert prompt_version_for("bear_case") == "v1"
+def test_registered_purposes_resolve_to_registered_version() -> None:
+    # decision_audit is still v1; bear_case moved to v2 in the S9 sec-llm pass
+    # (its IR anchor is now spotlighted) — both resolve via the registry, which
+    # is the single bump-point the A/B dimension depends on.
     assert prompt_version_for("decision_audit") == "v1"
+    assert prompt_version_for("bear_case") == "v2"
 
 
 def test_unknown_purpose_defaults_v1() -> None:
@@ -33,7 +36,9 @@ def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_trigger_and_prediction_purposes_registered() -> None:
     """The four trigger artifact purposes + the prediction-extraction purpose are
-    registered (so a bump is one place) and default to v1."""
+    registered (so a bump is one place). The trigger purposes moved to v2 in the
+    S9 spotlighting pass (transcript / news / anchor inputs now wrapped);
+    management_prediction is untouched at v1."""
     for purpose in (
         "earnings_tone_diff",
         "kpi_inflection_context",
@@ -42,7 +47,14 @@ def test_trigger_and_prediction_purposes_registered() -> None:
         "management_prediction",
     ):
         assert purpose in prompt_versions.registered_purposes()
-        assert prompt_version_for(purpose) == "v1"
+    assert prompt_version_for("management_prediction") == "v1"
+    for trigger_purpose in (
+        "earnings_tone_diff",
+        "kpi_inflection_context",
+        "material_news_classification",
+        "saydo_due_context",
+    ):
+        assert prompt_version_for(trigger_purpose) == "v2"
 
 
 def test_triggers_source_prompt_version_from_registry() -> None:
