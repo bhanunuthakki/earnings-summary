@@ -8,7 +8,13 @@ GUI.
 
 ## Active crons
 
-Fourteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating).
+Sixteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a weekly Thursday audit verifies every task XML is registered and on schedule.
+
+### Pre-chain backup
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which copies `data/portfolio.db` to `ES_DB_BACKUP_DIR` (default: `%USERPROFILE%\My Drive\earnings-summary-db-backups`) as a gzip-compressed snapshot via SQLite's online-backup API. Fires 15 minutes before the 03:00 refresh chain so a consistent snapshot exists before the day's writes begin. Keeps the most recent `ES_DB_BACKUP_RETAIN` snapshots (default 14). |
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -61,6 +67,12 @@ The two weekly tasks deliberately bracket the trading week: `weekly_p2_lens_refr
 | `earnings-summary\refresh_ir_kpis` | Weekly, Sunday 01:00 | `refresh_ir_kpis.task.xml` | `run_refresh_ir_kpis.bat` | **IR-spreadsheet KPI refresh.** Runs `execution/refresh_ir_kpis_all.py`, which loops every ticker with a parser config (`micro_thesis/ir_config/<T>.json`, enumerated via `ir_pipeline.config.configured_tickers`) and, per ticker, shells out to `refresh_ir_kpis.py --ticker <T> --discover`: headless-renders the issuer's IR results-center, downloads the current historical-data spreadsheet, parses it, and ingests the KPI series at IR_DOC tier — superseding the lower-tier LLM brief values the report charts read. Subprocess-isolated per ticker with a 5-min cap; never aborts on one ticker's failure; exit code = count of failed tickers. Idempotent: an unchanged spreadsheet re-ingests as a no-op (the document is sha256-keyed), so the weekly poll simply catches each new quarter's file within a week of publication. Tickers without a config are skipped (a ticker's first refresh must run `refresh_ir_kpis.py --url`/`--file` to generate its config). **Requires the optional `ir` extra** in the task's Python — see Prerequisites. |
 
 Runs Sunday 01:00 — ahead of `weekly_p2_lens_refresh` (02:00) and the Sunday-night `weekly_synthesis` (23:00) — so the freshly-ingested issuer KPIs are in `kpi_facts` before any lens/synthesis read. To change the cadence (e.g. monthly), edit the trigger in `refresh_ir_kpis.task.xml`; the script is cadence-agnostic and idempotent either way. Today only `NU` has a config, so the run is a single ticker; it scales automatically as more configs are generated.
+
+### Cron-registration audit (weekly)
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\verify_cron` | Weekly, Thursday 07:00 | `verify_cron.task.xml` | `run_verify_cron.bat` | **Cron self-audit.** Runs `execution/verify_cron_registration.py`, which reads every `cron/*.task.xml`, extracts the registered task name + trigger time, then queries `schtasks /query /fo csv` for the live state. Reports three problem categories: **missing** (XML exists but task not registered), **disabled** (registered but Status ≠ Ready/Running), **mismatch** (scheduled time differs from XML). Exit 0 = all OK, 1 = at least one problem, 2 = schtasks unreachable. Fires Thursday morning so any drift from the weekend's task-scheduler maintenance or a failed install surfaces before the next weekly synthesis run. Output in `.tmp/cron_logs/verify_cron_*.log`. |
 
 ### IR-document discovery + fetch (weekly)
 
@@ -152,6 +164,9 @@ From an **admin** PowerShell or `cmd` window, run one `schtasks /create` per
 task:
 
 ```cmd
+schtasks /create /tn "earnings-summary\backup_db" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\backup_db.task.xml"
+
 schtasks /create /tn "earnings-summary\refresh_cache" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_cache.task.xml" ^
   /ru "%USERNAME%"
@@ -209,8 +224,10 @@ schtasks /create /tn "earnings-summary\discover_ir_documents" ^
   /ru "%USERNAME%"
 
 schtasks /create /tn "earnings-summary\discover_ir_failing" ^
-  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_failing.task.xml" ^
-  /ru "%USERNAME%"
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\discover_ir_failing.task.xml"
+
+schtasks /create /tn "earnings-summary\verify_cron" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\verify_cron.task.xml"
 ```
 
 The `/tn` value is the registered task name (used by all `schtasks` commands
