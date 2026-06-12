@@ -23,6 +23,7 @@ from compute.kpi_resolver import (
     reporting_cadence_for,
     resolve_kpi_definition_name,
 )
+from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -101,6 +102,9 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
 
     quarterly_rows = _load_quarterly(conn, ticker)
     annual_rows = _load_annual(conn, ticker)
+    # Unresolved validation_issues for the ticker, parsed once — formatted
+    # into per-cell popover strings below (S2 PR3: disagreement at the cell).
+    issue_signals = load_unresolved_issues(conn)
     conn.close()
 
     if not quarterly_rows and not annual_rows:
@@ -129,6 +133,26 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
             _to_cell_source(prov_by_period.get(_period_date_key(r.get("period_end"))))
             for r in deduped_quarterly
         ]
+        if issue_signals:
+            fact_item = _COL_TO_FACT_LINE_ITEM.get(col, col)
+            for i, r in enumerate(deduped_quarterly):
+                src = sources_full[i]
+                if src is None:
+                    continue
+                try:
+                    raw_v = float(r.get(col))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    raw_v = 0.0
+                strings = display_issues_for_fact(
+                    issue_signals,
+                    ticker=ticker.upper(),
+                    item=fact_item,
+                    period_end=_period_date_key(r.get("period_end")),
+                    value=raw_v,
+                    displayed_tier=src.source,
+                )
+                if strings:
+                    src.issues = strings
         line_items.append(
             QuarterlyLineItem(
                 line_item=name,
@@ -208,6 +232,7 @@ def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
         locator=_opt("locator"),
         doc_id=int(raw_doc_id) if isinstance(raw_doc_id, int) else None,
         confidence=float(raw_confidence) if isinstance(raw_confidence, (int, float)) else None,
+        extracted_by=_opt("extracted_by"),
     )
 
 
@@ -300,11 +325,19 @@ def _kpi_cell_sources_for(
     series then renders without chips, never breaks.
     """
     placeholders = ",".join("?" * len(period_types))
+    issue_signals = load_unresolved_issues(conn)
+    kf_cols = _kpi_facts_columns(conn)
+    extracted_by_select = "kf.extracted_by" if "extracted_by" in kf_cols else "NULL AS extracted_by"
+    computed_from_select = (
+        "kf.computed_from" if "computed_from" in kf_cols else "NULL AS computed_from"
+    )
     try:
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.locator, kf.confidence,
-                   kf.source_doc_id,
+                   kf.source_doc_id, kf.value,
+                   {extracted_by_select},
+                   {computed_from_select},
                    d.fetched_at, d.source_url, d.doc_type,
                    d.accession_number, d.filing_date,
                    d.source_quality_tier AS source
@@ -330,8 +363,24 @@ def _kpi_cell_sources_for(
     for r in rows:
         raw_conf = r["confidence"]
         raw_doc_id = r["source_doc_id"]
-        out[str(r["period_end"])[:10]] = CellSource(
-            source=str(r["source"]) if r["source"] is not None else "unknown",
+        period_iso = str(r["period_end"])[:10]
+        tier = str(r["source"]) if r["source"] is not None else "unknown"
+        issues: list[str] = []
+        if issue_signals:
+            try:
+                fact_value = float(r["value"])
+            except (TypeError, ValueError):
+                fact_value = 0.0
+            issues = display_issues_for_fact(
+                issue_signals,
+                ticker=ticker.upper(),
+                item=resolved_name,
+                period_end=period_iso,
+                value=fact_value,
+                displayed_tier=tier,
+            )
+        out[period_iso] = CellSource(
+            source=tier,
             fetched_at=str(r["fetched_at"]) if r["fetched_at"] is not None else None,
             source_url=str(r["source_url"]) if r["source_url"] is not None else None,
             doc_type=str(r["doc_type"]) if r["doc_type"] is not None else None,
@@ -342,8 +391,20 @@ def _kpi_cell_sources_for(
             locator=str(r["locator"]) if r["locator"] is not None else None,
             doc_id=int(raw_doc_id) if raw_doc_id is not None else None,
             confidence=float(raw_conf) if raw_conf is not None else None,
+            extracted_by=str(r["extracted_by"]) if r["extracted_by"] is not None else None,
+            computed_from=str(r["computed_from"]) if r["computed_from"] is not None else None,
+            issues=issues,
         )
     return out
+
+
+def _kpi_facts_columns(conn: sqlite3.Connection) -> set[str]:
+    """kpi_facts column names — guards the optional audit/lineage selects
+    (extracted_by: 0054; computed_from: 0087) on legacy fixture DBs."""
+    try:
+        return {str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_facts)")}
+    except sqlite3.Error:
+        return set()
 
 
 def _quarter_label_for_period(period_end_iso: str) -> str | None:

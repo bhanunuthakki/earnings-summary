@@ -40,6 +40,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 from compute.kpi_resolver import resolve_kpi_definition_name
 from models.documents import SourceQualityTier, SourceType
@@ -217,6 +218,30 @@ class DerivedKpiRow:
     value: Decimal
     unit: Unit
     source_doc_id: int
+    # Pre-serialized lineage JSON for kpi_facts.computed_from (alembic 0087,
+    # data_provenance.md §9) — the derivation recipe the chip popover renders
+    # ("derived from: …" plus one mini-chip per input). None only when a
+    # deriver predates lineage capture.
+    computed_from: str | None = None
+
+
+def _lineage(display: str, inputs: list[dict[str, object]]) -> str:
+    """Serialize one ``computed_from`` payload. ``display`` is the human
+    formula ("operating_income ÷ revenue (%)"); each input names its source
+    row by logical key + the source document at derivation time. The
+    per-input ``tier`` is injected later by ``persist_derived_kpis`` (it
+    needs the documents table; the derivers are pure)."""
+    return json.dumps({"display": display, "inputs": inputs}, separators=(",", ":"))
+
+
+def _input_ref(ref: str, item: str, period_end: datetime, doc_id: int) -> dict[str, object]:
+    """One computed_from input: ``ref`` ∈ financial_fact | kpi_fact | segment_fact."""
+    return {
+        "ref": ref,
+        "item": item,
+        "period_end": period_end.date().isoformat(),
+        "doc_id": doc_id,
+    }
 
 
 def _pct(numerator: Decimal, denominator: Decimal) -> Decimal:
@@ -247,6 +272,15 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 value=_pct(f.operating_income, f.revenue),
                 unit=Unit.PERCENT,
                 source_doc_id=f.source_doc_id,
+                computed_from=_lineage(
+                    "operating_income ÷ revenue (%)",
+                    [
+                        _input_ref(
+                            "financial_fact", "operating_income", f.period_end, f.source_doc_id
+                        ),
+                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                    ],
+                ),
             )
         )
         out.append(
@@ -257,6 +291,13 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 value=_pct(f.net_income, f.revenue),
                 unit=Unit.PERCENT,
                 source_doc_id=f.source_doc_id,
+                computed_from=_lineage(
+                    "net_income ÷ revenue (%)",
+                    [
+                        _input_ref("financial_fact", "net_income", f.period_end, f.source_doc_id),
+                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                    ],
+                ),
             )
         )
         out.append(
@@ -267,6 +308,13 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 value=_pct(f.gross_profit, f.revenue),
                 unit=Unit.PERCENT,
                 source_doc_id=f.source_doc_id,
+                computed_from=_lineage(
+                    "gross_profit ÷ revenue (%)",
+                    [
+                        _input_ref("financial_fact", "gross_profit", f.period_end, f.source_doc_id),
+                        _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                    ],
+                ),
             )
         )
         # Capex / Revenue — capex stored as a negative cash-flow figure;
@@ -280,6 +328,18 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     value=_pct(abs(f.capital_expenditure), f.revenue),
                     unit=Unit.PERCENT,
                     source_doc_id=f.source_doc_id,
+                    computed_from=_lineage(
+                        "|capital_expenditure| ÷ revenue (%)",
+                        [
+                            _input_ref(
+                                "financial_fact",
+                                "capital_expenditure",
+                                f.period_end,
+                                f.source_doc_id,
+                            ),
+                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                        ],
+                    ),
                 )
             )
         if f.free_cash_flow is not None:
@@ -291,6 +351,15 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     value=_pct(f.free_cash_flow, f.revenue),
                     unit=Unit.PERCENT,
                     source_doc_id=f.source_doc_id,
+                    computed_from=_lineage(
+                        "free_cash_flow ÷ revenue (%)",
+                        [
+                            _input_ref(
+                                "financial_fact", "free_cash_flow", f.period_end, f.source_doc_id
+                            ),
+                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                        ],
+                    ),
                 )
             )
 
@@ -313,6 +382,15 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                     value=yoy,
                     unit=Unit.PERCENT,
                     source_doc_id=f.source_doc_id,
+                    computed_from=_lineage(
+                        "revenue vs same quarter 1y prior (%)",
+                        [
+                            _input_ref("financial_fact", "revenue", f.period_end, f.source_doc_id),
+                            _input_ref(
+                                "financial_fact", "revenue", prior.period_end, prior.source_doc_id
+                            ),
+                        ],
+                    ),
                 )
             )
             if (
@@ -333,6 +411,23 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                         value=ocf_yoy,
                         unit=Unit.PERCENT,
                         source_doc_id=f.source_doc_id,
+                        computed_from=_lineage(
+                            "operating_cash_flow vs same quarter 1y prior (%)",
+                            [
+                                _input_ref(
+                                    "financial_fact",
+                                    "operating_cash_flow",
+                                    f.period_end,
+                                    f.source_doc_id,
+                                ),
+                                _input_ref(
+                                    "financial_fact",
+                                    "operating_cash_flow",
+                                    prior.period_end,
+                                    prior.source_doc_id,
+                                ),
+                            ],
+                        ),
                     )
                 )
 
@@ -357,6 +452,21 @@ def derive_for_facts(facts: list[QuarterlyFacts]) -> list[DerivedKpiRow]:
                 value=ttm_net_income / equity * Decimal(100),
                 unit=Unit.PERCENT,
                 source_doc_id=cur.source_doc_id,
+                computed_from=_lineage(
+                    "TTM net_income ÷ total_stockholders_equity (%)",
+                    [
+                        _input_ref("financial_fact", "net_income", q.period_end, q.source_doc_id)
+                        for q in window
+                    ]
+                    + [
+                        _input_ref(
+                            "financial_fact",
+                            "total_stockholders_equity",
+                            cur.period_end,
+                            cur.source_doc_id,
+                        )
+                    ],
+                ),
             )
         )
     return out
@@ -502,7 +612,21 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                     margin = (oi / rev) * Decimal(100)
                     out.append(
                         DerivedKpiRow(
-                            pe, FiscalPeriodType(fpt), kpi_name, margin, Unit.PERCENT, doc_id
+                            pe,
+                            FiscalPeriodType(fpt),
+                            kpi_name,
+                            margin,
+                            Unit.PERCENT,
+                            doc_id,
+                            computed_from=_lineage(
+                                f"{seg_name} operating_income ÷ {seg_name} revenue (%)",
+                                [
+                                    _input_ref(
+                                        "segment_fact", f"{seg_name} operating_income", pe, doc_id
+                                    ),
+                                    _input_ref("segment_fact", f"{seg_name} revenue", pe, doc_id),
+                                ],
+                            ),
                         )
                     )
 
@@ -544,6 +668,29 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                             pe_current = next(
                                 k[0] for k in sorted_keys if k[0].year == year and k[1] == fpt
                             )
+                            prior_doc_id = year_map[prior_year][1]
+                            pe_prior = next(
+                                (
+                                    k[0]
+                                    for k in sorted_keys
+                                    if k[0].year == prior_year and k[1] == fpt
+                                ),
+                                None,
+                            )
+                            seg_inputs = [
+                                _input_ref(
+                                    "segment_fact", f"{seg_name} {metric_name}", pe_current, doc_id
+                                )
+                            ]
+                            if pe_prior is not None:
+                                seg_inputs.append(
+                                    _input_ref(
+                                        "segment_fact",
+                                        f"{seg_name} {metric_name}",
+                                        pe_prior,
+                                        prior_doc_id,
+                                    )
+                                )
                             for kpi_name in targets:
                                 out.append(
                                     DerivedKpiRow(
@@ -553,6 +700,10 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                                         yoy,
                                         Unit.PERCENT,
                                         doc_id,
+                                        computed_from=_lineage(
+                                            f"{seg_name} {metric_name} vs same quarter 1y prior (%)",
+                                            seg_inputs,
+                                        ),
                                     )
                                 )
 
@@ -644,12 +795,21 @@ _TRANSFORM_DERIVER_SPECS: tuple[_TransformSpec, ...] = (
 )
 
 
+_TRANSFORM_DISPLAY: dict[TransformKind, str] = {
+    TransformKind.YOY_CHANGE_BPS: "{base} - same quarter 1y prior (bps)",
+    TransformKind.YOY_CHANGE_PP: "{base} - same quarter 1y prior (pp)",
+    TransformKind.YOY_DECELERATION: "YoY deceleration of {base} (%)",
+    TransformKind.YOY_PCT_GROWTH: "{base} YoY growth (%)",
+}
+
+
 def compute_yoy_transform(
     points: list[KpiSeriesPoint],
     *,
     kind: TransformKind,
     name: str,
     unit: Unit,
+    base_label: str | None = None,
 ) -> list[DerivedKpiRow]:
     """Compute a same-fiscal-quarter YoY transform over a level/rate series.
 
@@ -673,6 +833,10 @@ def compute_yoy_transform(
     ``source_doc_id`` are the CURRENT point's, so provenance ties to the filing
     that reported the latest value. The percentage-change kinds assume a
     percentage-scale series; YOY_PCT_GROWTH takes a level/count base.
+
+    ``base_label`` (the spec's human label for the base series) feeds the
+    ``computed_from`` lineage: each output row records the current + prior-year
+    base observations as its inputs. None → lineage omitted (legacy callers).
     """
     by_fiscal_quarter: dict[tuple[FiscalPeriodType, int], KpiSeriesPoint] = {}
     for p in points:
@@ -697,6 +861,15 @@ def compute_yoy_transform(
             value = (p.value - prior.value) / prior.value * Decimal(100)
         else:  # pragma: no cover - exhaustive over TransformKind
             raise ValueError(f"Unhandled transform kind: {kind}")
+        computed_from = None
+        if base_label is not None:
+            computed_from = _lineage(
+                _TRANSFORM_DISPLAY[kind].format(base=base_label),
+                [
+                    _input_ref("kpi_fact", base_label, p.period_end, p.source_doc_id),
+                    _input_ref("kpi_fact", base_label, prior.period_end, prior.source_doc_id),
+                ],
+            )
         out.append(
             DerivedKpiRow(
                 period_end=p.period_end,
@@ -705,6 +878,7 @@ def compute_yoy_transform(
                 value=value,
                 unit=unit,
                 source_doc_id=p.source_doc_id,
+                computed_from=computed_from,
             )
         )
     return out
@@ -780,9 +954,75 @@ def derive_kpi_transforms(conn: sqlite3.Connection, ticker: str) -> list[Derived
         if len(points) < 2:
             continue
         out.extend(
-            compute_yoy_transform(points, kind=spec.kind, name=spec.derived_name, unit=spec.unit)
+            compute_yoy_transform(
+                points,
+                kind=spec.kind,
+                name=spec.derived_name,
+                unit=spec.unit,
+                base_label=spec.base_label,
+            )
         )
     return out
+
+
+def _input_doc_tiers(conn: sqlite3.Connection, rows: list[DerivedKpiRow]) -> dict[int, str]:
+    """source_quality_tier per document id referenced by any row's lineage
+    inputs. One query for the whole batch; {} when the documents table or
+    tier column is absent (legacy fixtures) — inputs then stay tier-less."""
+    doc_ids: set[int] = set()
+    for row in rows:
+        if row.computed_from is None:
+            continue
+        try:
+            payload: object = json.loads(row.computed_from)
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        inputs = cast("dict[str, object]", payload).get("inputs")
+        if not isinstance(inputs, list):
+            continue
+        for entry in cast("list[object]", inputs):
+            if isinstance(entry, dict):
+                raw = cast("dict[str, object]", entry).get("doc_id")
+                if isinstance(raw, int):
+                    doc_ids.add(raw)
+    if not doc_ids:
+        return {}
+    marks = ",".join("?" * len(doc_ids))
+    try:
+        cur = conn.execute(
+            f"SELECT id, source_quality_tier FROM documents WHERE id IN ({marks})",
+            tuple(doc_ids),
+        )
+        return {int(r[0]): str(r[1]) for r in cur.fetchall() if r[1] is not None}
+    except sqlite3.Error:
+        return {}
+
+
+def _enrich_lineage_tiers(computed_from: str | None, tier_by_doc: dict[int, str]) -> str | None:
+    """Inject each input's document tier into the lineage JSON so the chip
+    popover can color the per-input mini-chips without a documents lookup at
+    render time. No-op (returns the original) on missing/unparseable JSON."""
+    if computed_from is None or not tier_by_doc:
+        return computed_from
+    try:
+        payload: object = json.loads(computed_from)
+    except ValueError:
+        return computed_from
+    if not isinstance(payload, dict):
+        return computed_from
+    payload_map = cast("dict[str, object]", payload)
+    inputs = payload_map.get("inputs")
+    if not isinstance(inputs, list):
+        return computed_from
+    for entry in cast("list[object]", inputs):
+        if isinstance(entry, dict):
+            entry_map = cast("dict[str, object]", entry)
+            raw = entry_map.get("doc_id")
+            if isinstance(raw, int) and raw in tier_by_doc:
+                entry_map["tier"] = tier_by_doc[raw]
+    return json.dumps(payload_map, separators=(",", ":"))
 
 
 def persist_derived_kpis(
@@ -805,6 +1045,7 @@ def persist_derived_kpis(
     # Derived rows are mechanical arithmetic over FMP-tier inputs; the
     # deterministic prior (pipeline.confidence) replaces the unset 1.0.
     confidence = score_confidence(tier=SourceQualityTier.FMP_NORMALIZED, extracted_by=extracted_by)
+    tier_by_doc = _input_doc_tiers(conn, rows)
     inserted = 0
     for row in rows:
         kpi_def_id = find_or_create_kpi_definition(
@@ -825,6 +1066,7 @@ def persist_derived_kpis(
             source_doc_id=row.source_doc_id,
             confidence=confidence,
             extracted_by=extracted_by,
+            computed_from=_enrich_lineage_tiers(row.computed_from, tier_by_doc),
         )
         if new_id is not None:
             inserted += 1

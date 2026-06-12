@@ -532,6 +532,11 @@ def load_financial_cell_provenance(
             if _has_column(conn, "financial_facts", "confidence")
             else "NULL AS confidence"
         )
+        extracted_by_select = (
+            "ff.extracted_by"
+            if _has_column(conn, "financial_facts", "extracted_by")
+            else "NULL AS extracted_by"
+        )
         rows = conn.execute(
             f"""
             SELECT ff.id AS fact_id,
@@ -540,6 +545,7 @@ def load_financial_cell_provenance(
                    ff.period_end,
                    {locator_select},
                    {confidence_select},
+                   {extracted_by_select},
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,
@@ -581,6 +587,7 @@ def load_financial_cell_provenance(
                 "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
                 "locator": str(r["locator"]) if r["locator"] is not None else None,
                 "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+                "extracted_by": str(r["extracted_by"]) if r["extracted_by"] is not None else None,
             }
             out.setdefault(str(r["line_item"]), {})[pe.date().isoformat()] = prov
         return out
@@ -624,6 +631,8 @@ def _sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
             "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
             "locator": str(r["locator"]) if r["locator"] is not None else None,
             "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
+            "extracted_by": str(r["extracted_by"]) if r["extracted_by"] is not None else None,
+            "computed_from": str(r["computed_from"]) if r["computed_from"] is not None else None,
         }
         unit_raw = r["unit"]
         by_period[pe] = SourcedObservation(
@@ -689,6 +698,11 @@ def load_financial_series_with_provenance(
             if _has_column(conn, "financial_facts", "confidence")
             else "NULL AS confidence"
         )
+        extracted_by_select = (
+            "ff.extracted_by"
+            if _has_column(conn, "financial_facts", "extracted_by")
+            else "NULL AS extracted_by"
+        )
         rows = conn.execute(
             f"""
             SELECT ff.period_end,
@@ -698,6 +712,8 @@ def load_financial_series_with_provenance(
                    ff.source_doc_id,
                    {locator_select},
                    {confidence_select},
+                   {extracted_by_select},
+                   NULL AS computed_from,
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,
@@ -788,6 +804,16 @@ def load_kpi_series_with_provenance(
             if _has_column(conn, "kpi_facts", "confidence")
             else "NULL AS confidence"
         )
+        extracted_by_select = (
+            "kf.extracted_by"
+            if _has_column(conn, "kpi_facts", "extracted_by")
+            else "NULL AS extracted_by"
+        )
+        computed_from_select = (
+            "kf.computed_from"
+            if _has_column(conn, "kpi_facts", "computed_from")
+            else "NULL AS computed_from"
+        )
         rows = conn.execute(
             f"""
             SELECT kf.period_end,
@@ -797,6 +823,8 @@ def load_kpi_series_with_provenance(
                    kf.source_doc_id,
                    {locator_select},
                    {confidence_select},
+                   {extracted_by_select},
+                   {computed_from_select},
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,

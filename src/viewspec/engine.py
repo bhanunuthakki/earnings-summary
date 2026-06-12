@@ -110,6 +110,8 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
         locator=_s("locator"),
         doc_id=doc_raw if isinstance(doc_raw, int) else None,
         confidence=float(conf_raw) if isinstance(conf_raw, (int, float)) else None,
+        extracted_by=_s("extracted_by"),
+        computed_from=_s("computed_from"),
     )
 
 

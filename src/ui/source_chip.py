@@ -88,10 +88,66 @@ def viewer_href(src: CellSource) -> str | None:
     return f"/source/{src.doc_id}{suffix}"
 
 
+# Inputs shown in a "derived from" popover before truncating with "+N more"
+# (ROE carries 5; anything longer is a misbehaving writer, not a UI case).
+_MAX_LINEAGE_INPUTS = 6
+
+
+def _lineage_rows(computed_from: str) -> list[str]:
+    """Popover rows for a derived row's ``computed_from`` JSON (0087):
+    "derived from: <display>" plus one mini-chip per input — tier-colored
+    abbrev linking the /source viewer when the input carries doc_id.
+    Defensive: malformed JSON renders nothing (lineage is enrichment)."""
+    try:
+        payload: object = json.loads(computed_from)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    payload_map = cast("dict[str, object]", payload)
+    display = payload_map.get("display")
+    raw_inputs = payload_map.get("inputs")
+    rows: list[str] = []
+    if isinstance(display, str) and display:
+        rows.append(f'<div class="src-pop-row">derived from: {_esc(display)}</div>')
+    if not isinstance(raw_inputs, list):
+        return rows
+    inputs = cast("list[object]", raw_inputs)
+    for entry in inputs[:_MAX_LINEAGE_INPUTS]:
+        if not isinstance(entry, dict):
+            continue
+        entry_map = cast("dict[str, object]", entry)
+        item = entry_map.get("item")
+        if not isinstance(item, str) or not item:
+            continue
+        period = entry_map.get("period_end")
+        period_str = f" · {_esc(period)}" if isinstance(period, str) and period else ""
+        tier = entry_map.get("tier")
+        tier_str = tier if isinstance(tier, str) and tier else ""
+        chip_abbrev = SOURCE_CHIP_ABBREV.get(tier_str, "SRC")
+        chip_cls = f"src-chip src-{_esc(tier_str.replace('_', '-'))}" if tier_str else "src-chip"
+        doc_id = entry_map.get("doc_id")
+        if isinstance(doc_id, int):
+            chip = (
+                f'<a class="{chip_cls}" href="/source/{doc_id}" target="_blank" '
+                f'rel="noopener" title="{_esc(tier_str or "source document")}">{_esc(chip_abbrev)}</a>'
+            )
+        else:
+            chip = f'<span class="{chip_cls}">{_esc(chip_abbrev)}</span>'
+        rows.append(f'<div class="src-pop-row src-pop-input">{chip} {_esc(item)}{period_str}</div>')
+    if len(inputs) > _MAX_LINEAGE_INPUTS:
+        rows.append(
+            f'<div class="src-pop-row mono">+{len(inputs) - _MAX_LINEAGE_INPUTS} more inputs</div>'
+        )
+    return rows
+
+
 def source_chip_html(src: CellSource) -> str:
     """Clickable per-number source chip: hover = tier + fetched-at; click
     opens a JS-free <details> popover with the document identity (doc type,
-    accession, filing date, sub-document locator) and the open links — the
+    accession, filing date, sub-document locator), the scored confidence %,
+    the extraction method, derived-from lineage with per-input mini-chips,
+    any unresolved validation issues (⚠ rows), and the open links — the
     in-app /source viewer (P4.3) plus the original document URL.
     """
     abbrev = SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
@@ -104,10 +160,16 @@ def source_chip_html(src: CellSource) -> str:
     if pct is not None:
         flag = " · below threshold" if low_conf else ""
         rows.append(f'<div class="src-pop-row">confidence {pct}%{flag}</div>')
+    for issue in src.issues:
+        rows.append(f'<div class="src-pop-row src-pop-warn">{_esc(issue)}</div>')
     if src.fetched_at:
         rows.append(f'<div class="src-pop-row">fetched {_esc(src.fetched_at[:10])}</div>')
     if src.doc_type:
         rows.append(f'<div class="src-pop-row">{_esc(src.doc_type)}</div>')
+    if src.extracted_by:
+        rows.append(f'<div class="src-pop-row mono">via {_esc(src.extracted_by)}</div>')
+    if src.computed_from:
+        rows.extend(_lineage_rows(src.computed_from))
     if src.accession_number:
         acc = _esc(src.accession_number)
         filed = f" · filed {_esc(src.filing_date)}" if src.filing_date else ""
@@ -169,4 +231,9 @@ SOURCE_CHIP_CSS = """
 .src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
 .src-pop-row a { color: var(--accent); }
+/* S2 PR3: unresolved validation issues + derived-from input rows. */
+.src-pop-warn { color: var(--warn); }
+.src-pop-input { display: flex; align-items: center; gap: 5px; }
+.src-pop-input .src-chip { opacity: 1; }
+.src-pop-input a.src-chip { text-decoration: none; }
 """

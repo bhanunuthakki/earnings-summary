@@ -246,7 +246,9 @@ def insert_with_restatement_detection(
         ).fetchone()
         if incumbent_row is not None:
             incumbent_doc_id = int(
-                incumbent_row["source_doc_id"] if hasattr(incumbent_row, "keys") else incumbent_row[0]
+                incumbent_row["source_doc_id"]
+                if hasattr(incumbent_row, "keys")
+                else incumbent_row[0]
             )
             if incumbent_doc_id != source_doc_id and is_later_filing(
                 conn,
@@ -359,6 +361,7 @@ def insert_kpi_with_restatement_detection(
     extracted_by: str | None = None,
     locator: str | None = None,
     source_excerpt: str | None = None,
+    computed_from: str | None = None,
 ) -> tuple[int | None, int | None]:
     """kpi_facts twin of `insert_with_restatement_detection`.
 
@@ -418,8 +421,8 @@ def insert_kpi_with_restatement_detection(
         and _table_has_column(conn, "kpi_facts", "confidence")
     )
     # Optional tail columns: written only when provided AND the schema has
-    # them (locator: 0075; source_excerpt: 0033) — same drop-on-legacy
-    # tolerance as the audit columns.
+    # them (locator: 0075; source_excerpt: 0033; computed_from: 0087) — same
+    # drop-on-legacy tolerance as the audit columns.
     tail_cols: list[str] = []
     tail_vals: list[str] = []
     if locator is not None and _table_has_column(conn, "kpi_facts", "locator"):
@@ -428,6 +431,9 @@ def insert_kpi_with_restatement_detection(
     if source_excerpt is not None and _table_has_column(conn, "kpi_facts", "source_excerpt"):
         tail_cols.append("source_excerpt")
         tail_vals.append(source_excerpt)
+    if computed_from is not None and _table_has_column(conn, "kpi_facts", "computed_from"):
+        tail_cols.append("computed_from")
+        tail_vals.append(computed_from)
     try:
         if has_audit_cols:
             tail_names = "".join(f", {c}" for c in tail_cols)
