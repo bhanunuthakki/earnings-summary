@@ -595,18 +595,15 @@ _PANEL_JS = """
   });
 
   // Home-dock handoff (Ask v4): the dock stashes its thread when popping
-  // out to this tab; replay it as text turns + seed the narrative history.
-  // Registered BEFORE the palette consumer so a pending question lands
-  // after the replayed thread.
+  // out to this tab (store key askThread — legacy cc-ask-thread migrates);
+  // replay it as text turns + seed the narrative history. Registered BEFORE
+  // the palette consumer so a pending question lands after the replayed
+  // thread. This fragment only ever runs inside the shell, where CCState is
+  // inlined first — the guard covers a bare fragment render.
   function consumeDockThread() {
-    var raw = null;
-    try {
-      raw = sessionStorage.getItem('cc-ask-thread');
-      if (raw) sessionStorage.removeItem('cc-ask-thread');
-    } catch (e) { return; }
-    if (!raw) return;
-    var turns = [];
-    try { turns = JSON.parse(raw) || []; } catch (e) { return; }
+    if (!window.CCState) return;
+    var turns = window.CCState.getJSON('askThread') || [];
+    window.CCState.del('askThread');
     if (!turns.length) return;
     clearHello();
     turns.forEach(function (t) {
@@ -627,27 +624,29 @@ _PANEL_JS = """
   window.addEventListener('cc-ask-q', consumeDockThread);
   consumeDockThread();
 
-  // Ctrl/Cmd+K handoff: the shell palette stashes the typed query in
-  // sessionStorage and jumps to #explore; consume it at wire-up (lazy
-  // panel load) or on the palette's event (panel already loaded).
+  // Ctrl/Cmd+K handoff: the shell palette stashes the typed query in the
+  // store (key askQ — legacy cc-ask-q migrates; the EVENT name stays
+  // 'cc-ask-q') and jumps to #explore; consume it at wire-up (lazy panel
+  // load) or on the palette's event (panel already loaded).
   function consumePaletteQuery() {
-    var q = null;
-    try { q = sessionStorage.getItem('cc-ask-q'); } catch (e) { return; }
+    if (!window.CCState) return;
+    var q = window.CCState.get('askQ');
     if (!q || askBusy) return;
-    try { sessionStorage.removeItem('cc-ask-q'); } catch (e) {}
+    window.CCState.del('askQ');
     submitAsk(q);
   }
   window.addEventListener('cc-ask-q', consumePaletteQuery);
   consumePaletteQuery();
 
-  // Saved-view handoff (UX9b): the shell palette stashes a chosen view id and
-  // jumps to #explore. Open the advanced builder fold and click that view's
-  // load chip — reusing the same delegated load+run path the chip strip uses.
+  // Saved-view handoff (UX9b): the shell palette stashes a chosen view id
+  // (store key askViewId — legacy cc-view-id migrates) and jumps to
+  // #explore. Open the advanced builder fold and click that view's load
+  // chip — reusing the same delegated load+run path the chip strip uses.
   function consumePaletteView() {
-    var id = null;
-    try { id = sessionStorage.getItem('cc-view-id'); } catch (e) { return; }
+    if (!window.CCState) return;
+    var id = window.CCState.get('askViewId');
     if (!id) return;
-    try { sessionStorage.removeItem('cc-view-id'); } catch (e) {}
+    window.CCState.del('askViewId');
     var chip = root.querySelector('[data-view-id="' + id + '"] button[data-act="load"]');
     if (!chip) return;
     var fold = el('ask-advanced');

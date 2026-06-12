@@ -4,8 +4,9 @@ the shell chrome.
 A chat dock rendered ONCE into the command-center shell's body — outside the
 ``.cc-panels`` panel-swap container — so the conversation survives tab
 switches instead of vanishing with the Home panel. Three states, with
-explicit header controls, persisted under ``localStorage['askDockMode']``
-(the legacy boolean ``askDockOpen`` key migrates on first boot):
+explicit header controls, persisted via the shared client store
+(``CCState`` key ``dockMode``; the pre-S14 ``askDockMode`` /
+boolean ``askDockOpen`` keys migrate on first read):
 
 * **min** — a slim bottom-right pill (just the Ask title; ▁ minimizes,
   clicking the pill restores the last expanded state);
@@ -28,10 +29,12 @@ unsupported claims.  The ``⇿`` button opens a thread-list overlay: resume,
 rename (double-click), or delete past threads; a **New thread** button
 starts a fresh session.
 
-The ⇗ pop-out stashes history under ``sessionStorage['cc-ask-thread']``
-(plus any pending input under the palette's ``cc-ask-q`` key), minimizes the
-dock, and jumps to ``#explore`` — the Ask panel replays the turns at
-wire-up, so the conversation continues in the full tab.
+The ⇗ pop-out stashes history under the store's ``askThread`` key (plus any
+pending input under the palette's ``askQ`` key), minimizes the dock, and
+jumps to ``#explore`` — the Ask panel replays the turns at wire-up, so the
+conversation continues in the full tab. The dock's own persistence
+(``askSessionId`` server-thread id, ``askTail`` replay tail) rides the same
+store; ``CC_STATE_JS`` is inlined by the shell before this dock's IIFE.
 
 Stacking: the dock sits at z-index 35 — above the panels and the sticky top
 bar (30), below the drawers (38/39), peek (44/45), hover card (46), and
@@ -153,17 +156,19 @@ _DOCK_JS = r"""
   var threadsList = document.getElementById('ask-dock-threads-list');
   var threadsClose = document.getElementById('ask-dock-threads-close');
   var newThreadBtn = document.getElementById('ask-dock-new-thread');
-  var TAIL_KEY = 'cc-ask-dock-tail';
-  var SID_KEY = 'cc-ask-session-id';
+  // State rides the shared client store (S14 PR2): CCState keys — the
+  // legacy cc-ask-dock-tail / cc-ask-session-id names migrate on first read.
+  var TAIL_KEY = 'askTail';
+  var SID_KEY = 'askSessionId';
   var history = [];
   var lastSpec = null;
   var busy = false;
   var expandedMode = 'float';  // the state a pill click restores
   var currentSessionId = null;
 
-  // Restore session id from sessionStorage so a reload re-attaches to the
-  // same thread without asking the server for a new one.
-  try { currentSessionId = sessionStorage.getItem(SID_KEY) || null; } catch (e) {}
+  // Restore session id from the store so a reload re-attaches to the same
+  // thread without asking the server for a new one.
+  currentSessionId = window.CCState.get(SID_KEY) || null;
 
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -182,7 +187,7 @@ _DOCK_JS = r"""
   function remember(role, text) {
     history.push({role: role, text: String(text || '').slice(0, 1200)});
     if (history.length > 12) history = history.slice(-12);
-    try { sessionStorage.setItem(TAIL_KEY, JSON.stringify(history)); } catch (e) {}
+    window.CCState.setJSON(TAIL_KEY, history);
   }
   function scroll() { thread.scrollTop = thread.scrollHeight; }
 
@@ -202,7 +207,7 @@ _DOCK_JS = r"""
     } else {
       document.body.removeAttribute('data-ask-split');
     }
-    try { localStorage.setItem('askDockMode', mode); } catch (e) {}
+    window.CCState.set('dockMode', mode);
     if (mode !== 'min' && !skipFocus) input.focus();
   }
   window.addEventListener('resize', function () {
@@ -236,16 +241,15 @@ _DOCK_JS = r"""
     setMode('float');
   });
 
-  // ⇗ pop-out: hand the dock conversation to the full Ask tab (same
-  // sessionStorage contract as the shell palette's cc-ask-q handoff), then
-  // minimize so the thread doesn't render twice beside the Ask panel.
+  // ⇗ pop-out: hand the dock conversation to the full Ask tab (same store
+  // contract as the shell palette's askQ handoff; the event NAME stays
+  // 'cc-ask-q' — it's the poke contract, not a storage key), then minimize
+  // so the thread doesn't render twice beside the Ask panel.
   pop.addEventListener('click', function (ev) {
     ev.stopPropagation();
-    try {
-      if (history.length) sessionStorage.setItem('cc-ask-thread', JSON.stringify(history));
-      var pending = input.value.trim();
-      if (pending) sessionStorage.setItem('cc-ask-q', pending);
-    } catch (e) {}
+    if (history.length) window.CCState.setJSON('askThread', history);
+    var pending = input.value.trim();
+    if (pending) window.CCState.set('askQ', pending);
     setMode('min', true);
     location.hash = '#explore';
     window.dispatchEvent(new Event('cc-ask-q'));
@@ -385,9 +389,9 @@ _DOCK_JS = r"""
       .then(function (data) {
         if (!data) return;
         currentSessionId = sid;
-        try { sessionStorage.setItem(SID_KEY, sid); } catch (e) {}
+        window.CCState.set(SID_KEY, sid);
         history = [];
-        try { sessionStorage.removeItem(TAIL_KEY); } catch (e) {}
+        window.CCState.del(TAIL_KEY);
         // Render the stored turns.
         thread.innerHTML = '';
         var turns = data.turns || [];
@@ -427,9 +431,9 @@ _DOCK_JS = r"""
 
   function startNewThread() {
     currentSessionId = null;
-    try { sessionStorage.removeItem(SID_KEY); } catch (e) {}
+    window.CCState.del(SID_KEY);
     history = [];
-    try { sessionStorage.removeItem(TAIL_KEY); } catch (e) {}
+    window.CCState.del(TAIL_KEY);
     thread.innerHTML = '<span class="ask-dock-empty">Ask about any tracked name without leaving this tab.</span>';
     closeThreads();
     input.focus();
@@ -445,7 +449,7 @@ _DOCK_JS = r"""
   // ---------------------------------------------------------------------------
 
   try {
-    var tail = JSON.parse(sessionStorage.getItem(TAIL_KEY) || 'null');
+    var tail = window.CCState.getJSON(TAIL_KEY);
     if (tail && tail.length) {
       history = tail.slice(-12);
       var empty = thread.querySelector('.ask-dock-empty');
@@ -469,13 +473,10 @@ _DOCK_JS = r"""
   // Boot state
   // ---------------------------------------------------------------------------
 
-  var boot = null;
-  try {
-    boot = localStorage.getItem('askDockMode');
-    if (boot !== 'min' && boot !== 'float' && boot !== 'split') {
-      boot = localStorage.getItem('askDockOpen') === '1' ? 'float' : 'min';
-    }
-  } catch (e) { boot = 'min'; }
+  // The store handles the legacy reads (askDockMode, and the pre-dock
+  // boolean askDockOpen which maps open -> float) — see KEYS in cc_state.
+  var boot = window.CCState.get('dockMode');
+  if (boot !== 'min' && boot !== 'float' && boot !== 'split') boot = 'min';
   setMode(boot, true);
 
   // ---------------------------------------------------------------------------
@@ -551,7 +552,7 @@ _DOCK_JS = r"""
         // Server assigned a session — capture it for future turns.
         if (ev2.session_id) {
           currentSessionId = ev2.session_id;
-          try { sessionStorage.setItem(SID_KEY, ev2.session_id); } catch (e) {}
+          window.CCState.set(SID_KEY, ev2.session_id);
         }
       } else if (ev2.type === 'stage') {
         busyLine(ev2.note || (ev2.stage === 'compiling' ? 'compiling the view'

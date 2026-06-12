@@ -64,22 +64,25 @@ def test_dock_renders_inline_cite_marks_with_claims() -> None:
 
 
 def test_dock_popout_hands_thread_to_the_ask_tab() -> None:
-    """The ⇗ pop-out uses the palette's handoff contract: thread under
-    cc-ask-thread, pending input under cc-ask-q, jump to #explore + event —
-    and the dock minimizes so the thread doesn't render twice beside the
-    Ask panel."""
+    """The ⇗ pop-out uses the palette's handoff contract via the shared
+    store (S14 PR2): thread under askThread, pending input under askQ, jump
+    to #explore + event (the EVENT name stays 'cc-ask-q') — and the dock
+    minimizes so the thread doesn't render twice beside the Ask panel."""
     html = render_ask_dock()
-    assert "cc-ask-thread" in html
-    assert "cc-ask-q" in html
+    assert "CCState.setJSON('askThread', history)" in html
+    assert "CCState.set('askQ', pending)" in html
     assert "#explore" in html
     assert "new Event('cc-ask-q')" in html
     assert "setMode('min', true)" in html
+    # The dock holds NO raw storage calls — every key rides window.CCState.
+    assert "sessionStorage" not in html
+    assert "localStorage" not in html
 
 
 def test_dock_three_states_and_persistence() -> None:
     """Ask v5: min / float / split with explicit header controls. The mode
-    persists in localStorage (the legacy boolean key migrates once) and the
-    thread tail persists in sessionStorage so a reload replays it."""
+    and the thread tail persist through the shared store (dockMode local,
+    askTail/askSessionId session; legacy keys migrate inside cc_state)."""
     html = render_ask_dock()
     # Split view: the dock-side CSS hook + the body attribute that reflows
     # the shell panels beside the column over the standard transition.
@@ -87,10 +90,10 @@ def test_dock_three_states_and_persistence() -> None:
     assert 'body[data-ask-split="1"] .cc-panels' in html
     assert "transition: margin-right var(--transition)" in html
     assert "data-ask-split" in html
-    # State + thread persistence keys.
-    assert "askDockMode" in html
-    assert "askDockOpen" in html  # one-time migration of the legacy key
-    assert "cc-ask-dock-tail" in html
+    # State + thread persistence: store keys, not raw storage names.
+    assert "CCState.set('dockMode', mode)" in html
+    assert "var TAIL_KEY = 'askTail'" in html
+    assert "var SID_KEY = 'askSessionId'" in html
     # Esc exits split, deferring to the shell's overlays first.
     assert "'Escape'" in html
     for overlay in ("cc-palette", "cc-peek", "cc-notes-drawer", "cc-drawer"):
