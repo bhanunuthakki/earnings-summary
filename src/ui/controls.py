@@ -135,6 +135,11 @@ a.k-tick-sym:hover { color: var(--accent); }
 /* ---- field/section caption ---- */
 .k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em; }
+
+/* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px; }
+}
 """
 
 

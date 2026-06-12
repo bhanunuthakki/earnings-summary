@@ -200,6 +200,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   flex: 1;
   min-width: 0;
   height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
   background: var(--bg);
   color: var(--fg);
@@ -1091,7 +1092,9 @@ details.panel > summary:hover { background: var(--paper); }
 .twk-toggle-btn:hover { color: var(--fg); border-color: var(--border-2); }
 
 .twk-panel {
-  position: fixed; right: 16px; bottom: 16px; z-index: 2147483646;
+  position: fixed; right: 16px; bottom: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 2147483646;
   width: 280px;
   display: none;
   flex-direction: column;
@@ -1656,6 +1659,21 @@ ul.flag-list li.flag-positive {
 }
 .decision-chip.decision-chip-muted .decision-chip-n {
   color: var(--fg-soft);
+}
+
+/* ============================================================
+   Responsive overrides (S16 PR1)
+   ============================================================ */
+
+/* Horizontal table scroll at small-laptop/tablet widths. */
+@media (max-width: 1024px) {
+  .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Tablet portrait: compress lateral padding and section tab strip. */
+@media (max-width: 768px) {
+  :root { --pad-x: 12px; }
+  .tabs, .subtabs { overflow-x: auto; }
 }
 """
 )
