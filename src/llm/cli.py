@@ -233,6 +233,15 @@ LLM_MODELS: dict[str, str] = {
     # Haiku is reliable on copy-the-token tasks. Validation + one repair
     # retry live in viewspec.nl_compile; failures degrade to the builder UI.
     "viewspec_compile": FAST_CLASSIFIER_MODEL,
+    # Ask pack router (src/ask/router.py, fund-grade build S4): selects which
+    # portfolio evidence packs (holdings / conviction / dcf / decisions /
+    # journal / performance) a narrative ask turn needs. Closed-enum JSON
+    # selection on the interactive ask path — latency dominates, Haiku is
+    # reliable on pick-from-a-list tasks, and mis-selection fails closed to
+    # document-only evidence. Scored by the golden set in
+    # evals/golden/ask_pack_router.json; budget row seeded by alembic 0089
+    # (skip mode — a blown cap disables packs, the turn still answers).
+    "ask_pack_router": FAST_CLASSIFIER_MODEL,
     # Pairwise backend judge (src/llm/backend_judge.py): grades Claude-vs-Gemini
     # paired outputs to decide whether a purpose may join the eval-gated Gemini
     # allowlist. Opus on purpose — the judge must out-discriminate BOTH
