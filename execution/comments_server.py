@@ -35,10 +35,12 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import math
 import os
 import queue
 import sys
 import urllib.parse
+from collections import deque
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -322,6 +324,31 @@ def create_app(
             response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
+
+    @app.after_request
+    def add_panel_etag(response: Response) -> Response:
+        # Cheap revalidation for the shell's panel fragments (S14): every
+        # 200-OK GET under /api/panel/ carries a content ETag, and a matching
+        # If-None-Match comes back 304 with an empty body — the client's
+        # stale-while-revalidate refresh costs the panel BUILD, not the panel
+        # TRANSFER, and an unchanged panel never re-renders. `no-cache` means
+        # "store but always revalidate", so the browser's own HTTP cache gives
+        # the drawer/notes/peek fetches the same cheap 304 path with zero
+        # client changes. (Registered after add_cors_headers — Flask runs
+        # after_request hooks in reverse order, so the 304 conversion happens
+        # first and the CORS headers still land on the 304.)
+        if (
+            request.method == "GET"
+            and request.path.startswith("/api/panel/")
+            and response.status_code == 200
+            and not response.direct_passthrough
+        ):
+            response.add_etag()
+            response.headers["Cache-Control"] = "no-cache"
+            # make_conditional mutates + returns self; the cast restores the
+            # Flask subclass the werkzeug stub erases.
+            return cast("Response", response.make_conditional(request))
         return response
 
     @app.route("/healthz", methods=["GET"])
@@ -714,6 +741,87 @@ def create_app(
             render_notes_drawer_fragment(repo_root, request.args.get("ticker")),
             mimetype="text/html",
         )
+
+    # ----- PANEL LATENCY METRICS (S14) -----
+    # The shell's loader POSTs one sample per panel activation/refresh
+    # (fetch/render/total ms + which cache path served it). In-memory ring
+    # only — perceived-latency telemetry for a single-operator localhost app
+    # is diagnostics, not data; a DB table would outlive its usefulness.
+    # Surfaced in System → Data Cache (the panel fetches the GET aggregate).
+    panel_metrics: deque[dict[str, object]] = deque(maxlen=500)
+    metric_cache_modes = frozenset({"cold", "swr", "prefetch", "revalidate"})
+
+    @app.route("/api/metrics/panel", methods=["POST", "OPTIONS"])
+    def panel_metrics_post():
+        """Record one client-side panel timing sample:
+        ``{panel, cache, fetch_ms, render_ms, total_ms, status?}``.
+        Fire-and-forget from the shell — always 204 on accepted shape."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        panel = str(payload.get("panel") or "").strip()
+        cache = str(payload.get("cache") or "").strip()
+        if not panel or cache not in metric_cache_modes:
+            return ({"error": "panel + cache (cold|swr|prefetch|revalidate) required"}, 400)
+
+        def _ms(key: str) -> float | None:
+            value = payload.get(key)
+            if isinstance(value, (int, float)) and 0 <= float(value) < 600_000:
+                return round(float(value), 1)
+            return None
+
+        status_raw = payload.get("status")
+        panel_metrics.append(
+            {
+                "panel": panel[:40],
+                "cache": cache,
+                "fetch_ms": _ms("fetch_ms"),
+                "render_ms": _ms("render_ms"),
+                "total_ms": _ms("total_ms"),
+                "status": int(status_raw) if isinstance(status_raw, (int, float)) else None,
+                "at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+        return ("", 204)
+
+    @app.route("/api/metrics/panel", methods=["GET"])
+    def panel_metrics_get():
+        """Aggregate of the in-memory samples: per (panel, cache-path) count +
+        p50/p95 total ms, plus the overall perceived-latency headline. Resets
+        on server restart by design."""
+        groups: dict[tuple[str, str], list[float]] = {}
+        for s in panel_metrics:
+            total = s.get("total_ms")
+            if not isinstance(total, (int, float)):
+                continue
+            groups.setdefault((str(s["panel"]), str(s["cache"])), []).append(float(total))
+
+        def _p(values: list[float], q: float) -> float:
+            # Nearest-rank percentile: always an observed value, never the
+            # beyond-max extrapolation statistics.quantiles produces on small n.
+            ordered = sorted(values)
+            idx = max(0, min(len(ordered) - 1, math.ceil(q * len(ordered)) - 1))
+            return round(ordered[idx], 1)
+
+        rows = [
+            {
+                "panel": panel,
+                "cache": cache,
+                "n": len(vals),
+                "p50_ms": _p(vals, 0.50),
+                "p95_ms": _p(vals, 0.95),
+            }
+            for (panel, cache), vals in sorted(groups.items())
+        ]
+        # The headline: what a tab activation FEELS like (cold first hits vs
+        # the cache-served paths). `revalidate` is background work — excluded.
+        perceived = [v for (_panel, c), vals in groups.items() if c != "revalidate" for v in vals]
+        return {
+            "rows": rows,
+            "samples": len(panel_metrics),
+            "perceived_p50_ms": _p(perceived, 0.50) if perceived else None,
+            "perceived_p95_ms": _p(perceived, 0.95) if perceived else None,
+        }
 
     @app.route("/analytical", methods=["GET"])
     def analytical_page():

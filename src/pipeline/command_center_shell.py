@@ -16,6 +16,14 @@ Design — thin shell + lazy panels:
   it in the DOM. Inline ``<script>`` blocks inside a fragment (e.g. the budget
   Save-button wiring) are re-executed after injection — ``innerHTML`` alone does
   not run them.
+* **Sub-500ms perceived activations (S14)**: every lazy panel ships a
+  content-shaped skeleton (``_SKELETON_KINDS``); fetched fragments are cached
+  in sessionStorage and served stale-while-revalidate (the server ETags every
+  ``/api/panel/`` response, so the background refresh is a 304 when nothing
+  changed); top-bar/sub-tab hover and an idle pass after first paint prefetch
+  likely-next panels (Portfolio's tracker round-trip especially). Each
+  activation's fetch/render timings POST to ``/api/metrics/panel`` and read
+  back in System → Data Cache.
 * **Four primary sections + a System icon (UX9b over the PR2 IA)**: the top
   bar's nav carries Home / Companies / Ask / Portfolio; System demoted to a
   top-right icon button beside ⌘K and ⚙ Settings (same ``data-theme-target``
@@ -411,6 +419,75 @@ _PEEK_HTML = (
 )
 
 
+# Structured skeletons (S14): each lazy panel's placeholder is shaped like the
+# content it loads — a table panel shows ghost rows, a KPI panel shows ghost
+# cards above rows — instead of one generic shimmer line. The kind map is the
+# single source: the server renders the skeleton into the initial placeholder,
+# and SHELL_JS captures that markup at boot so a cold (re)load can re-show it
+# (e.g. the Holding panel switching tickers). Kinds:
+#   table — heading + ghost header + 8 ghost rows (most System panels)
+#   kpis  — heading + a 4-card KPI strip above the ghost table
+#   cards — heading + a ghost card grid (memo / synthesis surfaces)
+#   form  — a ghost input band + chip row + prose lines (the Ask builder)
+#   band  — a thin utility band + one tall frame block (the Holding embed)
+_SKELETON_KINDS: dict[str, str] = {
+    "holding": "band",
+    "discovery": "table",
+    "journal": "cards",
+    "explore": "form",
+    "portfolio": "kpis",
+    "portfolio_synthesis": "cards",
+    "decisions_record": "table",
+    "advisor_memos": "cards",
+    "holdings": "table",
+    "section_coverage": "table",
+    "ir_coverage": "table",
+    "source_calls": "kpis",
+    "cron_health": "kpis",
+    "dcf_coverage": "table",
+    "evals": "table",
+    "validation": "table",
+    "restatements": "table",
+}
+
+
+def _skeleton_html(kind: str) -> str:
+    """One panel-shaped loading skeleton. Pure presentational markup —
+    ``aria-hidden`` so screen readers never narrate ghost rows."""
+    head = (
+        '<div class="cc-skel-line cc-skel-title"></div><div class="cc-skel-line cc-skel-sub"></div>'
+    )
+    table = (
+        '<div class="cc-skel-table"><div class="cc-skel-row cc-skel-th"></div>'
+        + '<div class="cc-skel-row"></div>' * 8
+        + "</div>"
+    )
+    if kind == "kpis":
+        body = (
+            head
+            + '<div class="cc-skel-kpis">'
+            + '<div class="cc-skel-kpi"></div>' * 4
+            + "</div>"
+            + table
+        )
+    elif kind == "cards":
+        body = (
+            head + '<div class="cc-skel-cards">' + '<div class="cc-skel-card"></div>' * 6 + "</div>"
+        )
+    elif kind == "form":
+        body = (
+            '<div class="cc-skel-input"></div>'
+            '<div class="cc-skel-chips">' + '<div class="cc-skel-chip"></div>' * 4 + "</div>"
+            '<div class="cc-skel-line cc-skel-sub"></div>'
+            '<div class="cc-skel-line cc-skel-sub"></div>'
+        )
+    elif kind == "band":
+        body = '<div class="cc-skel-band"></div><div class="cc-skel-frame"></div>'
+    else:  # table
+        body = head + table
+    return f'<div class="cc-skel" data-skel="{escape(kind)}" aria-hidden="true">{body}</div>'
+
+
 def _render_panels(
     tabs: tuple[tuple[str, str, str | None, bool, bool], ...], overview_html: str
 ) -> str:
@@ -429,10 +506,11 @@ def _render_panels(
         # ``cc-picker`` <select> in the shell chrome. ``required`` is unused now:
         # the no-ticker fragment renders the combobox band, not a shell stub.
         pk = ' data-picker="1"' if picker else ""
+        skel = _skeleton_html(_SKELETON_KINDS.get(pid, "table"))
         out.append(
             f'<section class="cc-panel" data-panel="{escape(pid)}"{ep}{pk} '
             f'data-loaded="0" data-current-ticker="" hidden>'
-            '<div class="cc-panel-body"><div class="cc-loading">Loading…</div></div>'
+            f'<div class="cc-panel-body">{skel}</div>'
             "</section>"
         )
     return "".join(out)
@@ -526,6 +604,39 @@ button { transition: color var(--transition), border-color var(--transition),
   background: linear-gradient(90deg, var(--surface) 25%, var(--paper) 50%, var(--surface) 75%);
   background-size: 200% 100%; animation: cc-shimmer 1.2s ease-in-out infinite; }
 @keyframes cc-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* Structured panel skeletons (S14): every ghost block shares the PR8 shimmer
+   wash; the layouts echo the real panel anatomy (heading → KPI strip → table
+   rows / card grid / input band) so the first paint reads as "the panel,
+   loading" instead of "a spinner". Layout-only, token-skinned. */
+.cc-skel { padding: 12px 0 24px; }
+.cc-skel-line, .cc-skel-row, .cc-skel-kpi, .cc-skel-card, .cc-skel-input,
+.cc-skel-chip, .cc-skel-band, .cc-skel-frame {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--paper) 50%, var(--surface) 75%);
+  background-size: 200% 100%; animation: cc-shimmer 1.2s ease-in-out infinite;
+  border-radius: var(--radius); }
+.cc-skel-title { height: 16px; max-width: 240px; margin-bottom: 10px; }
+.cc-skel-sub { height: 10px; max-width: 460px; margin-bottom: 18px; }
+.cc-skel-table { display: flex; flex-direction: column; gap: 10px; }
+.cc-skel-row { height: 12px; }
+.cc-skel-row.cc-skel-th { height: 9px; max-width: 58%; }
+.cc-skel-row:nth-child(3n) { max-width: 94%; }
+.cc-skel-row:nth-child(3n+1) { max-width: 98%; }
+.cc-skel-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; margin-bottom: 18px; }
+.cc-skel-kpi { height: 64px; }
+.cc-skel-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: var(--sp-3); }
+.cc-skel-card { height: 96px; }
+.cc-skel-input { height: 38px; max-width: 760px; margin-bottom: 12px; }
+.cc-skel-chips { display: flex; gap: var(--sp-2); margin-bottom: 18px; }
+.cc-skel-chip { height: 20px; width: 92px; border-radius: var(--radius-full); }
+.cc-skel-band { height: 36px; margin-bottom: 14px; }
+.cc-skel-frame { height: calc(100vh - 280px); min-height: 360px; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-skel-line, .cc-skel-row, .cc-skel-kpi, .cc-skel-card, .cc-skel-input,
+  .cc-skel-chip, .cc-skel-band, .cc-skel-frame, .cc-loading::after { animation: none; }
+}
 
 /* The Holding tab's ticker picker is now a search combobox inside the holding
    fragment's utility band (UX9c, .cc-combo) — no shell-chrome <select>. */
@@ -1032,22 +1143,214 @@ SHELL_JS = r"""
       .catch(function () { TICKERS = []; return TICKERS; });
   }
 
+  // ----- Perceived-latency plumbing (S14) -----
+  // Three layers over one per-panel cache (sessionStorage, key
+  // cc:v1:panel:<id>[:TICKER] -> {etag, html, ts}):
+  //   1. Structured skeletons — the server renders a content-shaped
+  //      placeholder per panel; captured at boot (SKEL) so cold (re)loads can
+  //      re-show it (e.g. the Holding panel switching tickers).
+  //   2. Stale-while-revalidate — a cached fragment paints instantly, then a
+  //      background fetch with If-None-Match either 304s (server adds an ETag
+  //      to every /api/panel/ response) or quietly swaps the fresh fragment
+  //      in, preserving scroll and never while the user is typing inside it.
+  //   3. Prefetch — top-bar/sub-tab hover plus an idle pass after first paint
+  //      (WARM_PANELS) fill the cache, so likely-next activations are paints.
+  // Every activation records {fetch,render,total} ms + which path served it:
+  // a small ring on window.CCPerf and a fire-and-forget POST to
+  // /api/metrics/panel (read back in System → Data Cache).
+  var SKEL = {};            // panel id -> boot placeholder markup
+  var INFLIGHT = {};        // cache key -> in-flight fragment promise
+  var CACHE_PREFIX = 'cc:v1:panel:';
+  var FRESH_MS = 30000;     // just-fetched window: skip revalidation
+  var WARM_PANELS = ['portfolio', 'explore'];
+
+  panels.forEach(function (p) {
+    if (p.getAttribute('data-loaded') !== '1') {
+      var b = p.querySelector('.cc-panel-body');
+      if (b) SKEL[p.getAttribute('data-panel')] = b.innerHTML;
+    }
+  });
+
+  function skelFor(pid) {
+    return SKEL[pid] || '<div class="cc-loading">Loading…</div>';
+  }
+
+  function cacheKey(pid, ticker) {
+    return CACHE_PREFIX + pid + (ticker ? ':' + ticker : '');
+  }
+
+  function cacheGet(key) {
+    try {
+      var raw = sessionStorage.getItem(key);
+      var entry = raw ? JSON.parse(raw) : null;
+      return (entry && typeof entry.html === 'string') ? entry : null;
+    } catch (e) { return null; }
+  }
+
+  function cacheSet(key, entry) {
+    if (entry.html.length > 400000) return;  // quota is shared — skip outliers
+    var v = JSON.stringify(entry);
+    try { sessionStorage.setItem(key, v); }
+    catch (e) {
+      // Quota pressure: evict every panel entry once, retry, then give up
+      // quietly (SWR just stays cold; nothing user-visible breaks).
+      try {
+        var doomed = [];
+        for (var i = 0; i < sessionStorage.length; i++) {
+          var k = sessionStorage.key(i);
+          if (k && k.indexOf(CACHE_PREFIX) === 0) doomed.push(k);
+        }
+        doomed.forEach(function (k) { sessionStorage.removeItem(k); });
+        sessionStorage.setItem(key, v);
+      } catch (e2) { /* storage unavailable */ }
+    }
+  }
+
+  // One fetch per cache key at a time: a hover prefetch already in flight is
+  // reused by the activation that follows it instead of double-fetching.
+  function fetchFragment(url, key, etag) {
+    if (INFLIGHT[key]) return INFLIGHT[key];
+    var opts = etag ? { headers: { 'If-None-Match': etag } } : {};
+    var p = fetch(url, opts).then(function (r) {
+      if (r.status === 304) return { status: 304, etag: etag, html: null };
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text().then(function (html) {
+        return { status: 200, etag: r.headers.get('ETag') || '', html: html };
+      });
+    });
+    INFLIGHT[key] = p.then(
+      function (res) { delete INFLIGHT[key]; return res; },
+      function (err) { delete INFLIGHT[key]; throw err; }
+    );
+    return INFLIGHT[key];
+  }
+
+  var PERF = { samples: [] };
+  window.CCPerf = PERF;
+  function record(pid, cache, fetchMs, renderMs, totalMs, status) {
+    function r1(x) { return x == null ? null : Math.round(x * 10) / 10; }
+    var s = { panel: pid, cache: cache, fetch_ms: r1(fetchMs),
+              render_ms: r1(renderMs), total_ms: r1(totalMs), status: status || null };
+    PERF.samples.push(s);
+    if (PERF.samples.length > 60) PERF.samples.shift();
+    try {
+      fetch('/api/metrics/panel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(s), keepalive: true
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
   function loadBody(panel, ticker) {
     var ep = panel.getAttribute('data-endpoint');
     if (!ep) return;
+    var pid = panel.getAttribute('data-panel');
     var body = panel.querySelector('.cc-panel-body');
     var url = ep + (ticker ? ('?ticker=' + encodeURIComponent(ticker)) : '');
-    body.innerHTML = '<div class="cc-loading">Loading…</div>';
-    fetch(url).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }).then(function (html) {
-      injectHtml(body, html);
+    var key = cacheKey(pid, ticker || '');
+    var cached = cacheGet(key);
+    var t0 = performance.now();
+    var served = null;  // the path that painted first, if any
+
+    if (cached) {
+      injectHtml(body, cached.html);
       panel.setAttribute('data-current-ticker', ticker || '');
+      var paintMs = performance.now() - t0;
+      served = (Date.now() - (cached.ts || 0) < FRESH_MS) ? 'prefetch' : 'swr';
+      record(pid, served, null, paintMs, paintMs, 200);
+      if (served === 'prefetch') return;  // just fetched — skip revalidation
+    } else {
+      body.innerHTML = skelFor(pid);
+    }
+
+    var tFetch = performance.now();
+    fetchFragment(url, key, cached && cached.etag).then(function (res) {
+      var fetchMs = performance.now() - tFetch;
+      if (res.status === 304) {
+        if (cached) { cached.ts = Date.now(); cacheSet(key, cached); }
+        record(pid, 'revalidate', fetchMs, 0, fetchMs, 304);
+        return;
+      }
+      var entry = { etag: res.etag, html: res.html, ts: Date.now() };
+      if (served) {
+        // Quiet refresh of an already-painted stale fragment. Never yank the
+        // DOM out from under the user's typing — cache the fresh copy and let
+        // the next pageload serve it instead.
+        var ae = document.activeElement;
+        if (ae && body.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) {
+          cacheSet(key, entry);
+          record(pid, 'revalidate', fetchMs, 0, fetchMs, 200);
+          return;
+        }
+        var y = window.scrollY, st = body.scrollTop;
+        var tR = performance.now();
+        injectHtml(body, res.html);
+        window.scrollTo(0, y);
+        body.scrollTop = st;
+        record(pid, 'revalidate', fetchMs, performance.now() - tR, fetchMs + (performance.now() - tR), 200);
+      } else {
+        var tR2 = performance.now();
+        injectHtml(body, res.html);
+        panel.setAttribute('data-current-ticker', ticker || '');
+        record(pid, 'cold', fetchMs, performance.now() - tR2, performance.now() - t0, 200);
+      }
+      cacheSet(key, entry);
     }).catch(function (e) {
-      body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+      if (!served) body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
     });
   }
+
+  // Warm a not-yet-loaded panel's cache (no DOM injection — fragment scripts
+  // run at activation, when the panel is visible and can measure layout).
+  // Ticker-scoped panels prefetch their no-ticker variant (the Holding
+  // combobox band). Returns a promise so warmStart can run sequentially.
+  function prefetchPanel(pid) {
+    var panel = panelById(pid);
+    if (!panel || panel.getAttribute('data-loaded') === '1') return Promise.resolve();
+    var ep = panel.getAttribute('data-endpoint');
+    if (!ep) return Promise.resolve();
+    var key = cacheKey(pid, '');
+    var cached = cacheGet(key);
+    if (cached && Date.now() - (cached.ts || 0) < FRESH_MS) return Promise.resolve();
+    var t0 = performance.now();
+    return fetchFragment(ep, key, cached && cached.etag).then(function (res) {
+      if (res.status === 304) {
+        if (cached) { cached.ts = Date.now(); cacheSet(key, cached); }
+      } else {
+        cacheSet(key, { etag: res.etag, html: res.html, ts: Date.now() });
+      }
+      record(pid, 'revalidate', performance.now() - t0, 0, performance.now() - t0, res.status);
+    }).catch(function () {});
+  }
+
+  // Hover intent on a section or sub-tab button warms its landing panel; the
+  // 80ms delay skips drive-by passes on the way to something else.
+  var prefetchHoverTimer = null;
+  document.addEventListener('mouseover', function (ev) {
+    if (!ev.target.closest) return;
+    var t = ev.target.closest('.cc-theme-tab, .cc-tab[data-tab-target]');
+    if (!t) return;
+    if (prefetchHoverTimer) clearTimeout(prefetchHoverTimer);
+    prefetchHoverTimer = setTimeout(function () {
+      var pid = t.getAttribute('data-tab-target');
+      if (!pid) {
+        var tid = t.getAttribute('data-theme-target');
+        pid = lastPanelByTheme[tid] || firstPanelOfTheme(tid);
+      }
+      if (pid) prefetchPanel(pid);
+    }, 80);
+  });
+
+  // Idle warm-start after first paint: Portfolio (the tracker round-trip
+  // makes it the slowest first hit) and Ask, one at a time so a burst of
+  // panel builds never competes with the visible page.
+  function warmStart() {
+    WARM_PANELS.reduce(function (chain, pid) {
+      return chain.then(function () { return prefetchPanel(pid); });
+    }, Promise.resolve());
+  }
+  if (window.requestIdleCallback) window.requestIdleCallback(warmStart, { timeout: 4000 });
+  else setTimeout(warmStart, 1500);
 
   function activate(panelId, ticker) {
     var panel = panelById(panelId);
