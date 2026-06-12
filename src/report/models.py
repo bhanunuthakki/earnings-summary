@@ -360,6 +360,19 @@ class CellSource(BaseModel):
     # formula: tier base + extraction-method delta - validation penalties).
     # None on legacy DBs / pre-scoring rows — the chip then shows no %.
     confidence: float | None = None
+    # Audit trail of HOW the value left its document (the fact row's
+    # extracted_by tag: 'fmp', 'sec_xbrl', 'llm:<model>', 'manual_*', …).
+    # Rendered as a popover row (S2 PR3); None on legacy rows.
+    extracted_by: str | None = None
+    # Raw kpi_facts.computed_from lineage JSON (alembic 0087) for derived
+    # rows — {"display": "...", "inputs": [{ref,item,period_end,doc_id,tier}]}.
+    # The chip popover renders "derived from: <display>" plus one mini-chip
+    # per input. None for directly-extracted facts.
+    computed_from: str | None = None
+    # Pre-formatted unresolved validation_issues strings targeting this fact
+    # ("⚠ SEC says $101M, 0.99% delta", manual-override reasons, …) — built
+    # by pipeline.confidence.display_issues_for_fact; rendered as warn rows.
+    issues: list[str] = []
 
 
 class QuarterlyLineItem(BaseModel):

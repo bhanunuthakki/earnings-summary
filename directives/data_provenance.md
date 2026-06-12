@@ -181,3 +181,32 @@ Wiring:
 - **Reconciliation** — `python execution/backfill_confidence.py --apply` rescores both tables from current tiers + unresolved issues; idempotent (pure formula, second run over an unchanged DB writes nothing). Re-run after validation passes.
 - **Preservation** — LLM-method rows already carrying a non-default confidence are self-scored extractions; the backfill never rescores them (the self-report is not recoverable from the stored product).
 - **UI** — the source chip (`src/ui/source_chip.py`) shows the % in its popover and hover title; below `LOW_CONFIDENCE_THRESHOLD = 0.8` the chip takes a warn-tinted dashed border (the subtle low-confidence cell affordance).
+
+## 9. Derived-fact lineage — `kpi_facts.computed_from` (alembic 0087)
+
+Derived KPI rows (`extracted_by` `fmp_derived` / `kpi_transform_derived`) carry a nullable JSON TEXT column recording the derivation recipe:
+
+```json
+{"display": "operating_income ÷ revenue (%)",
+ "inputs": [
+   {"ref": "financial_fact", "item": "operating_income", "period_end": "2025-12-31",
+    "doc_id": 45, "tier": "fmp_normalized"},
+   {"ref": "financial_fact", "item": "revenue", "period_end": "2025-12-31",
+    "doc_id": 45, "tier": "fmp_normalized"}
+ ]}
+```
+
+- `display` — the human-readable formula the chip popover renders as "derived from: …".
+- `inputs[*].ref` ∈ `financial_fact` | `kpi_fact` | `segment_fact`; `item` is the line_item / KPI label / `"<segment> <metric>"`; `period_end` ISO date. Two-period derivations (YoY) list both periods.
+- `doc_id` + `tier` — the input's source document at derivation time (`tier` injected by `persist_derived_kpis` from `documents.source_quality_tier`), so the popover renders one tier-colored mini-chip per input linking `/source/<doc_id>` with no render-time lookup.
+
+Writers: `compute/fmp_derived_kpis.py` (margins, ratios, YoY growth, ROE, segment KPIs, category-2 transforms). NULL for directly-extracted rows and rows written before 0087 (re-derivation naturally backfills — `derive_for_ticker` is idempotent). No DB-level JSON CHECK, same rationale as §7's locator column.
+
+### Cell-level surfacing (chip popover)
+
+The source chip popover (`src/ui/source_chip.py`) renders, per fact:
+
+- **confidence %** (§8) + the low-confidence affordance below 0.8;
+- **unresolved validation issues** as warn rows, formatted by `pipeline.confidence.display_issues_for_fact` — a cross-source disagreement reads from the displayed cell's perspective ("⚠ SEC says $101M, 0.99% delta"); unrecognized rules fall back to `⚠ <rule>: <raw_value>`, which is where a manual-override reason (§3) surfaces;
+- **`extracted_by`** ("via fmp_derived") — the extraction-method audit trail;
+- **derived-from lineage** — `computed_from.display` plus per-input mini-chips.

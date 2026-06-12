@@ -163,6 +163,11 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
 .src-pop-row a { color: var(--accent); }
+/* S2 PR3: unresolved validation issues + derived-from input rows. */
+.src-pop-warn { color: var(--warn); }
+.src-pop-input { display: flex; align-items: center; gap: 5px; }
+.src-pop-input .src-chip { opacity: 1; }
+.src-pop-input a.src-chip { text-decoration: none; }
 
 .ic-btn {
   appearance: none;

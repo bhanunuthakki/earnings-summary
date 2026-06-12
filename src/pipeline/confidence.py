@@ -56,6 +56,7 @@ self-report signal or break idempotence.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Literal
@@ -199,6 +200,7 @@ class _ParsedIssue:
     item: str
     period: str | None  # YYYY-MM-DD when the raw_value embeds one
     value: float | None  # offending value when the raw_value embeds one
+    raw: str = ""  # original raw_value — feeds the popover display strings
 
 
 def _parse_issue(rule: str, severity: str, raw_value: str) -> _ParsedIssue | None:
@@ -207,12 +209,14 @@ def _parse_issue(rule: str, severity: str, raw_value: str) -> _ParsedIssue | Non
         item, rest = raw.split(" @ ", 1)
         period = rest[:10] if len(rest) >= 10 else None
         return _ParsedIssue(
-            rule=rule, severity=severity, item=item.strip(), period=period, value=None
+            rule=rule, severity=severity, item=item.strip(), period=period, value=None, raw=raw
         )
     if " prior=" in raw:  # magnitude_jump
         item = raw.split(" prior=", 1)[0].strip()
         period = raw[-10:] if " at " in raw else None
-        return _ParsedIssue(rule=rule, severity=severity, item=item, period=period, value=None)
+        return _ParsedIssue(
+            rule=rule, severity=severity, item=item, period=period, value=None, raw=raw
+        )
     if "=" in raw:  # plausible_range / unit_mismatch: "<item>=<value>[ <unit>]"
         item, rest = raw.split("=", 1)
         try:
@@ -220,7 +224,7 @@ def _parse_issue(rule: str, severity: str, raw_value: str) -> _ParsedIssue | Non
         except ValueError:
             return None
         return _ParsedIssue(
-            rule=rule, severity=severity, item=item.strip(), period=None, value=value
+            rule=rule, severity=severity, item=item.strip(), period=None, value=value, raw=raw
         )
     return None
 
@@ -275,6 +279,110 @@ def issues_for_fact(
         for p in candidates
         if _issue_matches(p, item=item, period=period, value=value)
     )
+
+
+# ---------------------------------------------------------------------------
+# Popover display strings for matched issues (S2 PR3)
+# ---------------------------------------------------------------------------
+
+# Short labels for the disagreement string, keyed by documents.source_type
+# (the engine embeds source_type, not tier, in disagreement raw_values).
+_SOURCE_TYPE_SHORT: dict[str, str] = {
+    "sec_xbrl": "SEC",
+    "fmp": "FMP",
+    "ir_doc": "IR",
+    "llm_extracted": "LLM",
+    "sec_s1": "S-1",
+    "transcript_audio": "Call",
+    "manual_csv": "Manual",
+    "manual_entry": "Manual",
+}
+
+# Displayed tier → the source_type its rows come from, to pick which side of
+# a disagreement is "the other source" relative to the displayed cell.
+_TIER_TO_SOURCE_TYPE: dict[str, str] = {
+    SourceQualityTier.SEC_OFFICIAL.value: "sec_xbrl",
+    SourceQualityTier.FMP_NORMALIZED.value: "fmp",
+    SourceQualityTier.LLM_EXTRACTED.value: "llm_extracted",
+    SourceQualityTier.S1_PROVISIONAL.value: "sec_s1",
+}
+
+_DISAGREEMENT_RE = re.compile(
+    r"(?P<a_st>\w+)=(?P<a_val>-?[\d.eE+]+) vs (?P<b_st>\w+)=(?P<b_val>-?[\d.eE+]+) "
+    r"\((?P<pct>[\d.]+)%\)"
+)
+
+
+def _fmt_compact_value(raw: str) -> str:
+    """Compact display for a disagreement-side value: $-scaled for big
+    actuals ('$101M'), trimmed float otherwise (KPI percents, ratios)."""
+    try:
+        v = float(raw)
+    except ValueError:
+        return raw
+    a = abs(v)
+    if a >= 1e9:
+        return f"${v / 1e9:.1f}B"
+    if a >= 1e6:
+        return f"${v / 1e6:.0f}M"
+    if a >= 1e5:
+        return f"${v / 1e3:.0f}K"
+    return f"{v:g}"
+
+
+def display_issues_for_fact(
+    by_ticker: dict[str, list[_ParsedIssue]],
+    *,
+    ticker: str,
+    item: str,
+    period_end: str,
+    value: float,
+    displayed_tier: str | None = None,
+) -> list[str]:
+    """Pre-formatted popover strings for the fact's matching unresolved
+    issues — what CellSource.issues carries (S2 PR3).
+
+    A disagreement reads from the displayed cell's perspective: the OTHER
+    source's claim ("⚠ SEC says $101M, 0.99% delta"); ``displayed_tier``
+    picks the side (falls back to naming both when ambiguous). Rules without
+    a bespoke format fall back to "⚠ <rule>: <raw_value>" — which is exactly
+    where a manual-override reason recorded per data_provenance.md §3
+    surfaces.
+    """
+    candidates = by_ticker.get(ticker.upper())
+    if not candidates:
+        return []
+    period = period_end[:10]
+    out: list[str] = []
+    displayed_st = _TIER_TO_SOURCE_TYPE.get(displayed_tier or "")
+    for p in candidates:
+        if not _issue_matches(p, item=item, period=period, value=value):
+            continue
+        if p.rule == "source_disagreement":
+            m = _DISAGREEMENT_RE.search(p.raw)
+            if m is not None:
+                sides = [(m["a_st"], m["a_val"]), (m["b_st"], m["b_val"])]
+                others = [s for s in sides if s[0] != displayed_st] or sides
+                if displayed_st is not None and len(others) == 1:
+                    st, val = others[0]
+                    label = _SOURCE_TYPE_SHORT.get(st, st)
+                    out.append(f"⚠ {label} says {_fmt_compact_value(val)}, {m['pct']}% delta")
+                else:
+                    a_label = _SOURCE_TYPE_SHORT.get(sides[0][0], sides[0][0])
+                    b_label = _SOURCE_TYPE_SHORT.get(sides[1][0], sides[1][0])
+                    out.append(
+                        f"⚠ {a_label} {_fmt_compact_value(sides[0][1])} vs "
+                        f"{b_label} {_fmt_compact_value(sides[1][1])} ({m['pct']}% delta)"
+                    )
+                continue
+            out.append(f"⚠ source disagreement: {p.raw}")
+        elif p.rule == "magnitude_jump":
+            out.append(f"⚠ magnitude jump vs prior period ({p.raw.split(' prior=', 1)[-1]})")
+        elif p.rule in ("plausible_range", "unit_mismatch"):
+            out.append(f"⚠ {p.rule.replace('_', ' ')}: {p.raw}")
+        else:
+            out.append(f"⚠ {p.rule.replace('_', ' ')}: {p.raw}")
+    return out
 
 
 # ---------------------------------------------------------------------------
