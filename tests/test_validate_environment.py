@@ -37,6 +37,11 @@ def test_empty_fmp_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("FMP_API_KEY=\nFMP_TIER=basic\n", encoding="utf-8")
     monkeypatch.setattr("execution.validate_environment.ENV_FILE", env_file)
+    # Remove any real/suite-leaked FMP_API_KEY so the empty file value isn't
+    # overridden — several test modules `os.environ.setdefault` a placeholder
+    # key at import, which reaches this test in a full-suite run (same hazard
+    # test_invalid_fmp_tier already guards for FMP_TIER).
+    monkeypatch.delenv("FMP_API_KEY", raising=False)
     from execution.validate_environment import check
 
     results = {name: ok for name, ok, _ in check()}
