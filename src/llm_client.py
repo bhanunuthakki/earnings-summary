@@ -150,6 +150,12 @@ from llm.ledger import (
 from llm.style import (
     NUMBER_FORMATTING_BLOCK as NUMBER_FORMATTING_BLOCK,
 )
+from llm.untrusted import (
+    WEB_CONTENT_NOTICE as WEB_CONTENT_NOTICE,
+)
+from llm.untrusted import (
+    spotlight as spotlight,
+)
 
 # Load .env at module init so GEMINI_API_KEY is available without callers having
 # to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
@@ -398,8 +404,9 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
 
     Transcript:
     """
+    body = spotlight(text, source="earnings call transcript (issuer-published document)")
     try:
-        return call_llm(prompt + text, purpose="transcript_summary", ticker=ticker)
+        return call_llm(prompt + body, purpose="transcript_summary", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
@@ -446,8 +453,9 @@ This is sourced from the company's IR website, so it is the official financial r
 
 Press Release:
 """
+    body = spotlight(text, source="earnings press release (issuer-published document)")
     try:
-        return call_llm(prompt + text, purpose="press_release_summary", ticker=ticker)
+        return call_llm(prompt + body, purpose="press_release_summary", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Press release summary generation failed: {e}")
         raise
@@ -487,8 +495,9 @@ Extract the key strategic narrative — what story is management telling investo
 
 Presentation Text:
 """
+    body = spotlight(text, source="earnings presentation deck text (issuer-published document)")
     try:
-        return call_llm(prompt + text, purpose="presentation_brief", ticker=ticker)
+        return call_llm(prompt + body, purpose="presentation_brief", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Presentation brief generation failed: {e}")
         raise
@@ -1122,8 +1131,9 @@ or DIFFERENT vs. prior management framing.]
 
 Event Document Text:
 """
+    body = spotlight(bounded_text, source="IR event document (issuer-published)")
     try:
-        return call_llm(prompt + bounded_text, purpose="event_brief", ticker=ticker)
+        return call_llm(prompt + body, purpose="event_brief", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Event brief generation failed: {e}")
         raise
@@ -1181,6 +1191,8 @@ WEB BUDGET (HARD CAPS — do not exceed):
 - If the search returns more candidates than {max_web_results}, pick the
   highest-thesis-impact subset (see ranking rules below) and discard the
   rest before fetching. Don't fetch URLs you won't cite.
+
+{WEB_CONTENT_NOTICE}
 
 RANKING + filtering rules:
 - Order each section by THESIS IMPACT (highest first), NOT chronologically.
@@ -1282,6 +1294,7 @@ def structure_recent_news_json(
         f"pure stock-price chatter.\n\n"
         f"WEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT "
         f"MOST {max_web_results} URLs via web_fetch.\n\n"
+        f"{WEB_CONTENT_NOTICE}\n\n"
         "Return ONLY a JSON array, one object per distinct story, EXACTLY:\n"
         '[{"headline": "<title>", "url": "<canonical article url>", '
         '"published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", '
@@ -1335,13 +1348,15 @@ def _ir_anchor_prompt_block(md: str) -> str:
 
     The caller is expected to have already invoked ``load_ir_anchor`` — the
     body already carries its own ``## IR ANCHOR (... USE WITH SKEPTICISM)``
-    heading. This wrapper only handles the prefix newline + empty-case guard
-    so the surrounding prompt template doesn't sprout a dangling blank line
-    when the ticker has no IR-deck cache.
+    heading. This wrapper spotlights the company-authored narrative as
+    untrusted data (the bias header frames *credibility*; the spotlight
+    revokes *instruction authority*) and handles the prefix newline +
+    empty-case guard so the surrounding prompt template doesn't sprout a
+    dangling blank line when the ticker has no IR-deck cache.
     """
     if not md.strip():
         return ""
-    return f"\n{md}\n"
+    return f"\n{spotlight(md, source='issuer IR narrative (company-authored)')}\n"
 
 
 def _ts_signals_prompt_block(md: str) -> str:
@@ -1675,14 +1690,17 @@ def generate_company_description(
     )
     recent_ir_block = (
         f"RECENT IR DOCUMENT EXCERPTS (press releases, investor day decks):\n"
-        f'"""\n{recent_ir_md.strip()[:8000]}\n"""\n'
+        f"{spotlight(recent_ir_md.strip()[:8000], source='recent IR document excerpts (issuer-derived)')}\n"
         if recent_ir_md.strip()
         else ""
     )
     # IR anchor carries its own ## IR ANCHOR (USE WITH SKEPTICISM) heading from
-    # load_ir_anchor; pass it through verbatim so the bias frame stays intact.
+    # load_ir_anchor (bias frame, kept intact); the spotlight wrap additionally
+    # marks the company-authored text as data without instruction authority.
     ir_anchor_block = (
-        f"{ir_anchor_md.strip()}\n" if ir_anchor_md.strip() else ""
+        f"{spotlight(ir_anchor_md.strip(), source='issuer IR narrative (company-authored)')}\n"
+        if ir_anchor_md.strip()
+        else ""
     )
     prompt = f"""You are writing the "Company" section of an analyst-grade
 investment memo on {ticker}. Voice: a senior buy-side analyst's working
@@ -1708,9 +1726,7 @@ GEOGRAPHIES this report displays (use these EXACT names):
 {geos_block}
 
 10-K segment-naming excerpts (factual grounding only — do not paraphrase):
-\"\"\"
-{form_10k_text.strip()[:2500] or "(none)"}
-\"\"\"
+{spotlight(form_10k_text.strip()[:2500], source="10-K narrative excerpts (issuer-filed)") or "(none)"}
 
 Profile blurb (third-party — do not copy):
 "{profile_description.strip()[:500] or "(none)"}"
@@ -1840,14 +1856,10 @@ FMP profile.json description:
 \"\"\"
 
 10-K narrative excerpts (business description / segments):
-\"\"\"
-{form_10k_text.strip() or "(no 10-K narrative available)"}
-\"\"\"
+{spotlight(form_10k_text.strip(), source="10-K narrative excerpts (issuer-filed)") or "(no 10-K narrative available)"}
 
 Recent earnings-call Q&A excerpts (how management frames the platform NOW):
-\"\"\"
-{transcript_excerpts.strip() or "(no transcripts available)"}
-\"\"\"
+{spotlight(transcript_excerpts.strip(), source="earnings-call Q&A excerpts (issuer-published)") or "(no transcripts available)"}
 
 Segment names this report displays (use these where they fit; do not invent new ones):
 {segments_block}

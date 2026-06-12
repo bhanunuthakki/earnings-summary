@@ -70,6 +70,7 @@ from llm.anchors import (
     load_thesis_anchor,
 )
 from llm.prompt_versions import prompt_version_for
+from llm.untrusted import spotlight
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -308,7 +309,14 @@ def _build_classification_prompt(ticker: str, anchor_block: str, stories: list[_
     for idx, story in enumerate(stories):
         snippet = f"\n   Snippet: {story.snippet}" if story.snippet else ""
         numbered.append(f"{idx}. {story.headline}{snippet}")
-    headlines_block = "\n".join(numbered)
+    # Headlines/snippets arrive from external feeds (FMP, EDGAR, WebSearch
+    # structuring) — spotlight them so injected "news" text cannot issue
+    # instructions to the materiality classifier (news→trigger→alert chain;
+    # directives/llm_injection_threat_model.md).
+    headlines_block = spotlight(
+        "\n".join(numbered),
+        source="news headlines and snippets from external feeds",
+    )
 
     return (
         f"You are screening recent news for a long-term investor in {ticker}.\n\n"
