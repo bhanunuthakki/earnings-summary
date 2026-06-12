@@ -30,18 +30,20 @@ import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-
 from filing_text_fetcher import (  # noqa: E402
     fetch_latest_10k_text,
     load_canonical_narrative,
     split_risk_factors,
 )
-from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from llm.cli import is_hard_stop  # noqa: E402
+from llm.structured import call_llm_structured  # noqa: E402
+from llm_client import call_llm  # noqa: E402
 
 log = logging.getLogger("extract_risk_factors")
 
@@ -74,7 +76,16 @@ def _llm_classify_risks(
     *, ticker: str, fiscal_year: int, risks: list[tuple[str, str]]
 ) -> dict[int, str]:
     """Batch LLM call: send all uncategorized risks at once and get back
-    a {ordinal: category} mapping. Returns {} on parse failure."""
+    a {ordinal: category} mapping.
+
+    Loud on failure (llm_evals_plan §5.4): a call/parse failure used to
+    return ``{}``, which silently persisted every uncategorized risk as
+    "other" — indistinguishable from a real classification. Now the call
+    goes through ``call_llm_structured`` (one retry-with-feedback) and any
+    final failure RAISES, so ``extract_for_ticker`` skips the ticker with a
+    visible ``classify_failed`` status instead of shipping fabricated
+    categories.
+    """
     if not risks:
         return {}
     payload = [
@@ -97,30 +108,19 @@ Risks (JSON):
 
 Return ONLY a JSON object {{"<id>": "<category>", ...}}.
 Use "other" only when no category fits."""
-    try:
-        raw = call_llm(
-            prompt,
-            purpose="risk_factor_classify",
-            ticker=ticker,
-            model="claude-haiku-4-5-20251001",
-        ).strip()
-    except Exception as exc:  # noqa: BLE001
-        log.warning({"event": "risk_classify_failed", "ticker": ticker, "error": str(exc)})
-        return {}
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        decoded = json.loads(raw)
-    except json.JSONDecodeError:
-        log.warning({"event": "risk_classify_parse_failed", "ticker": ticker})
-        return {}
+    decoded = call_llm_structured(
+        prompt,
+        purpose="risk_factor_classify",
+        ticker=ticker,
+        model="claude-haiku-4-5-20251001",
+        expect="object",
+    )
     out: dict[int, str] = {}
-    if isinstance(decoded, dict):
-        for k, v in decoded.items():
-            try:
-                out[int(k)] = str(v)
-            except (ValueError, TypeError):
-                continue
+    for k, v in cast("dict[str, object]", decoded).items():
+        try:
+            out[int(k)] = str(v)
+        except (ValueError, TypeError):
+            continue
     return out
 
 
@@ -176,7 +176,7 @@ Return only the summary text, no JSON."""
         if "no material rewording" in out.lower():
             return None
         return out[:1500]
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "risk_diff_failed", "ticker": ticker, "error": str(exc)})
         return None
 
@@ -226,10 +226,31 @@ def extract_for_ticker(
             uncategorized_indices.append(i)
 
     if uncategorized:
-        # Batch LLM classification (single call for all uncategorized risks)
-        llm_map = _llm_classify_risks(
-            ticker=ticker, fiscal_year=result.fiscal_year, risks=uncategorized
-        )
+        # Batch LLM classification (single call for all uncategorized risks).
+        # A failed call/parse SKIPS the ticker with a visible status instead
+        # of persisting every uncategorized risk as a fabricated "other"
+        # (llm_evals_plan §5.4). Hard stops (budget cap / missing CLI) still
+        # propagate — they fail the whole run loudly per is_hard_stop.
+        try:
+            llm_map = _llm_classify_risks(
+                ticker=ticker, fiscal_year=result.fiscal_year, risks=uncategorized
+            )
+        except Exception as exc:
+            if is_hard_stop(exc):
+                raise
+            log.error(
+                {
+                    "event": "risk_classify_failed_skipping_ticker",
+                    "ticker": ticker,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            return {
+                "ticker": ticker,
+                "status": "classify_failed",
+                "n": 0,
+                "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+            }
         for local_idx, original_idx in enumerate(uncategorized_indices):
             categories[original_idx] = llm_map.get(local_idx, "other")
 

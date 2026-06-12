@@ -1,0 +1,26 @@
+{
+  "purpose": "transcript_metadata",
+  "notes": "Mode-A golden set for identify_transcript_metadata (llm_evals_plan PR 4). Synthetic cover-page snippets; expected is the exact TICKER_QX_YYYY string (or UNKNOWN). Deterministic compare — no judge: an exact-format string is either right or wrong.",
+  "cases": [
+    {
+      "id": "tm-001-plain-cover",
+      "text": "NVIDIA Corporation (NASDAQ: NVDA)\nQ1 Fiscal 2026 Earnings Call\nMay 28, 2025, 5:00 PM ET\n\nOperator: Good afternoon. My name is Sarah and I will be your conference operator today. At this time, I would like to welcome everyone to NVIDIA's first quarter fiscal 2026 earnings call.",
+      "expected": "NVDA_Q1_2026"
+    },
+    {
+      "id": "tm-002-us-listing-rule",
+      "text": "Taiwan Semiconductor Manufacturing Company (TWSE: 2330)\nFourth Quarter 2025 Earnings Conference\nJanuary 15, 2026\n\nJeff Su: Good afternoon, everyone, and welcome to TSMC's fourth quarter 2025 earnings conference call.",
+      "expected": "TSM_Q4_2025"
+    },
+    {
+      "id": "tm-003-spelled-out-quarter",
+      "text": "MercadoLibre, Inc.\nThird Quarter 2025 Results Conference Call\nNovember 6, 2025\n\nInvestor Relations: Hello everyone, and welcome to the MercadoLibre earnings conference call for the quarter ended September 30, 2025.",
+      "expected": "MELI_Q3_2025"
+    },
+    {
+      "id": "tm-004-not-a-transcript",
+      "text": "Chocolate chip cookie recipe. Preheat the oven to 375F. Cream the butter and both sugars until fluffy, then beat in the eggs and vanilla. Fold in the flour, baking soda, and salt, then the chocolate chips. Bake 9 to 11 minutes.",
+      "expected": "UNKNOWN"
+    }
+  ]
+}
