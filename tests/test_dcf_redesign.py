@@ -20,6 +20,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -48,6 +49,7 @@ REDESIGN_SHEETS = [
     "Financials",
     "Consensus",
     "Valuation",
+    "Sensitivity",
     "Monte Carlo",
 ]
 
@@ -150,6 +152,54 @@ def test_negative_margin_yields_negative_value_without_crashing() -> None:
     # the refresher's #291 guard nulls over/under on a value like this.
     loss = dataclasses.replace(_BASE, near_op_margin=-0.5, terminal_op_margin=-0.5)
     assert redesign.value(loss).value_per_share_usd < 0
+
+
+# --------------------------------------------------------------------------- #
+# Scenarios + sensitivity (pure engine)
+# --------------------------------------------------------------------------- #
+def test_scenario_values_order_bear_base_bull() -> None:
+    """With the seeded offsets the three fair values are strictly ordered and
+    Base is exactly the value-of-record."""
+    sv = redesign.scenario_values(_BASE)
+    assert sv.bull is not None and sv.bear is not None
+    assert sv.bear < sv.base < sv.bull
+    assert sv.base == pytest.approx(redesign.value(_BASE).value_per_share_usd)
+
+
+def test_apply_scenario_shifts_every_lever() -> None:
+    shifted = redesign.apply_scenario(_BASE, redesign.BULL_SEED)
+    assert shifted.near_growth_by_segment["Total company"] == pytest.approx(0.13)
+    assert shifted.terminal_growth_by_segment["Total company"] == pytest.approx(0.04)
+    assert shifted.near_op_margin == pytest.approx(0.21)
+    assert shifted.terminal_op_margin == pytest.approx(0.27)
+    assert shifted.exit_multiple == pytest.approx(14.0)
+    assert shifted.terminal_growth_g == pytest.approx(0.035)
+
+
+def test_scenario_degenerate_bull_degrades_to_none() -> None:
+    """A Bull terminal-g pushed to/above WACC under a perpetuity terminal is
+    un-valuable: bull degrades to None while Base (still WACC > g) and Bear
+    (g moves further below WACC) stay numeric."""
+    perp = dataclasses.replace(
+        _BASE, terminal_method="Perpetuity", wacc=0.038, terminal_growth_g=0.034
+    )
+    sv = redesign.scenario_values(perp)
+    assert sv.bull is None  # bull g = 3.9% >= 3.8% WACC
+    assert sv.base > 0
+    assert sv.bear is not None
+
+
+def test_sensitivity_grid_centered_on_base_and_monotonic() -> None:
+    grid = redesign.sensitivity_grid(_BASE)
+    assert len(grid.wacc_axis) == 7 and len(grid.multiple_axis) == 7
+    assert grid.values[3][3] == pytest.approx(redesign.value(_BASE).value_per_share_usd)
+    assert grid.wacc_axis[3] == pytest.approx(_BASE.wacc)
+    assert grid.multiple_axis[3] == pytest.approx(_BASE.exit_multiple)
+    for row in grid.values:  # value falls as WACC rises (left -> right)
+        assert all(row[j] > row[j + 1] for j in range(len(row) - 1))
+    for j in range(7):  # value rises with the exit multiple (top -> bottom)
+        col = [grid.values[i][j] for i in range(7)]
+        assert all(col[i] < col[i + 1] for i in range(len(col) - 1))
 
 
 # --------------------------------------------------------------------------- #
@@ -466,6 +516,68 @@ def test_fx_applied_for_non_usd_reporter(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Scenarios + sensitivity in the built workbook
+# --------------------------------------------------------------------------- #
+# The grid is 7x7 anchored at header row 4 / column B, so the base (center)
+# cell sits at row 8, column E.
+_GRID_CENTER = (8, 5)
+
+
+def test_builder_writes_scenarios_block_and_sensitivity_sheet(
+    built_usd: tuple[Path, float],
+) -> None:
+    """A fresh build carries the seeded Bull/Bear Δ columns, the three computed
+    fair values (Base == the reader's value-of-record), and a Sensitivity sheet
+    whose center cell is that same value — builder statics and the refresh
+    engine can't drift because both come from dcf.redesign."""
+    dest, _ = built_usd
+    rv = redesign.read_and_value(dest)
+    assert rv is not None
+    wb = openpyxl.load_workbook(str(dest))
+    try:
+        assert wb.sheetnames == REDESIGN_SHEETS
+        dsh = wb["Dashboard"]
+        bull_margin = dsh.cell(redesign.SCEN_ROW_MARGIN_TERM, redesign.SCEN_COL_BULL).value
+        bear_mult = dsh.cell(redesign.SCEN_ROW_EXIT_MULT, redesign.SCEN_COL_BEAR).value
+        assert bull_margin == pytest.approx(redesign.BULL_SEED.margin_term)
+        assert bear_mult == pytest.approx(redesign.BEAR_SEED.exit_multiple)
+        base_fv = dsh.cell(redesign.SCEN_FV_ROW, 2).value
+        bull_fv = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value
+        bear_fv = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value
+        assert isinstance(base_fv, float) and isinstance(bull_fv, float)
+        assert isinstance(bear_fv, float)
+        assert base_fv == pytest.approx(rv.value_per_share_usd)
+        assert bear_fv < base_fv < bull_fv
+        sens = wb["Sensitivity"]
+        assert sens.cell(*_GRID_CENTER).value == pytest.approx(rv.value_per_share_usd)
+    finally:
+        wb.close()
+
+
+def test_reader_returns_seeded_deltas_and_blank_cells_fall_back(
+    built_usd: tuple[Path, float], tmp_path: Path
+) -> None:
+    """read_inputs returns the seeded offsets from a fresh build; blanking a
+    single Δ cell falls back to that lever's documented seed (and a pre-scenario
+    workbook therefore reads as the full seeds)."""
+    dest, _ = built_usd
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.bull_deltas == redesign.BULL_SEED
+    assert inp.bear_deltas == redesign.BEAR_SEED
+
+    copy = tmp_path / "blanked.xlsx"
+    shutil.copyfile(dest, copy)
+    wb = openpyxl.load_workbook(str(copy))
+    wb["Dashboard"].cell(row=redesign.SCEN_ROW_TG, column=redesign.SCEN_COL_BULL).value = None
+    wb.save(str(copy))
+    wb.close()
+    blanked = redesign.read_inputs(copy)
+    assert blanked is not None
+    assert blanked.bull_deltas.terminal_g == pytest.approx(redesign.BULL_SEED.terminal_g)
+
+
+# --------------------------------------------------------------------------- #
 # Edit-preservation refresh integration
 # --------------------------------------------------------------------------- #
 class _FakeLive:
@@ -712,6 +824,121 @@ def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
             rev_values.append(float(v))
     wb3.close()
     assert any(abs(v - 9999.0) < 1.0 for v in rev_values)
+
+
+def test_refresh_preserves_scenario_edits_and_recomputes_outputs(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scenario half of the edit-preservation contract: edit Bull/Bear Δ
+    cells, refresh. The edits MUST survive the rebuild, the computed fair-value
+    row + Sensitivity grid MUST be rewritten from the edited inputs (not the
+    builder's defaults), dcf_runs MUST carry the scenario range in
+    assumption_snapshot_json, and the deltas MUST mirror to dcf_assumptions."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps({"redesign": {"exit_multiple": 12.0, "narrative": "keep me"}}, indent=2),
+        encoding="utf-8",
+    )
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    # The user edits both scenario columns (a richer Bull margin, a harsher
+    # Bear multiple) and we note the seeded computed Bull value beforehand.
+    wb = openpyxl.load_workbook(str(dest))
+    dsh = wb["Dashboard"]
+    pre_bull = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value
+    pre_bear = dsh.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value
+    assert isinstance(pre_bull, float) and isinstance(pre_bear, float)
+    dsh.cell(row=redesign.SCEN_ROW_MARGIN_TERM, column=redesign.SCEN_COL_BULL, value=0.10)
+    dsh.cell(row=redesign.SCEN_ROW_EXIT_MULT, column=redesign.SCEN_COL_BEAR, value=-4.0)
+    wb.save(str(dest))
+    wb.close()
+
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "ok", res
+
+    wb2 = openpyxl.load_workbook(str(dest))
+    try:
+        dsh2 = wb2["Dashboard"]
+        # The Δ edits survived the rebuild.
+        bull_margin = dsh2.cell(redesign.SCEN_ROW_MARGIN_TERM, redesign.SCEN_COL_BULL).value
+        bear_mult = dsh2.cell(redesign.SCEN_ROW_EXIT_MULT, redesign.SCEN_COL_BEAR).value
+        assert bull_margin == pytest.approx(0.10)
+        assert bear_mult == pytest.approx(-4.0)
+        # The computed row was rewritten from the EDITED deltas: a richer Bull
+        # margin lifts Bull, a harsher Bear multiple cuts Bear.
+        post_bull = dsh2.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BULL).value
+        post_bear = dsh2.cell(redesign.SCEN_FV_ROW, redesign.SCEN_COL_BEAR).value
+        assert isinstance(post_bull, float) and isinstance(post_bear, float)
+        assert post_bull > pre_bull
+        assert post_bear < pre_bear
+        # The Sensitivity grid tracks the value-of-record (rewritten post-inject).
+        rv = redesign.read_and_value(dest)
+        assert rv is not None
+        sens = wb2["Sensitivity"]
+        assert sens.cell(*_GRID_CENTER).value == pytest.approx(rv.value_per_share_usd)
+    finally:
+        wb2.close()
+
+    # dcf_runs carries the scenario range; BASE stays npv_per_share.
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT npv_per_share, assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    snap = json.loads(row[1])
+    sc = snap["scenarios"]
+    assert sc["base"]["fair_value_per_share_usd"] == pytest.approx(float(row[0]))
+    assert sc["bull"]["fair_value_per_share_usd"] == pytest.approx(post_bull)
+    assert sc["bear"]["fair_value_per_share_usd"] == pytest.approx(post_bear)
+    assert sc["bull"]["deltas"]["margin_term"] == pytest.approx(0.10)
+    assert sc["bear"]["deltas"]["exit_multiple"] == pytest.approx(-4.0)
+
+    # The deltas mirrored back to the assumptions JSON (from-scratch parity).
+    rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
+    assert rd["scenario_bull"]["margin_term"] == pytest.approx(0.10)
+    assert rd["scenario_bear"]["exit_multiple"] == pytest.approx(-4.0)
+    assert rd["narrative"] == "keep me"
+
+
+def test_builder_reads_scenario_override_from_block(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """scenario_bull/scenario_bear overrides in the redesign block flow into the
+    built workbook's Δ columns (the other half of the sync round-trip) — levers
+    absent from the override keep their documented seeds."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "scenario_bull": {"margin_term": 0.07},
+                    "scenario_bear": {"growth_near": -0.08},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "ok", res
+    assert _dashboard_cell(
+        dest, redesign.SCEN_ROW_MARGIN_TERM, redesign.SCEN_COL_BULL
+    ) == pytest.approx(0.07)
+    assert _dashboard_cell(
+        dest, redesign.SCEN_ROW_GROWTH_NEAR, redesign.SCEN_COL_BEAR
+    ) == pytest.approx(-0.08)
+    # un-overridden levers keep the seeds
+    assert _dashboard_cell(
+        dest, redesign.SCEN_ROW_EXIT_MULT, redesign.SCEN_COL_BULL
+    ) == pytest.approx(redesign.BULL_SEED.exit_multiple)
 
 
 def test_refresh_skips_dcf_not_applicable(

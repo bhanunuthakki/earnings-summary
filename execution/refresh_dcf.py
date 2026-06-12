@@ -12,8 +12,12 @@ Valuation/Monte Carlo). On each run, `refresh_one`:
     price is refreshed, from the live quote);
   - recomputes the value-of-record in Python from those Dashboard inputs + the
     Financials actuals (openpyxl can't evaluate the formulas offline), via
-    `dcf.redesign.read_and_value` -> `dcf.valuation.compute_valuation`, and
-    upserts the `dcf_runs` row that briefs read from.
+    `dcf.redesign.read_inputs`/`value` -> `dcf.valuation.compute_valuation`, and
+    upserts the `dcf_runs` row that briefs read from;
+  - recomputes the Bull/Bear scenario fair values (Dashboard SCENARIOS deltas)
+    and the WACC x exit-multiple Sensitivity grid from the same inputs, rewrites
+    those static cells post-inject, and stores the scenario range in
+    `assumption_snapshot_json` (BASE remains `npv_per_share`/`over_under_pct`).
 
 Names Opus flagged `dcf_applicable=false` (banks/insurers/asset-managers) are
 skipped, matching the builder's SKIP.
@@ -34,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import json
 import os
 import sqlite3
@@ -421,8 +426,20 @@ def _unlink(path: Path) -> None:
         path.unlink()
 
 
-def _redesign_snapshot(rv: redesign_mod.RedesignValuation, workbook_path: str) -> str:
-    """Serialize the redesigned-DCF inputs/outputs into the assumption snapshot."""
+def _redesign_snapshot(
+    rv: redesign_mod.RedesignValuation,
+    workbook_path: str,
+    *,
+    scenarios: redesign_mod.ScenarioValues | None = None,
+    inp: redesign_mod.RedesignInputs | None = None,
+) -> str:
+    """Serialize the redesigned-DCF inputs/outputs into the assumption snapshot.
+
+    ``scenarios`` adds the Bull/Bear fair values (and the deltas that produced
+    them) — BASE stays the row's ``npv_per_share``/``over_under_pct`` (the 0076
+    convention untouched); Bull/Bear live only here, for the valuation card and
+    any risk/reward consumer.
+    """
     payload: dict[str, object] = {
         "workbook_path": workbook_path,
         "format": "redesign",
@@ -439,6 +456,18 @@ def _redesign_snapshot(rv: redesign_mod.RedesignValuation, workbook_path: str) -
         "valuation_fcf_M": rv.fcff_stream_m,
         "forecast_revenue_M": rv.forecast_revenue_m,
     }
+    if scenarios is not None and inp is not None:
+        payload["scenarios"] = {
+            "base": {"fair_value_per_share_usd": scenarios.base},
+            "bull": {
+                "fair_value_per_share_usd": scenarios.bull,
+                "deltas": dataclasses.asdict(inp.bull_deltas),
+            },
+            "bear": {
+                "fair_value_per_share_usd": scenarios.bear,
+                "deltas": dataclasses.asdict(inp.bear_deltas),
+            },
+        }
     return json.dumps(payload, indent=2)
 
 
@@ -485,6 +514,10 @@ def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.Redesi
     rd["risk_free_rate"] = inp.risk_free_rate
     rd["equity_risk_premium"] = inp.equity_risk_premium
     rd["cost_of_debt"] = inp.cost_of_debt
+    # Scenario offsets mirror too, so a from-scratch build (which seeds the
+    # Bull/Bear columns from this block) reproduces edited scenarios.
+    rd["scenario_bull"] = dataclasses.asdict(inp.bull_deltas)
+    rd["scenario_bear"] = dataclasses.asdict(inp.bear_deltas)
     try:
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except OSError:
@@ -544,13 +577,19 @@ def _refresh_redesign(
     redesign_mod.inject_dashboard(tmp, captured, current_price=live.price if live else None)
 
     try:
-        rv = redesign_mod.read_and_value(tmp)
+        inp = redesign_mod.read_inputs(tmp)
+        rv = redesign_mod.value(inp) if inp is not None else None
     except redesign_mod.RedesignError as e:
         _unlink(tmp)
         return {"ticker": ticker, "status": "failed", "reason": str(e)}
-    if rv is None:
+    if inp is None or rv is None:
         _unlink(tmp)
         return {"ticker": ticker, "status": "failed", "reason": "rebuilt workbook not redesign"}
+
+    # Rewrite the Python-computed static cells (Dashboard scenario fair values +
+    # the Sensitivity grid) from the INJECTED inputs — the builder wrote them
+    # from its from-scratch defaults, which the user's preserved edits supersede.
+    scenarios = redesign_mod.write_computed_outputs(tmp, inp)
 
     os.replace(tmp, dest)
 
@@ -577,7 +616,7 @@ def _refresh_redesign(
         live_price=live.price if live else None,
         live_price_at=live.fetched_at if live else None,
         mos_bar_used=mos_bar_f,
-        assumption_snapshot_json=_redesign_snapshot(rv, str(dest)),
+        assumption_snapshot_json=_redesign_snapshot(rv, str(dest), scenarios=scenarios, inp=inp),
         notes=f"workbook={dest.name} (redesigned)",
     )
     with sqlite3.connect(str(db_path)) as conn:
@@ -587,10 +626,7 @@ def _refresh_redesign(
     # build_all_redesigned_dcf can't silently revert user edits (single source of
     # truth). Best-effort: a sync-write failure must never fail the refresh — the
     # edits are already preserved in the workbook + dcf_runs.
-    synced = False
-    inp = redesign_mod.read_inputs(dest)
-    if inp is not None:
-        synced = sync_assumptions_json(repo_root, ticker, inp)
+    synced = sync_assumptions_json(repo_root, ticker, inp)
 
     return {
         "ticker": ticker,
@@ -600,6 +636,8 @@ def _refresh_redesign(
         "assumptions_synced": synced,
         "valuation_year": valuation_year,
         "fair_value_per_share": fair_value,
+        "fair_value_bull": scenarios.bull,
+        "fair_value_bear": scenarios.bear,
         "enterprise_value_M": rv.operating_value_usd_m,
         "live_price": live.price if live else None,
         "over_under_pct": over_under,

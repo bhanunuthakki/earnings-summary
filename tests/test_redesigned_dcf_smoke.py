@@ -2,7 +2,7 @@
 
 Generates a minimal FMP fixture for a fake ticker, runs the builder as a
 subprocess (the way the driver invokes it), and asserts the workbook has the
-nine expected sheets, the headline value cell, the Dashboard dropdowns, and no
+ten expected sheets, the headline value cell, the Dashboard dropdowns, and no
 column-A label that accidentally became a formula (the leading-'=' bug).
 """
 
@@ -26,6 +26,7 @@ SHEETS = [
     "Financials",
     "Consensus",
     "Valuation",
+    "Sensitivity",
     "Monte Carlo",
 ]
 
