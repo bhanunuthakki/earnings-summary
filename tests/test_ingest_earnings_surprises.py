@@ -63,9 +63,7 @@ def _seed_schema(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _write_cache(
-    surprise_dir: Path, ticker: str, records: list[dict[str, object]]
-) -> Path:
+def _write_cache(surprise_dir: Path, ticker: str, records: list[dict[str, object]]) -> Path:
     """Write `<TICKER>_surprises.json` in the exact shape the backfill writer
     produces — payload root + records list."""
     surprise_dir.mkdir(parents=True, exist_ok=True)
@@ -128,10 +126,14 @@ def test_parse_record_rejects_missing_required_fields() -> None:
 
 def test_parse_record_normalizes_ticker_uppercase() -> None:
     mod = _load_module()
-    parsed = mod._parse_record({
-        "ticker": "wix", "release_date": "2025-08-06", "source_name": "fmp_calendar",
-        "fetched_at": "2026-05-13T12:00:00",
-    })
+    parsed = mod._parse_record(
+        {
+            "ticker": "wix",
+            "release_date": "2025-08-06",
+            "source_name": "fmp_calendar",
+            "fetched_at": "2026-05-13T12:00:00",
+        }
+    )
     assert parsed is not None
     assert parsed["ticker"] == "WIX"
 
@@ -210,18 +212,25 @@ def test_candidate_caches_missing_ticker_returns_empty(tmp_path: Path) -> None:
 def test_ingest_inserts_new_records(tmp_path: Path) -> None:
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
-    cache = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(release_date="2025-08-06"),
-        _record(release_date="2025-11-19", eps_actual="1.68", eps_estimate="1.54"),
-    ])
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(release_date="2025-08-06"),
+            _record(release_date="2025-11-19", eps_actual="1.68", eps_estimate="1.54"),
+        ],
+    )
     result = mod.ingest_one_ticker(conn, cache, dry_run=False)
     conn.commit()
     assert result.errors == []
     assert result.inserted == 2
     assert result.updated == 0
-    rows = conn.execute("SELECT ticker, release_date FROM earnings_surprises ORDER BY release_date").fetchall()
+    rows = conn.execute(
+        "SELECT ticker, release_date FROM earnings_surprises ORDER BY release_date"
+    ).fetchall()
     assert [(r["ticker"], r["release_date"]) for r in rows] == [
-        ("WIX", "2025-08-06"), ("WIX", "2025-11-19"),
+        ("WIX", "2025-08-06"),
+        ("WIX", "2025-11-19"),
     ]
 
 
@@ -249,15 +258,23 @@ def test_ingest_updates_when_source_changes(tmp_path: Path) -> None:
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
     # First run: yfinance-only (no revenue)
-    cache_v1 = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(source="yfinance", revenue_actual=None, revenue_estimate=None),  # type: ignore[arg-type]
-    ])
+    cache_v1 = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(source="yfinance", revenue_actual=None, revenue_estimate=None),  # type: ignore[arg-type]
+        ],
+    )
     mod.ingest_one_ticker(conn, cache_v1, dry_run=False)
     conn.commit()
     # Second run: FMP shows up with revenue data
-    cache_v2 = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(source="fmp_calendar"),
-    ])
+    cache_v2 = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(source="fmp_calendar"),
+        ],
+    )
     result = mod.ingest_one_ticker(conn, cache_v2, dry_run=False)
     conn.commit()
     assert result.inserted == 0
@@ -283,11 +300,15 @@ def test_ingest_skips_malformed_records(tmp_path: Path) -> None:
     """Records missing required fields are counted as skipped, not crash."""
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
-    cache = _write_cache(tmp_path / "surprise", "WIX", [
-        {"ticker": "WIX"},  # missing release_date + source_name
-        _record(release_date="2025-08-06"),
-        "not-a-dict",  # type: ignore[list-item]
-    ])
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            {"ticker": "WIX"},  # missing release_date + source_name
+            _record(release_date="2025-08-06"),
+            "not-a-dict",  # type: ignore[list-item]
+        ],
+    )
     result = mod.ingest_one_ticker(conn, cache, dry_run=False)
     conn.commit()
     assert result.inserted == 1
@@ -326,9 +347,13 @@ def test_ingest_decimal_precision_match_is_unchanged(tmp_path: Path) -> None:
     flagged as 'updated' on every re-ingest."""
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
-    cache = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(release_date="2026-05-13", eps_surprise_pct="-1800.00"),
-    ])
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(release_date="2026-05-13", eps_surprise_pct="-1800.00"),
+        ],
+    )
     mod.ingest_one_ticker(conn, cache, dry_run=False)
     conn.commit()
     # Confirm SQLite did normalize the stored value (sanity check on the bug premise)
@@ -348,14 +373,22 @@ def test_ingest_ignores_fetched_at_drift(tmp_path: Path) -> None:
     otherwise the daily cron's telemetry overstates real activity."""
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
-    cache_v1 = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(fetched_at="2026-05-13T12:00:00"),
-    ])
+    cache_v1 = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(fetched_at="2026-05-13T12:00:00"),
+        ],
+    )
     mod.ingest_one_ticker(conn, cache_v1, dry_run=False)
     conn.commit()
-    cache_v2 = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(fetched_at="2026-05-14T12:00:00"),  # later run, same data
-    ])
+    cache_v2 = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(fetched_at="2026-05-14T12:00:00"),  # later run, same data
+        ],
+    )
     result = mod.ingest_one_ticker(conn, cache_v2, dry_run=False)
     conn.commit()
     assert result.unchanged == 1
@@ -371,10 +404,14 @@ def test_ingest_unique_index_enforces_release_date(tmp_path: Path) -> None:
     that makes the daily cron safe to run repeatedly."""
     mod = _load_module()
     conn = _seed_schema(tmp_path / "db.sqlite")
-    cache = _write_cache(tmp_path / "surprise", "WIX", [
-        _record(release_date="2025-08-06", eps_actual="2.28"),
-        _record(release_date="2025-08-06", eps_actual="2.29"),  # same date, different actual
-    ])
+    cache = _write_cache(
+        tmp_path / "surprise",
+        "WIX",
+        [
+            _record(release_date="2025-08-06", eps_actual="2.28"),
+            _record(release_date="2025-08-06", eps_actual="2.29"),  # same date, different actual
+        ],
+    )
     result = mod.ingest_one_ticker(conn, cache, dry_run=False)
     conn.commit()
     n = conn.execute("SELECT COUNT(*) AS n FROM earnings_surprises").fetchone()["n"]

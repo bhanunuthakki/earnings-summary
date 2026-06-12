@@ -75,12 +75,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", help="Evaluate a single ticker")
-    group.add_argument(
-        "--all", action="store_true", help="Evaluate every ticker in thesis_state"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true", help="Print verdicts without persisting"
-    )
+    group.add_argument("--all", action="store_true", help="Evaluate every ticker in thesis_state")
+    parser.add_argument("--dry-run", action="store_true", help="Print verdicts without persisting")
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     parser.add_argument("--holdings-dir", default=str(_HOLDINGS_DIR), type=Path)
     args = parser.parse_args()
@@ -105,14 +101,22 @@ def main() -> int:
             except FileNotFoundError as e:
                 skipped.append({"ticker": ticker, "reason": str(e)})
                 record_stage(
-                    conn, run_id, ticker, StageName.SYNTHESIZE, StageStatus.SKIPPED,
+                    conn,
+                    run_id,
+                    ticker,
+                    StageName.SYNTHESIZE,
+                    StageStatus.SKIPPED,
                     error_msg=f"{type(e).__name__}: {e}"[:500],
                 )
                 continue
             except (ValueError, KeyError) as e:
                 failed += 1
                 record_stage(
-                    conn, run_id, ticker, StageName.SYNTHESIZE, StageStatus.FAILED,
+                    conn,
+                    run_id,
+                    ticker,
+                    StageName.SYNTHESIZE,
+                    StageStatus.FAILED,
                     error_msg=f"{type(e).__name__}: {e}"[:500],
                 )
                 sys.stderr.write(f"FAILED {ticker}: {type(e).__name__}: {e}\n")
@@ -122,20 +126,29 @@ def main() -> int:
             if not args.dry_run:
                 persist_verdict(conn, verdict, run_id=run_id)
             record_stage(
-                conn, run_id, ticker, StageName.SYNTHESIZE, StageStatus.OK,
+                conn,
+                run_id,
+                ticker,
+                StageName.SYNTHESIZE,
+                StageStatus.OK,
             )
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(conn, run_id, terminal, error_summary=f"{failed} failed" if failed else None)
 
-        print(json.dumps({
-            "run_id": run_id,
-            "evaluated": len(verdicts),
-            "skipped": skipped,
-            "failed": failed,
-            "dry_run": args.dry_run,
-            "verdicts": [_verdict_to_dict(v) for v in verdicts],
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "evaluated": len(verdicts),
+                    "skipped": skipped,
+                    "failed": failed,
+                    "dry_run": args.dry_run,
+                    "verdicts": [_verdict_to_dict(v) for v in verdicts],
+                },
+                indent=2,
+            )
+        )
         return 0 if failed == 0 else 1
     finally:
         conn.close()

@@ -127,15 +127,11 @@ def read_transcript_text(path: Path) -> str:
 # require >=2 capitalized tokens to exclude single-word sentence starters
 # ("This:", "Studio", "Total"). "Operator" is handled by a separate pattern.
 _SPEAKER_NAME_PATTERN = (
-    r"[A-Z][A-Za-z]+"          # first capitalized word
+    r"[A-Z][A-Za-z]+"  # first capitalized word
     r"(?:\s+[A-Z][A-Za-z'\-]+){1,3}"  # 1-3 more capitalized tokens
 )
-_OPERATOR_RE = re.compile(
-    r"(?:^|\n)[ \t]*(?P<name>Operator|OPERATOR)[ \t]*(?::[ \t]+|\n)"
-)
-_SPEAKER_RE = re.compile(
-    rf"(?:^|\n)[ \t]*(?P<name>{_SPEAKER_NAME_PATTERN})[ \t]*(?::[ \t]+|\n)"
-)
+_OPERATOR_RE = re.compile(r"(?:^|\n)[ \t]*(?P<name>Operator|OPERATOR)[ \t]*(?::[ \t]+|\n)")
+_SPEAKER_RE = re.compile(rf"(?:^|\n)[ \t]*(?P<name>{_SPEAKER_NAME_PATTERN})[ \t]*(?::[ \t]+|\n)")
 
 
 def _normalize_speaker(name: str) -> str:
@@ -149,14 +145,24 @@ def _normalize_speaker(name: str) -> str:
 # executives cuts the noise. "Operator" is always allowed (distinct regex).
 # Tickers absent from this map: no filter; all detected names accepted.
 _KNOWN_SPEAKERS: dict[str, frozenset[str]] = {
-    "WIX": frozenset({
-        "Avishai Abrahami", "Lior Shemesh", "Nir Zohar",
-        "Maggie O'Donnell", "Maggie ODonnell",
-    }),
-    "GOOG": frozenset({
-        "Sundar Pichai", "Anant Ashkenazi", "Philipp Schindler",
-        "Ruth Porat", "Jim Friedland",
-    }),
+    "WIX": frozenset(
+        {
+            "Avishai Abrahami",
+            "Lior Shemesh",
+            "Nir Zohar",
+            "Maggie O'Donnell",
+            "Maggie ODonnell",
+        }
+    ),
+    "GOOG": frozenset(
+        {
+            "Sundar Pichai",
+            "Anant Ashkenazi",
+            "Philipp Schindler",
+            "Ruth Porat",
+            "Jim Friedland",
+        }
+    ),
 }
 
 
@@ -229,7 +235,7 @@ def segment_by_speaker(
 
     for i, sm in enumerate(matches):
         end = matches[i + 1].name_start if i + 1 < len(matches) else len(text)
-        body = text[sm.body_start:end].strip()
+        body = text[sm.body_start : end].strip()
         if body:
             turns.append(SpeakerTurn(speaker=_normalize_speaker(sm.name), text=body))
     return turns
@@ -338,18 +344,14 @@ def find_existing_document_id(conn: sqlite3.Connection, sha256: str) -> int | No
 
 def find_existing_transcript_id(conn: sqlite3.Connection, document_id: int) -> int | None:
     """Return transcripts.id linked to this document, or None if not yet parsed."""
-    cur = conn.execute(
-        "SELECT id FROM transcripts WHERE document_id = ? LIMIT 1", (document_id,)
-    )
+    cur = conn.execute("SELECT id FROM transcripts WHERE document_id = ? LIMIT 1", (document_id,))
     row = cur.fetchone()
     return int(row["id"]) if row is not None else None
 
 
 def find_document_for_path(conn: sqlite3.Connection, doc_id: int) -> tuple[str, datetime | None]:
     """Return (ticker, period_end) for a document_id."""
-    cur = conn.execute(
-        "SELECT ticker, period_end FROM documents WHERE id = ?", (doc_id,)
-    )
+    cur = conn.execute("SELECT ticker, period_end FROM documents WHERE id = ?", (doc_id,))
     row = cur.fetchone()
     if row is None:
         raise ValueError(f"No document with id={doc_id}")
@@ -607,8 +609,14 @@ def _infer_fiscal_period_type(period_end: datetime) -> FiscalPeriodType:
     and Oct-FYE filers (Jan/Apr/Jul/Oct) — i.e. all FYE patterns currently in scope.
     """
     month_to_quarter = {
-        3: FiscalPeriodType.Q1, 6: FiscalPeriodType.Q2, 9: FiscalPeriodType.Q3, 12: FiscalPeriodType.Q4,
-        4: FiscalPeriodType.Q1, 7: FiscalPeriodType.Q2, 10: FiscalPeriodType.Q3, 1: FiscalPeriodType.Q4,
+        3: FiscalPeriodType.Q1,
+        6: FiscalPeriodType.Q2,
+        9: FiscalPeriodType.Q3,
+        12: FiscalPeriodType.Q4,
+        4: FiscalPeriodType.Q1,
+        7: FiscalPeriodType.Q2,
+        10: FiscalPeriodType.Q3,
+        1: FiscalPeriodType.Q4,
     }
     if period_end.month not in month_to_quarter:
         raise ValueError(

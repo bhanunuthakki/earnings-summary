@@ -51,9 +51,7 @@ def _build_schema(db_path: Path) -> None:
         conn.close()
 
 
-def _seed_with_explicit_dates(
-    db_path: Path, rows: list[tuple[str, str, float, datetime]]
-) -> None:
+def _seed_with_explicit_dates(db_path: Path, rows: list[tuple[str, str, float, datetime]]) -> None:
     """Bypass record_score so we can stamp scored_at directly — needed by the
     window-filter test to put rows at controlled ages."""
     conn = sqlite3.connect(str(db_path))
@@ -98,9 +96,7 @@ def _run_cli(argv: list[str], capsys: Capsys) -> str:
     return capsys.readouterr().out
 
 
-def test_cli_empty_db_prints_helpful_message_and_exits_zero(
-    tmp_path: Path, capsys: Capsys
-) -> None:
+def test_cli_empty_db_prints_helpful_message_and_exits_zero(tmp_path: Path, capsys: Capsys) -> None:
     db = tmp_path / "portfolio.db"
     _build_schema(db)
     out = _run_cli(["--db", str(db)], capsys)
@@ -130,8 +126,8 @@ def test_cli_renders_human_table_for_populated_db(tmp_path: Path, capsys: Capsys
     assert "decision_audit" in out
     assert "v3" in out and "v2" in out and "v1" in out
 
-    bear_v3 = out.find("bear_case") + out[out.find("bear_case"):].find("v3")
-    bear_v2 = out.find("bear_case") + out[out.find("bear_case"):].find("v2")
+    bear_v3 = out.find("bear_case") + out[out.find("bear_case") :].find("v3")
+    bear_v2 = out.find("bear_case") + out[out.find("bear_case") :].find("v2")
     decision_v1 = out.find("decision_audit")
     assert bear_v3 < bear_v2 < decision_v1
 
@@ -177,8 +173,8 @@ def test_cli_window_days_filter_excludes_old_rows(tmp_path: Path, capsys: Capsys
     _seed_with_explicit_dates(
         db,
         [
-            ("bear_case", "v3", 0.9, now - timedelta(days=1)),   # in 7d window
-            ("bear_case", "v3", 0.8, now - timedelta(days=5)),   # in 7d window
+            ("bear_case", "v3", 0.9, now - timedelta(days=1)),  # in 7d window
+            ("bear_case", "v3", 0.8, now - timedelta(days=5)),  # in 7d window
             ("bear_case", "v2", 0.4, now - timedelta(days=20)),  # only in 30d window
             ("bear_case", "v1", 0.2, now - timedelta(days=90)),  # only in all-time
         ],
@@ -209,32 +205,22 @@ def test_cli_purpose_and_ticker_filters_narrow_results(tmp_path: Path, capsys: C
     db = tmp_path / "portfolio.db"
     _build_schema(db)
     record_score(
-        CalibrationScore(
-            purpose="bear_case", prompt_version="v3", score=0.8, ticker="META"
-        ),
+        CalibrationScore(purpose="bear_case", prompt_version="v3", score=0.8, ticker="META"),
         db_path=db,
     )
     record_score(
-        CalibrationScore(
-            purpose="bear_case", prompt_version="v3", score=0.5, ticker="GOOG"
-        ),
+        CalibrationScore(purpose="bear_case", prompt_version="v3", score=0.5, ticker="GOOG"),
         db_path=db,
     )
     record_score(
-        CalibrationScore(
-            purpose="decision_audit", prompt_version="v1", score=0.4
-        ),
+        CalibrationScore(purpose="decision_audit", prompt_version="v1", score=0.4),
         db_path=db,
     )
 
-    bear_only = json.loads(
-        _run_cli(["--db", str(db), "--purpose", "bear_case", "--json"], capsys)
-    )
+    bear_only = json.loads(_run_cli(["--db", str(db), "--purpose", "bear_case", "--json"], capsys))
     assert {r["purpose"] for r in bear_only["summaries"]} == {"bear_case"}
 
-    meta_only = json.loads(
-        _run_cli(["--db", str(db), "--ticker", "META", "--json"], capsys)
-    )
+    meta_only = json.loads(_run_cli(["--db", str(db), "--ticker", "META", "--json"], capsys))
     assert all(r["n_runs"] == 1 for r in meta_only["summaries"])
     assert {(r["purpose"], r["prompt_version"]) for r in meta_only["summaries"]} == {
         ("bear_case", "v3")

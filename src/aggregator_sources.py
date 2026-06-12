@@ -159,7 +159,7 @@ def _extract_qa(visible_text: str) -> str | None:
     head = QA_BOUNDARY_RE.search(visible_text)
     if not head:
         return None
-    qa = visible_text[head.start():]
+    qa = visible_text[head.start() :]
     tail = QA_TAIL_RE.search(qa)
     if tail:
         # Keep the cue itself; drop everything after it (footer/nav).

@@ -22,9 +22,7 @@ from pipeline.cadence_policy import (  # noqa: E402
 def test_allows_run_when_budget_covers_pending() -> None:
     """Basic tier with 250 calls/day cap, 100 already used, want to onboard
     3 tickers (3*40=120 calls projected, 150 remaining → fits)."""
-    allowed, reason = check_onboarding_budget(
-        pending_count=3, remaining_calls=150
-    )
+    allowed, reason = check_onboarding_budget(pending_count=3, remaining_calls=150)
     assert allowed is True
     assert "120 calls projected" in reason
     assert "150 remaining" in reason
@@ -32,9 +30,7 @@ def test_allows_run_when_budget_covers_pending() -> None:
 
 def test_blocks_when_projected_exceeds_remaining() -> None:
     """10 tickers × 40 = 400 calls, but only 200 remaining → block."""
-    allowed, reason = check_onboarding_budget(
-        pending_count=10, remaining_calls=200
-    )
+    allowed, reason = check_onboarding_budget(pending_count=10, remaining_calls=200)
     assert allowed is False
     assert "insufficient tier budget" in reason
     # Helpful: tells operator how many would fit.
@@ -43,9 +39,7 @@ def test_blocks_when_projected_exceeds_remaining() -> None:
 
 def test_blocks_when_cap_already_exhausted() -> None:
     """Zero remaining → block immediately, even for 1 ticker."""
-    allowed, reason = check_onboarding_budget(
-        pending_count=1, remaining_calls=0
-    )
+    allowed, reason = check_onboarding_budget(pending_count=1, remaining_calls=0)
     assert allowed is False
     assert "tier cap exhausted" in reason
 
@@ -53,9 +47,7 @@ def test_blocks_when_cap_already_exhausted() -> None:
 def test_allows_run_at_unlimited_tier() -> None:
     """Starter/premium tier passes sys.maxsize as remaining_calls — always
     permitted."""
-    allowed, _ = check_onboarding_budget(
-        pending_count=100, remaining_calls=10**9
-    )
+    allowed, _ = check_onboarding_budget(pending_count=100, remaining_calls=10**9)
     assert allowed is True
 
 
@@ -78,7 +70,5 @@ def test_custom_calls_per_onboard_argument_honored() -> None:
 
 def test_empty_pending_list_is_allowed() -> None:
     """Zero pending tickers — gate is a no-op."""
-    allowed, _ = check_onboarding_budget(
-        pending_count=0, remaining_calls=10
-    )
+    allowed, _ = check_onboarding_budget(pending_count=0, remaining_calls=10)
     assert allowed is True

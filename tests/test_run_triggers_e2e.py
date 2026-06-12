@@ -332,11 +332,16 @@ def test_happy_path_fires_alert_and_actions(
 
     monkeypatch.setattr("triggers.earnings_tone.call_llm", _CountingLLM([_diff_payload()]))
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     conn = sqlite3.connect(str(db_path))
@@ -388,9 +393,7 @@ def test_happy_path_fires_alert_and_actions(
 # ---------------------------------------------------------------------------
 
 
-def test_dedup_second_run_persists_nothing(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dedup_second_run_persists_nothing(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A second invocation against unchanged state hits find_by_signature → no insert."""
     conn = sqlite3.connect(str(db_path))
     try:
@@ -401,12 +404,32 @@ def test_dedup_second_run_persists_nothing(
     llm = _CountingLLM([_diff_payload()])
     monkeypatch.setattr("triggers.earnings_tone.call_llm", llm)
 
-    assert run_triggers.main([
-        "--tickers", "MELI", "--db-path", str(db_path), "--max-cost-usd", "10",
-    ]) == 0
-    assert run_triggers.main([
-        "--tickers", "MELI", "--db-path", str(db_path), "--max-cost-usd", "10",
-    ]) == 0
+    assert (
+        run_triggers.main(
+            [
+                "--tickers",
+                "MELI",
+                "--db-path",
+                str(db_path),
+                "--max-cost-usd",
+                "10",
+            ]
+        )
+        == 0
+    )
+    assert (
+        run_triggers.main(
+            [
+                "--tickers",
+                "MELI",
+                "--db-path",
+                str(db_path),
+                "--max-cost-usd",
+                "10",
+            ]
+        )
+        == 0
+    )
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -436,12 +459,17 @@ def test_dry_run_persists_nothing(
 
     monkeypatch.setattr("triggers.earnings_tone.call_llm", _CountingLLM([_diff_payload()]))
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI",
-        "--db-path", str(db_path),
-        "--dry-run",
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--db-path",
+            str(db_path),
+            "--dry-run",
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     conn = sqlite3.connect(str(db_path))
@@ -480,11 +508,16 @@ def test_per_ticker_isolation_continues_after_failure(
         _RaisingLLM(fail_ticker="MELI", response=_diff_payload()),
     )
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI,GOOG",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI,GOOG",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     conn = sqlite3.connect(str(db_path))
@@ -522,11 +555,16 @@ def test_cost_cap_halts_cleanly(
 
     monkeypatch.setattr("execution.run_triggers.query_run_cost_usd", _over_cap)
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     conn = sqlite3.connect(str(db_path))
@@ -562,19 +600,23 @@ def test_idle_trigger_does_not_block_active_one(
 
     monkeypatch.setattr("triggers.earnings_tone.call_llm", _CountingLLM([_diff_payload()]))
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI",
-        "--triggers", "earnings_tone,kpi_inflection",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--triggers",
+            "earnings_tone,kpi_inflection",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     conn = sqlite3.connect(str(db_path))
     try:
-        rows = conn.execute(
-            "SELECT trigger_kind FROM alerts ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT trigger_kind FROM alerts ORDER BY id").fetchall()
     finally:
         conn.close()
     kinds = [r[0] for r in rows]
@@ -613,11 +655,16 @@ def test_no_candidates_exits_cleanly(
 
     monkeypatch.setattr("triggers.earnings_tone.call_llm", _fail_llm)
 
-    exit_code = run_triggers.main([
-        "--tickers", "MELI",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     summary = json.loads(capsys.readouterr().out)
@@ -643,11 +690,16 @@ def test_empty_ticker_list_exits_cleanly(
 
     monkeypatch.setattr("triggers.earnings_tone.call_llm", _fail_llm)
 
-    exit_code = run_triggers.main([
-        "--tickers", "",
-        "--db-path", str(db_path),
-        "--max-cost-usd", "10",
-    ])
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
     assert exit_code == 0
 
     summary = json.loads(capsys.readouterr().out)

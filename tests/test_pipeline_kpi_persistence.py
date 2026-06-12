@@ -82,7 +82,9 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = Fa
         );
         """
     )
-    conn.execute(_KPI_FACTS_LOGICAL_UNIQUE if legacy_logical_unique else _KPI_FACTS_PROVENANCE_UNIQUE)
+    conn.execute(
+        _KPI_FACTS_LOGICAL_UNIQUE if legacy_logical_unique else _KPI_FACTS_PROVENANCE_UNIQUE
+    )
     conn.commit()
 
 
@@ -108,12 +110,18 @@ def legacy_conn() -> sqlite3.Connection:
 def test_find_or_create_kpi_definition_inserts_when_missing(conn: sqlite3.Connection) -> None:
     """First call inserts; second call returns the same id."""
     id1 = find_or_create_kpi_definition(
-        conn, ticker="MELI", name="Revenue Growth (FXN)",
-        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+        conn,
+        ticker="MELI",
+        name="Revenue Growth (FXN)",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
     )
     id2 = find_or_create_kpi_definition(
-        conn, ticker="MELI", name="Revenue Growth (FXN)",
-        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+        conn,
+        ticker="MELI",
+        name="Revenue Growth (FXN)",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
     )
     assert id1 == id2
     assert id1 > 0
@@ -229,7 +237,9 @@ def test_persist_manifest_keeps_both_rows_with_different_source_doc_id(
         period_end=datetime(2026, 1, 31),
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9676,
-        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)],
+        values=[
+            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+        ],
     )
     later = first.model_copy(
         update={
@@ -268,7 +278,9 @@ def test_persist_manifest_keeps_both_rows_when_older_source_doc_id_replayed(
         period_end=datetime(2026, 1, 31),
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9705,
-        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)],
+        values=[
+            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)
+        ],
     )
     older = newer.model_copy(
         update={
@@ -308,8 +320,11 @@ def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(conn: sqlite3.Connect
     but the helper is kept as a defensive utility and this test
     documents the contract."""
     kpi_def_id = find_or_create_kpi_definition(
-        conn, ticker="RBRK", name="Revenue YoY Growth (USD)",
-        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+        conn,
+        ticker="RBRK",
+        name="Revenue YoY Growth (USD)",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
     )
 
     rows = [
@@ -349,8 +364,11 @@ def test_purge_duplicate_kpi_facts_keeps_max_source_doc_id(conn: sqlite3.Connect
 def test_purge_duplicate_kpi_facts_is_idempotent(conn: sqlite3.Connection) -> None:
     """Calling purge on an already-clean table is a no-op (returns 0)."""
     kpi_def_id = find_or_create_kpi_definition(
-        conn, ticker="MELI", name="Revenue Growth (FXN)",
-        unit=Unit.PERCENT, primary_source=SourceType.IR_DOC,
+        conn,
+        ticker="MELI",
+        name="Revenue Growth (FXN)",
+        unit=Unit.PERCENT,
+        primary_source=SourceType.IR_DOC,
     )
     conn.execute(
         "INSERT INTO kpi_facts "
@@ -561,7 +579,9 @@ def test_persist_manifest_falls_back_on_legacy_logical_unique(
         period_end=datetime(2026, 1, 31),
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9676,
-        values=[KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)],
+        values=[
+            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+        ],
     )
     later = first.model_copy(update={"source_doc_id": 9705})
 
@@ -574,7 +594,5 @@ def test_persist_manifest_falls_back_on_legacy_logical_unique(
     assert result.inserted == 0
     assert result.skipped_existing == 1
 
-    rows = legacy_conn.execute(
-        "SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'RBRK'"
-    ).fetchone()
+    rows = legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'RBRK'").fetchone()
     assert rows[0] == 1

@@ -423,7 +423,9 @@ def fetch_form4_from_edgar(
     try:
         payload = _http_get_json(url, user_agent=ua)
     except Exception as exc:
-        log.warning({"event": "form4_submissions_fetch_failed", "ticker": ticker, "error": str(exc)})
+        log.warning(
+            {"event": "form4_submissions_fetch_failed", "ticker": ticker, "error": str(exc)}
+        )
         return []
 
     # Recent filings live in payload['filings']['recent'] as parallel arrays
@@ -554,9 +556,7 @@ def parse_form4_xml(
             shares = 0.0
         if shares <= 0:
             continue
-        price_text = (
-            tx_el.findtext("transactionAmounts/transactionPricePerShare/value") or ""
-        )
+        price_text = tx_el.findtext("transactionAmounts/transactionPricePerShare/value") or ""
         try:
             price = float(price_text) if price_text else None
         except ValueError:
@@ -690,9 +690,11 @@ def _http_get_json(url: str, *, user_agent: str, timeout: float = 30.0) -> dict[
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if "gzip" in encoding:
             import gzip
+
             raw = gzip.decompress(raw)
         elif "deflate" in encoding:
             import zlib
+
             raw = zlib.decompress(raw)
         body = raw.decode("utf-8")
     return cast("dict[str, object]", json.loads(body))
@@ -705,9 +707,11 @@ def _http_get_text(url: str, *, user_agent: str, timeout: float = 30.0) -> str:
         encoding = resp.headers.get("Content-Encoding", "").lower()
         if "gzip" in encoding:
             import gzip
+
             raw = gzip.decompress(raw)
         elif "deflate" in encoding:
             import zlib
+
             raw = zlib.decompress(raw)
         return raw.decode("utf-8", errors="replace")
 

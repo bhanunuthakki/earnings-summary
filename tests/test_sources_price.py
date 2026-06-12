@@ -10,6 +10,7 @@ yfinance path is NOT mocked here (no network in unit tests). The FMP fallback
 is verified directly; the chain logic is verified by ordering of the public
 function (yfinance first → fmp_cache second).
 """
+
 from __future__ import annotations
 
 import json

@@ -147,8 +147,7 @@ def test_multiple_renders_append_separate_rows(tmp_path: Path) -> None:
         triggers = [
             r[0]
             for r in conn.execute(
-                "SELECT trigger FROM brief_provenance_log "
-                "WHERE ticker = 'AMZN' ORDER BY id"
+                "SELECT trigger FROM brief_provenance_log WHERE ticker = 'AMZN' ORDER BY id"
             ).fetchall()
         ]
     finally:

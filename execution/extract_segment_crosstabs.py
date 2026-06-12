@@ -111,9 +111,7 @@ def _parse_args() -> argparse.Namespace:
     )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
-    g.add_argument(
-        "--all", action="store_true", help="All tracked portfolio + watchlist tickers"
-    )
+    g.add_argument("--all", action="store_true", help="All tracked portfolio + watchlist tickers")
     p.add_argument("--year", type=int, default=None, help="Specific fiscal year (default: latest)")
     p.add_argument("--refresh", action="store_true", help="Ignore cache and re-extract")
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)

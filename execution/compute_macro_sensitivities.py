@@ -86,11 +86,7 @@ def _load_ticker_prices(ticker: str, repo_root: Path) -> list[tuple[date, float]
         for r in rows:
             d_raw = r.get("date")
             v_raw = (
-                r.get("adjClose")
-                if "adjClose" in r
-                else r.get("close")
-                if "close" in r
-                else None
+                r.get("adjClose") if "adjClose" in r else r.get("close") if "close" in r else None
             )
             if not isinstance(d_raw, str) or v_raw is None:
                 continue

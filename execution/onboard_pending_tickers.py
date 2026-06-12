@@ -60,6 +60,7 @@ Usage:
     python execution/onboard_pending_tickers.py --skip-fmp
     python execution/onboard_pending_tickers.py --skip-commitments
 """
+
 from __future__ import annotations
 
 import argparse
@@ -191,8 +192,7 @@ def _last_fmp_attempt(conn: sqlite3.Connection, ticker: str) -> datetime | None:
     callers treat None as 'never attempted' (do NOT defer)."""
     try:
         cur = conn.execute(
-            "SELECT MAX(last_pulled) AS m FROM fmp_endpoint_status "
-            "WHERE UPPER(ticker) = UPPER(?)",
+            "SELECT MAX(last_pulled) AS m FROM fmp_endpoint_status WHERE UPPER(ticker) = UPPER(?)",
             (ticker,),
         )
         row = cur.fetchone()
@@ -238,9 +238,7 @@ def apply_ipo_backoff(
         to_process: list[tuple[str, str]] = []
         deferred: list[tuple[str, str]] = []
         for ticker, reason in pending:
-            if reason != _COMMITMENT_ONLY_REASON and _is_recently_ipod(
-                ticker, holdings_dir
-            ):
+            if reason != _COMMITMENT_ONLY_REASON and _is_recently_ipod(ticker, holdings_dir):
                 last = _last_fmp_attempt(conn, ticker)
                 if last is not None and (now - last) < cutoff:
                     deferred.append((ticker, reason))
@@ -386,15 +384,15 @@ def main() -> int:
         "--skip-budget-gate",
         action="store_true",
         help="Skip the pre-flight FMP tier-cap check. Use with caution — bulk "
-             "onboarding on the basic tier (250 calls/day) can blow the cap "
-             "halfway through.",
+        "onboarding on the basic tier (250 calls/day) can blow the cap "
+        "halfway through.",
     )
     ap.add_argument(
         "--calls-per-onboard",
         type=int,
         default=ESTIMATED_FMP_CALLS_PER_ONBOARD,
         help=f"Estimated FMP calls per ticker for the gate (default: "
-             f"{ESTIMATED_FMP_CALLS_PER_ONBOARD})",
+        f"{ESTIMATED_FMP_CALLS_PER_ONBOARD})",
     )
     args = ap.parse_args()
 
@@ -409,8 +407,7 @@ def main() -> int:
     # in the report (not silently dropped) and still re-checked once a day.
     pending, deferred = apply_ipo_backoff(pending_all, Path(args.db), _HOLDINGS_DIR)
     deferred_payload = [
-        {"ticker": t, "reason": r, "deferred": "recently_ipod_daily_cadence"}
-        for t, r in deferred
+        {"ticker": t, "reason": r, "deferred": "recently_ipod_daily_cadence"} for t, r in deferred
     ]
     if deferred:
         log.info(
@@ -434,15 +431,17 @@ def main() -> int:
         pending = pending[: args.max]
 
     if args.dry_run:
-        print(json.dumps(
-            {
-                "run_id": stamp,
-                "pending_count": len(pending),
-                "tickers": [{"ticker": t, "reason": r} for t, r in pending],
-                "deferred": deferred_payload,
-            },
-            indent=2,
-        ))
+        print(
+            json.dumps(
+                {
+                    "run_id": stamp,
+                    "pending_count": len(pending),
+                    "tickers": [{"ticker": t, "reason": r} for t, r in pending],
+                    "deferred": deferred_payload,
+                },
+                indent=2,
+            )
+        )
         return 0
 
     # Skip the gate for fmp-skipped runs (no FMP calls fire) and for
@@ -453,9 +452,7 @@ def main() -> int:
         and any(r != _COMMITMENT_ONLY_REASON for _, r in pending)
     )
     if needs_budget_gate:
-        full_onboards = sum(
-            1 for _, r in pending if r != _COMMITMENT_ONLY_REASON
-        )
+        full_onboards = sum(1 for _, r in pending if r != _COMMITMENT_ONLY_REASON)
         remaining = _remaining_fmp_budget()
         allowed, reason = check_onboarding_budget(
             pending_count=full_onboards,
@@ -488,9 +485,7 @@ def main() -> int:
             log_path=log_path,
         )
         results.append(result)
-        outcomes = " ".join(
-            f"{s.stage.split('_')[0]}={s.outcome.value}" for s in result.stages
-        )
+        outcomes = " ".join(f"{s.stage.split('_')[0]}={s.outcome.value}" for s in result.stages)
         log.info("  %s done in %.1fs — %s", ticker, result.elapsed_seconds, outcomes)
 
     report = {
@@ -504,18 +499,11 @@ def main() -> int:
 
     # Exit code: non-zero if every onboard subprocess failed (signals real problem).
     # Pure no-commitments runs skip onboard, so they never count toward this signal.
-    full_chain_results = [
-        r for r in results if r.pending_reason != _COMMITMENT_ONLY_REASON
-    ]
+    full_chain_results = [r for r in results if r.pending_reason != _COMMITMENT_ONLY_REASON]
     onboard_failures = sum(
         1 for r in full_chain_results if r.stages[0].outcome is StageOutcome.FAILED
     )
-    return (
-        1
-        if full_chain_results
-        and onboard_failures == len(full_chain_results)
-        else 0
-    )
+    return 1 if full_chain_results and onboard_failures == len(full_chain_results) else 0
 
 
 if __name__ == "__main__":

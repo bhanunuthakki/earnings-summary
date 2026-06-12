@@ -282,9 +282,7 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
     if isinstance(data_anchor, str) and data_anchor.strip().lower() == "s1":
         ipo_date = payload.get("ipo_date")
         ipo_suffix = (
-            f" (IPO {ipo_date.strip()})"
-            if isinstance(ipo_date, str) and ipo_date.strip()
-            else ""
+            f" (IPO {ipo_date.strip()})" if isinstance(ipo_date, str) and ipo_date.strip() else ""
         )
         parts.append(
             f"\n**Narrative source:** S-1 / 424B prospectus{ipo_suffix} — "

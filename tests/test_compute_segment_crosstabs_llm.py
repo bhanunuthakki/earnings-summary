@@ -301,9 +301,7 @@ def test_extract_skips_when_no_doc_row(
     junction writer requires a real documents.id FK."""
     _write_10k_payload(tmp_path, "AMZN", 2024)
 
-    monkeypatch.setattr(
-        segment_crosstabs_llm, "_call_claude", lambda *a, **k: _VALID_LLM_RESPONSE
-    )
+    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: _VALID_LLM_RESPONSE)
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is not None
@@ -365,9 +363,7 @@ def test_build_secondary_expansions_surfaces_parent_label_aws(
             ]
         }
     )
-    monkeypatch.setattr(
-        segment_crosstabs_llm, "_call_claude", lambda *a, **k: aws_quarterly
-    )
+    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: aws_quarterly)
 
     extract_for_ticker("AMZN", tmp_path, conn)
 
@@ -442,20 +438,18 @@ def test_extract_one_axis_fallback_writes_revenue_metric(
             ]
         }
     )
-    monkeypatch.setattr(
-        segment_crosstabs_llm, "_call_claude", lambda *a, **k: one_axis_response
-    )
+    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: one_axis_response)
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is None
     assert result.dimensions_inserted == 3
 
     metrics = {
-        r["metric"] for r in conn.execute("SELECT DISTINCT metric FROM segment_dimensions").fetchall()
+        r["metric"]
+        for r in conn.execute("SELECT DISTINCT metric FROM segment_dimensions").fetchall()
     }
     assert metrics == {"revenue"}, (
-        f"1-axis breakdowns must land with metric='revenue' (not subject-prefixed); "
-        f"got {metrics}"
+        f"1-axis breakdowns must land with metric='revenue' (not subject-prefixed); got {metrics}"
     )
 
 

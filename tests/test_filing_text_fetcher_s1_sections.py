@@ -139,7 +139,9 @@ def test_item_style_fallback_still_works() -> None:
 
 
 def test_missing_section_returns_none() -> None:
-    item_1a, item_7, item_8 = _extract_s1_sections("Just some prose with no section headers at all.")
+    item_1a, item_7, item_8 = _extract_s1_sections(
+        "Just some prose with no section headers at all."
+    )
     assert item_1a is None
     assert item_7 is None
     assert item_8 is None

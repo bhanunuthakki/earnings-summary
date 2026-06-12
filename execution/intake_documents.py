@@ -66,19 +66,19 @@ def chain_processing(results: list[IntakeResult]) -> None:
     This matches what `backfill_transcripts.py` runs for auto-fetched
     transcripts so the manual-drop path doesn't leave Say-Do blind.
     """
-    new_filings = [
-        r for r in results if not r.skipped and r.classification is not None
-    ]
+    new_filings = [r for r in results if not r.skipped and r.classification is not None]
     if not new_filings:
         print("[intake] No newly-filed IR documents — skipping process chain.", file=sys.stderr)
         return
 
     tickers = sorted({r.classification.ticker for r in new_filings if r.classification})
-    transcript_tickers = sorted({
-        r.classification.ticker
-        for r in new_filings
-        if r.classification and r.classification.doc_type == DocType.EARNINGS_CALL_TRANSCRIPT
-    })
+    transcript_tickers = sorted(
+        {
+            r.classification.ticker
+            for r in new_filings
+            if r.classification and r.classification.doc_type == DocType.EARNINGS_CALL_TRANSCRIPT
+        }
+    )
 
     process_script = SCRIPT_DIR / "process_ir_documents.py"
     ingest_script = SCRIPT_DIR / "ingest_transcripts.py"
@@ -131,15 +131,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--inbox", type=Path, default=INBOX_DIR,
+        "--inbox",
+        type=Path,
+        default=INBOX_DIR,
         help=f"Drop folder to scan (default: {INBOX_DIR.relative_to(PROJECT_ROOT)})",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Plan classifications and moves without applying them",
     )
     parser.add_argument(
-        "--process", action="store_true",
+        "--process",
+        action="store_true",
         help="After filing, run process_ir_documents.py for each affected ticker",
     )
     args = parser.parse_args()

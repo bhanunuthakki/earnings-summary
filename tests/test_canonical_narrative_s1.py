@@ -209,9 +209,7 @@ def test_compute_company_description_passes_s1_text_to_llm(
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
     conn.row_factory = sqlite3.Row
     try:
-        result = cd_module.extract_for_ticker(
-            "FRVO", repo, conn, fiscal_year=None, refresh=True
-        )
+        result = cd_module.extract_for_ticker("FRVO", repo, conn, fiscal_year=None, refresh=True)
     finally:
         conn.close()
 

@@ -89,9 +89,7 @@ def _seed_company(
     conn.commit()
 
 
-def _seed_fmp_pull(
-    conn: sqlite3.Connection, ticker: str, endpoint: str, last_pulled: str
-) -> None:
+def _seed_fmp_pull(conn: sqlite3.Connection, ticker: str, endpoint: str, last_pulled: str) -> None:
     conn.execute(
         "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, last_pulled) "
         "VALUES (?, ?, 'annual', 'ok', ?)",
@@ -126,7 +124,9 @@ def _seed_thesis_eval(
     conn.commit()
 
 
-def _write_workspace_html(repo_root: Path, ticker: str, report_date: str, *, age_seconds: int = 0) -> Path:
+def _write_workspace_html(
+    repo_root: Path, ticker: str, report_date: str, *, age_seconds: int = 0
+) -> Path:
     dest = repo_root / "output" / "research" / ticker / f"{report_date}_workspace.html"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("<html><body>stub</body></html>", encoding="utf-8")
@@ -317,9 +317,7 @@ def test_archived_companies_excluded(conn, tmp_path):
     _seed_company(conn, "NU", "portfolio")
     # Archive a different company
     _seed_company(conn, "OLD", "portfolio")
-    conn.execute(
-        "UPDATE tracked_companies SET archived_at = '2025-01-01' WHERE ticker = 'OLD'"
-    )
+    conn.execute("UPDATE tracked_companies SET archived_at = '2025-01-01' WHERE ticker = 'OLD'")
     conn.commit()
 
     out = build_dashboard_rows(conn, tmp_path)

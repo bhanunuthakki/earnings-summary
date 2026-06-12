@@ -50,9 +50,7 @@ def build_profile(ticker: str, repo_root: Path) -> EtfProfileSection:
             status=SectionStatus.MISSING_DATA,
             missing=MissingReason(
                 stage="INGEST(fmp_etf)",
-                fix_command=(
-                    f"python execution/fetch_etf_data.py --ticker {ticker.upper()}"
-                ),
+                fix_command=(f"python execution/fetch_etf_data.py --ticker {ticker.upper()}"),
             ),
             ticker=ticker.upper(),
         )
@@ -79,9 +77,7 @@ def build_profile(ticker: str, repo_root: Path) -> EtfProfileSection:
     )
 
 
-def build_holdings(
-    ticker: str, repo_root: Path, top_n: int = 10
-) -> EtfHoldingsSection:
+def build_holdings(ticker: str, repo_root: Path, top_n: int = 10) -> EtfHoldingsSection:
     """Build the §5 ETF holdings section (top N + sector breakdown)."""
     conn = open_repo_db(repo_root)
     if conn is None:
@@ -103,9 +99,7 @@ def build_holdings(
             status=SectionStatus.MISSING_DATA,
             missing=MissingReason(
                 stage="INGEST(fmp_etf)",
-                fix_command=(
-                    f"python execution/fetch_etf_data.py --ticker {ticker.upper()}"
-                ),
+                fix_command=(f"python execution/fetch_etf_data.py --ticker {ticker.upper()}"),
             ),
         )
 

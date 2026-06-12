@@ -137,7 +137,9 @@ def test_record_decision_idempotent_on_source_artifact_id(db: Path) -> None:
     # Confirm only one row was inserted
     conn = sqlite3.connect(str(db))
     try:
-        n = conn.execute("SELECT COUNT(*) FROM decisions WHERE source_artifact_id = 99").fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM decisions WHERE source_artifact_id = 99").fetchone()[
+            0
+        ]
         assert n == 1
     finally:
         conn.close()
@@ -420,9 +422,7 @@ def test_batch_recorder_inserts_from_lens_artifacts(repo_root: Path) -> None:
             conn,
             ticker="META",
             purpose="lens:five_min_reread",
-            content_md=(
-                "## 2. Recommended Action\n\n**ADD 15%**\n\nThesis intact, discount real."
-            ),
+            content_md=("## 2. Recommended Action\n\n**ADD 15%**\n\nThesis intact, discount real."),
             generated_at=datetime.now(UTC) - timedelta(days=5),
         )
         conn.commit()

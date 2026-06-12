@@ -79,8 +79,7 @@ def main() -> int:
                 f"[{log.ticker}] extracted={len(log.quarters_extracted)} "
                 f"skipped={len(log.quarters_skipped_no_missing)} "
                 f"kpis_inserted={log.kpis_inserted_total} "
-                f"elapsed={log.elapsed_ms}ms"
-                + (f" error={log.error}" if log.error else ""),
+                f"elapsed={log.elapsed_ms}ms" + (f" error={log.error}" if log.error else ""),
                 file=sys.stderr,
             )
     finally:
@@ -92,11 +91,15 @@ def main() -> int:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
-    p.add_argument("--refresh", action="store_true", help="Re-extract even if all KPIs already present")
+    p.add_argument(
+        "--refresh", action="store_true", help="Re-extract even if all KPIs already present"
+    )
     p.add_argument(
         "--source",
         choices=("earnings", "ir"),

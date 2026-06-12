@@ -54,9 +54,7 @@ def refresh_for_tickers(
             continue
 
         try:
-            verdict = evaluate_ticker_thesis(
-                conn, ticker=ticker, holdings_dir=holdings_dir
-            )
+            verdict = evaluate_ticker_thesis(conn, ticker=ticker, holdings_dir=holdings_dir)
         except FileNotFoundError:
             results.append(
                 TickerRefreshResult(

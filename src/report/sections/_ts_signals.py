@@ -41,7 +41,9 @@ class SignalRow:
 
     metric_name: str
     metric_kind: str  # 'financial' | 'kpi' | 'segment'
-    signal_type: str  # 'trend' | 'inflection' | 'anomaly' | 'yoy_acceleration' | 'seasonal' | 'correlation'
+    signal_type: (
+        str  # 'trend' | 'inflection' | 'anomaly' | 'yoy_acceleration' | 'seasonal' | 'correlation'
+    )
     value_json: str
     severity: str  # 'green' | 'yellow' | 'red'
     narrative: str | None
@@ -178,9 +180,7 @@ def load_segment_signals(ticker: str, *, repo_root: Path) -> list[SignalRow]:
     ]
 
 
-def format_signals_as_prompt_block(
-    signals: list[SignalRow], heading: str
-) -> str:
+def format_signals_as_prompt_block(signals: list[SignalRow], heading: str) -> str:
     """Render signals as a markdown block with the supplied H2 heading.
 
     Each line is one signal's pre-rendered narrative — the writer already

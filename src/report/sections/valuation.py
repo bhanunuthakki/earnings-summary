@@ -44,7 +44,9 @@ def build(
             )
         return _to_section(cached)
 
-    skip = budget_gate("valuation_basis", "Valuation (multiple)", repo_root, bypass=force_budget_bypass)
+    skip = budget_gate(
+        "valuation_basis", "Valuation (multiple)", repo_root, bypass=force_budget_bypass
+    )
     if skip is not None:
         # A previously-cached multiple is free to render — prefer it over forgoing.
         cached = compute_valuation.load(repo_root, ticker)
@@ -94,13 +96,8 @@ def build(
             status=SectionStatus.MISSING_DATA,
             missing=missing(
                 stage="INGEST(fmp_key_metrics)",
-                fix_command=(
-                    f"python execution/backfill_fmp.py --ticker {ticker.upper()}"
-                ),
-                detail=(
-                    result.skipped_reason
-                    or "compute layer returned no valuation multiple."
-                ),
+                fix_command=(f"python execution/backfill_fmp.py --ticker {ticker.upper()}"),
+                detail=(result.skipped_reason or "compute layer returned no valuation multiple."),
             ),
         )
     return _to_section(result)

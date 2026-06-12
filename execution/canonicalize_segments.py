@@ -272,7 +272,11 @@ def _apply_groups(
         upsert_relationship(
             from_entity_id=seg_id,
             relationship_kind=(
-                "segment_of" if kind == "segment" else "product_of" if kind == "product_category" else "geography_of"
+                "segment_of"
+                if kind == "segment"
+                else "product_of"
+                if kind == "product_category"
+                else "geography_of"
             ),
             to_entity_id=company_entity_id,
         )
@@ -306,12 +310,8 @@ def _apply_groups(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root."
-    )
-    parser.add_argument(
-        "--tickers", help="Comma-separated tickers (default: all unmapped)."
-    )
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root.")
+    parser.add_argument("--tickers", help="Comma-separated tickers (default: all unmapped).")
     parser.add_argument(
         "--max-tickers",
         type=int,

@@ -345,9 +345,7 @@ def test_build_alert_round_trip_with_mocked_llm(
     # Signature is keyed on the new transcript only, per the spec.
     from alerts.store import compute_signature_sha
 
-    expected_sig = compute_signature_sha(
-        "earnings_tone", "MELI", {"transcript_id": current_id}
-    )
+    expected_sig = compute_signature_sha("earnings_tone", "MELI", {"transcript_id": current_id})
     assert alert.signature_sha == expected_sig
 
 
@@ -356,10 +354,12 @@ def test_build_alert_retries_once_on_malformed_json(
 ) -> None:
     """First response is non-JSON; retry succeeds and the alert lands."""
     _ = _seed_five_quarters(fixture_db)
-    mock = _StatefulLLM([
-        "Here is your answer: { I am not JSON",  # first attempt — bad
-        _diff_payload(),                          # retry — good
-    ])
+    mock = _StatefulLLM(
+        [
+            "Here is your answer: { I am not JSON",  # first attempt — bad
+            _diff_payload(),  # retry — good
+        ]
+    )
     monkeypatch.setattr("triggers.earnings_tone.call_llm", mock)
 
     candidates = EarningsToneTrigger().scan("MELI", fixture_db)
@@ -441,10 +441,10 @@ def test_draft_actions_full_action_mix(
 ) -> None:
     """Confirm the per-shift action policy across the cases:
 
-      - earnings_prep_append fires for EVERY shift (always)
-      - thesis_update fires only for directional shifts with confidence ≥ 0.6
-      - bear_append fires for adverse (softer/dropped_topic) shifts that
-        name a thesis KPI — confidence doesn't gate bear_append
+    - earnings_prep_append fires for EVERY shift (always)
+    - thesis_update fires only for directional shifts with confidence ≥ 0.6
+    - bear_append fires for adverse (softer/dropped_topic) shifts that
+      name a thesis KPI — confidence doesn't gate bear_append
     """
     _ = _seed_five_quarters(fixture_db)
     shifts: list[dict[str, object]] = [

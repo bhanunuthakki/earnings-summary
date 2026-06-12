@@ -191,9 +191,7 @@ class Trigger(Protocol):
     kind: ClassVar[str]
     cadence: ClassVar[Cadence]
 
-    def scan(
-        self, ticker: str, db: sqlite3.Connection
-    ) -> list[TriggerCandidate]: ...
+    def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]: ...
 
     def should_fire(
         self,
@@ -201,9 +199,7 @@ class Trigger(Protocol):
         user_state: UserStateContext,
     ) -> bool: ...
 
-    def signature_key_evidence(
-        self, candidate: TriggerCandidate
-    ) -> Mapping[str, object]:
+    def signature_key_evidence(self, candidate: TriggerCandidate) -> Mapping[str, object]:
         """Return the subset of ``candidate.evidence`` that keys the
         re-fire dedup hash.
 

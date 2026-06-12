@@ -25,9 +25,9 @@ from dataclasses import dataclass
 class MacroShock:
     """One shock to one series. `unit` declares how `magnitude` is interpreted:
 
-      - "bps"      : basis points (rates: fed_funds, us_10y)
-      - "pct"      : percent move (FX, commodities, indices)
-      - "absolute" : move TO this exact value (e.g. brent → $50)
+    - "bps"      : basis points (rates: fed_funds, us_10y)
+    - "pct"      : percent move (FX, commodities, indices)
+    - "absolute" : move TO this exact value (e.g. brent → $50)
     """
 
     series_id: str

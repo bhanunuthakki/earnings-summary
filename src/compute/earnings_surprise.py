@@ -66,11 +66,17 @@ class SurpriseScorecard:
 
 
 _EMPTY_METRIC = SurpriseMetric(
-    beats=0, misses=0, no_data=0,
-    beat_rate_pct=None, avg_surprise_pct=None, latest_surprise_pct=None,
+    beats=0,
+    misses=0,
+    no_data=0,
+    beat_rate_pct=None,
+    avg_surprise_pct=None,
+    latest_surprise_pct=None,
 )
 EMPTY_SCORECARD = SurpriseScorecard(
-    total_quarters=0, eps=_EMPTY_METRIC, revenue=_EMPTY_METRIC,
+    total_quarters=0,
+    eps=_EMPTY_METRIC,
+    revenue=_EMPTY_METRIC,
 )
 
 
@@ -129,12 +135,16 @@ def _aggregate_one_side(
     decided = beats + misses
     beat_rate = (
         (Decimal(beats) / Decimal(decided) * Decimal(100)).quantize(Decimal("0.1"))
-        if decided > 0 else None
+        if decided > 0
+        else None
     )
     avg = (total / Decimal(matched)).quantize(Decimal("0.01")) if matched > 0 else None
     return SurpriseMetric(
-        beats=beats, misses=misses, no_data=no_data,
-        beat_rate_pct=beat_rate, avg_surprise_pct=avg,
+        beats=beats,
+        misses=misses,
+        no_data=no_data,
+        beat_rate_pct=beat_rate,
+        avg_surprise_pct=avg,
         latest_surprise_pct=latest_value,
     )
 

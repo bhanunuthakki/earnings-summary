@@ -57,7 +57,8 @@ def _seed(
 def test_fetch_history_returns_oldest_first(conn: sqlite3.Connection) -> None:
     """Rows come back in ascending timestamp order regardless of insert order."""
     _seed(
-        conn, "X",
+        conn,
+        "X",
         [
             (datetime(2026, 5, 1), BreachStatus.OK),
             (datetime(2026, 4, 1), BreachStatus.WARN),
@@ -75,7 +76,8 @@ def test_fetch_history_empty_for_unknown_ticker(conn: sqlite3.Connection) -> Non
 def test_transitions_skips_unchanged_consecutive_status(conn: sqlite3.Connection) -> None:
     """OK -> OK -> WARN -> WARN -> BREACH -> 2 transitions only (OK->WARN, WARN->BREACH)."""
     _seed(
-        conn, "X",
+        conn,
+        "X",
         [
             (datetime(2026, 1, 1), BreachStatus.OK),
             (datetime(2026, 2, 1), BreachStatus.OK),
@@ -86,14 +88,21 @@ def test_transitions_skips_unchanged_consecutive_status(conn: sqlite3.Connection
     )
     transitions = transitions_for(conn, "X")
     assert len(transitions) == 2
-    assert (transitions[0].from_status, transitions[0].to_status) == (BreachStatus.OK, BreachStatus.WARN)
+    assert (transitions[0].from_status, transitions[0].to_status) == (
+        BreachStatus.OK,
+        BreachStatus.WARN,
+    )
     assert transitions[0].transitioned_at == datetime(2026, 3, 1)
-    assert (transitions[1].from_status, transitions[1].to_status) == (BreachStatus.WARN, BreachStatus.BREACH)
+    assert (transitions[1].from_status, transitions[1].to_status) == (
+        BreachStatus.WARN,
+        BreachStatus.BREACH,
+    )
 
 
 def test_transitions_empty_when_status_never_changes(conn: sqlite3.Connection) -> None:
     _seed(
-        conn, "X",
+        conn,
+        "X",
         [(datetime(2026, 1, 1), BreachStatus.OK), (datetime(2026, 2, 1), BreachStatus.OK)],
     )
     assert transitions_for(conn, "X") == []
@@ -102,10 +111,11 @@ def test_transitions_empty_when_status_never_changes(conn: sqlite3.Connection) -
 def test_streak_summary_counts_only_consecutive_recent(conn: sqlite3.Connection) -> None:
     """Old runs that match the current status but are interrupted DON'T count."""
     _seed(
-        conn, "X",
+        conn,
+        "X",
         [
             (datetime(2026, 1, 1), BreachStatus.WARN),  # not part of current streak
-            (datetime(2026, 2, 1), BreachStatus.OK),    # interrupts
+            (datetime(2026, 2, 1), BreachStatus.OK),  # interrupts
             (datetime(2026, 3, 1), BreachStatus.WARN),  # current streak starts here
             (datetime(2026, 4, 1), BreachStatus.WARN),
             (datetime(2026, 5, 1), BreachStatus.WARN),
@@ -135,10 +145,14 @@ def test_streak_summary_single_eval(conn: sqlite3.Connection) -> None:
 def test_portfolio_summary_returns_one_per_ticker(conn: sqlite3.Connection) -> None:
     """A ticker with multiple evals appears once in the rollup."""
     _seed(conn, "A", [(datetime(2026, 1, 1), BreachStatus.OK)])
-    _seed(conn, "B", [
-        (datetime(2026, 1, 1), BreachStatus.OK),
-        (datetime(2026, 2, 1), BreachStatus.WARN),
-    ])
+    _seed(
+        conn,
+        "B",
+        [
+            (datetime(2026, 1, 1), BreachStatus.OK),
+            (datetime(2026, 2, 1), BreachStatus.WARN),
+        ],
+    )
     rollups = portfolio_summary(conn)
     assert len(rollups) == 2
     by_ticker = {r.ticker: r for r in rollups}

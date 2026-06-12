@@ -108,6 +108,4 @@ def saydo_custom_id(
     can drop results into the same path without filename collisions or
     custom-mapping logic.
     """
-    return (
-        f"SayDo_{ticker}_{prev_quarter}_{prev_year}_{curr_quarter}_{curr_year}"
-    )
+    return f"SayDo_{ticker}_{prev_quarter}_{prev_year}_{curr_quarter}_{curr_year}"

@@ -73,8 +73,7 @@ def _cmd_list(db_path: Path) -> int:
     rows = list_budgets(db_path=db_path)
     if not rows:
         sys.stderr.write(
-            f"No llm_budgets rows in {db_path}. "
-            "Run `python -m alembic upgrade head` first.\n"
+            f"No llm_budgets rows in {db_path}. Run `python -m alembic upgrade head` first.\n"
         )
         return 1
     now = datetime.now(UTC)
@@ -82,8 +81,7 @@ def _cmd_list(db_path: Path) -> int:
     print(f"  DB: {db_path}")
     print()
     print(
-        f"  {'purpose':<32s} {'cap':>9s} {'spend':>9s} {'used':>16s} "
-        f"{'block':>5s}  {'updated_at'}"
+        f"  {'purpose':<32s} {'cap':>9s} {'spend':>9s} {'used':>16s} {'block':>5s}  {'updated_at'}"
     )
     for r in rows:
         # list_budgets returns dict[str, object] for JSON-boundary tolerance;
@@ -100,9 +98,7 @@ def _cmd_list(db_path: Path) -> int:
         )
     print()
     total_cap = sum(
-        float(cast("Decimal", r["monthly_cap_usd"]))
-        for r in rows
-        if r["purpose"] != "__default__"
+        float(cast("Decimal", r["monthly_cap_usd"])) for r in rows if r["purpose"] != "__default__"
     )
     total_spend = sum(
         float(cast("Decimal", r["current_spend_usd"]))
@@ -111,20 +107,14 @@ def _cmd_list(db_path: Path) -> int:
     )
     print(f"  Total budgeted (excl __default__): ${total_cap:,.2f}/mo")
     print(f"  Total spend this month:            ${total_spend:,.2f}")
-    print(
-        f"  Net headroom:                      ${total_cap - total_spend:,.2f}"
-    )
+    print(f"  Net headroom:                      ${total_cap - total_spend:,.2f}")
     return 0
 
 
-def _cmd_set(
-    db_path: Path, purpose: str, cap: float | None, hard_block: bool | None
-) -> int:
+def _cmd_set(db_path: Path, purpose: str, cap: float | None, hard_block: bool | None) -> int:
     """Update the cap and/or hard_block flag for `purpose`."""
     if cap is None and hard_block is None:
-        sys.stderr.write(
-            "--set requires at least one of --cap, --hard-block, --soft-cap\n"
-        )
+        sys.stderr.write("--set requires at least one of --cap, --hard-block, --soft-cap\n")
         return 2
     # Cap update goes through llm_budget.set_cap so the formatting is shared
     # with any other caller. hard_block toggling is direct SQL — it's a
@@ -183,10 +173,7 @@ def _cmd_report(db_path: Path, month: str | None) -> int:
     print(f"=== LLM BUDGET REPORT — {label} ===")
     print(f"  DB: {db_path}")
     print()
-    print(
-        f"  {'purpose':<32s} {'cap':>9s} {'spend':>9s} {'calls':>6s} "
-        f"{'used':>16s} {'block'}"
-    )
+    print(f"  {'purpose':<32s} {'cap':>9s} {'spend':>9s} {'calls':>6s} {'used':>16s} {'block'}")
     total_spend = Decimal("0")
     total_capped = Decimal("0")
     for r in rows:

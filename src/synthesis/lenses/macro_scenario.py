@@ -103,9 +103,7 @@ def _ctx_macro_scenario(
         from macro_store import fetch_sensitivities  # noqa: PLC0415
     except ImportError:
         return None
-    sens_objs = fetch_sensitivities(
-        ticker=ticker, db_path=repo_root / "data" / "portfolio.db"
-    )
+    sens_objs = fetch_sensitivities(ticker=ticker, db_path=repo_root / "data" / "portfolio.db")
     sens_rows: list[dict[str, object]] = [
         {
             "series_id": s.series_id,
@@ -122,9 +120,7 @@ def _ctx_macro_scenario(
         live_raw = cast("float | None", dcf.get("live_price"))
         ou = (ou_raw or 0.0) * 100
         dcf_summary = (
-            f"NPV/share: ${npv_raw or 0:.0f} · "
-            f"Live: ${live_raw or 0:.0f} · "
-            f"Over/Under: {ou:+.1f}%"
+            f"NPV/share: ${npv_raw or 0:.0f} · Live: ${live_raw or 0:.0f} · Over/Under: {ou:+.1f}%"
         )
     else:
         dcf_summary = "(no DCF run for this ticker)"
@@ -172,13 +168,13 @@ def run_macro_scenario_lens(
 
     ctx = _ctx_macro_scenario(scenario_obj=scenario_obj, ticker=ticker, repo_root=repo_root)
     if ctx is None:
-        log.debug({"event": "macro_scenario_context_empty", "ticker": ticker, "scenario": scenario_id})
+        log.debug(
+            {"event": "macro_scenario_context_empty", "ticker": ticker, "scenario": scenario_id}
+        )
         return None
     effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
     if not force:
-        existing = read_current(
-            ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path
-        )
+        existing = read_current(ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path)
         if existing is not None and not existing.dirty:
             new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
             if new_sha == existing.input_sha256:
@@ -193,7 +189,11 @@ def run_macro_scenario_lens(
         return None
     try:
         content = call_llm(
-            compose_brief_prompt(prompt), purpose=purpose, ticker=ctx.ticker, scope="ticker", model=model
+            compose_brief_prompt(prompt),
+            purpose=purpose,
+            ticker=ctx.ticker,
+            scope="ticker",
+            model=model,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning({"event": "macro_scenario_llm_failed", "error": str(exc)})

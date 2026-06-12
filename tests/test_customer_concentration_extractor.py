@@ -128,12 +128,14 @@ def _payload_with_relevant_sections() -> dict[str, object]:
         "symbol": "NVDA",
         "year": "2024",
         "Summary of Significant Accounting Policies": [
-            {"Concentrations of Credit Risk":
-                ["One customer accounted for approximately 19% of total revenue in fiscal 2024."]},
+            {
+                "Concentrations of Credit Risk": [
+                    "One customer accounted for approximately 19% of total revenue in fiscal 2024."
+                ]
+            },
         ],
         "Revenues": [
-            {"Revenue from Customers":
-                ["Customer A accounted for approximately 13% of revenue."]},
+            {"Revenue from Customers": ["Customer A accounted for approximately 13% of revenue."]},
         ],
         "Unrelated Section": [{"noise": ["should not be included"]}],
     }
@@ -149,27 +151,33 @@ def test_extract_persists_named_and_anonymized(
 ) -> None:
     monkeypatch.setattr(
         "table_extractors.customer_concentration.call_llm",
-        _mock_llm([
-            {
-                "customer_label": "Microsoft Corporation",
-                "pct_of_revenue": 0.19,
-                "revenue_amount": 11500,
-                "anonymized": False,
-                "source_excerpt": "Microsoft Corporation accounted for approximately 19% of revenue",
-            },
-            {
-                "customer_label": "Customer A",
-                "pct_of_revenue": 0.13,
-                "revenue_amount": None,
-                "anonymized": True,
-                "source_excerpt": "Customer A accounted for approximately 13% of revenue.",
-            },
-        ]),
+        _mock_llm(
+            [
+                {
+                    "customer_label": "Microsoft Corporation",
+                    "pct_of_revenue": 0.19,
+                    "revenue_amount": 11500,
+                    "anonymized": False,
+                    "source_excerpt": "Microsoft Corporation accounted for approximately 19% of revenue",
+                },
+                {
+                    "customer_label": "Customer A",
+                    "pct_of_revenue": 0.13,
+                    "revenue_amount": None,
+                    "anonymized": True,
+                    "source_excerpt": "Customer A accounted for approximately 13% of revenue.",
+                },
+            ]
+        ),
     )
     outcome = cc.extract(
-        ticker="NVDA", fiscal_year=2024,
+        ticker="NVDA",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=7,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=7,
     )
     assert outcome.status == "ok"
     assert outcome.n_rows_proposed == 2
@@ -200,8 +208,7 @@ def test_extract_persists_named_and_anonymized(
 
         # Mapping proposal was emitted for the named customer
         proposal = conn.execute(
-            "SELECT kind, payload_json, ticker, status FROM mapping_proposals "
-            "WHERE ticker = 'NVDA'"
+            "SELECT kind, payload_json, ticker, status FROM mapping_proposals WHERE ticker = 'NVDA'"
         ).fetchone()
         assert proposal is not None
         assert proposal[0] == "new_entity"
@@ -224,9 +231,13 @@ def test_extract_handles_empty_disclosure(
         _mock_llm([]),
     )
     outcome = cc.extract(
-        ticker="GOOG", fiscal_year=2024,
+        ticker="GOOG",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=1,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=1,
     )
     assert outcome.status == "ok"
     assert outcome.n_rows_inserted == 0
@@ -238,17 +249,25 @@ def test_extract_normalizes_percentage_above_one(
     # Model sometimes emits 12 (meaning 12%) instead of 0.12; normalize.
     monkeypatch.setattr(
         "table_extractors.customer_concentration.call_llm",
-        _mock_llm([{
-            "customer_label": "BigCo",
-            "pct_of_revenue": 18,  # int 18, should normalize to 0.18
-            "anonymized": False,
-            "source_excerpt": "BigCo accounted for ~18% of revenue.",
-        }]),
+        _mock_llm(
+            [
+                {
+                    "customer_label": "BigCo",
+                    "pct_of_revenue": 18,  # int 18, should normalize to 0.18
+                    "anonymized": False,
+                    "source_excerpt": "BigCo accounted for ~18% of revenue.",
+                }
+            ]
+        ),
     )
     outcome = cc.extract(
-        ticker="AAPL", fiscal_year=2024,
+        ticker="AAPL",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=2,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=2,
     )
     assert outcome.n_rows_inserted == 1
     conn = sqlite3.connect(str(db))
@@ -267,40 +286,66 @@ def test_extract_skips_out_of_range_percentage(
     # 500 is clearly malformed — should be dropped, not stored.
     monkeypatch.setattr(
         "table_extractors.customer_concentration.call_llm",
-        _mock_llm([
-            {"customer_label": "Sane", "pct_of_revenue": 0.15, "anonymized": False, "source_excerpt": "x"},
-            {"customer_label": "Bogus", "pct_of_revenue": 500, "anonymized": False, "source_excerpt": "x"},
-        ]),
+        _mock_llm(
+            [
+                {
+                    "customer_label": "Sane",
+                    "pct_of_revenue": 0.15,
+                    "anonymized": False,
+                    "source_excerpt": "x",
+                },
+                {
+                    "customer_label": "Bogus",
+                    "pct_of_revenue": 500,
+                    "anonymized": False,
+                    "source_excerpt": "x",
+                },
+            ]
+        ),
     )
     outcome = cc.extract(
-        ticker="X", fiscal_year=2024,
+        ticker="X",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=3,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=3,
     )
     assert outcome.n_rows_inserted == 1
 
 
-def test_extract_is_idempotent(
-    db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_extract_is_idempotent(db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "table_extractors.customer_concentration.call_llm",
-        _mock_llm([{
-            "customer_label": "Customer A",
-            "pct_of_revenue": 0.12,
-            "anonymized": True,
-            "source_excerpt": "Customer A: 12% of revenue.",
-        }]),
+        _mock_llm(
+            [
+                {
+                    "customer_label": "Customer A",
+                    "pct_of_revenue": 0.12,
+                    "anonymized": True,
+                    "source_excerpt": "Customer A: 12% of revenue.",
+                }
+            ]
+        ),
     )
     out1 = cc.extract(
-        ticker="X", fiscal_year=2024,
+        ticker="X",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=1,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=1,
     )
     out2 = cc.extract(
-        ticker="X", fiscal_year=2024,
+        ticker="X",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=1,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=1,
     )
     assert out1.n_rows_inserted == 1
     assert out2.n_rows_inserted == 0  # unique violation, silently skipped
@@ -315,9 +360,12 @@ def test_extract_returns_llm_failed_when_llm_raises(
 
     monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _boom)
     outcome = cc.extract(
-        ticker="X", fiscal_year=2024,
+        ticker="X",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "llm_failed"
     assert "simulated upstream" in outcome.notes
@@ -332,9 +380,12 @@ def test_extract_returns_parse_failed_on_non_json_response(
 
     monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _bad)
     outcome = cc.extract(
-        ticker="X", fiscal_year=2024,
+        ticker="X",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "parse_failed"
 
@@ -348,9 +399,13 @@ def test_extract_strips_json_code_fence(
 
     monkeypatch.setattr("table_extractors.customer_concentration.call_llm", _fenced)
     outcome = cc.extract(
-        ticker="Z", fiscal_year=2024,
+        ticker="Z",
+        fiscal_year=2024,
         fmp_payload=_payload_with_relevant_sections(),
-        sec_text=None, db_path=db, repo_root=tmp_path, filing_doc_id=8,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=8,
     )
     assert outcome.status == "ok"
     assert outcome.n_rows_inserted == 1

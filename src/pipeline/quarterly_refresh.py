@@ -173,18 +173,23 @@ def _stage_fetch_sec_xbrl(
     """
     if ticker.upper() not in CIK_MAP:
         return StageResult(
-            name=StageName.FETCH_SEC_XBRL, status=StageStatus.SKIPPED,
-            rows_processed=0, notes="no CIK in CIK_MAP",
+            name=StageName.FETCH_SEC_XBRL,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no CIK in CIK_MAP",
         )
     try:
         stats = ingest_sec_for_ticker(conn, ticker=ticker, project_root=project_root)
     except (OSError, ValueError, KeyError) as e:
         return StageResult(
-            name=StageName.FETCH_SEC_XBRL, status=StageStatus.FAILED,
-            rows_processed=0, notes=f"{type(e).__name__}: {e}"[:200],
+            name=StageName.FETCH_SEC_XBRL,
+            status=StageStatus.FAILED,
+            rows_processed=0,
+            notes=f"{type(e).__name__}: {e}"[:200],
         )
     return StageResult(
-        name=StageName.FETCH_SEC_XBRL, status=StageStatus.OK,
+        name=StageName.FETCH_SEC_XBRL,
+        status=StageStatus.OK,
         rows_processed=stats.facts_inserted,
         notes=f"{stats.accessions_inserted} accessions; {stats.facts_inserted} new facts",
     )
@@ -210,8 +215,10 @@ def _stage_extract_fmp_facts(
     docs = cur.fetchall()
     if not docs:
         return StageResult(
-            name=StageName.EXTRACT_FMP_FACTS, status=StageStatus.SKIPPED,
-            rows_processed=0, notes="no FMP fact-producing documents",
+            name=StageName.EXTRACT_FMP_FACTS,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no FMP fact-producing documents",
         )
     inserted = 0
     failed = 0
@@ -229,7 +236,8 @@ def _stage_extract_fmp_facts(
             inserted += n
     status = StageStatus.OK if failed == 0 else StageStatus.FAILED
     return StageResult(
-        name=StageName.EXTRACT_FMP_FACTS, status=status,
+        name=StageName.EXTRACT_FMP_FACTS,
+        status=status,
         rows_processed=inserted,
         notes=f"{len(docs)} docs scanned; {inserted} new fact rows; {failed} failures",
     )
@@ -248,8 +256,10 @@ def _stage_ingest_ir_transcripts(
     docs = cur.fetchall()
     if not docs:
         return StageResult(
-            name=StageName.INGEST_IR_TRANSCRIPTS, status=StageStatus.SKIPPED,
-            rows_processed=0, notes="no unprocessed ir_transcript docs",
+            name=StageName.INGEST_IR_TRANSCRIPTS,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no unprocessed ir_transcript docs",
         )
     processed = 0
     failed = 0
@@ -266,7 +276,8 @@ def _stage_ingest_ir_transcripts(
             failed += 1
     status = StageStatus.OK if failed == 0 else StageStatus.FAILED
     return StageResult(
-        name=StageName.INGEST_IR_TRANSCRIPTS, status=status,
+        name=StageName.INGEST_IR_TRANSCRIPTS,
+        status=status,
         rows_processed=processed,
         notes=f"{processed} new transcripts wired up; {failed} failed",
     )
@@ -278,39 +289,45 @@ def _stage_derive_kpis(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
         emitted, inserted = derive_for_ticker(conn, ticker)
     except (ValueError, KeyError) as e:
         return StageResult(
-            name=StageName.DERIVE_FMP_KPIS, status=StageStatus.FAILED,
-            rows_processed=0, notes=f"{type(e).__name__}: {e}"[:200],
+            name=StageName.DERIVE_FMP_KPIS,
+            status=StageStatus.FAILED,
+            rows_processed=0,
+            notes=f"{type(e).__name__}: {e}"[:200],
         )
     if emitted == 0:
         return StageResult(
-            name=StageName.DERIVE_FMP_KPIS, status=StageStatus.SKIPPED,
+            name=StageName.DERIVE_FMP_KPIS,
+            status=StageStatus.SKIPPED,
             rows_processed=0,
             notes="no quarterly fmp_income_statement data on disk",
         )
     return StageResult(
-        name=StageName.DERIVE_FMP_KPIS, status=StageStatus.OK,
+        name=StageName.DERIVE_FMP_KPIS,
+        status=StageStatus.OK,
         rows_processed=inserted,
         notes=f"{emitted} rows derived; {inserted} new (others already present)",
     )
 
 
-def _stage_match_commitments(
-    conn: sqlite3.Connection, *, ticker: str
-) -> StageResult:
+def _stage_match_commitments(conn: sqlite3.Connection, *, ticker: str) -> StageResult:
     """Match outstanding management_commitments against any newly-arrived kpi_facts."""
     results = match_commitments_pending(conn, ticker=ticker)
     if not results:
         return StageResult(
-            name=StageName.MATCH_COMMITMENTS, status=StageStatus.SKIPPED,
-            rows_processed=0, notes="no pending commitments",
+            name=StageName.MATCH_COMMITMENTS,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no pending commitments",
         )
     by_outcome: dict[str, int] = {}
     for r in results:
         by_outcome[r.outcome.value] = by_outcome.get(r.outcome.value, 0) + 1
     summary = ", ".join(f"{k}={v}" for k, v in sorted(by_outcome.items()))
     return StageResult(
-        name=StageName.MATCH_COMMITMENTS, status=StageStatus.OK,
-        rows_processed=len(results), notes=f"matched {len(results)}: {summary}",
+        name=StageName.MATCH_COMMITMENTS,
+        status=StageStatus.OK,
+        rows_processed=len(results),
+        notes=f"matched {len(results)}: {summary}",
     )
 
 
@@ -338,22 +355,24 @@ def _stage_evaluate_thesis(
         else None
     )
     try:
-        verdict = evaluate_ticker_thesis(
-            conn, ticker=ticker, holdings_dir=holdings_dir
-        )
+        verdict = evaluate_ticker_thesis(conn, ticker=ticker, holdings_dir=holdings_dir)
     except FileNotFoundError:
         return (
             StageResult(
-                name=StageName.EVALUATE_THESIS, status=StageStatus.SKIPPED,
-                rows_processed=0, notes="no holdings spec for this ticker",
+                name=StageName.EVALUATE_THESIS,
+                status=StageStatus.SKIPPED,
+                rows_processed=0,
+                notes="no holdings spec for this ticker",
             ),
             _ThesisEvalOutcome(status=None, changed=False, notes="no holdings spec"),
         )
     except (ValueError, KeyError) as e:
         return (
             StageResult(
-                name=StageName.EVALUATE_THESIS, status=StageStatus.FAILED,
-                rows_processed=0, notes=f"{type(e).__name__}: {e}"[:200],
+                name=StageName.EVALUATE_THESIS,
+                status=StageStatus.FAILED,
+                rows_processed=0,
+                notes=f"{type(e).__name__}: {e}"[:200],
             ),
             _ThesisEvalOutcome(status=None, changed=False, notes="eval failed"),
         )
@@ -362,7 +381,8 @@ def _stage_evaluate_thesis(
     changed = prior_status is not new_status
     return (
         StageResult(
-            name=StageName.EVALUATE_THESIS, status=StageStatus.OK,
+            name=StageName.EVALUATE_THESIS,
+            status=StageStatus.OK,
             rows_processed=1,
             notes=(
                 f"{prior_status.value if prior_status else 'none'} -> {new_status.value}"
@@ -394,27 +414,38 @@ def _stage_persist_timeseries_signals(
         )
     except sqlite3.OperationalError as e:
         return StageResult(
-            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.SKIPPED,
-            rows_processed=0, notes=f"table missing — run migration: {e}"[:200],
+            name=StageName.PERSIST_TIMESERIES_SIGNALS,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes=f"table missing — run migration: {e}"[:200],
         )
     except (ValueError, KeyError, json.JSONDecodeError) as e:
         return StageResult(
-            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.FAILED,
-            rows_processed=0, notes=f"{type(e).__name__}: {e}"[:200],
+            name=StageName.PERSIST_TIMESERIES_SIGNALS,
+            status=StageStatus.FAILED,
+            rows_processed=0,
+            notes=f"{type(e).__name__}: {e}"[:200],
         )
     if n == 0:
         return StageResult(
-            name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.SKIPPED,
-            rows_processed=0, notes="no metrics with sufficient data",
+            name=StageName.PERSIST_TIMESERIES_SIGNALS,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no metrics with sufficient data",
         )
     return StageResult(
-        name=StageName.PERSIST_TIMESERIES_SIGNALS, status=StageStatus.OK,
-        rows_processed=n, notes=f"{n} signal rows upserted",
+        name=StageName.PERSIST_TIMESERIES_SIGNALS,
+        status=StageStatus.OK,
+        rows_processed=n,
+        notes=f"{n} signal rows upserted",
     )
 
 
 _IR_PDF_DOC_TYPES: tuple[str, ...] = (
-    "ir_presentation", "ir_press_release", "ir_supplement", "ir_investor_update",
+    "ir_presentation",
+    "ir_press_release",
+    "ir_supplement",
+    "ir_investor_update",
 )
 
 
@@ -483,7 +514,8 @@ def _stage_surface_pending_llm(
     status = StageStatus.NEEDS_LLM if items else StageStatus.SKIPPED
     return (
         StageResult(
-            name=StageName.SURFACE_PENDING_LLM, status=status,
+            name=StageName.SURFACE_PENDING_LLM,
+            status=status,
             rows_processed=len(items),
             notes=f"{len(items)} pending items for LLM follow-up",
         ),
@@ -547,12 +579,18 @@ def refresh_portfolio(
     started_at = datetime.now()
     reports = [
         refresh_ticker(
-            conn, ticker=t, project_root=project_root,
-            holdings_dir=holdings_dir, run_id=run_id, fetch_sec=fetch_sec,
+            conn,
+            ticker=t,
+            project_root=project_root,
+            holdings_dir=holdings_dir,
+            run_id=run_id,
+            fetch_sec=fetch_sec,
         )
         for t in tickers
     ]
     return RefreshReport(
-        run_id=run_id, started_at=started_at, ended_at=datetime.now(),
+        run_id=run_id,
+        started_at=started_at,
+        ended_at=datetime.now(),
         tickers=tuple(reports),
     )

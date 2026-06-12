@@ -115,7 +115,9 @@ def usage_from_json_meta(meta: dict[str, object]) -> dict[str, int | float | Non
         return int(v) if isinstance(v, (int, float)) else None
 
     cost = meta.get("total_cost_usd")
-    cost_float = float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+    cost_float = (
+        float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+    )
 
     return {
         "input_tokens": _int("input_tokens"),
@@ -220,7 +222,7 @@ def _resolve_db_path(override: Path | str | None) -> Path | None:
         return Path(override)
     try:
         from db import DB_PATH  # late import — keeps this module
-                                # importable without a DB context configured
+        # importable without a DB context configured
 
         return Path(DB_PATH)
     except ImportError:

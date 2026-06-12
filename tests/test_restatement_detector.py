@@ -201,17 +201,11 @@ def test_is_later_filing_compares_fiscal_year(fixture_db: Path) -> None:
             is True
         )
         assert (
-            is_later_filing(
-                conn, new_source_doc_id=q1_doc, incumbent_source_doc_id=fy_doc
-            )
-            is False
+            is_later_filing(conn, new_source_doc_id=q1_doc, incumbent_source_doc_id=fy_doc) is False
         )
         # Same-year fallback to fetched_at: FY 2023 fetched after Q1 2023.
         assert (
-            is_later_filing(
-                conn, new_source_doc_id=fy_doc, incumbent_source_doc_id=q1_doc
-            )
-            is True
+            is_later_filing(conn, new_source_doc_id=fy_doc, incumbent_source_doc_id=q1_doc) is True
         )
     finally:
         conn.close()
@@ -351,9 +345,7 @@ def test_restatement_chain_loader_returns_newer_by_default(fixture_db: Path) -> 
         conn.close()
 
     # Default (no as_of_date): the restated FY-sourced value wins.
-    obs = load_financial_series(
-        ticker="AMZN", line_item="revenue", db_path=fixture_db
-    )
+    obs = load_financial_series(ticker="AMZN", line_item="revenue", db_path=fixture_db)
     assert len(obs) == 1
     assert obs[0].value == pytest.approx(127500.0)
 
@@ -432,9 +424,7 @@ def test_loader_prefers_sec_official_over_fmp_normalized(fixture_db: Path) -> No
     finally:
         conn.close()
 
-    obs = load_financial_series(
-        ticker="AMZN", line_item="revenue", db_path=fixture_db
-    )
+    obs = load_financial_series(ticker="AMZN", line_item="revenue", db_path=fixture_db)
     assert len(obs) == 1
     assert obs[0].value == pytest.approx(127360.0)
 
@@ -487,9 +477,7 @@ def test_loader_tier_beats_higher_id(fixture_db: Path) -> None:
     finally:
         conn.close()
 
-    obs = load_financial_series(
-        ticker="AMZN", line_item="revenue", db_path=fixture_db
-    )
+    obs = load_financial_series(ticker="AMZN", line_item="revenue", db_path=fixture_db)
     assert len(obs) == 1
     # SEC value wins despite lower id — that is the whole point of the
     # tier-aware ordering.
@@ -542,9 +530,7 @@ def test_loader_within_same_tier_higher_id_wins(fixture_db: Path) -> None:
     finally:
         conn.close()
 
-    obs = load_financial_series(
-        ticker="GOOG", line_item="revenue", db_path=fixture_db
-    )
+    obs = load_financial_series(ticker="GOOG", line_item="revenue", db_path=fixture_db)
     assert len(obs) == 1
     assert obs[0].value == pytest.approx(80540.0)
 
@@ -592,13 +578,16 @@ def test_find_incumbent_returns_head_of_chain(fixture_db: Path) -> None:
         conn.commit()
 
         # Chain: ids[0] <- ids[1] <- ids[2]. The head is ids[2].
-        assert find_incumbent(
-            conn,
-            ticker="META",
-            period_end=datetime.fromisoformat("2023-03-31"),
-            fiscal_period_type="Q1",
-            line_item="revenue",
-        ) == ids[2]
+        assert (
+            find_incumbent(
+                conn,
+                ticker="META",
+                period_end=datetime.fromisoformat("2023-03-31"),
+                fiscal_period_type="Q1",
+                line_item="revenue",
+            )
+            == ids[2]
+        )
 
         # latest_in_chain from the root should walk forward to ids[2].
         assert latest_in_chain(conn, ids[0]) == ids[2]
@@ -654,8 +643,7 @@ def test_same_document_replay_is_noop(fixture_db: Path) -> None:
         assert replay_supersedes is None
         # Exactly one row exists for the logical key.
         rows = conn.execute(
-            "SELECT COUNT(*) FROM financial_facts "
-            "WHERE ticker = ? AND line_item = ?",
+            "SELECT COUNT(*) FROM financial_facts WHERE ticker = ? AND line_item = ?",
             ("META", "revenue"),
         ).fetchone()
         assert rows[0] == 1
@@ -668,9 +656,7 @@ def test_same_document_replay_is_noop(fixture_db: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_kpi_definition(
-    conn: sqlite3.Connection, *, ticker: str, name: str
-) -> int:
+def _seed_kpi_definition(conn: sqlite3.Connection, *, ticker: str, name: str) -> int:
     """Insert one kpi_definitions row; returns id."""
     cur = conn.execute(
         "INSERT INTO kpi_definitions (ticker, name, unit, primary_source) "
@@ -708,9 +694,7 @@ def test_kpi_restatement_chain_two_rows_with_supersedes_link(
             fetched_at="2024-02-15 12:00:00",
             sha256="b" * 64,
         )
-        kpi_def_id = _seed_kpi_definition(
-            conn, ticker="MELI", name="Revenue Growth (FXN)"
-        )
+        kpi_def_id = _seed_kpi_definition(conn, ticker="MELI", name="Revenue Growth (FXN)")
         conn.commit()
 
         # First write: Q-filing value.
@@ -776,9 +760,7 @@ def test_kpi_same_document_replay_is_noop(fixture_db: Path) -> None:
             fetched_at="2026-02-25 12:00:00",
             sha256="a" * 64,
         )
-        kpi_def_id = _seed_kpi_definition(
-            conn, ticker="RBRK", name="Revenue YoY Growth (USD)"
-        )
+        kpi_def_id = _seed_kpi_definition(conn, ticker="RBRK", name="Revenue YoY Growth (USD)")
         conn.commit()
 
         first_id, _ = insert_kpi_with_restatement_detection(
@@ -841,9 +823,7 @@ def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
             sha256="b" * 64,
             tier="llm_extracted",
         )
-        kpi_def_id = _seed_kpi_definition(
-            conn, ticker="MELI", name="Revenue Growth (FXN)"
-        )
+        kpi_def_id = _seed_kpi_definition(conn, ticker="MELI", name="Revenue Growth (FXN)")
         conn.commit()
         insert_kpi_with_restatement_detection(
             conn,
@@ -869,9 +849,7 @@ def test_kpi_loader_returns_restated_value_by_default(fixture_db: Path) -> None:
     finally:
         conn.close()
 
-    obs = load_kpi_series(
-        ticker="MELI", kpi_name="Revenue Growth (FXN)", db_path=fixture_db
-    )
+    obs = load_kpi_series(ticker="MELI", kpi_name="Revenue Growth (FXN)", db_path=fixture_db)
     assert len(obs) == 1
     assert obs[0].value == pytest.approx(92.0)
 
@@ -908,9 +886,7 @@ def test_kpi_loader_prefers_sec_official_over_llm_extracted(
             sha256="b" * 64,
             tier="fmp_normalized",
         )
-        kpi_def_id = _seed_kpi_definition(
-            conn, ticker="MELI", name="Operating Margin (GAAP)"
-        )
+        kpi_def_id = _seed_kpi_definition(conn, ticker="MELI", name="Operating Margin (GAAP)")
         for doc, val in [(ir_doc, Decimal("13.0")), (fmp_doc, Decimal("13.5"))]:
             insert_kpi_with_restatement_detection(
                 conn,

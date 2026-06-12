@@ -91,12 +91,22 @@ def run_lens(
         ctx = lens.build_context(ticker, repo_root)
     except Exception as exc:  # noqa: BLE001 — defensive across context loaders
         log.warning(
-            {"event": "lens_context_build_failed", "lens": lens.name, "ticker": ticker, "error": str(exc)}
+            {
+                "event": "lens_context_build_failed",
+                "lens": lens.name,
+                "ticker": ticker,
+                "error": str(exc),
+            }
         )
         return None
     if ctx is None:
         log.debug(
-            {"event": "lens_context_empty", "lens": lens.name, "ticker": ticker, "reason": "insufficient_data"}
+            {
+                "event": "lens_context_empty",
+                "lens": lens.name,
+                "ticker": ticker,
+                "reason": "insufficient_data",
+            }
         )
         return None
 
@@ -114,18 +124,28 @@ def run_lens(
             db_path=db_path,
         )
         if existing is not None and not existing.dirty:
-            new_sha = compute_input_sha256(
-                prompt_version="v1", cache_inputs=effective_cache_inputs
-            )
+            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
             if new_sha == existing.input_sha256:
-                log.info({"event": "lens_cache_hit", "lens": lens.name, "ticker": ticker, "artifact_id": existing.id})
+                log.info(
+                    {
+                        "event": "lens_cache_hit",
+                        "lens": lens.name,
+                        "ticker": ticker,
+                        "artifact_id": existing.id,
+                    }
+                )
                 return existing
 
     try:
         prompt = lens.prompt_template.format(**ctx.template_kwargs)
     except KeyError as exc:
         log.warning(
-            {"event": "lens_template_missing_key", "lens": lens.name, "ticker": ticker, "key": str(exc)}
+            {
+                "event": "lens_template_missing_key",
+                "lens": lens.name,
+                "ticker": ticker,
+                "key": str(exc),
+            }
         )
         return None
 
@@ -139,7 +159,12 @@ def run_lens(
         )
     except Exception as exc:  # noqa: BLE001 — record + return
         log.warning(
-            {"event": "lens_llm_call_failed", "lens": lens.name, "ticker": ticker, "error": str(exc)}
+            {
+                "event": "lens_llm_call_failed",
+                "lens": lens.name,
+                "ticker": ticker,
+                "error": str(exc),
+            }
         )
         return None
 
@@ -177,9 +202,7 @@ def run_lens(
     )
     if artifact_id is None:
         return None
-    return read_current(
-        ticker=ctx.ticker, purpose=purpose, scope=lens.scope, db_path=db_path
-    )
+    return read_current(ticker=ctx.ticker, purpose=purpose, scope=lens.scope, db_path=db_path)
 
 
 def read_lens_artifact(
@@ -324,7 +347,9 @@ def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
         conn.close()
 
 
-def load_latest_financials_snapshot(ticker: str, repo_root: Path, n_periods: int = 8) -> list[dict[str, object]]:
+def load_latest_financials_snapshot(
+    ticker: str, repo_root: Path, n_periods: int = 8
+) -> list[dict[str, object]]:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return []
@@ -381,9 +406,7 @@ def summarize_predictions(rows: list[dict[str, object]], max_items: int = 20) ->
         kpi = str(r.get("kpi_name") or "?")
         outc = str(r.get("outcome") or "pending")
         narr = str(r.get("prediction_md") or "")[:140]
-        lines.append(
-            f"- {made} → {tgt} · {kpi} · {outc.upper()} · {narr}"
-        )
+        lines.append(f"- {made} → {tgt} · {kpi} · {outc.upper()} · {narr}")
     return "\n".join(lines)
 
 

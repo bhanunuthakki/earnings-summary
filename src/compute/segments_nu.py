@@ -147,9 +147,7 @@ def _insert_segment_facts(conn: sqlite3.Connection, facts: list[SegmentFact]) ->
     return write_segment_facts_via_junction(conn, facts)
 
 
-def extract_nu_segment_facts(
-    conn: sqlite3.Connection, document_id: int, project_root: Path
-) -> int:
+def extract_nu_segment_facts(conn: sqlite3.Connection, document_id: int, project_root: Path) -> int:
     """Read NU 10-K/10-Q JSON, walk segment-info section, write segment_facts. Idempotent."""
     cur = conn.cursor()
     cur.execute("SELECT ticker, file_path, doc_type FROM documents WHERE id = ?", (document_id,))
@@ -157,7 +155,9 @@ def extract_nu_segment_facts(
     if row is None:
         raise ValueError(f"No document with id={document_id}")
     if row["ticker"] != _TICKER:
-        raise ValueError(f"Document {document_id} is ticker={row['ticker']!r}, expected {_TICKER!r}")
+        raise ValueError(
+            f"Document {document_id} is ticker={row['ticker']!r}, expected {_TICKER!r}"
+        )
     if row["doc_type"] not in _DOC_TYPES:
         raise ValueError(
             f"Document {document_id} is doc_type={row['doc_type']!r}, "

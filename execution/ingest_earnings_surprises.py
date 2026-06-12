@@ -41,12 +41,18 @@ _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 # Schema column list — single source of truth for the upsert statement.
 # `release_date` is part of the conflict key, not the SET clause.
 _UPSERT_COLUMNS: tuple[str, ...] = (
-    "ticker", "release_date",
-    "eps_estimate", "eps_actual",
-    "revenue_estimate", "revenue_actual",
-    "eps_surprise_pct", "revenue_surprise_pct",
-    "num_analysts_eps", "num_analysts_revenue",
-    "source_name", "source_url",
+    "ticker",
+    "release_date",
+    "eps_estimate",
+    "eps_actual",
+    "revenue_estimate",
+    "revenue_actual",
+    "eps_surprise_pct",
+    "revenue_surprise_pct",
+    "num_analysts_eps",
+    "num_analysts_revenue",
+    "source_name",
+    "source_url",
     "fetched_at",
 )
 _UPDATABLE_COLUMNS: tuple[str, ...] = tuple(
@@ -55,11 +61,16 @@ _UPDATABLE_COLUMNS: tuple[str, ...] = tuple(
 
 # Decimal-typed columns need value-equivalent comparison (SQLite's NUMERIC
 # affinity strips trailing zeros: "-1800.00" → -1800), not string compare.
-_DECIMAL_COLUMNS: frozenset[str] = frozenset({
-    "eps_estimate", "eps_actual",
-    "revenue_estimate", "revenue_actual",
-    "eps_surprise_pct", "revenue_surprise_pct",
-})
+_DECIMAL_COLUMNS: frozenset[str] = frozenset(
+    {
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "eps_surprise_pct",
+        "revenue_surprise_pct",
+    }
+)
 
 # fetched_at always drifts across backfill runs (regenerated per fetch). We
 # still WRITE the new timestamp via the upsert — we just don't count its
@@ -115,8 +126,9 @@ def _parse_record(rec: object) -> dict[str, object] | None:
     release_date = d.get("release_date")
     ticker = d.get("ticker")
     source_name = d.get("source_name")
-    if not (isinstance(release_date, str) and isinstance(ticker, str) and
-            isinstance(source_name, str)):
+    if not (
+        isinstance(release_date, str) and isinstance(ticker, str) and isinstance(source_name, str)
+    ):
         return None
     # fetched_at is required by the schema; if absent, fall back to "now" so the
     # row can still land — better than rejecting a record over missing telemetry.
@@ -133,9 +145,12 @@ def _parse_record(rec: object) -> dict[str, object] | None:
     # Decimal-bearing columns: source-of-truth shape is `str | None` (Decimal
     # serialized) — we pass through whatever the JSON has, SQLite coerces.
     for k in (
-        "eps_estimate", "eps_actual",
-        "revenue_estimate", "revenue_actual",
-        "eps_surprise_pct", "revenue_surprise_pct",
+        "eps_estimate",
+        "eps_actual",
+        "revenue_estimate",
+        "revenue_actual",
+        "eps_surprise_pct",
+        "revenue_surprise_pct",
     ):
         v = d.get(k)
         out[k] = v if isinstance(v, str) else None
@@ -150,9 +165,7 @@ def _upsert_sql() -> str:
     """Build the parameterized upsert. Returns rows modified per `cursor.rowcount`."""
     cols = ", ".join(_UPSERT_COLUMNS)
     placeholders = ", ".join("?" for _ in _UPSERT_COLUMNS)
-    set_clause = ",\n            ".join(
-        f"{c} = excluded.{c}" for c in _UPDATABLE_COLUMNS
-    )
+    set_clause = ",\n            ".join(f"{c} = excluded.{c}" for c in _UPDATABLE_COLUMNS)
     return (
         f"INSERT INTO earnings_surprises ({cols}) VALUES ({placeholders}) "
         f"ON CONFLICT(ticker, release_date) DO UPDATE SET\n            {set_clause}"
@@ -181,9 +194,7 @@ def _values_match(col: str, existing: object, incoming: object) -> bool:
     return str(existing) == str(incoming)
 
 
-def _row_exists_and_matches(
-    conn: sqlite3.Connection, parsed: dict[str, object]
-) -> bool:
+def _row_exists_and_matches(conn: sqlite3.Connection, parsed: dict[str, object]) -> bool:
     """Return True if a row already exists for (ticker, release_date) AND all
     meaningful updatable columns match the incoming record. Drives the
     inserted/updated/unchanged telemetry — the upsert itself runs unconditionally.
@@ -267,7 +278,9 @@ def main() -> int:
     p.add_argument("--ticker", help="Single ticker to ingest")
     p.add_argument("--dry-run", action="store_true", help="Plan only — no DB writes")
     p.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT,
+        "--repo-root",
+        type=Path,
+        default=PROJECT_ROOT,
         help="Repo root containing data/. Default: this repo.",
     )
     args = p.parse_args()

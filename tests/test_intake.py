@@ -125,50 +125,60 @@ def test_doc_type_index_keys_subset_of_index_manager_valid_set() -> None:
     import index_manager
 
     for key in DOC_TYPE_INDEX_KEY.values():
-        assert key in index_manager.VALID_DOC_TYPES, f"index_manager.VALID_DOC_TYPES is missing {key!r}"
+        assert key in index_manager.VALID_DOC_TYPES, (
+            f"index_manager.VALID_DOC_TYPES is missing {key!r}"
+        )
 
 
 def test_intake_classification_validates_doctype_enum() -> None:
     """A doc_type value not in DocType must fail Pydantic validation."""
     with pytest.raises(ValidationError):
-        IntakeClassification.model_validate({
-            "ticker": "BN",
-            "period_end": "2025-09-30",
-            "doc_type": "ir_random_doctype_that_does_not_exist",
-            "confidence": 0.9,
-            "reasoning": "test",
-        })
+        IntakeClassification.model_validate(
+            {
+                "ticker": "BN",
+                "period_end": "2025-09-30",
+                "doc_type": "ir_random_doctype_that_does_not_exist",
+                "confidence": 0.9,
+                "reasoning": "test",
+            }
+        )
 
 
 def test_intake_classification_rejects_out_of_range_confidence() -> None:
     with pytest.raises(ValidationError):
-        IntakeClassification.model_validate({
-            "ticker": "BN",
-            "period_end": "2025-09-30",
-            "doc_type": "ir_press_release",
-            "confidence": 1.5,
-            "reasoning": "test",
-        })
+        IntakeClassification.model_validate(
+            {
+                "ticker": "BN",
+                "period_end": "2025-09-30",
+                "doc_type": "ir_press_release",
+                "confidence": 1.5,
+                "reasoning": "test",
+            }
+        )
 
 
 def test_intake_classification_resolves_aliased_ticker() -> None:
-    c = IntakeClassification.model_validate({
-        "ticker": "googl",
-        "period_end": "2025-06-30",
-        "doc_type": "ir_press_release",
-        "confidence": 0.9,
-        "reasoning": "test",
-    })
+    c = IntakeClassification.model_validate(
+        {
+            "ticker": "googl",
+            "period_end": "2025-06-30",
+            "doc_type": "ir_press_release",
+            "confidence": 0.9,
+            "reasoning": "test",
+        }
+    )
     assert c.ticker == "GOOG"
 
 
 def test_intake_classification_accepts_ir_event() -> None:
     """ir_event is a valid doc_type for non-quarterly investor day / AGM / capital markets day decks."""
-    c = IntakeClassification.model_validate({
-        "ticker": "BN",
-        "period_end": "2025-09-25",
-        "doc_type": "ir_event",
-        "confidence": 0.9,
-        "reasoning": "investor day deck",
-    })
+    c = IntakeClassification.model_validate(
+        {
+            "ticker": "BN",
+            "period_end": "2025-09-25",
+            "doc_type": "ir_event",
+            "confidence": 0.9,
+            "reasoning": "investor day deck",
+        }
+    )
     assert c.doc_type == DocType.IR_EVENT

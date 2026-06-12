@@ -210,9 +210,7 @@ def main() -> int:
         default=None,
         help="Write JSON to this path instead of stdout.",
     )
-    parser.add_argument(
-        "--pretty", action="store_true", help="Pretty-print the JSON (indent=2)."
-    )
+    parser.add_argument("--pretty", action="store_true", help="Pretty-print the JSON (indent=2).")
     parser.add_argument(
         "--no-persist",
         action="store_true",
@@ -250,9 +248,7 @@ def main() -> int:
             try:
                 conn = sqlite3.connect(str(db_path))
                 try:
-                    n = compute_and_persist_signals(
-                        ticker=ticker, db=conn, repo_root=repo_root
-                    )
+                    n = compute_and_persist_signals(ticker=ticker, db=conn, repo_root=repo_root)
                     report["signals_persisted"] = n
                 finally:
                     conn.close()

@@ -27,7 +27,14 @@ from pathlib import Path
 
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 
-_SECTION_KEYWORDS = ("segment", "geographic", "description of business", "operating segments", "revenue", "sales")
+_SECTION_KEYWORDS = (
+    "segment",
+    "geographic",
+    "description of business",
+    "operating segments",
+    "revenue",
+    "sales",
+)
 _MAX_TEXT_BUDGET = 60000  # chars sent to LLM — caps prompt size on chatty filings
 
 

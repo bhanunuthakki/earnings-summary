@@ -46,7 +46,18 @@ from user_state.registry import list_kpis, upsert_kpi
 # 8 quarters flat ~18, then a 4-quarter decline to 16.4. Changepoint idx=8
 # (recent), latest-point z ≈ -2.3.
 _VALUES_RECENT_DOWN: list[float] = [
-    18.0, 18.1, 17.9, 18.0, 18.1, 17.9, 18.0, 18.0, 17.4, 17.0, 16.7, 16.4,
+    18.0,
+    18.1,
+    17.9,
+    18.0,
+    18.1,
+    17.9,
+    18.0,
+    18.0,
+    17.4,
+    17.0,
+    16.7,
+    16.4,
 ]
 # 8 flat at 18, sharp step to a flat 16.4. Changepoint idx=8 (recent), but the
 # latest-point z ≈ -1.2 (< significant) — used for the "mild, no threshold,
@@ -372,9 +383,7 @@ def test_scan_stale_inflection_returns_empty(
     assert KpiInflectionTrigger().scan("NU", fixture_conn) == []
 
 
-def test_scan_missing_tables_returns_empty(
-    fixture_conn: sqlite3.Connection, db_path: Path
-) -> None:
+def test_scan_missing_tables_returns_empty(fixture_conn: sqlite3.Connection, db_path: Path) -> None:
     # Registered, but no kpi_facts/kpi_definitions rows for this KPI → []
     _register_kpi(db_path, ticker="NU", kpi_name="DEPOSIT_COST")
     assert KpiInflectionTrigger().scan("NU", fixture_conn) == []
@@ -432,9 +441,7 @@ def test_should_fire_false_no_threshold_and_mild_z() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_alert_fires_when_llm_down(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_build_alert_fires_when_llm_down(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """LLM raises → the alert STILL fires with the deterministic factual memo;
     llm_context_available is False. This is the core contract."""
     monkeypatch.setattr("triggers.kpi_inflection.call_llm", _raise_llm)

@@ -83,8 +83,7 @@ def _ensure_period(
     new_id = cur.lastrowid
     if new_id is None:
         raise RuntimeError(
-            "segment_periods INSERT returned no lastrowid — DB connection "
-            "is in an unexpected state"
+            "segment_periods INSERT returned no lastrowid — DB connection is in an unexpected state"
         )
     return (int(new_id), True)
 
@@ -278,9 +277,7 @@ def segment_fact_to_dimension(
     )
 
 
-def write_segment_facts_via_junction(
-    conn: sqlite3.Connection, facts: Iterable[SegmentFact]
-) -> int:
+def write_segment_facts_via_junction(conn: sqlite3.Connection, facts: Iterable[SegmentFact]) -> int:
     """Write a batch of legacy-shaped SegmentFact objects through the junction.
 
     Groups facts on the segment_periods natural key (ticker, period_end,
@@ -326,10 +323,7 @@ def write_segment_facts_via_junction(
         # row (via SegmentDimension.unit).
         anchor = group[0]
         dimensions = [
-            segment_fact_to_dimension(
-                f.segment_name, f.metric, f.value, unit=f.unit
-            )
-            for f in group
+            segment_fact_to_dimension(f.segment_name, f.metric, f.value, unit=f.unit) for f in group
         ]
         _, dims_inserted = write_segment_facts_junction(
             conn,

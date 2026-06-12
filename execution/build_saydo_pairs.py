@@ -76,9 +76,7 @@ def main() -> int:
     return 0
 
 
-def _prepare_batch_mode(
-    tickers: list[str], repo_root: Path, *, refresh: bool
-) -> int:
+def _prepare_batch_mode(tickers: list[str], repo_root: Path, *, refresh: bool) -> int:
     """Collect every pending SayDo pair across `tickers` into a single
     Anthropic message-batches JSONL file. Does NOT submit — operator pipes
     the file into the SDK's batches API on the overnight cron path.
@@ -116,15 +114,15 @@ def _prepare_batch_mode(
             out_path = tmp / f"{custom_id}.txt"
             if out_path.exists() and not refresh:
                 continue
-            prompt = _build_pairwise_analysis_prompt(
-                prev, curr, anchor_block=anchor_block
-            )
+            prompt = _build_pairwise_analysis_prompt(prev, curr, anchor_block=anchor_block)
             requests.append(BatchRequest(custom_id=custom_id, prompt=prompt))
-            manifest_entries.append({
-                "custom_id": custom_id,
-                "ticker": ticker,
-                "expected_output": str(out_path.relative_to(repo_root)),
-            })
+            manifest_entries.append(
+                {
+                    "custom_id": custom_id,
+                    "ticker": ticker,
+                    "expected_output": str(out_path.relative_to(repo_root)),
+                }
+            )
 
     written = write_jsonl(requests, jsonl_path)
     manifest_path.write_text(
@@ -135,40 +133,49 @@ def _prepare_batch_mode(
                 "requests": manifest_entries,
                 "jsonl": str(jsonl_path.relative_to(repo_root)),
                 "submit_hint": (
-                    "Submit via: python -c \"from anthropic import Anthropic; "
+                    'Submit via: python -c "from anthropic import Anthropic; '
                     "c = Anthropic(); "
                     "import json; reqs = [json.loads(line) for line in open(JSONL_PATH)]; "
-                    "batch = c.messages.batches.create(requests=reqs); print(batch.id)\""
+                    'batch = c.messages.batches.create(requests=reqs); print(batch.id)"'
                 ),
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-    print(json.dumps({
-        "mode": "prepare_batch",
-        "requests_written": written,
-        "jsonl": str(jsonl_path.relative_to(repo_root)),
-        "manifest": str(manifest_path.relative_to(repo_root)),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "mode": "prepare_batch",
+                "requests_written": written,
+                "jsonl": str(jsonl_path.relative_to(repo_root)),
+                "manifest": str(manifest_path.relative_to(repo_root)),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
-    p.add_argument("--refresh", action="store_true", help="Re-generate even if SayDo file already exists")
+    p.add_argument(
+        "--refresh", action="store_true", help="Re-generate even if SayDo file already exists"
+    )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     p.add_argument(
         "--prepare-batch",
         action="store_true",
         help="Write a JSONL of Anthropic messages.batches.create requests to "
-             ".tmp/saydo_batch/ instead of issuing synchronous LLM calls. "
-             "Overnight cron submits the batch via the SDK; result drops back "
-             "into .tmp/SayDo_*.txt with the same filenames the synchronous "
-             "path would have written.",
+        ".tmp/saydo_batch/ instead of issuing synchronous LLM calls. "
+        "Overnight cron submits the batch via the SDK; result drops back "
+        "into .tmp/SayDo_*.txt with the same filenames the synchronous "
+        "path would have written.",
     )
     return p.parse_args()
 
@@ -188,9 +195,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     return [r[0] for r in rows]
 
 
-def _process_ticker(
-    ticker: str, repo_root: Path, refresh: bool
-) -> dict[str, object]:
+def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, object]:
     started = datetime.now(timezone.utc)
     t0 = time.perf_counter()
     tmp = repo_root / ".tmp"
@@ -283,8 +288,7 @@ def _list_summaries(tmp: Path, ticker: str) -> list[dict[str, object]]:
         out.append((int(m.group("q")), int(m.group("y")), p))
     out.sort(key=lambda x: (x[1], x[0]))
     return [
-        {"quarter": f"Q{q}", "year": y, "text": p.read_text(encoding="utf-8")}
-        for q, y, p in out
+        {"quarter": f"Q{q}", "year": y, "text": p.read_text(encoding="utf-8")} for q, y, p in out
     ]
 
 

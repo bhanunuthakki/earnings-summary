@@ -77,17 +77,24 @@ def main() -> int:
     out_path = repo_root / "output" / "earnings_calendar.html"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
-    print(json.dumps({
-        "path": str(out_path),
-        "upcoming": len(upcoming),
-        "recent": len(recent),
-        "no_data": len(no_data),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "path": str(out_path),
+                "upcoming": len(upcoming),
+                "recent": len(recent),
+                "no_data": len(no_data),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--repo-root",
         type=Path,
@@ -134,12 +141,14 @@ def _read_calendar(repo_root: Path, ticker: str) -> list[dict]:
             d = datetime.strptime(raw_date[:10], "%Y-%m-%d").date()
         except ValueError:
             continue
-        out.append({
-            "date": d,
-            "time": (row.get("time") or row.get("hour") or "").strip().lower(),
-            "eps_est": row.get("epsEstimated") or row.get("eps_estimated"),
-            "rev_est": row.get("revenueEstimated") or row.get("revenue_estimated"),
-        })
+        out.append(
+            {
+                "date": d,
+                "time": (row.get("time") or row.get("hour") or "").strip().lower(),
+                "eps_est": row.get("epsEstimated") or row.get("eps_estimated"),
+                "rev_est": row.get("revenueEstimated") or row.get("revenue_estimated"),
+            }
+        )
     return out
 
 
@@ -185,8 +194,8 @@ def _latest_report(repo_root: Path, ticker: str) -> tuple[str, str] | None:
 
 
 _LIST_CLASS_LABELS: dict[str, tuple[str, str]] = {
-    "portfolio":  ("portfolio",  "Portfolio"),
-    "watchlist":  ("watchlist",  "Watchlist"),
+    "portfolio": ("portfolio", "Portfolio"),
+    "watchlist": ("watchlist", "Watchlist"),
     "evaluation": ("evaluation", "Evaluation"),
 }
 
@@ -235,8 +244,8 @@ def _render_row(row: dict, today: date, *, kind: str) -> str:
         f'<td class="name">{row["name"]}</td>'
         f'<td><span class="badge {list_class}">{list_label}</span></td>'
         f'<td class="when">{when}</td>'
-        f'<td>{report_cell}</td>'
-        f'</tr>'
+        f"<td>{report_cell}</td>"
+        f"</tr>"
     )
 
 
@@ -252,18 +261,24 @@ def _render_no_data_row(row: dict) -> str:
         f'<td class="ticker">{row["ticker"]}</td>'
         f'<td class="name">{row["name"]}</td>'
         f'<td><span class="badge {list_class}">{list_label}</span></td>'
-        f'<td>{report_cell}</td>'
-        f'</tr>'
+        f"<td>{report_cell}</td>"
+        f"</tr>"
     )
 
 
 def _render_html(today: date, upcoming: list[dict], recent: list[dict], no_data: list[dict]) -> str:
-    upcoming_rows = "\n".join(_render_row(r, today, kind="upcoming") for r in upcoming) or \
-        '<tr><td colspan="6" class="muted">No upcoming earnings in the next 90 days.</td></tr>'
-    recent_rows = "\n".join(_render_row(r, today, kind="recent") for r in recent) or \
-        '<tr><td colspan="6" class="muted">No earnings in the last 45 days.</td></tr>'
-    no_data_rows = "\n".join(_render_no_data_row(r) for r in no_data) or \
-        '<tr><td colspan="4" class="muted">All tracked tickers have calendar data.</td></tr>'
+    upcoming_rows = (
+        "\n".join(_render_row(r, today, kind="upcoming") for r in upcoming)
+        or '<tr><td colspan="6" class="muted">No upcoming earnings in the next 90 days.</td></tr>'
+    )
+    recent_rows = (
+        "\n".join(_render_row(r, today, kind="recent") for r in recent)
+        or '<tr><td colspan="6" class="muted">No earnings in the last 45 days.</td></tr>'
+    )
+    no_data_rows = (
+        "\n".join(_render_no_data_row(r) for r in no_data)
+        or '<tr><td colspan="4" class="muted">All tracked tickers have calendar data.</td></tr>'
+    )
 
     portfolio_upcoming = sum(1 for r in upcoming if r["list_type"] == "portfolio")
     watchlist_upcoming = sum(1 for r in upcoming if r["list_type"] == "watchlist")

@@ -92,21 +92,19 @@ def main() -> int:
 
     print()
     print(f"transcript_index: {t_updated} updated, {t_same} already canonical, {t_skipped} skipped")
-    print(f"document_index:   {d_updated} updated, {d_same} already canonical, {d_skipped} skipped (non-transcript or null)")
+    print(
+        f"document_index:   {d_updated} updated, {d_same} already canonical, {d_skipped} skipped (non-transcript or null)"
+    )
 
     if args.dry_run:
         print("\n[dry-run] No files written.")
         return 0
 
     if t_updated:
-        transcript_index_path.write_text(
-            json.dumps(transcript_index, indent=4), encoding="utf-8"
-        )
+        transcript_index_path.write_text(json.dumps(transcript_index, indent=4), encoding="utf-8")
         print(f"\nWrote {transcript_index_path}")
     if d_updated:
-        document_index_path.write_text(
-            json.dumps(document_index, indent=4), encoding="utf-8"
-        )
+        document_index_path.write_text(json.dumps(document_index, indent=4), encoding="utf-8")
         print(f"Wrote {document_index_path}")
     return 0
 

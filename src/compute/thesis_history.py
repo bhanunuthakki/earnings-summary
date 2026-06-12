@@ -46,9 +46,7 @@ class StreakSummary:
     total_evaluations: int
 
 
-def fetch_history(
-    conn: sqlite3.Connection, ticker: str
-) -> list[EvaluationSnapshot]:
+def fetch_history(conn: sqlite3.Connection, ticker: str) -> list[EvaluationSnapshot]:
     """Return all evaluations for a ticker, oldest-first."""
     cur = conn.execute(
         "SELECT evaluated_at, overall_status, run_id "
@@ -71,9 +69,7 @@ def fetch_history(
     return out
 
 
-def transitions_for(
-    conn: sqlite3.Connection, ticker: str
-) -> list[StatusTransition]:
+def transitions_for(conn: sqlite3.Connection, ticker: str) -> list[StatusTransition]:
     """Return only the evaluations where the status changed from the prior one."""
     history = fetch_history(conn, ticker)
     out: list[StatusTransition] = []
@@ -91,9 +87,7 @@ def transitions_for(
     return out
 
 
-def streak_summary(
-    conn: sqlite3.Connection, ticker: str
-) -> StreakSummary | None:
+def streak_summary(conn: sqlite3.Connection, ticker: str) -> StreakSummary | None:
     """Return current-status streak length + when it started.
 
     Streak = consecutive most-recent evaluations sharing the same status.
@@ -123,9 +117,7 @@ def portfolio_summary(
     conn: sqlite3.Connection,
 ) -> list[StreakSummary]:
     """Return per-ticker streak summary across every ticker in thesis_evaluations."""
-    cur = conn.execute(
-        "SELECT DISTINCT ticker FROM thesis_evaluations ORDER BY ticker"
-    )
+    cur = conn.execute("SELECT DISTINCT ticker FROM thesis_evaluations ORDER BY ticker")
     tickers = [row["ticker"] for row in cur.fetchall()]
     out: list[StreakSummary] = []
     for ticker in tickers:

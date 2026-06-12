@@ -102,9 +102,7 @@ def _seed_transcript(
     return (transcript_id, segment_id)
 
 
-def _seed_kpi_def(
-    conn: sqlite3.Connection, ticker: str, name: str, unit: str = "percent"
-) -> None:
+def _seed_kpi_def(conn: sqlite3.Connection, ticker: str, name: str, unit: str = "percent") -> None:
     conn.execute(
         "INSERT INTO kpi_definitions (ticker, name, unit) VALUES (?, ?, ?)",
         (ticker, name, unit),

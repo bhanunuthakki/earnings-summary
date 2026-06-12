@@ -54,6 +54,7 @@ def set_db_path(db_path: str | os.PathLike[str]) -> None:
     DATA_DIR = os.path.dirname(DB_PATH)
     FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
+
 # Tickers that share FMP files under an alternate name (canonical → file prefix)
 _FMP_ALIASES: dict[str, list[str]] = {
     "GOOG": ["GOOG", "GOOGL"],
@@ -76,13 +77,9 @@ _LIST_TYPES: frozenset[str] = frozenset(
 # `BRIEFED_LIST_TYPES` — strict subset that auto-produces full briefs (portfolio
 # or eval flavor). Watchlist is a holding pen and not briefed by default.
 ACTIVE_LIST_TYPES: tuple[str, ...] = ("portfolio", "watchlist", "evaluation")
-ACTIVE_LIST_TYPES_SQL: str = (
-    "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
-)
+ACTIVE_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in ACTIVE_LIST_TYPES) + ")"
 BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
-BRIEFED_LIST_TYPES_SQL: str = (
-    "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
-)
+BRIEFED_LIST_TYPES_SQL: str = "(" + ", ".join(f"'{t}'" for t in BRIEFED_LIST_TYPES) + ")"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -505,7 +502,10 @@ def _spawn_onboard_async(ticker: str) -> None:
     script = os.path.join(PROJECT_ROOT, "execution", "onboard_ticker.py")
     if not os.path.exists(script):
         sys.stderr.write(
-            json.dumps({"event": "onboard_spawn_skipped", "ticker": ticker, "reason": "script missing"}) + "\n"
+            json.dumps(
+                {"event": "onboard_spawn_skipped", "ticker": ticker, "reason": "script missing"}
+            )
+            + "\n"
         )
         return
 
@@ -651,8 +651,7 @@ def archive_company(ticker: str, user_id: str = DEFAULT_USER_ID) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE tracked_companies SET archived_at = ? "
-        "WHERE user_id = ? AND ticker = ?",
+        "UPDATE tracked_companies SET archived_at = ? WHERE user_id = ? AND ticker = ?",
         (datetime.datetime.now(), user_id, ticker.upper()),
     )
     archived = cursor.rowcount > 0

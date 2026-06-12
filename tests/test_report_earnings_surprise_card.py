@@ -80,12 +80,15 @@ def test_builder_returns_none_when_no_rows_for_ticker(tmp_path: Path) -> None:
 
 def test_builder_populates_full_surprise_card(tmp_path: Path) -> None:
     """4 quarters with both sides -> populated card; Decimal -> float at boundary."""
-    repo = _seed_db(tmp_path, [
-        ("WIX", "2024-08-06", "10.0", "2.0"),
-        ("WIX", "2024-11-19", "15.0", "-1.0"),
-        ("WIX", "2025-02-19", "-5.0", "3.0"),
-        ("WIX", "2025-05-21", "8.0", "1.0"),
-    ])
+    repo = _seed_db(
+        tmp_path,
+        [
+            ("WIX", "2024-08-06", "10.0", "2.0"),
+            ("WIX", "2024-11-19", "15.0", "-1.0"),
+            ("WIX", "2025-02-19", "-5.0", "3.0"),
+            ("WIX", "2025-05-21", "8.0", "1.0"),
+        ],
+    )
     card = _build_surprise_card("WIX", repo)
     assert card is not None
     assert card.total_quarters == 4
@@ -102,10 +105,13 @@ def test_builder_populates_full_surprise_card(tmp_path: Path) -> None:
 
 def test_builder_handles_post_fmp_lapse_revenue(tmp_path: Path) -> None:
     """Revenue all-NULL (yfinance-only world) -> revenue side reports no_data."""
-    repo = _seed_db(tmp_path, [
-        ("WIX", "2024-08-06", "10.0", None),
-        ("WIX", "2024-11-19", "15.0", None),
-    ])
+    repo = _seed_db(
+        tmp_path,
+        [
+            ("WIX", "2024-08-06", "10.0", None),
+            ("WIX", "2024-11-19", "15.0", None),
+        ],
+    )
     card = _build_surprise_card("WIX", repo)
     assert card is not None
     assert card.eps_beat_rate_pct == pytest.approx(100.0)
@@ -128,8 +134,12 @@ def test_md_renderer_skips_when_zero_quarters() -> None:
     out = StringIO()
     empty = SurpriseScorecardCard(
         total_quarters=0,
-        eps_beats=0, eps_misses=0, eps_no_data=0,
-        revenue_beats=0, revenue_misses=0, revenue_no_data=0,
+        eps_beats=0,
+        eps_misses=0,
+        eps_no_data=0,
+        revenue_beats=0,
+        revenue_misses=0,
+        revenue_no_data=0,
     )
     _md_block(out, empty)
     assert out.getvalue() == ""
@@ -139,10 +149,18 @@ def test_md_renderer_full_card() -> None:
     out = StringIO()
     card = SurpriseScorecardCard(
         total_quarters=8,
-        eps_beats=7, eps_misses=1, eps_no_data=0,
-        eps_beat_rate_pct=87.5, eps_avg_surprise_pct=14.07, eps_latest_surprise_pct=9.1,
-        revenue_beats=8, revenue_misses=0, revenue_no_data=0,
-        revenue_beat_rate_pct=100.0, revenue_avg_surprise_pct=2.74, revenue_latest_surprise_pct=5.6,
+        eps_beats=7,
+        eps_misses=1,
+        eps_no_data=0,
+        eps_beat_rate_pct=87.5,
+        eps_avg_surprise_pct=14.07,
+        eps_latest_surprise_pct=9.1,
+        revenue_beats=8,
+        revenue_misses=0,
+        revenue_no_data=0,
+        revenue_beat_rate_pct=100.0,
+        revenue_avg_surprise_pct=2.74,
+        revenue_latest_surprise_pct=5.6,
     )
     _md_block(out, card)
     s = out.getvalue()
@@ -157,10 +175,18 @@ def test_md_renderer_negative_values_signed() -> None:
     out = StringIO()
     card = SurpriseScorecardCard(
         total_quarters=8,
-        eps_beats=3, eps_misses=5, eps_no_data=0,
-        eps_beat_rate_pct=37.5, eps_avg_surprise_pct=-3.04, eps_latest_surprise_pct=-7.05,
-        revenue_beats=4, revenue_misses=4, revenue_no_data=0,
-        revenue_beat_rate_pct=50.0, revenue_avg_surprise_pct=0.11, revenue_latest_surprise_pct=-0.5,
+        eps_beats=3,
+        eps_misses=5,
+        eps_no_data=0,
+        eps_beat_rate_pct=37.5,
+        eps_avg_surprise_pct=-3.04,
+        eps_latest_surprise_pct=-7.05,
+        revenue_beats=4,
+        revenue_misses=4,
+        revenue_no_data=0,
+        revenue_beat_rate_pct=50.0,
+        revenue_avg_surprise_pct=0.11,
+        revenue_latest_surprise_pct=-0.5,
     )
     _md_block(out, card)
     s = out.getvalue()
@@ -177,10 +203,18 @@ def test_md_renderer_revenue_no_data_row() -> None:
     out = StringIO()
     card = SurpriseScorecardCard(
         total_quarters=4,
-        eps_beats=3, eps_misses=1, eps_no_data=0,
-        eps_beat_rate_pct=75.0, eps_avg_surprise_pct=7.0, eps_latest_surprise_pct=8.0,
-        revenue_beats=0, revenue_misses=0, revenue_no_data=4,
-        revenue_beat_rate_pct=None, revenue_avg_surprise_pct=None, revenue_latest_surprise_pct=None,
+        eps_beats=3,
+        eps_misses=1,
+        eps_no_data=0,
+        eps_beat_rate_pct=75.0,
+        eps_avg_surprise_pct=7.0,
+        eps_latest_surprise_pct=8.0,
+        revenue_beats=0,
+        revenue_misses=0,
+        revenue_no_data=4,
+        revenue_beat_rate_pct=None,
+        revenue_avg_surprise_pct=None,
+        revenue_latest_surprise_pct=None,
     )
     _md_block(out, card)
     s = out.getvalue()
@@ -216,9 +250,13 @@ def test_md_renders_scorecard_even_when_section_is_missing_data() -> None:
         missing=MissingReason(stage="SYNTHESIZE", fix_command="...", detail="..."),
         surprise_scorecard=SurpriseScorecardCard(
             total_quarters=4,
-            eps_beats=3, eps_misses=1, eps_no_data=0,
+            eps_beats=3,
+            eps_misses=1,
+            eps_no_data=0,
             eps_beat_rate_pct=75.0,
-            revenue_beats=4, revenue_misses=0, revenue_no_data=0,
+            revenue_beats=4,
+            revenue_misses=0,
+            revenue_no_data=0,
             revenue_beat_rate_pct=100.0,
         ),
     )

@@ -170,9 +170,7 @@ def test_current_month_spend_filters_other_purposes(tmp_path: Path) -> None:
     _insert_call(db, purpose="bear_case", cost=5.00, called_at=now)
     _insert_call(db, purpose="transcript_summary", cost=10.00, called_at=now)
     assert current_month_spend("bear_case", db_path=db, now=now) == Decimal("5.0000")
-    assert current_month_spend("transcript_summary", db_path=db, now=now) == Decimal(
-        "10.0000"
-    )
+    assert current_month_spend("transcript_summary", db_path=db, now=now) == Decimal("10.0000")
 
 
 def test_current_month_spend_filters_prior_month(tmp_path: Path) -> None:
@@ -309,9 +307,7 @@ def test_record_alert_separate_month_writes_separate_row(tmp_path: Path) -> None
     record_alert("bear_case", 0.80, Decimal("40.00"), db_path=db, now=jun_15)
     conn = sqlite3.connect(str(db))
     try:
-        rows = conn.execute(
-            "SELECT month FROM llm_budget_alerts ORDER BY month"
-        ).fetchall()
+        rows = conn.execute("SELECT month FROM llm_budget_alerts ORDER BY month").fetchall()
     finally:
         conn.close()
     assert [r[0] for r in rows] == ["2026-05", "2026-06"]

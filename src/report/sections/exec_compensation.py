@@ -191,9 +191,7 @@ def _load_insider_signals(
     except ImportError:
         return []
 
-    signals = conviction_signals(
-        ticker=ticker, window_days=window_days, db_path=db_path
-    )
+    signals = conviction_signals(ticker=ticker, window_days=window_days, db_path=db_path)
     return [
         InsiderSignalRowModel(
             insider_name=s.insider_name,
@@ -230,9 +228,7 @@ def _load_thesis_kpis(ticker: str, repo_root: Path) -> list[str]:
     return out
 
 
-def _summarize_metrics(
-    metrics_raw: object, thesis_kpis: list[str]
-) -> tuple[str | None, bool]:
+def _summarize_metrics(metrics_raw: object, thesis_kpis: list[str]) -> tuple[str | None, bool]:
     """Render metrics summary + flag whether ANY thesis tier-1 KPI is among
     the comp-design metrics (the alignment check)."""
     if not metrics_raw:
@@ -445,7 +441,9 @@ def _alignment_prompt(
             f"{s.transaction_type} {s.shares:,.0f} sh @ ${s.transaction_value or 0:,.0f}, "
             f"signal={s.signal_strength:.2f}, {s.rationale}"
         )
-    thesis_str = "\n  - " + "\n  - ".join(thesis_kpis) if thesis_kpis else " (no thesis KPIs configured)"
+    thesis_str = (
+        "\n  - " + "\n  - ".join(thesis_kpis) if thesis_kpis else " (no thesis KPIs configured)"
+    )
 
     return f"""You are writing a concise alignment analysis for {ticker} as part of a
 buy-side equity research workspace. Your job is to evaluate whether management's

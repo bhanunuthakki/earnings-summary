@@ -262,18 +262,12 @@ def _chart_label_to_line_item(label: str) -> str | None:
     return _CHART_LABEL_MAP.get(norm)
 
 
-def _load_series(
-    spec: _MetricSpec, *, ticker: str, repo_root: Path
-) -> list[Observation]:
+def _load_series(spec: _MetricSpec, *, ticker: str, repo_root: Path) -> list[Observation]:
     """Dispatch to the right loader given the spec."""
     if spec.loader == "financial":
-        return load_financial_series(
-            ticker=ticker, line_item=spec.metric_name, repo_root=repo_root
-        )
+        return load_financial_series(ticker=ticker, line_item=spec.metric_name, repo_root=repo_root)
     if spec.loader == "kpi":
-        return load_kpi_series(
-            ticker=ticker, kpi_name=spec.metric_name, repo_root=repo_root
-        )
+        return load_kpi_series(ticker=ticker, kpi_name=spec.metric_name, repo_root=repo_root)
     if spec.loader == "segment" and spec.segment_args is not None:
         seg, metric = spec.segment_args
         return load_segment_series(
@@ -334,9 +328,7 @@ def _iter_signals(
         yield "seasonal", json.dumps(summary, default=str), sev, narr
 
 
-def _severity_trend(
-    spec: _MetricSpec, payload: dict[str, object]
-) -> tuple[str, str]:
+def _severity_trend(spec: _MetricSpec, payload: dict[str, object]) -> tuple[str, str]:
     direction = str(payload.get("direction", "flat"))
     sig = bool(payload.get("statistical_significance", False))
     slope_pct = float(cast("float", payload.get("slope_pct_of_mean", 0.0)))
@@ -379,9 +371,7 @@ def _severity_inflection(
     return sev, narrative
 
 
-def _severity_anomalies(
-    spec: _MetricSpec, anomalies: list[dict[str, object]]
-) -> tuple[str, str]:
+def _severity_anomalies(spec: _MetricSpec, anomalies: list[dict[str, object]]) -> tuple[str, str]:
     max_abs = max(abs(float(cast("float", a["zscore"]))) for a in anomalies)
     most_recent = anomalies[-1]
     if max_abs >= _ZSCORE_RED:
@@ -398,9 +388,7 @@ def _severity_anomalies(
     return sev, narrative
 
 
-def _severity_yoy_acceleration(
-    spec: _MetricSpec, payload: dict[str, object]
-) -> tuple[str, str]:
+def _severity_yoy_acceleration(spec: _MetricSpec, payload: dict[str, object]) -> tuple[str, str]:
     most_recent_yoy = float(cast("float", payload.get("most_recent_yoy", 0.0)))
     most_recent_delta = float(cast("float", payload.get("most_recent_delta", 0.0)))
     trend = str(payload.get("trend", "flat"))
@@ -421,9 +409,7 @@ def _severity_yoy_acceleration(
     return sev, narrative
 
 
-def _severity_seasonal(
-    spec: _MetricSpec, payload: dict[str, object]
-) -> tuple[str, str]:
+def _severity_seasonal(spec: _MetricSpec, payload: dict[str, object]) -> tuple[str, str]:
     strength = float(cast("float", payload.get("seasonal_strength", 0.0)))
     # Seasonality is informational — never red. Strong seasonality (>0.6)
     # flags as yellow so the renderer knows YoY-only framing is preferable

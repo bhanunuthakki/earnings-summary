@@ -113,8 +113,12 @@ def main() -> None:
     group.add_argument("--portfolio", action="store_true", help="Portfolio only")
     group.add_argument("--watchlist", action="store_true", help="Watchlist only")
     group.add_argument("--evaluation", action="store_true", help="Evaluation only")
-    parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
-                        help=f"Max events per ticker (default {DEFAULT_LIMIT})")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=DEFAULT_LIMIT,
+        help=f"Max events per ticker (default {DEFAULT_LIMIT})",
+    )
     args = parser.parse_args()
 
     if not FMP_API_KEY:

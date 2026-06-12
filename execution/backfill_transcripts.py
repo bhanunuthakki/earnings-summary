@@ -108,9 +108,7 @@ def _quarter_end_date(fiscal_year: int, fiscal_quarter: int, fye_month: int) -> 
     return date(year, month, last_day)
 
 
-def recent_fiscal_quarters(
-    fye_month: int, today: date, n: int
-) -> list[tuple[int, int]]:
+def recent_fiscal_quarters(fye_month: int, today: date, n: int) -> list[tuple[int, int]]:
     """Return up to `n` (fiscal_year, fiscal_quarter) pairs whose period_end
     is <= today, most recent first."""
     out: list[tuple[int, int]] = []
@@ -247,14 +245,10 @@ def _resolve_tickers(arg_ticker: str | None) -> list[tuple[str, int]]:
         try:
             month = int(fye_raw[:2])
         except ValueError:
-            sys.stderr.write(
-                f"[skip] {r['ticker']}: fiscal_year_end={fye_raw!r} not parseable\n"
-            )
+            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end={fye_raw!r} not parseable\n")
             continue
         if not 1 <= month <= 12:
-            sys.stderr.write(
-                f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n"
-            )
+            sys.stderr.write(f"[skip] {r['ticker']}: fiscal_year_end month {month} out of range\n")
             continue
         out.append((r["ticker"], month))
     return out
@@ -282,14 +276,17 @@ def _run_extract(repo_root: Path, ticker: str, dry_run: bool) -> int:
     Same repo_root rationale as `_run_ingest`.
     """
     if dry_run:
-        print(f"  [dry-run] would invoke extract_commitments --auto --ticker {ticker}",
-              file=sys.stderr)
+        print(
+            f"  [dry-run] would invoke extract_commitments --auto --ticker {ticker}",
+            file=sys.stderr,
+        )
         return 0
     cmd = [
         sys.executable,
         str(repo_root / "execution" / "extract_commitments_from_transcript.py"),
         "--auto",
-        "--ticker", ticker,
+        "--ticker",
+        ticker,
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
@@ -299,9 +296,7 @@ def _ticker_has_transcripts(ticker: str) -> bool:
     """Return True if there's at least one transcripts row for this ticker."""
     conn = db.get_connection()
     try:
-        cur = conn.execute(
-            "SELECT 1 FROM transcripts WHERE ticker = ? LIMIT 1", (ticker.upper(),)
-        )
+        cur = conn.execute("SELECT 1 FROM transcripts WHERE ticker = ? LIMIT 1", (ticker.upper(),))
         return cur.fetchone() is not None
     finally:
         conn.close()
@@ -321,12 +316,19 @@ def main() -> int:
         default=_DEFAULT_LOOKBACK,
         help=f"How many recent fiscal quarters to attempt per ticker (default {_DEFAULT_LOOKBACK})",
     )
-    p.add_argument("--skip-ingest", action="store_true",
-                   help="Skip the post-fetch ingest_transcripts.py call")
-    p.add_argument("--skip-extract", action="store_true",
-                   help="Skip the post-ingest commitment-extraction calls")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Plan only — print what WOULD be fetched/ingested/extracted")
+    p.add_argument(
+        "--skip-ingest", action="store_true", help="Skip the post-fetch ingest_transcripts.py call"
+    )
+    p.add_argument(
+        "--skip-extract",
+        action="store_true",
+        help="Skip the post-ingest commitment-extraction calls",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Plan only — print what WOULD be fetched/ingested/extracted",
+    )
     p.add_argument(
         "--audio-fallback",
         action="store_true",
@@ -339,7 +341,7 @@ def main() -> int:
         type=Path,
         default=PROJECT_ROOT,
         help="Repo root containing data/, transcripts/. Default: this repo. "
-             "Worktree-based runs should pass the main repo path.",
+        "Worktree-based runs should pass the main repo path.",
     )
     args = p.parse_args()
 
@@ -354,9 +356,11 @@ def main() -> int:
         return 0
 
     per_ticker: list[TickerBackfillResult] = []
-    print(f"[backfill_transcripts] scope={len(tickers)} tickers  "
-          f"lookback={args.lookback_quarters}q  today={today.isoformat()}",
-          file=sys.stderr)
+    print(
+        f"[backfill_transcripts] scope={len(tickers)} tickers  "
+        f"lookback={args.lookback_quarters}q  today={today.isoformat()}",
+        file=sys.stderr,
+    )
     for ticker, fye_month in tickers:
         r = _backfill_one(
             ticker,
@@ -392,13 +396,11 @@ def main() -> int:
         for ticker, _ in tickers:
             if not _ticker_has_transcripts(ticker):
                 continue
-            print(f"[backfill_transcripts] extracting commitments for {ticker}",
-                  file=sys.stderr)
+            print(f"[backfill_transcripts] extracting commitments for {ticker}", file=sys.stderr)
             rc = _run_extract(repo_root, ticker, args.dry_run)
             extract_results.append({"ticker": ticker, "rc": rc})
     elif args.skip_extract:
-        print("[backfill_transcripts] --skip-extract set; skipping commitments",
-              file=sys.stderr)
+        print("[backfill_transcripts] --skip-extract set; skipping commitments", file=sys.stderr)
 
     summary = {
         "today": today.isoformat(),

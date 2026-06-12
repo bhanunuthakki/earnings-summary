@@ -5,6 +5,7 @@ The spawn fires whenever a ticker *transitions into* the analytical universe
 adds AND promotions from non-onboardable list_types (index_member, etf, none).
 Re-adds within the onboardable set must NOT re-spawn.
 """
+
 from __future__ import annotations
 
 import sys
@@ -106,24 +107,18 @@ def test_cross_promote_watchlist_to_evaluation_does_not_respawn(
     assert spawn_calls == []
 
 
-def test_new_add_to_index_member_does_not_spawn(
-    isolated_db: Path, spawn_calls: list[str]
-) -> None:
+def test_new_add_to_index_member_does_not_spawn(isolated_db: Path, spawn_calls: list[str]) -> None:
     db.track_company("XYZ", "Some Index Constituent", "index_member")
     assert spawn_calls == []
 
 
-def test_re_add_same_watchlist_does_not_respawn(
-    isolated_db: Path, spawn_calls: list[str]
-) -> None:
+def test_re_add_same_watchlist_does_not_respawn(isolated_db: Path, spawn_calls: list[str]) -> None:
     _seed(isolated_db, "AAPL", "watchlist")
     db.track_company("AAPL", "Apple Inc.", "watchlist")
     assert spawn_calls == []
 
 
-def test_promotion_from_index_member_spawns(
-    isolated_db: Path, spawn_calls: list[str]
-) -> None:
+def test_promotion_from_index_member_spawns(isolated_db: Path, spawn_calls: list[str]) -> None:
     """The bug fix: a ticker on the S&P 500 index_member list, then later
     promoted to the watchlist, must trigger the onboarder. Previously this
     silently skipped the spawn because the row already existed."""

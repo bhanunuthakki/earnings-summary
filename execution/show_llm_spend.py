@@ -44,9 +44,7 @@ def _open_db(db_path: Path) -> sqlite3.Connection:
     # Verify the ledger table exists — gives a clearer error than a SQL failure.
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if "llm_calls" not in tables:
-        sys.stderr.write(
-            "llm_calls table missing — run `python -m alembic upgrade head` first.\n"
-        )
+        sys.stderr.write("llm_calls table missing — run `python -m alembic upgrade head` first.\n")
         sys.exit(3)
     return conn
 
@@ -202,9 +200,7 @@ def _recent_errors(
     return [dict(r) for r in rows]
 
 
-def _fallbacks(
-    conn: sqlite3.Connection, where: str, params: list[Any]
-) -> list[dict[str, Any]]:
+def _fallbacks(conn: sqlite3.Connection, where: str, params: list[Any]) -> list[dict[str, Any]]:
     head_where = where if where else " WHERE 1=1"
     rows = conn.execute(
         f"""
@@ -235,7 +231,9 @@ def _render_human(report: dict[str, Any], window_label: str) -> str:
     distinct = s.get("distinct_prompts") or 0
     if calls and distinct:
         dup_rate = 1.0 - (distinct / calls)
-    out.append(f"Dedup potential:       {_fmt_pct(dup_rate * 100 if dup_rate else 0, 100)} of calls had a repeat sha")
+    out.append(
+        f"Dedup potential:       {_fmt_pct(dup_rate * 100 if dup_rate else 0, 100)} of calls had a repeat sha"
+    )
     out.append("")
     cache_read = s.get("cache_read_tok") or 0
     cache_create = s.get("cache_create_tok") or 0
@@ -243,14 +241,18 @@ def _render_human(report: dict[str, Any], window_label: str) -> str:
     total_input = cache_read + cache_create + fresh_input
     out.append("Input token mix:")
     out.append(f"  cache_read:          {cache_read:>12,} ({_fmt_pct(cache_read, total_input)})")
-    out.append(f"  cache_creation:      {cache_create:>12,} ({_fmt_pct(cache_create, total_input)})")
+    out.append(
+        f"  cache_creation:      {cache_create:>12,} ({_fmt_pct(cache_create, total_input)})"
+    )
     out.append(f"  fresh:               {fresh_input:>12,} ({_fmt_pct(fresh_input, total_input)})")
     out.append(f"Output tokens:         {s.get('output_tok') or 0:>12,}")
     out.append(f"Gemini fallbacks:      {s.get('fallback_calls') or 0}")
     out.append("")
 
     out.append("--- By purpose (top by cost) ---")
-    out.append(f"  {'purpose':<28s} {'calls':>6s} {'cost':>10s} {'cache_read%':>12s} {'avg_ms':>8s}")
+    out.append(
+        f"  {'purpose':<28s} {'calls':>6s} {'cost':>10s} {'cache_read%':>12s} {'avg_ms':>8s}"
+    )
     for r in report["by_purpose"][:20]:
         cache_pct = _fmt_pct(r.get("cache_read_tok") or 0, r.get("total_input_tok") or 0)
         out.append(
@@ -268,7 +270,9 @@ def _render_human(report: dict[str, Any], window_label: str) -> str:
         out.append("--- By ticker (top 15) ---")
         out.append(f"  {'ticker':<10s} {'calls':>6s} {'cost':>10s}")
         for r in report["by_ticker"][:15]:
-            out.append(f"  {r['group_key']:<10s} {r['calls']:>6d} {_fmt_usd(r.get('cost_usd')):>10s}")
+            out.append(
+                f"  {r['group_key']:<10s} {r['calls']:>6d} {_fmt_usd(r.get('cost_usd')):>10s}"
+            )
         out.append("")
 
     out.append("--- Latency (p50 / p95 / max ms) ---")
@@ -293,7 +297,9 @@ def _render_human(report: dict[str, Any], window_label: str) -> str:
     if report["fallbacks"]:
         out.append("--- Gemini fallbacks by purpose ---")
         for r in report["fallbacks"]:
-            out.append(f"  {r['purpose']:<28s} {r['fallback_calls']:>4d}  errors={r['fallback_errors']}")
+            out.append(
+                f"  {r['purpose']:<28s} {r['fallback_calls']:>4d}  errors={r['fallback_errors']}"
+            )
         out.append("")
 
     if report["recent_errors"]:
@@ -339,11 +345,9 @@ def main() -> int:
     if args.json:
         print(json.dumps(report, indent=2, default=str))
     else:
-        label = (
-            f"last {args.since} day(s)"
-            if args.since > 0
-            else "all time"
-        ) + (f" · run_id={args.run_id}" if args.run_id else "")
+        label = (f"last {args.since} day(s)" if args.since > 0 else "all time") + (
+            f" · run_id={args.run_id}" if args.run_id else ""
+        )
         print(_render_human(report, label))
     return 0
 

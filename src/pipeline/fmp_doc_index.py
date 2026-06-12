@@ -88,7 +88,7 @@ def _classify_filename(fname: str) -> str:
     for suffix in _GRADES_SUFFIXES:
         if fname.endswith(suffix):
             return "fmp_grades"
-    stem = fname[:-len(".json")] if fname.endswith(".json") else fname
+    stem = fname[: -len(".json")] if fname.endswith(".json") else fname
     parts = stem.split("_", 1)
     if len(parts) < 2:
         return "fmp_other"

@@ -128,9 +128,7 @@ def extract_for_ticker(
         return {"ticker": ticker, "status": "no_def14a", "n": 0}
 
     proxy_text = result.text[:_MAX_PROXY_CHARS]
-    prompt = _PROMPT.format(
-        ticker=ticker, fiscal_year=result.fiscal_year, proxy_text=proxy_text
-    )
+    prompt = _PROMPT.format(ticker=ticker, fiscal_year=result.fiscal_year, proxy_text=proxy_text)
 
     try:
         raw = call_llm(
@@ -158,9 +156,7 @@ def extract_for_ticker(
     if not isinstance(execs_raw, list):
         return {"ticker": ticker, "status": "no_executives", "n": 0}
 
-    peer_group = (
-        d.get("peer_group") if isinstance(d.get("peer_group"), list) else []
-    )
+    peer_group = d.get("peer_group") if isinstance(d.get("peer_group"), list) else []
     peer_group_list = [str(p) for p in cast("list[object]", peer_group) if isinstance(p, str)]
     cic_terms = d.get("cic_terms") if isinstance(d.get("cic_terms"), dict) else {}
     hedging = d.get("hedging_pledging_policy")
@@ -214,9 +210,7 @@ def extract_for_ticker(
             cash_bonus_target=_f(e.get("cash_bonus_target")),
             cash_bonus_actual=_f(e.get("cash_bonus_actual")),
             equity_grant_value=_f(e.get("equity_grant_value")),
-            equity_grant_breakdown=cast(
-                "dict[str, object]", e.get("equity_grant_breakdown") or {}
-            ),
+            equity_grant_breakdown=cast("dict[str, object]", e.get("equity_grant_breakdown") or {}),
             other_comp=_f(e.get("other_comp")),
             total_comp_granted=_f(e.get("total_comp_granted")),
             total_comp_realized=_f(e.get("total_comp_realized")),

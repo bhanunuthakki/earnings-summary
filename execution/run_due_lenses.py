@@ -106,10 +106,7 @@ def main() -> int:
         for tier, _ticker, lens_name in plan:
             counts.setdefault(tier, {}).setdefault(lens_name, 0)
             counts[tier][lens_name] += 1
-        preview = [
-            {"tier": t, "ticker": tk, "lens": ln}
-            for (t, tk, ln) in plan[:25]
-        ]
+        preview = [{"tier": t, "ticker": tk, "lens": ln} for (t, tk, ln) in plan[:25]]
         print(
             json.dumps(
                 {
@@ -204,9 +201,7 @@ def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]
                     "SELECT UPPER(ticker) AS ticker, processing_tier "
                     "FROM tracked_companies WHERE archived_at IS NULL"
                 ).fetchall()
-                tier_by_ticker = {
-                    r["ticker"]: (r["processing_tier"] or "P3").upper() for r in rows
-                }
+                tier_by_ticker = {r["ticker"]: (r["processing_tier"] or "P3").upper() for r in rows}
 
     plan: list[tuple[str, str, str]] = []
     # Collect unique lens slugs across tiers (P1 = full set; P2/P3 are subsets).

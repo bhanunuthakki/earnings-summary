@@ -117,8 +117,10 @@ class _FakeBatchesAPI:
         assert batch_id == self.batch_id
         if not self.poll_sequence:
             # Default to ended if test forgot to seed an extra tick.
-            status, counts = "ended", {"processing": 0, "succeeded": 0, "errored": 0,
-                                       "canceled": 0, "expired": 0}
+            status, counts = (
+                "ended",
+                {"processing": 0, "succeeded": 0, "errored": 0, "canceled": 0, "expired": 0},
+            )
         else:
             status, counts = self.poll_sequence.pop(0)
         return SimpleNamespace(
@@ -142,16 +144,11 @@ class _FakeClient:
         self.messages = _FakeMessagesAPI(batches)
 
 
-def _make_jsonl(
-    tmp_path: Path, custom_ids: list[str]
-) -> Path:
+def _make_jsonl(tmp_path: Path, custom_ids: list[str]) -> Path:
     """Write a real JSONL file via the canonical helper so the test exercises
     the same shape build_saydo_pairs.py emits."""
     batch_dir = tmp_path / ".tmp" / "saydo_batch"
-    requests = [
-        BatchRequest(custom_id=cid, prompt=f"prompt body for {cid}")
-        for cid in custom_ids
-    ]
+    requests = [BatchRequest(custom_id=cid, prompt=f"prompt body for {cid}") for cid in custom_ids]
     out = batch_dir / "saydo_batch_20260526T000000Z.jsonl"
     write_jsonl(requests, out)
     return out
@@ -188,11 +185,15 @@ def test_extract_assistant_text_concatenates_text_blocks() -> None:
 
 
 def test_request_counts_dict_handles_sdk_model_and_plain_dict() -> None:
-    sdk_shape = SimpleNamespace(request_counts=SimpleNamespace(
-        processing=1, succeeded=2, errored=3, canceled=4, expired=5
-    ))
+    sdk_shape = SimpleNamespace(
+        request_counts=SimpleNamespace(processing=1, succeeded=2, errored=3, canceled=4, expired=5)
+    )
     assert _request_counts_dict(sdk_shape) == {
-        "processing": 1, "succeeded": 2, "errored": 3, "canceled": 4, "expired": 5
+        "processing": 1,
+        "succeeded": 2,
+        "errored": 3,
+        "canceled": 4,
+        "expired": 5,
     }
     dict_shape = SimpleNamespace(request_counts={"succeeded": 9})
     assert _request_counts_dict(dict_shape) == {"succeeded": 9}
@@ -243,9 +244,7 @@ def test_filter_existing_force_overwrite_keeps_all(tmp_path: Path) -> None:
     tmp = tmp_path / ".tmp"
     tmp.mkdir()
     (tmp / "SayDo_A_Q1_2025_Q2_2025.txt").write_text("prior", encoding="utf-8")
-    rows: list[dict[str, object]] = [
-        {"custom_id": "SayDo_A_Q1_2025_Q2_2025", "params": {}}
-    ]
+    rows: list[dict[str, object]] = [{"custom_id": "SayDo_A_Q1_2025_Q2_2025", "params": {}}]
     out = _filter_existing(rows, tmp, force_overwrite=True)
     assert len(out) == 1
 
@@ -275,12 +274,15 @@ def test_poll_loop_progresses_through_states(tmp_path: Path) -> None:
     jsonl = _make_jsonl(tmp_path, ["SayDo_A_Q1_2025_Q2_2025"])
     batches = _FakeBatchesAPI(
         poll_sequence=[
-            ("in_progress", {"processing": 1, "succeeded": 0, "errored": 0,
-                             "canceled": 0, "expired": 0}),
-            ("in_progress", {"processing": 1, "succeeded": 0, "errored": 0,
-                             "canceled": 0, "expired": 0}),
-            ("ended", {"processing": 0, "succeeded": 1, "errored": 0,
-                       "canceled": 0, "expired": 0}),
+            (
+                "in_progress",
+                {"processing": 1, "succeeded": 0, "errored": 0, "canceled": 0, "expired": 0},
+            ),
+            (
+                "in_progress",
+                {"processing": 1, "succeeded": 0, "errored": 0, "canceled": 0, "expired": 0},
+            ),
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0}),
         ],
         results_by_id={
             "batch_test_001": [
@@ -318,13 +320,17 @@ def test_poll_loop_progresses_through_states(tmp_path: Path) -> None:
 
 
 def test_succeeded_results_written_to_tmp(tmp_path: Path) -> None:
-    jsonl = _make_jsonl(tmp_path, [
-        "SayDo_A_Q1_2025_Q2_2025",
-        "SayDo_B_Q1_2025_Q2_2025",
-    ])
+    jsonl = _make_jsonl(
+        tmp_path,
+        [
+            "SayDo_A_Q1_2025_Q2_2025",
+            "SayDo_B_Q1_2025_Q2_2025",
+        ],
+    )
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 2, "errored": 0,
-                                  "canceled": 0, "expired": 0})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 2, "errored": 0, "canceled": 0, "expired": 0})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_A_Q1_2025_Q2_2025", _succeeded("text A")),
@@ -334,9 +340,13 @@ def test_succeeded_results_written_to_tmp(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["succeeded"] == 2
@@ -353,16 +363,19 @@ def test_idempotent_skip_when_target_already_exists(tmp_path: Path) -> None:
     out *before* submission — so no API call should happen for it."""
     tmp = tmp_path / ".tmp"
     tmp.mkdir()
-    (tmp / "SayDo_A_Q1_2025_Q2_2025.txt").write_text("prior synchronous write",
-                                                     encoding="utf-8")
+    (tmp / "SayDo_A_Q1_2025_Q2_2025.txt").write_text("prior synchronous write", encoding="utf-8")
 
-    jsonl = _make_jsonl(tmp_path, [
-        "SayDo_A_Q1_2025_Q2_2025",  # already on disk
-        "SayDo_B_Q1_2025_Q2_2025",  # needs to be submitted
-    ])
+    jsonl = _make_jsonl(
+        tmp_path,
+        [
+            "SayDo_A_Q1_2025_Q2_2025",  # already on disk
+            "SayDo_B_Q1_2025_Q2_2025",  # needs to be submitted
+        ],
+    )
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 1, "errored": 0,
-                                  "canceled": 0, "expired": 0})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_B_Q1_2025_Q2_2025", _succeeded("text B")),
@@ -371,9 +384,13 @@ def test_idempotent_skip_when_target_already_exists(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["requests_skipped_existing"] == 1
@@ -395,8 +412,9 @@ def test_force_overwrite_resubmits_existing_targets(tmp_path: Path) -> None:
 
     jsonl = _make_jsonl(tmp_path, ["SayDo_A_Q1_2025_Q2_2025"])
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 1, "errored": 0,
-                                  "canceled": 0, "expired": 0})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_A_Q1_2025_Q2_2025", _succeeded("fresh A")),
@@ -405,9 +423,13 @@ def test_force_overwrite_resubmits_existing_targets(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=True,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=True,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["submitted"] == 1
@@ -415,14 +437,18 @@ def test_force_overwrite_resubmits_existing_targets(tmp_path: Path) -> None:
 
 
 def test_errored_results_landed_in_errors_json(tmp_path: Path) -> None:
-    jsonl = _make_jsonl(tmp_path, [
-        "SayDo_A_Q1_2025_Q2_2025",
-        "SayDo_B_Q1_2025_Q2_2025",
-        "SayDo_C_Q1_2025_Q2_2025",
-    ])
+    jsonl = _make_jsonl(
+        tmp_path,
+        [
+            "SayDo_A_Q1_2025_Q2_2025",
+            "SayDo_B_Q1_2025_Q2_2025",
+            "SayDo_C_Q1_2025_Q2_2025",
+        ],
+    )
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 1, "errored": 1,
-                                  "canceled": 0, "expired": 1})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 1, "canceled": 0, "expired": 1})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_A_Q1_2025_Q2_2025", _succeeded("ok")),
@@ -433,9 +459,13 @@ def test_errored_results_landed_in_errors_json(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "ended_with_errors"
@@ -464,9 +494,13 @@ def test_dry_run_does_not_submit(tmp_path: Path) -> None:
     batches = _FakeBatchesAPI(poll_sequence=[], results_by_id={})
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=True, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=True,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "dry_run_ok"
@@ -478,9 +512,7 @@ def test_dry_run_does_not_submit(tmp_path: Path) -> None:
     assert summary["estimated_cost_usd"] == "0.0105"
 
 
-def _init_budget_db(
-    db_path: Path, *, purpose: str, cap_usd: float, current_spend: float
-) -> None:
+def _init_budget_db(db_path: Path, *, purpose: str, cap_usd: float, current_spend: float) -> None:
     """Mirror migrations 0034 + 0052 inline so we don't have to run alembic
     in the test. Same pattern as test_llm_budget.py."""
     conn = sqlite3.connect(str(db_path))
@@ -555,19 +587,25 @@ def test_cost_gate_halts_when_projected_total_exceeds_cap(tmp_path: Path) -> Non
     data_dir.mkdir()
     db_path = data_dir / "portfolio.db"
     # cap=$1, current spend=$0.999 -> any submission tips over.
-    _init_budget_db(db_path, purpose="pairwise_analysis", cap_usd=1.00,
-                    current_spend=0.999)
+    _init_budget_db(db_path, purpose="pairwise_analysis", cap_usd=1.00, current_spend=0.999)
 
-    jsonl = _make_jsonl(tmp_path, [
-        "SayDo_A_Q1_2025_Q2_2025",
-        "SayDo_B_Q1_2025_Q2_2025",
-    ])
+    jsonl = _make_jsonl(
+        tmp_path,
+        [
+            "SayDo_A_Q1_2025_Q2_2025",
+            "SayDo_B_Q1_2025_Q2_2025",
+        ],
+    )
     batches = _FakeBatchesAPI(poll_sequence=[], results_by_id={})
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "halted_cost_gate"
@@ -585,13 +623,13 @@ def test_cost_gate_passes_when_cap_has_headroom(tmp_path: Path) -> None:
     data_dir.mkdir()
     db_path = data_dir / "portfolio.db"
     # cap=$10, current spend=$0 -> trivially below cap.
-    _init_budget_db(db_path, purpose="pairwise_analysis", cap_usd=10.00,
-                    current_spend=0.0)
+    _init_budget_db(db_path, purpose="pairwise_analysis", cap_usd=10.00, current_spend=0.0)
 
     jsonl = _make_jsonl(tmp_path, ["SayDo_A_Q1_2025_Q2_2025"])
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 1, "errored": 0,
-                                  "canceled": 0, "expired": 0})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_A_Q1_2025_Q2_2025", _succeeded("body A")),
@@ -600,9 +638,13 @@ def test_cost_gate_passes_when_cap_has_headroom(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "ended"
@@ -613,8 +655,9 @@ def test_cost_gate_fails_open_when_no_budget_row(tmp_path: Path) -> None:
     """Fresh repo with no portfolio.db should not block submission."""
     jsonl = _make_jsonl(tmp_path, ["SayDo_A_Q1_2025_Q2_2025"])
     batches = _FakeBatchesAPI(
-        poll_sequence=[("ended", {"processing": 0, "succeeded": 1, "errored": 0,
-                                  "canceled": 0, "expired": 0})],
+        poll_sequence=[
+            ("ended", {"processing": 0, "succeeded": 1, "errored": 0, "canceled": 0, "expired": 0})
+        ],
         results_by_id={
             "batch_test_001": [
                 _individual("SayDo_A_Q1_2025_Q2_2025", _succeeded("body A")),
@@ -623,9 +666,13 @@ def test_cost_gate_fails_open_when_no_budget_row(tmp_path: Path) -> None:
     )
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "ended"
@@ -643,16 +690,23 @@ def test_noop_when_every_target_already_exists(tmp_path: Path) -> None:
     (tmp / "SayDo_A_Q1_2025_Q2_2025.txt").write_text("done", encoding="utf-8")
     (tmp / "SayDo_B_Q1_2025_Q2_2025.txt").write_text("done", encoding="utf-8")
 
-    jsonl = _make_jsonl(tmp_path, [
-        "SayDo_A_Q1_2025_Q2_2025",
-        "SayDo_B_Q1_2025_Q2_2025",
-    ])
+    jsonl = _make_jsonl(
+        tmp_path,
+        [
+            "SayDo_A_Q1_2025_Q2_2025",
+            "SayDo_B_Q1_2025_Q2_2025",
+        ],
+    )
     batches = _FakeBatchesAPI(poll_sequence=[], results_by_id={})
 
     summary = submit_and_collect(
-        jsonl, repo_root=tmp_path, dry_run=False, force_overwrite=False,
+        jsonl,
+        repo_root=tmp_path,
+        dry_run=False,
+        force_overwrite=False,
         client_factory=lambda: _FakeClient(batches),
-        sleep=lambda _s: None, poll_backoff=(1,),
+        sleep=lambda _s: None,
+        poll_backoff=(1,),
     )
 
     assert summary["status"] == "noop"

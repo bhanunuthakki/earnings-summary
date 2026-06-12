@@ -98,12 +98,8 @@ def test_upsert_series_idempotent_overwrites(db: Path) -> None:
 
 
 def test_upsert_separate_dates_get_separate_rows(db: Path) -> None:
-    a = upsert_series_value(
-        series_id="us_10y", rate_date=date(2026, 5, 1), value=4.2, db_path=db
-    )
-    b = upsert_series_value(
-        series_id="us_10y", rate_date=date(2026, 5, 2), value=4.21, db_path=db
-    )
+    a = upsert_series_value(series_id="us_10y", rate_date=date(2026, 5, 1), value=4.2, db_path=db)
+    b = upsert_series_value(series_id="us_10y", rate_date=date(2026, 5, 2), value=4.21, db_path=db)
     assert a is not None and b is not None and a != b
     assert series_row_count(series_id="us_10y", db_path=db) == 2
 
@@ -213,9 +209,7 @@ def test_upsert_sensitivity_idempotent_and_distinct_lookbacks() -> None:
 
 def test_created_at_is_recent(db: Path) -> None:
     """Smoke: created_at stamp lands within the last few seconds."""
-    upsert_series_value(
-        series_id="usd_brl", rate_date=date(2026, 5, 1), value=5.10, db_path=db
-    )
+    upsert_series_value(series_id="usd_brl", rate_date=date(2026, 5, 1), value=5.10, db_path=db)
     conn = sqlite3.connect(str(db))
     try:
         row = conn.execute(

@@ -59,9 +59,7 @@ class HoldingScorecard:
     recent_kpis: tuple[RecentKpi, ...]
 
 
-def _commitment_scorecard(
-    conn: sqlite3.Connection, ticker: str
-) -> CommitmentScorecard:
+def _commitment_scorecard(conn: sqlite3.Connection, ticker: str) -> CommitmentScorecard:
     """Aggregate management_commitments outcomes for a ticker."""
     cur = conn.execute(
         "SELECT outcome, COUNT(*) AS n "
@@ -90,9 +88,7 @@ def _commitment_scorecard(
     )
 
 
-def _recent_kpis(
-    conn: sqlite3.Connection, ticker: str, limit: int = 8
-) -> list[RecentKpi]:
+def _recent_kpis(conn: sqlite3.Connection, ticker: str, limit: int = 8) -> list[RecentKpi]:
     """Return the most-recent kpi_facts row per KPI name for the ticker.
 
     Joins to kpi_definitions for the canonical name. Limit caps the number of
@@ -131,9 +127,7 @@ def _recent_kpis(
     return out
 
 
-def _current_breach_status(
-    conn: sqlite3.Connection, ticker: str
-) -> BreachStatus | None:
+def _current_breach_status(conn: sqlite3.Connection, ticker: str) -> BreachStatus | None:
     """Read the current snapshot from thesis_state."""
     cur = conn.execute(
         "SELECT breach_status FROM thesis_state WHERE ticker = ? LIMIT 1",
@@ -163,9 +157,7 @@ def scorecard_for(
         breach_status=_current_breach_status(conn, ticker),
         streak=streak_summary(conn, ticker),
         commitments=_commitment_scorecard(conn, ticker),
-        surprise=surprise_scorecard_for(
-            conn, ticker, lookback_quarters=surprise_lookback_quarters
-        ),
+        surprise=surprise_scorecard_for(conn, ticker, lookback_quarters=surprise_lookback_quarters),
         recent_kpis=tuple(_recent_kpis(conn, ticker, limit=recent_kpi_limit)),
     )
 
@@ -205,7 +197,8 @@ def briefed_scorecards(
     tickers = [row["ticker"] for row in cur.fetchall()]
     return [
         scorecard_for(
-            conn, t,
+            conn,
+            t,
             recent_kpi_limit=recent_kpi_limit,
             surprise_lookback_quarters=surprise_lookback_quarters,
         )

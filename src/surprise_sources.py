@@ -60,9 +60,7 @@ class SurpriseHit:
     num_analysts_revenue: int | None
     source_name: str
     source_url: str | None
-    fetched_at: datetime = field(
-        default_factory=lambda: datetime.now(UTC).replace(microsecond=0)
-    )
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC).replace(microsecond=0))
 
     def to_json(self) -> dict[str, object]:
         d = asdict(self)
@@ -70,8 +68,12 @@ class SurpriseHit:
         d["release_date"] = self.release_date.isoformat()
         d["fetched_at"] = self.fetched_at.isoformat()
         for k in (
-            "eps_estimate", "eps_actual", "revenue_estimate", "revenue_actual",
-            "eps_surprise_pct", "revenue_surprise_pct",
+            "eps_estimate",
+            "eps_actual",
+            "revenue_estimate",
+            "revenue_actual",
+            "eps_surprise_pct",
+            "revenue_surprise_pct",
         ):
             v = d[k]
             d[k] = str(v) if isinstance(v, Decimal) else None

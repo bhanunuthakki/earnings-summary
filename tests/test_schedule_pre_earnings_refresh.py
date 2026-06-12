@@ -34,7 +34,8 @@ def test_fmp_match_skips_fallback(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     hints_path = _patch_common(monkeypatch, tmp_path, {"NU"})
     earnings_date = (date.today() + timedelta(days=3)).isoformat()
     monkeypatch.setattr(
-        sper, "_fetch_earnings_calendar",
+        sper,
+        "_fetch_earnings_calendar",
         lambda start, end: [{"symbol": "NU", "date": earnings_date}],
     )
 
@@ -62,9 +63,13 @@ def test_fmp_empty_yfinance_returns_event(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     yf_date = date.today() + timedelta(days=5)
     monkeypatch.setattr(
-        sper, "next_earnings_date",
-        lambda _root, ticker: NextEarnings(expected_date=yf_date, source_name="yfinance", confirmed=False)
-        if ticker == "NU" else None,
+        sper,
+        "next_earnings_date",
+        lambda _root, ticker: (
+            NextEarnings(expected_date=yf_date, source_name="yfinance", confirmed=False)
+            if ticker == "NU"
+            else None
+        ),
     )
 
     summary = sper.schedule()
@@ -94,7 +99,9 @@ def test_both_empty_no_hint_no_exception(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert json.loads(hints_path.read_text(encoding="utf-8")) == {}
 
 
-def test_fmp_rate_limit_falls_through_to_yfinance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_fmp_rate_limit_falls_through_to_yfinance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When the FMP universe call raises (rate limit / network), every watched
     ticker funnels into the per-ticker fallback path instead of crashing."""
     hints_path = _patch_common(monkeypatch, tmp_path, {"NU"})
@@ -106,8 +113,11 @@ def test_fmp_rate_limit_falls_through_to_yfinance(monkeypatch: pytest.MonkeyPatc
 
     yf_date = date.today() + timedelta(days=2)
     monkeypatch.setattr(
-        sper, "next_earnings_date",
-        lambda _root, _t: NextEarnings(expected_date=yf_date, source_name="yfinance", confirmed=False),
+        sper,
+        "next_earnings_date",
+        lambda _root, _t: NextEarnings(
+            expected_date=yf_date, source_name="yfinance", confirmed=False
+        ),
     )
 
     summary = sper.schedule()
@@ -127,8 +137,11 @@ def test_fallback_filters_outside_window(monkeypatch: pytest.MonkeyPatch, tmp_pa
     # 30 days out — well beyond LOOKAHEAD_DAYS (7).
     far_date = date.today() + timedelta(days=30)
     monkeypatch.setattr(
-        sper, "next_earnings_date",
-        lambda _root, _t: NextEarnings(expected_date=far_date, source_name="yfinance", confirmed=False),
+        sper,
+        "next_earnings_date",
+        lambda _root, _t: NextEarnings(
+            expected_date=far_date, source_name="yfinance", confirmed=False
+        ),
     )
 
     summary = sper.schedule()
@@ -136,7 +149,9 @@ def test_fallback_filters_outside_window(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert summary["new_or_updated_hints"] == []
 
 
-def test_fallback_isolates_per_ticker_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_fallback_isolates_per_ticker_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """If next_earnings_date raises for one ticker, the rest still run."""
     _patch_common(monkeypatch, tmp_path, {"NU", "MELI"})
     monkeypatch.setattr(sper, "_fetch_earnings_calendar", lambda start, end: [])

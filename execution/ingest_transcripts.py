@@ -38,7 +38,10 @@ from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
-_TRANSCRIPT_DIRS = (PROJECT_ROOT / "transcripts" / "processed", PROJECT_ROOT / "transcripts" / "raw")
+_TRANSCRIPT_DIRS = (
+    PROJECT_ROOT / "transcripts" / "processed",
+    PROJECT_ROOT / "transcripts" / "raw",
+)
 
 
 def _promote_raw_to_processed(
@@ -361,9 +364,7 @@ def main() -> int:
             conn,
             run_id,
             terminal,
-            error_summary=(
-                f"{total_failed} files failed" if total_failed else None
-            ),
+            error_summary=(f"{total_failed} files failed" if total_failed else None),
         )
 
         missing_qa = [

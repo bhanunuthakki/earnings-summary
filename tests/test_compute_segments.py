@@ -171,8 +171,13 @@ def test_extract_segment_facts_rejects_wrong_doc_type(
 
 def test_reconciliation_accepts_well_formed_record(conn: sqlite3.Connection) -> None:
     """Segment sum within ±10% of revenue passes the gate."""
-    _seed_revenue(conn, ticker="GOOG", period_end="2025-12-31 00:00:00",
-                  period_type="FY", value=350_018_000_000)
+    _seed_revenue(
+        conn,
+        ticker="GOOG",
+        period_end="2025-12-31 00:00:00",
+        period_type="FY",
+        value=350_018_000_000,
+    )
     record = FmpSegmentRecord.model_validate(_PRODUCT_SAMPLE)  # sum ≈ 325B; ratio ≈ 0.93
     assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=42) is True
 
@@ -181,8 +186,13 @@ def test_reconciliation_rejects_contaminated_record(
     conn: sqlite3.Connection, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The UBER Q4-2025 contamination pattern (sum ≈ 3.4x revenue) is rejected."""
-    _seed_revenue(conn, ticker="UBER", period_end="2025-12-31 00:00:00",
-                  period_type="Q4", value=14_366_000_000)
+    _seed_revenue(
+        conn,
+        ticker="UBER",
+        period_end="2025-12-31 00:00:00",
+        period_type="Q4",
+        value=14_366_000_000,
+    )
     contaminated = {
         "date": "2025-12-31",
         "symbol": "UBER",
@@ -208,16 +218,19 @@ def test_reconciliation_rejects_contaminated_record(
 
 def test_reconciliation_accepts_under_revenue(conn: sqlite3.Connection) -> None:
     """Sum < revenue (missing 'Other' bucket case) always passes."""
-    _seed_revenue(conn, ticker="ACN", period_end="2024-08-31 00:00:00",
-                  period_type="FY", value=64_896_000_000)
-    record = FmpSegmentRecord.model_validate({
-        "date": "2024-08-31",
-        "symbol": "ACN",
-        "reportedCurrency": "USD",
-        "period": "FY",
-        "fiscalYear": 2024,
-        "data": {"North America": 30_000_000_000, "EMEA": 18_000_000_000},  # ratio 0.74
-    })
+    _seed_revenue(
+        conn, ticker="ACN", period_end="2024-08-31 00:00:00", period_type="FY", value=64_896_000_000
+    )
+    record = FmpSegmentRecord.model_validate(
+        {
+            "date": "2024-08-31",
+            "symbol": "ACN",
+            "reportedCurrency": "USD",
+            "period": "FY",
+            "fiscalYear": 2024,
+            "data": {"North America": 30_000_000_000, "EMEA": 18_000_000_000},  # ratio 0.74
+        }
+    )
     assert _passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
 
 
@@ -265,24 +278,29 @@ def test_insert_segment_facts_writes_to_junction(conn: sqlite3.Connection) -> No
 
 def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
     """Exactly 10% over revenue is the cap — values at or below the cap accept."""
-    _seed_revenue(conn, ticker="TEST", period_end="2024-12-31 00:00:00",
-                  period_type="FY", value=100_000_000)
-    record = FmpSegmentRecord.model_validate({
-        "date": "2024-12-31",
-        "symbol": "TEST",
-        "reportedCurrency": "USD",
-        "period": "FY",
-        "fiscalYear": 2024,
-        "data": {"A": 60_000_000, "B": 50_000_000},  # sum=110M; ratio=1.10 (==cap)
-    })
+    _seed_revenue(
+        conn, ticker="TEST", period_end="2024-12-31 00:00:00", period_type="FY", value=100_000_000
+    )
+    record = FmpSegmentRecord.model_validate(
+        {
+            "date": "2024-12-31",
+            "symbol": "TEST",
+            "reportedCurrency": "USD",
+            "period": "FY",
+            "fiscalYear": 2024,
+            "data": {"A": 60_000_000, "B": 50_000_000},  # sum=110M; ratio=1.10 (==cap)
+        }
+    )
     assert _passes_reconciliation(conn, record, "revenue_by_product", source_doc_id=1) is True
 
-    record_over = FmpSegmentRecord.model_validate({
-        "date": "2024-12-31",
-        "symbol": "TEST",
-        "reportedCurrency": "USD",
-        "period": "FY",
-        "fiscalYear": 2024,
-        "data": {"A": 60_000_000, "B": 51_000_000},  # sum=111M; ratio=1.11 (>cap)
-    })
+    record_over = FmpSegmentRecord.model_validate(
+        {
+            "date": "2024-12-31",
+            "symbol": "TEST",
+            "reportedCurrency": "USD",
+            "period": "FY",
+            "fiscalYear": 2024,
+            "data": {"A": 60_000_000, "B": 51_000_000},  # sum=111M; ratio=1.11 (>cap)
+        }
+    )
     assert _passes_reconciliation(conn, record_over, "revenue_by_product", source_doc_id=1) is False

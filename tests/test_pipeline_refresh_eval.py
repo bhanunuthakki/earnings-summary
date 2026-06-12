@@ -101,12 +101,21 @@ def _seed_facts(conn: sqlite3.Connection, ticker: str) -> None:
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size) "
         "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1)",
-        (ticker, f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
-         "a" * 64, datetime.now()),
+        (
+            ticker,
+            f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
+            "a" * 64,
+            datetime.now(),
+        ),
     )
     doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
     pe = datetime(2024, 12, 31)
-    for line, val in [("revenue", 1000), ("operating_income", 200), ("net_income", 150), ("gross_profit", 500)]:
+    for line, val in [
+        ("revenue", 1000),
+        ("operating_income", 200),
+        ("net_income", 150),
+        ("gross_profit", 500),
+    ]:
         conn.execute(
             "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
             "line_item, value, currency, unit, source_doc_id) "
@@ -175,9 +184,7 @@ def test_refresh_for_tickers_skips_missing_holdings(
     assert results[0].derived_kpi_rows_inserted >= 3
 
 
-def test_refresh_for_tickers_breach_propagates(
-    conn: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_refresh_for_tickers_breach_propagates(conn: sqlite3.Connection, tmp_path: Path) -> None:
     """If derived margin is below threshold, eval_status = BREACH."""
     _seed_facts(conn, "Z")
     _write_holdings(tmp_path, "Z", threshold=50)  # threshold higher than actual 20%

@@ -106,9 +106,7 @@ def conn() -> sqlite3.Connection:
     return c
 
 
-def _seed_state(
-    conn: sqlite3.Connection, ticker: str, status: BreachStatus
-) -> None:
+def _seed_state(conn: sqlite3.Connection, ticker: str, status: BreachStatus) -> None:
     conn.execute(
         "INSERT INTO thesis_state (ticker, raw_json, breach_status, ingested_at, last_updated) "
         "VALUES (?, '{}', ?, ?, ?)",
@@ -330,8 +328,7 @@ def _seed_tracked(
     archived: str | None = None,
 ) -> None:
     conn.execute(
-        "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO tracked_companies (ticker, name, list_type, archived_at) VALUES (?, ?, ?, ?)",
         (ticker, ticker, list_type, archived),
     )
     conn.commit()
@@ -341,7 +338,7 @@ def test_briefed_scorecards_includes_portfolio_and_eval(conn: sqlite3.Connection
     _seed_tracked(conn, "A", "portfolio")
     _seed_tracked(conn, "B", "evaluation")
     _seed_tracked(conn, "C", "watchlist")  # must be excluded
-    _seed_tracked(conn, "D", "none")        # must be excluded
+    _seed_tracked(conn, "D", "none")  # must be excluded
     cards = briefed_scorecards(conn)
     assert {c.ticker for c in cards} == {"A", "B"}
 

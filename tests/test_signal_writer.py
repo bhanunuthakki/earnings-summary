@@ -172,24 +172,20 @@ def _seed_goog(repo_root: Path) -> Path:
     # 16 quarters of synthetic data — enough for every primitive to fire.
     # Mix of growth shapes so the test exercises green/yellow/red branches.
     _insert_financial(db_path, "GOOG", "revenue", [100.0 + 5 * i for i in range(16)])
-    _insert_financial(
-        db_path, "GOOG", "operating_income", [25.0 + 2 * i for i in range(16)]
-    )
+    _insert_financial(db_path, "GOOG", "operating_income", [25.0 + 2 * i for i in range(16)])
     # FCF with a 1.5σ-ish anomaly in the last quarter to catch the writer's
     # anomaly branch — values are in the ~30-50 band, end with 70 to land an
     # observable z-score against the trailing window.
     fcf_vals = [30.0 + math.sin(i) * 3 for i in range(15)] + [70.0]
     _insert_financial(db_path, "GOOG", "free_cash_flow", fcf_vals)
-    _insert_financial(
-        db_path, "GOOG", "gross_profit", [60.0 + 3 * i for i in range(16)]
-    )
-    _insert_financial(
-        db_path, "GOOG", "net_income", [20.0 + 1.5 * i for i in range(16)]
-    )
+    _insert_financial(db_path, "GOOG", "gross_profit", [60.0 + 3 * i for i in range(16)])
+    _insert_financial(db_path, "GOOG", "net_income", [20.0 + 1.5 * i for i in range(16)])
 
     # Two KPIs matching holdings tier_1 entries
     _insert_kpi(db_path, "GOOG", "GCP revenue growth (YoY)", [0.35 - 0.01 * i for i in range(16)])
-    _insert_kpi(db_path, "GOOG", "GCP operating margin trajectory", [0.05 + 0.005 * i for i in range(16)])
+    _insert_kpi(
+        db_path, "GOOG", "GCP operating margin trajectory", [0.05 + 0.005 * i for i in range(16)]
+    )
 
     # Minimal holdings JSON covering both code paths.
     holdings_dir = repo_root / "micro_thesis" / "holdings"
@@ -244,7 +240,11 @@ def test_writer_persists_signals_for_seeded_ticker(tmp_path: Path) -> None:
         assert r["ticker"] == "GOOG"
         assert r["metric_kind"] in {"financial", "kpi"}
         assert r["signal_type"] in {
-            "trend", "inflection", "anomaly", "yoy_acceleration", "seasonal",
+            "trend",
+            "inflection",
+            "anomaly",
+            "yoy_acceleration",
+            "seasonal",
         }
 
     # At least one signal carried a rendered narrative (the writer always
@@ -306,9 +306,7 @@ def test_writer_run_id_is_persisted(tmp_path: Path) -> None:
     db_path = _seed_goog(tmp_path)
     conn = sqlite3.connect(str(db_path))
     try:
-        compute_and_persist_signals(
-            ticker="GOOG", db=conn, repo_root=tmp_path, run_id="abc123"
-        )
+        compute_and_persist_signals(ticker="GOOG", db=conn, repo_root=tmp_path, run_id="abc123")
     finally:
         conn.close()
 
@@ -368,9 +366,7 @@ def test_writer_raises_when_table_missing(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    _insert_financial(
-        db_path, "GOOG", "revenue", [100.0 + 5 * i for i in range(16)]
-    )
+    _insert_financial(db_path, "GOOG", "revenue", [100.0 + 5 * i for i in range(16)])
 
     conn = sqlite3.connect(str(db_path))
     try:

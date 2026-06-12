@@ -80,9 +80,7 @@ def main() -> int:
         if args.ticker:
             _print_plan_for(conn, args.ticker)
         else:
-            _print_plans_for_all(
-                conn, include_index_members=args.include_index_members
-            )
+            _print_plans_for_all(conn, include_index_members=args.include_index_members)
     finally:
         conn.close()
     return 0

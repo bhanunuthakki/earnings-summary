@@ -66,10 +66,38 @@ def conn() -> sqlite3.Connection:
 def test_cik_map_covers_all_tracked_tickers() -> None:
     """Every portfolio + watchlist + ETF ticker should have a CIK except FLKR (ETF)."""
     expected = {
-        "ABNB", "AMAT", "AMZN", "ASML", "BHP", "BKNG", "BN", "CNQ", "FCX", "FNV",
-        "GOOG", "HDB", "JPM", "LLY", "LMND", "MELI", "META", "MU", "NOW", "NU",
-        "NVO", "RBRK", "RIO", "SOFI", "TOL", "TPL", "TSM", "VALE", "VEEV",
-        "WIX", "WPM", "WY",
+        "ABNB",
+        "AMAT",
+        "AMZN",
+        "ASML",
+        "BHP",
+        "BKNG",
+        "BN",
+        "CNQ",
+        "FCX",
+        "FNV",
+        "GOOG",
+        "HDB",
+        "JPM",
+        "LLY",
+        "LMND",
+        "MELI",
+        "META",
+        "MU",
+        "NOW",
+        "NU",
+        "NVO",
+        "RBRK",
+        "RIO",
+        "SOFI",
+        "TOL",
+        "TPL",
+        "TSM",
+        "VALE",
+        "VEEV",
+        "WIX",
+        "WPM",
+        "WY",
     }
     assert expected == set(CIK_MAP)
 
@@ -118,10 +146,26 @@ def test_enumerate_accessions_dedupes() -> None:
                 "Revenues": {
                     "units": {
                         "USD": [
-                            {"accn": "0001-22-001", "form": "10-K", "filed": "2025-02-01", "fy": 2024, "fp": "FY",
-                             "start": "2024-01-01", "end": "2024-12-31", "val": 100},
-                            {"accn": "0001-22-001", "form": "10-K", "filed": "2025-02-01", "fy": 2024, "fp": "FY",
-                             "start": "2024-01-01", "end": "2024-12-31", "val": 100},
+                            {
+                                "accn": "0001-22-001",
+                                "form": "10-K",
+                                "filed": "2025-02-01",
+                                "fy": 2024,
+                                "fp": "FY",
+                                "start": "2024-01-01",
+                                "end": "2024-12-31",
+                                "val": 100,
+                            },
+                            {
+                                "accn": "0001-22-001",
+                                "form": "10-K",
+                                "filed": "2025-02-01",
+                                "fy": 2024,
+                                "fp": "FY",
+                                "start": "2024-01-01",
+                                "end": "2024-12-31",
+                                "val": 100,
+                            },
                         ]
                     }
                 }
@@ -137,11 +181,19 @@ def test_upsert_accession_documents_idempotent(conn: sqlite3.Connection) -> None
     """Re-running upsert with the same accessions inserts no new documents."""
     accessions = {
         "0001-22-001": _AccessionRecord(
-            accession="0001-22-001", form="10-K", filed="2025-02-01", fy=2024, fp="FY",
+            accession="0001-22-001",
+            form="10-K",
+            filed="2025-02-01",
+            fy=2024,
+            fp="FY",
         ),
     }
-    first = upsert_accession_documents(conn, ticker="X", accessions=accessions, project_root=Path("/tmp"))
-    second = upsert_accession_documents(conn, ticker="X", accessions=accessions, project_root=Path("/tmp"))
+    first = upsert_accession_documents(
+        conn, ticker="X", accessions=accessions, project_root=Path("/tmp")
+    )
+    second = upsert_accession_documents(
+        conn, ticker="X", accessions=accessions, project_root=Path("/tmp")
+    )
     assert first == second
     n = conn.execute("SELECT COUNT(*) FROM documents WHERE source_type='sec_xbrl'").fetchone()[0]
     assert n == 1
@@ -151,7 +203,11 @@ def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
     """Mixed payload: Q3 standalone (3 month) + 9M YTD; only Q3 gets inserted."""
     accessions = {
         "0001-22-001": _AccessionRecord(
-            accession="0001-22-001", form="10-Q", filed="2025-10-30", fy=2025, fp="Q3",
+            accession="0001-22-001",
+            form="10-Q",
+            filed="2025-10-30",
+            fy=2025,
+            fp="Q3",
         ),
     }
     accn_to_doc = upsert_accession_documents(
@@ -164,13 +220,27 @@ def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
                     "units": {
                         "USD": [
                             # Q3 standalone (3 months)
-                            {"accn": "0001-22-001", "form": "10-Q", "filed": "2025-10-30",
-                             "fy": 2025, "fp": "Q3",
-                             "start": "2025-07-01", "end": "2025-09-30", "val": 4_000_000_000},
+                            {
+                                "accn": "0001-22-001",
+                                "form": "10-Q",
+                                "filed": "2025-10-30",
+                                "fy": 2025,
+                                "fp": "Q3",
+                                "start": "2025-07-01",
+                                "end": "2025-09-30",
+                                "val": 4_000_000_000,
+                            },
                             # 9-month YTD (skipped)
-                            {"accn": "0001-22-001", "form": "10-Q", "filed": "2025-10-30",
-                             "fy": 2025, "fp": "Q3",
-                             "start": "2025-01-01", "end": "2025-09-30", "val": 11_000_000_000},
+                            {
+                                "accn": "0001-22-001",
+                                "form": "10-Q",
+                                "filed": "2025-10-30",
+                                "fy": 2025,
+                                "fp": "Q3",
+                                "start": "2025-01-01",
+                                "end": "2025-09-30",
+                                "val": 11_000_000_000,
+                            },
                         ]
                     }
                 }
@@ -181,7 +251,9 @@ def test_insert_facts_skips_ytd_aggregations(conn: sqlite3.Connection) -> None:
         conn, ticker="X", payload=payload, accession_to_doc_id=accn_to_doc
     )
     assert inserted == 1
-    rows = conn.execute("SELECT value, fiscal_period_type FROM financial_facts WHERE ticker='X'").fetchall()
+    rows = conn.execute(
+        "SELECT value, fiscal_period_type FROM financial_facts WHERE ticker='X'"
+    ).fetchall()
     assert len(rows) == 1
     assert int(dict(rows[0])["value"]) == 4_000_000_000
     assert dict(rows[0])["fiscal_period_type"] == "Q3"

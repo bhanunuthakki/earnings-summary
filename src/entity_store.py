@@ -758,7 +758,9 @@ def pending_proposals(
                 payload = json.loads(r["payload_json"])
             except (json.JSONDecodeError, TypeError):
                 payload = {}
-            payload_dict: dict[str, object] = payload if isinstance(payload, dict) else {"raw": payload}
+            payload_dict: dict[str, object] = (
+                payload if isinstance(payload, dict) else {"raw": payload}
+            )
             out.append(
                 MappingProposal(
                     id=int(r["id"]),
@@ -805,7 +807,9 @@ def decide_proposal(
                 payload = json.loads(row["payload_json"])
             except (json.JSONDecodeError, TypeError):
                 payload = {}
-            payload_dict: dict[str, object] = payload if isinstance(payload, dict) else {"raw": payload}
+            payload_dict: dict[str, object] = (
+                payload if isinstance(payload, dict) else {"raw": payload}
+            )
             ent_id, con_id = _apply_proposal_payload(
                 conn, kind=row["kind"], payload=payload_dict, ticker=row["ticker"]
             )
@@ -893,9 +897,15 @@ def _apply_proposal_payload(
                 (
                     ekind,
                     cname,
-                    payload.get("display_name") if isinstance(payload.get("display_name"), str) else None,
-                    json.dumps(payload.get("external_ids")) if payload.get("external_ids") else None,
-                    payload.get("parent_entity_id") if isinstance(payload.get("parent_entity_id"), int) else None,
+                    payload.get("display_name")
+                    if isinstance(payload.get("display_name"), str)
+                    else None,
+                    json.dumps(payload.get("external_ids"))
+                    if payload.get("external_ids")
+                    else None,
+                    payload.get("parent_entity_id")
+                    if isinstance(payload.get("parent_entity_id"), int)
+                    else None,
                     json.dumps(payload.get("meta")) if payload.get("meta") else None,
                     now,
                     now,
@@ -930,8 +940,12 @@ def _apply_proposal_payload(
                     ckind,
                     cname,
                     payload.get("unit_kind") if isinstance(payload.get("unit_kind"), str) else None,
-                    payload.get("taxonomy_xbrl_tag") if isinstance(payload.get("taxonomy_xbrl_tag"), str) else None,
-                    payload.get("generic_definition_md") if isinstance(payload.get("generic_definition_md"), str) else None,
+                    payload.get("taxonomy_xbrl_tag")
+                    if isinstance(payload.get("taxonomy_xbrl_tag"), str)
+                    else None,
+                    payload.get("generic_definition_md")
+                    if isinstance(payload.get("generic_definition_md"), str)
+                    else None,
                     now,
                 ),
             )
@@ -978,7 +992,14 @@ def _apply_proposal_payload(
                     from_entity_id, relationship_kind, to_entity_id, effective_from, confidence
                 ) VALUES (?,?,?,?,1.0)
                 """,
-                (int(f), rk, int(t), payload.get("effective_from") if isinstance(payload.get("effective_from"), str) else None),
+                (
+                    int(f),
+                    rk,
+                    int(t),
+                    payload.get("effective_from")
+                    if isinstance(payload.get("effective_from"), str)
+                    else None,
+                ),
             )
             return (int(f), None)
     elif kind == "concept_redefinition":
@@ -986,7 +1007,12 @@ def _apply_proposal_payload(
         tk = payload.get("ticker") or ticker
         ef = payload.get("effective_from")
         df = payload.get("definition_md")
-        if isinstance(cid, (int, float)) and isinstance(tk, str) and isinstance(ef, str) and isinstance(df, str):
+        if (
+            isinstance(cid, (int, float))
+            and isinstance(tk, str)
+            and isinstance(ef, str)
+            and isinstance(df, str)
+        ):
             insert = conn.execute(
                 """
                 INSERT INTO concept_definitions(

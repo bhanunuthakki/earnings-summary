@@ -114,7 +114,9 @@ def etf_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     conn.close()
 
 
-def _seed_tc(conn: sqlite3.Connection, ticker: str, kind: str | None, list_type: str = "portfolio") -> None:
+def _seed_tc(
+    conn: sqlite3.Connection, ticker: str, kind: str | None, list_type: str = "portfolio"
+) -> None:
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type) "
         "VALUES (?, ?, ?, ?)",
@@ -442,9 +444,7 @@ def test_ingest_from_payloads_is_idempotent(etf_db: sqlite3.Connection) -> None:
     assert holdings_count == 1
 
 
-def test_ingest_from_cache_reads_disk_fixtures(
-    etf_db: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_ingest_from_cache_reads_disk_fixtures(etf_db: sqlite3.Connection, tmp_path: Path) -> None:
     fmp_dir = tmp_path / "fmp"
     fmp_dir.mkdir()
     (fmp_dir / "SOXX_etf_info.json").write_text(
@@ -493,9 +493,7 @@ def test_build_etf_brief_missing_when_profile_absent(repo_root_with_db: Path) ->
     assert brief.holdings.status is SectionStatus.MISSING_DATA
 
 
-def test_build_etf_brief_ok_after_ingest(
-    etf_db: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_build_etf_brief_ok_after_ingest(etf_db: sqlite3.Connection, tmp_path: Path) -> None:
     info = [
         {
             "symbol": "SOXX",
@@ -535,9 +533,7 @@ def test_build_etf_brief_ok_after_ingest(
     # Sector breakdown should sum the three Semis weights.
     assert len(brief.holdings.sector_breakdown) == 1
     assert brief.holdings.sector_breakdown[0].sector == "Semis"
-    assert brief.holdings.sector_breakdown[0].weight_pct == pytest.approx(
-        0.0942 + 0.0851 + 0.0621
-    )
+    assert brief.holdings.sector_breakdown[0].weight_pct == pytest.approx(0.0942 + 0.0851 + 0.0621)
 
 
 def test_etf_markdown_renderer_emits_profile_and_holdings() -> None:
@@ -566,7 +562,13 @@ def test_etf_markdown_renderer_emits_profile_and_holdings() -> None:
             as_of_date=date(2026, 5, 25),
             total_constituents=2,
             top_holdings=[
-                EtfHoldingRow(rank=1, constituent_ticker="NVDA", name="NVIDIA", weight_pct=0.0942, sector="Semis"),
+                EtfHoldingRow(
+                    rank=1,
+                    constituent_ticker="NVDA",
+                    name="NVIDIA",
+                    weight_pct=0.0942,
+                    sector="Semis",
+                ),
             ],
             sector_breakdown=[EtfSectorBreakdownRow(sector="Semis", weight_pct=0.0942)],
         ),
@@ -654,16 +656,46 @@ _SOXX_INFO_FIXTURE = [
 _SOXX_HOLDINGS_FIXTURE = [
     {"asset": "NVDA", "name": "NVIDIA Corp", "weightPercentage": 9.42, "sector": "Semiconductors"},
     {"asset": "AVGO", "name": "Broadcom Inc", "weightPercentage": 8.51, "sector": "Semiconductors"},
-    {"asset": "AMD", "name": "Advanced Micro Devices", "weightPercentage": 7.21, "sector": "Semiconductors"},
-    {"asset": "TSM", "name": "Taiwan Semiconductor", "weightPercentage": 6.05, "sector": "Semiconductors"},
+    {
+        "asset": "AMD",
+        "name": "Advanced Micro Devices",
+        "weightPercentage": 7.21,
+        "sector": "Semiconductors",
+    },
+    {
+        "asset": "TSM",
+        "name": "Taiwan Semiconductor",
+        "weightPercentage": 6.05,
+        "sector": "Semiconductors",
+    },
     {"asset": "INTC", "name": "Intel Corp", "weightPercentage": 5.88, "sector": "Semiconductors"},
     {"asset": "QCOM", "name": "Qualcomm Inc", "weightPercentage": 4.92, "sector": "Semiconductors"},
-    {"asset": "MU", "name": "Micron Technology", "weightPercentage": 4.10, "sector": "Semiconductors"},
-    {"asset": "AMAT", "name": "Applied Materials", "weightPercentage": 4.02, "sector": "Semiconductors"},
+    {
+        "asset": "MU",
+        "name": "Micron Technology",
+        "weightPercentage": 4.10,
+        "sector": "Semiconductors",
+    },
+    {
+        "asset": "AMAT",
+        "name": "Applied Materials",
+        "weightPercentage": 4.02,
+        "sector": "Semiconductors",
+    },
     {"asset": "LRCX", "name": "Lam Research", "weightPercentage": 3.65, "sector": "Semiconductors"},
     {"asset": "KLAC", "name": "KLA Corp", "weightPercentage": 3.22, "sector": "Semiconductors"},
-    {"asset": "ASML", "name": "ASML Holding", "weightPercentage": 3.10, "sector": "Semiconductor Equipment"},
-    {"asset": "MRVL", "name": "Marvell Technology", "weightPercentage": 2.41, "sector": "Semiconductors"},
+    {
+        "asset": "ASML",
+        "name": "ASML Holding",
+        "weightPercentage": 3.10,
+        "sector": "Semiconductor Equipment",
+    },
+    {
+        "asset": "MRVL",
+        "name": "Marvell Technology",
+        "weightPercentage": 2.41,
+        "sector": "Semiconductors",
+    },
 ]
 
 
@@ -678,9 +710,7 @@ def _materialize_db(etf_db: sqlite3.Connection, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_soxx_end_to_end_ingest_then_render(
-    etf_db: sqlite3.Connection, tmp_path: Path
-) -> None:
+def test_soxx_end_to_end_ingest_then_render(etf_db: sqlite3.Connection, tmp_path: Path) -> None:
     """The full ETF MVP arc: seed registry, ingest from fixtures, render brief.
 
     Mirrors what happens on a real onboard: SOXX added with instrument_type='etf',
@@ -692,17 +722,13 @@ def test_soxx_end_to_end_ingest_then_render(
     # 2. Drop fixture JSONs that the cached-mode fetcher will read.
     fmp_dir = tmp_path / "data" / "historical" / "fmp"
     fmp_dir.mkdir(parents=True, exist_ok=True)
-    (fmp_dir / "SOXX_etf_info.json").write_text(
-        json.dumps(_SOXX_INFO_FIXTURE), encoding="utf-8"
-    )
+    (fmp_dir / "SOXX_etf_info.json").write_text(json.dumps(_SOXX_INFO_FIXTURE), encoding="utf-8")
     (fmp_dir / "SOXX_etf_holdings.json").write_text(
         json.dumps(_SOXX_HOLDINGS_FIXTURE), encoding="utf-8"
     )
 
     # 3. Ingest from the fixtures.
-    profile, n = ingest_from_cache(
-        etf_db, "SOXX", fmp_dir=fmp_dir, as_of_date=date(2026, 5, 25)
-    )
+    profile, n = ingest_from_cache(etf_db, "SOXX", fmp_dir=fmp_dir, as_of_date=date(2026, 5, 25))
     assert profile.issuer == "BlackRock"
     assert n == 12
 
@@ -741,9 +767,7 @@ def test_build_artifacts_dispatches_to_etf_path(
     _seed_tc(etf_db, "SOXX", "etf", list_type="portfolio")
     fmp_dir = tmp_path / "data" / "historical" / "fmp"
     fmp_dir.mkdir(parents=True, exist_ok=True)
-    (fmp_dir / "SOXX_etf_info.json").write_text(
-        json.dumps(_SOXX_INFO_FIXTURE), encoding="utf-8"
-    )
+    (fmp_dir / "SOXX_etf_info.json").write_text(json.dumps(_SOXX_INFO_FIXTURE), encoding="utf-8")
     (fmp_dir / "SOXX_etf_holdings.json").write_text(
         json.dumps(_SOXX_HOLDINGS_FIXTURE), encoding="utf-8"
     )

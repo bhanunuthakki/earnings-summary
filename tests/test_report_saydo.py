@@ -12,6 +12,7 @@ from report.sections.saydo import (
     _parse_thesis_view,
 )
 
+
 def test_parse_rating() -> None:
     text = """
 ### 3. Analyst Verdict
@@ -28,6 +29,7 @@ The performance was mixed.
     text_legacy = "Performance Rating: EXCEEDED"
     assert _parse_rating(text_legacy) == "EXCEEDED"
 
+
 def test_parse_attribution() -> None:
     text = """
 ### 4. Adversarial Loop
@@ -43,6 +45,7 @@ Some other text.
 """
     assert _parse_attribution(text_net_conv) == "Net Conviction: High conviction."
 
+
 def test_parse_thesis_view() -> None:
     text = """
 ### 5. Thesis Impact
@@ -52,15 +55,17 @@ Some other paragraph.
 """
     assert _parse_thesis_view(text) == "This is the thesis impact text."
 
+
 def test_build_missing_data(tmp_path: Path) -> None:
     section = build_saydo("AMZN", tmp_path)
     assert section.status == SectionStatus.MISSING_DATA
     assert "No SayDo_*.txt files found" in section.missing.detail
 
+
 def test_build_ok(tmp_path: Path) -> None:
     tmp_dir = tmp_path / ".tmp"
     tmp_dir.mkdir()
-    
+
     card_content = """
 ### 3. Analyst Verdict
 **EXCEEDED**
@@ -74,7 +79,7 @@ Thesis impact content here.
     # Filename: SayDo_{TICKER}_Q{prev}_{prev_yr}_Q{curr}_{curr_yr}.txt
     card_file = tmp_dir / "SayDo_AMZN_Q3_2024_Q4_2024.txt"
     card_file.write_text(card_content, encoding="utf-8")
-    
+
     section = build_saydo("AMZN", tmp_path)
     assert section.status == SectionStatus.OK
     assert len(section.cards) == 1

@@ -108,10 +108,7 @@ def _save_hints(hints: dict[str, str]) -> None:
 
 
 def _prune_expired(hints: dict[str, str], now: datetime) -> dict[str, str]:
-    return {
-        t: exp for t, exp in hints.items()
-        if datetime.fromisoformat(exp) > now
-    }
+    return {t: exp for t, exp in hints.items() if datetime.fromisoformat(exp) > now}
 
 
 def _fallback_unmatched(unmatched: set[str], start: date, end: date) -> list[dict[str, str]]:
@@ -134,11 +131,13 @@ def _fallback_unmatched(unmatched: set[str], start: date, end: date) -> list[dic
             continue
         if not (start <= nx.expected_date <= end):
             continue
-        out.append({
-            "symbol": ticker,
-            "date": nx.expected_date.isoformat(),
-            "source": nx.source_name,
-        })
+        out.append(
+            {
+                "symbol": ticker,
+                "date": nx.expected_date.isoformat(),
+                "source": nx.source_name,
+            }
+        )
     return out
 
 
@@ -155,7 +154,9 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
     try:
         calendar = _fetch_earnings_calendar(today, end)
     except RuntimeError as e:
-        log.warning("FMP earnings-calendar fetch failed; falling back to per-ticker lookup: %s", _redact(e))
+        log.warning(
+            "FMP earnings-calendar fetch failed; falling back to per-ticker lookup: %s", _redact(e)
+        )
         calendar = []
     matches: list[dict[str, str]] = [
         {**e, "source": "fmp"} for e in calendar if e["symbol"] in watched
@@ -185,12 +186,14 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
         existing = hints.get(ticker)
         if existing is None or datetime.fromisoformat(existing) < expires:
             hints[ticker] = expires.isoformat(timespec="seconds")
-            new_hints.append({
-                "ticker": ticker,
-                "earnings_date": m["date"],
-                "hint_expires": hints[ticker],
-                "source": m.get("source", "fmp"),
-            })
+            new_hints.append(
+                {
+                    "ticker": ticker,
+                    "earnings_date": m["date"],
+                    "hint_expires": hints[ticker],
+                    "source": m.get("source", "fmp"),
+                }
+            )
 
     if not dry_run:
         _save_hints(hints)
@@ -209,8 +212,7 @@ def schedule(*, dry_run: bool = False) -> dict[str, object]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dry-run", action="store_true",
-                    help="Hit calendar API but don't write hints")
+    ap.add_argument("--dry-run", action="store_true", help="Hit calendar API but don't write hints")
     args = ap.parse_args()
     summary = schedule(dry_run=args.dry_run)
     print(json.dumps(summary, indent=2))

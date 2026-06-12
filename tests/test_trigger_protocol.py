@@ -120,7 +120,9 @@ def test_draft_actions_empty_for_empty_evidence() -> None:
 
 def _field_types(cls: type) -> dict[str, str]:
     """Map field name -> string type annotation (resolved via dataclass)."""
-    return {f.name: f.type if isinstance(f.type, str) else str(f.type) for f in dataclasses.fields(cls)}
+    return {
+        f.name: f.type if isinstance(f.type, str) else str(f.type) for f in dataclasses.fields(cls)
+    }
 
 
 def test_trigger_candidate_fields() -> None:

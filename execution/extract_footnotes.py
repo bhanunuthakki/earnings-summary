@@ -108,9 +108,7 @@ def extract_for_ticker(
         return {"ticker": ticker, "status": "no_item_8", "n": 0}
 
     item_8 = result.item_8_text[:_MAX_ITEM_8_CHARS]
-    prompt = _PROMPT.format(
-        ticker=ticker, fiscal_year=result.fiscal_year, item_8_text=item_8
-    )
+    prompt = _PROMPT.format(ticker=ticker, fiscal_year=result.fiscal_year, item_8_text=item_8)
 
     try:
         raw = call_llm(
@@ -147,9 +145,7 @@ def extract_for_ticker(
     }
 
 
-def _persist_rows(
-    *, ticker: str, fiscal_year: int, rows: list[object], db_path: Path
-) -> int:
+def _persist_rows(*, ticker: str, fiscal_year: int, rows: list[object], db_path: Path) -> int:
     if not db_path.exists():
         return 0
     period_end = datetime(fiscal_year, 12, 31).isoformat()  # rough; FMP gives precise dates

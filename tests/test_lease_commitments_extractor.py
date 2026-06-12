@@ -71,8 +71,10 @@ def _goog_lease_section() -> list[dict[str, object]]:
     Per-period column order: [2024, 2023]."""
     return [
         {
-            "Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions":
-                ["Dec. 31, 2024", "Dec. 31, 2023"]
+            "Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions": [
+                "Dec. 31, 2024",
+                "Dec. 31, 2023",
+            ]
         },
         {"Operating Leases": ["\xa0", "\xa0"]},
         {"2025": [3162, "\xa0"]},
@@ -195,13 +197,17 @@ def test_extract_persists_all_ladder_rows(db: Path, tmp_path: Path) -> None:
         conn.close()
 
 
-def test_extract_logs_extractions_when_filing_doc_id_present(
-    db: Path, tmp_path: Path
-) -> None:
+def test_extract_logs_extractions_when_filing_doc_id_present(db: Path, tmp_path: Path) -> None:
     payload = {"Leases - Future Minimum Lease P": _goog_lease_section()}
     outcome = lc.extract(
-        ticker="GOOG", fiscal_year=2024, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path, filing_doc_id=99, as_of_date=date(2024, 12, 31),
+        ticker="GOOG",
+        fiscal_year=2024,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=99,
+        as_of_date=date(2024, 12, 31),
     )
     assert outcome.n_extractions_logged == 18
     conn = sqlite3.connect(str(db))
@@ -218,15 +224,27 @@ def test_extract_is_idempotent(db: Path, tmp_path: Path) -> None:
     payload = {"Leases - Future Minimum Lease P": _goog_lease_section()}
     # First run
     outcome1 = lc.extract(
-        ticker="GOOG", fiscal_year=2024, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path, filing_doc_id=1, as_of_date=date(2024, 12, 31),
+        ticker="GOOG",
+        fiscal_year=2024,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=1,
+        as_of_date=date(2024, 12, 31),
     )
     assert outcome1.n_rows_inserted == 18
     # Second run with same inputs — every insert should hit the unique
     # constraint and be skipped.
     outcome2 = lc.extract(
-        ticker="GOOG", fiscal_year=2024, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path, filing_doc_id=1, as_of_date=date(2024, 12, 31),
+        ticker="GOOG",
+        fiscal_year=2024,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
+        filing_doc_id=1,
+        as_of_date=date(2024, 12, 31),
     )
     assert outcome2.n_rows_proposed == 18
     assert outcome2.n_rows_inserted == 0
@@ -238,29 +256,33 @@ def test_extract_is_idempotent(db: Path, tmp_path: Path) -> None:
         conn.close()
 
 
-def test_extract_returns_no_data_when_section_missing(
-    db: Path, tmp_path: Path
-) -> None:
+def test_extract_returns_no_data_when_section_missing(db: Path, tmp_path: Path) -> None:
     payload = {
         "symbol": "FAKETICK",
         "Revenues": [{"unrelated": ["section"]}],
     }
     outcome = lc.extract(
-        ticker="FAKETICK", fiscal_year=2024, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path,
+        ticker="FAKETICK",
+        fiscal_year=2024,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "no_data"
     assert outcome.n_rows_inserted == 0
 
 
-def test_extract_returns_no_data_when_fy_not_in_periods(
-    db: Path, tmp_path: Path
-) -> None:
+def test_extract_returns_no_data_when_fy_not_in_periods(db: Path, tmp_path: Path) -> None:
     # Payload says fy2024 but caller asks for fy2030 → no matching column.
     payload = {"Leases - Future Minimum Lease P": _goog_lease_section()}
     outcome = lc.extract(
-        ticker="GOOG", fiscal_year=2030, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path,
+        ticker="GOOG",
+        fiscal_year=2030,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "no_data"
     assert "no period column matched" in outcome.notes
@@ -268,8 +290,12 @@ def test_extract_returns_no_data_when_fy_not_in_periods(
 
 def test_extract_handles_missing_payload(db: Path, tmp_path: Path) -> None:
     outcome = lc.extract(
-        ticker="X", fiscal_year=2024, fmp_payload=None, sec_text=None,
-        db_path=db, repo_root=tmp_path,
+        ticker="X",
+        fiscal_year=2024,
+        fmp_payload=None,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "no_data"
 
@@ -277,8 +303,12 @@ def test_extract_handles_missing_payload(db: Path, tmp_path: Path) -> None:
 def test_extract_handles_missing_fiscal_year(db: Path, tmp_path: Path) -> None:
     payload = {"Leases - Future Minimum Lease P": _goog_lease_section()}
     outcome = lc.extract(
-        ticker="GOOG", fiscal_year=None, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path,
+        ticker="GOOG",
+        fiscal_year=None,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "no_data"
 
@@ -298,9 +328,18 @@ def test_ladder_label_classifier_handles_year_offsets() -> None:
     assert lc._classify_label("2029", fiscal_year=2024) == ("Y5", 2029)
     assert lc._classify_label("2030", fiscal_year=2024) == ("Thereafter", 2030)
     assert lc._classify_label("Thereafter", fiscal_year=2024) == ("Thereafter", None)
-    assert lc._classify_label("Total future lease payments", fiscal_year=2024) == ("TotalPayments", None)
-    assert lc._classify_label("Less imputed interest", fiscal_year=2024) == ("ImputedInterest", None)
-    assert lc._classify_label("Total lease liability balance", fiscal_year=2024) == ("LeaseLiability", None)
+    assert lc._classify_label("Total future lease payments", fiscal_year=2024) == (
+        "TotalPayments",
+        None,
+    )
+    assert lc._classify_label("Less imputed interest", fiscal_year=2024) == (
+        "ImputedInterest",
+        None,
+    )
+    assert lc._classify_label("Total lease liability balance", fiscal_year=2024) == (
+        "LeaseLiability",
+        None,
+    )
     assert lc._classify_label("Unrelated noise label", fiscal_year=2024) == (None, None)
 
 
@@ -311,8 +350,11 @@ def test_extract_handles_operating_only_section_without_axis_marker(
     marker, labels are 'Fiscal YYYY' instead of bare year."""
     payload: dict[str, object] = {
         "Leases- Schedule of Maturities ": [
-            {"Leases- Schedule of Maturities of Lease Liabilities (Details) $ in Thousands":
-                ["Jan. 31, 2024 USD ($)"]},
+            {
+                "Leases- Schedule of Maturities of Lease Liabilities (Details) $ in Thousands": [
+                    "Jan. 31, 2024 USD ($)"
+                ]
+            },
             {"Lessee, Operating Lease, Liability, Payment, Due [Abstract]": ["\xa0"]},
             {"Fiscal 2025": [10213]},
             {"Fiscal 2026": [10710]},
@@ -326,8 +368,12 @@ def test_extract_handles_operating_only_section_without_axis_marker(
         ],
     }
     outcome = lc.extract(
-        ticker="VEEV", fiscal_year=2024, fmp_payload=payload, sec_text=None,
-        db_path=db, repo_root=tmp_path,
+        ticker="VEEV",
+        fiscal_year=2024,
+        fmp_payload=payload,
+        sec_text=None,
+        db_path=db,
+        repo_root=tmp_path,
     )
     assert outcome.status == "ok"
     # 5 ladder years + Thereafter + TotalPayments + ImputedInterest + LeaseLiability = 9
@@ -365,25 +411,30 @@ def test_classify_label_accepts_fiscal_prefix() -> None:
 
 def test_classify_label_accepts_extended_total_labels() -> None:
     # VEEV-style labels with embedded 'operating'
-    assert lc._classify_label(
-        "Total operating lease payments", fiscal_year=2024
-    ) == ("TotalPayments", None)
-    assert lc._classify_label(
-        "Total operating lease liabilities", fiscal_year=2024
-    ) == ("LeaseLiability", None)
+    assert lc._classify_label("Total operating lease payments", fiscal_year=2024) == (
+        "TotalPayments",
+        None,
+    )
+    assert lc._classify_label("Total operating lease liabilities", fiscal_year=2024) == (
+        "LeaseLiability",
+        None,
+    )
 
 
 def test_infer_fallback_lease_type_from_title() -> None:
-    assert lc._infer_fallback_lease_type(
-        "Lessee, Operating Lease, Liability — USD ($)", rows=[]
-    ) == "operating"
-    assert lc._infer_fallback_lease_type(
-        "Finance Lease Future Payments — USD ($)", rows=[]
-    ) == "finance"
+    assert (
+        lc._infer_fallback_lease_type("Lessee, Operating Lease, Liability — USD ($)", rows=[])
+        == "operating"
+    )
+    assert (
+        lc._infer_fallback_lease_type("Finance Lease Future Payments — USD ($)", rows=[])
+        == "finance"
+    )
     # Mixed title → no inference
-    assert lc._infer_fallback_lease_type(
-        "Operating Lease and Finance Lease Maturities", rows=[]
-    ) is None
+    assert (
+        lc._infer_fallback_lease_type("Operating Lease and Finance Lease Maturities", rows=[])
+        is None
+    )
 
 
 def test_infer_as_of_handles_common_formats() -> None:

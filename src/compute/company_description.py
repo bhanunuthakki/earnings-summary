@@ -160,8 +160,13 @@ def extract_for_ticker(
     ir_anchor_md = load_ir_anchor(repo_root, ticker)
     inputs_sha = hashlib.sha256(
         (
-            thesis_text + "\x00" + recent_earnings_md + "\x00" + recent_ir_md
-            + "\x00" + ir_anchor_md
+            thesis_text
+            + "\x00"
+            + recent_earnings_md
+            + "\x00"
+            + recent_ir_md
+            + "\x00"
+            + ir_anchor_md
         ).encode("utf-8")
     ).hexdigest()
     composite_sha = hashlib.sha256((sha256 + "\x00" + inputs_sha).encode("utf-8")).hexdigest()

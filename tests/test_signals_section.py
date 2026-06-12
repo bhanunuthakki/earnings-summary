@@ -136,9 +136,7 @@ def _seed_rows(db: Path) -> None:
                 "net_income",
                 "financial",
                 "seasonal",
-                json.dumps(
-                    {"n": 16, "period": 4, "method": "stl", "seasonal_strength": 0.25}
-                ),
+                json.dumps({"n": 16, "period": 4, "method": "stl", "seasonal_strength": 0.25}),
                 "green",
                 "Net Income: seasonal_strength=0.25 (method=stl).",
             ),
@@ -209,10 +207,9 @@ def test_ticker_case_insensitive(tmp_path: Path) -> None:
     repo = _populated_repo(tmp_path)
     upper = signals_section.build("GOOG", repo)
     lower = signals_section.build("goog", repo)
-    assert (
-        len(upper.red_signals) + len(upper.yellow_signals) + len(upper.green_signals)
-        == len(lower.red_signals) + len(lower.yellow_signals) + len(lower.green_signals)
-    )
+    assert len(upper.red_signals) + len(upper.yellow_signals) + len(upper.green_signals) == len(
+        lower.red_signals
+    ) + len(lower.yellow_signals) + len(lower.green_signals)
 
 
 def test_missing_table_returns_empty_rollup(tmp_path: Path) -> None:
@@ -246,7 +243,15 @@ def _make_section_with_data() -> SignalsSection:
     return SignalsSection(
         status=SectionStatus.OK,
         red_signals=[
-            _row("free_cash_flow", "financial", "anomaly", "red", "FCF: anomaly z=3.1", "z=+3.10 (max |z|=3.10, 2 pts)", 3.1),
+            _row(
+                "free_cash_flow",
+                "financial",
+                "anomaly",
+                "red",
+                "FCF: anomaly z=3.1",
+                "z=+3.10 (max |z|=3.10, 2 pts)",
+                3.1,
+            ),
         ],
         yellow_signals=[
             _row(
@@ -283,6 +288,7 @@ def _row(
     mag: float,
 ):
     from report.models import SignalRow
+
     return SignalRow(
         metric_name=metric,
         metric_kind=kind,  # type: ignore[arg-type]
@@ -340,7 +346,9 @@ def test_workspace_renderer_omits_fires_block_when_no_red_or_yellow() -> None:
     section = SignalsSection(
         status=SectionStatus.OK,
         green_signals=[
-            _row("revenue", "financial", "trend", "green", "Revenue accelerating", "slope=+5%", 0.05),
+            _row(
+                "revenue", "financial", "trend", "green", "Revenue accelerating", "slope=+5%", 0.05
+            ),
         ],
     )
     body = StringIO()

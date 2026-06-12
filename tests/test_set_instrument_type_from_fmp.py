@@ -5,6 +5,7 @@ tracked_companies.instrument_type NULL, tripping onboard_pending_tickers'
 `no_instrument_type` reason forever. set_instrument_type_from_fmp classifies it
 from the cached FMP profile, but only when NULL so curated values aren't lost.
 """
+
 from __future__ import annotations
 
 import json
@@ -71,9 +72,7 @@ def _write_profile(project_root: Path, ticker: str, **flags: object) -> None:
     fmp_dir = project_root / "data" / "historical" / "fmp"
     fmp_dir.mkdir(parents=True, exist_ok=True)
     record = {"symbol": ticker, "companyName": f"{ticker} Inc", **flags}
-    (fmp_dir / f"{ticker}_profile.json").write_text(
-        json.dumps([record]), encoding="utf-8"
-    )
+    (fmp_dir / f"{ticker}_profile.json").write_text(json.dumps([record]), encoding="utf-8")
 
 
 def _open(db_path: Path) -> sqlite3.Connection:

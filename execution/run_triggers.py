@@ -151,9 +151,7 @@ def _load_portfolio_tickers(db_path: Path) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def _load_dismissed_signatures(
-    db_path: Path, *, user_id: str, lookback_days: int
-) -> set[str]:
+def _load_dismissed_signatures(db_path: Path, *, user_id: str, lookback_days: int) -> set[str]:
     """Set of ``signature_sha`` values the user has dismissed recently.
 
     Used to seed ``UserStateContext.recent_dismissed_signatures`` so
@@ -184,9 +182,7 @@ def _load_dismissed_signatures(
         conn.close()
 
 
-def _compose_user_state(
-    db_path: Path, *, user_id: str, ticker: str
-) -> UserStateContext:
+def _compose_user_state(db_path: Path, *, user_id: str, ticker: str) -> UserStateContext:
     """Snapshot the user-stated thesis state for ``ticker``.
 
     Best-effort: if the user_state tables are absent the snapshot
@@ -253,8 +249,7 @@ def query_run_cost_usd(db_path: Path, run_started_at: datetime) -> Decimal:
             if "llm_calls" not in tables:
                 return Decimal("0")
             row = conn.execute(
-                "SELECT COALESCE(SUM(cost_estimate_usd), 0.0) FROM llm_calls "
-                "WHERE called_at >= ?",
+                "SELECT COALESCE(SUM(cost_estimate_usd), 0.0) FROM llm_calls WHERE called_at >= ?",
                 (threshold,),
             ).fetchone()
         finally:
@@ -288,10 +283,7 @@ def _select_triggers(names: list[str] | None) -> list[type[Trigger]]:
     for name in names:
         cls = by_kind.get(name)
         if cls is None:
-            raise ValueError(
-                f"unknown trigger kind: {name!r}. "
-                f"Available: {sorted(by_kind)}"
-            )
+            raise ValueError(f"unknown trigger kind: {name!r}. Available: {sorted(by_kind)}")
         out.append(cls)
     return out
 
@@ -370,9 +362,7 @@ def _process_candidate(
     key_evidence = trigger.signature_key_evidence(candidate)
     signature_sha = compute_signature_sha(trigger.kind, ticker, key_evidence)
 
-    existing = find_by_signature(
-        user_id=user_id, signature_sha=signature_sha, db_path=db_path
-    )
+    existing = find_by_signature(user_id=user_id, signature_sha=signature_sha, db_path=db_path)
     if existing is not None:
         _emit(
             {
@@ -664,9 +654,7 @@ def main(argv: list[str] | None = None) -> int:
     db_path = resolve_db_path(args.db_path)
 
     ticker_list = _split_csv(args.tickers)
-    tickers = (
-        _load_portfolio_tickers(db_path) if ticker_list is None else ticker_list
-    )
+    tickers = _load_portfolio_tickers(db_path) if ticker_list is None else ticker_list
 
     trigger_names = _split_triggers(args.triggers)
     trigger_classes = _select_triggers(trigger_names)

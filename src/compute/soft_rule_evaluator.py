@@ -187,9 +187,7 @@ def _fetch_series(
     try:
         rows = conn.execute(sql, params).fetchall()
     except sqlite3.Error as exc:
-        log.warning(
-            {"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)}
-        )
+        log.warning({"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)})
         return []
     out: list[tuple[datetime, float]] = []
     for row in rows:
@@ -320,15 +318,9 @@ def _eval_series_decel(
             f"{', '.join(f'{round(d)}bps' for _, d in decels)} "
             f"over last {periods} quarters (threshold {round(threshold_bps)}bps); "
             f"recent YoY {yoy[-1][1]:.1f}%"
-            + (
-                f" vs prior {yoy[-2][1]:.1f}%" if len(yoy) >= 2 else ""
-            )
+            + (f" vs prior {yoy[-2][1]:.1f}%" if len(yoy) >= 2 else "")
             + ("; FIRED" if fired else "; ok")
-            + (
-                f". prev_decel={round(second_decel[1])}bps"
-                if second_decel[0] is not None
-                else ""
-            )
+            + (f". prev_decel={round(second_decel[1])}bps" if second_decel[0] is not None else "")
         ),
     )
 
@@ -358,8 +350,10 @@ def _eval_series_threshold(
             ),
         )
     window = series[-periods:]
+
     def hit(v: float) -> bool:
         return v < threshold if direction == "below" else v > threshold
+
     fired = all(hit(v) for _, v in window)
     return _PredOutcome(
         fired=fired,
@@ -374,8 +368,7 @@ def _eval_series_threshold(
         },
         description=(
             f"{metric} {direction} {threshold:g} for {periods} consecutive Q "
-            f"(values: {', '.join(f'{v:g}' for _, v in window)})"
-            + ("; FIRED" if fired else "; ok")
+            f"(values: {', '.join(f'{v:g}' for _, v in window)})" + ("; FIRED" if fired else "; ok")
         ),
     )
 
@@ -429,8 +422,10 @@ def _eval_ratio_breach(
             ),
         )
     window = paired[-periods:]
+
     def hit(r: float) -> bool:
         return r < threshold if direction == "below" else r > threshold
+
     fired = all(hit(r) for _, r in window)
     return _PredOutcome(
         fired=fired,
@@ -477,9 +472,7 @@ def _metric_spec(raw: Any) -> tuple[str, FactSource]:
     raise ValueError(f"metric spec must be str or dict, got {type(raw).__name__}: {raw!r}")
 
 
-def _eval_compound(
-    conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
-) -> _PredOutcome:
+def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]) -> _PredOutcome:
     """AND / OR over child predicates."""
     op = str(_param(params, "op")).lower()
     if op not in ("and", "or"):

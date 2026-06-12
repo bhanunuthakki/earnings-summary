@@ -56,9 +56,7 @@ class FailureMode:
     refutation_criteria: str
 
 
-def materialize_predictions(
-    *, ticker: str, repo_root: Path, max_history: int = 8
-) -> int:
+def materialize_predictions(*, ticker: str, repo_root: Path, max_history: int = 8) -> int:
     """For every historical bear case for ticker, write its failure modes as
     rows in `predictions` (idempotent via predictions_store.record's natural key).
 
@@ -66,9 +64,7 @@ def materialize_predictions(
     """
     ticker = ticker.upper()
     db_path = repo_root / "data" / "portfolio.db"
-    bears = artifact_history(
-        ticker=ticker, purpose="bear_case", limit=max_history, db_path=db_path
-    )
+    bears = artifact_history(ticker=ticker, purpose="bear_case", limit=max_history, db_path=db_path)
     inserted = 0
     for art in bears:
         modes = _parse_failure_modes(art.content_md, art.content_json)
@@ -167,7 +163,7 @@ def _grade_one_prediction(
     """Single LLM grading call. Returns {outcome, confidence, notes}."""
     p = pred  # type: ignore[assignment]
     prompt = f"""You are grading a prior LLM-generated bear-case hypothesis for {ticker}
-against subsequent realized data. The hypothesis was made on {p.made_at.date().isoformat() if hasattr(p, 'made_at') and p.made_at else '?'}.
+against subsequent realized data. The hypothesis was made on {p.made_at.date().isoformat() if hasattr(p, "made_at") and p.made_at else "?"}.
 
 **The hypothesis (verbatim from the prior bear case):**
 {p.prediction_md}
@@ -175,13 +171,13 @@ against subsequent realized data. The hypothesis was made on {p.made_at.date().i
 **Subsequent data the grader can read against:**
 
 ## Recent earnings summary (most recent quarter)
-{corpus.get('latest_summary', '(none)')}
+{corpus.get("latest_summary", "(none)")}
 
 ## Recent financials (last 8Q)
-{corpus.get('financials', '(none)')}
+{corpus.get("financials", "(none)")}
 
 ## Recent insider activity (last 90d)
-{corpus.get('insiders', '(none)')}
+{corpus.get("insiders", "(none)")}
 
 **Your task:** read the hypothesis + the subsequent data and emit ONE
 JSON object with these fields. Return ONLY the JSON, no commentary:
@@ -232,9 +228,7 @@ Definitions:
             "notes": str(d.get("notes") or ""),
         }
     except json.JSONDecodeError:
-        log.warning(
-            {"event": "grader_parse_failed", "raw_head": raw[:200]}
-        )
+        log.warning({"event": "grader_parse_failed", "raw_head": raw[:200]})
         return None
 
 
@@ -288,7 +282,9 @@ def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
                 ):
                     val = r["transaction_value"]
                     val_str = (
-                        f"${float(val) / 1e6:.1f}M" if val and float(val) >= 1e6 else f"${float(val or 0) / 1e3:.0f}K"
+                        f"${float(val) / 1e6:.1f}M"
+                        if val and float(val) >= 1e6
+                        else f"${float(val or 0) / 1e3:.0f}K"
                     )
                     insider_lines.append(
                         f"- {str(r['transaction_date'])[:10]} · {r['insider_name']} "
@@ -298,9 +294,7 @@ def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
             conn.close()
 
     return {
-        "latest_summary": "\n\n".join(
-            f"### {q}\n{txt[:3000]}" for q, txt in summaries
-        )
+        "latest_summary": "\n\n".join(f"### {q}\n{txt[:3000]}" for q, txt in summaries)
         or "(no summaries)",
         "financials": "\n".join(fin_lines) or "(no financials)",
         "insiders": "\n".join(insider_lines) or "(no insiders)",

@@ -148,9 +148,7 @@ def seed_competitors(*, company_entity_id: int, competitor_names: list[str]) -> 
         if existing is not None:
             target = existing
         else:
-            target = upsert_entity(
-                kind="competitor", canonical_name=name, display_name=name
-            )
+            target = upsert_entity(kind="competitor", canonical_name=name, display_name=name)
             if target is None:
                 continue
             record_alias(entity_id=target, alias_text=name, alias_kind="manual")
@@ -361,9 +359,7 @@ def _resolve_segment_for_ticker(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root."
-    )
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Repo root.")
     parser.add_argument(
         "--backfill-only",
         action="store_true",

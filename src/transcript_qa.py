@@ -132,8 +132,7 @@ def validate_audio_transcript(path: Path) -> QaResult:
     timestamped = len(texts)
     if line_count > 0 and timestamped < line_count * AUDIO_MIN_TIMESTAMPED_FRACTION:
         issues.append(
-            f"timestamped {timestamped}/{line_count} "
-            f"< {AUDIO_MIN_TIMESTAMPED_FRACTION:.0%}"
+            f"timestamped {timestamped}/{line_count} < {AUDIO_MIN_TIMESTAMPED_FRACTION:.0%}"
         )
 
     duration = 0.0
@@ -143,9 +142,7 @@ def validate_audio_transcript(path: Path) -> QaResult:
     if timestamped > 0:
         duration = max(ends) - min(starts)
         if duration < AUDIO_MIN_DURATION_SEC:
-            issues.append(
-                f"duration_covered {duration:.0f}s < {AUDIO_MIN_DURATION_SEC}s"
-            )
+            issues.append(f"duration_covered {duration:.0f}s < {AUDIO_MIN_DURATION_SEC}s")
         words = sum(len(t.split()) for t in texts)
         wps = (words / duration) if duration > 0 else 0.0
         if wps < AUDIO_MIN_WORDS_PER_SECOND:

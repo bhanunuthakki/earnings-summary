@@ -59,9 +59,7 @@ def fake_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         index_manager, "DOCUMENT_INDEX_PATH", str(root / ".tmp" / "document_index.json")
     )
-    monkeypatch.setattr(
-        index_manager, "TRANSCRIPTS_RAW_DIR", str(root / "transcripts" / "raw")
-    )
+    monkeypatch.setattr(index_manager, "TRANSCRIPTS_RAW_DIR", str(root / "transcripts" / "raw"))
     monkeypatch.setattr(
         index_manager,
         "TRANSCRIPTS_PROCESSED_DIR",
@@ -153,9 +151,7 @@ def test_fresh_raw_ingest_moves_file_updates_db(
     assert db_path == "transcripts/processed/GOOG_Q1_2025.txt"
 
 
-def test_skipped_ingest_is_noop(
-    fake_project: Path, conn: sqlite3.Connection
-) -> None:
+def test_skipped_ingest_is_noop(fake_project: Path, conn: sqlite3.Connection) -> None:
     """`skipped_existing=True` means no fresh ingest — leave everything alone."""
     mod = _load_ingest_module()
 
@@ -177,18 +173,14 @@ def test_skipped_ingest_is_noop(
     assert db_path == "transcripts/raw/AMZN_Q2_2025.txt"
 
 
-def test_already_processed_file_is_noop(
-    fake_project: Path, conn: sqlite3.Connection
-) -> None:
+def test_already_processed_file_is_noop(fake_project: Path, conn: sqlite3.Connection) -> None:
     """File coming in from `processed/` already — nothing to promote."""
     mod = _load_ingest_module()
 
     processed_path = fake_project / "transcripts" / "processed" / "META_Q3_2024.txt"
     processed_path.write_text("processed-canonical", encoding="utf-8")
     sha = sha256_of(processed_path)
-    doc_id = _insert_doc(
-        conn, "META", "transcripts/processed/META_Q3_2024.txt", sha
-    )
+    doc_id = _insert_doc(conn, "META", "transcripts/processed/META_Q3_2024.txt", sha)
 
     new_path = mod._promote_raw_to_processed(
         _result(processed_path, doc_id=doc_id, ticker="META"),
@@ -263,9 +255,7 @@ def test_sha_mismatch_conflict_preserves_both_logs_event(
     assert new_path == raw_path
     assert raw_path.exists()
     assert processed_path.exists()
-    db_path = conn.execute(
-        "SELECT file_path FROM documents WHERE id = ?", (doc_id,)
-    ).fetchone()[0]
+    db_path = conn.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,)).fetchone()[0]
     assert db_path == "transcripts/raw/WIX_Q4_2025.txt"
 
     # Structured event emitted to stderr for investigation.
@@ -292,15 +282,15 @@ def test_index_entries_are_updated_after_promotion(
     # Seed both indexes with raw/ entries — the state a freshly-fetched file
     # would leave behind after fetch_qa_transcript ran.
     index_manager.register_transcript(
-        "GOOG", 2025, "Q1",
+        "GOOG",
+        2025,
+        "Q1",
         source="aggregator_roic",
         filepath="GOOG_Q1_2025.txt",  # canonicalizes to raw/ since the file is there
         has_qa=True,
     )
 
-    mod._promote_raw_to_processed(
-        _result(raw_path, doc_id=doc_id), _parsed(), conn, fake_project
-    )
+    mod._promote_raw_to_processed(_result(raw_path, doc_id=doc_id), _parsed(), conn, fake_project)
 
     t_entry = index_manager.has_transcript("GOOG", 2025, "Q1")
     assert t_entry is not None
@@ -413,7 +403,8 @@ def test_main_promotes_after_fresh_ingest(
             "Operator\n"
             "Good afternoon, and welcome to the GOOG Q1 2025 call.\n"
             "Sundar Pichai\n\nThanks, Jim. Hi, everyone. "
-            + "Lorem ipsum dolor sit amet. " * 200
+            + "Lorem ipsum dolor sit amet. "
+            * 200
             + "\n\n"
             "Anant Ashkenazi\n\nThanks, Sundar. Q1 revenue grew. "
             + "Consectetur adipiscing elit. " * 200

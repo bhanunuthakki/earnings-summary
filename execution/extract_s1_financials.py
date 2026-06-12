@@ -61,9 +61,7 @@ def _upsert_s1_document(
     source_url: str | None,
 ) -> tuple[int, bool]:
     """Find the S-1 document by sha256, else insert it. Returns (doc_id, created)."""
-    row = conn.execute(
-        "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)
-    ).fetchone()
+    row = conn.execute("SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)).fetchone()
     if row is not None:
         return int(row["id"]), False
 
@@ -124,7 +122,11 @@ def main() -> int:
     if s1_path is None:
         print(
             json.dumps(
-                {"ticker": ticker, "error": "no cached S-1 text found", "repo_root": str(repo_root)},
+                {
+                    "ticker": ticker,
+                    "error": "no cached S-1 text found",
+                    "repo_root": str(repo_root),
+                },
                 indent=2,
             )
         )
@@ -133,7 +135,16 @@ def main() -> int:
     text = s1_path.read_text(encoding="utf-8")
     data = parse_s1_text(text)
     if not data:
-        print(json.dumps({"ticker": ticker, "error": "parsed no financial facts from S-1", "s1_path": str(s1_path)}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "ticker": ticker,
+                    "error": "parsed no financial facts from S-1",
+                    "s1_path": str(s1_path),
+                },
+                indent=2,
+            )
+        )
         return 1
 
     periods = sorted({d.period_end for d in data})

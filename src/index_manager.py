@@ -44,6 +44,7 @@ VALID_DOC_TYPES = {
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _ensure_dir() -> None:
     os.makedirs(CACHE_DIR, exist_ok=True)
 
@@ -116,6 +117,7 @@ def _canonicalize_transcript_filepath(filepath: str | None) -> str | None:
 # Legacy transcript API (backward compatible)
 # ---------------------------------------------------------------------------
 
+
 def has_transcript(ticker: str, year, quarter: str) -> dict | None:
     """Returns the metadata dict if a transcript exists, else None."""
     index = _load(TRANSCRIPT_INDEX_PATH)
@@ -147,8 +149,12 @@ def register_transcript(
 
     # Preserve existing QA fields if caller didn't pass them — re-registering
     # for an unrelated reason (e.g. metadata fix) shouldn't blow away QA state.
-    updated_qa_status = qa_status if qa_status is not None else (existing.get("qa_status") if existing else None)
-    updated_qa_details = qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
+    updated_qa_status = (
+        qa_status if qa_status is not None else (existing.get("qa_status") if existing else None)
+    )
+    updated_qa_details = (
+        qa_details if qa_details is not None else (existing.get("qa_details") if existing else None)
+    )
 
     canonical_filepath = _canonicalize_transcript_filepath(filepath)
 
@@ -239,6 +245,7 @@ def update_local_path(
 # ---------------------------------------------------------------------------
 # New multi-doc-type API
 # ---------------------------------------------------------------------------
+
 
 def has_document(ticker: str, year, quarter: str, doc_type: str) -> dict | None:
     """Returns the metadata dict if a document exists in the index, else None."""
@@ -410,10 +417,9 @@ def get_unprocessed_events(ticker: str | None = None) -> list[dict]:
     """Return all registered but unprocessed event artifacts, optionally filtered by ticker."""
     index = _load(DOCUMENT_INDEX_PATH)
     result = [
-        v for v in index.values()
-        if v.get("doc_type") == "event"
-        and not v.get("processed")
-        and v.get("local_path")
+        v
+        for v in index.values()
+        if v.get("doc_type") == "event" and not v.get("processed") and v.get("local_path")
     ]
     if ticker:
         ticker = resolve_ticker(ticker).upper()
@@ -484,10 +490,9 @@ def get_unprocessed_documents(ticker: str | None = None) -> list[dict]:
     """
     index = _load(DOCUMENT_INDEX_PATH)
     result = [
-        v for v in index.values()
-        if v.get("doc_type") != "event"
-        and not v.get("processed")
-        and v.get("local_path")
+        v
+        for v in index.values()
+        if v.get("doc_type") != "event" and not v.get("processed") and v.get("local_path")
     ]
     if ticker:
         ticker = resolve_ticker(ticker).upper()

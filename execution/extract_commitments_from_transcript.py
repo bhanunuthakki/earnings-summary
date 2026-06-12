@@ -96,9 +96,7 @@ def _resolve_auto_targets(
     --transcript-id wins; otherwise pull the pending list (optionally filtered
     by --ticker) and cap at --max."""
     if transcript_id is not None:
-        cur = conn.execute(
-            "SELECT id, ticker FROM transcripts WHERE id = ?", (transcript_id,)
-        )
+        cur = conn.execute("SELECT id, ticker FROM transcripts WHERE id = ?", (transcript_id,))
         row = cur.fetchone()
         if row is None:
             return []
@@ -120,18 +118,14 @@ def _run_auto(
     dry_run: bool,
 ) -> dict[str, object]:
     """Auto-extract for each target. Returns a structured run report."""
-    targets = _resolve_auto_targets(
-        conn, ticker=ticker, transcript_id=transcript_id, max_n=max_n
-    )
+    targets = _resolve_auto_targets(conn, ticker=ticker, transcript_id=transcript_id, max_n=max_n)
     results: list[dict[str, object]] = []
     total_inserted = 0
     for tid, tk in targets:
         try:
             manifest = extract_for_transcript(conn, tid, llm_call=_call_claude)
         except Exception as e:  # noqa: BLE001 — surface in report rather than abort
-            log.warning(
-                "extract failed for transcript_id=%d ticker=%s: %s", tid, tk, e
-            )
+            log.warning("extract failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
             results.append(
                 {
                     "transcript_id": tid,
@@ -184,9 +178,7 @@ def main() -> int:
         action="store_true",
         help="Auto-extract via LLM for every transcript with no commitments yet",
     )
-    parser.add_argument(
-        "--ticker", help="Restrict --list-pending or --auto to one ticker"
-    )
+    parser.add_argument("--ticker", help="Restrict --list-pending or --auto to one ticker")
     parser.add_argument(
         "--transcript-id",
         type=int,

@@ -85,9 +85,7 @@ def build_dashboard_rows(
     return grouped
 
 
-def _build_one_row(
-    conn: sqlite3.Connection, repo_root: Path, company: Company
-) -> DashboardRow:
+def _build_one_row(conn: sqlite3.Connection, repo_root: Path, company: Company) -> DashboardRow:
     return DashboardRow(
         ticker=company.ticker,
         list_type=company.list_type.value,
@@ -109,8 +107,7 @@ def _last_fmp_pulled_for(conn: sqlite3.Connection, ticker: str) -> str | None:
     fiscal-period in the fetched payload (often a forward quarter).
     """
     cur = conn.execute(
-        "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status "
-        "WHERE ticker = ?",
+        "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status WHERE ticker = ?",
         (ticker.upper(),),
     )
     row = cur.fetchone()
@@ -120,9 +117,7 @@ def _last_fmp_pulled_for(conn: sqlite3.Connection, ticker: str) -> str | None:
     return str(value) if value else None
 
 
-def _last_transcript_for(
-    conn: sqlite3.Connection, ticker: str
-) -> TranscriptStatus | None:
+def _last_transcript_for(conn: sqlite3.Connection, ticker: str) -> TranscriptStatus | None:
     cur = conn.execute(
         "SELECT period_end, has_qa_section, call_date FROM transcripts "
         "WHERE ticker = ? AND period_end IS NOT NULL "

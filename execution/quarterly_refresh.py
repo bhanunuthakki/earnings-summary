@@ -140,20 +140,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to a single ticker")
     parser.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Emit the full report as JSON (default: human-readable table)",
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print the planned ticker scope and exit; make no DB changes",
     )
     parser.add_argument(
-        "--fetch-sec", action="store_true",
+        "--fetch-sec",
+        action="store_true",
         help="Opt-in: hit SEC companyfacts API at the start of each ticker's DAG. "
         "Default off so the cron stays network-free.",
     )
     parser.add_argument(
-        "--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"),
+        "--db",
+        default=str(PROJECT_ROOT / "data" / "portfolio.db"),
     )
     args = parser.parse_args()
 
@@ -169,15 +173,19 @@ def main() -> int:
 
         run_id = start_run(conn, directive="quarterly_refresh", ticker_scope=tickers)
         report = refresh_portfolio(
-            conn, tickers=tickers, project_root=PROJECT_ROOT,
-            holdings_dir=_HOLDINGS_DIR, run_id=run_id, fetch_sec=args.fetch_sec,
+            conn,
+            tickers=tickers,
+            project_root=PROJECT_ROOT,
+            holdings_dir=_HOLDINGS_DIR,
+            run_id=run_id,
+            fetch_sec=args.fetch_sec,
         )
         any_failed = any(
-            stage.status is RefreshStageStatus.FAILED
-            for t in report.tickers for stage in t.stages
+            stage.status is RefreshStageStatus.FAILED for t in report.tickers for stage in t.stages
         )
         end_run(
-            conn, run_id,
+            conn,
+            run_id,
             RunStageStatus.OK if not any_failed else RunStageStatus.FAILED,
             error_summary="one or more stages failed" if any_failed else None,
         )

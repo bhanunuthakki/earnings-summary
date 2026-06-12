@@ -53,7 +53,9 @@ TMP_DIR = PROJECT_ROOT / ".tmp"
 
 # Filename: <TICKER>_Q<N>_<YEAR>.txt — strict, ticker must match alias rules.
 TRANSCRIPT_FNAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.\-]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.txt$")
-AUDIO_FNAME_RE = re.compile(r"^temp_audio_(?P<ticker>[A-Z][A-Z0-9.\-]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.[A-Za-z0-9]+$")
+AUDIO_FNAME_RE = re.compile(
+    r"^temp_audio_(?P<ticker>[A-Z][A-Z0-9.\-]*)_Q(?P<q>[1-4])_(?P<y>\d{4})\.[A-Za-z0-9]+$"
+)
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,9 @@ def _run_qa(refs: list[TranscriptRef], rerun_all: bool) -> dict[str, int]:
             # File on disk but unindexed — register a stub so update_transcript_qa
             # has a row to write to.
             index_manager.register_transcript(
-                ref.ticker, ref.year, ref.qlabel,
+                ref.ticker,
+                ref.year,
+                ref.qlabel,
                 source="unknown_legacy",
                 filepath=ref.path.name,
                 has_qa=None,
@@ -106,7 +110,10 @@ def _run_qa(refs: list[TranscriptRef], rerun_all: bool) -> dict[str, int]:
             counts["registered_new"] += 1
 
         if entry is None:  # defensive — register failed
-            print(f"[qa-error] could not register {ref.ticker} {ref.qlabel} {ref.year}", file=sys.stderr)
+            print(
+                f"[qa-error] could not register {ref.ticker} {ref.qlabel} {ref.year}",
+                file=sys.stderr,
+            )
             continue
 
         prior_status = entry.get("qa_status")
@@ -116,7 +123,9 @@ def _run_qa(refs: list[TranscriptRef], rerun_all: bool) -> dict[str, int]:
 
         result = validate_transcript(ref.path, entry.get("source") or "unknown_legacy")
         index_manager.update_transcript_qa(
-            ref.ticker, ref.year, ref.qlabel,
+            ref.ticker,
+            ref.year,
+            ref.qlabel,
             qa_status=result.status.value,
             qa_details=result.model_dump(mode="json"),
         )
@@ -156,13 +165,17 @@ def _clean_orphan_audio(ticker_filter: str | None) -> tuple[int, int]:
             print(f"[clean] removed orphan audio {p.name} (qa=ok)")
             deleted += 1
         else:
-            print(f"[keep] {p.name} (qa={qa_status or '<not-set>'}) — transcript not validated, audio kept for retry")
+            print(
+                f"[keep] {p.name} (qa={qa_status or '<not-set>'}) — transcript not validated, audio kept for retry"
+            )
             kept += 1
     return (deleted, kept)
 
 
 def _report(refs: list[TranscriptRef]) -> None:
-    print(f"{'TICKER':6s} {'PERIOD':10s} {'SOURCE':22s} {'QA':6s} {'SIZE':>8s} {'LINES':>6s} ISSUES")
+    print(
+        f"{'TICKER':6s} {'PERIOD':10s} {'SOURCE':22s} {'QA':6s} {'SIZE':>8s} {'LINES':>6s} ISSUES"
+    )
     print("-" * 85)
     for ref in refs:
         entry = index_manager.has_transcript(ref.ticker, ref.year, ref.qlabel)
@@ -172,7 +185,7 @@ def _report(refs: list[TranscriptRef]) -> None:
         details = entry.get("qa_details") or {}
         issues = details.get("issues") or []
         print(
-            f"{ref.ticker:6s} {ref.qlabel} {ref.year}   {entry.get('source','?'):22s} "
+            f"{ref.ticker:6s} {ref.qlabel} {ref.year}   {entry.get('source', '?'):22s} "
             f"{(entry.get('qa_status') or '?'):6s} "
             f"{details.get('file_size_bytes', 0):>8} "
             f"{details.get('line_count', 0):>6} "
@@ -184,14 +197,24 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="QA validation + audio-cache cleanup for transcripts/raw/."
     )
-    parser.add_argument("--backfill", action="store_true",
-                        help="Run QA on transcripts that have no recorded qa_status.")
-    parser.add_argument("--rerun-all", action="store_true",
-                        help="Re-validate every transcript regardless of prior status.")
-    parser.add_argument("--clean-orphan-audio", action="store_true",
-                        help="Delete .tmp/temp_audio_*.* whose transcript is qa=ok.")
-    parser.add_argument("--report", action="store_true",
-                        help="Print a status table of every indexed transcript.")
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Run QA on transcripts that have no recorded qa_status.",
+    )
+    parser.add_argument(
+        "--rerun-all",
+        action="store_true",
+        help="Re-validate every transcript regardless of prior status.",
+    )
+    parser.add_argument(
+        "--clean-orphan-audio",
+        action="store_true",
+        help="Delete .tmp/temp_audio_*.* whose transcript is qa=ok.",
+    )
+    parser.add_argument(
+        "--report", action="store_true", help="Print a status table of every indexed transcript."
+    )
     parser.add_argument("--ticker", help="Restrict all modes to this ticker.")
     args = parser.parse_args()
 
@@ -201,8 +224,10 @@ def main() -> None:
         args.clean_orphan_audio = True
 
     refs = _scan_transcripts(args.ticker)
-    print(f"[scan] {len(refs)} transcript file(s) in {RAW_DIR.relative_to(PROJECT_ROOT)}"
-          + (f" (ticker={args.ticker})" if args.ticker else ""))
+    print(
+        f"[scan] {len(refs)} transcript file(s) in {RAW_DIR.relative_to(PROJECT_ROOT)}"
+        + (f" (ticker={args.ticker})" if args.ticker else "")
+    )
 
     if args.backfill or args.rerun_all:
         counts = _run_qa(refs, rerun_all=args.rerun_all)

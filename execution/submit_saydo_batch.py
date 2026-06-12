@@ -115,10 +115,12 @@ def main() -> int:
     jsonl_path = args.jsonl.resolve() if args.jsonl else _find_latest_jsonl(repo_root)
     if jsonl_path is None or not jsonl_path.exists():
         print(
-            json.dumps({
-                "error": "no_jsonl_found",
-                "looked_in": str((repo_root / ".tmp" / "saydo_batch").resolve()),
-            }),
+            json.dumps(
+                {
+                    "error": "no_jsonl_found",
+                    "looked_in": str((repo_root / ".tmp" / "saydo_batch").resolve()),
+                }
+            ),
             file=sys.stderr,
         )
         return 1
@@ -254,9 +256,7 @@ def submit_and_collect(
         file=sys.stderr,
     )
 
-    final_batch = _poll_until_ended(
-        client, batch_id, sleep=sleep, poll_backoff=poll_backoff
-    )
+    final_batch = _poll_until_ended(client, batch_id, sleep=sleep, poll_backoff=poll_backoff)
 
     counts = _write_results(
         client,
@@ -303,9 +303,7 @@ def _load_jsonl(path: Path) -> list[dict[str, object]]:
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"{path}:{i} malformed JSON: {exc}"
-                ) from exc
+                raise ValueError(f"{path}:{i} malformed JSON: {exc}") from exc
             if not isinstance(row, dict):
                 raise ValueError(f"{path}:{i} expected JSON object, got {type(row).__name__}")
             row_typed = cast("dict[str, object]", row)
@@ -350,9 +348,7 @@ def _estimate_input_cost_usd(n_requests: int) -> Decimal:
     return Decimal(str(discounted * INPUT_PRICE_PER_TOKEN)).quantize(Decimal("0.0001"))
 
 
-def _check_cost_gate(
-    n_requests: int, *, repo_root: Path, now: datetime
-) -> dict[str, object]:
+def _check_cost_gate(n_requests: int, *, repo_root: Path, now: datetime) -> dict[str, object]:
     """Decide whether the projected batch cost would push pairwise_analysis
     over its monthly cap. Returns a dict; `allowed=False` halts submission.
 
@@ -507,11 +503,13 @@ def _write_results(
         elif result_type == "errored":
             counts["errored"] += 1
             err = getattr(result, "error", None)
-            error_records.append({
-                "custom_id": cid,
-                "type": "errored",
-                "error": _coerce_to_dict(err),
-            })
+            error_records.append(
+                {
+                    "custom_id": cid,
+                    "type": "errored",
+                    "error": _coerce_to_dict(err),
+                }
+            )
         elif result_type == "expired":
             counts["expired"] += 1
             error_records.append({"custom_id": cid, "type": "expired"})
@@ -520,17 +518,17 @@ def _write_results(
             error_records.append({"custom_id": cid, "type": "canceled"})
         else:
             # Unknown variant — record without crashing.
-            error_records.append({
-                "custom_id": cid,
-                "type": f"unknown:{result_type}",
-            })
+            error_records.append(
+                {
+                    "custom_id": cid,
+                    "type": f"unknown:{result_type}",
+                }
+            )
 
     if error_records:
         batch_dir.mkdir(parents=True, exist_ok=True)
         errors_path = batch_dir / f"errors_{batch_id}.json"
-        errors_path.write_text(
-            json.dumps(error_records, indent=2, default=str), encoding="utf-8"
-        )
+        errors_path.write_text(json.dumps(error_records, indent=2, default=str), encoding="utf-8")
 
     return {
         "succeeded": counts["succeeded"],
@@ -588,7 +586,10 @@ def _record_batched_call(
     cost_float = _batched_cost_usd(input_tokens, output_tokens)
 
     params = cast("dict[str, object]", request.get("params", {})) if request else {}
-    model = cast("str", message.model if hasattr(message, "model") else params.get("model", "")) or "unknown"
+    model = (
+        cast("str", message.model if hasattr(message, "model") else params.get("model", ""))
+        or "unknown"
+    )
     prompt_text = _prompt_text_from_params(params)
 
     ticker = _ticker_from_custom_id(custom_id)
@@ -621,8 +622,7 @@ def _batched_cost_usd(input_tokens: int, output_tokens: int) -> float:
     """Cost at the 50% batch tier, computed locally — the SDK does not
     surface a per-result total_cost_usd on batched messages."""
     return (
-        input_tokens * INPUT_PRICE_PER_TOKEN
-        + output_tokens * OUTPUT_PRICE_PER_TOKEN
+        input_tokens * INPUT_PRICE_PER_TOKEN + output_tokens * OUTPUT_PRICE_PER_TOKEN
     ) * BATCH_DISCOUNT
 
 

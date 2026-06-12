@@ -86,8 +86,7 @@ def _resolve_tickers(arg_ticker: str | None) -> list[str]:
     try:
         if arg_ticker:
             cur = conn.execute(
-                "SELECT ticker FROM tracked_companies "
-                "WHERE ticker = ? AND archived_at IS NULL",
+                "SELECT ticker FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
                 (arg_ticker.upper(),),
             )
         else:
@@ -168,7 +167,7 @@ def main() -> int:
         type=int,
         default=_DEFAULT_LOOKBACK,
         help=f"Keep the most recent N reported quarters per ticker (default {_DEFAULT_LOOKBACK}, "
-             f"0 = keep all source history)",
+        f"0 = keep all source history)",
     )
     p.add_argument("--dry-run", action="store_true", help="Plan only — do not write files")
     p.add_argument(
@@ -176,7 +175,7 @@ def main() -> int:
         type=Path,
         default=PROJECT_ROOT,
         help="Repo root containing data/. Default: this repo. Worktree-based runs "
-             "should pass the main repo path.",
+        "should pass the main repo path.",
     )
     args = p.parse_args()
 

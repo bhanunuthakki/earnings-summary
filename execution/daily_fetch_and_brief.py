@@ -77,11 +77,7 @@ def main() -> int:
     tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, args)
 
     if skipped_by_tier:
-        print(
-            json.dumps(
-                {"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}
-            )
-        )
+        print(json.dumps({"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}))
 
     if not tickers:
         print(json.dumps({"event": "no_dirty_tickers"}))
@@ -151,7 +147,9 @@ def _parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--ticker", help="Force-refresh a specific ticker, ignoring brief_dirty + bypassing gates")
+    g.add_argument(
+        "--ticker", help="Force-refresh a specific ticker, ignoring brief_dirty + bypassing gates"
+    )
     g.add_argument(
         "--all-tracked", action="store_true", help="Refresh every tracked ticker (heavy)"
     )
@@ -346,14 +344,14 @@ def _check_skip_gates(
     if list_type == "evaluation" and last_built_at is not None:
         age = now - last_built_at
         if age < timedelta(days=eval_cadence_days):
-            return (True, f"evaluation_cadence (age={age.days}d < {eval_cadence_days}d)", current_hash)
+            return (
+                True,
+                f"evaluation_cadence (age={age.days}d < {eval_cadence_days}d)",
+                current_hash,
+            )
 
     # Gate B: material-change — if hash matches AND build is fresh, skip
-    if (
-        last_brief_hash
-        and current_hash == last_brief_hash
-        and last_built_at is not None
-    ):
+    if last_brief_hash and current_hash == last_brief_hash and last_built_at is not None:
         age = now - last_built_at
         if age < timedelta(days=no_change_ttl_days):
             return (True, f"no_material_change (age={age.days}d, hash matches)", current_hash)
@@ -361,9 +359,7 @@ def _check_skip_gates(
     return (False, None, current_hash)
 
 
-def _record_skip(
-    db_path: Path, ticker: str, current_hash: str, reason: str
-) -> None:
+def _record_skip(db_path: Path, ticker: str, current_hash: str, reason: str) -> None:
     """On gate skip: clear brief_dirty + record last_built_at + last_brief_hash.
 
     Clearing the dirty flag is intentional — the gate is saying "nothing new to
@@ -458,11 +454,14 @@ def _refresh_one_ticker(
     )
     if flipped:
         sys.stderr.write(
-            json.dumps({
-                "event": "llm_artifacts_marked_dirty",
-                "ticker": ticker,
-                "count": flipped,
-            }) + "\n"
+            json.dumps(
+                {
+                    "event": "llm_artifacts_marked_dirty",
+                    "ticker": ticker,
+                    "count": flipped,
+                }
+            )
+            + "\n"
         )
 
     build_cmd = [
