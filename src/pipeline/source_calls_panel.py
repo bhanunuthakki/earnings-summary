@@ -41,14 +41,15 @@ _PANEL_STYLE = """<style>
 
 def render_source_calls_panel(db_path: Path) -> str:
     """The Data Cache tab fragment: a cache-effectiveness KPI strip + a
-    per-(source, kind) table. Degrades to an empty-state when nothing is logged."""
+    per-(source, kind) table, followed by the shell's panel-latency readout
+    (S14). Degrades to an empty-state when nothing is logged."""
     ov = cache_effectiveness_overview(db_path=db_path)
     if ov.total_calls == 0:
         return (
-            '<section class="panel"><h2>Data fetch cache</h2>'
+            _PANEL_STYLE + '<section class="panel"><h2>Data fetch cache</h2>'
             '<p class="muted">No source-call rows yet. Adapters in <code>src/sources/</code> '
             "log to <code>source_calls</code> on every fetch attempt; the table fills as the "
-            "daily jobs run.</p></section>"
+            "daily jobs run.</p></section>" + _PANEL_LATENCY_SECTION
         )
     return "".join(
         [
@@ -61,8 +62,57 @@ def render_source_calls_panel(db_path: Path) -> str:
             _source_table(ov.by_source),
             _note(ov),
             "</section>",
+            _PANEL_LATENCY_SECTION,
         ]
     )
+
+
+# Shell panel-latency readout (S14): the loader in command_center_shell.py
+# POSTs one sample per panel activation/refresh to /api/metrics/panel; this
+# section reads the GET aggregate back. Client-rendered by the fragment's own
+# script (re-executed on every injection — the shell's injectHtml recreates
+# script tags), so the section needs no server-side plumbing beyond the route.
+_PANEL_LATENCY_SECTION = """<section class="panel" id="sc-panel-latency">
+<h2>Panel latency</h2>
+<p class="sub">What tab activations actually cost, as measured by the shell loader:
+<code>cold</code> = first build over the network, <code>swr</code> /
+<code>prefetch</code> = painted from the session cache, <code>revalidate</code> =
+the background refresh behind a cached paint (304 = unchanged). In-memory ring —
+resets with the server.</p>
+<div id="sc-lat-body"><div class="cc-loading">Loading…</div></div>
+<script>
+(function () {
+  var holder = document.getElementById('sc-lat-body');
+  if (!holder) return;
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function ms(x) { return x == null ? '—' : x + ' ms'; }
+  fetch('/api/metrics/panel').then(function (r) { return r.json(); }).then(function (j) {
+    var rows = (j && j.rows) || [];
+    if (!rows.length) {
+      holder.innerHTML = '<p class="muted">No samples yet this server run — ' +
+        'switch a few tabs, then reopen this panel.</p>';
+      return;
+    }
+    var head = '<p class="sub">Perceived activation p50 <strong>' + esc(ms(j.perceived_p50_ms)) +
+      '</strong> · p95 <strong>' + esc(ms(j.perceived_p95_ms)) + '</strong> over ' +
+      esc(j.samples) + ' samples (revalidations excluded).</p>';
+    var html = '<table class="sc-table"><thead><tr><th>Panel</th><th>Path</th>' +
+      '<th class="num">Loads</th><th class="num">p50 ms</th><th class="num">p95 ms</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      html += '<tr><td class="src">' + esc(r.panel) + '</td><td>' + esc(r.cache) + '</td>' +
+        '<td class="num">' + esc(r.n) + '</td><td class="num">' + esc(r.p50_ms) + '</td>' +
+        '<td class="num">' + esc(r.p95_ms) + '</td></tr>';
+    });
+    holder.innerHTML = head + html + '</tbody></table>';
+  }).catch(function () {
+    holder.innerHTML = '<p class="muted">Metrics endpoint unavailable.</p>';
+  });
+})();
+</script>
+</section>"""
 
 
 def _pct(x: float) -> str:

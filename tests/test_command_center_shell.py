@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from pipeline.command_center_shell import (
     _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]  # keep-in-sync contract under test
     _SETTINGS_DRAWER_HTML,  # pyright: ignore[reportPrivateUsage]  # collapsed-by-default contract
+    _SKELETON_KINDS,  # pyright: ignore[reportPrivateUsage]  # skeleton coverage contract
+    _THEMES,  # pyright: ignore[reportPrivateUsage]  # skeleton coverage contract
     SHELL_CSS,
     SHELL_JS,
     render_overview_panel,
@@ -363,6 +365,67 @@ def test_content_width_is_wide() -> None:
     shell now flows to 1600."""
     assert "max-width: 1600px" in SHELL_CSS
     assert "max-width: 1280px" not in SHELL_CSS
+
+
+def test_lazy_panels_ship_structured_skeletons() -> None:
+    """S14: every lazy panel's placeholder is shaped like its content — the
+    kind map covers every lazy sub-tab, the placeholders render (aria-hidden)
+    in the initial document, and the generic Loading… stub is gone from
+    panel bodies (drawers/peek keep it — small surfaces)."""
+    lazy_ids = {t[0] for _tid, _lbl, subs in _THEMES for t in subs if t[0] != "overview"}
+    assert set(_SKELETON_KINDS) == lazy_ids
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    # One skeleton per lazy panel, none inside the inlined Overview.
+    assert html.count('class="cc-skel"') == len(lazy_ids)
+    assert 'aria-hidden="true"' in html
+    # Shaped placeholders: the Holding embed, KPI-strip panels, table panels,
+    # the Ask builder, and card surfaces each get their own anatomy.
+    for kind in ("band", "kpis", "table", "form", "cards"):
+        assert f'data-skel="{kind}"' in html
+    # No generic loading stub left in any panel body.
+    assert '<div class="cc-panel-body"><div class="cc-loading">' not in html
+    # Skeleton CSS rides the shell sheet, honoring reduced-motion.
+    assert ".cc-skel-row" in SHELL_CSS
+    assert "prefers-reduced-motion" in SHELL_CSS
+
+
+def test_shell_js_swr_cache_and_revalidation() -> None:
+    """S14: the loader paints cached fragments instantly and revalidates in
+    the background — sessionStorage entries under cc:v1:panel:*, conditional
+    refetch via If-None-Match, quiet swap that preserves scroll and never
+    fires while the user is typing inside the panel."""
+    assert "'cc:v1:panel:'" in SHELL_JS
+    assert "'If-None-Match'" in SHELL_JS
+    assert "304" in SHELL_JS
+    # The boot pass captures the server-rendered skeletons for cold re-loads.
+    assert "SKEL[p.getAttribute('data-panel')]" in SHELL_JS
+    # Quiet-swap guards: active typing + scroll restoration.
+    assert "document.activeElement" in SHELL_JS
+    assert "window.scrollY" in SHELL_JS
+    # Quota pressure evicts panel entries rather than throwing.
+    assert "sessionStorage.removeItem(k)" in SHELL_JS
+
+
+def test_shell_js_prefetch_and_warm_start() -> None:
+    """S14: hover on a section/sub-tab button warms its landing panel; after
+    first paint an idle pass warms Portfolio (the tracker round-trip) and Ask.
+    In-flight fetches are shared so activation never double-fetches."""
+    assert "function prefetchPanel" in SHELL_JS
+    assert "'.cc-theme-tab, .cc-tab[data-tab-target]'" in SHELL_JS
+    assert "WARM_PANELS = ['portfolio', 'explore']" in SHELL_JS
+    assert "requestIdleCallback" in SHELL_JS
+    assert "INFLIGHT" in SHELL_JS
+
+
+def test_shell_js_instruments_panel_timings() -> None:
+    """S14: each activation/refresh records which path served it + the
+    fetch/render split, ringed on window.CCPerf and POSTed fire-and-forget
+    to /api/metrics/panel (read back in System → Data Cache)."""
+    assert "window.CCPerf" in SHELL_JS
+    assert "'/api/metrics/panel'" in SHELL_JS
+    assert "keepalive: true" in SHELL_JS
+    for mode in ("'cold'", "'swr'", "'prefetch'", "'revalidate'"):
+        assert mode in SHELL_JS
 
 
 def test_ask_dock_is_persistent_shell_chrome() -> None:
