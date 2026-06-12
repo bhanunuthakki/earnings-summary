@@ -48,7 +48,8 @@ def compute_growth(values: list[float | None]) -> GrowthMetrics:
     """Compute QoQ, YoY, 1Y-TTM CAGR, 3Y-TTM CAGR from a chronological series.
 
     `values` is ordered oldest → newest. Returns Nones for any metric whose
-    inputs are missing or non-positive (CAGR requires positive endpoints).
+    inputs are missing or whose endpoints straddle zero (CAGR needs
+    sign-stable endpoints; an all-negative series like capex uses magnitudes).
     """
     if not values:
         return GrowthMetrics()
@@ -70,14 +71,22 @@ def _safe_growth(curr: float | None, base: float | None) -> float | None:
     return curr / base - 1.0
 
 
-def _ttm_cagr(values: list[float | None], end_offset: int, base_offset: int, years: int) -> float | None:
+def _ttm_cagr(
+    values: list[float | None], end_offset: int, base_offset: int, years: int
+) -> float | None:
     """TTM CAGR. end_offset/base_offset are quarters back from the most recent.
 
     end_offset=0 → TTM(Q0..Q-3); base_offset=4 → TTM(Q-4..Q-7).
     """
     end_window = _ttm(values, end_offset)
     base_window = _ttm(values, base_offset)
-    if end_window is None or base_window is None or base_window <= 0 or end_window <= 0:
+    if end_window is None or base_window is None:
+        return None
+    if end_window < 0 and base_window < 0:
+        # Sign-stable negative series (capex): CAGR of the magnitude. A sign
+        # flip between the windows still returns None below.
+        end_window, base_window = -end_window, -base_window
+    if base_window <= 0 or end_window <= 0:
         return None
     return (end_window / base_window) ** (1 / years) - 1.0
 
