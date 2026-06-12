@@ -44,7 +44,7 @@ import os
 import sqlite3
 import subprocess
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -472,30 +472,29 @@ def _redesign_snapshot(
     return json.dumps(payload, indent=2)
 
 
-def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.RedesignInputs) -> bool:
-    """Mirror the workbook's edited numeric assumptions back into
-    ``data/dcf_assumptions/<T>.json["redesign"]`` — the from-scratch-build default.
+@dataclasses.dataclass(frozen=True)
+class SyncResult:
+    """Outcome of one workbook→assumptions-JSON sync. ``status`` is 'synced'
+    (existing block updated), 'created' (no JSON existed — one was created
+    from the workbook), or 'failed' (with ``detail``); persisted to
+    ``dcf_runs.assumptions_sync_status`` so a broken mirror is durable and
+    visible, not a bool lost in stdout."""
 
-    Without this, an ``import``/refresh preserves edits in the workbook + ``dcf_runs``
-    but leaves the JSON stale, so a ``build_all_redesigned_dcf`` (which builds purely
-    from the JSON) would silently revert them. Writing the numbers back keeps the JSON
-    a true source of truth. Updates ONLY the numeric assumption fields — segment growth,
-    op margins, tax, exit multiple/basis, terminal method/g, capex-da, and the WACC
-    drivers (beta/rf/ERP/cost-of-debt); the Opus ``narrative``/``reasoning`` and the model
-    flags (``dcf_applicable``/``business_model``/``valuation_model``) are left untouched.
-    Returns True when written, False when there is no assumptions file / redesign block.
-    """
-    path = repo_root / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
-    if not path.exists():
-        return False
-    try:
-        data = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, json.JSONDecodeError):
-        return False
-    block = data.get("redesign")
-    if not isinstance(block, dict):
-        return False
-    rd = cast("dict[str, object]", block)
+    status: str
+    detail: str | None = None
+
+    def as_status_text(self) -> str:
+        return f"{self.status}: {self.detail}" if self.detail else self.status
+
+
+def _apply_inputs_to_block(rd: dict[str, object], inp: redesign_mod.RedesignInputs) -> None:
+    """Write the workbook's numeric assumptions into a redesign block. Updates
+    ONLY the numeric fields — segment growth, op margins, tax, exit
+    multiple/basis, terminal method/g, capex-da, the WACC drivers
+    (beta/rf/ERP/cost-of-debt) and the scenario offsets; the Opus
+    ``narrative``/``reasoning``, the model flags (``dcf_applicable``/
+    ``business_model``/``valuation_model``) and the ``opus_baseline``
+    provenance snapshot are never touched."""
     rd["segments"] = {
         seg: {
             "near_term_growth": inp.near_growth_by_segment[seg],
@@ -519,11 +518,56 @@ def sync_assumptions_json(repo_root: Path, ticker: str, inp: redesign_mod.Redesi
     # Bull/Bear columns from this block) reproduces edited scenarios.
     rd["scenario_bull"] = dataclasses.asdict(inp.bull_deltas)
     rd["scenario_bear"] = dataclasses.asdict(inp.bear_deltas)
+
+
+def sync_assumptions_json(
+    repo_root: Path, ticker: str, inp: redesign_mod.RedesignInputs
+) -> SyncResult:
+    """Mirror the workbook's edited numeric assumptions back into
+    ``data/dcf_assumptions/<T>.json["redesign"]`` — the from-scratch-build default.
+
+    Without this, an ``import``/refresh preserves edits in the workbook + ``dcf_runs``
+    but leaves the JSON stale, so a ``build_all_redesigned_dcf`` (which builds purely
+    from the JSON) would silently revert them. The contract is LOUD in both
+    directions (no silent False):
+
+    * no assumptions file → one is **created** with a ``redesign`` block from the
+      workbook (``set_by: "sync"`` marks it as workbook-derived, not an Opus
+      pass), closing the revert hole for the ~43 workbooks that never had one;
+    * a file with no ``redesign`` block gets one (same marker);
+    * an unreadable file or a failed write returns ``failed`` with the detail —
+      the caller persists it to ``dcf_runs`` and warns on stderr.
+    """
+    path = repo_root / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
+    created = not path.exists()
+    data: dict[str, object] = {}
+    if not created:
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            return SyncResult("failed", f"unreadable assumptions JSON: {e}")
+        if not isinstance(raw, dict):
+            return SyncResult("failed", "assumptions JSON is not an object")
+        data = cast("dict[str, object]", raw)
+    block = data.get("redesign")
+    rd: dict[str, object]
+    if isinstance(block, dict):
+        rd = cast("dict[str, object]", block)
+    else:
+        if not created and block is not None:
+            return SyncResult("failed", "redesign key exists but is not an object")
+        # No block to sync into — create one from the workbook so a from-scratch
+        # build reproduces the user's current inputs instead of reverting them.
+        created = True
+        rd = {"set_by": "sync", "created_at": date.today().isoformat()}
+        data["redesign"] = rd
+    _apply_inputs_to_block(rd, inp)
     try:
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except OSError:
-        return False
-    return True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as e:
+        return SyncResult("failed", f"write failed: {e}")
+    return SyncResult("created" if created else "synced")
 
 
 def _refresh_redesign(
@@ -611,6 +655,15 @@ def _refresh_redesign(
 
     os.replace(tmp, dest)
 
+    # Mirror the now-deployed assumptions back to the from-scratch default so a
+    # build_all_redesigned_dcf can't silently revert user edits (single source of
+    # truth). A failure must not block the valuation refresh (the edits are
+    # already safe in the workbook + dcf_runs) but it is LOUD: persisted onto
+    # the dcf_runs row, surfaced in the result, and warned to stderr.
+    sync = sync_assumptions_json(repo_root, ticker, inp)
+    if sync.status == "failed":
+        sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
+
     holdings = _load_holdings(repo_root, ticker)
     mos_bar = holdings.get("mos_bar") if holdings else None
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
@@ -636,22 +689,18 @@ def _refresh_redesign(
         mos_bar_used=mos_bar_f,
         assumption_snapshot_json=_redesign_snapshot(rv, str(dest), scenarios=scenarios, inp=inp),
         notes=f"workbook={dest.name} (redesigned)",
+        assumptions_sync_status=sync.as_status_text(),
+        assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
     )
     with sqlite3.connect(str(db_path)) as conn:
         persist_mod.upsert(conn, row)
-
-    # Mirror the now-deployed assumptions back to the from-scratch default so a
-    # build_all_redesigned_dcf can't silently revert user edits (single source of
-    # truth). Best-effort: a sync-write failure must never fail the refresh — the
-    # edits are already preserved in the workbook + dcf_runs.
-    synced = sync_assumptions_json(repo_root, ticker, inp)
 
     return {
         "ticker": ticker,
         "status": "ok",
         "workbook": str(dest),
         "format": "redesign",
-        "assumptions_synced": synced,
+        "assumptions_sync": dataclasses.asdict(sync),
         "assumption_provenance": provenance,
         "valuation_year": valuation_year,
         "fair_value_per_share": fair_value,

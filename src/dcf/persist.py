@@ -37,6 +37,12 @@ class DcfRunRow:
     over_under_pct is deliberately absent — upsert() derives it from
     live_price + npv_per_share so no caller can persist a value that
     violates the documented ratio convention.
+
+    assumptions_sync_status / assumptions_synced_at (migration 0091) record
+    the workbook→assumptions-JSON sync outcome ('synced' / 'created' /
+    'failed: <detail>', naive-UTC stamp). Only the redesign refresh sets them;
+    the bespoke archetype builders (bank/holdco/fintech/platform) leave them
+    None, which persists as NULL = "no sync ran".
     """
 
     ticker: str
@@ -53,6 +59,8 @@ class DcfRunRow:
     assumption_snapshot_json: str
     notes: str | None = None
     run_id: str | None = None
+    assumptions_sync_status: str | None = None
+    assumptions_synced_at: datetime | None = None
 
 
 def derive_over_under(live_price: float | None, npv_per_share: float) -> float | None:
@@ -64,10 +72,51 @@ def derive_over_under(live_price: float | None, npv_per_share: float) -> float |
     return valuation.over_under_pct(live_price, npv_per_share)
 
 
+def _has_sync_columns(conn: sqlite3.Connection) -> bool:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    return "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
+
+
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
-    """INSERT-OR-REPLACE the dcf_runs row keyed by ticker."""
+    """INSERT-OR-REPLACE the dcf_runs row keyed by ticker.
+
+    A row carrying sync fields against a pre-0091 schema raises (loud, with
+    the fix) rather than dropping them — a silently-unpersisted sync status
+    would defeat the whole point of recording it. Rows WITHOUT sync fields
+    (the bespoke archetype builders) keep working on either schema.
+    """
+    has_sync = _has_sync_columns(conn)
+    if (row.assumptions_sync_status or row.assumptions_synced_at) and not has_sync:
+        raise sqlite3.OperationalError(
+            "dcf_runs is missing assumptions_sync_status/assumptions_synced_at — "
+            "run `alembic upgrade head` (migration 0091) before refreshing"
+        )
+    sync_cols = ", assumptions_sync_status, assumptions_synced_at" if has_sync else ""
+    sync_vals = ", :assumptions_sync_status, :assumptions_synced_at" if has_sync else ""
+    params: dict[str, object] = {
+        "ticker": row.ticker.upper(),
+        "valuation_date": row.valuation_date.isoformat(),
+        "horizon_years": row.horizon_years,
+        "wacc": row.wacc,
+        "npv": row.npv,
+        "npv_per_share": row.npv_per_share,
+        "shares_outstanding": row.shares_outstanding,
+        "currency": row.currency,
+        "notes": row.notes,
+        "run_id": row.run_id,
+        "live_price": row.live_price,
+        "live_price_at": row.live_price_at.isoformat() if row.live_price_at else None,
+        "over_under_pct": derive_over_under(row.live_price, row.npv_per_share),
+        "mos_bar_used": row.mos_bar_used,
+        "assumption_snapshot_json": row.assumption_snapshot_json,
+    }
+    if has_sync:
+        params["assumptions_sync_status"] = row.assumptions_sync_status
+        params["assumptions_synced_at"] = (
+            row.assumptions_synced_at.isoformat() if row.assumptions_synced_at else None
+        )
     conn.execute(
-        """
+        f"""
         INSERT OR REPLACE INTO dcf_runs (
             ticker, valuation_date, horizon_years,
             wacc, terminal_growth,
@@ -75,7 +124,7 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             currency, notes, run_id,
             live_price, live_price_at, over_under_pct,
             mos_bar_used, assumption_snapshot_json,
-            revenue_growths_json, fcf_margin
+            revenue_growths_json, fcf_margin{sync_cols}
         ) VALUES (
             :ticker, :valuation_date, :horizon_years,
             :wacc, 0,
@@ -83,26 +132,10 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             :currency, :notes, :run_id,
             :live_price, :live_price_at, :over_under_pct,
             :mos_bar_used, :assumption_snapshot_json,
-            '[]', 0
+            '[]', 0{sync_vals}
         )
         """,
-        {
-            "ticker": row.ticker.upper(),
-            "valuation_date": row.valuation_date.isoformat(),
-            "horizon_years": row.horizon_years,
-            "wacc": row.wacc,
-            "npv": row.npv,
-            "npv_per_share": row.npv_per_share,
-            "shares_outstanding": row.shares_outstanding,
-            "currency": row.currency,
-            "notes": row.notes,
-            "run_id": row.run_id,
-            "live_price": row.live_price,
-            "live_price_at": row.live_price_at.isoformat() if row.live_price_at else None,
-            "over_under_pct": derive_over_under(row.live_price, row.npv_per_share),
-            "mos_bar_used": row.mos_bar_used,
-            "assumption_snapshot_json": row.assumption_snapshot_json,
-        },
+        params,
     )
     conn.commit()
 

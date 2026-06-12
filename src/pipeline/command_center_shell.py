@@ -145,6 +145,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # Last-7-day pipeline run history from ingestion_runs (S1 fund-grade
             # build): backup + morning pipeline verdict + per-directive dot grid.
             ("cron_health", "Cron Health", "/api/panel/cron_health", False, False),
+            # Which DCF workbooks are live / stale / skipped / orphaned (S11):
+            # per-name freshness + assumptions-JSON state + sync outcome (0091).
+            ("dcf_coverage", "DCF Coverage", "/api/panel/dcf_coverage", False, False),
             # LLM eval scores (llm_evals_plan §2.6): latest run per purpose +
             # prompt-version A/B strip + failed-case drawers + call health,
             # with run buttons over the jobs SSE machinery.

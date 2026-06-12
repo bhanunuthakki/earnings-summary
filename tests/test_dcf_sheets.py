@@ -297,7 +297,8 @@ CREATE TABLE dcf_runs (
     currency TEXT, notes TEXT, run_id TEXT,
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
-    revenue_growths_json TEXT, fcf_margin REAL
+    revenue_growths_json TEXT, fcf_margin REAL,
+    assumptions_sync_status TEXT, assumptions_synced_at TEXT
 );
 """
 
