@@ -55,6 +55,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "transcript_metadata",
     "intake_classifier",
     "news_structuring",
+    "decision_conditions_extract",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -159,6 +160,71 @@ def load_intake_classifier_golden(path: Path) -> list[ClassifierCase]:
                 case_id,
                 {"filename": filename, "text": text, "hint": cast("dict[str, object]", hint)},
                 exp,
+            )
+        )
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+_CONDITION_GRADED_FIELDS = ("metric", "metric_source", "op", "threshold", "unit", "for_periods")
+
+
+def _str_list(value: object) -> list[str] | None:
+    """``value`` as a list of strings, or None when it isn't one."""
+    if not isinstance(value, list):
+        return None
+    items = cast("list[object]", value)
+    if not all(isinstance(x, str) for x in items):
+        return None
+    return cast("list[str]", items)
+
+
+def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for decision_conditions.extract_conditions: a memo section +
+    the ticker's metric vocabulary; ``expected`` is the pinned condition
+    list (graded fields only — ``note`` is freeform)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "decision_conditions_extract")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        ticker = _require_str(c, "ticker", label, errors).upper()
+        section = _require_str(c, "section", label, errors)
+        kpi_names = _str_list(c.get("kpi_names"))
+        line_items = _str_list(c.get("line_items"))
+        if kpi_names is None:
+            errors.append(f"{label} ({case_id}): `kpi_names` must be a list of strings")
+            kpi_names = []
+        if line_items is None:
+            errors.append(f"{label} ({case_id}): `line_items` must be a list of strings")
+            line_items = []
+        expected = c.get("expected")
+        if not isinstance(expected, list):
+            errors.append(f"{label} ({case_id}): `expected` must be a list")
+            expected = []
+        for j, entry in enumerate(cast("list[object]", expected)):
+            if not isinstance(entry, dict):
+                errors.append(f"{label} ({case_id}): expected[{j}] must be an object")
+                continue
+            entry_obj = cast("dict[str, object]", entry)
+            missing = [k for k in _CONDITION_GRADED_FIELDS if k not in entry_obj]
+            if missing:
+                errors.append(f"{label} ({case_id}): expected[{j}] missing {missing}")
+        cases.append(
+            ClassifierCase(
+                case_id,
+                {
+                    "section": section,
+                    "ticker": ticker,
+                    "kpi_names": list(kpi_names),
+                    "line_items": list(line_items),
+                },
+                list(cast("list[object]", expected)),
             )
         )
     if errors:
@@ -279,6 +345,99 @@ def grade_intake_classifier_case(
     )
 
 
+def _condition_key(obj: dict[str, object]) -> tuple[object, ...]:
+    """The graded identity of one condition. metric compares case-insensitively
+    (the model copies vocabulary names verbatim, but a stray case change is
+    not an analytical error); threshold through float() so 7 == 7.0."""
+    threshold = obj.get("threshold")
+    threshold_f = (
+        float(threshold)
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool)
+        else None
+    )
+    metric = obj.get("metric")
+    return (
+        metric.strip().lower() if isinstance(metric, str) else None,
+        obj.get("metric_source"),
+        obj.get("op"),
+        threshold_f,
+        obj.get("unit"),
+        obj.get("for_periods"),
+    )
+
+
+def grade_decision_conditions_case(
+    case: ClassifierCase, *, fn: Callable[..., list[object]]
+) -> CaseResult:
+    """Order-insensitive compare of extracted vs pinned conditions on the
+    graded fields. score = matches / max(n_expected, n_actual); both empty is
+    a vacuous pass (the no-falsifiable-conditions negative case)."""
+    expected = cast("list[object]", case.expected)
+    t0 = time.monotonic()
+    try:
+        actual = fn(
+            cast("str", case.inputs["section"]),
+            ticker=cast("str", case.inputs["ticker"]),
+            kpi_names=cast("list[str]", case.inputs["kpi_names"]),
+            line_items=cast("list[str]", case.inputs["line_items"]),
+        )
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "decision_conditions_extract", case.case_id)
+        # StructuredParseError (both attempts unusable) is an extraction
+        # quality failure, not a config problem — score it 0, keep running.
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return CaseResult(
+            case_id=case.case_id,
+            question=f"decision_conditions_extract/{case.case_id}",
+            passed=False,
+            score=0.0,
+            expected_json=dumps_compact(expected),
+            actual_json=None,
+            failure_stage="call",
+            judge_rationale=f"extraction raised {type(exc).__name__}: {exc}",
+            latency_ms=latency_ms,
+        )
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    expected_keys = [
+        _condition_key(cast("dict[str, object]", e)) for e in expected if isinstance(e, dict)
+    ]
+    actual_objs: list[dict[str, object]] = []
+    for cond in actual:
+        as_json = getattr(cond, "as_json_obj", None)
+        obj = as_json() if callable(as_json) else cond
+        if isinstance(obj, dict):
+            actual_objs.append(cast("dict[str, object]", obj))
+    actual_keys = [_condition_key(o) for o in actual_objs]
+
+    remaining = list(actual_keys)
+    matched = 0
+    misses: list[str] = []
+    for exp_key in expected_keys:
+        if exp_key in remaining:
+            remaining.remove(exp_key)
+            matched += 1
+        else:
+            misses.append(f"expected condition not extracted: {exp_key}")
+    for extra in remaining:
+        misses.append(f"unexpected condition extracted: {extra}")
+
+    denom = max(len(expected_keys), len(actual_keys))
+    score = 1.0 if denom == 0 else matched / denom
+    passed = score == 1.0
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"decision_conditions_extract/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact(expected),
+        actual_json=dumps_compact(actual_objs),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=None if passed else "; ".join(misses[:5]),
+        latency_ms=latency_ms,
+    )
+
+
 def validate_news_row(row: object, *, now: datetime | None = None) -> str | None:
     """One row against the structurer's HARD RULES. None = valid, else the
     violation (the first one found — enough to fail the row)."""
@@ -359,6 +518,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         return cast("Callable[..., object]", llm_client.identify_transcript_metadata)
     if purpose == "intake_classifier":
         return cast("Callable[..., object]", llm_client.classify_intake_document)
+    if purpose == "decision_conditions_extract":
+        import decision_conditions
+
+        return cast("Callable[..., object]", decision_conditions.extract_conditions)
     return llm_client.structure_recent_news_json
 
 
@@ -383,6 +546,9 @@ def run_classifier_eval(
     elif purpose == "news_structuring":
         cases = load_news_structuring_golden(golden_path)
         grade = grade_news_structuring_case
+    elif purpose == "decision_conditions_extract":
+        cases = load_decision_conditions_golden(golden_path)
+        grade = grade_decision_conditions_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"

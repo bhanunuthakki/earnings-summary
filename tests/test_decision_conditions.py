@@ -1,0 +1,553 @@
+"""Tests for src/decision_conditions.py (fund-grade S5, PR 1).
+
+Covers:
+  * section extraction — numbered (five_min_reread) + unnumbered (Socratic)
+    header shapes, absent section, empty body
+  * parse_condition — every rejection path + the note/metric caps
+  * conditions_from_json — corrupt column degrades to (), never raises
+  * extract_conditions — LLM mocked at the module seam
+    (``decision_conditions.call_llm_structured``): invalid entries dropped,
+    cap enforced, StructuredParseError propagates
+  * record_socratic_decisions — insert / idempotent re-run / no-stance skip /
+    stance→kind mapping (buy→add)
+  * attach_conditions — artifact + memo sources, '[]' stamp for sectionless
+    prose, parse-failure leaves the row unstamped (retried next run),
+    idempotency (stamped rows are not re-walked)
+  * load_open_decisions — open + conditioned rows only
+
+All LLM transport is monkeypatched (conftest enforces no real spend).
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+import decision_conditions as dc
+from decision_conditions import (
+    DecisionCondition,
+    attach_conditions,
+    conditions_from_json,
+    extract_conditions,
+    extract_section,
+    load_open_decisions,
+    metric_vocabulary,
+    parse_condition,
+    record_socratic_decisions,
+)
+from llm.structured import StructuredParseError
+
+# ---------------------------------------------------------------------------
+# Fixture DB — decisions in the post-0086 shape + the source tables
+# ---------------------------------------------------------------------------
+
+_SCHEMA = """
+CREATE TABLE decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16) NOT NULL,
+    recommendation_kind VARCHAR(32) NOT NULL,
+    recommendation_value FLOAT,
+    conviction VARCHAR(16),
+    source_artifact_id INTEGER,
+    source_memo_id INTEGER,
+    source_lens VARCHAR(64),
+    rationale_excerpt TEXT,
+    made_at DATETIME NOT NULL,
+    user_acted_at DATETIME,
+    user_action_kind VARCHAR(32),
+    user_notes TEXT,
+    outcome_at DATETIME,
+    outcome_label VARCHAR(16),
+    outcome_pct FLOAT,
+    outcome_notes TEXT,
+    decision_conditions TEXT,
+    conditions_extracted_at DATETIME,
+    created_at DATETIME NOT NULL,
+    CHECK (source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX idx_decisions_source_artifact ON decisions(source_artifact_id);
+CREATE UNIQUE INDEX uq_decisions_source_memo ON decisions(source_memo_id)
+    WHERE source_memo_id IS NOT NULL;
+CREATE TABLE llm_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT,
+    purpose TEXT NOT NULL,
+    content_md TEXT,
+    generated_at TEXT NOT NULL,
+    superseded_by_id INTEGER
+);
+CREATE TABLE advisor_memos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'bhanu',
+    kind TEXT NOT NULL,
+    ticker TEXT,
+    counter_ticker TEXT,
+    title TEXT NOT NULL,
+    body_md TEXT NOT NULL,
+    context_json TEXT,
+    stance TEXT,
+    horizon_days INTEGER,
+    score_status TEXT NOT NULL DEFAULT 'pending',
+    note_id INTEGER,
+    ledger_entry_id INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE kpi_definitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    unit TEXT
+);
+CREATE TABLE kpi_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    fiscal_period_type TEXT NOT NULL,
+    kpi_definition_id INTEGER NOT NULL,
+    value REAL NOT NULL,
+    unit TEXT,
+    source_doc_id INTEGER
+);
+CREATE TABLE financial_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    fiscal_period_type TEXT NOT NULL,
+    line_item TEXT NOT NULL,
+    value REAL NOT NULL,
+    unit TEXT,
+    source_doc_id INTEGER
+);
+"""
+
+_NOW = datetime.now(UTC).replace(tzinfo=None).isoformat()
+
+
+@pytest.fixture()
+def db(tmp_path: Path) -> Path:
+    path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_SCHEMA)
+    conn.commit()
+    conn.close()
+    return path
+
+
+def _connect(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+_FIVE_MIN_MD = """## 1. What changed
+- NPLs ticked up 40bps.
+
+## 2. Recommended action
+**TRIM 20%** The credit book is wobbling.
+
+## 3. What would change my mind
+90d+ NPLs pushing above 7% for two consecutive quarters, or monthly ARPAC
+falling below $10.
+"""
+
+_SOCRATIC_MD = """## Bull
+Strong deposit franchise.
+
+## Bear
+Funding costs rising.
+
+## What would change my mind
+Risk-adjusted NIM printing below 9% for two quarters.
+
+## Stance if forced
+The deposit moat carries it.
+
+STANCE: hold
+"""
+
+
+def _good_condition_obj(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
+        "metric": "NPL 90d+",
+        "metric_source": "kpi",
+        "op": "gt",
+        "threshold": 7.0,
+        "unit": "percent",
+        "for_periods": 2,
+        "note": "90d+ NPLs above 7% for two straight quarters",
+    }
+    base.update(overrides)
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Section extraction
+# ---------------------------------------------------------------------------
+
+
+def test_extract_section_numbered_five_min_shape() -> None:
+    body = extract_section(_FIVE_MIN_MD)
+    assert body is not None
+    assert body.startswith("90d+ NPLs pushing above 7%")
+    assert "Recommended action" not in body
+
+
+def test_extract_section_unnumbered_socratic_shape() -> None:
+    body = extract_section(_SOCRATIC_MD)
+    assert body is not None
+    assert body.startswith("Risk-adjusted NIM printing below 9%")
+    # Stops at the next section header.
+    assert "Stance if forced" not in body
+
+
+def test_extract_section_absent_or_empty() -> None:
+    assert extract_section("## 1. What changed\nnothing") is None
+    assert extract_section(None) is None
+    assert extract_section("") is None
+    assert extract_section("## What would change my mind\n\n## Next\nx") is None
+
+
+# ---------------------------------------------------------------------------
+# Condition validation
+# ---------------------------------------------------------------------------
+
+
+def test_parse_condition_happy_path() -> None:
+    cond = parse_condition(_good_condition_obj())
+    assert cond == DecisionCondition(
+        metric="NPL 90d+",
+        metric_source="kpi",
+        op="gt",
+        threshold=7.0,
+        unit="percent",
+        for_periods=2,
+        note="90d+ NPLs above 7% for two straight quarters",
+    )
+
+
+def test_parse_condition_unresolved_metric_source_none() -> None:
+    cond = parse_condition(_good_condition_obj(metric_source=None))
+    assert cond is not None
+    assert cond.metric_source is None
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"metric": ""},
+        {"metric": 7},
+        {"metric_source": "vibes"},
+        {"op": "eq"},  # directional ops only
+        {"op": "below"},
+        {"threshold": "seven"},
+        {"threshold": True},
+        {"unit": "furlongs"},
+        {"for_periods": 0},
+        {"for_periods": 13},
+        {"for_periods": 2.5},
+        {"for_periods": True},
+    ],
+)
+def test_parse_condition_rejections(override: dict[str, object]) -> None:
+    assert parse_condition(_good_condition_obj(**override)) is None
+
+
+def test_parse_condition_not_a_dict_and_default_periods() -> None:
+    assert parse_condition("nope") is None
+    obj = _good_condition_obj()
+    del obj["for_periods"]
+    cond = parse_condition(obj)
+    assert cond is not None
+    assert cond.for_periods == 1
+
+
+def test_conditions_from_json_corrupt_degrades() -> None:
+    assert conditions_from_json(None) == ()
+    assert conditions_from_json("") == ()
+    assert conditions_from_json("{not json") == ()
+    assert conditions_from_json('{"an": "object"}') == ()
+    good = json.dumps([_good_condition_obj(), {"metric": ""}])
+    parsed = conditions_from_json(good)
+    assert len(parsed) == 1
+    assert parsed[0].metric == "NPL 90d+"
+
+
+# ---------------------------------------------------------------------------
+# LLM extraction (mocked transport)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_conditions_drops_invalid_and_caps(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        seen["prompt"] = prompt
+        seen["kwargs"] = kwargs
+        entries: list[object] = [_good_condition_obj(metric=f"Metric {i}") for i in range(10)]
+        entries.insert(0, {"metric": "", "op": "gt"})  # invalid — dropped
+        return entries
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    out = extract_conditions(
+        "section text",
+        ticker="nu",
+        kpi_names=["NPL 90d+"],
+        line_items=["revenue"],
+    )
+    assert len(out) == 8  # _MAX_CONDITIONS_PER_DECISION
+    assert all(c.metric.startswith("Metric ") for c in out)
+    kwargs = seen["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["purpose"] == "decision_conditions_extract"
+    assert kwargs["ticker"] == "NU"
+    assert kwargs["expect"] == "array"
+    prompt = seen["prompt"]
+    assert isinstance(prompt, str)
+    assert "NPL 90d+" in prompt and "revenue" in prompt
+
+
+def test_extract_conditions_parse_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        raise StructuredParseError("bad twice", raw_head="x")
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    with pytest.raises(StructuredParseError):
+        extract_conditions("s", ticker="NU", kpi_names=[], line_items=[])
+
+
+# ---------------------------------------------------------------------------
+# Socratic memo → decisions rows
+# ---------------------------------------------------------------------------
+
+
+def _insert_memo(path: Path, *, kind: str = "socratic", stance: str | None = "hold") -> int:
+    conn = _connect(path)
+    cur = conn.execute(
+        "INSERT INTO advisor_memos (kind, ticker, title, body_md, stance, created_at) "
+        "VALUES (?, 'NU', 'Socratic: NU', ?, ?, ?)",
+        (kind, _SOCRATIC_MD, stance, _NOW),
+    )
+    conn.commit()
+    memo_id = int(cur.lastrowid or 0)
+    conn.close()
+    return memo_id
+
+
+def test_record_socratic_decisions_inserts_and_is_idempotent(db: Path) -> None:
+    memo_id = _insert_memo(db, stance="buy")
+    tally = record_socratic_decisions(db_path=db)
+    assert tally["inserted"] == 1
+
+    conn = _connect(db)
+    row = conn.execute("SELECT * FROM decisions").fetchone()
+    conn.close()
+    assert row["ticker"] == "NU"
+    assert row["recommendation_kind"] == "add"  # buy→add on a holding
+    assert row["source_memo_id"] == memo_id
+    assert row["source_artifact_id"] is None
+    assert row["source_lens"] == "advisor_socratic"
+    assert "deposit moat" in row["rationale_excerpt"]
+
+    again = record_socratic_decisions(db_path=db)
+    assert again["inserted"] == 0
+    assert again["skipped_existing"] == 1
+
+
+def test_record_socratic_decisions_skips_no_stance_and_other_kinds(db: Path) -> None:
+    _insert_memo(db, stance=None)
+    _insert_memo(db, kind="next_dollar", stance="hold")  # not socratic — ignored
+    tally = record_socratic_decisions(db_path=db)
+    assert tally["inserted"] == 0
+    assert tally["skipped_no_stance"] == 1
+
+
+def test_record_socratic_decisions_missing_db() -> None:
+    tally = record_socratic_decisions(db_path=Path("Z:/nope/portfolio.db"))
+    assert tally["db_unavailable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# attach_conditions
+# ---------------------------------------------------------------------------
+
+
+def _insert_artifact_decision(path: Path, *, content_md: str, ticker: str = "NU") -> int:
+    conn = _connect(path)
+    cur = conn.execute(
+        "INSERT INTO llm_artifacts (ticker, purpose, content_md, generated_at) "
+        "VALUES (?, 'lens:five_min_reread', ?, ?)",
+        (ticker, content_md, _NOW),
+    )
+    artifact_id = int(cur.lastrowid or 0)
+    cur = conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, "
+        "source_lens, made_at, outcome_label, created_at) "
+        "VALUES (?, 'trim', ?, 'five_min_reread', ?, 'pending', ?)",
+        (ticker, artifact_id, _NOW, _NOW),
+    )
+    conn.commit()
+    decision_id = int(cur.lastrowid or 0)
+    conn.close()
+    return decision_id
+
+
+def test_attach_conditions_artifact_and_memo_sources(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_decision = _insert_artifact_decision(db, content_md=_FIVE_MIN_MD)
+    _insert_memo(db, stance="hold")
+    record_socratic_decisions(db_path=db)
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        return [_good_condition_obj()]
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    tally = attach_conditions(db_path=db)
+    assert tally["extracted"] == 2
+    assert tally["no_section"] == 0
+
+    conn = _connect(db)
+    rows = conn.execute(
+        "SELECT id, decision_conditions, conditions_extracted_at FROM decisions"
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["conditions_extracted_at"] is not None
+        stored = json.loads(row["decision_conditions"])
+        assert stored[0]["metric"] == "NPL 90d+"
+    assert {r["id"] for r in rows} >= {artifact_decision}
+
+    # Idempotent: stamped rows are not re-walked (LLM would raise if called).
+    def exploding(prompt: str, **kwargs: object) -> object:
+        raise AssertionError("re-extraction attempted on a stamped row")
+
+    monkeypatch.setattr(dc, "call_llm_structured", exploding)
+    again = attach_conditions(db_path=db)
+    assert again["extracted"] == 0
+    assert again["no_section"] == 0
+
+
+def test_attach_conditions_sectionless_prose_stamps_empty(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    decision_id = _insert_artifact_decision(
+        db, content_md="## 2. Recommended action\n**HOLD**\nNothing else."
+    )
+
+    def exploding(prompt: str, **kwargs: object) -> object:
+        raise AssertionError("LLM must not be called without a section")
+
+    monkeypatch.setattr(dc, "call_llm_structured", exploding)
+    tally = attach_conditions(db_path=db)
+    assert tally["no_section"] == 1
+
+    conn = _connect(db)
+    row = conn.execute(
+        "SELECT decision_conditions, conditions_extracted_at FROM decisions WHERE id = ?",
+        (decision_id,),
+    ).fetchone()
+    conn.close()
+    assert row["decision_conditions"] == "[]"
+    assert row["conditions_extracted_at"] is not None
+
+
+def test_attach_conditions_parse_failure_leaves_row_unstamped(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    decision_id = _insert_artifact_decision(db, content_md=_FIVE_MIN_MD)
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        raise StructuredParseError("unusable twice", raw_head="?")
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    tally = attach_conditions(db_path=db)
+    assert tally["parse_failed"] == 1
+
+    conn = _connect(db)
+    row = conn.execute(
+        "SELECT decision_conditions, conditions_extracted_at FROM decisions WHERE id = ?",
+        (decision_id,),
+    ).fetchone()
+    conn.close()
+    assert row["decision_conditions"] is None
+    assert row["conditions_extracted_at"] is None  # retried next run
+
+
+def test_attach_conditions_pre_migration_db(tmp_path: Path) -> None:
+    # decisions table without the 0086 columns → best-effort unavailable.
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE decisions (id INTEGER PRIMARY KEY, ticker TEXT)")
+    conn.commit()
+    conn.close()
+    tally = attach_conditions(db_path=path)
+    assert tally["db_unavailable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Vocabulary + open-decision reads
+# ---------------------------------------------------------------------------
+
+
+def test_metric_vocabulary_reads_both_tables(db: Path) -> None:
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('NU', 'NPL 90d+', 'percent')"
+    )
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
+        "value, unit, source_doc_id) VALUES ('NU', '2026-03-31', 'Q1', 1, 7.4, 'percent', 1)"
+    )
+    # A definition with no facts must NOT appear (unresolvable at eval time).
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('NU', 'Ghost KPI', 'percent')"
+    )
+    conn.execute(
+        "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
+        "value, unit, source_doc_id) VALUES ('NU', '2026-03-31', 'Q1', 'revenue', 1.0, 'millions', 1)"
+    )
+    conn.commit()
+    kpi_names, line_items = metric_vocabulary(conn, "nu")
+    conn.close()
+    assert kpi_names == ["NPL 90d+"]
+    assert line_items == ["revenue"]
+
+
+def test_load_open_decisions_filters(db: Path) -> None:
+    conditions_json = json.dumps([_good_condition_obj()])
+    conn = _connect(db)
+    # Open + conditioned → returned.
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, recommendation_value, "
+        "source_artifact_id, made_at, created_at, decision_conditions) "
+        "VALUES ('NU', 'trim', 20.0, 1, ?, ?, ?)",
+        (_NOW, _NOW, conditions_json),
+    )
+    # Graded → excluded.
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at, "
+        "created_at, decision_conditions, outcome_at) "
+        "VALUES ('NU', 'hold', 2, ?, ?, ?, ?)",
+        (_NOW, _NOW, conditions_json, _NOW),
+    )
+    # No conditions / empty conditions → excluded.
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at, "
+        "created_at, decision_conditions) VALUES ('NU', 'add', 3, ?, ?, '[]')",
+        (_NOW, _NOW),
+    )
+    conn.commit()
+
+    open_decisions = load_open_decisions(conn, "NU")
+    conn.close()
+    assert len(open_decisions) == 1
+    d = open_decisions[0]
+    assert d.recommendation_kind == "trim"
+    assert d.recommendation_value == 20.0
+    assert len(d.conditions) == 1
+    assert d.conditions[0].metric == "NPL 90d+"

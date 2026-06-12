@@ -623,8 +623,8 @@ def test_no_candidates_exits_cleanly(
     summary = json.loads(capsys.readouterr().out)
     assert summary["alerts_fired"] == 0
     # All default triggers (earnings_tone + kpi_inflection + saydo_due +
-    # material_news) no-candidate on MELI.
-    assert summary["no_candidate_skips"] == 4
+    # material_news + decision_condition) no-candidate on MELI.
+    assert summary["no_candidate_skips"] == len(run_triggers.ENABLED_TRIGGERS)
     assert summary["tickers_processed"] == 1
 
 

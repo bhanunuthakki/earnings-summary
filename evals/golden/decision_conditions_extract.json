@@ -1,0 +1,85 @@
+{
+  "purpose": "decision_conditions_extract",
+  "notes": "Mode-A golden set for decision_conditions.extract_conditions (fund-grade S5). Each case is a 'What would change my mind' section body + the ticker's metric vocabulary; expected pins the graded fields (metric, metric_source, op, threshold, unit, for_periods) — `note` is freeform and ungraded. Order-insensitive compare; score = matched / max(n_expected, n_actual).",
+  "cases": [
+    {
+      "id": "dc-001-two-kpi-conditions",
+      "ticker": "NU",
+      "kpi_names": ["NPL 90d+", "NPL 15-90d", "Monthly ARPAC (USD)", "Risk-adjusted NIM (NIM minus cost of risk)", "ROE (annualized, consolidated)"],
+      "line_items": ["revenue", "net_income", "free_cash_flow"],
+      "section": "Two prints would flip this call. First, 90d+ NPLs pushing above 7% for two consecutive quarters would mean the credit book is deteriorating faster than the yield compensates. Second, monthly ARPAC falling below $10 would break the monetization leg of the thesis.",
+      "expected": [
+        {"metric": "NPL 90d+", "metric_source": "kpi", "op": "gt", "threshold": 7, "unit": "percent", "for_periods": 2},
+        {"metric": "Monthly ARPAC (USD)", "metric_source": "kpi", "op": "lt", "threshold": 10, "unit": "actual", "for_periods": 1}
+      ]
+    },
+    {
+      "id": "dc-002-growth-decel",
+      "ticker": "NOW",
+      "kpi_names": ["Revenue YoY Growth (USD)", "FCF Margin (GAAP)", "Operating Margin (GAAP)"],
+      "line_items": ["revenue", "free_cash_flow", "ebit"],
+      "section": "Subscription revenue growth dropping below 20% YoY for 2 consecutive quarters would tell me the AI-consumption story is not converting into bookings, and I would exit the position rather than wait for margin offsets.",
+      "expected": [
+        {"metric": "Revenue YoY Growth (USD)", "metric_source": "kpi", "op": "lt", "threshold": 20, "unit": "percent", "for_periods": 2}
+      ]
+    },
+    {
+      "id": "dc-003-financial-line-item-billions",
+      "ticker": "META",
+      "kpi_names": ["Operating Margin (GAAP)", "Capex / Revenue (GAAP)"],
+      "line_items": ["free_cash_flow", "revenue", "capital_expenditure", "net_income"],
+      "section": "The capex super-cycle is tolerable only while cash generation holds. Quarterly free cash flow printing below $1.5B would change my mind — at that level the buyback math and the AI-spend runway both break.",
+      "expected": [
+        {"metric": "free_cash_flow", "metric_source": "financial", "op": "lt", "threshold": 1.5, "unit": "billions", "for_periods": 1}
+      ]
+    },
+    {
+      "id": "dc-004-at-or-above-ge",
+      "ticker": "NU",
+      "kpi_names": ["NPL 90d+", "Cost-to-serve (USD)", "Deposit cost (% of CDI)"],
+      "line_items": ["revenue", "net_income"],
+      "section": "If cost-to-serve rises to $1.20 or above for three straight quarters, the operating-leverage thesis is broken regardless of what customer growth does.",
+      "expected": [
+        {"metric": "Cost-to-serve (USD)", "metric_source": "kpi", "op": "ge", "threshold": 1.2, "unit": "actual", "for_periods": 3}
+      ]
+    },
+    {
+      "id": "dc-005-unresolved-metric",
+      "ticker": "GOOG",
+      "kpi_names": ["Operating Margin (GAAP)", "Revenue YoY Growth (USD)"],
+      "line_items": ["revenue", "ebit", "net_income"],
+      "section": "Cloud backlog conversion dropping under 30% would signal that the RPO build is bookings theater rather than future revenue, and I would cut the position.",
+      "expected": [
+        {"metric": "Cloud backlog conversion", "metric_source": null, "op": "lt", "threshold": 30, "unit": "percent", "for_periods": 1}
+      ]
+    },
+    {
+      "id": "dc-006-qualitative-only-empty",
+      "ticker": "BN",
+      "kpi_names": ["Distributable earnings per share (USD)", "Fee-bearing capital (USD B)"],
+      "line_items": ["revenue", "net_income"],
+      "section": "A change of CEO, a credible activist campaign against the holdco structure, or a regulatory move against carried-interest taxation would each force a rethink — none of these is a number I can watch on a dashboard, but any would change my mind.",
+      "expected": []
+    },
+    {
+      "id": "dc-007-mixed-numeric-and-qualitative",
+      "ticker": "MELI",
+      "kpi_names": ["Credit NPL >90d (%)", "GMV YoY Growth (FX-neutral)", "Take rate (%)"],
+      "line_items": ["revenue", "net_income"],
+      "section": "Two things. Credit NPLs above 25% would mean the fintech book is repeating the 2022 mistake — that is checkable every quarter. And a major devaluation in Argentina would hurt, though the timing and size of that is not something I can put a threshold on.",
+      "expected": [
+        {"metric": "Credit NPL >90d (%)", "metric_source": "kpi", "op": "gt", "threshold": 25, "unit": "percent", "for_periods": 1}
+      ]
+    },
+    {
+      "id": "dc-008-bps-threshold",
+      "ticker": "NU",
+      "kpi_names": ["Risk-adjusted NIM YoY change (bps)", "NPL 90d+", "Monthly ARPAC (USD)"],
+      "line_items": ["revenue", "net_income"],
+      "section": "Risk-adjusted NIM compressing by more than 200bps year-over-year — a print of -200bps or worse on the YoY change — for two quarters running would mean funding costs are outrunning yield and the spread story is over.",
+      "expected": [
+        {"metric": "Risk-adjusted NIM YoY change (bps)", "metric_source": "kpi", "op": "le", "threshold": -200, "unit": "bps", "for_periods": 2}
+      ]
+    }
+  ]
+}

@@ -84,6 +84,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "transcript_metadata": "v1",
     "intake_classifier": "v1",
     "news_structuring": "v1",
+    # Falsifiable-condition extraction (src/decision_conditions.py, mode-A
+    # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
+    # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
+    "decision_conditions_extract": "v1",
     # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
     # templates). Bump when either judge prompt is materially reworded so
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay

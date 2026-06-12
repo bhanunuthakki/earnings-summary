@@ -50,6 +50,7 @@ GOLDEN_PURPOSES = (
     "transcript_metadata",
     "intake_classifier",
     "news_structuring",
+    "decision_conditions_extract",
 )
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES

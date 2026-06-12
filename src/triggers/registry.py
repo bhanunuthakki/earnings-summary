@@ -16,6 +16,7 @@ the driver doesn't depend on it.
 from __future__ import annotations
 
 from triggers.base import Trigger
+from triggers.decision_condition import DecisionConditionTrigger
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.material_news import MaterialNewsTrigger
@@ -26,6 +27,7 @@ ENABLED_TRIGGERS: list[type[Trigger]] = [
     KpiInflectionTrigger,
     SayDoDueTrigger,
     MaterialNewsTrigger,
+    DecisionConditionTrigger,
 ]
 
 ALL_TRIGGERS: list[type[Trigger]] = [
@@ -33,4 +35,5 @@ ALL_TRIGGERS: list[type[Trigger]] = [
     KpiInflectionTrigger,
     SayDoDueTrigger,
     MaterialNewsTrigger,
+    DecisionConditionTrigger,
 ]

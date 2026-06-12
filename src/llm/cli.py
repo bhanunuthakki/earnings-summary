@@ -218,6 +218,15 @@ LLM_MODELS: dict[str, str] = {
     # model= at the call site; moved here so the registry stays the single
     # reviewable surface (llm_evals_plan.md §5.5).
     "decision_extraction": FAST_CLASSIFIER_MODEL,
+    # Falsifiable-condition extraction (src/decision_conditions.py): turns the
+    # "What would change my mind" memo section into structured
+    # {metric, op, threshold, unit, for_periods} conditions against a supplied
+    # metric vocabulary — a narrow copy-the-token JSON task over ~1-2KB of
+    # prose, run once per new decision. Haiku: latency/cost dominate, the
+    # schema is closed, and the golden set
+    # (evals/golden/decision_conditions_extract.json) guards quality; escalate
+    # only on eval regression.
+    "decision_conditions_extract": FAST_CLASSIFIER_MODEL,
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates and
