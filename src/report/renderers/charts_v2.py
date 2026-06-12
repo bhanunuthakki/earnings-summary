@@ -174,6 +174,8 @@ def bar_chart(spec: BarSpec) -> str:
     parts = [
         f'<svg class="cv2-chart" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(spec.title)}">',
+        f"<title>{html.escape(spec.title)}</title>"
+        f"<desc>Bar chart, {len(spec.labels)} periods.</desc>",
         f'<text x="{pad_left}" y="14" class="cv2-title">{html.escape(spec.title)}</text>',
     ]
 
@@ -294,6 +296,8 @@ def multi_line_chart(
     parts = [
         f'<svg class="cv2-chart" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'role="img" aria-label="{html.escape(title)}">',
+        f"<title>{html.escape(title)}</title>"
+        f"<desc>Line chart, {len(series)} series, {n} periods.</desc>",
         f'<text x="{pad_left}" y="14" class="cv2-title">{html.escape(title)}</text>',
     ]
 
@@ -449,6 +453,8 @@ def stacked_area(
     parts = [
         f'<svg class="cv2-chart" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'role="img" aria-label="{html.escape(title)}">',
+        f"<title>{html.escape(title)}</title>"
+        f"<desc>Stacked area chart, {len(series)} series, {n} periods.</desc>",
         f'<text x="{pad_left}" y="14" class="cv2-title">{html.escape(title)}</text>',
     ]
 
@@ -551,6 +557,8 @@ def stacked_area_100pct(
     parts = [
         f'<svg class="cv2-chart" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         f'role="img" aria-label="{html.escape(title)}">',
+        f"<title>{html.escape(title)}</title>"
+        f"<desc>100% stacked area chart, {len(series)} series, {n} periods.</desc>",
         f'<text x="{pad_left}" y="14" class="cv2-title">{html.escape(title)}</text>',
     ]
 

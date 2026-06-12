@@ -52,12 +52,12 @@ _DOCK_CSS = """
   background:var(--surface); box-shadow:0 16px 48px rgba(0,0,0,0.55);
   display:flex; flex-direction:column; overflow:hidden; }
 .ask-dock-head { display:flex; align-items:center; gap:8px; width:100%; padding:9px 12px;
-  background:var(--paper); border:none; cursor:pointer; text-align:left; }
+  background:var(--paper); cursor:pointer; }
 .ask-dock-title { color:var(--accent); font-weight:600; font-size:var(--fs-body); }
 .ask-dock-hint { color:var(--muted); font-size:var(--fs-caption); flex:1; overflow:hidden;
   white-space:nowrap; text-overflow:ellipsis; }
 .ask-dock-ctl { color:var(--muted); font-size:var(--fs-body); padding:0 2px;
-  text-decoration:none; cursor:pointer; }
+  text-decoration:none; cursor:pointer; background:none; border:none; font:inherit; line-height:1; }
 .ask-dock-ctl:hover { color:var(--accent); }
 .ask-dock-body { display:flex; flex-direction:column; max-height:54vh; max-height:54dvh; position:relative; }
 /* min — the slim pill: title only, body folded, controls hidden (the pill
@@ -632,26 +632,26 @@ def render_ask_dock() -> str:
     return f"""<style>{_DOCK_CSS}{CITE_MARKS_CSS}</style>
 <script>{CITE_MARKS_JS}</script>
 <div class="ask-dock" id="ask-dock" data-mode="min">
-  <button type="button" class="ask-dock-head" id="ask-dock-toggle">
+  <div class="ask-dock-head" id="ask-dock-toggle">
     <span class="ask-dock-title">Ask</span>
     <span class="ask-dock-hint">tables for metric questions &middot; cited answers for open ones</span>
-    <span class="ask-dock-ctl" id="ask-dock-threads-btn" role="button"
-      title="Browse saved threads" aria-label="Browse threads">&#x21C6;</span>
-    <span class="ask-dock-ctl" id="ask-dock-min" role="button" title="Minimize"
-      aria-label="Minimize">&#x2581;</span>
-    <span class="ask-dock-ctl ask-dock-splitbtn" id="ask-dock-split" role="button"
-      title="Split view beside the page (Esc exits)" aria-label="Toggle split view">&#x25EB;</span>
-    <span class="ask-dock-ctl" id="ask-dock-pop" role="button" title="Continue in the Ask tab"
-      aria-label="Continue in the Ask tab">&#x21D7;</span>
-  </button>
+    <button type="button" class="ask-dock-ctl" id="ask-dock-threads-btn"
+      title="Browse saved threads" aria-label="Browse threads">&#x21C6;</button>
+    <button type="button" class="ask-dock-ctl" id="ask-dock-min" title="Minimize"
+      aria-label="Minimize">&#x2581;</button>
+    <button type="button" class="ask-dock-ctl ask-dock-splitbtn" id="ask-dock-split"
+      title="Split view beside the page (Esc exits)" aria-label="Toggle split view">&#x25EB;</button>
+    <button type="button" class="ask-dock-ctl" id="ask-dock-pop" title="Continue in the Ask tab"
+      aria-label="Continue in the Ask tab">&#x21D7;</button>
+  </div>
   <div class="ask-dock-body" id="ask-dock-body">
     <div id="ask-dock-threads" class="ask-dock-threads" hidden>
       <div class="ask-dock-threads-head">
         <span class="ask-dock-threads-title">Saved threads</span>
         <button type="button" id="ask-dock-new-thread" class="k-btn k-btn-quiet k-btn-sm">
           + New thread</button>
-        <span class="ask-dock-ctl" id="ask-dock-threads-close" role="button"
-          title="Close" aria-label="Close threads">&#x2715;</span>
+        <button type="button" class="ask-dock-ctl" id="ask-dock-threads-close"
+          title="Close" aria-label="Close threads">&#x2715;</button>
       </div>
       <div id="ask-dock-threads-list" class="ask-dock-threads-list"></div>
     </div>
