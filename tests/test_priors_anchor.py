@@ -134,12 +134,22 @@ def test_long_bodies_clip_and_block_caps(repo: Path) -> None:
 
 
 def test_compose_backcompat_and_priors() -> None:
-    assert compose_anchor_block("T", "B") == "T\n\n---\n\nB\n\n---\n\n"
+    # Since the S9 sec-llm pass the composed block ships spotlighted
+    # (llm.untrusted) — blocks keep their order and separators INSIDE one
+    # untrusted-data marker pair, and the trailing separator survives.
+    two = compose_anchor_block("T-BLOCK", "B-BLOCK")
+    assert "T-BLOCK\n\n---\n\nB-BLOCK" in two
+    assert "<<<BEGIN-UNTRUSTED-DATA" in two and two.endswith("\n\n---\n\n")
     assert compose_anchor_block("", "", "", "") == ""
-    only_priors = compose_anchor_block("", "", "", "P")
-    assert only_priors == "P\n\n---\n\n"
-    full = compose_anchor_block("T", "B", "I", "P")
-    assert full.index("T") < full.index("B") < full.index("I") < full.index("P")
+    only_priors = compose_anchor_block("", "", "", "P-BLOCK")
+    assert "P-BLOCK" in only_priors and only_priors.endswith("\n\n---\n\n")
+    full = compose_anchor_block("T-BLOCK", "B-BLOCK", "I-BLOCK", "P-BLOCK")
+    assert (
+        full.index("T-BLOCK")
+        < full.index("B-BLOCK")
+        < full.index("I-BLOCK")
+        < full.index("P-BLOCK")
+    )
 
 
 # ----------------------------------------------------------------------------

@@ -541,8 +541,24 @@ def compose_anchor_block(
             load_ir_anchor(repo_root, ticker),
             load_priors_anchor(repo_root, ticker),
         )
+
+    The composed block is spotlighted (``llm.untrusted.spotlight``) before it
+    ships: anchors chain LLM artifacts and issuer-authored IR narrative into
+    ~7 downstream prompts, so an injection surviving into any anchor source
+    would otherwise propagate with instruction authority. The wrap is
+    deterministic — artifact caches that key on the composed anchor text stay
+    stable for unchanged anchors.
     """
+    from llm.untrusted import spotlight
+
     blocks = [b for b in (thesis_anchor, bear_anchor, ir_anchor, priors_anchor) if b.strip()]
     if not blocks:
         return ""
-    return "\n\n---\n\n".join(blocks) + "\n\n---\n\n"
+    wrapped = spotlight(
+        "\n\n---\n\n".join(blocks),
+        source=(
+            "stored research context (analyst thesis, prior bear-case review, "
+            "IR narrative, analyst notes)"
+        ),
+    )
+    return wrapped + "\n\n---\n\n"

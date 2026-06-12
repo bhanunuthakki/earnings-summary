@@ -48,14 +48,22 @@ from __future__ import annotations
 #     this registry, so every artifact was permanently ``v1`` — v6 re-grade.)
 _PROMPT_VERSIONS: dict[str, str] = {
     # Graded calibration purposes.
-    "bear_case": "v1",
+    # bear_case v2 (2026-06-12, S9): untrusted-content spotlighting — the IR
+    # anchor block is now wrapped in BEGIN/END UNTRUSTED-DATA markers with an
+    # instruction-priority notice (src/llm/untrusted.py).
+    "bear_case": "v2",
     "decision_audit": "v1",
     "management_prediction": "v1",
     # Personal-CIO trigger artifact purposes.
-    "earnings_tone_diff": "v1",
-    "kpi_inflection_context": "v1",
-    "material_news_classification": "v1",
-    "saydo_due_context": "v1",
+    # v2 across the board (2026-06-12, S9): spotlighting of untrusted prompt
+    # inputs — transcript bodies (earnings_tone_diff, + template priority
+    # rule), news headlines/snippets (material_news_classification), and the
+    # composed anchor block every trigger embeds (compose_anchor_block now
+    # wraps). saydo/kpi prompts changed only via the anchor wrap.
+    "earnings_tone_diff": "v2",
+    "kpi_inflection_context": "v2",
+    "material_news_classification": "v2",
+    "saydo_due_context": "v2",
     # Pairwise backend judge (src/llm/backend_judge.py). Bump when the A/B judge
     # rubric is materially reworded so a re-grade of the same corpus is comparable
     # to the prior verdict instead of being silently confounded by the prompt.
@@ -82,7 +90,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # _NEXT_DOLLAR_PROMPT is materially rewritten and the score history forks
     # cleanly. (bear_case is already registered above with the outcome
     # graders — one entry governs both its grading modes.)
-    "transcript_summary": "v1",
+    # transcript_summary v2 (2026-06-12, S9): transcript body + anchor block
+    # spotlighted as untrusted data.
+    "transcript_summary": "v2",
     "advisor_next_dollar": "v1",
     # Golden-set classifier purposes (mode A, PR 4). Bump when the prompt in
     # identify_transcript_metadata / classify_intake_document /
@@ -91,7 +101,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # workflow in directives/llm_calls.md.
     "transcript_metadata": "v1",
     "intake_classifier": "v1",
-    "news_structuring": "v1",
+    # news_structuring v2 (2026-06-12, S9): UNTRUSTED WEB CONTENT priority
+    # rule added; thesis anchor spotlighted at the fetch_news_websearch call
+    # site (which also now sources its artifact version from this entry).
+    "news_structuring": "v2",
     # Falsifiable-condition extraction (src/decision_conditions.py, mode-A
     # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
     # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
@@ -101,6 +114,21 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay
     # comparable within a version.
     "eval_judge": "v1",
+    # Untrusted-content spotlighting wave (2026-06-12, S9 sec-llm pass;
+    # directives/llm_injection_threat_model.md). First registration for each,
+    # at v2: their prompts changed — either directly (document text / web
+    # rules) or because the composed anchor block they embed is now wrapped
+    # by compose_anchor_block.
+    "press_release_summary": "v2",  # press-release body spotlighted
+    "presentation_brief": "v2",  # deck text spotlighted
+    "event_brief": "v2",  # event document text spotlighted
+    "recent_developments": "v2",  # web-content priority rule added
+    "company_description": "v2",  # 10-K excerpts + IR blocks spotlighted
+    "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
+    "pairwise_analysis": "v2",  # composed anchor block now spotlighted
+    "saydo_filter": "v2",  # composed anchor block now spotlighted
+    "advisor_socratic_questions": "v2",  # composed anchor block now spotlighted
+    "advisor_socratic_memo": "v2",  # composed anchor block now spotlighted
 }
 
 _DEFAULT_VERSION = "v1"

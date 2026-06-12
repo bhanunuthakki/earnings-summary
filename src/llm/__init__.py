@@ -79,6 +79,10 @@ from llm.style import (
     compose_brief_prompt,
     style_block_cache_token,
 )
+from llm.untrusted import (
+    WEB_CONTENT_NOTICE,
+    spotlight,
+)
 
 __all__ = [
     "ANCHOR_BLOCK_CHAR_CAP",
@@ -96,6 +100,7 @@ __all__ = [
     "LLM_MODELS",
     "NUMBER_FORMATTING_BLOCK",
     "PRIORS_ANCHOR_CHAR_CAP",
+    "WEB_CONTENT_NOTICE",
     "LLMBudgetExceeded",
     "aggregate_by_purpose",
     "call_gemini",
@@ -114,6 +119,7 @@ __all__ = [
     "load_priors_anchor",
     "load_thesis_anchor",
     "record_llm_call",
+    "spotlight",
     "style_block_cache_token",
     "try_gemini_fallback",
 ]

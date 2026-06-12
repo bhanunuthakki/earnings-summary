@@ -33,6 +33,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm.anchors import load_thesis_anchor  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
+from llm.untrusted import spotlight  # noqa: E402
 from llm_artifact_store import (  # noqa: E402
     UpsertRequest,
     compute_input_sha256,
@@ -45,7 +47,10 @@ from news.store import SOURCE_FEED_WEBSEARCH, NewsRow  # noqa: E402
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _EASTERN = ZoneInfo("America/New_York")
 _PURPOSE = "news_structuring"
-_PROMPT_VERSION = "v1"
+# Sourced from the registry (not a hardcoded literal) so a prompt bump in
+# prompt_versions.py rotates this cache key too — the registry is the single
+# bump-point for prompt changes (directives/llm_calls.md).
+_PROMPT_VERSION = prompt_version_for(_PURPOSE)
 DEFAULT_NEWS_DAYS = 2
 
 # Timezone tags the structuring prompt may emit, normalized upper-case.
@@ -144,9 +149,17 @@ def _map_item(item: object, ticker: str) -> NewsRow | None:
 
 
 def _load_anchor(ticker: str) -> str:
-    """Best-effort thesis anchor for framing + the cache key; "" on any failure."""
+    """Best-effort thesis anchor for framing + the cache key; "" on any failure.
+
+    Spotlighted before it enters the prompt: this path loads the thesis
+    anchor directly (not via ``compose_anchor_block``, which wraps for the
+    composed consumers), so it owns the untrusted-data wrap itself. The wrap
+    is deterministic, so the same anchor still cache-hits."""
     try:
-        return load_thesis_anchor(PROJECT_ROOT, ticker)
+        return spotlight(
+            load_thesis_anchor(PROJECT_ROOT, ticker),
+            source="analyst thesis anchor (stored research context)",
+        )
     except Exception as exc:  # anchor is optional — never block the fetch
         _log("news_websearch_anchor_load_failed", ticker=ticker, error=str(exc))
         return ""

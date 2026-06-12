@@ -58,6 +58,7 @@ from llm.anchors import (
 )
 from llm.prompt_versions import prompt_version_for
 from llm.style import NUMBER_FORMATTING_BLOCK
+from llm.untrusted import spotlight
 from llm_artifact_store import (
     UpsertRequest,
     compute_input_sha256,
@@ -364,10 +365,31 @@ def _render_prompt(
     current_qa: str,
     prior_transcripts: list[dict[str, object]],
 ) -> str:
-    """Render the diff-prompt body with the supplied context."""
+    """Render the diff-prompt body with the supplied context.
+
+    Transcript bodies (current + priors) are spotlighted before render:
+    issuer-published call text is the template's dominant untrusted input,
+    and the Jinja interpolation would otherwise hand any instructions
+    embedded in it the same authority as the template's own prose. The
+    template carries the matching priority rule under
+    "# Untrusted-content rule"."""
     template = _load_prompt_template()
     prior_periods = [
         _format_period_label(cast("str", p["fiscal_period_type"]), cast("str", p["fiscal_period"]))
+        for p in prior_transcripts
+    ]
+    spotlit_priors: list[dict[str, object]] = [
+        {
+            **p,
+            "prepared_remarks": spotlight(
+                cast("str", p.get("prepared_remarks") or ""),
+                source="earnings call transcript prepared remarks (issuer-published)",
+            ),
+            "qa": spotlight(
+                cast("str", p.get("qa") or ""),
+                source="earnings call transcript Q&A (issuer-published)",
+            ),
+        }
         for p in prior_transcripts
     ]
     return template.render(
@@ -377,9 +399,15 @@ def _render_prompt(
         prior_periods=prior_periods,
         thesis_anchor_block=thesis_anchor_block or "(no thesis anchor on file)",
         number_formatting_block=NUMBER_FORMATTING_BLOCK,
-        current_prepared_remarks=current_prepared_remarks,
-        current_qa=current_qa,
-        prior_transcripts=prior_transcripts,
+        current_prepared_remarks=spotlight(
+            current_prepared_remarks,
+            source="earnings call transcript prepared remarks (issuer-published)",
+        ),
+        current_qa=spotlight(
+            current_qa,
+            source="earnings call transcript Q&A (issuer-published)",
+        ),
+        prior_transcripts=spotlit_priors,
     )
 
 
