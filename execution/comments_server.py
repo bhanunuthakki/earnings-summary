@@ -650,6 +650,52 @@ def create_app(
             return Response(render_holding_picker_band(repo_root), mimetype="text/html")
         return Response(render_holding_fragment(repo_root, ticker), mimetype="text/html")
 
+    @app.route("/api/position-lifecycle/<ticker>", methods=["GET"])
+    def position_lifecycle_fragment(ticker: str):
+        """The holding page's position-lifecycle timeline as a standalone
+        fragment (S5 PR2) — the grading form re-fetches this after a POST so
+        the section refreshes in place without reloading the shell."""
+        from pipeline.position_lifecycle_panel import render_position_lifecycle_section
+
+        return Response(
+            render_position_lifecycle_section(
+                db_path, ticker, user_id=request.args.get("user_id", DEFAULT_USER_ID)
+            ),
+            mimetype="text/html",
+        )
+
+    @app.route("/api/position-entries/<int:entry_id>", methods=["POST", "OPTIONS"])
+    def position_entry_grade(entry_id: int):
+        """Write the analyst's post-exit grading onto one position_entries row:
+        ``{exit_reason?, lessons?, outcome_vs_thesis?}``. Omitted keys are left
+        untouched; empty strings clear a field. 400 on an unknown outcome
+        label, 404 on a missing row."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from position_lifecycle import update_exit_fields
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+
+        def _opt(key: str) -> str | None:
+            value = payload.get(key)
+            return str(value) if value is not None else None
+
+        try:
+            ok = update_exit_fields(
+                db_path=db_path,
+                entry_id=entry_id,
+                exit_reason=_opt("exit_reason"),
+                lessons=_opt("lessons"),
+                outcome_vs_thesis=_opt("outcome_vs_thesis"),
+            )
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        if not ok:
+            return ({"error": "position_entries unavailable (pre-0088 DB?)"}, 500)
+        return {"id": entry_id, "ok": True}
+
     @app.route("/api/panel/notes_drawer", methods=["GET"])
     def notes_drawer_panel_fragment():
         """The shell's shared ✎ Notes drawer (UX9b) as a fragment: quick-add

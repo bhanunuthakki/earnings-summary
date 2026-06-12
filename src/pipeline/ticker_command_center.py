@@ -853,8 +853,10 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     on-demand drawers: **Ops** (refresh · budget bypass · DCF⇄Sheets ·
     analyses log · artifacts · freshness detail) and **Notes** (open analyst
     notes + recent alerts — the old right-hand rail)."""
+    from identity import DEFAULT_USER_ID
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
+    from pipeline.position_lifecycle_panel import render_position_lifecycle_section
 
     t = ticker.upper()
     tcc = build_ticker_command_center(repo_root, t)
@@ -872,6 +874,10 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     ops_body = "".join(
         [
             reread_section,
+            # The position-lifecycle timeline (S5 PR2): entry/exit snapshots +
+            # post-exit grading. Live-rendered, between the reread and the
+            # operational sections — analytical content leads the drawer.
+            render_position_lifecycle_section(db_path, t, user_id=DEFAULT_USER_ID),
             _freshness_strip(tcc.identity),
             _refresh_section(t),
             _dcf_sheets_section(t),
