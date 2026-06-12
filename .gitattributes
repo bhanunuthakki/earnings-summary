@@ -1,0 +1,4 @@
+# Golden render snapshots are byte-compared by tests/test_workspace_golden.py.
+# Keep them out of EOL translation so a CRLF checkout can't make the on-disk
+# bytes differ from what the harness wrote (it writes/reads LF explicitly).
+tests/golden/workspace/** -text
