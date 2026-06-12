@@ -139,7 +139,9 @@ def test_chat_dispatches_to_pool_and_streams_chunks(monkeypatch, client):
     """Smoke-test the new pool path — chunks from a fake stream_response
     flow through the queue and into the SSE response."""
 
-    def fake_stream_response(*, repo_root, ticker, report_date, user_message):
+    # extra_context carries grounding evidence and the S7 NEED-protocol —
+    # armed turns always pass it, so fakes must accept it.
+    def fake_stream_response(*, repo_root, ticker, report_date, user_message, extra_context=""):
         yield {"type": "delta", "text": f"hello {ticker}"}
         yield {"type": "final", "text": "done"}
 
@@ -166,7 +168,7 @@ def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
     """If stream_response raises mid-flight, the pool catches it and
     emits an error SSE frame instead of leaving the queue stuck."""
 
-    def boom(*, repo_root, ticker, report_date, user_message):
+    def boom(*, repo_root, ticker, report_date, user_message, extra_context=""):
         yield {"type": "delta", "text": "partial"}
         raise RuntimeError("subprocess died")
 
@@ -261,7 +263,7 @@ def test_concurrent_chat_requests_proceed_in_parallel(monkeypatch, client):
     """
     barrier = threading.Barrier(2, timeout=5)
 
-    def fake_stream_response(*, repo_root, ticker, report_date, user_message):
+    def fake_stream_response(*, repo_root, ticker, report_date, user_message, extra_context=""):
         # Both workers must reach this point within 5s. If chat requests
         # are serialized, only one ever does, and barrier.wait raises
         # BrokenBarrierError after the timeout.

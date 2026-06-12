@@ -335,9 +335,12 @@ def _extract_diff(text: str) -> dict[str, object] | None:
     return cast("dict[str, object]", payload).get("diff") if "diff" in payload else None
 
 
-# Public name — the ask engine extracts diffs from portfolio-scoped
-# narrative answers it composes itself (src/ask/engine.py).
+# Public names — the ask engine extracts diffs from portfolio-scoped
+# narrative answers it composes itself, and the S7 evidence loop rebuilds
+# the report-drawer prompt for ledger-attributed follow-up calls
+# (src/ask/engine.py).
 extract_diff = _extract_diff
+build_system_prompt = _system_prompt
 
 
 def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
@@ -600,6 +603,7 @@ __all__ = [
     "ChatTurn",
     "apply_chat_diff",
     "build_chat_response",
+    "build_system_prompt",
     "extract_diff",
     "load_thread",
     "save_thread",
