@@ -3,7 +3,7 @@
 Mocks LLM calls so the test suite doesn't need a live Claude binary. Verifies:
 - capture-file loading and deduplication
 - active-purpose discovery (with and without a DB)
-- verdicts accumulate correctly via _insert_verdict
+- verdicts accumulate correctly via the canonical writer (record_verdict)
 - no-persist mode writes nothing
 - cron files exist and are syntactically valid
 """
@@ -106,19 +106,23 @@ def minimal_db(tmp_path: Path) -> Path:
         )
         """
     )
+    # Mirrors the reconciled 0084 migration (#448) — the one canonical shape
+    # record_verdict writes and apply_model_switches reads.
     conn.execute(
         """
         CREATE TABLE model_eval_verdicts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             purpose TEXT NOT NULL,
-            incumbent_model TEXT NOT NULL,
-            candidate_model TEXT NOT NULL,
+            candidate TEXT NOT NULL,
+            incumbent TEXT NOT NULL,
             verdict TEXT NOT NULL,
-            judge_agreement REAL NOT NULL,
-            n_cases INTEGER NOT NULL,
-            n_parity INTEGER NOT NULL,
-            evaluated_at TEXT NOT NULL,
-            summary_json TEXT
+            run_id TEXT NOT NULL,
+            parity_rate REAL,
+            judge_agreement REAL,
+            n_cases INTEGER,
+            n_parity INTEGER,
+            summary_json TEXT,
+            recorded_at TEXT NOT NULL
         )
         """
     )
@@ -278,31 +282,29 @@ def test_discover_active_purposes_filters_to_explicit(sweep: Any, minimal_db: Pa
 
 
 # ---------------------------------------------------------------------------
-# _insert_verdict
+# Verdict persistence (llm.model_overrides.record_verdict — the one writer)
 # ---------------------------------------------------------------------------
 
 
-def test_insert_verdict_accumulates(sweep: Any, minimal_db: Path) -> None:
-    from datetime import datetime
+def test_insert_verdict_accumulates(minimal_db: Path) -> None:
+    """Verdicts accumulate through the ONE canonical writer
+    (llm.model_overrides.record_verdict — #448 removed the sweep's divergent
+    _insert_verdict): rolling INSERTs, never an upsert."""
+    from llm.model_overrides import record_verdict
 
-    from llm.model_eval import KEEP_INCUMBENT, CandidateVerdict
-
-    verdict = CandidateVerdict(
-        purpose="bear_case",
-        incumbent="claude-sonnet-4-6",
-        candidate="claude-haiku-4-5-20251001",
-        n=4,
-        candidate_wins=1,
-        incumbent_wins=3,
-        ties=0,
-        parity_rate=0.25,
-        judge_agreement=1.0,
-        recommendation=KEEP_INCUMBENT,
-        reason="incumbent winning majority",
-    )
-    at = datetime(2026, 6, 11, 3, 0, 0)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)  # second INSERT
+    for _ in range(2):
+        record_verdict(
+            purpose="bear_case",
+            candidate="claude-haiku-4-5-20251001",
+            incumbent="claude-sonnet-4-6",
+            verdict="KEEP_INCUMBENT",
+            run_id="run0001",
+            parity_rate=0.25,
+            judge_agreement=1.0,
+            n_cases=4,
+            n_parity=1,
+            db_path=minimal_db,
+        )
 
     conn = sqlite3.connect(str(minimal_db))
     rows = conn.execute("SELECT * FROM model_eval_verdicts").fetchall()
@@ -310,39 +312,42 @@ def test_insert_verdict_accumulates(sweep: Any, minimal_db: Path) -> None:
     assert len(rows) == 2  # rolling INSERT, not upsert
 
 
-def test_insert_verdict_fields(sweep: Any, minimal_db: Path) -> None:
-    from datetime import datetime
+def test_insert_verdict_fields(minimal_db: Path) -> None:
+    """record_verdict persists every CandidateVerdict field (asserted by
+    column NAME — the positional asserts broke once already in the #441/#443
+    schema fork)."""
+    from llm.model_eval import SWITCH_DOWN
+    from llm.model_overrides import record_verdict
 
-    from llm.model_eval import SWITCH_DOWN, CandidateVerdict
-
-    verdict = CandidateVerdict(
+    record_verdict(
         purpose="transcript_summary",
-        incumbent="claude-sonnet-4-6",
         candidate="claude-haiku-4-5-20251001",
-        n=6,
-        candidate_wins=5,
-        incumbent_wins=1,
-        ties=0,
+        incumbent="claude-sonnet-4-6",
+        verdict=SWITCH_DOWN,
+        run_id="run0042",
         parity_rate=5 / 6,
         judge_agreement=0.8,
-        recommendation=SWITCH_DOWN,
-        reason="haiku holds parity",
+        n_cases=6,
+        n_parity=5,
+        summary_json=json.dumps({"recommendation": SWITCH_DOWN, "reason": "haiku holds parity"}),
+        db_path=minimal_db,
     )
-    at = datetime(2026, 6, 11, 4, 0, 0)
-    sweep._insert_verdict(minimal_db, verdict, evaluated_at=at)
 
     conn = sqlite3.connect(str(minimal_db))
+    conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM model_eval_verdicts").fetchone()
     conn.close()
 
-    assert row[1] == "transcript_summary"  # purpose
-    assert row[2] == "claude-sonnet-4-6"  # incumbent_model
-    assert row[3] == "claude-haiku-4-5-20251001"  # candidate_model
-    assert row[4] == SWITCH_DOWN  # verdict
-    assert abs(row[5] - 0.8) < 0.001  # judge_agreement
-    assert row[6] == 6  # n_cases
-    assert row[7] == 5  # n_parity (wins + ties)
-    summary = json.loads(row[9])  # summary_json
+    assert row["purpose"] == "transcript_summary"
+    assert row["incumbent"] == "claude-sonnet-4-6"
+    assert row["candidate"] == "claude-haiku-4-5-20251001"
+    assert row["verdict"] == SWITCH_DOWN
+    assert row["run_id"] == "run0042"
+    assert abs(row["judge_agreement"] - 0.8) < 0.001
+    assert row["n_cases"] == 6
+    assert row["n_parity"] == 5
+    assert row["recorded_at"]  # stamped now-UTC by the writer
+    summary = json.loads(row["summary_json"])
     assert summary["recommendation"] == SWITCH_DOWN
 
 
