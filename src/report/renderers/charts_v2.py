@@ -657,7 +657,14 @@ def yoy_heatmap_table(
         return (curr / prior - 1) * 100
 
     def cagr(curr: float | None, prior: float | None, n_years: float) -> float | None:
-        if curr is None or prior is None or prior <= 0 or curr <= 0:
+        if curr is None or prior is None:
+            return None
+        if curr < 0 and prior < 0:
+            # Sign-stable negative series (capex is stored as negative spend):
+            # CAGR of the magnitude, matching the sign-through YoY% cells.
+            # Sign flips (loss→profit) still return None below.
+            curr, prior = -curr, -prior
+        if prior <= 0 or curr <= 0:
             return None
         return ((curr / prior) ** (1 / n_years) - 1) * 100
 

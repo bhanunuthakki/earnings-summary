@@ -158,20 +158,72 @@ def _assemble_corpus_md(ticker: str, repo_root: Path, db_path: Path) -> str:
     return out.getvalue() or "_(no corpus material available)_\n"
 
 
+# Direct financial_facts read — NOT the metrics/ratios views. The views
+# window-scan all ~726k facts per query (~12s each) and key identity off the
+# fiscal-period LABEL, which cross-labels quarters for off-calendar reporters;
+# reading facts keyed on the period_end DATE is the #452 pattern (see
+# src/report/sections/financials.py, which documents the rationale). Period
+# types mirror report.sections._common.ANNUAL_PERIOD_TYPES.
+_ANNUAL_FACTS_SQL = """
+WITH dedup AS (
+    SELECT
+        line_item, value,
+        CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
+        ROW_NUMBER() OVER (
+            PARTITION BY CAST(substr(period_end, 1, 4) AS INTEGER), line_item
+            ORDER BY source_doc_id DESC, period_end DESC
+        ) AS rn
+    FROM financial_facts
+    WHERE ticker = ? AND fiscal_period_type IN ('FY', 'annual')
+)
+SELECT
+    fiscal_year,
+    MAX(CASE WHEN line_item = 'revenue' THEN value END) AS revenue,
+    MAX(CASE WHEN line_item = 'operating_income' THEN value END) AS operating_income,
+    MAX(CASE WHEN line_item = 'net_income' THEN value END) AS net_income,
+    MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS free_cash_flow,
+    MAX(CASE WHEN line_item = 'total_stockholders_equity' THEN value END) AS total_equity
+FROM dedup
+WHERE rn = 1
+GROUP BY fiscal_year
+ORDER BY fiscal_year DESC
+LIMIT ?
+"""
+
+
 def _load_annual(conn: sqlite3.Connection, ticker: str, n: int) -> list[dict[str, object]]:
+    """Last N fiscal years (oldest first) with the ratios the corpus table shows.
+
+    Margins/ROE are computed here from the underlying line items — same
+    formulas as the retired ``ratios`` view (x / NULLIF(denominator, 0)).
+    """
     cur = conn.cursor()
-    cur.execute(
-        "SELECT m.fiscal_year, m.revenue, r.operating_margin, r.fcf_margin, "
-        "r.net_margin, r.roe FROM metrics m LEFT JOIN ratios r "
-        "ON m.ticker = r.ticker AND m.fiscal_year = r.fiscal_year "
-        "AND m.fiscal_period_type = r.fiscal_period_type "
-        "WHERE m.ticker = ? AND m.fiscal_period_type = 'FY' "
-        "ORDER BY m.period_end DESC LIMIT ?",
-        (ticker, n),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    cur.execute(_ANNUAL_FACTS_SQL, (ticker.upper(), n))
+    rows: list[dict[str, object]] = []
+    for r in cur.fetchall():
+        revenue = r["revenue"]
+        rows.append(
+            {
+                "fiscal_year": r["fiscal_year"],
+                "revenue": revenue,
+                "operating_margin": _ratio(r["operating_income"], revenue),
+                "fcf_margin": _ratio(r["free_cash_flow"], revenue),
+                "net_margin": _ratio(r["net_income"], revenue),
+                "roe": _ratio(r["net_income"], r["total_equity"]),
+            }
+        )
     rows.reverse()
     return rows
+
+
+def _ratio(numerator: object, denominator: object) -> float | None:
+    if (
+        not isinstance(numerator, (int, float))
+        or not isinstance(denominator, (int, float))
+        or denominator == 0
+    ):
+        return None
+    return float(numerator) / float(denominator)
 
 
 def _load_risk_factors(repo_root: Path, ticker: str) -> tuple[str, int | None]:
@@ -318,7 +370,7 @@ def _append_to_diligence(
     contradicting = result.get("contradicting_evidence")
     if isinstance(contradicting, list) and contradicting:
         body.write("**Contradicting evidence:**\n\n")
-        for item in contradicting:
+        for item in cast("list[object]", contradicting):
             body.write(f"- {item}\n")
         body.write("\n")
     mgmt = result.get("mgmt_credibility_check")
@@ -327,7 +379,7 @@ def _append_to_diligence(
     assumptions = result.get("thesis_assumptions")
     if isinstance(assumptions, list) and assumptions:
         body.write("**Thesis assumptions to monitor:**\n\n")
-        for item in assumptions:
+        for item in cast("list[object]", assumptions):
             body.write(f"- {item}\n")
         body.write("\n")
     with open(path, "a", encoding="utf-8") as f:
