@@ -69,6 +69,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # most-specific colloquialism resolution — the first live eval run's
     # failure modes (vs-002/vs-016 YoY-of-YoY, vs-010 R&D->opex).
     "viewspec_compile": "v2",
+    # Ask pack router (src/ask/router.py, S4). Bump when _build_prompt's
+    # catalog/rules are materially rewritten, then re-run
+    # `run_llm_evals.py --purpose ask_pack_router`.
+    "ask_pack_router": "v1",
     # Rubric-audited prose purposes (mode B, PR 2): their audit runs are keyed
     # to these versions, so bump when generate_summary's prompt /
     # _NEXT_DOLLAR_PROMPT is materially rewritten and the score history forks

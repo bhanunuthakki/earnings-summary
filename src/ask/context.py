@@ -159,6 +159,14 @@ a single report:
 
 {universe}{thesis_block}
 
+Portfolio-state evidence: when the question concerns the book itself
+(sizing, weights, cost basis, valuation gaps, past decisions, the journal),
+the numbered EVIDENCE block may carry portfolio packs — live holdings,
+stated conviction and targets, DCF fair values, the decision ledger, open
+notes, performance vs benchmarks. Cite them like any other numbered source;
+when a pack reports "offline" or "none on file", say the data is
+unavailable instead of estimating it.
+
 Answer from this context first. When you need specifics, use the Read tool
 — you have read access to:
 

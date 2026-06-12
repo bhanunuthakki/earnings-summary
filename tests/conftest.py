@@ -70,3 +70,24 @@ def _no_real_chat_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(chat_session, "stream_llm_text", _blocked)
     monkeypatch.setattr(chat_session.build_chat_response, "stream_response", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pack_router_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same never-spend rule for the ask pack router (S4): ``ask.grounding``
+    consults it on every narrative turn, so any test with tracked companies
+    in its fixture DB would otherwise launch a real Haiku subprocess. The
+    block raises at the router's transport seam; ``route_packs`` catches it
+    (its documented fail-closed contract) and the turn degrades to
+    document-only evidence — no spend, prod-faithful behavior. Tests that
+    exercise routing/packs monkeypatch ``ask.router.call_llm_structured``
+    or ``ask.grounding.route_packs`` themselves."""
+    import ask.router as ask_router
+
+    def _blocked(*_a: object, **_k: object) -> object:
+        raise AssertionError(
+            "real pack-router LLM invoked in a test — monkeypatch "
+            "ask.router.call_llm_structured or ask.grounding.route_packs"
+        )
+
+    monkeypatch.setattr(ask_router, "call_llm_structured", _blocked)

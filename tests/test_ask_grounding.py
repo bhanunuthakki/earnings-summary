@@ -52,6 +52,12 @@ CREATE TABLE tracked_companies (
     user_id TEXT NOT NULL DEFAULT 'bhanu', ticker TEXT NOT NULL,
     name TEXT NOT NULL, list_type TEXT NOT NULL
 );
+CREATE TABLE dcf_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL, valuation_date TEXT NOT NULL,
+    npv_per_share NUMERIC, live_price NUMERIC,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 _TRANSCRIPT_LINES = [
@@ -153,6 +159,10 @@ def repo(tmp_path: Path) -> Path:
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('TST', 'Test Co',"
         " 'portfolio')"
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price)"
+        " VALUES ('TST', '2026-06-01', 50.0, 40.0)"
     )
     conn.commit()
     conn.close()
@@ -261,3 +271,46 @@ def test_question_terms_drop_stopwords_and_fold_plurals() -> None:
     assert "operating" in terms
     assert "why" not in terms
     assert "the" not in terms
+
+
+# ----------------------------------------------------------------------------
+# Portfolio packs in the numbering (S4)
+
+
+def test_selected_packs_lead_the_numbering(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from ask.router import PackRoute
+
+    def _dcf_route(_q: str, *, db_path: Path) -> PackRoute:
+        return PackRoute(("dcf",), "ok")
+
+    monkeypatch.setattr("ask.grounding.route_packs", _dcf_route)
+    items = _gather(repo, "TST revenue trend — is it cheap vs my model?")
+    assert items, "expected pack + fact evidence"
+    assert items[0].kind == "dcf"
+    assert items[0].href == "/#decisions_record"
+    assert "fair $50.00 vs live $40.00" in items[0].text
+    assert "+25% upside" in items[0].text
+    # Document evidence still follows, numbering stays sequential.
+    assert any(i.kind == "fact" for i in items[1:])
+    assert [i.n for i in items] == list(range(1, len(items) + 1))
+
+
+def test_pack_channel_failure_never_costs_document_evidence(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(_q: str, *, db_path: Path) -> object:
+        raise RuntimeError("router bug")
+
+    monkeypatch.setattr("ask.grounding.route_packs", _boom)
+    items = _gather(repo, "TST revenue trend")
+    assert any(i.kind == "fact" for i in items)
+    assert all(i.kind in ("fact", "filing", "transcript") for i in items)
+
+
+def test_unpatched_router_is_blocked_by_conftest_and_degrades(repo: Path) -> None:
+    """The autouse conftest blocker raises at the router's transport seam;
+    route_packs swallows it (fail-closed) — document evidence is unaffected
+    and no subprocess can launch from the suite."""
+    items = _gather(repo, "TST revenue trend")
+    assert any(i.kind == "fact" for i in items)
+    assert all(i.kind in ("fact", "filing", "transcript") for i in items)

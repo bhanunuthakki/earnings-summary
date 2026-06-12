@@ -1,8 +1,13 @@
 """Grounded evidence retrieval for narrative answers (Ask v3).
 
 Before a narrative turn reaches the LLM, this module pulls the rows and
-passages most relevant to the question from the three citeable stores:
+passages most relevant to the question from the citeable stores:
 
+  packs       — portfolio evidence (S4): live holdings, stated conviction,
+                DCF fair values, the decision ledger, open journal notes,
+                performance vs benchmarks. ``ask.router`` decides per
+                question which packs load (a budget-gated fast-model call
+                that fails closed to none); ``ask.packs`` loads them.
   facts       — kpi_facts + financial_facts series whose metric the
                 question names (matched against kpi_definitions names and
                 financial_facts line items), with the latest fact's
@@ -15,13 +20,17 @@ passages most relevant to the question from the three citeable stores:
                 file lines, so hits cite /source/<doc_id>#L<line>), located
                 through the transcripts table's document_id
 
-Each hit becomes a numbered ``EvidenceItem`` ([1], [2], …). The engine
-injects ``build_evidence_block`` into the prompt under a cite-or-don't-claim
-contract and, after the answer streams, emits a ``citations`` event with
-``used_citation_items`` — only the markers the answer actually used.
+Each hit becomes a numbered ``EvidenceItem`` ([1], [2], …); packs lead the
+numbering (the book is the primary context for the questions that select
+them). The engine injects ``build_evidence_block`` into the prompt under a
+cite-or-don't-claim contract and, after the answer streams, emits a
+``citations`` event with ``used_citation_items`` — only the markers the
+answer actually used.
 
-Everything is best-effort and read-only: a missing DB, table, or file
-silently contributes nothing. No LLM calls, no writes.
+Everything is best-effort and read-only: a missing DB, table, or file —
+or any pack-channel failure — silently contributes nothing. The one LLM
+call here is the pack router (see ``ask.router`` for its budget gate and
+fail-closed contract); document retrieval itself never calls a model.
 """
 
 from __future__ import annotations
@@ -35,6 +44,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from ask.packs import load_packs
+from ask.router import route_packs
+
 log = logging.getLogger(__name__)
 
 # Caps keep the evidence block interactive-sized: the model reads it on
@@ -43,7 +55,8 @@ _MAX_FACT_ITEMS_PER_TICKER = 3
 _MAX_FACT_ITEMS = 6
 _MAX_FILING_ITEMS = 2
 _MAX_TRANSCRIPT_ITEMS = 3
-_MAX_ITEMS = 12
+# Document channels self-cap at 11 (6+2+3); packs at one item each (≤6).
+_MAX_ITEMS = 18
 _MAX_TICKERS = 4
 _SERIES_POINTS = 8
 _FILING_SNIPPET_CHARS = 700
@@ -164,7 +177,7 @@ class EvidenceItem:
     """One numbered, citeable piece of evidence."""
 
     n: int
-    kind: str  # "fact" | "filing" | "transcript"
+    kind: str  # "fact" | "filing" | "transcript" | a pack key (ask.packs.PACK_KEYS)
     label: str  # chip text, e.g. "NU · Operating Margin (GAAP)"
     text: str  # what the model reads (series values / passage snippet)
     doc_id: int | None
@@ -624,14 +637,27 @@ def gather_evidence(
         return []
     try:
         named = _named_tracked_tickers(q, db_path)
-        tickers = (named or [t.strip().upper() for t in scope_tickers if t.strip()])[:_MAX_TICKERS]
+        scope = [t.strip().upper() for t in scope_tickers if t.strip()]
+        tickers = (named or scope)[:_MAX_TICKERS]
         if not tickers:
             return []
         terms = question_terms(q)
         question_squashed = _squash(q)
 
-        conn = _connect(db_path)
+        # Portfolio packs lead the numbering. Focus = the tickers the
+        # question literally names; a small scope (the report drawer's one
+        # ticker, an explicit ask-box universe) also focuses, while a wide
+        # scope (the whole portfolio) means portfolio-wide pack views. The
+        # channel is isolated so a pack bug can never cost document evidence.
         raw: list[dict[str, object]] = []
+        try:
+            focus = named or (scope if len(scope) <= _MAX_TICKERS else [])
+            route = route_packs(q, db_path=db_path)
+            raw.extend(load_packs(route.packs, db_path=db_path, focus_tickers=focus))
+        except Exception:
+            log.warning({"event": "ask_pack_channel_failed"}, exc_info=True)
+
+        conn = _connect(db_path)
         try:
             if conn is not None:
                 raw.extend(_fact_evidence(conn, question_squashed, tickers))
