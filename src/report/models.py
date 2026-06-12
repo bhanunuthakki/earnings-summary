@@ -99,6 +99,13 @@ class ValuationSnapshot(BaseModel):
     # dcf_runs snapshot. None when the run predates model tagging.
     valuation_model_label: str | None = None
 
+    # S11 — workbook→assumptions-JSON sync outcome from dcf_runs (migration
+    # 0091): 'synced' / 'created' / 'failed: <detail>' + the naive-UTC stamp.
+    # None when the run predates the columns, the DB lacks them, or the
+    # archetype doesn't run the redesign sync — the card stays quiet then.
+    assumptions_sync_status: str | None = None
+    assumptions_synced_at: datetime | None = None
+
 
 class KpiSnapshotRow(BaseModel):
     name: str

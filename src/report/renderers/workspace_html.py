@@ -2506,6 +2506,7 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         _val_row(body, "Margin-of-safety bar", f"{v.mos_bar * 100:.0f}%")
     if v.trigger_status and v.trigger_status != "unknown":
         _val_row(body, "Trigger status", v.trigger_status.upper())
+    _assumptions_sync_row(body, v)
     # (Valuation date rides in the header's as-of slot — P4.1 anatomy.)
     if v.sheet_url:
         # A Google Sheet is linked (holdings dcf_defaults.gsheet_id) — point
@@ -2547,6 +2548,33 @@ def _val_row(
     if muted:
         cls += " muted"
     body.write(f'<div class="{cls}"><span>{_esc(label)}</span><strong>{_esc(value)}</strong></div>')
+
+
+def _assumptions_sync_row(body: StringIO, v: ValuationSnapshot) -> None:
+    """The workbook↔assumptions-JSON sync state (S11, dcf_runs 0091).
+
+    A failed sync means workbook edits are NOT mirrored to the from-scratch
+    build default — a from-scratch rebuild would revert them — so it renders
+    as a loud warning. Quiet (no row) when the run predates the columns or
+    the archetype doesn't sync.
+    """
+    if not v.assumptions_sync_status:
+        return
+    when = v.assumptions_synced_at.date().isoformat() if v.assumptions_synced_at else ""
+    status = v.assumptions_sync_status
+    if status.startswith("failed"):
+        body.write(
+            '<div class="val-row"><span>Assumptions JSON</span>'
+            f'<strong class="neg" title="{_esc(status)}">sync FAILED'
+            f"{' · ' + _esc(when) if when else ''} — workbook edits not mirrored; "
+            "a from-scratch rebuild would revert them</strong></div>"
+        )
+        return
+    label = "created from workbook" if status == "created" else "synced"
+    body.write(
+        '<div class="val-row muted"><span>Assumptions JSON</span>'
+        f"<strong>{_esc(label)}{' · ' + _esc(when) if when else ''}</strong></div>"
+    )
 
 
 def _scenario_range_block(body: StringIO, v: ValuationSnapshot) -> None:

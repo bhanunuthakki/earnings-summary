@@ -173,12 +173,17 @@ def _valuation_snapshot(
         )
 
     cursor = conn.cursor()
+    # The sync-outcome columns are migration 0091 — read them only when the
+    # DB has them so briefs still build against an older repo data dir.
+    cols = {str(r[1]) for r in cursor.execute("PRAGMA table_info(dcf_runs)")}
+    has_sync_cols = "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
+    sync_select = ", assumptions_sync_status, assumptions_synced_at" if has_sync_cols else ""
     cursor.execute(
-        """
+        f"""
         SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
                shares_outstanding, breakdown_json,
                live_price, live_price_at, over_under_pct, mos_bar_used,
-               assumption_snapshot_json
+               assumption_snapshot_json{sync_select}
         FROM dcf_runs
         WHERE ticker = ?
         LIMIT 1
@@ -210,6 +215,12 @@ def _valuation_snapshot(
     upside = -over_under if over_under is not None else None
     trigger = _trigger_status(over_under, mos_bar_used, held=held)
     bull_fv, bear_fv = _scenario_range(row["assumption_snapshot_json"])
+    sync_status = (
+        str(row["assumptions_sync_status"])
+        if has_sync_cols and row["assumptions_sync_status"] is not None
+        else None
+    )
+    synced_at = _parse_iso_datetime(row["assumptions_synced_at"]) if has_sync_cols else None
 
     return ValuationSnapshot(
         consolidated_npv_per_share=cons_npv_per_share,
@@ -228,6 +239,8 @@ def _valuation_snapshot(
         bull_npv_per_share=bull_fv,
         bear_npv_per_share=bear_fv,
         valuation_model_label=_model_label(row["assumption_snapshot_json"]),
+        assumptions_sync_status=sync_status,
+        assumptions_synced_at=synced_at,
     )
 
 

@@ -64,7 +64,8 @@ CREATE TABLE dcf_runs (
     currency TEXT, notes TEXT, run_id TEXT,
     live_price REAL, live_price_at TEXT, over_under_pct REAL,
     mos_bar_used REAL, assumption_snapshot_json TEXT,
-    revenue_growths_json TEXT, fcf_margin REAL
+    revenue_growths_json TEXT, fcf_margin REAL,
+    assumptions_sync_status TEXT, assumptions_synced_at TEXT
 );
 """
 
@@ -677,7 +678,7 @@ def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> No
         beta=1.45,
         equity_risk_premium=0.055,
     )
-    assert refresh_dcf.sync_assumptions_json(tmp_path, "TESTCO", edited) is True
+    assert refresh_dcf.sync_assumptions_json(tmp_path, "TESTCO", edited).status == "synced"
     out = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
     rd = out["redesign"]
     assert rd["segments"]["Total company"] == {"near_term_growth": 0.06, "terminal_growth": 0.02}
@@ -698,13 +699,42 @@ def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> No
     assert out["narrative"] == "TOP NARRATIVE keep"
 
 
-def test_sync_assumptions_json_noop_when_absent(tmp_path: Path) -> None:
-    """No assumptions file or no redesign block -> returns False, writes nothing."""
-    assert refresh_dcf.sync_assumptions_json(tmp_path, "MISSING", _BASE) is False
+def test_sync_creates_assumptions_json_when_absent(tmp_path: Path) -> None:
+    """No assumptions file (the silent-no-op hole: 43 of ~91 workbooks) -> one
+    is CREATED from the workbook inputs, marked set_by='sync', so a
+    from-scratch build reproduces the user's values instead of reverting them."""
+    res = refresh_dcf.sync_assumptions_json(tmp_path, "MISSING", _BASE)
+    assert res.status == "created"
+    created = json.loads(
+        (tmp_path / "data" / "dcf_assumptions" / "MISSING.json").read_text(encoding="utf-8")
+    )
+    rd = created["redesign"]
+    assert rd["set_by"] == "sync"
+    assert rd["exit_multiple"] == 12.0
+    assert rd["segments"]["Total company"]["near_term_growth"] == 0.10
+    # no fabricated Opus provenance for a workbook-derived block
+    assert "opus_baseline" not in created
+
+    # A file with no redesign block gets one (other keys preserved).
+    adir = tmp_path / "data" / "dcf_assumptions"
+    (adir / "NOBLOCK.json").write_text(json.dumps({"ticker": "NOBLOCK"}), encoding="utf-8")
+    res = refresh_dcf.sync_assumptions_json(tmp_path, "NOBLOCK", _BASE)
+    assert res.status == "created"
+    out = json.loads((adir / "NOBLOCK.json").read_text(encoding="utf-8"))
+    assert out["ticker"] == "NOBLOCK"
+    assert out["redesign"]["set_by"] == "sync"
+
+
+def test_sync_fails_loud_on_unreadable_json(tmp_path: Path) -> None:
+    """Corruption is 'failed' + detail — never a silent False."""
     adir = tmp_path / "data" / "dcf_assumptions"
     adir.mkdir(parents=True)
-    (adir / "NOBLOCK.json").write_text(json.dumps({"ticker": "NOBLOCK"}), encoding="utf-8")
-    assert refresh_dcf.sync_assumptions_json(tmp_path, "NOBLOCK", _BASE) is False
+    (adir / "BAD.json").write_text("{not json", encoding="utf-8")
+    res = refresh_dcf.sync_assumptions_json(tmp_path, "BAD", _BASE)
+    assert res.status == "failed"
+    assert res.detail is not None and "unreadable" in res.detail
+    (adir / "NOTOBJ.json").write_text('"just a string"', encoding="utf-8")
+    assert refresh_dcf.sync_assumptions_json(tmp_path, "NOTOBJ", _BASE).status == "failed"
 
 
 def test_refresh_redesign_syncs_assumptions_json(
@@ -730,11 +760,18 @@ def test_refresh_redesign_syncs_assumptions_json(
     wb.save(str(dest))
     wb.close()
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
-    assert res["assumptions_synced"] is True
+    assert res["assumptions_sync"] == {"status": "synced", "detail": None}
     rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
     assert rd["exit_multiple"] == pytest.approx(8.0)
     assert rd["beta"] == pytest.approx(1.55)
     assert rd["narrative"] == "keep me"
+    # The sync outcome is durable: persisted onto the dcf_runs row (0090).
+    conn = sqlite3.connect(str(db))
+    srow = conn.execute(
+        "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO'"
+    ).fetchone()
+    conn.close()
+    assert srow is not None and srow[0] == "synced" and srow[1]
 
 
 def test_refresh_provenance_end_to_end(refresh_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:

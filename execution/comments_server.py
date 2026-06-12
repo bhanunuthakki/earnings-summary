@@ -474,6 +474,14 @@ def create_app(
 
             return Response(render_cron_health_panel(db_path), mimetype="text/html")
 
+        if name == "dcf_coverage":
+            # Which of the ~90 DCF workbooks are live / stale / skipped /
+            # orphaned (S11): per-name workbook + dcf_runs freshness +
+            # assumptions-JSON state + the workbook→JSON sync outcome (0091).
+            from pipeline.dcf_coverage_panel import render_dcf_coverage_panel
+
+            return Response(render_dcf_coverage_panel(db_path, repo_root), mimetype="text/html")
+
         if name == "validation":
             # Whole-book data-quality state over validation_issues (P3.4) —
             # range violations, magnitude jumps, source disagreement, unit

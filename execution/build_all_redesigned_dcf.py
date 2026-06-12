@@ -5,6 +5,18 @@ then build ``<out-dir>/<T>.xlsx`` via ``build_redesigned_dcf.py``. Financials th
 Opus flagged ``dcf_applicable=false`` (banks/insurers/asset-managers) print SKIP.
 Prints a summary table (value/share, price, upside, segments, status).
 
+``--out-dir`` defaults to the CANONICAL workbook location ``dcf/`` (S11): the
+refresher, the Sheets round-trip, the served ``/dcf/<T>`` route and
+``dcf_runs.notes`` all resolve ``dcf/<T>.xlsx``. A from-scratch build here is
+edit-safe BY DESIGN: every refresh mirrors workbook edits back into
+``data/dcf_assumptions/<T>.json`` (creating the file when absent), and this
+builder reads that JSON — so rebuilding reproduces the user's current inputs
+rather than reverting them. Day-to-day, prefer ``refresh_dcf.py --all-named``
+(capture→rebuild→inject, plus dcf_runs persistence); this fan-out is for
+seeding new names and format migrations. The old ``dcf/redesign/`` default
+left two diverging copies per name — the DCF coverage panel flags any
+leftovers there as superseded.
+
 Usage::
 
     python execution/build_all_redesigned_dcf.py                  # maintained DCF names
@@ -64,7 +76,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--tickers", nargs="*", help="tickers to build (default: maintained DCF set)")
     ap.add_argument("--opus", action="store_true", help="refresh Opus assumptions before building")
-    ap.add_argument("--out-dir", default=str(REPO / "dcf" / "redesign"))
+    ap.add_argument(
+        "--out-dir",
+        default=str(REPO / "dcf"),
+        help="output dir (default: the canonical dcf/ — see module docstring)",
+    )
     args = ap.parse_args()
 
     tickers = args.tickers or default_tickers()

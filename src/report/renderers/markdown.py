@@ -298,6 +298,16 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
         meta_parts.append(f"MoS bar {v.mos_bar * 100:.0f}%")
     if v.valuation_date is not None:
         meta_parts.append(f"Valued {v.valuation_date}")
+    if v.assumptions_sync_status is not None:
+        # S11: a failed workbook→assumptions-JSON sync means a from-scratch
+        # rebuild would revert workbook edits — say so where the numbers are.
+        if v.assumptions_sync_status.startswith("failed"):
+            meta_parts.append(f"**assumptions sync {v.assumptions_sync_status}**")
+        else:
+            when = (
+                f" {v.assumptions_synced_at.date().isoformat()}" if v.assumptions_synced_at else ""
+            )
+            meta_parts.append(f"assumptions {v.assumptions_sync_status}{when}")
     if meta_parts:
         out.write(f"_{' · '.join(meta_parts)}_\n\n")
 
