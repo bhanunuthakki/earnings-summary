@@ -18,10 +18,16 @@ Unlike the dashboards, this is an editorial *reading* surface, so its larger
 type is deliberately surface-specific and is **left literal**, not forced onto
 the dashboard scale: the reading-body ramp (12.5-14px prose / table cells /
 panel titles) and the display ramp (15px lede -> 28px section title -> the 60px
-identity ticker / 100px hero mark / big numeric readouts). One sanctioned
-escape below the ``--fs-micro`` floor: the 8.5px per-number provenance chip
-(``.src-chip`` — intentionally the smallest mark so it never crowds the number
-it annotates).
+identity ticker / 100px hero mark / big numeric readouts). The exception is
+TYPE ONLY (UI polish v3 follow-up, 2026-06-11): every other primitive follows
+the system — chips/tags ride ``--radius-full`` with color-mix status fills,
+status colors route through ``--ok/--warn/--bad`` (green=good; the accent-blue
+"ok" pills predated the green unification), popovers use ``--shadow-pop``, and
+there is no raw hex/rgba in the local CSS. One sanctioned mark below both the
+``--fs-micro`` floor and the chip shape: the 8.5px / 3px-corner per-number
+provenance chip (``.src-chip`` — intentionally the smallest mark so it never
+crowds the number it annotates; its shell twin in ``ui/source_chip.py`` stays
+identical).
 
 Single string constant. The renderer inlines it inside a ``<style>`` tag so
 the deliverable stays a single self-contained HTML file (matches the existing
@@ -107,16 +113,22 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 
 .pill {
   display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: 3px;
+  padding: 2px 8px; border-radius: var(--radius-full);
   font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500;
   letter-spacing: 0.04em;
   border: 1px solid var(--border-2);
   white-space: nowrap;
 }
-.pill-ok { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+/* Status pills: green=good / red=bad from the semantic tokens (the accent-blue
+   "ok" predated the P0.1 green unification), soft color-mix fills per the
+   design-language chip convention. */
+.pill-ok { color: var(--ok); border-color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent); }
 .pill-neutral { color: var(--fg); border-color: var(--fg); }
-.pill-warn { color: var(--warn); border-color: var(--warn); background: rgba(185,124,0,0.08); }
-.pill-bad { color: var(--bad); border-color: var(--bad); background: var(--tone-neg); }
+.pill-warn { color: var(--warn); border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.pill-bad { color: var(--bad); border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent); }
 .pill-muted { color: var(--muted-2); border-color: var(--border); }
 
 /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny
@@ -141,7 +153,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
   min-width: 220px; max-width: 340px; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border-2);
-  border-radius: var(--radius); box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
   font-size: var(--fs-caption); text-align: left; white-space: normal;
 }
 .src-pop-row { padding: 1px 0; color: var(--fg); }
@@ -378,7 +390,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .tab-count {
   font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500;
   padding: 1px 6px; background: var(--paper);
-  border-radius: 3px; color: var(--muted);
+  border-radius: var(--radius-full); color: var(--muted);
 }
 .tab.active .tab-count { background: var(--fg); color: var(--bg); }
 .tabs-spacer { flex: 1; }
@@ -410,7 +422,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .subtab.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
 .subtab-count {
   font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500;
-  padding: 0 5px; border-radius: 3px;
+  padding: 0 5px; border-radius: var(--radius-full);
   background: var(--paper); color: var(--muted);
 }
 .subtab.active .subtab-count { background: var(--bg); color: var(--fg); }
@@ -554,7 +566,7 @@ details.panel > summary:hover { background: var(--paper); }
   font-size: var(--fs-micro); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--accent); border: 1px solid var(--accent);
-  border-radius: 3px; padding: 0 5px; flex: none;
+  border-radius: var(--radius-full); padding: 0 5px; flex: none;
 }
 .oi-body { flex: 1; color: var(--fg-soft); }
 .oi-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); flex: none; }
@@ -683,7 +695,7 @@ details.panel > summary:hover { background: var(--paper); }
   font-size: var(--fs-micro); font-weight: 600;
   padding: 3px 7px; border: 1px solid var(--accent);
   color: var(--accent); background: var(--accent-soft);
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   letter-spacing: 0.06em; min-width: 70px; text-align: center;
 }
 .qa-topic { font-size: 13.5px; font-weight: 500; flex: 1; color: var(--fg); }
@@ -838,7 +850,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .ir-type {
   font-size: var(--fs-micro); font-weight: 600;
-  padding: 3px 7px; border-radius: 3px;
+  padding: 3px 7px; border-radius: var(--radius-full);
   background: var(--accent-soft); color: var(--accent);
   letter-spacing: 0.06em; text-transform: uppercase;
 }
@@ -897,7 +909,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .decision-action {
   font-size: var(--fs-caption); font-weight: 600;
-  padding: 2px 7px; border-radius: 3px;
+  padding: 2px 7px; border-radius: var(--radius-full);
   background: var(--accent-soft); color: var(--accent);
   letter-spacing: 0.06em; text-transform: uppercase;
 }
@@ -906,12 +918,17 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .decision-outcome {
   font-size: var(--fs-micro); font-weight: 600;
-  padding: 2px 6px; border-radius: 3px;
+  padding: 2px 6px; border-radius: var(--radius-full);
   letter-spacing: 0.06em; text-transform: uppercase;
 }
-.decision-outcome.validated { color: var(--accent); background: var(--accent-soft); }
-.decision-outcome.invalidated { color: var(--bad); background: var(--tone-neg); }
-.decision-outcome.partial { color: var(--warn); background: var(--tone-opt); }
+/* Outcomes are STATUS: green=good (the accent "validated" predated the
+   green unification), soft color-mix fills per the chip convention. */
+.decision-outcome.validated { color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.decision-outcome.invalidated { color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent); }
+.decision-outcome.partial { color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent); }
 .decision-thesis {
   font-size: 12.5px; color: var(--fg-soft); line-height: 1.55;
   margin: 0;
@@ -1039,8 +1056,8 @@ details.panel > summary:hover { background: var(--paper); }
   background: var(--surface);
   color: var(--fg);
   border: 1px solid var(--border-2);
-  border-radius: var(--radius-full);
-  box-shadow: 0 12px 40px rgba(0,0,0,.16);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
   font-family: var(--sans); font-size: 12.5px;
   overflow: hidden;
 }
@@ -1072,13 +1089,13 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .twk-lbl { color: var(--fg-soft); font-weight: 500; }
 .twk-seg {
-  display: flex; padding: 2px; border-radius: 7px;
+  display: flex; padding: 2px; border-radius: var(--radius);
   background: var(--paper);
   border: 1px solid var(--border);
 }
 .twk-seg button {
   appearance: none; border: 0; background: transparent;
-  flex: 1; padding: 5px 8px; border-radius: 5px;
+  flex: 1; padding: 5px 8px; border-radius: calc(var(--radius) - 2px);
   font: inherit; font-weight: 500; color: var(--muted);
   cursor: pointer;
 }
@@ -1188,7 +1205,7 @@ details.panel > summary:hover { background: var(--paper); }
 .ledger-stale {
   margin-left: 6px; font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.04em; color: var(--warn);
-  border: 1px solid var(--warn); border-radius: 3px; padding: 0 4px;
+  border: 1px solid var(--warn); border-radius: var(--radius-full); padding: 0 4px;
 }
 /* Dim a stale row's data but keep the flag itself at full strength. */
 .ledger-stale-row td { opacity: 0.55; }
@@ -1258,7 +1275,7 @@ a.peer:hover { background: var(--paper); }
   font-family: var(--mono);
   padding: 1px 6px;
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: var(--radius-full);
 }
 .decision-brief-link:hover { background: var(--accent-soft); }
 .decision-outcome-block {
@@ -1349,17 +1366,17 @@ a.peer:hover { background: var(--paper); }
   font-size: var(--fs-micro);
   font-family: var(--mono);
   background: var(--accent);
-  color: var(--surface);
+  color: var(--accent-contrast);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   margin-left: 6px;
   vertical-align: middle;
   letter-spacing: 0.5px;
 }
 .kpi-match { color: var(--ok); font-weight: 500; }
 
-.insider-table tr.tx-buy { background: rgba(58, 138, 58, 0.06); }
-.insider-table tr.tx-sell { background: rgba(176, 64, 64, 0.04); }
+.insider-table tr.tx-buy { background: color-mix(in srgb, var(--ok) 6%, transparent); }
+.insider-table tr.tx-sell { background: color-mix(in srgb, var(--bad) 4%, transparent); }
 .insider-table td.signal-strong { color: var(--ok); font-weight: 600; }
 .insider-table td.signal-medium { color: var(--accent); font-weight: 500; }
 .insider-table td.signal-weak { color: var(--muted); }
@@ -1382,7 +1399,7 @@ ul.flag-list li {
 ul.flag-list li.flag-warn { border-left-color: var(--warn); }
 ul.flag-list li.flag-positive {
   border-left-color: var(--ok);
-  background: rgba(58, 138, 58, 0.06);
+  background: color-mix(in srgb, var(--ok) 6%, transparent);
 }
 
 /* ============================================================
@@ -1403,7 +1420,7 @@ ul.flag-list li.flag-positive {
   background: var(--warn);
   color: var(--surface);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   margin-left: 6px;
   letter-spacing: 0.5px;
 }
@@ -1414,7 +1431,7 @@ ul.flag-list li.flag-positive {
   background: var(--muted);
   color: var(--surface);
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-full);
   margin-left: 6px;
   letter-spacing: 0.5px;
 }
@@ -1464,15 +1481,15 @@ ul.flag-list li.flag-positive {
   font-weight: 600;
 }
 .decision-badge.outcome-correct .decision-outcome {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
   color: var(--ok);
 }
 .decision-badge.outcome-wrong .decision-outcome {
-  background: #fdecec;
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
   color: var(--bad);
 }
 .decision-badge.outcome-mixed .decision-outcome {
-  background: var(--tone-opt);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
   color: var(--warn);
 }
 .decision-badge.outcome-pending .decision-outcome {

@@ -257,6 +257,23 @@ def test_pr3_swept_stylesheets_carry_no_raw_hex() -> None:
     assert not offenders, f"raw hex crept back into swept CSS: {offenders}"
 
 
+def test_workspace_local_css_standardizes_non_type_primitives() -> None:
+    """PR4 (user follow-up): the report's editorial exception is TYPE ONLY.
+    Its local CSS (minus the shared palette/controls prefix, which legitimately
+    carries the token hex values) has no raw hex or rgba washes, and the only
+    3px corner left is the sanctioned .src-chip micro-mark."""
+    from report.renderers.workspace_styles import CSS as WS_CSS
+    from ui.controls import controls_css as _ccss
+    from ui.tokens import palette_css as _pcss
+
+    local = WS_CSS.replace(_pcss("paper"), "").replace(_ccss("paper"), "")
+    assert not _HEX.search(local), f"raw hex in workspace local CSS: {_HEX.findall(local)}"
+    assert "rgba(" not in local.replace("rgba(0,0,0", "").replace("rgba(0, 0, 0", ""), (
+        "non-neutral rgba wash in workspace local CSS"
+    )
+    assert local.count("border-radius: 3px") == 1  # .src-chip only
+
+
 def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
     """The 'one long label' kill (PR2): the shell palette renders ticker rows
     as .k-tick spans, and the holding combobox never bakes 'T · Name' into its
