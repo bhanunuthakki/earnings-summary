@@ -1512,7 +1512,28 @@ def _kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
         levels = s.levels_full or s.values
         if not levels or all(v is None for v in levels):
             continue
-        matrix_rows.append(MatrixRow(name=s.name, levels=list(levels), unit=s.unit))
+        # KPI chip universality (S2 PR2): same anatomy as the line-items
+        # panel — per-cell hover (tier + fetched-at + conf %), clickable chip
+        # on the row label for the latest sourced quarter. sources_full
+        # aligns to levels_full, so chips only attach on that axis.
+        cell_titles: list[str | None] | None = None
+        label_suffix = ""
+        if s.levels_full and s.sources_full:
+            cell_titles = [
+                _source_hover_title(src) if src is not None else None for src in s.sources_full
+            ]
+            latest_src = next((src for src in reversed(s.sources_full) if src is not None), None)
+            if latest_src is not None:
+                label_suffix = _source_chip_html(latest_src)
+        matrix_rows.append(
+            MatrixRow(
+                name=s.name,
+                levels=list(levels),
+                unit=s.unit,
+                cell_titles=cell_titles,
+                label_suffix_html=label_suffix,
+            )
+        )
     if not matrix_rows:
         return
     body.write(_panel_head("Tracked KPIs", sub=f"{len(matrix_rows)} analyst-tracked series"))
@@ -1538,7 +1559,26 @@ def _annual_kpi_series_yoy_panel(body: StringIO, fin: FinancialsSection) -> None
     for s in series:
         if not s.values or all(v is None for v in s.values):
             continue
-        matrix_rows.append(MatrixRow(name=s.name, levels=list(s.values), unit=s.unit))
+        # Chips on the annual axis (S2 PR2): sources_full aligns to years,
+        # which IS this panel's level axis — no window translation needed.
+        cell_titles: list[str | None] | None = None
+        label_suffix = ""
+        if s.sources_full:
+            cell_titles = [
+                _source_hover_title(src) if src is not None else None for src in s.sources_full
+            ]
+            latest_src = next((src for src in reversed(s.sources_full) if src is not None), None)
+            if latest_src is not None:
+                label_suffix = _source_chip_html(latest_src)
+        matrix_rows.append(
+            MatrixRow(
+                name=s.name,
+                levels=list(s.values),
+                unit=s.unit,
+                cell_titles=cell_titles,
+                label_suffix_html=label_suffix,
+            )
+        )
     if not matrix_rows:
         return
     periods = [str(y) for y in years]

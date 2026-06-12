@@ -146,8 +146,10 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
 
     quarterly_ok = bool(line_items)
     annual_ok = bool(annual_items)
-    status = SectionStatus.OK if (quarterly_ok and annual_ok) else (
-        SectionStatus.PARTIAL if (quarterly_ok or annual_ok) else SectionStatus.MISSING_DATA
+    status = (
+        SectionStatus.OK
+        if (quarterly_ok and annual_ok)
+        else (SectionStatus.PARTIAL if (quarterly_ok or annual_ok) else SectionStatus.MISSING_DATA)
     )
 
     requested_priorities = _read_chart_priorities_request(ticker, repo_root)
@@ -247,7 +249,7 @@ def _resolve_priorities(
     li_map = {li.line_item.lower(): li.line_item for li in line_items}
     resolved: list[str] = []
     kpi_series: list[KpiSeries] = []
-    annual_raw: list[tuple[str, str, dict[int, float]]] = []
+    annual_raw: list[tuple[str, str, dict[int, float], dict[int, CellSource]]] = []
 
     db_path = repo_root / "data" / "portfolio.db"
     conn: sqlite3.Connection | None = None
@@ -281,11 +283,85 @@ def _resolve_priorities(
     return resolved, kpi_series, annual_series, annual_years
 
 
+def _kpi_cell_sources_for(
+    conn: sqlite3.Connection,
+    ticker: str,
+    resolved_name: str,
+    period_types: tuple[str, ...],
+) -> dict[str, CellSource]:
+    """Per-period provenance for one resolved KPI definition, keyed by the
+    period_end ISO date (YYYY-MM-DD) — the kpi_facts twin of
+    ``load_financial_cell_provenance`` (KPI chip universality, S2 PR2).
+
+    Row pick matches ``_kpi_series_for`` / ``_annual_kpi_raw_for`` exactly
+    (highest ``source_doc_id`` per logical key) so the chip always describes
+    the number the series displays. Best-effort: ``{}`` on legacy DBs
+    without a documents table or the 0054/0075 provenance columns — the
+    series then renders without chips, never breaks.
+    """
+    placeholders = ",".join("?" * len(period_types))
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT kf.period_end, kf.locator, kf.confidence,
+                   kf.source_doc_id,
+                   d.fetched_at, d.source_url, d.doc_type,
+                   d.accession_number, d.filing_date,
+                   d.source_quality_tier AS source
+            FROM kpi_facts kf
+            JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+            JOIN documents d ON d.id = kf.source_doc_id
+            WHERE kf.ticker = ?
+              AND kd.name = ?
+              AND kf.fiscal_period_type IN ({placeholders})
+              AND kf.source_doc_id = (
+                  SELECT MAX(k2.source_doc_id) FROM kpi_facts k2
+                  WHERE k2.ticker = kf.ticker
+                    AND k2.kpi_definition_id = kf.kpi_definition_id
+                    AND k2.period_end = kf.period_end
+                    AND k2.fiscal_period_type = kf.fiscal_period_type
+              )
+            """,
+            (ticker.upper(), resolved_name, *period_types),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[str, CellSource] = {}
+    for r in rows:
+        raw_conf = r["confidence"]
+        raw_doc_id = r["source_doc_id"]
+        out[str(r["period_end"])[:10]] = CellSource(
+            source=str(r["source"]) if r["source"] is not None else "unknown",
+            fetched_at=str(r["fetched_at"]) if r["fetched_at"] is not None else None,
+            source_url=str(r["source_url"]) if r["source_url"] is not None else None,
+            doc_type=str(r["doc_type"]) if r["doc_type"] is not None else None,
+            accession_number=(
+                str(r["accession_number"]) if r["accession_number"] is not None else None
+            ),
+            filing_date=str(r["filing_date"]) if r["filing_date"] is not None else None,
+            locator=str(r["locator"]) if r["locator"] is not None else None,
+            doc_id=int(raw_doc_id) if raw_doc_id is not None else None,
+            confidence=float(raw_conf) if raw_conf is not None else None,
+        )
+    return out
+
+
+def _quarter_label_for_period(period_end_iso: str) -> str | None:
+    """``YYYY-MM-DD`` → the report's ``"YYYY Qn"`` label; None on bad input."""
+    try:
+        year = int(period_end_iso[:4])
+        month = int(period_end_iso[5:7])
+    except ValueError:
+        return None
+    return f"{year} Q{(month - 1) // 3 + 1}"
+
+
 def _annual_kpi_raw_for(
     conn: sqlite3.Connection, ticker: str, kpi_name: str
-) -> tuple[str, str, dict[int, float]] | None:
+) -> tuple[str, str, dict[int, float], dict[int, CellSource]] | None:
     """Pull an annual-cadence KPI's fiscal-year-end series as ``(canonical_name,
-    pretty_unit, {fiscal_year: value})``, or None when nothing resolves.
+    pretty_unit, {fiscal_year: value}, {fiscal_year: CellSource})``, or None
+    when nothing resolves.
 
     Reads only ``FY``/``annual`` rows (``ANNUAL_FACT_PERIOD_TYPES``) so interim
     prints on an otherwise-annual metric never pollute the annual axis; dedupes to
@@ -334,11 +410,25 @@ def _annual_kpi_raw_for(
             continue
     if not by_year:
         return None
-    return canonical_name, _pretty_unit(canonical_unit), by_year
+    src_by_year = {
+        year: src
+        for period_iso, src in _kpi_cell_sources_for(
+            conn, ticker, resolved_name, ANNUAL_FACT_PERIOD_TYPES
+        ).items()
+        if (year := _safe_year(period_iso)) is not None
+    }
+    return canonical_name, _pretty_unit(canonical_unit), by_year, src_by_year
+
+
+def _safe_year(period_end_iso: str) -> int | None:
+    try:
+        return int(period_end_iso[:4])
+    except ValueError:
+        return None
 
 
 def _align_annual_kpis(
-    annual_raw: list[tuple[str, str, dict[int, float]]],
+    annual_raw: list[tuple[str, str, dict[int, float], dict[int, CellSource]]],
 ) -> tuple[list[AnnualKpiSeries], list[int]]:
     """Build a shared fiscal-year axis (union of all series' years, newest
     ``ANNUAL_HISTORY_YEARS``) and align each annual KPI to it. Returns
@@ -346,7 +436,7 @@ def _align_annual_kpis(
     if not annual_raw:
         return [], []
     all_years: set[int] = set()
-    for _name, _unit, by_year in annual_raw:
+    for _name, _unit, by_year, _src in annual_raw:
         all_years.update(by_year)
     years = sorted(all_years)[-ANNUAL_HISTORY_YEARS:]
     series = [
@@ -355,8 +445,12 @@ def _align_annual_kpis(
             unit=unit,
             years=years,
             values=[by_year.get(y) for y in years],
+            sources_full=[src_by_year.get(y) for y in years],
+            confidence_full=[
+                src.confidence if (src := src_by_year.get(y)) is not None else None for y in years
+            ],
         )
-        for name, unit, by_year in annual_raw
+        for name, unit, by_year, src_by_year in annual_raw
     ]
     return series, years
 
@@ -426,12 +520,28 @@ def _kpi_series_for(
     if all(v is None for v in values):
         return None
     levels_full = [by_label.get(lbl) for lbl in quarter_labels_full]
+    # Per-period chips (S2 PR2): map provenance rows onto the same label axis
+    # the values use; best-effort ({} on legacy DBs → series without chips).
+    src_by_label: dict[str, CellSource] = {}
+    for period_iso, src in _kpi_cell_sources_for(
+        conn, ticker, resolved_name, QUARTERLY_FACT_PERIOD_TYPES
+    ).items():
+        label = _quarter_label_for_period(period_iso)
+        if label is not None:
+            src_by_label[label] = src
+    sources_full: list[CellSource | None] = [src_by_label.get(lbl) for lbl in quarter_labels_full]
     return KpiSeries(
         name=canonical_name,
         unit=_pretty_unit(canonical_unit),
         quarters=quarter_labels,
         values=values,
         levels_full=levels_full,
+        sources_full=sources_full if any(s is not None for s in sources_full) else [],
+        confidence_full=(
+            [s.confidence if s is not None else None for s in sources_full]
+            if any(s is not None for s in sources_full)
+            else []
+        ),
     )
 
 
@@ -640,7 +750,9 @@ def _build_annual(rows: list[dict[str, object]]) -> tuple[list[int], list[Annual
         series = [_to_display(merged_by_year[y].get(col), col) for y in years]
         if all(v is None for v in series):
             continue
-        items.append(AnnualLineItem(line_item=name, unit=unit, digits=digits, years=years, values=series))
+        items.append(
+            AnnualLineItem(line_item=name, unit=unit, digits=digits, years=years, values=series)
+        )
     return (years, items)
 
 
@@ -682,9 +794,7 @@ def build_per_metric(ticker: str, repo_root: Path) -> dict[str, dict[str, object
     """
     out: dict[str, dict[str, object]] = {}
     for view_col, fact_key in _LINE_ITEM_TO_FACT_KEY.items():
-        prov = load_financial_fact_provenance(
-            ticker.upper(), fact_key, repo_root=repo_root
-        )
+        prov = load_financial_fact_provenance(ticker.upper(), fact_key, repo_root=repo_root)
         if prov is None:
             continue
         out[f"{view_col}_q_latest"] = prov
