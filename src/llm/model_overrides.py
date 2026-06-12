@@ -155,49 +155,8 @@ def deactivate_override(
     return deactivated
 
 
-def record_verdict(
-    *,
-    purpose: str,
-    candidate: str,
-    incumbent: str,
-    verdict: str,
-    run_id: str,
-    parity_rate: float | None = None,
-    judge_agreement: float | None = None,
-    n_cases: int | None = None,
-    db_path: Path | str | None = None,
-) -> None:
-    """Persist one CandidateVerdict result to ``model_eval_verdicts``.
-
-    Called by ``execution/run_model_eval_sweep.py`` (PR2) and by
-    ``execution/apply_model_switches.py`` when it wants to record a verdict
-    inline.  Callers supply ``recorded_at`` implicitly as now-UTC.
-    """
-    path = _resolve_db_path(db_path)
-    if path is None:
-        raise RuntimeError("record_verdict: no DB path available")
-    now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
-    conn = sqlite3.connect(str(path), timeout=10.0)
-    try:
-        conn.execute(
-            """
-            INSERT INTO model_eval_verdicts
-                (purpose, candidate, incumbent, verdict, run_id,
-                 parity_rate, judge_agreement, n_cases, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                purpose,
-                candidate,
-                incumbent,
-                verdict,
-                run_id,
-                parity_rate,
-                judge_agreement,
-                n_cases,
-                now_iso,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+# NOTE: verdict WRITES live in execution/run_model_eval_sweep.py
+# (``_insert_verdict``, the PR2 sweep). The PR3 draft of this module carried a
+# duplicate ``record_verdict`` writer against a divergent column set (the #441
+# vs #443 mid-air schema fork); it had no callers and was removed when the
+# schemas were reconciled onto the sweep's table shape.

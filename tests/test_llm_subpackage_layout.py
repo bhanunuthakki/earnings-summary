@@ -130,8 +130,9 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     # Sonnet (default) analytical writing — unchanged.
     assert resolve("bear_case") == cli.DEFAULT_MODEL
     assert resolve("transcript_summary") == cli.DEFAULT_MODEL
+    # company_description moved Opus -> Sonnet in #444 (model-eval verdict).
+    assert resolve("company_description") == cli.DEFAULT_MODEL
     # Pre-existing Opus pins — unchanged.
-    assert resolve("company_description") == "claude-opus-4-7"
     assert resolve("valuation_basis") == "claude-opus-4-7"
     assert resolve("saydo_importance") == "claude-opus-4-7"
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"

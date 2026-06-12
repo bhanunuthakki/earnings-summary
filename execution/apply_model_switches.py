@@ -73,8 +73,8 @@ def _recent_verdicts(
             rows = conn.execute(
                 """
                 SELECT verdict FROM model_eval_verdicts
-                WHERE purpose = ? AND candidate = ?
-                ORDER BY recorded_at DESC
+                WHERE purpose = ? AND candidate_model = ?
+                ORDER BY evaluated_at DESC
                 LIMIT ?
                 """,
                 (purpose, candidate, limit),
@@ -93,7 +93,7 @@ def _all_evaluated_pairs(db_path: Path) -> list[tuple[str, str]]:
         conn = sqlite3.connect(str(db_path), timeout=5.0)
         try:
             rows = conn.execute(
-                "SELECT DISTINCT purpose, candidate FROM model_eval_verdicts"
+                "SELECT DISTINCT purpose, candidate_model FROM model_eval_verdicts"
             ).fetchall()
         finally:
             conn.close()
@@ -111,9 +111,9 @@ def _latest_incumbent(db_path: Path, purpose: str, candidate: str) -> str | None
         try:
             row = conn.execute(
                 """
-                SELECT incumbent FROM model_eval_verdicts
-                WHERE purpose = ? AND candidate = ?
-                ORDER BY recorded_at DESC
+                SELECT incumbent_model FROM model_eval_verdicts
+                WHERE purpose = ? AND candidate_model = ?
+                ORDER BY evaluated_at DESC
                 LIMIT 1
                 """,
                 (purpose, candidate),
