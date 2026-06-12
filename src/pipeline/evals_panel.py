@@ -43,6 +43,7 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "transcript_metadata",
     "intake_classifier",
     "news_structuring",
+    "decision_conditions_extract",
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",

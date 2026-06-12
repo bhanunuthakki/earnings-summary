@@ -8,11 +8,14 @@ stale HTML. This orchestrator chains the stages into one scheduled run. (The
 morning-digest render stage retired with the standalone /digest page,
 2026-06-11 — the live Home rail serves that view straight from the DB.)
 
-Four stages run in sequence as subprocess-isolated children:
+Five stages run in sequence as subprocess-isolated children:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
      ``news`` table so the material_news trigger has stories to classify;
      ``--news-source`` selects FMP / WebSearch+Opus / auto).
+  0b. decisions -- ``record_decisions.py`` (record memo verdicts into the
+     ``decisions`` ledger + extract falsifiable "what would change my mind"
+     conditions, so the decision_condition trigger evaluates fresh rows).
   1. triggers -- ``run_triggers.py`` (the long pole; fans LLM-backed sensors
      across the portfolio, cost-capped via ``--max-cost-usd``).
   2. feed     -- ``build_alert_feed.py``.
@@ -86,15 +89,27 @@ _NEWS_TIMEOUT_S = 900
 # source-disagreement checks across every tracked ticker — a SQLite-bound sweep;
 # 10 min is generous.
 _VALIDATE_TIMEOUT_S = 600
+# Stage 0b (decisions) records memo verdicts (regex, cheap) and extracts
+# falsifiable conditions for NEW decisions only (one Haiku call each, ≤50 per
+# run). Normal mornings touch 0-2 rows; 15 min covers a backfill day.
+_DECISIONS_TIMEOUT_S = 900
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
 STAGE_PREFLIGHT = "stage_preflight"
 STAGE_NEWS = "stage_0_news"
+STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
-_ALL_STAGE_KEYS = (STAGE_PREFLIGHT, STAGE_NEWS, STAGE_TRIGGERS, STAGE_FEED, STAGE_VALIDATE)
+_ALL_STAGE_KEYS = (
+    STAGE_PREFLIGHT,
+    STAGE_NEWS,
+    STAGE_DECISIONS,
+    STAGE_TRIGGERS,
+    STAGE_FEED,
+    STAGE_VALIDATE,
+)
 
 # Timeout for the environment preflight (should be sub-second).
 _PREFLIGHT_TIMEOUT_S = 30
@@ -195,6 +210,26 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *db_path_args,
                 ],
                 timeout_s=_NEWS_TIMEOUT_S,
+            )
+        )
+
+    # Stage 0b -- decision ledger + falsifiable-condition extraction, BEFORE
+    # triggers so the decision_condition sensor evaluates fresh conditions in
+    # the same run. Skipped with triggers (re-render-only path: the sensor
+    # won't run, so there is nothing to prepare). Takes --repo-root/--db-path
+    # only — no --user-id (the decisions ledger is single-operator).
+    if not args.skip_triggers:
+        decisions_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_DECISIONS,
+                label="Stage 0b - decision conditions (record_decisions.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "record_decisions.py"),
+                    *decisions_db_args,
+                ],
+                timeout_s=_DECISIONS_TIMEOUT_S,
             )
         )
 

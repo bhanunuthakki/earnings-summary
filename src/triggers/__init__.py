@@ -28,6 +28,7 @@ from triggers.base import (
     TriggerCandidate,
     UserStateContext,
 )
+from triggers.decision_condition import DecisionConditionTrigger
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.material_news import MaterialNewsTrigger
@@ -39,6 +40,7 @@ __all__ = [
     "ENABLED_TRIGGERS",
     "AlertDraft",
     "Cadence",
+    "DecisionConditionTrigger",
     "EarningsToneTrigger",
     "KpiInflectionTrigger",
     "MaterialNewsTrigger",

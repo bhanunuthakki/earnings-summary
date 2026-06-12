@@ -1,7 +1,7 @@
 """Tests for execution/run_morning_pipeline.py — the morning orchestrator.
 
-The orchestrator chains four subprocess stages (news -> triggers -> feed ->
-validate). Its load-bearing contract is resilience: it must attempt every
+The orchestrator runs an unconditional environment preflight, then chains
+five subprocess stages (news -> decisions -> triggers -> feed -> validate). Its load-bearing contract is resilience: it must attempt every
 non-skipped stage even when an earlier one fails or times out, and report the
 count of failed stages as the exit code only after all stages have run.
 
@@ -25,7 +25,9 @@ import pytest
 from execution import run_morning_pipeline
 
 # Script basenames in canonical run order, used to assert dispatch order.
+PREFLIGHT_SCRIPT = "validate_environment.py"
 NEWS_SCRIPT = "fetch_news.py"
+DECISIONS_SCRIPT = "record_decisions.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
@@ -121,9 +123,9 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun) -> None:
 def test_all_stages_succeed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Four stages return 0 → exit 0, summary all-ok, and the four scripts
-    are invoked exactly once each in news -> triggers -> feed -> validate
-    order."""
+    """Five stages return 0 → exit 0, summary all-ok, and the five scripts
+    are invoked exactly once each in news -> decisions -> triggers -> feed ->
+    validate order."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
@@ -131,14 +133,18 @@ def test_all_stages_succeed(
 
     assert rc == 0
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
 
     summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_preflight"] == "ok"
     assert summary["stage_0_news"] == "ok"
+    assert summary["stage_0b_decisions"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_2_feed"] == "ok"
     assert summary["stage_3_validate"] == "ok"
@@ -163,7 +169,9 @@ def test_stage1_failure_still_runs_feed(
 
     assert rc == 1
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -186,7 +194,9 @@ def test_feed_failure_still_runs_validation(
 
     assert rc == 1
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -201,24 +211,36 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing → all four still attempted, exit code == 4."""
+    """Every stage failing (preflight included) → all six still attempted,
+    exit code == 6."""
     fake = _RecordingRun(
-        returncodes={NEWS_SCRIPT: 1, TRIGGERS_SCRIPT: 1, FEED_SCRIPT: 1, VALIDATE_SCRIPT: 2}
+        returncodes={
+            PREFLIGHT_SCRIPT: 1,
+            NEWS_SCRIPT: 1,
+            DECISIONS_SCRIPT: 1,
+            TRIGGERS_SCRIPT: 1,
+            FEED_SCRIPT: 1,
+            VALIDATE_SCRIPT: 2,
+        }
     )
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 4
+    assert rc == 6
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
 
     summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_preflight"] == "failed"
     assert summary["stage_0_news"] == "failed"
+    assert summary["stage_0b_decisions"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
     assert summary["stage_2_feed"] == "failed"
     assert summary["stage_3_validate"] == "failed"
@@ -242,7 +264,9 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
 
     assert rc == 1
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -262,22 +286,25 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
 def test_skip_triggers_runs_only_the_feed_render(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--skip-triggers omits stage 1 entirely: exactly one subprocess call
-    (the feed), the trigger script is never invoked, and the summary marks
-    stage 1 as skipped (which is not a failure → exit 0)."""
+    """--skip-triggers omits stage 1 entirely: only the (unconditional)
+    preflight and the feed render run, the trigger script is never invoked,
+    and the summary marks stage 1 as skipped (not a failure → exit 0)."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main(["--skip-triggers"])
 
     assert rc == 0
-    assert fake.scripts == [FEED_SCRIPT]
+    assert fake.scripts == [PREFLIGHT_SCRIPT, FEED_SCRIPT]
     assert TRIGGERS_SCRIPT not in fake.scripts
-    # --skip-triggers also skips stage 0 (no point fetching news we won't classify).
+    # --skip-triggers also skips stage 0 (no point fetching news we won't classify)
+    # and stage 0b (the decision_condition sensor won't run, nothing to prepare).
     assert NEWS_SCRIPT not in fake.scripts
+    assert DECISIONS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
+    assert summary["stage_0b_decisions"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_2_feed"] == "ok"
     # --skip-triggers (re-render only) also skips the validation gate.
@@ -324,7 +351,9 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the validation stage failed
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -344,7 +373,13 @@ def test_skip_validation_removes_only_stage3(
 
     rc = run_morning_pipeline.main(["--skip-validation"])
     assert rc == 0
-    assert fake.scripts == [NEWS_SCRIPT, TRIGGERS_SCRIPT, FEED_SCRIPT]
+    assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
+        NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        FEED_SCRIPT,
+    ]
     assert VALIDATE_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -391,6 +426,11 @@ def test_args_passed_through_to_stages(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--user-id" not in news_argv
     assert "--max-cost-usd" not in news_argv
 
+    # The decisions recorder likewise takes neither (single-operator ledger).
+    decisions_argv = by_script[DECISIONS_SCRIPT]
+    assert "--user-id" not in decisions_argv
+    assert "--max-cost-usd" not in decisions_argv
+
     # The contract is the forwarded numeric value, not its string form —
     # argparse (type=float) normalizes "5" to "5.0", which run_triggers parses
     # back to the same float. Assert the value, not the formatting.
@@ -415,6 +455,8 @@ def test_db_path_passed_to_all_stages_when_set(
     assert rc == 0
 
     for argv in fake.calls:
+        if _script_of(argv) == PREFLIGHT_SCRIPT:
+            continue  # the env preflight takes no --db-path
         assert _has_flag(argv, "--db-path", str(db_path))
 
 
@@ -438,13 +480,15 @@ def test_db_path_omitted_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stage0_news_runs_first_with_default_source(monkeypatch: pytest.MonkeyPatch) -> None:
-    """By default Stage 0 runs first and invokes fetch_news.py --source auto."""
+    """Stage 0 is the first MAIN stage (right after the unconditional
+    preflight) and invokes fetch_news.py --source auto."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
     rc = run_morning_pipeline.main([])
     assert rc == 0
-    assert fake.scripts[0] == NEWS_SCRIPT  # ordered before triggers
+    assert fake.scripts[0] == PREFLIGHT_SCRIPT  # unconditional, always first
+    assert fake.scripts[1] == NEWS_SCRIPT  # ordered before triggers
 
     news_argv = next(c for c in fake.calls if _script_of(c) == NEWS_SCRIPT)
     assert _flag_value(news_argv, "--source") == "auto"
@@ -459,7 +503,13 @@ def test_skip_news_removes_only_stage0(
 
     rc = run_morning_pipeline.main(["--skip-news"])
     assert rc == 0
-    assert fake.scripts == [TRIGGERS_SCRIPT, FEED_SCRIPT, VALIDATE_SCRIPT]
+    assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
+        DECISIONS_SCRIPT,
+        TRIGGERS_SCRIPT,
+        FEED_SCRIPT,
+        VALIDATE_SCRIPT,
+    ]
     assert NEWS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -492,7 +542,9 @@ def test_news_failure_does_not_stop_triggers(
     rc = run_morning_pipeline.main([])
     assert rc == 1  # exactly the news stage failed
     assert fake.scripts == [
+        PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        DECISIONS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -502,6 +554,30 @@ def test_news_failure_does_not_stop_triggers(
     assert summary["stage_0_news"] == "failed"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_2_feed"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Stage 0b — decision conditions (after news, before triggers)
+# ---------------------------------------------------------------------------
+
+
+def test_stage0b_decisions_runs_between_news_and_triggers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stage 0b runs record_decisions.py after the news fetch and before the
+    trigger sweep, so the decision_condition sensor evaluates conditions
+    extracted in the SAME run. A stage-0b failure must not block triggers."""
+    fake = _RecordingRun(returncodes={DECISIONS_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the decisions stage failed
+    assert fake.scripts.index(NEWS_SCRIPT) < fake.scripts.index(DECISIONS_SCRIPT)
+    assert fake.scripts.index(DECISIONS_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0b_decisions"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
 
 
 def _has_flag(argv: list[str], flag: str, value: str) -> bool:

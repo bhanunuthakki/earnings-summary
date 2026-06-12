@@ -98,6 +98,9 @@ _TRIGGER_CATEGORIES: dict[str, str] = {
     "kpi_inflection": CATEGORY_THESIS,
     "thesis_drift": CATEGORY_THESIS,
     "saydo_due": CATEGORY_WATCH,
+    # A falsifiable "what would change my mind" condition being met is a
+    # thesis-relevant event — the decision it resurfaces was thesis-driven.
+    "decision_condition": CATEGORY_THESIS,
 }
 
 _KIND_CATEGORIES: dict[str, str] = {

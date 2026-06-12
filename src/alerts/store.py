@@ -57,11 +57,20 @@ ACTION_STATUSES: frozenset[str] = frozenset(
     {ACTION_STATUS_PENDING, ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED}
 )
 # The dashboard's trigger-kind vocabulary (src/dashboard/evidence_drawer.py):
-# the four live sensor `kind` classvars plus 'thesis_drift', which was folded
+# the five live sensor `kind` classvars plus 'thesis_drift', which was folded
 # into the kpi_inflection sensor rather than shipped on its own but is still a
-# recognized alert kind the feed/drawer render.
+# recognized alert kind the feed/drawer render. 'decision_condition' is the
+# falsifiable-conditions evaluator (0086). Keep in lockstep with the
+# ck_alerts_trigger_kind CHECK (0068, widened in 0086).
 TRIGGER_KINDS: frozenset[str] = frozenset(
-    {"kpi_inflection", "earnings_tone", "saydo_due", "thesis_drift", "material_news"}
+    {
+        "kpi_inflection",
+        "earnings_tone",
+        "saydo_due",
+        "thesis_drift",
+        "material_news",
+        "decision_condition",
+    }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
 ACTION_KINDS: frozenset[str] = frozenset(

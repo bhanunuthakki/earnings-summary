@@ -194,6 +194,22 @@ def _load_rule(raw: dict[str, object], tier: RuleTier) -> BreakRule:
     return rule.model_copy(update={"tier": tier})
 
 
+def fetch_kpi_observations(
+    conn: sqlite3.Connection,
+    ticker: str,
+    kpi_name: str,
+    n_periods: int,
+) -> list[KpiObservation] | None:
+    """Public alias of the history fetcher for external rule evaluators.
+
+    The decision-condition trigger (triggers.decision_condition) evaluates
+    falsifiable conditions through the SAME resolver/dedup/cadence path as
+    break rules, so its comparisons can never drift from this module's —
+    the same guarantee ``convert_unit`` gives the unit dimension (#317/#320).
+    """
+    return _fetch_kpi_history(conn, ticker, kpi_name, n_periods)
+
+
 def _fetch_kpi_history(
     conn: sqlite3.Connection,
     ticker: str,
