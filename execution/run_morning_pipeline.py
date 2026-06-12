@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -66,6 +67,7 @@ from enum import StrEnum
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
@@ -87,11 +89,15 @@ _VALIDATE_TIMEOUT_S = 600
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
+STAGE_PREFLIGHT = "stage_preflight"
 STAGE_NEWS = "stage_0_news"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
-_ALL_STAGE_KEYS = (STAGE_NEWS, STAGE_TRIGGERS, STAGE_FEED, STAGE_VALIDATE)
+_ALL_STAGE_KEYS = (STAGE_PREFLIGHT, STAGE_NEWS, STAGE_TRIGGERS, STAGE_FEED, STAGE_VALIDATE)
+
+# Timeout for the environment preflight (should be sub-second).
+_PREFLIGHT_TIMEOUT_S = 30
 
 # News ingestion source for Stage 0. Default `auto` (self-healing): FMP first,
 # falling back to WebSearch+Opus per ticker on refusal — so the material_news
@@ -132,6 +138,16 @@ class _StageResult:
     exit_code: int | None
     elapsed_seconds: float
     error: str | None = None
+
+
+def _build_preflight_stage() -> _Stage:
+    """Return the environment preflight stage (validate_environment.py)."""
+    return _Stage(
+        key=STAGE_PREFLIGHT,
+        label="Stage preflight - environment check (validate_environment.py)",
+        argv=[sys.executable, str(PROJECT_ROOT / "execution" / "validate_environment.py")],
+        timeout_s=_PREFLIGHT_TIMEOUT_S,
+    )
 
 
 def _stage_args_for(args: argparse.Namespace, *, include_max_cost: bool) -> list[str]:
@@ -390,23 +406,75 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _record_run(
+    db_path: Path,
+    *,
+    start: bool,
+    run_id: str | None = None,
+    failed: bool = False,
+    error_summary: str | None = None,
+) -> str | None:
+    """Wrap start_run / end_run so run accounting failures never crash the pipeline."""
+    try:
+        from models.runs import StageStatus as RunStatus
+        from pipeline.run_accounting import end_run, start_run
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            if start:
+                return start_run(conn, directive="run_morning_pipeline", ticker_scope=[])
+            if run_id is not None:
+                status = RunStatus.FAILED if failed else RunStatus.OK
+                end_run(conn, run_id, status, error_summary)
+        finally:
+            conn.close()
+    except Exception as exc:
+        sys.stderr.write(f"WARNING: run_accounting failed: {exc}\n")
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     t0 = time.monotonic()
+
+    # Resolve DB path early — needed for run accounting.
+    db_path = args.db_path if args.db_path is not None else PROJECT_ROOT / "data" / "portfolio.db"
+
+    # Record the pipeline start in ingestion_runs so the dead-man post-flight
+    # (verify_daily_chain.py) can confirm it ran today.
+    run_id: str | None = None
+    if db_path.exists():
+        run_id = _record_run(db_path, start=True)
+
+    # Stage preflight: run validate_environment.py before the main stages.
+    # A failed preflight is loud (stderr banner + summary entry) but does NOT
+    # abort the pipeline — the resilience contract holds for all stages.
+    preflight = _run_stage(_build_preflight_stage())
 
     stages = _build_stages(args)
 
     # Always-attempt contract: iterate every built stage with no early return.
     # _run_stage never raises, so a failure / timeout in one stage cannot stop
     # the next from running.
-    results: list[_StageResult] = [_run_stage(stage) for stage in stages]
+    main_results: list[_StageResult] = [_run_stage(stage) for stage in stages]
+    results: list[_StageResult] = [preflight, *main_results]
 
     summary = _summarize(results, elapsed_seconds=round(time.monotonic() - t0, 3))
     sys.stdout.write("\n" + json.dumps(summary, indent=2) + "\n")
 
+    failed_count = sum(1 for r in results if r.status is StageStatus.FAILED)
+
+    # Close the ingestion_runs row so the dead-man sees a terminal status today.
+    if run_id is not None and db_path.exists():
+        failed_names = [r.key for r in results if r.status is StageStatus.FAILED]
+        err = f"failed stages: {', '.join(failed_names)}" if failed_names else None
+        _record_run(
+            db_path, start=False, run_id=run_id, failed=bool(failed_count), error_summary=err
+        )
+
     # Exit code = number of failed stages (skipped stages are not failures and
     # were never added to `results`). Reported only after all stages ran.
-    return sum(1 for r in results if r.status is StageStatus.FAILED)
+    return failed_count
 
 
 if __name__ == "__main__":
