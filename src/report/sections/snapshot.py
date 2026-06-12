@@ -227,6 +227,7 @@ def _valuation_snapshot(
         live_price_at=live_price_at,
         bull_npv_per_share=bull_fv,
         bear_npv_per_share=bear_fv,
+        valuation_model_label=_model_label(row["assumption_snapshot_json"]),
     )
 
 
@@ -258,6 +259,39 @@ def _scenario_range(snapshot_json: object) -> tuple[float | None, float | None]:
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
     return fair_value("bull"), fair_value("bear")
+
+
+# Snapshot "model" tag (stamped by the bespoke builders) → card-facing label.
+# The redesigned FCFF refresher stamps format="redesign" instead of a model tag.
+_MODEL_LABELS = {
+    "holdco_sotp": "SOTP / NAV",
+    "holdco_sotp_brk": "SOTP / NAV",
+    "bank_excess_return": "Excess return",
+    "platform_dcf": "Platform DCF",
+    "fintech_sotp": "Fintech SOTP",
+}
+
+
+def _model_label(snapshot_json: object) -> str | None:
+    """Human label for the valuation archetype that produced a dcf_runs row,
+    so the card says which model the number came from. An unrecognized model
+    tag passes through raw (a new archetype labels itself); rows predating
+    model tagging return None and the card stays generic."""
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None
+    try:
+        data: object = json.loads(snapshot_json)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    payload = cast("dict[str, object]", data)
+    model = payload.get("model")
+    if isinstance(model, str) and model:
+        return _MODEL_LABELS.get(model, model)
+    if payload.get("format") == "redesign":
+        return "FCFF DCF"
+    return None
 
 
 def _mos_bar(holdings: dict[str, object] | None) -> float | None:

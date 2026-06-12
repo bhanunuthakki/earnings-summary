@@ -2479,7 +2479,9 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
     body.write(
         _panel_head(
             "Valuation summary",
-            sub="DCF",
+            # S12: the sub slot names the archetype that produced the number
+            # (SOTP / NAV, Excess return, FCFF DCF, ...); generic for legacy rows.
+            sub=v.valuation_model_label or "DCF",
             as_of=v.valuation_date.isoformat() if v.valuation_date is not None else None,
         )
         + '<div class="val-stack">'

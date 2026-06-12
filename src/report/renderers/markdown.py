@@ -289,6 +289,9 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
         )
     out.write("\n")
     meta_parts: list[str] = []
+    if v.valuation_model_label:
+        # S12: say which archetype produced the number.
+        meta_parts.append(f"Model: {v.valuation_model_label}")
     if v.wacc is not None:
         meta_parts.append(f"WACC {v.wacc * 100:.1f}%")
     if v.mos_bar is not None:

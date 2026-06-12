@@ -94,6 +94,11 @@ class ValuationSnapshot(BaseModel):
     bull_npv_per_share: float | None = None
     bear_npv_per_share: float | None = None
 
+    # S12 — which valuation archetype produced the number ("FCFF DCF",
+    # "SOTP / NAV", "Excess return", "Platform DCF", ...), parsed from the
+    # dcf_runs snapshot. None when the run predates model tagging.
+    valuation_model_label: str | None = None
+
 
 class KpiSnapshotRow(BaseModel):
     name: str
