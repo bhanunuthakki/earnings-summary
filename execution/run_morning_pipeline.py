@@ -472,6 +472,17 @@ def main(argv: list[str] | None = None) -> int:
             db_path, start=False, run_id=run_id, failed=bool(failed_count), error_summary=err
         )
 
+    # Post-flight dead-man check: write .tmp/daily_chain_status.json with
+    # today's pipeline verdict so the cron_health panel and external monitors
+    # can confirm the chain ran (even when the pipeline had partial failures).
+    # Runs AFTER end_run so ingestion_runs reflects the terminal status.
+    try:
+        from execution.verify_daily_chain import main as _vdc_main
+
+        _vdc_main(["--quiet", "--db-path", str(db_path)])
+    except Exception as exc:
+        sys.stderr.write(f"WARNING: verify_daily_chain post-flight failed: {exc}\n")
+
     # Exit code = number of failed stages (skipped stages are not failures and
     # were never added to `results`). Reported only after all stages ran.
     return failed_count

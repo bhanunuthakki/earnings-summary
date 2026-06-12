@@ -142,6 +142,9 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             ("section_coverage", "Coverage", "/api/panel/section_coverage", False, False),
             ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
             ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
+            # Last-7-day pipeline run history from ingestion_runs (S1 fund-grade
+            # build): backup + morning pipeline verdict + per-directive dot grid.
+            ("cron_health", "Cron Health", "/api/panel/cron_health", False, False),
             # LLM eval scores (llm_evals_plan §2.6): latest run per purpose +
             # prompt-version A/B strip + failed-case drawers + call health,
             # with run buttons over the jobs SSE machinery.
