@@ -84,10 +84,12 @@ class Claim:
         return {"text": self.text, "cites": list(self.cites), "supported": self.supported}
 
 
-def _normalize(text: str) -> str:
+def normalize_text(text: str) -> str:
     """Matching form: markers + markdown tokens out, whitespace collapsed,
     case folded — so a quote anchors whether or not the model copied the
-    ``[n]`` markers along with the words."""
+    ``[n]`` markers along with the words. Public because the citation-
+    accuracy eval (evals.ask_citations) must match expected quotes to
+    claims with EXACTLY the anchoring semantics production uses."""
     return " ".join(_NORM_STRIP_RX.sub(" ", text).lower().split())
 
 
@@ -100,7 +102,7 @@ def split_sentences(text: str) -> list[str]:
 def _anchor_sentence(quote: str, sentences: list[str], normed: list[str]) -> int | None:
     """Index of the sentence the quote was copied from; None when it anchors
     nowhere (a paraphrase or hallucinated quote — dropped by contract)."""
-    q = _normalize(quote)
+    q = normalize_text(quote)
     if len(q) < _MIN_QUOTE_CHARS:
         return None
     for i, s in enumerate(normed):
@@ -126,7 +128,7 @@ def _reconcile(
     """
     valid = frozenset(item.n for item in items)
     sentences = split_sentences(final_text)
-    normed = [_normalize(s) for s in sentences]
+    normed = [normalize_text(s) for s in sentences]
 
     by_sentence: dict[int, tuple[set[int], bool]] = {}
     dropped = 0
@@ -215,17 +217,26 @@ def extract_claim_map(
     items: list[EvidenceItem],
     *,
     db_path: Path,
+    strict: bool = False,
 ) -> list[Claim] | None:
-    """The claims→cites map for one finished answer. Never raises.
+    """The claims→cites map for one finished answer.
 
-    None means fail-closed (budget skip / transport failure / unusable map)
-    — the caller degrades to answer-level citations. An empty list is a
-    real result: the model audited the answer and found no factual claims.
+    Default (interactive) contract: never raises. None means fail-closed
+    (budget skip / transport failure / unusable map) — the caller degrades
+    to answer-level citations. An empty list is a real result: the model
+    audited the answer and found no factual claims.
+
+    ``strict=True`` is the EVAL contract (evals.ask_citations): call and
+    parse failures PROPAGATE so the harness can separate transport-down
+    (abort the run) from map quality (score the case), and the inner
+    budget gate is bypassed — the eval runner owns its own budget pre-gate.
+    A None return in strict mode therefore always means "the map anchored
+    to nothing" — a pure quality failure.
     """
     text = final_text.strip()
     if not text or not items:
         return None
-    if should_skip_for_budget(PURPOSE, db_path=db_path) is not None:
+    if not strict and should_skip_for_budget(PURPOSE, db_path=db_path) is not None:
         log.info({"event": "ask_claim_grounding_budget_skipped"})
         return None
     try:
@@ -237,6 +248,8 @@ def extract_claim_map(
             required_keys=("claims",),
         )
     except Exception as exc:
+        if strict:
+            raise
         # Interactive surface: a transport failure, hard stop, or doubly-bad
         # JSON must degrade to answer-level citations, never break the turn.
         log.warning(
@@ -245,6 +258,8 @@ def extract_claim_map(
         return None
     raw = cast("dict[str, object]", payload).get("claims")
     if not isinstance(raw, list):
+        if strict:
+            raise ValueError("claim map: `claims` field is not a list")
         return None
     return _reconcile(cast("list[object]", raw), text, items)
 
@@ -296,5 +311,6 @@ __all__ = [
     "Claim",
     "build_citations_payload",
     "extract_claim_map",
+    "normalize_text",
     "split_sentences",
 ]

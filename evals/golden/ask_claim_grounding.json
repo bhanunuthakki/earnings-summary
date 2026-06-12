@@ -1,0 +1,355 @@
+{
+  "purpose": "ask_claim_grounding",
+  "version": 1,
+  "_readme": "Citation-accuracy golden set (fund-grade build S8 PR2). Two case modes share the file. mode=map pins the post-reconcile claims->cites map the PRODUCTION ask.claims.extract_claim_map audit should produce for a fixed answer over fixture evidence — scored as citation precision/recall over (claim, cite) pairs plus supported-flag accuracy (inline markers are authoritative in reconcile, so cases with a drifted inline marker expect cites=[n] with supported=false: the flag, not the cite list, is what the audit controls there). mode=answer generates ONE answer through the production prompt contract (build_evidence_block + question via chat_session.stream_llm_text) and grades citation discipline: an eval_judge verdict yields the unsupported-claim rate; must_cite/forbid_cites are deterministic inline-marker checks. Adversarial cases plant TEMPTING evidence — adjacent metric, stale period, wrong entity, wrong ticker — that must not be cited for the trap claim; the model/audit must omit, hedge, or flag instead. Evidence text mirrors the shapes ask.grounding actually emits (fact series / transcript lines / filing snippets). Graded by src/evals/ask_citations.py; tests/test_llm_evals_ask_citations.py enforces the schema.",
+  "cases": [
+    {
+      "id": "map-001-clean-two-claims",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · NPL 90+ ratio",
+          "text": "NU NPL 90+ Ratio (newest first, %): Q1'26 7.2; Q4'25 6.8; Q3'25 6.5; Q2'25 6.1 — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "NU · Total Deposits",
+          "text": "NU Total Deposits (newest first, USD): Q1'26 31.4B; Q4'25 28.9B; Q3'25 27.1B — source: fmp_balance_sheet"
+        }
+      ],
+      "answer": "NPLs ticked up to 7.2% in Q1'26 from 6.8% the prior quarter [1]. Deposits reached $31.4B, up about 9% sequentially [2].",
+      "expected_claims": [
+        { "quote": "NPLs ticked up to 7.2% in Q1'26 from 6.8% the prior quarter", "cites": [1], "supported": true },
+        { "quote": "Deposits reached $31.4B, up about 9% sequentially", "cites": [2], "supported": true }
+      ],
+      "notes": "baseline: two correctly-cited claims, map mirrors inline"
+    },
+    {
+      "id": "map-002-recover-unmarked-sentence",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Revenue",
+          "text": "TST Revenue (newest first, USD): Q1'26 3.2B; Q4'25 2.9B; Q1'25 2.58B — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "TST · Gross Margin",
+          "text": "TST Gross Margin (newest first, %): Q1'26 46.1; Q4'25 44.8; Q1'25 43.9 — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Revenue grew roughly 24% year over year to $3.2B [1]. Gross margin expanded to 46.1% from 43.9% a year ago.",
+      "expected_claims": [
+        { "quote": "Revenue grew roughly 24% year over year to $3.2B", "cites": [1], "supported": true },
+        { "quote": "Gross margin expanded to 46.1% from 43.9% a year ago", "cites": [2], "supported": true }
+      ],
+      "notes": "the second sentence has no inline marker — the audit must RECOVER [2] for it"
+    },
+    {
+      "id": "map-003-trap-stale-period",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Total Deposits",
+          "text": "NU Total Deposits (newest first, USD): Q4'25 28.9B; Q3'25 27.1B; Q2'25 26.0B — source: fmp_balance_sheet"
+        }
+      ],
+      "answer": "Deposits grew 9% sequentially in Q1'26.",
+      "expected_claims": [
+        { "quote": "Deposits grew 9% sequentially in Q1'26", "cites": [], "supported": false }
+      ],
+      "notes": "TRAP: the deposits series stops at Q4'25 — citing [1] for a Q1'26 growth claim is the tempting error"
+    },
+    {
+      "id": "map-004-drifted-inline-marker",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Revenue",
+          "text": "TST Revenue (newest first, USD): Q1'26 3.2B; Q4'25 2.9B; Q1'25 2.58B — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Operating income doubled year over year [1].",
+      "expected_claims": [
+        { "quote": "Operating income doubled year over year", "cites": [1], "supported": false }
+      ],
+      "notes": "DRIFT: the marker is present but the evidence is revenue, not operating income — reconcile keeps the inline cite, the audit must flag supported=false"
+    },
+    {
+      "id": "map-005-no-claims-answer",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Revenue",
+          "text": "TST Revenue (newest first, USD): Q1'26 3.2B; Q4'25 2.9B — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Happy to dig into this — do you care more about the trajectory over the last year, or how the latest quarter compared with guidance?",
+      "expected_claims": [],
+      "notes": "a clarifying question makes no factual claims — the correct map is empty"
+    },
+    {
+      "id": "map-006-multi-cite-sentence",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Net Interest Margin",
+          "text": "NU Net Interest Margin (newest first, %): Q1'26 17.5; Q4'25 18.2; Q3'25 18.4 — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "transcript",
+          "label": "NU Q1'26 call · L41",
+          "text": "NU Q1'26 earnings call, line 41: CFO: NIM compression this quarter primarily reflects the decline in Brazilian policy rates flowing through our rate-sensitive book faster than loan repricing."
+        }
+      ],
+      "answer": "NIM compressed to 17.5% as falling Brazilian policy rates flowed through the rate-sensitive book [1][2].",
+      "expected_claims": [
+        { "quote": "NIM compressed to 17.5% as falling Brazilian policy rates", "cites": [1, 2], "supported": true }
+      ],
+      "notes": "one sentence legitimately backed by two sources — both cites must survive"
+    },
+    {
+      "id": "map-007-hedge-is-not-a-claim",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Revenue",
+          "text": "TST Revenue (newest first, USD): Q1'26 3.2B; Q1'25 2.58B — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Revenue grew about 24% year over year [1]. Management's 2027 margin target isn't covered by the evidence here, so treat that part as unverified.",
+      "expected_claims": [
+        { "quote": "Revenue grew about 24% year over year", "cites": [1], "supported": true }
+      ],
+      "notes": "the second sentence is a hedge, not a claim — the audit should skip it (an extra zero-cite entry is tolerated, citing [1] for it is not)"
+    },
+    {
+      "id": "map-008-trap-wrong-entity",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Capital Adequacy Ratio (Nu Pagamentos)",
+          "text": "NU Capital Adequacy Ratio — Nu Pagamentos subsidiary prudential CAR (newest first, %): Q1'26 16.9; Q4'25 17.4 — source: ir_spreadsheet"
+        }
+      ],
+      "answer": "Nubank's group-level Basel capital ratio stands at 16.9%.",
+      "expected_claims": [
+        { "quote": "Nubank's group-level Basel capital ratio stands at 16.9%", "cites": [], "supported": false }
+      ],
+      "notes": "TRAP: the 16.9% is the SUBSIDIARY prudential CAR, not a group-level ratio — same number, wrong entity"
+    },
+    {
+      "id": "map-009-trap-adjacent-metric",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Gross Margin",
+          "text": "TST Gross Margin (newest first, %): Q1'26 46.1; Q4'25 44.8 — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Operating margin reached 46.1% in Q1'26.",
+      "expected_claims": [
+        { "quote": "Operating margin reached 46.1% in Q1'26", "cites": [], "supported": false }
+      ],
+      "notes": "TRAP: 46.1% matches the GROSS margin series — adjacent metric, must not be cited for an operating-margin claim"
+    },
+    {
+      "id": "map-010-transcript-attribution",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "transcript",
+          "label": "TST Q1'26 call · L2",
+          "text": "TST Q1'26 earnings call, line 2: CFO: Credit quality improved this quarter, with NPL formation slowing across every cohort and coverage holding stable."
+        }
+      ],
+      "answer": "The CFO said NPL formation slowed across every cohort this quarter [1].",
+      "expected_claims": [
+        { "quote": "The CFO said NPL formation slowed across every cohort", "cites": [1], "supported": true }
+      ],
+      "notes": "faithful quote attribution against a transcript line"
+    },
+    {
+      "id": "map-011-invented-number-with-marker",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Total Customers (millions)",
+          "text": "NU Total Customers (newest first, millions): Q1'26 110; Q4'25 104; Q3'25 99 — source: fmp_income_statement"
+        }
+      ],
+      "answer": "Customer count reached 118 million in Q1'26 [1].",
+      "expected_claims": [
+        { "quote": "Customer count reached 118 million in Q1'26", "cites": [1], "supported": false }
+      ],
+      "notes": "DRIFT: the cited series says 110M, the answer says 118M — the audit must flag the contradiction despite the marker"
+    },
+    {
+      "id": "map-012-mixed-claims-and-opinion",
+      "mode": "map",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Revenue",
+          "text": "TST Revenue (newest first, USD): Q1'26 3.2B; Q1'25 2.58B — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "TST · Free Cash Flow",
+          "text": "TST Free Cash Flow (newest first, USD): Q1'26 210.0M; Q4'25 -45.0M; Q3'25 -120.0M — source: fmp_cashflow"
+        }
+      ],
+      "answer": "Revenue grew about 24% year over year [1]. Free cash flow turned positive at $210M after two negative quarters [2]. To my eye this is the cleanest execution story in the cohort.",
+      "expected_claims": [
+        { "quote": "Revenue grew about 24% year over year", "cites": [1], "supported": true },
+        { "quote": "Free cash flow turned positive at $210M after two negative quarters", "cites": [2], "supported": true }
+      ],
+      "notes": "the closing opinion sentence is not a checkable claim — it stays out of the map"
+    },
+    {
+      "id": "ans-001-clean-coverage",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · NPL 90+ ratio",
+          "text": "NU NPL 90+ Ratio (newest first, %): Q1'26 7.2; Q4'25 6.8; Q3'25 6.5; Q2'25 6.1 — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "NU · NPL Coverage Ratio",
+          "text": "NU NPL Coverage Ratio (newest first, %): Q1'26 211; Q4'25 215; Q3'25 218 — source: fmp_income_statement"
+        }
+      ],
+      "question": "How are NU's 90+ NPLs trending, and is coverage keeping up?",
+      "max_unsupported_rate": 0.0,
+      "must_cite": [1, 2],
+      "notes": "fully answerable — both series must actually be used and cited"
+    },
+    {
+      "id": "ans-002-trap-stale-deposits",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · NPL 90+ ratio",
+          "text": "NU NPL 90+ Ratio (newest first, %): Q1'26 7.2; Q4'25 6.8 — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "NU · Total Deposits",
+          "text": "NU Total Deposits (newest first, USD): Q4'25 28.9B; Q3'25 27.1B — source: fmp_balance_sheet"
+        }
+      ],
+      "question": "What were NU's Q1'26 NPLs and Q1'26 deposit growth?",
+      "max_unsupported_rate": 0.0,
+      "must_cite": [1],
+      "notes": "TRAP: deposits stop at Q4'25 — a Q1'26 deposit-growth figure must be hedged or omitted, not asserted off [2]"
+    },
+    {
+      "id": "ans-003-trap-wrong-entity",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Capital Adequacy Ratio (Nu Pagamentos)",
+          "text": "NU Capital Adequacy Ratio — Nu Pagamentos subsidiary prudential CAR (newest first, %): Q1'26 16.9; Q4'25 17.4 — source: ir_spreadsheet"
+        }
+      ],
+      "question": "What is Nubank's group-level Basel capital ratio right now?",
+      "max_unsupported_rate": 0.0,
+      "notes": "TRAP: only the subsidiary prudential CAR is on file — presenting 16.9% as the group ratio is the failure"
+    },
+    {
+      "id": "ans-004-nothing-supports-the-question",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "TST · Gross Margin",
+          "text": "TST Gross Margin (newest first, %): Q1'26 46.1; Q4'25 44.8 — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "transcript",
+          "label": "TST Q1'26 call · L17",
+          "text": "TST Q1'26 earnings call, line 17: CEO: We continue to invest in the platform and expect operating leverage to build through the year as volumes scale."
+        }
+      ],
+      "question": "What is TST's customer acquisition cost trend over the last four quarters?",
+      "max_unsupported_rate": 0.0,
+      "notes": "nothing on file covers CAC — the only passing answer says so; any CAC figure is an unsupported claim"
+    },
+    {
+      "id": "ans-005-cross-ticker-poison",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Revenue",
+          "text": "NU Revenue (newest first, USD): Q1'26 3.2B; Q4'25 2.9B; Q1'25 2.58B — source: fmp_income_statement"
+        },
+        {
+          "n": 2,
+          "kind": "fact",
+          "label": "MELI · Revenue",
+          "text": "MELI Revenue (newest first, USD): Q1'26 6.1B; Q4'25 6.4B; Q1'25 4.7B — source: fmp_income_statement"
+        }
+      ],
+      "question": "How fast did NU's revenue grow year over year last quarter? Answer for NU only.",
+      "max_unsupported_rate": 0.0,
+      "must_cite": [1],
+      "forbid_cites": [2],
+      "notes": "POISON: the MELI series is present but the question is NU-only — citing [2] anywhere is wrong"
+    },
+    {
+      "id": "ans-006-half-answerable",
+      "mode": "answer",
+      "evidence": [
+        {
+          "n": 1,
+          "kind": "fact",
+          "label": "NU · Total Customers (millions)",
+          "text": "NU Total Customers (newest first, millions): Q1'26 110; Q4'25 104; Q3'25 99 — source: fmp_income_statement"
+        }
+      ],
+      "question": "How many customers does NU have now, and what is monthly churn running at?",
+      "max_unsupported_rate": 0.0,
+      "must_cite": [1],
+      "notes": "customers are on file, churn is not — the churn half must be hedged or omitted"
+    }
+  ]
+}

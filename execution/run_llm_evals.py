@@ -53,6 +53,7 @@ GOLDEN_PURPOSES = (
     "decision_conditions_extract",
     "ask_pack_router",
     "ask_evidence_followup",
+    "ask_claim_grounding",
 )
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
@@ -216,6 +217,22 @@ def main() -> int:
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
+            )
+        elif args.purpose == "ask_claim_grounding":
+            # Citation accuracy (S8 PR2): map cases are deterministic
+            # precision/recall on the production claim audit; answer cases
+            # generate + judge. --no-judge runs the map cases only (no
+            # generation or judge spend).
+            from evals.ask_citations import DEFAULT_GOLDEN_RELPATH as CITATIONS_GOLDEN
+            from evals.ask_citations import run_ask_citations_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / CITATIONS_GOLDEN)).resolve()
+            summary = run_ask_citations_eval(
+                db_path=db_path,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+                include_answer_cases=not args.no_judge,
             )
         else:
             # Fast classifiers (PR 4): deterministic golden sets, no judge —

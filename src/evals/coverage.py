@@ -34,9 +34,16 @@ from llm.prompt_versions import registered_purposes
 
 # Mode-A purposes with checked-in golden sets. viewspec is the pilot grader;
 # the classifier trio landed in PR 4; ask_pack_router (evals.ask_router) in
-# S4; ask_evidence_followup (evals.ask_loop) in S7.
+# S4; ask_evidence_followup (evals.ask_loop) in S7; ask_claim_grounding
+# (evals.ask_citations — citation accuracy) in S8.
 GOLDEN_PURPOSES: frozenset[str] = frozenset(
-    {"viewspec_compile", "ask_pack_router", "ask_evidence_followup", *CLASSIFIER_PURPOSES}
+    {
+        "viewspec_compile",
+        "ask_pack_router",
+        "ask_evidence_followup",
+        "ask_claim_grounding",
+        *CLASSIFIER_PURPOSES,
+    }
 )
 
 # Mode-C outcome graders (execution/run_calibration_grading.py rungs 1-3).
