@@ -100,6 +100,10 @@ LLMs are probabilistic, business logic is deterministic. This 3-layer architectu
 
 - Every parsed response validated against a Pydantic model. On validation error, halt and dump the raw response to `.tmp/` for inspection. Do not attempt a guess-fix in the agent loop — the schema changed, the directive needs updating.
 
+## UI / Front-end
+
+- Any HTML surface work follows `directives/design_language.md` (canonical): tokens from `src/ui/tokens.py`, controls/chips/ticker-labels from `src/ui/controls.py`, no raw hex or off-scale font sizes in surface CSS.
+
 ## Security
 
 - Credentials live in `.env`, `credentials.json`, `token.json`. Never log, output, or commit these (also in global rules).

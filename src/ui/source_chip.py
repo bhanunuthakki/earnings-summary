@@ -134,11 +134,11 @@ SOURCE_CHIP_CSS = """
   position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
   min-width: 220px; max-width: 340px; padding: 8px 10px;
   background: var(--surface); border: 1px solid var(--border-2, var(--border));
-  border-radius: 6px; box-shadow: 0 6px 18px rgba(0,0,0,0.18);
-  font-size: 11px; text-align: left; white-space: normal;
+  border-radius: var(--radius); box-shadow: var(--shadow-pop);
+  font-size: var(--fs-caption); text-align: left; white-space: normal;
 }
 .src-pop-row { padding: 1px 0; color: var(--fg); }
-.src-pop-row.mono { font-family: var(--mono, monospace); font-size: 10px; color: var(--muted); }
+.src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
 .src-pop-row a { color: var(--accent); }
 """

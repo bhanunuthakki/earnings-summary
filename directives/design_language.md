@@ -74,6 +74,10 @@ status (the old `#14361f/#6ee7a0` family is exactly the drift this kills).
 - **One motion**: `var(--transition)` (150ms ease) with explicit properties —
   never `transition: all`.
 - **One popover elevation**: `box-shadow: var(--shadow-pop)`.
+- **Close glyphs** (the `×` buttons on drawers/popovers/peeks): `20px`,
+  muted → fg on hover. A glyph size, not a type-scale step.
+- **Soft status fills**: `color-mix(in srgb, var(--ok|warn|bad|accent) ~16%,
+  transparent)` + token ink — never a freehand dark-well/pastel hex pair.
 
 ## 4. Controls (`src/ui/controls.py`)
 

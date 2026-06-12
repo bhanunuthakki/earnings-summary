@@ -39,11 +39,11 @@ _NM_LIMITS: dict[str, float] = {"yoy": 500.0, "cagr": 200.0}
 VIEWSPEC_CSS = (
     """
 .vx-result { margin-top: 6px; }
-.vx-meta { color: var(--muted); font-size: 11.5px; margin: 4px 0 8px; }
-.vx-warn { color: var(--warn); font-size: 11.5px; margin: 2px 0; }
+.vx-meta { color: var(--muted); font-size: var(--fs-caption); margin: 4px 0 8px; }
+.vx-warn { color: var(--warn); font-size: var(--fs-caption); margin: 2px 0; }
 .vx-wrap { overflow-x: auto; }
-.vx-matrix { border-collapse: collapse; font-size: 11px;
-  font-family: var(--mono, monospace); }
+.vx-matrix { border-collapse: collapse; font-size: var(--fs-caption);
+  font-family: var(--mono); }
 .vx-matrix th, .vx-matrix td { padding: 4px 7px; border: 1px solid var(--border);
   text-align: right; white-space: nowrap; }
 .vx-matrix thead th { color: var(--fg); background: var(--paper, var(--surface)); }
