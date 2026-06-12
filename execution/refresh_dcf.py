@@ -51,6 +51,7 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from dcf import assumptions_doc  # noqa: E402
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
@@ -591,6 +592,23 @@ def _refresh_redesign(
     # from its from-scratch defaults, which the user's preserved edits supersede.
     scenarios = redesign_mod.write_computed_outputs(tmp, inp)
 
+    # Assumption provenance from the same injected inputs: reconcile the
+    # override ledger against the Opus baseline, rewrite the Assumptions sheet
+    # + yellow-cell comments. A corrupt assumptions JSON must not block the
+    # valuation refresh, but it surfaces in the result + stderr, never silently.
+    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+    provenance: dict[str, object]
+    try:
+        provenance = {
+            "status": "ok",
+            "sources": assumptions_doc.write_provenance(
+                tmp, inp, assumptions_path, ticker=ticker, update_ledger=True
+            ),
+        }
+    except assumptions_doc.ProvenanceError as e:
+        provenance = {"status": "error", "detail": str(e)}
+        sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
+
     os.replace(tmp, dest)
 
     holdings = _load_holdings(repo_root, ticker)
@@ -634,6 +652,7 @@ def _refresh_redesign(
         "workbook": str(dest),
         "format": "redesign",
         "assumptions_synced": synced,
+        "assumption_provenance": provenance,
         "valuation_year": valuation_year,
         "fair_value_per_share": fair_value,
         "fair_value_bull": scenarios.bull,

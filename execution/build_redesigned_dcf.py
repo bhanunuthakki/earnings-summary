@@ -38,6 +38,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 # (which points at the DATA repo).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from dcf import assumptions_doc
 from dcf import redesign as redesign_mod
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
@@ -382,6 +383,9 @@ except Exception:
 _opus = (
     json.loads(cache.read_text(encoding="utf-8")).get("redesign") if cache.exists() else None
 ) or {}
+# The immutable Opus baseline (seeded once for passes predating provenance
+# tracking) — feeds the Cover "Assumptions by" line and the Assumptions sheet.
+_baseline = assumptions_doc.ensure_opus_baseline(cache)
 # WACC drivers: a block override wins over the FMP profile beta + textbook rf/ERP/Kd.
 # Resolved once and fed to BOTH the Monte Carlo base WACC and the Dashboard yellow
 # cells, so an edited beta/ERP survives a from-scratch rebuild (the round-trip is
@@ -1669,11 +1673,17 @@ cv.column_dimensions["A"].width = 28
 cv.column_dimensions["B"].width = 48
 put(cv, 1, 1, f"{NAME} ({T})").font = TITLE
 put(cv, 2, 1, "DCF valuation — exit-multiple terminal · defaults anchored to consensus").font = SUB
+_assumptions_by = (
+    "builder defaults (consensus-anchored; no Opus pass)"
+    if _baseline is None
+    else f"Opus 4.8 — values as of {_baseline.as_of}"
+    + (" (provenance seeded)" if _baseline.seeded else "")
+)
 for i, (k, v) in enumerate(
     [
         ("Last updated", date.today().isoformat()),
         ("Data pulled (FMP)", qlabels[-1]),
-        ("Assumptions by", f"Opus 4.8 — {date.today().isoformat()}"),
+        ("Assumptions by", _assumptions_by),
     ]
 ):
     put(cv, 4 + i, 1, k, bold=True)
@@ -1762,6 +1772,13 @@ order = [
 ]
 for pos, name in enumerate(order):
     wb.move_sheet(name, -(wb.sheetnames.index(name) - pos))
+
+# Assumption provenance LAST (it self-inserts directly after the Dashboard, so
+# the explicit reorder above must already have run): the Assumptions sheet +
+# yellow-cell comments, classified against the Opus baseline. No ledger update
+# here — a from-scratch build's inputs come from the same JSON the ledger
+# compares against, so divergence is already recorded by the refresher.
+assumptions_doc.write_provenance_into(wb, _inp, cache, ticker=T, update_ledger=False)
 
 DEST.parent.mkdir(parents=True, exist_ok=True)
 wb.save(str(DEST))
