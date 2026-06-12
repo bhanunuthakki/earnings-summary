@@ -175,9 +175,10 @@ def test_explore_panel_picker_options_carry_definition_titles(db_path: Path) -> 
 
 def test_explore_panel_consumes_dock_thread_handoff(db_path: Path) -> None:
     """Ask v4 Home dock: the panel replays a stashed dock thread at wire-up
-    (sessionStorage 'cc-ask-thread', same event as the palette handoff)."""
+    (store key askThread via window.CCState, same event as the palette
+    handoff; the legacy cc-ask-thread name lives in cc_state's migration)."""
     html_out = render_explore_panel(db_path)
-    assert "cc-ask-thread" in html_out
+    assert "CCState.getJSON('askThread')" in html_out
     assert "function consumeDockThread()" in html_out
 
 
@@ -465,8 +466,10 @@ def test_ask_stream_endpoint_requires_query(client: FlaskClient) -> None:
 
 def test_explore_panel_js_streams_and_consumes_palette_query(db_path: Path) -> None:
     """Ask v2 panel wiring: the thread consumes the SSE endpoint and picks
-    up the Ctrl+K palette's stashed query at wire-up / on its event."""
+    up the Ctrl+K palette's stashed query (store key askQ; the poke EVENT
+    keeps its 'cc-ask-q' name) at wire-up / on its event."""
     html_out = render_explore_panel(db_path)
     assert "/api/ask/stream" in html_out
-    assert "cc-ask-q" in html_out
+    assert "CCState.get('askQ')" in html_out
+    assert "'cc-ask-q'" in html_out  # the event registration
     assert "consumePaletteQuery" in html_out

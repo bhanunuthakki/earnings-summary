@@ -54,8 +54,15 @@ Design — thin shell + lazy panels:
   once into the body, OUTSIDE ``.cc-panels``, so the conversational dock
   persists across every tab switch. Three states — min pill / floating card /
   split column (``body[data-ask-split="1"]`` reflows the panels beside it) —
-  persisted in localStorage; the thread tail survives reloads via
-  sessionStorage.
+  persisted across sessions; the thread tail survives reloads.
+* **One client state container (S14 PR2)**: ``pipeline.cc_state`` inlines
+  ``window.CCState`` before every other script — namespaced ``cc:v1:*`` keys
+  with explicit getters/setters replacing the scattered raw storage keys
+  (palette→Ask handoffs, dock mode/thread, drawer sections, the SWR panel
+  cache), legacy keys migrating forward on first read. The shell also tracks
+  section/tab/ticker there, so a hash-less reload returns to where you were
+  (same tab-session only). The full contract is the comment block atop
+  ``CC_STATE_JS``.
 
 The standalone ``/analytical`` and ``/ticker/<t>`` pages remain as working
 deep-link targets (zero rewrite); this shell is purely additive.
@@ -73,6 +80,7 @@ from html import escape
 from dashboard.inbox import INBOX_CSS, INBOX_JS
 from dashboard.upcoming import UPCOMING_CSS
 from pipeline.ask_dock import render_ask_dock
+from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui.controls import controls_css
@@ -271,6 +279,11 @@ def render_shell(
             _NOTES_DRAWER_HTML,
             _PALETTE_HTML,
             _PEEK_HTML,
+            # The shared client state container (S14 PR2): one namespaced,
+            # versioned window.CCState, inlined BEFORE the dock and shell
+            # scripts (and therefore before any lazily-injected fragment
+            # script) so every consumer sees the same store.
+            f"<script>{CC_STATE_JS}</script>",
             # The persistent Ask dock (Ask v5): shell chrome, not panel
             # content — outside .cc-panels so it survives every tab switch.
             render_ask_dock(),
@@ -285,7 +298,8 @@ def render_shell(
 # injectHtml used for tabs, so the budget Save buttons and the maintenance
 # blocks' SSE wiring keep working unchanged inside the drawer.
 # All sections ship COLLAPSED; SHELL_JS restores each section's last
-# open/closed state from localStorage (key: cc-drawer-sec:<endpoint>).
+# open/closed state from the client store (key drawer:<endpoint>; the
+# pre-S14 cc-drawer-sec:<endpoint> localStorage keys migrate on first read).
 _SETTINGS_DRAWER_HTML = (
     '<div class="cc-drawer-scrim" id="cc-drawer-scrim" hidden></div>'
     '<aside class="cc-drawer" id="cc-drawer" hidden aria-label="Settings">'
@@ -1177,8 +1191,8 @@ SHELL_JS = r"""
   }
 
   // ----- Perceived-latency plumbing (S14) -----
-  // Three layers over one per-panel cache (sessionStorage, key
-  // cc:v1:panel:<id>[:TICKER] -> {etag, html, ts}):
+  // Three layers over one per-panel cache (session-scoped store entries,
+  // key cc:v1:panel:<id>[:TICKER] -> {etag, html, ts}):
   //   1. Structured skeletons — the server renders a content-shaped
   //      placeholder per panel; captured at boot (SKEL) so cold (re)loads can
   //      re-show it (e.g. the Holding panel switching tickers).
@@ -1193,7 +1207,6 @@ SHELL_JS = r"""
   // /api/metrics/panel (read back in System → Data Cache).
   var SKEL = {};            // panel id -> boot placeholder markup
   var INFLIGHT = {};        // cache key -> in-flight fragment promise
-  var CACHE_PREFIX = 'cc:v1:panel:';
   var FRESH_MS = 30000;     // just-fetched window: skip revalidation
   var WARM_PANELS = ['portfolio', 'explore'];
 
@@ -1208,36 +1221,12 @@ SHELL_JS = r"""
     return SKEL[pid] || '<div class="cc-loading">Loading…</div>';
   }
 
-  function cacheKey(pid, ticker) {
-    return CACHE_PREFIX + pid + (ticker ? ':' + ticker : '');
-  }
-
-  function cacheGet(key) {
-    try {
-      var raw = sessionStorage.getItem(key);
-      var entry = raw ? JSON.parse(raw) : null;
-      return (entry && typeof entry.html === 'string') ? entry : null;
-    } catch (e) { return null; }
-  }
-
-  function cacheSet(key, entry) {
-    if (entry.html.length > 400000) return;  // quota is shared — skip outliers
-    var v = JSON.stringify(entry);
-    try { sessionStorage.setItem(key, v); }
-    catch (e) {
-      // Quota pressure: evict every panel entry once, retry, then give up
-      // quietly (SWR just stays cold; nothing user-visible breaks).
-      try {
-        var doomed = [];
-        for (var i = 0; i < sessionStorage.length; i++) {
-          var k = sessionStorage.key(i);
-          if (k && k.indexOf(CACHE_PREFIX) === 0) doomed.push(k);
-        }
-        doomed.forEach(function (k) { sessionStorage.removeItem(k); });
-        sessionStorage.setItem(key, v);
-      } catch (e2) { /* storage unavailable */ }
-    }
-  }
+  // The fragment cache lives in the shared store (S14 PR2): same
+  // cc:v1:panel:* entries PR1 wrote, addressed through CCState.panel so the
+  // store owns panel cache metadata (quota eviction included).
+  var cacheKey = window.CCState.panel.key;
+  var cacheGet = window.CCState.panel.get;
+  var cacheSet = window.CCState.panel.set;
 
   // One fetch per cache key at a time: a hover prefetch already in flight is
   // reused by the activation that follows it instead of double-fetching.
@@ -1409,10 +1398,16 @@ SHELL_JS = r"""
         n.hidden = (theme !== activeTheme) || (holdingOpen && theme === 'companies');
       });
       lastPanelByTheme[activeTheme] = panelId;
+      window.CCState.set('section', activeTheme);
     }
+    // Track where the user IS (S14 PR2): tab always; ticker only on the
+    // ticker-scoped panels so the last holding survives a detour through
+    // other tabs. The boot path replays these on a hash-less reload.
+    window.CCState.set('tab', panelId);
     // ``data-picker`` panels are ticker-scoped: pass the hash ticker straight to
     // loadBody (the in-fragment combobox supplies it via the #holding=<T> hash).
     var isPicker = panel.getAttribute('data-picker') === '1';
+    if (isPicker && ticker) window.CCState.set('ticker', ticker);
     var loaded = panel.getAttribute('data-loaded') === '1';
     if (isPicker) {
       var cur = panel.getAttribute('data-current-ticker') || '';
@@ -1570,11 +1565,13 @@ SHELL_JS = r"""
   function goHash(id) { return function () { location.hash = '#' + id; }; }
   function goUrl(url) { return function () { location.href = url; }; }
   function goAsk(q) {
-    // Hand the typed query to the Ask panel: stash it, jump to #explore,
-    // and poke any already-loaded panel (it consumes the stash at wire-up
-    // when the tab loads lazily — see consumePaletteQuery in explore_panel).
+    // Hand the typed query to the Ask panel: stash it in the store, jump to
+    // #explore, and poke any already-loaded panel (it consumes the stash at
+    // wire-up when the tab loads lazily — see consumePaletteQuery in
+    // explore_panel). The event NAME stays 'cc-ask-q' — that string is the
+    // poke contract, not a storage key.
     return function () {
-      try { sessionStorage.setItem('cc-ask-q', q); } catch (e) {}
+      window.CCState.set('askQ', q);
       location.hash = '#explore';
       window.dispatchEvent(new Event('cc-ask-q'));
     };
@@ -1584,7 +1581,7 @@ SHELL_JS = r"""
     // but for a saved view id — the Ask/explore panel loads + runs its chip
     // (see consumePaletteView in explore_panel).
     return function () {
-      try { sessionStorage.setItem('cc-view-id', String(id)); } catch (e) {}
+      window.CCState.set('askViewId', String(id));
       location.hash = '#explore';
       window.dispatchEvent(new Event('cc-view-id'));
     };
@@ -1980,22 +1977,22 @@ SHELL_JS = r"""
     }
   });
   // Drawer sections ship collapsed; each remembers its own open/closed state
-  // across reloads (localStorage cc-drawer-sec:<endpoint>). The toggle handler
-  // only fetches while the drawer is VISIBLE — the boot-time restore below
-  // also fires toggle events, and openDrawer() already loads whatever is open.
+  // across reloads (store key drawer:<endpoint>; the pre-S14
+  // cc-drawer-sec:<endpoint> keys migrate on first read). The toggle
+  // handler only fetches while the drawer is VISIBLE — the boot-time
+  // restore below also fires toggle events, and openDrawer() already loads
+  // whatever is open.
   function drawerSecKey(sec) {
-    return 'cc-drawer-sec:' + (sec.getAttribute('data-endpoint') || '');
+    return 'drawer:' + (sec.getAttribute('data-endpoint') || '');
   }
   if (drawer) {
     var allSecs = drawer.querySelectorAll('.cc-drawer-sec');
     for (var di = 0; di < allSecs.length; di++) {
       allSecs[di].addEventListener('toggle', function (ev) {
-        try { localStorage.setItem(drawerSecKey(ev.target), ev.target.open ? '1' : '0'); }
-        catch (e) { /* storage unavailable — state just won't persist */ }
+        window.CCState.set(drawerSecKey(ev.target), ev.target.open ? '1' : '0');
         if (ev.target.open && !drawer.hidden) loadDrawerSection(ev.target);
       });
-      try { allSecs[di].open = localStorage.getItem(drawerSecKey(allSecs[di])) === '1'; }
-      catch (e) { /* storage unavailable — stay collapsed */ }
+      allSecs[di].open = window.CCState.get(drawerSecKey(allSecs[di])) === '1';
     }
   }
 
@@ -2030,6 +2027,21 @@ SHELL_JS = r"""
   });
 
   window.addEventListener('hashchange', onHashChange);
+  // Boot restore (S14 PR2): a hash-less load returns to where you were —
+  // same tab-session only (the store's tab/ticker are session-scoped, so a
+  // fresh tab still lands on Overview; a mid-work reload doesn't).
+  // location.replace keeps the detour out of Back history; the synchronous
+  // onHashChange below reads the already-updated hash, and the async
+  // hashchange event it also fires re-activates idempotently.
+  if (!location.hash) {
+    var bootTab = window.CCState.get('tab');
+    var bootPanel = bootTab ? panelById(bootTab) : null;
+    if (bootPanel && bootTab !== 'overview') {
+      var bootTicker = bootPanel.getAttribute('data-picker') === '1'
+        ? (window.CCState.get('ticker') || '') : '';
+      location.replace('#' + bootTab + (bootTicker ? '=' + encodeURIComponent(bootTicker) : ''));
+    }
+  }
   onHashChange();  // initial activation from the current hash (or overview)
 })();
 """.strip()

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from pipeline.cc_state import CC_STATE_JS
 from pipeline.command_center_shell import (
     _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]  # keep-in-sync contract under test
     _SETTINGS_DRAWER_HTML,  # pyright: ignore[reportPrivateUsage]  # collapsed-by-default contract
@@ -254,12 +255,14 @@ def test_settings_drawer_structure() -> None:
 def test_settings_drawer_sections_collapsed_with_remembered_state() -> None:
     """UI polish: every drawer section ships collapsed (no `open` attribute
     in the drawer markup); SHELL_JS restores and persists each section's
-    state per-endpoint in localStorage."""
+    state per-endpoint through the store (drawer:<endpoint>; the legacy
+    cc-drawer-sec:<endpoint> localStorage keys migrate inside cc_state)."""
     assert "<details" in _SETTINGS_DRAWER_HTML
     assert " open " not in _SETTINGS_DRAWER_HTML
-    assert "cc-drawer-sec:" in SHELL_JS
-    assert "localStorage.setItem(drawerSecKey(" in SHELL_JS
-    assert "localStorage.getItem(drawerSecKey(" in SHELL_JS
+    assert "'drawer:' + (sec.getAttribute('data-endpoint')" in SHELL_JS
+    assert "window.CCState.set(drawerSecKey(" in SHELL_JS
+    assert "window.CCState.get(drawerSecKey(" in SHELL_JS
+    assert "cc-drawer-sec:" in CC_STATE_JS  # the legacy name lives in the store
 
 
 def test_type_scale_tokens_reach_the_shell() -> None:
@@ -391,10 +394,13 @@ def test_lazy_panels_ship_structured_skeletons() -> None:
 
 def test_shell_js_swr_cache_and_revalidation() -> None:
     """S14: the loader paints cached fragments instantly and revalidates in
-    the background — sessionStorage entries under cc:v1:panel:*, conditional
-    refetch via If-None-Match, quiet swap that preserves scroll and never
-    fires while the user is typing inside the panel."""
-    assert "'cc:v1:panel:'" in SHELL_JS
+    the background — cc:v1:panel:* entries addressed through CCState.panel
+    (PR2 moved the cache into the store), conditional refetch via
+    If-None-Match, quiet swap that preserves scroll and never fires while
+    the user is typing inside the panel."""
+    assert "window.CCState.panel.key" in SHELL_JS
+    assert "window.CCState.panel.get" in SHELL_JS
+    assert "window.CCState.panel.set" in SHELL_JS
     assert "'If-None-Match'" in SHELL_JS
     assert "304" in SHELL_JS
     # The boot pass captures the server-rendered skeletons for cold re-loads.
@@ -402,8 +408,42 @@ def test_shell_js_swr_cache_and_revalidation() -> None:
     # Quiet-swap guards: active typing + scroll restoration.
     assert "document.activeElement" in SHELL_JS
     assert "window.scrollY" in SHELL_JS
-    # Quota pressure evicts panel entries rather than throwing.
-    assert "sessionStorage.removeItem(k)" in SHELL_JS
+
+
+def test_state_store_loads_before_every_other_script() -> None:
+    """S14 PR2: window.CCState is shell infrastructure — render_shell inlines
+    CC_STATE_JS exactly once, BEFORE the ask dock's IIFE and SHELL_JS (and
+    therefore before any lazily-injected fragment script can run)."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert html.count("window.CCState = {") == 1
+    store_at = html.index("window.CCState = {")
+    assert store_at < html.index('id="ask-dock"')
+    assert store_at < html.index(SHELL_JS[:40])
+
+
+def test_shell_routes_state_through_the_store() -> None:
+    """S14 PR2: the shell's own state writes go through CCState — palette
+    handoffs, section/tab/ticker tracking — and no raw storage calls remain
+    in SHELL_JS outside the store itself."""
+    assert "window.CCState.set('askQ', q)" in SHELL_JS
+    assert "window.CCState.set('askViewId', String(id))" in SHELL_JS
+    assert "window.CCState.set('section', activeTheme)" in SHELL_JS
+    assert "window.CCState.set('tab', panelId)" in SHELL_JS
+    assert "window.CCState.set('ticker', ticker)" in SHELL_JS
+    assert "sessionStorage" not in SHELL_JS
+    assert "localStorage" not in SHELL_JS
+
+
+def test_hashless_boot_restores_last_tab_within_the_session() -> None:
+    """S14 PR2: a reload with no hash returns to the stored tab (+ ticker for
+    picker panels) via location.replace — sessionStorage scoping means a
+    fresh tab still lands on Overview."""
+    assert "if (!location.hash)" in SHELL_JS
+    assert "window.CCState.get('tab')" in SHELL_JS
+    assert "window.CCState.get('ticker')" in SHELL_JS
+    assert "location.replace('#' + bootTab" in SHELL_JS
+    # Overview is the no-state default, never a forced redirect target.
+    assert "bootTab !== 'overview'" in SHELL_JS
 
 
 def test_shell_js_prefetch_and_warm_start() -> None:
