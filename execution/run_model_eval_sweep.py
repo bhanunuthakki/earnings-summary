@@ -66,6 +66,7 @@ from llm.model_eval import (  # noqa: E402
     run_model,
 )
 from llm.model_ladder import cheaper_candidates  # noqa: E402
+from llm.model_overrides import record_verdict  # noqa: E402
 
 log = logging.getLogger("run_model_eval_sweep")
 
@@ -245,7 +246,11 @@ def _evaluate_candidate(
     min_n: int,
     parity_threshold: float,
     timeout_seconds: int | None,
-) -> CandidateVerdict:
+) -> tuple[CandidateVerdict, list[dict[str, object]]]:
+    """Returns the verdict AND the per-case judge audit (label, judge, winner,
+    margin, rationales) so the full decision trail lands in summary_json."""
+    from llm.backend_judge import JudgedPair
+
     tally: dict[str, list[int]] = {jb: [0, 0, 0] for jb in judges}
     judged: list[tuple[str, object]] = []
 
@@ -280,8 +285,26 @@ def _evaluate_candidate(
             else:
                 tally[jb][2] += 1
 
+    case_audit: list[dict[str, object]] = []
+    for jb, jp in judged:
+        if not isinstance(jp, JudgedPair):
+            continue
+        winner_model = (
+            candidate if jp.winner == GEMINI else (incumbent if jp.winner == CLAUDE else "tie")
+        )
+        case_audit.append(
+            {
+                "label": jp.label,
+                "judge": jb,
+                "winner_model": winner_model,
+                "margin": jp.margin,
+                "position_consistent": jp.position_consistent,
+                "rationales": jp.rationales,
+            }
+        )
+
     per_judge = {jb: (t[0], t[1], t[2]) for jb, t in tally.items()}
-    return decide_switch(
+    verdict = decide_switch(
         purpose=purpose,
         incumbent=incumbent,
         candidate=candidate,
@@ -290,46 +313,13 @@ def _evaluate_candidate(
         min_n=min_n,
         parity_threshold=parity_threshold,
     )
+    return verdict, case_audit
 
 
-# ---------------------------------------------------------------------------
-# DB persistence
-# ---------------------------------------------------------------------------
-
-
-def _insert_verdict(
-    db_path: Path,
-    verdict: CandidateVerdict,
-    *,
-    evaluated_at: datetime,
-) -> None:
-    """INSERT one verdict row into model_eval_verdicts (rolling history)."""
-    summary = dataclasses.asdict(verdict)
-    n_parity = verdict.candidate_wins + verdict.ties
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
-    try:
-        conn.execute(
-            """
-            INSERT INTO model_eval_verdicts
-                (purpose, incumbent_model, candidate_model, verdict,
-                 judge_agreement, n_cases, n_parity, evaluated_at, summary_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                verdict.purpose,
-                verdict.incumbent,
-                verdict.candidate,
-                verdict.recommendation,
-                verdict.judge_agreement,
-                verdict.n,
-                n_parity,
-                evaluated_at.isoformat(),
-                json.dumps(summary, ensure_ascii=False),
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+# DB persistence: the sweep writes through llm.model_overrides.record_verdict
+# (the single canonical writer, shared with the apply_model_switches reader) —
+# see the call in run_sweep. The old divergent-schema _insert_verdict was removed
+# when the duplicate 0084 migration was reconciled.
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +360,6 @@ def run_sweep(
     log.info("active purposes (%d): %s", len(active_purposes), ", ".join(active_purposes))
 
     run_id = uuid.uuid4().hex
-    evaluated_at = datetime.now(UTC).replace(tzinfo=None)
     all_verdicts: list[CandidateVerdict] = []
 
     for purpose in active_purposes:
@@ -395,7 +384,7 @@ def run_sweep(
 
         for candidate in candidates:
             log.info("  evaluating candidate %s ...", candidate)
-            verdict = _evaluate_candidate(
+            verdict, case_audit = _evaluate_candidate(
                 cases,
                 purpose=purpose,
                 incumbent=incumbent,
@@ -416,7 +405,26 @@ def run_sweep(
             all_verdicts.append(verdict)
 
             if persist and db_path.exists():
-                _insert_verdict(db_path, verdict, evaluated_at=evaluated_at)
+                # Single canonical writer (shared with the auto-switch reader).
+                # summary_json = full verdict + every per-case judge rationale,
+                # so the switch decision is auditable from the DB alone.
+                summary_json = json.dumps(
+                    {"verdict": dataclasses.asdict(verdict), "cases": case_audit},
+                    ensure_ascii=False,
+                )
+                record_verdict(
+                    purpose=verdict.purpose,
+                    candidate=verdict.candidate,
+                    incumbent=verdict.incumbent,
+                    verdict=verdict.recommendation,
+                    run_id=run_id,
+                    parity_rate=verdict.parity_rate,
+                    judge_agreement=verdict.judge_agreement,
+                    n_cases=verdict.n,
+                    n_parity=verdict.candidate_wins + verdict.ties,
+                    summary_json=summary_json,
+                    db_path=db_path,
+                )
                 log.info("  persisted to model_eval_verdicts")
 
     return all_verdicts

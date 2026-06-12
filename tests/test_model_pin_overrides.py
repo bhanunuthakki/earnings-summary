@@ -339,6 +339,63 @@ def test_evaluate_switches_dry_run_does_not_write(db_path: Path) -> None:
     assert active_override("bear_case", db_path=db_path) is None  # nothing written
 
 
+def test_record_verdict_persists_full_audit_trail(db_path: Path) -> None:
+    """record_verdict (the single canonical writer) persists the audit columns —
+    n_parity + summary_json — so a switch decision is reconstructable from the DB
+    alone (the auditability requirement)."""
+    import json as _json
+
+    from llm.model_overrides import record_verdict
+
+    audit = {
+        "verdict": {"recommendation": "SWITCH_DOWN", "candidate_wins": 4, "ties": 3},
+        "cases": [
+            {
+                "label": "company_description:NU:abc",
+                "judge": "claude",
+                "winner_model": "tie",
+                "margin": 0.0,
+                "rationales": ["both grounded", "tie on accuracy"],
+            },
+            {
+                "label": "company_description:NU:abc",
+                "judge": "gemini",
+                "winner_model": "sonnet",
+                "margin": 0.4,
+                "rationales": ["sonnet more faithful", "sonnet wins"],
+            },
+        ],
+    }
+    record_verdict(
+        purpose="company_description",
+        candidate="claude-sonnet-4-6",
+        incumbent="claude-opus-4-7",
+        verdict="HOLD",
+        run_id="run-audit-1",
+        parity_rate=0.88,
+        judge_agreement=0.25,
+        n_cases=4,
+        n_parity=7,
+        summary_json=_json.dumps(audit),
+        db_path=db_path,
+    )
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT n_parity, summary_json, parity_rate FROM model_eval_verdicts WHERE run_id = ?",
+            ("run-audit-1",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[0] == 7  # n_parity persisted
+    assert row[2] == 0.88
+    restored = _json.loads(row[1])  # summary_json round-trips with per-case rationales
+    assert restored["verdict"]["recommendation"] == "SWITCH_DOWN"
+    assert len(restored["cases"]) == 2
+    assert "sonnet more faithful" in restored["cases"][1]["rationales"]
+
+
 def test_evaluate_switches_already_active_override_no_duplicate(db_path: Path) -> None:
     """When override is already active for the same candidate, action=ALREADY_ACTIVE."""
     from apply_model_switches import evaluate_switches

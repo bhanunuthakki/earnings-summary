@@ -3,11 +3,16 @@
 Two tables that together form the closed-loop model-selection system
 (directives/model_eval_loop.md):
 
-``model_eval_verdicts`` (what the PR2 sweep cron would write; idempotent
-guard so when PR2 lands it skips this table):
+``model_eval_verdicts`` (written by the PR2 sweep cron + eval driver):
   One row per (purpose, candidate) CandidateVerdict from a sweep run.
   A rolling window of these tells ``apply_model_switches`` whether the
-  evidence for a downgrade is consistent enough to act on.
+  evidence for a downgrade is consistent enough to act on. ``summary_json``
+  carries the full verdict + per-case judge rationales so the decision is
+  auditable from the DB alone. (This is the SINGLE 0084: a parallel PR2
+  shipped a divergent-schema 0084_model_eval_verdicts.py — both branched off
+  0083, giving two alembic heads with mismatched columns; that file was
+  deleted and the sweep now writes through llm.model_overrides.record_verdict
+  so writer and reader share this one schema.)
 
 ``model_pin_overrides`` (new for PR3):
   Reversible, DB-backed model pin for one purpose. When the switch loop
@@ -61,6 +66,12 @@ def upgrade() -> None:
             sa.Column("parity_rate", sa.Float(), nullable=True),
             sa.Column("judge_agreement", sa.Float(), nullable=True),
             sa.Column("n_cases", sa.Integer(), nullable=True),
+            # Candidate wins + ties (the parity numerator; n_parity/n_cases = parity_rate).
+            sa.Column("n_parity", sa.Integer(), nullable=True),
+            # Full audit blob: the complete CandidateVerdict (per-judge tallies,
+            # reason) PLUS the per-case judge verdicts + rationales — so every
+            # switch decision is auditable from the DB alone, no JSONL needed.
+            sa.Column("summary_json", sa.Text(), nullable=True),
             # Naive UTC ISO-8601 string (project naive-UTC convention).
             sa.Column("recorded_at", sa.Text(), nullable=False),
         )

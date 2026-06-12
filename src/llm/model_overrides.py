@@ -165,13 +165,17 @@ def record_verdict(
     parity_rate: float | None = None,
     judge_agreement: float | None = None,
     n_cases: int | None = None,
+    n_parity: int | None = None,
+    summary_json: str | None = None,
     db_path: Path | str | None = None,
 ) -> None:
     """Persist one CandidateVerdict result to ``model_eval_verdicts``.
 
-    Called by ``execution/run_model_eval_sweep.py`` (PR2) and by
-    ``execution/apply_model_switches.py`` when it wants to record a verdict
-    inline.  Callers supply ``recorded_at`` implicitly as now-UTC.
+    The single canonical writer — called by ``run_model_eval_sweep.py`` (the
+    weekly sweep) and ``eval_model_downgrade.py``, so the sweep writer and the
+    ``apply_model_switches`` reader share one schema. ``summary_json`` carries
+    the full verdict + per-case judge rationales for a complete DB audit trail
+    (no JSONL dependency). ``recorded_at`` is stamped now-UTC.
     """
     path = _resolve_db_path(db_path)
     if path is None:
@@ -183,8 +187,9 @@ def record_verdict(
             """
             INSERT INTO model_eval_verdicts
                 (purpose, candidate, incumbent, verdict, run_id,
-                 parity_rate, judge_agreement, n_cases, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parity_rate, judge_agreement, n_cases, n_parity,
+                 summary_json, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 purpose,
@@ -195,6 +200,8 @@ def record_verdict(
                 parity_rate,
                 judge_agreement,
                 n_cases,
+                n_parity,
+                summary_json,
                 now_iso,
             ),
         )
