@@ -428,10 +428,10 @@ _COMPARATOR_SYMBOL_MD: dict[str, str] = {"lt": "<", "le": "≤", "gt": ">", "ge"
 
 
 def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
-    """Mirror the HTML two-tier layout: catastrophic tripwires then thesis breakers.
+    """Two-tier layout: catastrophic tripwires then thesis breakers.
 
-    See `report.renderers.html._break_rules_block` for the framing — same column
-    contract, same suppression of empty tiers.
+    Universal rules render first under their own heading, per-ticker
+    business-model rules second; empty tiers are fully suppressed.
     """
     if s.overall_breach_status == "unknown" and not s.break_rule_evaluations:
         out.write("### Break rules\n\n")

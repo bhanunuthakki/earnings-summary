@@ -169,13 +169,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--renderer",
         choices=("default", "workspace", "both"),
-        default="both",
+        default="workspace",
         help=(
-            "Which HTML renderer build_artifacts emits. 'default' writes only the "
-            "legacy {DATE}_report.html; 'workspace' writes only the tabbed "
-            "{DATE}_workspace.html; 'both' (default) writes both. Default is 'both' so "
-            "the dashboard/comments stack gets the workspace artifact it globs for "
-            "while build_earnings_calendar still finds report.html."
+            "Compatibility no-op, forwarded to build_artifacts. The legacy "
+            "{DATE}_report.html renderer was retired — every value emits only "
+            "the tabbed {DATE}_workspace.html."
         ),
     )
     p.add_argument(

@@ -480,7 +480,7 @@ build_report.bat NU</code></pre>
     <table>
       <thead><tr><th>Script</th><th>When to use</th></tr></thead>
       <tbody>
-        <tr><td><code>build_artifacts.py</code></td><td>Build report. Flags: <code>--ticker</code>, <code>--all-tracked</code>, <code>--enable-llm</code>, <code>--renderer {default,workspace,both}</code>, <code>--flavor {portfolio,evaluation}</code>, <code>--news-days N</code>, <code>--refresh-news</code></td></tr>
+        <tr><td><code>build_artifacts.py</code></td><td>Build report. Flags: <code>--ticker</code>, <code>--all-tracked</code>, <code>--enable-llm</code>, <code>--flavor {portfolio,evaluation}</code>, <code>--news-days N</code>, <code>--refresh-news</code> (<code>--renderer</code> is a compatibility no-op — workspace is the only renderer)</td></tr>
         <tr><td><code>fetch_fmp_historical_data.py</code></td><td>FMP refresh. Flags: <code>--ticker</code>, <code>--all</code>, <code>--limit N</code></td></tr>
         <tr><td><code>save_fmp_data.py</code></td><td>Full FMP endpoint sweep (more granular). Flags: <code>--tickers</code>, <code>--portfolio</code>, <code>--watchlist</code>, <code>--evaluation</code>, <code>--all</code>, <code>--skip-existing</code>, <code>--max-calls N</code></td></tr>
         <tr><td><code>backfill_transcripts.py</code></td><td>Pull missing transcripts</td></tr>

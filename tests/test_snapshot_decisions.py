@@ -2,9 +2,9 @@
 
 Covers the new `recent_decisions` field on SnapshotSection (3 most recent
 decisions from the audit ledger introduced in migration 0046) and how each
-renderer surfaces it: HTML sidebar with outcome-colored badges, workspace
-panel with the same outcome classes, markdown bullet list. The sidebar is
-suppressed entirely when there are no rows for the ticker.
+renderer surfaces it: workspace panel with outcome-colored badge classes,
+markdown bullet list. The panel is suppressed entirely when there are no
+rows for the ticker.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from report.models import (
     ThesisSection,
     ValuationSnapshot,
 )
-from report.renderers.html import _snapshot as _snapshot_html
 from report.renderers.markdown import _snapshot as _snapshot_md
 from report.renderers.workspace_html import _thesis_tab as _thesis_tab_workspace
 from report.sections.snapshot import build as build_snapshot
@@ -254,34 +253,6 @@ _BADGES_FIXTURE = [
         rationale_short="KPIs cleared, discount real.",
     ),
 ]
-
-
-def test_html_renderer_emits_sidebar_with_outcome_classes() -> None:
-    section = _section_with_badges(_BADGES_FIXTURE)
-    out = StringIO()
-    _snapshot_html(out, section)
-    html = out.getvalue()
-    assert 'class="decision-history"' in html
-    # All three outcomes have their CSS class attached
-    assert "outcome-correct" in html
-    assert "outcome-pending" in html
-    assert "outcome-mixed" in html
-    # Date + kind + outcome surface in the badge text
-    assert "2026-05" in html
-    assert "TRIM" in html
-    assert "correct" in html
-    # Hover tooltip wires the rationale excerpt
-    assert 'title="Premium too wide vs fair value."' in html
-
-
-def test_html_renderer_hides_sidebar_when_empty() -> None:
-    """No decisions → no `decision-history` block at all (not even a placeholder)."""
-    section = _section_with_badges([])
-    out = StringIO()
-    _snapshot_html(out, section)
-    html = out.getvalue()
-    assert "decision-history" not in html
-    assert "Recent decisions" not in html
 
 
 def test_workspace_renderer_emits_decision_panel() -> None:

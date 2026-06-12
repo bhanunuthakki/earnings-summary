@@ -5,7 +5,7 @@ portfolio.db with the timeseries_signals table, seed rows spanning all
 three severities, then assert that:
 
   - the builder buckets + orders rows correctly,
-  - HTML / workspace / markdown renderers each emit the §3.5 region,
+  - workspace / markdown renderers each emit the §3.5 region,
   - empty-table / missing-DB returns a non-rendering section.
 """
 
@@ -18,7 +18,6 @@ from pathlib import Path
 from io import StringIO
 
 from report.models import SectionStatus, SignalsSection
-from report.renderers import html as html_renderer
 from report.renderers import markdown as markdown_renderer
 from report.renderers import workspace_html
 from report.sections import signals as signals_section
@@ -293,32 +292,6 @@ def _row(
         value_summary=stat,
         severity_magnitude=mag,
     )
-
-
-def test_html_renderer_emits_signals_block() -> None:
-    out = StringIO()
-    html_renderer._signals(out, _make_section_with_data())
-    rendered = out.getvalue()
-    assert 'id="signals"' in rendered
-    assert "§3.5 Signals" in rendered
-    assert "signals-fires" in rendered  # tier-bucketed cards container
-    assert "free_cash_flow" in rendered
-    assert "GCP revenue growth (YoY)" in rendered
-    # Green should not appear in the fires block but should appear in the table.
-    assert "All signals (3)" in rendered
-    assert "Revenue: accelerating" not in rendered.split("signals-fires")[1].split(
-        "<details"
-    )[0]
-
-
-def test_html_renderer_skips_when_empty() -> None:
-    """An empty section produces no output — section header included.
-
-    The renderer is the omission point, not the builder, so a brief
-    with zero signals simply lacks §3.5 entirely (no header, no callout)."""
-    out = StringIO()
-    html_renderer._signals(out, SignalsSection(status=SectionStatus.OK))
-    assert out.getvalue() == ""
 
 
 def test_markdown_renderer_emits_signals_block() -> None:

@@ -197,8 +197,9 @@ accent — near-invisible in the report's light theme), `portfolio_panel.py:238`
 `restatements_panel.py:29–31`, `source_calls_panel.py:36`,
 `validation_issues_panel.py:30–32`, `ticker_settings_panel.py:86–89`,
 `viewspec/render.py:42–45`, `ask_dock.py:54` (10.5px),
-`report/renderers/html.py` (35 sizes 10.5–28px + own font stacks at
-147/223/414/455 — predates tokens entirely), `workspace_chat.py` (15),
+`report/renderers/html.py` (renderer retired 2026-06-11 and the file deleted —
+workspace is the only HTML report; was 35 sizes 10.5–28px + own font stacks,
+predating tokens entirely), `workspace_chat.py` (15),
 `workspace_comments.py` (18). Workspace reading/display ramps in
 `workspace_styles.py` are sanctioned (§1) — its *chrome* tiers were already
 tokenized.
@@ -219,7 +220,8 @@ font stacks), `workspace_chat.py`, `peeks.py`.
 **Ticker+name as one string:** `ticker_command_center.py:773` (combobox input
 value `"NU · Nu Holdings Ltd."`), `:692` (standalone h1),
 `command_center_shell.py:1288` (palette row label), `html.py:760`
-(`<strong>T</strong> — name`), `markdown.py:224`. Done right (two-part) only
+(`<strong>T</strong> — name`; renderer since retired), `markdown.py:224`.
+Done right (two-part) only
 in the combobox dropdown rows (`cc-combo-tk/-nm`) and the peek mini-card
 (`cc-mini-ticker/-name`) — now canonized as `.k-tick`.
 

@@ -8,7 +8,7 @@ Covers:
       * mixed has_qa_section flags → both sides populate
       * no Q&A across the window → fallback note + prepared-only
       * no prepared across the window → fallback note + Q&A-only
-  - the markdown + HTML renderers' theme blocks
+  - the markdown + workspace renderers' theme blocks
 
 Mocking strategy: the LLM call goes through llm_client.extract_qa_vs_prepared_themes,
 which we monkeypatch on the EARNINGS section's import name (it imports the
@@ -26,7 +26,6 @@ from typing import Any
 import pytest
 
 from report.models import EarningsSection, QuoteSnippet, SectionStatus, ThemeRollup
-from report.renderers.html import _earnings as html_earnings
 from report.renderers.markdown import _earnings as md_earnings
 from report.sections import earnings as earnings_section
 from report.sections.earnings import (
@@ -586,44 +585,6 @@ def test_md_skips_themes_block_when_offline() -> None:
     section = EarningsSection(status=SectionStatus.OK)
     out = StringIO()
     md_earnings(out, section)
-    s = out.getvalue()
-    assert "Cross-quarter themes" not in s
-
-
-def test_html_renders_both_theme_blocks() -> None:
-    out = StringIO()
-    html_earnings(out, _sample_section_with_themes())
-    s = out.getvalue()
-    assert "Cross-quarter themes" in s
-    assert "Prepared remarks themes" in s
-    assert "Q&amp;A themes" in s  # & is escaped in HTML
-    assert "CapEx trajectory" in s
-    assert "AI compute capacity" in s
-    assert "theme-rollup" in s
-    assert "Anat Ashkenazi" in s
-
-
-def test_html_renders_fallback_note_when_qa_missing() -> None:
-    section = EarningsSection(
-        status=SectionStatus.OK,
-        prepared_remarks_themes=[
-            ThemeRollup(theme_name="Some theme", last_4q_count=1, mentions_per_quarter={"Q1 2026": 1}, evidence=[])
-        ],
-        qa_themes=[],
-        themes_note="No Q&A sections available in transcripts.",
-    )
-    out = StringIO()
-    html_earnings(out, section)
-    s = out.getvalue()
-    assert "Prepared remarks themes" in s
-    assert "No Q&amp;A sections available" in s
-    # Q&A header should not appear when qa_themes is empty
-    assert "<h4>Q&amp;A themes</h4>" not in s
-
-
-def test_html_skips_themes_block_when_offline() -> None:
-    out = StringIO()
-    html_earnings(out, EarningsSection(status=SectionStatus.OK))
     s = out.getvalue()
     assert "Cross-quarter themes" not in s
 

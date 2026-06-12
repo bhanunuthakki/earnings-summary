@@ -266,7 +266,7 @@ Then check:
   rows in the `earnings_surprises` table. The JSON summary at the end of the
   log lists per-ticker insert/update/unchanged counts and which source
   contributed each record (fmp_calendar vs yfinance).
-- For `daily_fetch_and_brief`: `output/research/<TICKER>/<DATE>_report.html`
+- For `daily_fetch_and_brief`: `output/research/<TICKER>/<DATE>_workspace.html`
   for any tickers that had `brief_dirty=1`.
 - For `run_morning_pipeline`: the log shows one `=== Stage N - …` header per
   stage (news → triggers → feed → validation) with each child's captured
