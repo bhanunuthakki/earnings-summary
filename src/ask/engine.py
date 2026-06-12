@@ -432,7 +432,9 @@ def _narrative_events(
     # thread from ask_turns (authoritative) instead of trusting the client tail.
     if turn.session_id:
         server_hist = _store_load_history(turn.session_id, db_path=db_path)
-        history = sanitize_history(server_hist)
+        # New session (no stored turns yet) → fall back to the client tail so the
+        # first question still has context from any client-side priming.
+        history = sanitize_history(server_hist if server_hist else turn.history)
         # Persist the user turn immediately so the audit trail is never missing
         # even if the assistant side errors.
         try:
