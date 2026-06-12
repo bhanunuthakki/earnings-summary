@@ -51,24 +51,24 @@ _SPEAKER_RE = re.compile(r"^([A-Z][\w.\- ',()]{0,70}?):(\s|$)")
 # The command-center shell appends this block to its own stylesheet so a
 # fragment injected into the peek renders identically to the full page.
 VIEWER_CONTENT_CSS = """
-.sv-title { font-size: 16px; font-weight: 700; }
-.sv-meta { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.sv-title { font-size: var(--fs-title); font-weight: 700; }
+.sv-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); }
 .sv-lines { list-style: none; margin: 0; padding: 0; counter-reset: ln; }
 .sv-lines li { counter-increment: ln; padding: 1px 8px 1px 0; display: flex; gap: 14px; }
 .sv-lines li::before { content: counter(ln); color: var(--muted-2); width: 42px;
-  flex: none; text-align: right; font-family: var(--mono); font-size: 11px;
+  flex: none; text-align: right; font-family: var(--mono); font-size: var(--fs-caption);
   padding-top: 2px; user-select: none; }
-.sv-lines li:target { background: rgba(245, 198, 106, 0.14);
+.sv-lines li:target { background: color-mix(in srgb, var(--warn) 14%, transparent);
   outline: 1px solid var(--warn); border-radius: 4px; }
 .sv-lines .ln-text { white-space: pre-wrap; word-break: break-word; }
 .sv-lines .ln-speaker { font-weight: 700; color: var(--accent); }
 .sv-secnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
-.sv-secnav a { font-size: 12px; padding: 3px 9px; border: 1px solid var(--border);
-  border-radius: 12px; text-decoration: none; color: var(--muted); }
+.sv-secnav a { font-size: var(--fs-caption); padding: 3px 9px; border: 1px solid var(--border);
+  border-radius: var(--radius-full); text-decoration: none; color: var(--muted); }
 .sv-secnav a.active { color: var(--accent); border-color: var(--accent); }
 .sv-secnav a:hover { color: var(--fg); }
 .sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
-.sv-sec-key { color: var(--muted); font-size: 12px; }
+.sv-sec-key { color: var(--muted); font-size: var(--fs-caption); }
 .sv-sec-val { white-space: pre-wrap; word-break: break-word; }
 .sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
   margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
@@ -77,14 +77,14 @@ VIEWER_CONTENT_CSS = """
 _PAGE_CSS = (
     """
 body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
-  font-size: 14px; line-height: 1.55; }
+  font-size: var(--fs-section); line-height: 1.55; }
 a { color: var(--accent); }
 .sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
   display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
   position: sticky; top: 0; background: var(--bg); z-index: 5; }
 .sv-body { max-width: 980px; margin: 0 auto; padding: 18px 22px 80px; }
 .sv-fallback { max-width: 720px; margin: 60px auto; padding: 22px;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 """
     + VIEWER_CONTENT_CSS
 )
@@ -177,7 +177,7 @@ def _doc_meta_html(doc: _DocRow) -> str:
     if doc.source_url:
         bits.append(
             f'<a href="{escape(doc.source_url)}" target="_blank" rel="noopener" '
-            'style="font-size:12px;">original source ↗</a>'
+            'style="font-size:var(--fs-caption);">original source ↗</a>'
         )
     return "".join(bits)
 

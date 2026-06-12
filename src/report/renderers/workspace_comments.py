@@ -759,7 +759,7 @@ CSS = r"""
   pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: 600;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--hairline);
   border-radius: 10px;
@@ -768,8 +768,8 @@ CSS = r"""
 }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
 .cmt-pin:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--ink-muted); color: var(--ink); }
-.cmt-pin.has-open { background: rgba(255, 196, 0, 0.18); border-color: rgba(255, 196, 0, 0.55); color: #ffc400; opacity: 1; }
-.cmt-pin.all-addressed { background: rgba(60, 200, 120, 0.12); border-color: rgba(60, 200, 120, 0.4); color: #3cc878; opacity: 0.9; }
+.cmt-pin.has-open { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); opacity: 1; }
+.cmt-pin.all-addressed { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); opacity: 0.9; }
 
 .cmt-sidebar {
   /* True push-sidebar: flex sibling to .l1-root */
@@ -793,14 +793,14 @@ CSS = r"""
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline);
 }
-.cmt-sidebar-title { font-size: 14px; font-weight: 600; color: var(--ink); }
+.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
 .cmt-sidebar-sub {
-  font-size: 11.5px; color: var(--muted); margin-top: 2px;
+  font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
   font-family: var(--font-mono);
 }
 .cmt-close {
   background: transparent; border: none; color: var(--ink-muted);
-  font-size: 22px; line-height: 1; padding: 0 6px; cursor: pointer;
+  font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer;
 }
 .cmt-close:hover { color: var(--ink); }
 
@@ -810,12 +810,12 @@ CSS = r"""
   display: inline-block;
   margin: 2px 8px 0 auto;
   padding: 2px 8px;
-  font-size: 10.5px; font-weight: 600;
+  font-size: var(--fs-micro); font-weight: 600;
   font-family: var(--font-mono);
-  background: rgba(255, 196, 0, 0.16);
-  color: #ffc400;
-  border: 1px solid rgba(255, 196, 0, 0.45);
-  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: var(--radius-full);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 
@@ -826,23 +826,23 @@ CSS = r"""
   display: inline-block;
   margin: 2px 6px 0 6px;
   padding: 2px 8px;
-  font-size: 10.5px; font-weight: 600;
+  font-size: var(--fs-micro); font-weight: 600;
   font-family: var(--font-mono);
-  border-radius: 10px;
+  border-radius: var(--radius-full);
   text-transform: uppercase; letter-spacing: 0.04em;
   border: 1px solid var(--hairline);
   background: rgba(255, 255, 255, 0.04);
   color: var(--ink-muted);
 }
 .cmt-health-pill.cmt-health-online {
-  color: #3cc878;
-  background: rgba(60, 200, 120, 0.12);
-  border-color: rgba(60, 200, 120, 0.4);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
 }
 .cmt-health-pill.cmt-health-offline {
-  color: #ff7070;
-  background: rgba(255, 80, 80, 0.14);
-  border-color: rgba(255, 80, 80, 0.45);
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
 }
 
 /* Offline banner inside the form — telegraphs the failure mode BEFORE
@@ -850,52 +850,52 @@ CSS = r"""
 .cmt-offline-banner {
   margin-bottom: 8px;
   padding: 6px 10px;
-  font-size: 11.5px;
-  color: #ffc8a0;
-  background: rgba(255, 130, 60, 0.10);
-  border: 1px solid rgba(255, 130, 60, 0.4);
-  border-radius: 4px;
+  font-size: var(--fs-caption);
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: var(--radius);
   line-height: 1.4;
 }
 
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
-.cmt-empty { color: var(--muted); font-size: 12px; padding: 8px 0; }
+.cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
 .cmt-card {
   background: var(--panel-alt);
   border: 1px solid var(--hairline);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 10px 12px;
   margin-bottom: 10px;
-  font-size: 13px;
+  font-size: var(--fs-body);
 }
 .cmt-card-head {
   display: flex; align-items: center; gap: 6px;
-  font-size: 10.5px; color: var(--muted);
+  font-size: var(--fs-micro); color: var(--muted);
   margin-bottom: 6px;
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 .cmt-status { font-weight: 600; }
-.cmt-status-open { color: #ffc400; }
-.cmt-status-addressed { color: #3cc878; }
+.cmt-status-open { color: var(--warn); }
+.cmt-status-addressed { color: var(--ok); }
 .cmt-status-dismissed { color: var(--muted); }
 .cmt-intent { background: rgba(255, 255, 255, 0.05); padding: 1px 6px; border-radius: 3px; }
 .cmt-time { margin-left: auto; font-family: var(--font-mono); }
 .cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
 .cmt-resolution {
   margin-top: 8px; padding: 8px 10px;
-  background: rgba(60, 200, 120, 0.08); border-left: 2px solid #3cc878;
-  border-radius: 3px; font-size: 12px; color: var(--ink-muted);
+  background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok);
+  border-radius: 3px; font-size: var(--fs-caption); color: var(--ink-muted);
 }
 .cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
-.cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: 12px; }
+.cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
 .cmt-thread-role { font-family: var(--font-mono); color: var(--muted); width: 60px; flex-shrink: 0; }
 .cmt-thread-text { color: var(--ink); }
-.cmt-role-assistant .cmt-thread-role { color: #6db3ff; }
+.cmt-role-assistant .cmt-thread-role { color: var(--accent); }
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
 .cmt-actions button {
   background: transparent; border: 1px solid var(--hairline);
-  color: var(--ink-muted); padding: 4px 10px; font-size: 11px;
-  border-radius: 4px; cursor: pointer;
+  color: var(--ink-muted); padding: 4px 10px; font-size: var(--fs-caption);
+  border-radius: var(--radius); cursor: pointer;
 }
 .cmt-actions button:hover { background: var(--panel); color: var(--ink); }
 
@@ -909,7 +909,7 @@ CSS = r"""
   border: none; padding: 6px 14px; border-radius: var(--radius);
   font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
 }
-.cmt-form-hint { font-size: 11px; color: var(--muted); margin-top: 6px; min-height: 14px; }
+.cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 
 /* Floating "+ Comment" button on text selection (Google-Docs style) */
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }

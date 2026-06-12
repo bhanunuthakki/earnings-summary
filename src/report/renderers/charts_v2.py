@@ -29,6 +29,7 @@ NEUTRAL_COLOR = "#5a6b78"
 
 # ----- Number formatting -----
 
+
 def fmt_compact(v: float | None, digits: int = 1) -> str:
     """Compact human-readable: 47,516 → 47.5K; 47,516,000,000 → 47.5B."""
     if v is None or (isinstance(v, float) and math.isnan(v)):
@@ -102,6 +103,7 @@ def _fmt_level_delta(v: float | None, unit: str) -> str:
 
 # ----- Bar charts -----
 
+
 @dataclass
 class BarSpec:
     values: list[float | None]
@@ -109,7 +111,7 @@ class BarSpec:
     title: str
     width: int = 540
     height: int = 220
-    value_fmt: str = "pct"   # "pct" | "dollar" | "compact"
+    value_fmt: str = "pct"  # "pct" | "dollar" | "compact"
     signed_color: bool = True  # green/red based on sign
     bar_color: str | None = None  # override single color
     clip_outliers: bool = True  # clip Y-axis at IQR x 2.5 so one spike doesn't crush the rest
@@ -180,9 +182,13 @@ def bar_chart(spec: BarSpec) -> str:
         if y_val == 0 and (vmin == 0 or vmax == 0):
             continue
         y = pad_top + ((vmax - y_val) / rng) * plot_h
-        parts.append(f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="{css}"/>')
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="{css}"/>'
+        )
         label_txt = fmt(y_val) if css == "cv2-grid" else "0"
-        parts.append(f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{label_txt}</text>')
+        parts.append(
+            f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{label_txt}</text>'
+        )
 
     # Always emit the zero line if not already covered.
     if vmin < 0 < vmax:
@@ -241,6 +247,7 @@ def bar_chart(spec: BarSpec) -> str:
 
 # ----- Multi-line chart (overlays) -----
 
+
 @dataclass
 class LineSeries:
     name: str
@@ -293,8 +300,12 @@ def multi_line_chart(
     # Y-axis: top, middle, bottom.
     for y_val in [vmax, (vmin + vmax) / 2, vmin]:
         y = pad_top + ((vmax - y_val) / rng) * plot_h
-        parts.append(f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>')
-        parts.append(f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{fmt(y_val)}</text>')
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>'
+        )
+        parts.append(
+            f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{fmt(y_val)}</text>'
+        )
 
     # X-axis labels — every other one to avoid crowding, horizontal.
     step = max(1, n // 7)
@@ -302,7 +313,7 @@ def multi_line_chart(
         x = pad_left + (i / (n - 1)) * plot_w if n > 1 else pad_left
         parts.append(
             f'<text x="{x:.1f}" y="{height - 12}" class="cv2-axis" text-anchor="middle">'
-            f'{html.escape(labels[i])}</text>'
+            f"{html.escape(labels[i])}</text>"
         )
 
     # Lines + dots + end-labels.
@@ -335,7 +346,9 @@ def multi_line_chart(
     leg_y = pad_top + 2
     for s_idx, s in enumerate(series):
         color = PALETTE[s_idx % len(PALETTE)]
-        parts.append(f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" fill="{color}"/>')
+        parts.append(
+            f'<rect x="{leg_x:.1f}" y="{leg_y:.1f}" width="10" height="10" fill="{color}"/>'
+        )
         parts.append(
             f'<text x="{leg_x + 14:.1f}" y="{leg_y + 9:.1f}" class="cv2-legend">{html.escape(s.name)}</text>'
         )
@@ -346,6 +359,7 @@ def multi_line_chart(
 
 
 # ----- Paired chart: level bars + YoY% bars side-by-side -----
+
 
 def paired_chart(
     level_values: list[float | None],
@@ -361,29 +375,34 @@ def paired_chart(
 
     Both share the same X labels. Wrapper div uses cv2-pair grid.
     """
-    left = bar_chart(BarSpec(
-        values=level_values,
-        labels=labels,
-        title=f"{title} — level",
-        width=panel_width,
-        height=height,
-        value_fmt=level_fmt,
-        signed_color=False,
-        bar_color=NEUTRAL_COLOR,
-    ))
-    right = bar_chart(BarSpec(
-        values=yoy_values,
-        labels=labels,
-        title=f"{title} — YoY %",
-        width=panel_width,
-        height=height,
-        value_fmt="pct",
-        signed_color=True,
-    ))
+    left = bar_chart(
+        BarSpec(
+            values=level_values,
+            labels=labels,
+            title=f"{title} — level",
+            width=panel_width,
+            height=height,
+            value_fmt=level_fmt,
+            signed_color=False,
+            bar_color=NEUTRAL_COLOR,
+        )
+    )
+    right = bar_chart(
+        BarSpec(
+            values=yoy_values,
+            labels=labels,
+            title=f"{title} — YoY %",
+            width=panel_width,
+            height=height,
+            value_fmt="pct",
+            signed_color=True,
+        )
+    )
     return f'<div class="cv2-pair">{left}{right}</div>'
 
 
 # ----- Stacked area (segment mix shift) -----
+
 
 def stacked_area(
     series: list[LineSeries],
@@ -406,13 +425,9 @@ def stacked_area(
         return _empty_chart(title, width, height)
 
     # Replace None with 0 for stacking — caller's responsibility to filter.
-    stack: list[list[float]] = [
-        [(v if v is not None else 0.0) for v in s.values] for s in series
-    ]
+    stack: list[list[float]] = [[(v if v is not None else 0.0) for v in s.values] for s in series]
 
-    totals: list[float] = [
-        sum(stack[s_i][t_i] for s_i in range(len(series))) for t_i in range(n)
-    ]
+    totals: list[float] = [sum(stack[s_i][t_i] for s_i in range(len(series))) for t_i in range(n)]
     vmax: float = max(totals) if totals else 1.0
     if vmax == 0:
         vmax = 1.0
@@ -440,15 +455,19 @@ def stacked_area(
     # Y gridlines: 0, half, full.
     for v_grid in [vmax, vmax / 2, 0.0]:
         y = y_at(v_grid)
-        parts.append(f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>')
-        parts.append(f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{fmt_compact(v_grid)}</text>')
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>'
+        )
+        parts.append(
+            f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{fmt_compact(v_grid)}</text>'
+        )
 
     # X labels — every other, horizontal.
     step = max(1, n // 7)
     for i in range(0, n, step):
         parts.append(
             f'<text x="{x_at(i):.1f}" y="{height - 12}" class="cv2-axis" text-anchor="middle">'
-            f'{html.escape(labels[i])}</text>'
+            f"{html.escape(labels[i])}</text>"
         )
 
     # Bands.
@@ -465,7 +484,9 @@ def stacked_area(
         path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in top_pts)
         path += " L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in reversed(bot_pts))
         path += " Z"
-        parts.append(f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>')
+        parts.append(
+            f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>'
+        )
 
         # Right-edge label.
         last_top_y: float = top_pts[-1][1]
@@ -475,7 +496,7 @@ def stacked_area(
         share: float = (last_val / totals[-1] * 100) if totals[-1] else 0
         parts.append(
             f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" fill="{color}">'
-            f'{html.escape(s.name)} {share:.0f}%</text>'
+            f"{html.escape(s.name)} {share:.0f}%</text>"
         )
 
     parts.append("</svg>")
@@ -502,12 +523,8 @@ def stacked_area_100pct(
     if n == 0 or not series:
         return _empty_chart(title, width, height)
 
-    stack: list[list[float]] = [
-        [(v if v is not None else 0.0) for v in s.values] for s in series
-    ]
-    totals: list[float] = [
-        sum(stack[s_i][t_i] for s_i in range(len(series))) for t_i in range(n)
-    ]
+    stack: list[list[float]] = [[(v if v is not None else 0.0) for v in s.values] for s in series]
+    totals: list[float] = [sum(stack[s_i][t_i] for s_i in range(len(series))) for t_i in range(n)]
 
     # Normalize to share at each time point.
     shares: list[list[float]] = []
@@ -540,15 +557,19 @@ def stacked_area_100pct(
     # Y-axis: 0%, 50%, 100%.
     for v_grid in [100, 50, 0]:
         y = y_at(v_grid)
-        parts.append(f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>')
-        parts.append(f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{v_grid}%</text>')
+        parts.append(
+            f'<line x1="{pad_left}" y1="{y:.1f}" x2="{width - pad_right}" y2="{y:.1f}" class="cv2-grid"/>'
+        )
+        parts.append(
+            f'<text x="{pad_left - 4}" y="{y + 3:.1f}" class="cv2-axis" text-anchor="end">{v_grid}%</text>'
+        )
 
     # X labels — horizontal.
     step = max(1, n // 7)
     for i in range(0, n, step):
         parts.append(
             f'<text x="{x_at(i):.1f}" y="{height - 12}" class="cv2-axis" text-anchor="middle">'
-            f'{html.escape(labels[i])}</text>'
+            f"{html.escape(labels[i])}</text>"
         )
 
     for s_i, s in enumerate(series):
@@ -563,7 +584,9 @@ def stacked_area_100pct(
         path = "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in top_pts)
         path += " L" + " L".join(f"{x:.1f},{y:.1f}" for x, y in reversed(bot_pts))
         path += " Z"
-        parts.append(f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>')
+        parts.append(
+            f'<path d="{path}" fill="{color}" fill-opacity="0.85" stroke="white" stroke-width="0.5"/>'
+        )
 
         last_top_y: float = top_pts[-1][1]
         last_bot_y: float = bot_pts[-1][1]
@@ -571,7 +594,7 @@ def stacked_area_100pct(
         latest_share: float = shares[s_i][-1]
         parts.append(
             f'<text x="{width - pad_right + 4}" y="{mid_y + 3:.1f}" class="cv2-band-label" fill="{color}">'
-            f'{html.escape(s.name)} {latest_share:.0f}%</text>'
+            f"{html.escape(s.name)} {latest_share:.0f}%</text>"
         )
 
     parts.append("</svg>")
@@ -580,12 +603,13 @@ def stacked_area_100pct(
 
 # ----- YoY heatmap matrix (HTML table) -----
 
+
 @dataclass
 class MatrixRow:
     name: str
-    levels: list[float | None]    # absolute values aligned to `periods`
-    unit: str = ""                # display hint
-    tooltip: str = ""             # if set, name gets a 📖 mark + title= attribute
+    levels: list[float | None]  # absolute values aligned to `periods`
+    unit: str = ""  # display hint
+    tooltip: str = ""  # if set, name gets a 📖 mark + title= attribute
     # Per-cell hover text aligned to `levels` (P3.3 source chips: "tier ·
     # fetched <date>"). None entries render plain cells.
     cell_titles: list[str | None] | None = None
@@ -746,6 +770,7 @@ def yoy_heatmap_table(
 
 # ----- QoQ $-delta bars (MBI page-6 style) -----
 
+
 def qoq_delta_bars(
     levels: list[float | None],
     labels: list[str],
@@ -758,44 +783,47 @@ def qoq_delta_bars(
     for i in range(1, len(levels)):
         prev, curr = levels[i - 1], levels[i]
         deltas.append((curr - prev) if (prev is not None and curr is not None) else None)
-    return bar_chart(BarSpec(
-        values=deltas,
-        labels=labels,
-        title=title,
-        width=width,
-        height=height,
-        value_fmt="dollar",
-        signed_color=True,
-    ))
+    return bar_chart(
+        BarSpec(
+            values=deltas,
+            labels=labels,
+            title=title,
+            width=width,
+            height=height,
+            value_fmt="dollar",
+            signed_color=True,
+        )
+    )
 
 
 # ----- Empty/error -----
+
 
 def _empty_chart(title: str, width: int, height: int) -> str:
     return (
         f'<svg class="cv2-chart" width="{width}" height="{height}">'
         f'<text x="{width / 2}" y="{height / 2}" class="cv2-empty-text" text-anchor="middle">'
-        f'No data for {html.escape(title)}</text></svg>'
+        f"No data for {html.escape(title)}</text></svg>"
     )
 
 
 # ----- Shared CSS -----
 
 CSS = """
-.cv2-chart { display: block; max-width: 100%; height: auto; font-family: 'Inter', -apple-system, sans-serif; }
+.cv2-chart { display: block; max-width: 100%; height: auto; font-family: var(--sans, 'Inter', sans-serif); }
 .cv2-title { font-size: 12px; font-weight: 600; fill: #1a1f2e; }
-.cv2-axis { font-size: 10px; fill: #67737d; font-family: 'JetBrains Mono', Consolas, monospace; }
+.cv2-axis { font-size: 10px; fill: #67737d; font-family: var(--mono, 'JetBrains Mono', monospace); }
 .cv2-grid { stroke: #e3e7eb; stroke-width: 1; }
 .cv2-grid-zero { stroke: #67737d; stroke-width: 1; stroke-dasharray: 2 2; }
-.cv2-bar-label { font-size: 9px; fill: #1a1f2e; font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 500; }
-.cv2-line-end { font-size: 10px; font-weight: 600; font-family: 'JetBrains Mono', Consolas, monospace; }
+.cv2-bar-label { font-size: 9px; fill: #1a1f2e; font-family: var(--mono, 'JetBrains Mono', monospace); font-weight: 500; }
+.cv2-line-end { font-size: 10px; font-weight: 600; font-family: var(--mono, 'JetBrains Mono', monospace); }
 .cv2-legend { font-size: 10.5px; fill: #1a1f2e; }
-.cv2-band-label { font-size: 10px; font-family: 'Inter', -apple-system, sans-serif; font-weight: 500; }
+.cv2-band-label { font-size: 10px; font-family: var(--sans, 'Inter', sans-serif); font-weight: 500; }
 .cv2-empty-text { font-size: 12px; fill: #67737d; }
 .cv2-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; font-family: 'JetBrains Mono', Consolas, monospace; width: 100%; }
+.cv2-matrix { border-collapse: collapse; font-size: 11px; font-family: var(--mono, 'JetBrains Mono', monospace); width: 100%; }
 .cv2-matrix th, .cv2-matrix td { padding: 4px 6px; border: 1px solid #e3e7eb; text-align: right; white-space: nowrap; }
 .cv2-matrix-label { text-align: left !important; font-weight: 600; color: #1a1f2e; background: #f7f9fb; position: sticky; left: 0; }
 .cv2-matrix-q, .cv2-matrix-cagr { font-weight: 600; color: #1a1f2e; background: #f7f9fb; }

@@ -233,6 +233,30 @@ def test_swept_panel_stylesheets_carry_no_raw_hex() -> None:
     assert not offenders, f"raw hex crept back into swept panel CSS: {offenders}"
 
 
+def test_pr3_swept_stylesheets_carry_no_raw_hex() -> None:
+    """PR3 extends the no-raw-hex guarantee to the inbox, source viewers,
+    provenance chips, viewspec matrices, and the report's comment/chat
+    drawers. (charts_v2's SVG-internal fills are a sanctioned exception —
+    design_language.md §1 — and are not asserted here.)"""
+    from dashboard.inbox import INBOX_CSS
+    from pipeline import source_viewers
+    from report.renderers.workspace_chat import CSS as CHAT_CSS
+    from report.renderers.workspace_comments import CSS as COMMENTS_CSS
+    from ui.source_chip import SOURCE_CHIP_CSS
+    from viewspec.render import VIEWSPEC_CSS
+
+    sheets = {
+        "inbox": INBOX_CSS,
+        "source_viewers": source_viewers._PAGE_CSS,  # pyright: ignore[reportPrivateUsage]
+        "source_chip": SOURCE_CHIP_CSS,
+        "viewspec": VIEWSPEC_CSS,
+        "workspace_chat": CHAT_CSS,
+        "workspace_comments": COMMENTS_CSS,
+    }
+    offenders = {name: _HEX.findall(css) for name, css in sheets.items() if _HEX.search(css)}
+    assert not offenders, f"raw hex crept back into swept CSS: {offenders}"
+
+
 def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
     """The 'one long label' kill (PR2): the shell palette renders ticker rows
     as .k-tick spans, and the holding combobox never bakes 'T · Name' into its

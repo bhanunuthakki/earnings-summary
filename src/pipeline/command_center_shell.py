@@ -922,7 +922,7 @@ td.ticker a:hover { color: var(--link); }
   white-space: nowrap; }
 .cc-peek-openfull:hover { color: var(--accent); }
 .cc-peek-close { background: transparent; border: none; color: var(--muted);
-  font-size: 19px; cursor: pointer; line-height: 1; padding: 2px 6px; }
+  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px; }
 .cc-peek-close:hover { color: var(--ink); }
 .cc-peek-body { overflow-y: auto; padding: 12px 14px; min-height: 60px; }
 .cc-peek-body .alert-card:last-child { margin-bottom: 0; }

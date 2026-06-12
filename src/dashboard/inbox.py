@@ -581,27 +581,27 @@ def _esc(text: str) -> str:
 INBOX_CSS = """
 .ix-stream { display: flex; flex-direction: column; gap: var(--sp-2); }
 .ix-card { border-radius: var(--radius);
-  background: var(--surface, #16171a); padding: 9px 12px; }
+  background: var(--surface); padding: 9px 12px; }
 .ix-head { display: flex; align-items: baseline; gap: 8px; }
-.ix-ticker { font-family: var(--mono, monospace); font-weight: 700; font-size: var(--fs-caption);
-  color: var(--fg, #e8e8e3); }
+.ix-ticker { font-family: var(--mono); font-weight: 700; font-size: var(--fs-caption);
+  color: var(--fg); }
 .ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; color: var(--muted, #888); }
-.ix-status { font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border, #2a2c30);
-  border-radius: var(--radius); padding: 0 5px; color: var(--muted, #888);
+  letter-spacing: 0.05em; color: var(--muted); }
+.ix-status { font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0 5px; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.05em; }
-.ix-status-pending { color: var(--warn, #fbbf24); border-color: var(--warn, #fbbf24); }
-.ix-status-applied, .ix-status-approved { color: var(--ok, #4ade80); }
-.ix-when { margin-left: auto; color: var(--muted, #888); font-size: var(--fs-micro);
-  font-family: var(--mono, monospace); white-space: nowrap; }
-.ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg, #e8e8e3);
+.ix-status-pending { color: var(--warn); border-color: var(--warn); }
+.ix-status-applied, .ix-status-approved { color: var(--ok); }
+.ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-micro);
+  font-family: var(--mono); white-space: nowrap; }
+.ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .ix-compact .ix-body { -webkit-line-clamp: 2; }
 .ix-card:hover .ix-body { -webkit-line-clamp: unset; }
 .ix-actions { margin-top: 6px; }
 .ix-open { margin-top: 4px; font-size: var(--fs-caption); }
-.ix-open a { color: var(--accent, #7aa2f7); text-decoration: none; }
-.ix-empty { color: var(--muted, #888); font-size: var(--fs-body); padding: 14px 4px; }
+.ix-open a { color: var(--accent); text-decoration: none; }
+.ix-empty { color: var(--muted); font-size: var(--fs-body); padding: 14px 4px; }
 /* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
    in the existing header row and flip visibility (layout stays reserved, so
    nothing shifts) on card hover / keyboard focus. */
@@ -609,40 +609,40 @@ INBOX_CSS = """
 .ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
 .ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
 .ix-act { font-size: var(--fs-caption); line-height: 1;
-  font-weight: 600; color: var(--muted, #888); background: transparent;
-  border: 1px solid var(--border, #2a2c30); border-radius: var(--radius); padding: 1px 5px;
+  font-weight: 600; color: var(--muted); background: transparent;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 5px;
   cursor: pointer; transition: color var(--transition), border-color var(--transition); }
-.ix-act-approve:hover { color: var(--ok, #4ade80); border-color: var(--ok, #4ade80); }
-.ix-act-dismiss:hover { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
+.ix-act-approve:hover { color: var(--ok); border-color: var(--ok); }
+.ix-act-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-act[disabled] { opacity: 0.5; cursor: default; }
-.ix-act-fail { color: var(--bad, #f87171); border-color: var(--bad, #f87171); }
+.ix-act-fail { color: var(--bad); border-color: var(--bad); }
 .ix-acted { margin-left: auto; font-size: var(--fs-micro); font-weight: 600;
-  white-space: nowrap; color: var(--muted, #888); }
-.ix-acted-applied { color: var(--ok, #4ade80); }
-.ix-status-cancelled { color: var(--muted, #888); }
+  white-space: nowrap; color: var(--muted); }
+.ix-acted-applied { color: var(--ok); }
+.ix-status-cancelled { color: var(--muted); }
 .ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
 /* Unread ("since you last looked") — inset accent bar: no border-width
    change, zero layout shift. Accent is sanctioned here: unread marks are
    actionable state, the one non-link accent this surface carries. */
-.ix-new { box-shadow: inset 2px 0 0 var(--accent, #7aa2f7); }
+.ix-new { box-shadow: inset 2px 0 0 var(--accent); }
 .ix-badge { display: inline-block; min-width: 14px; text-align: center;
   margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
-  background: var(--accent, #7aa2f7); color: #101114;
-  font-family: var(--mono, monospace); font-size: var(--fs-micro); font-weight: 700;
+  background: var(--accent); color: var(--accent-contrast);
+  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 700;
   line-height: 1.4; vertical-align: 2px; }
 .ix-badge[hidden] { display: none; }
 /* Category filter chips (Inbox v2) — client-side, scoped per stream. */
 .ix-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .ix-cat { font-size: var(--fs-micro); font-weight: 600; background: transparent;
-  color: var(--muted, #888); border: 1px solid var(--border, #2a2c30);
+  color: var(--muted); border: 1px solid var(--border);
   border-radius: var(--radius-full); padding: 2px 9px; cursor: pointer;
   transition: color var(--transition), border-color var(--transition); }
 .ix-cat span { opacity: 0.7; margin-left: 2px; }
-.ix-cat.is-on { color: var(--accent, #7aa2f7); border-color: var(--accent, #7aa2f7); }
+.ix-cat.is-on { color: var(--accent); border-color: var(--accent); }
 .ix-hide { display: none !important; }
 /* "Why ranked here" — the factor breakdown rides the kind/trigger chip's title. */
 .ix-kind[title], .trigger-badge[title] { cursor: help; }
-.ix-kind-synthesis { color: var(--accent, #7aa2f7); }
+.ix-kind-synthesis { color: var(--accent); }
 """.strip()
 
 # Behavior for the stream's two client-side features, embedded once per page

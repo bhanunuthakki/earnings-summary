@@ -121,11 +121,13 @@ def test_pill_css_has_distinct_state_colors() -> None:
     assert ".cmt-health-pill {" in COMMENTS_CSS
     assert ".cmt-health-pill.cmt-health-online" in COMMENTS_CSS
     assert ".cmt-health-pill.cmt-health-offline" in COMMENTS_CSS
-    # Green for online, red for offline — semantic, not arbitrary.
+    # Green for online, red for offline — semantic, from the shared tokens
+    # (UI polish v3: raw hex left this stylesheet; the pill follows --ok/--bad
+    # so it stays correct in both report themes).
     online = COMMENTS_CSS.split(".cmt-health-pill.cmt-health-online")[1].split("}")[0]
     offline = COMMENTS_CSS.split(".cmt-health-pill.cmt-health-offline")[1].split("}")[0]
-    assert "#3cc878" in online or "rgba(60, 200, 120" in online
-    assert "#ff7070" in offline or "rgba(255, 80, 80" in offline
+    assert "var(--ok)" in online
+    assert "var(--bad)" in offline
 
 
 def test_offline_banner_css_exists() -> None:
