@@ -75,6 +75,17 @@ import ticker_settings  # noqa: E402
 from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED  # noqa: E402
 from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
 from ask.engine import AskTurn, fold_events, respond_turn, sanitize_history  # noqa: E402
+from ask.store import (  # noqa: E402
+    AskSession as _AskSession,
+)
+from ask.store import (  # noqa: E402
+    delete_session,
+    ensure_session,
+    get_session,
+    list_sessions,
+    load_turns,
+    rename_session,
+)
 from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed  # noqa: E402
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
@@ -248,6 +259,32 @@ def create_app(
         chat_pool.submit(_drain_events, events, chunks)
 
         def generate():
+            while True:
+                item = chunks.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    def _stream_engine_events_with_session(
+        events: Iterator[dict[str, object]], session_id: str
+    ) -> Response:
+        """Like ``_stream_engine_events`` but emits a leading
+        ``{type: "session", session_id: "…"}`` frame so the client always
+        knows which session this turn belongs to."""
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
+        chat_pool.submit(_drain_events, events, chunks)
+
+        def generate():
+            yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
             while True:
                 item = chunks.get()
                 if item is None:
@@ -954,43 +991,111 @@ def create_app(
         report drawer's /chat/<ticker>, different attached context).
 
         JSON body ``{"query": ..., "tickers": [...], "context_spec": {...},
-        "history": [{"role", "text"}, ...]}`` — ``context_spec`` is the
-        previous turn's view spec (follow-ups like "now annual" refine it),
-        ``history`` the client-side thread tail for narrative continuity.
-        Always 200 with a tri-state payload: ``{"status": "ok", "kind":
-        "view", "spec", "fragment", "message"}`` for data answers,
-        ``{"status": "ok", "kind": "narrative" | "command", "text"}`` for
-        prose, or ``{"status": "budget_skipped" | "error", "message"}``.
-        400 only for a missing query."""
+        "history": [{"role", "text"}, ...], "session_id": "..."}`` —
+        ``session_id`` (optional) resumes a prior thread (S3 persistence);
+        when omitted a new session is created and returned as
+        ``{"session_id": "..."}`` in the response.  ``history`` is the
+        legacy client-side tail, used only when no session_id is supplied.
+        Always 200 with a tri-state payload augmented with ``session_id``."""
         if request.method == "OPTIONS":
             return ("", 204)
-        turn = _parse_ask_turn()
+        turn, sess = _parse_ask_turn_with_session()
         if turn is None:
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
         events = respond_turn(
             turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
-        return fold_events(events)
+        result = fold_events(events)
+        result["session_id"] = sess.id if sess else turn.session_id
+        return result
 
     @app.route("/api/ask/stream", methods=["POST", "OPTIONS"])
     def ask_stream_api():
-        """Streaming sibling of /api/ask (Ask v2): same engine, same
-        PORTFOLIO pack, but the raw event stream as SSE frames instead of
-        one folded payload — the Ask tab renders live progress (``stage``
-        frames drive the busy line, ``delta`` frames stream prose,
-        ``fragment``/``final`` assemble the answer card). Same frame shapes
-        as /chat/<ticker>."""
+        """Streaming sibling of /api/ask (Ask v2 / S3): same engine, same
+        PORTFOLIO pack, raw SSE frames.  The first frame is always
+        ``{type: "session", session_id: "..."}`` so the client can store
+        the id and pass it back on the next turn."""
         if request.method == "OPTIONS":
             return ("", 204)
-        turn = _parse_ask_turn()
+        turn, sess = _parse_ask_turn_with_session()
         if turn is None:
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
         events = respond_turn(
             turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
-        return _stream_engine_events(events)
+        sid = sess.id if sess else (turn.session_id or "")
+        return _stream_engine_events_with_session(events, sid)
+
+    # ------------------------------------------------------------------
+    # Ask session management (S3 thread list / rename / delete)
+    # ------------------------------------------------------------------
+
+    @app.route("/api/ask/sessions", methods=["GET"])
+    def ask_sessions_list():
+        """List portfolio Ask sessions, most-recently-updated first.
+        ``?limit=N`` (default 50) caps the result.
+        Returns ``{"sessions": [{id, title, created_at, updated_at}, …]}``."""
+        try:
+            limit = min(int(request.args.get("limit", 50)), 200)
+        except (TypeError, ValueError):
+            limit = 50
+        try:
+            rows = list_sessions(scope="portfolio", limit=limit, db_path=db_path)
+        except Exception:
+            rows = []
+        return {"sessions": [_session_to_json(s) for s in rows]}
+
+    @app.route("/api/ask/sessions/<session_id>", methods=["GET", "PATCH", "DELETE"])
+    def ask_session_detail(session_id: str):
+        """Single-session CRUD.
+
+        GET  → ``{id, title, created_at, updated_at, turns: [{role, text, citations, created_at}]}``
+        PATCH ``{"title": "…"}`` → rename, returns updated session JSON.
+        DELETE → 204.
+        """
+        sid = session_id.strip()
+        if not sid:
+            return ({"error": "session_id required"}, 400)
+
+        if request.method == "GET":
+            sess = get_session(sid, db_path=db_path)
+            if sess is None:
+                return ({"error": "not found"}, 404)
+            try:
+                turns = load_turns(sid, db_path=db_path)
+            except Exception:
+                turns = []
+            payload = _session_to_json(sess)
+            payload["turns"] = [
+                {
+                    "role": t.role,
+                    "text": t.text,
+                    "citations": t.citations,
+                    "model": t.model,
+                    "created_at": t.created_at,
+                }
+                for t in turns
+            ]
+            return payload
+
+        if request.method == "PATCH":
+            body = cast("dict[str, object]", request.get_json(silent=True) or {})
+            new_title = str(body.get("title") or "").strip()
+            if not new_title:
+                return ({"error": "title required"}, 400)
+            ok = rename_session(sid, new_title, db_path=db_path)
+            if not ok:
+                return ({"error": "not found"}, 404)
+            sess = get_session(sid, db_path=db_path)
+            return _session_to_json(sess) if sess else ({"error": "not found"}, 404)
+
+        # DELETE
+        ok = delete_session(sid, db_path=db_path)
+        if not ok:
+            return ({"error": "not found"}, 404)
+        return ("", 204)
 
     @app.route("/api/peers/<ticker>", methods=["GET"])
     def peers_api(ticker: str):
@@ -1021,8 +1126,7 @@ def create_app(
         }
 
     def _parse_ask_turn() -> AskTurn | None:
-        """The shared /api/ask request shape → AskTurn; None on a missing
-        query (the routes 400)."""
+        """Legacy helper — body → AskTurn without session management."""
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         query = str(body.get("query") or "").strip()
         if not query:
@@ -1041,6 +1145,60 @@ def create_app(
             context_spec=context_spec,
             history=sanitize_history(body.get("history")),
         )
+
+    def _parse_ask_turn_with_session() -> tuple[AskTurn | None, _AskSession | None]:
+        """Parse the request body and ensure a portfolio session exists.
+
+        Returns ``(None, None)`` when the query is missing (the route 400s).
+        When a ``session_id`` is supplied in the body, the existing session is
+        loaded (or a new one is created if the id is unknown).  When no
+        ``session_id`` is supplied, a new session is always created so the
+        response can always carry one back.
+        """
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return None, None
+        raw_tickers = body.get("tickers")
+        tickers = (
+            [str(t) for t in cast("list[object]", raw_tickers)]
+            if isinstance(raw_tickers, list)
+            else []
+        )
+        raw_ctx = body.get("context_spec")
+        context_spec = cast("dict[str, object]", raw_ctx) if isinstance(raw_ctx, dict) else None
+        raw_sid = body.get("session_id")
+        client_sid = str(raw_sid).strip() if isinstance(raw_sid, str) and raw_sid else None
+
+        sess: _AskSession | None = None
+        try:
+            sess = ensure_session(client_sid, scope="portfolio", db_path=db_path)
+            # Auto-title the session from the first question when it has no title.
+            if sess and not sess.title:
+                auto_title = query[:60]
+                rename_session(sess.id, auto_title, db_path=db_path)
+                sess = get_session(sess.id, db_path=db_path) or sess
+        except Exception:
+            sess = None  # best-effort — engine falls back to client history
+
+        session_id = sess.id if sess else None
+        turn = AskTurn(
+            text=query,
+            tickers=tickers,
+            context_spec=context_spec,
+            # history is the legacy fallback; engine uses server-side when session_id set
+            history=sanitize_history(body.get("history")),
+            session_id=session_id,
+        )
+        return turn, sess
+
+    def _session_to_json(sess: _AskSession) -> dict[str, object]:
+        return {
+            "id": sess.id,
+            "title": sess.title,
+            "created_at": sess.created_at,
+            "updated_at": sess.updated_at,
+        }
 
     @app.route("/api/views", methods=["GET", "POST"])
     def views_api():
