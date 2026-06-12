@@ -6,6 +6,13 @@ open ``position_entries`` rows; opens rows for new names, closes rows for
 departed ones, enriches entry prices when the tracker is online. Idempotent —
 the morning pipeline runs it daily (stage 0c); a quiet day is a no-op.
 
+After the lifecycle pass it runs the journal-link reconciliation (S15,
+src/journal_links.py): open analyst_notes whose linked decision has been
+graded (stage 0b records outcomes) or whose linked position just exited are
+auto-resolved when they opted in at link time, and counted as pending
+otherwise — the journal panel's reconciliation strip and the inbox surface
+those.
+
 ``--backfill`` seeds rows for positions held BEFORE this ledger existed:
 ``source='backfill'`` and ``entry_date`` stays NULL unless an opening buy is
 actually visible in the tracker's transaction window (honest "held, opening
@@ -28,6 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from identity import DEFAULT_USER_ID  # noqa: E402
+from journal_links import reconcile_linked_notes  # noqa: E402
 from position_lifecycle import sync_position_lifecycle  # noqa: E402
 
 log = logging.getLogger("sync_position_lifecycle")
@@ -81,6 +89,17 @@ def main() -> int:
         f"unchanged={tally['unchanged']} · "
         f"tracker={'online' if tally['tracker_available'] else 'offline'} · "
         f"db_unavailable={tally['db_unavailable']}"
+    )
+    # Journal-link reconciliation rides the same rung (S15): runs AFTER the
+    # lifecycle pass so a position closed seconds ago already counts as
+    # concluded for its linked notes. Best-effort — a pre-0093 schema just
+    # reports zero work.
+    notes_tally = reconcile_linked_notes(db_path=db_path, user_id=args.user_id)
+    log.info({"event": "reconcile_linked_notes_done", **notes_tally})
+    print(
+        "Journal-link reconciliation · "
+        f"auto_resolved={notes_tally['auto_resolved']} · "
+        f"pending={notes_tally['pending']}"
     )
     # A missing/pre-migration DB is a real failure for a scheduled rung; a
     # tracker outage is not (the reconciler degrades by design).

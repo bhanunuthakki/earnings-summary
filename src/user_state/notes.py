@@ -24,6 +24,14 @@ from chat / alert flows (follow-on wiring), or created directly
 ``context_json`` so a manual edit on the notes side (reclassify kind,
 resolve early) is never silently reverted by the next sync — see
 :func:`sync_store_comments`.
+
+Links (0093): a note may reference the decision and/or position-lifecycle
+row it is about (``decision_id`` → decisions.id, ``position_entry_id`` →
+position_entries.id; plain columns, validated in src/journal_links.py).
+``link_auto_resolve`` records the analyst's choice at link time: resolve
+the note automatically when the linked object concludes, or surface it in
+the pending-reconciliation view. :func:`set_note_links` is the low-level
+column write; the validating entry point is ``journal_links.link_note``.
 """
 
 from __future__ import annotations
@@ -90,6 +98,10 @@ class AnalystNoteRow:
     created_at: datetime
     updated_at: datetime
     resolved_at: datetime | None
+    # 0093 links — None/False on a pre-0093 schema (decoded defensively).
+    decision_id: int | None = None
+    position_entry_id: int | None = None
+    link_auto_resolve: bool = False
 
 
 @dataclass(slots=True)
@@ -113,9 +125,15 @@ def create_note(
     source: str = "manual",
     source_ref: str | None = None,
     context: dict[str, object] | None = None,
+    decision_id: int | None = None,
+    position_entry_id: int | None = None,
+    link_auto_resolve: bool = False,
     db_path: Path | str | None = None,
 ) -> AnalystNoteRow:
-    """INSERT one open note. ``ticker=None`` records a portfolio-level note."""
+    """INSERT one open note. ``ticker=None`` records a portfolio-level note.
+
+    The link params are written verbatim (no cross-table validation here) —
+    callers that take user input go through ``journal_links.link_note``."""
     _validate("kind", kind, NOTE_KINDS)
     _validate("source", source, NOTE_SOURCES)
     if not body.strip():
@@ -137,6 +155,9 @@ def create_note(
             resolution_note=None,
             context=context,
             resolved_at=None,
+            decision_id=decision_id,
+            position_entry_id=position_entry_id,
+            link_auto_resolve=link_auto_resolve,
         )
         conn.commit()
         return _fetch_one(conn, row_id)
@@ -238,6 +259,49 @@ def reclassify_note(
         conn.close()
 
 
+_UNSET: object = object()  # sentinel: "leave this link column alone"
+
+
+def set_note_links(
+    note_id: int,
+    *,
+    decision_id: int | None | object = _UNSET,
+    position_entry_id: int | None | object = _UNSET,
+    link_auto_resolve: bool | object = _UNSET,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow | None:
+    """Low-level write of the 0093 link columns. Only supplied fields are
+    touched; pass ``None`` to clear a link. NO cross-table validation —
+    that is ``journal_links.link_note``'s job. Returns the updated row, or
+    None when the note doesn't exist."""
+    sets: list[str] = []
+    params: list[object] = []
+    if decision_id is not _UNSET:
+        sets.append("decision_id = ?")
+        params.append(decision_id)
+    if position_entry_id is not _UNSET:
+        sets.append("position_entry_id = ?")
+        params.append(position_entry_id)
+    if link_auto_resolve is not _UNSET:
+        sets.append("link_auto_resolve = ?")
+        params.append(1 if link_auto_resolve else 0)
+    conn = open_conn(db_path)
+    try:
+        if not sets:
+            row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+            return None if row is None else _row_to_dc(row)
+        sets.append("updated_at = ?")
+        params.append(now_iso())
+        params.append(note_id)
+        cur = conn.execute(f"UPDATE analyst_notes SET {', '.join(sets)} WHERE id = ?", params)
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+        return _fetch_one(conn, note_id)
+    finally:
+        conn.close()
+
+
 def supersede_note(
     note_id: int,
     *,
@@ -247,9 +311,10 @@ def supersede_note(
 ) -> AnalystNoteRow:
     """Correct a note: INSERT a replacement chained via ``supersedes_id`` and
     mark the original superseded. The replacement inherits ticker + anchor
-    (the object the thought is about) but is a fresh ``manual`` row — the
-    chain, not an edit, is the audit trail (same invariant as the fact
-    tables' restatement chains). Raises LookupError when ``note_id`` is gone.
+    + links (the objects the thought is about) but is a fresh ``manual``
+    row — the chain, not an edit, is the audit trail (same invariant as the
+    fact tables' restatement chains). Raises LookupError when ``note_id`` is
+    gone.
     """
     if kind is not None:
         _validate("kind", kind, NOTE_KINDS)
@@ -276,6 +341,9 @@ def supersede_note(
             resolution_note=None,
             context=None,
             resolved_at=None,
+            decision_id=old.decision_id,
+            position_entry_id=old.position_entry_id,
+            link_auto_resolve=old.link_auto_resolve,
         )
         conn.execute(
             "UPDATE analyst_notes SET status = 'superseded', updated_at = ? WHERE id = ?",
@@ -485,33 +553,47 @@ def _insert(
     context: dict[str, object] | None,
     resolved_at: str | None,
     created_at: str | None = None,
+    decision_id: int | None = None,
+    position_entry_id: int | None = None,
+    link_auto_resolve: bool = False,
 ) -> int:
     now = now_iso()
+    columns = [
+        "user_id", "ticker", "kind", "status", "body", "anchor_type", "anchor_key",
+        "source", "source_ref", "supersedes_id", "resolution_note", "context_json",
+        "created_at", "updated_at", "resolved_at",
+    ]  # fmt: skip
+    values: list[object] = [
+        user_id,
+        ticker.upper() if ticker else None,
+        kind,
+        status,
+        body,
+        anchor_type,
+        anchor_key,
+        source,
+        source_ref,
+        supersedes_id,
+        resolution_note,
+        json.dumps(context) if context is not None else None,
+        created_at or now,
+        now,
+        resolved_at,
+    ]
+    # Link columns (0093) join the statement only when actually set, so the
+    # default write path keeps working against pre-0093 / hand-rolled test
+    # schemas; passing a link there fails loudly instead (linking needs 0093).
+    for column, value in (
+        ("decision_id", decision_id),
+        ("position_entry_id", position_entry_id),
+        ("link_auto_resolve", 1 if link_auto_resolve else None),
+    ):
+        if value is not None:
+            columns.append(column)
+            values.append(value)
     cur = conn.execute(
-        """
-        INSERT INTO analyst_notes(
-            user_id, ticker, kind, status, body, anchor_type, anchor_key,
-            source, source_ref, supersedes_id, resolution_note, context_json,
-            created_at, updated_at, resolved_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            user_id,
-            ticker.upper() if ticker else None,
-            kind,
-            status,
-            body,
-            anchor_type,
-            anchor_key,
-            source,
-            source_ref,
-            supersedes_id,
-            resolution_note,
-            json.dumps(context) if context is not None else None,
-            created_at or now,
-            now,
-            resolved_at,
-        ),
+        f"INSERT INTO analyst_notes({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
+        values,
     )
     return int(cur.lastrowid or 0)
 
@@ -559,6 +641,15 @@ def _fetch_one(conn: sqlite3.Connection, row_id: int) -> AnalystNoteRow:
     return _row_to_dc(row)
 
 
+def _link_col(row: sqlite3.Row, name: str) -> int | None:
+    """A 0093 link column, or None on a pre-0093 / hand-rolled schema."""
+    try:
+        raw = row[name]
+    except IndexError:
+        return None
+    return None if raw is None else int(raw)
+
+
 def _row_to_dc(row: sqlite3.Row) -> AnalystNoteRow:
     raw_ctx = row["context_json"]
     context: dict[str, object] | None = None
@@ -589,4 +680,7 @@ def _row_to_dc(row: sqlite3.Row) -> AnalystNoteRow:
         created_at=parse_dt(row["created_at"]),
         updated_at=parse_dt(row["updated_at"]),
         resolved_at=(None if raw_resolved is None else parse_dt(raw_resolved)),
+        decision_id=_link_col(row, "decision_id"),
+        position_entry_id=_link_col(row, "position_entry_id"),
+        link_auto_resolve=bool(_link_col(row, "link_auto_resolve") or 0),
     )

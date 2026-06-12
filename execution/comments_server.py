@@ -199,6 +199,17 @@ def _note_to_json(note: object) -> dict[str, object]:
     return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
 
 
+def _opt_int(raw: object) -> int | None:
+    """A JSON field as int, or None when absent/empty/non-numeric — the
+    note-link routes' tolerant id decode (S15)."""
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(str(raw))
+    except (TypeError, ValueError):
+        return None
+
+
 def _view_to_json(view: object) -> dict[str, object]:
     """SavedViewRow → JSON-safe dict for the /api/views responses (P5.1)."""
     from dataclasses import asdict
@@ -541,15 +552,25 @@ def create_app(
             )
 
         if name == "journal":
-            # Research → Journal (P4.5): the analyst_notes lifecycle UI.
-            # ``?fragment=list`` returns just the filtered note list — the
-            # panel's own JS refreshes that fragment after every action.
-            from pipeline.journal_panel import render_journal_list, render_journal_panel
+            # Research → Journal (P4.5 + S15): the analyst_notes lifecycle UI.
+            # ``?fragment=list`` returns just the filtered note list and
+            # ``?fragment=reconcile`` the pending-reconciliation strip — the
+            # panel's own JS refreshes those fragments after every action.
+            from pipeline.journal_panel import (
+                render_journal_list,
+                render_journal_panel,
+                render_reconciliation_list,
+            )
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
             j_ticker = (request.args.get("ticker") or "").strip().upper() or None
             j_kind = (request.args.get("kind") or "").strip() or None
             j_status = (request.args.get("status") or "open").strip() or "open"
+            if request.args.get("fragment") == "reconcile":
+                return Response(
+                    render_reconciliation_list(db_path, user_id=user_id, ticker=j_ticker),
+                    mimetype="text/html",
+                )
             renderer = (
                 render_journal_list
                 if request.args.get("fragment") == "list"
@@ -920,6 +941,21 @@ def create_app(
         anchor_type_raw = payload.get("anchor_type")
         anchor_key_raw = payload.get("anchor_key")
         context_raw = payload.get("context")
+        # Optional 0093 links at capture time ("note this decision" flows).
+        # Validated like the /link action — a dangling target is a 404.
+        link_decision_id = _opt_int(payload.get("decision_id"))
+        link_position_id = _opt_int(payload.get("position_entry_id"))
+        if link_decision_id is not None or link_position_id is not None:
+            from journal_links import get_target
+
+            for target_kind, target_id in (
+                ("decision", link_decision_id),
+                ("position", link_position_id),
+            ):
+                if target_id is not None and (
+                    get_target(kind=target_kind, target_id=target_id, db_path=db_path) is None
+                ):
+                    return ({"error": f"{target_kind} id={target_id} not found"}, 404)
         try:
             created = notes_store.create_note(
                 user_id=user_id,
@@ -932,6 +968,9 @@ def create_app(
                 context=cast("dict[str, object]", context_raw)
                 if isinstance(context_raw, dict)
                 else None,
+                decision_id=link_decision_id,
+                position_entry_id=link_position_id,
+                link_auto_resolve=bool(payload.get("auto_resolve")),
                 db_path=db_path,
             )
         except ValueError as exc:
@@ -940,10 +979,11 @@ def create_app(
 
     @app.route("/api/notes/<int:note_id>/<action>", methods=["POST", "OPTIONS"])
     def notes_action_api(note_id: int, action: str):
-        """Lifecycle actions on one note (P4.5): resolve / reclassify /
-        supersede / archive. Supersede creates the chained replacement and
-        returns it; the others return the updated row. 404 on unknown id,
-        400 on a bad kind or missing supersede body."""
+        """Lifecycle actions on one note (P4.5 + S15): resolve / reclassify /
+        supersede / archive / link / unlink. Supersede creates the chained
+        replacement and returns it; the others return the updated row. 404 on
+        unknown id or dangling link target, 400 on a bad kind, missing
+        supersede body, or a link with no target."""
         if request.method == "OPTIONS":
             return ("", 204)
         from user_state import notes as notes_store
@@ -974,6 +1014,20 @@ def create_app(
                     kind=str(kind_raw) if kind_raw is not None else None,
                     db_path=db_path,
                 )
+            elif action == "link":
+                from journal_links import link_note
+
+                updated = link_note(
+                    note_id,
+                    decision_id=_opt_int(payload.get("decision_id")),
+                    position_entry_id=_opt_int(payload.get("position_entry_id")),
+                    auto_resolve=bool(payload.get("auto_resolve")),
+                    db_path=db_path,
+                )
+            elif action == "unlink":
+                from journal_links import unlink_note
+
+                updated = unlink_note(note_id, db_path=db_path)
             else:
                 return ({"error": f"unknown action {action!r}"}, 404)
         except ValueError as exc:

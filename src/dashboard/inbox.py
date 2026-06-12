@@ -261,17 +261,31 @@ def collect_inbox(
             notes = list_notes(user_id=user_id, ticker=ticker, status="open", db_path=db_path)
         except sqlite3.Error:
             notes = []
+        # S15: open notes whose linked decision graded / position exited are
+        # awaiting reconciliation — surface that on the card (title + pending
+        # badge; "pending" also carries the needs-the-owner status multiplier
+        # in inbox_rank) instead of letting them sit as ordinary watch items.
+        reconcile_why: dict[int, str] = {}
+        if notes:
+            try:
+                from journal_links import pending_reconciliation_note_ids
+
+                reconcile_why = pending_reconciliation_note_ids(db_path=db_path, user_id=user_id)
+            except Exception:  # pre-0093 schema — plain notes
+                reconcile_why = {}
         for n in notes:
             when = _as_naive_utc(n.created_at)
             if not _in_window(when, windowed=False):  # standing: until only
                 continue
+            conclusion = reconcile_why.get(n.id)
             items.append(
                 InboxItem(
                     kind="note",
                     ticker=n.ticker,
                     when=when,
-                    title=n.kind,
-                    body=n.body,
+                    title=f"reconcile · {n.kind}" if conclusion else n.kind,
+                    body=f"{n.body} — {conclusion}" if conclusion else n.body,
+                    status="pending" if conclusion else None,
                 )
             )
 
