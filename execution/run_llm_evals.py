@@ -52,6 +52,7 @@ GOLDEN_PURPOSES = (
     "news_structuring",
     "decision_conditions_extract",
     "ask_pack_router",
+    "ask_evidence_followup",
 )
 AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
@@ -197,6 +198,21 @@ def main() -> int:
             golden_path = (args.golden or (PROJECT_ROOT / ROUTER_GOLDEN)).resolve()
             summary = run_ask_router_eval(
                 db_path=db_path,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+            )
+        elif args.purpose == "ask_evidence_followup":
+            # S7 agentic loop: drives the production ask path end-to-end
+            # (pass 1 + follow-up rounds — real spend per case) and grades
+            # the loop structurally from the event stream; no judge.
+            from evals.ask_loop import DEFAULT_GOLDEN_RELPATH as LOOP_GOLDEN
+            from evals.ask_loop import run_ask_loop_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / LOOP_GOLDEN)).resolve()
+            summary = run_ask_loop_eval(
+                db_path=db_path,
+                repo_root=repo_root,  # transcripts/filings live in the data repo
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
