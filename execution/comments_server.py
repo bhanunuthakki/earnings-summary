@@ -466,6 +466,14 @@ def create_app(
 
             return Response(render_source_calls_panel(db_path), mimetype="text/html")
 
+        if name == "cron_health":
+            # Last-7-day pipeline run history from ingestion_runs, ordered by
+            # criticality (backup_db → run_morning_pipeline → others); KPI strip
+            # for today's morning pipeline verdict and consecutive-clean-day streak.
+            from pipeline.cron_health_panel import render_cron_health_panel
+
+            return Response(render_cron_health_panel(db_path), mimetype="text/html")
+
         if name == "validation":
             # Whole-book data-quality state over validation_issues (P3.4) —
             # range violations, magnitude jumps, source disagreement, unit
