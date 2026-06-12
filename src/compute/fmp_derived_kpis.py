@@ -42,8 +42,9 @@ from enum import StrEnum
 from pathlib import Path
 
 from compute.kpi_resolver import resolve_kpi_definition_name
-from models.documents import SourceType
+from models.documents import SourceQualityTier, SourceType
 from models.facts import FiscalPeriodType, Unit
+from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
@@ -801,6 +802,9 @@ def persist_derived_kpis(
     `derive_kpi_transforms`) pass `'kpi_transform_derived'` so the two are
     distinguishable from direct FMP ingestion and from each other.
     """
+    # Derived rows are mechanical arithmetic over FMP-tier inputs; the
+    # deterministic prior (pipeline.confidence) replaces the unset 1.0.
+    confidence = score_confidence(tier=SourceQualityTier.FMP_NORMALIZED, extracted_by=extracted_by)
     inserted = 0
     for row in rows:
         kpi_def_id = find_or_create_kpi_definition(
@@ -819,6 +823,7 @@ def persist_derived_kpis(
             value=row.value,
             unit=row.unit.value,
             source_doc_id=row.source_doc_id,
+            confidence=confidence,
             extracted_by=extracted_by,
         )
         if new_id is not None:

@@ -23,6 +23,7 @@ from compute._common import (
     parse_currency,
     read_records_json,
 )
+from models.documents import SourceQualityTier
 from models.facts import FactLocator, FinancialFact, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpAsReportedRecord
 
@@ -128,6 +129,8 @@ def extract_as_reported_facts(
     for idx, rec_data in enumerate(records):
         rec = FmpAsReportedRecord.model_validate(rec_data)
         facts = extract_facts_from_record(rec, source_doc_id=document_id, record_index=idx)
-        inserted += insert_financial_facts(conn, facts, extracted_by="fmp_as_reported")
+        inserted += insert_financial_facts(
+            conn, facts, extracted_by="fmp_as_reported", tier=SourceQualityTier.FMP_NORMALIZED
+        )
     conn.commit()
     return inserted

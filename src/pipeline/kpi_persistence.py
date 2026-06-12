@@ -19,11 +19,12 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from models.documents import SourceType
+from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.kpis import ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
+from pipeline.confidence import score_confidence
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 
 # kpi_facts.source_excerpt is VARCHAR(1024) (alembic 0033) — clip on write so
@@ -88,9 +89,7 @@ class KpiExtractionManifest(BaseModel):
     values: list[KpiValue]
 
 
-def _find_kpi_definition(
-    conn: sqlite3.Connection, ticker: str, name: str
-) -> int | None:
+def _find_kpi_definition(conn: sqlite3.Connection, ticker: str, name: str) -> int | None:
     """Return kpi_definitions.id for (ticker, name), or None if not registered."""
     cur = conn.execute(
         "SELECT id FROM kpi_definitions WHERE ticker = ? AND name = ?",
@@ -428,7 +427,14 @@ def persist_manifest(
             value=value,
             unit=unit,
             source_doc_id=manifest.source_doc_id,
-            confidence=kpi.confidence,
+            # The deterministic tier+method prior scaled by the extractor's
+            # per-value self-report (pipeline.confidence's documented formula) —
+            # an LLM readout of an IR deck no longer stores a flat 0.95.
+            confidence=score_confidence(
+                tier=tier_for_source_type(manifest.primary_source),
+                extracted_by=extracted_by,
+                self_reported=kpi.confidence,
+            ),
             extracted_by=extracted_by,
             locator=kpi.locator.to_json() if kpi.locator is not None else None,
             source_excerpt=excerpt or None,
@@ -439,6 +445,4 @@ def persist_manifest(
             skipped += 1
 
     conn.commit()
-    return PersistResult(
-        inserted=inserted, skipped_existing=skipped, validation_issues=issues
-    )
+    return PersistResult(inserted=inserted, skipped_existing=skipped, validation_issues=issues)

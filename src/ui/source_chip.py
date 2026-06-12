@@ -35,12 +35,29 @@ SOURCE_CHIP_ABBREV: dict[str, str] = {
     "s1_provisional": "S-1",
 }
 
+# Below this scored confidence (pipeline.confidence formula) the chip takes
+# the subtle low-confidence affordance: warn-tinted dashed border. 0.8 sits
+# between the deterministic FMP prior (0.94) and one-disagreement FMP (0.79),
+# so a single unresolved cross-source disagreement is enough to flag a cell.
+LOW_CONFIDENCE_THRESHOLD = 0.8
+
+
+def confidence_pct(src: CellSource) -> int | None:
+    """Whole-percent display value of a scored confidence; None when unscored."""
+    if src.confidence is None:
+        return None
+    return round(max(0.0, min(1.0, src.confidence)) * 100)
+
 
 def source_hover_title(src: CellSource) -> str:
-    """Hover text for a sourced number: tier + fetched-at (P3.3 contract)."""
+    """Hover text for a sourced number: tier + fetched-at (P3.3 contract),
+    plus the scored confidence % when the row carries one."""
     parts = [src.source]
     if src.fetched_at:
         parts.append(f"fetched {src.fetched_at[:10]}")
+    pct = confidence_pct(src)
+    if pct is not None:
+        parts.append(f"conf {pct}%")
     return " · ".join(parts)
 
 
@@ -79,7 +96,14 @@ def source_chip_html(src: CellSource) -> str:
     """
     abbrev = SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
     tier_slug = src.source.replace("_", "-")
+    pct = confidence_pct(src)
+    low_conf = (
+        pct is not None and src.confidence is not None and src.confidence < LOW_CONFIDENCE_THRESHOLD
+    )
     rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
+    if pct is not None:
+        flag = " · below threshold" if low_conf else ""
+        rows.append(f'<div class="src-pop-row">confidence {pct}%{flag}</div>')
     if src.fetched_at:
         rows.append(f'<div class="src-pop-row">fetched {_esc(src.fetched_at[:10])}</div>')
     if src.doc_type:
@@ -102,9 +126,10 @@ def source_chip_html(src: CellSource) -> str:
             f'<div class="src-pop-row"><a href="{_esc(src.source_url)}" target="_blank" '
             f'rel="noopener">{label}</a></div>'
         )
+    low_cls = " src-lowconf" if low_conf else ""
     return (
         '<details class="src-pop">'
-        f'<summary class="src-chip src-{_esc(tier_slug)}" '
+        f'<summary class="src-chip src-{_esc(tier_slug)}{low_cls}" '
         f'title="{_esc(source_hover_title(src))}">{_esc(abbrev)}</summary>'
         f'<div class="src-pop-body">{"".join(rows)}</div>'
         "</details>"
@@ -130,6 +155,9 @@ SOURCE_CHIP_CSS = """
 .src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
 .src-yfinance-fallback, .src-s1-provisional { color: var(--muted-2, var(--muted)); }
+/* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell
+   affordance — warn-tinted dashed border, overriding the tier color. */
+.src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
 .src-pop-body {
   position: absolute; z-index: 40; top: calc(100% + 4px); left: 0;
   min-width: 220px; max-width: 340px; padding: 8px 10px;

@@ -352,6 +352,10 @@ class CellSource(BaseModel):
     # documents.id of the winning row — lets the chip deep-link the in-app
     # /source/<doc_id> viewers (P4.3) instead of only the raw source_url.
     doc_id: int | None = None
+    # Scored fact confidence in [0, 1] (pipeline.confidence's documented
+    # formula: tier base + extraction-method delta - validation penalties).
+    # None on legacy DBs / pre-scoring rows — the chip then shows no %.
+    confidence: float | None = None
 
 
 class QuarterlyLineItem(BaseModel):

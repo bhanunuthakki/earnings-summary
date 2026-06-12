@@ -17,6 +17,7 @@ from compute._common import (
     load_document_row,
     read_records_json,
 )
+from models.documents import SourceQualityTier
 from models.facts import FinancialFact, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpIncomeStatementRecord
 
@@ -84,6 +85,8 @@ def extract_income_statement_facts(
             period_type_override=period_override,
             record_index=idx,
         )
-        inserted += insert_financial_facts(conn, facts, extracted_by="fmp")
+        inserted += insert_financial_facts(
+            conn, facts, extracted_by="fmp", tier=SourceQualityTier.FMP_NORMALIZED
+        )
     conn.commit()
     return inserted

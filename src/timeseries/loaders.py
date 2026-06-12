@@ -167,8 +167,7 @@ def _tier_rank_case_sql(column_alias: str) -> str:
     """Build a CASE expression mapping source_quality_tier text -> int rank.
     Used inline in SELECT for tier-aware ordering."""
     cases = " ".join(
-        f"WHEN '{tier}' THEN {rank}"
-        for tier, rank in SOURCE_QUALITY_TIER_RANK.items()
+        f"WHEN '{tier}' THEN {rank}" for tier, rank in SOURCE_QUALITY_TIER_RANK.items()
     )
     return f"CASE {column_alias} {cases} ELSE 0 END"
 
@@ -238,10 +237,7 @@ def load_financial_series(
         # On legacy schemas (no documents table, or no tier column), fall
         # back to the pre-0053 max(id) dedup so callers operating against
         # bare fixture DBs keep working.
-        has_tier = (
-            has_documents
-            and _has_column(conn, "documents", "source_quality_tier")
-        )
+        has_tier = has_documents and _has_column(conn, "documents", "source_quality_tier")
         if not has_documents:
             rows = conn.execute(
                 f"""
@@ -263,17 +259,9 @@ def load_financial_series(
             ).fetchall()
             return _rows_to_series(rows)
 
-        rank_expr = (
-            _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
-        )
-        as_of_clause = (
-            "AND d.fetched_at <= ? "
-            if as_of_cutoff is not None
-            else ""
-        )
-        as_of_params: tuple[object, ...] = (
-            (as_of_cutoff,) if as_of_cutoff is not None else ()
-        )
+        rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
+        as_of_params: tuple[object, ...] = (as_of_cutoff,) if as_of_cutoff is not None else ()
         # Pick the winning row per logical (period_end, fiscal_period_type)
         # tuple by ranking on (tier, id). Implemented via a correlated
         # subquery that emits the chosen id; the outer query then reads
@@ -408,15 +396,9 @@ def load_financial_fact_provenance(
             }
 
         has_tier = _has_column(conn, "documents", "source_quality_tier")
-        rank_expr = (
-            _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
-        )
-        as_of_clause = (
-            "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
-        )
-        as_of_params: tuple[object, ...] = (
-            (as_of_cutoff,) if as_of_cutoff is not None else ()
-        )
+        rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
+        as_of_params: tuple[object, ...] = (as_of_cutoff,) if as_of_cutoff is not None else ()
         tier_select = (
             "d.source_quality_tier AS source"
             if has_tier
@@ -545,6 +527,11 @@ def load_financial_cell_provenance(
             if _has_column(conn, "documents", "accession_number")
             else "NULL AS accession_number, NULL AS filing_date"
         )
+        confidence_select = (
+            "ff.confidence"
+            if _has_column(conn, "financial_facts", "confidence")
+            else "NULL AS confidence"
+        )
         rows = conn.execute(
             f"""
             SELECT ff.id AS fact_id,
@@ -552,6 +539,7 @@ def load_financial_cell_provenance(
                    ff.line_item,
                    ff.period_end,
                    {locator_select},
+                   {confidence_select},
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,
@@ -592,6 +580,7 @@ def load_financial_cell_provenance(
                 ),
                 "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
                 "locator": str(r["locator"]) if r["locator"] is not None else None,
+                "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
             }
             out.setdefault(str(r["line_item"]), {})[pe.date().isoformat()] = prov
         return out
@@ -634,6 +623,7 @@ def _sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
             ),
             "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
             "locator": str(r["locator"]) if r["locator"] is not None else None,
+            "confidence": float(r["confidence"]) if r["confidence"] is not None else None,
         }
         unit_raw = r["unit"]
         by_period[pe] = SourcedObservation(
@@ -694,6 +684,11 @@ def load_financial_series_with_provenance(
             else "NULL AS accession_number, NULL AS filing_date"
         )
         unit_select = "ff.unit" if _has_column(conn, "financial_facts", "unit") else "NULL AS unit"
+        confidence_select = (
+            "ff.confidence"
+            if _has_column(conn, "financial_facts", "confidence")
+            else "NULL AS confidence"
+        )
         rows = conn.execute(
             f"""
             SELECT ff.period_end,
@@ -702,6 +697,7 @@ def load_financial_series_with_provenance(
                    ff.id AS fact_id,
                    ff.source_doc_id,
                    {locator_select},
+                   {confidence_select},
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,
@@ -787,6 +783,11 @@ def load_kpi_series_with_provenance(
             else "NULL AS accession_number, NULL AS filing_date"
         )
         unit_select = "kf.unit" if _has_column(conn, "kpi_facts", "unit") else "NULL AS unit"
+        confidence_select = (
+            "kf.confidence"
+            if _has_column(conn, "kpi_facts", "confidence")
+            else "NULL AS confidence"
+        )
         rows = conn.execute(
             f"""
             SELECT kf.period_end,
@@ -795,6 +796,7 @@ def load_kpi_series_with_provenance(
                    kf.id AS fact_id,
                    kf.source_doc_id,
                    {locator_select},
+                   {confidence_select},
                    d.fetched_at,
                    d.source_url,
                    d.doc_type,
@@ -889,17 +891,9 @@ def load_kpi_series(
             return _rows_to_series(rows)
 
         has_tier = _has_column(conn, "documents", "source_quality_tier")
-        rank_expr = (
-            _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
-        )
-        as_of_clause = (
-            "AND d.fetched_at <= ? "
-            if as_of_cutoff is not None
-            else ""
-        )
-        as_of_params: tuple[object, ...] = (
-            (as_of_cutoff,) if as_of_cutoff is not None else ()
-        )
+        rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
+        as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
+        as_of_params: tuple[object, ...] = (as_of_cutoff,) if as_of_cutoff is not None else ()
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.value

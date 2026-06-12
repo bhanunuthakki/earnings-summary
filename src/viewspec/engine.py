@@ -99,6 +99,7 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
         return str(v) if v is not None else None
 
     doc_raw = prov.get("source_doc_id")
+    conf_raw = prov.get("confidence")
     return CellSource(
         source=str(prov.get("source") or "unknown"),
         fetched_at=_s("fetched_at"),
@@ -108,6 +109,7 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
         filing_date=_s("filing_date"),
         locator=_s("locator"),
         doc_id=doc_raw if isinstance(doc_raw, int) else None,
+        confidence=float(conf_raw) if isinstance(conf_raw, (int, float)) else None,
     )
 
 

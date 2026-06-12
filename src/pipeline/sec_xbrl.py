@@ -38,6 +38,7 @@ from models.documents import (
     tier_for_source_type,
 )
 from models.facts import FactLocator, FiscalPeriodType, Unit
+from pipeline.confidence import score_confidence
 from pipeline.restatement_detector import (
     _table_has_column,
     insert_with_restatement_detection,
@@ -46,17 +47,38 @@ from pipeline.restatement_detector import (
 # Reverse-lookup CIK from `https://www.sec.gov/files/company_tickers.json` (verified 2026-05).
 # Update by re-querying that endpoint when adding tickers.
 CIK_MAP: dict[str, str] = {
-    "ABNB": "0001559720", "AMAT": "0000006951", "AMZN": "0001018724",
-    "ASML": "0000937966", "BHP": "0000811809", "BKNG": "0001075531",
-    "BN": "0001001085", "CNQ": "0001017413", "FCX": "0000831259",
-    "FNV": "0001456346", "GOOG": "0001652044", "HDB": "0001144967",
-    "JPM": "0000019617", "LLY": "0000059478", "LMND": "0001691421",
-    "MELI": "0001099590", "META": "0001326801", "MU": "0000723125",
-    "NOW": "0001373715", "NU": "0001691493", "NVO": "0000353278",
-    "RBRK": "0001943896", "RIO": "0000863064", "SOFI": "0001818874",
-    "TOL": "0000794170", "TPL": "0001811074", "TSM": "0001046179",
-    "VALE": "0000917851", "VEEV": "0001393052", "WIX": "0001576789",
-    "WPM": "0001323404", "WY": "0000106535",
+    "ABNB": "0001559720",
+    "AMAT": "0000006951",
+    "AMZN": "0001018724",
+    "ASML": "0000937966",
+    "BHP": "0000811809",
+    "BKNG": "0001075531",
+    "BN": "0001001085",
+    "CNQ": "0001017413",
+    "FCX": "0000831259",
+    "FNV": "0001456346",
+    "GOOG": "0001652044",
+    "HDB": "0001144967",
+    "JPM": "0000019617",
+    "LLY": "0000059478",
+    "LMND": "0001691421",
+    "MELI": "0001099590",
+    "META": "0001326801",
+    "MU": "0000723125",
+    "NOW": "0001373715",
+    "NU": "0001691493",
+    "NVO": "0000353278",
+    "RBRK": "0001943896",
+    "RIO": "0000863064",
+    "SOFI": "0001818874",
+    "TOL": "0000794170",
+    "TPL": "0001811074",
+    "TSM": "0001046179",
+    "VALE": "0000917851",
+    "VEEV": "0001393052",
+    "WIX": "0001576789",
+    "WPM": "0001323404",
+    "WY": "0000106535",
 }
 
 
@@ -79,12 +101,18 @@ _TAG_MAP: dict[tuple[str, str], str] = {
 
 # Map SEC form -> our DocType for the per-accession documents row.
 _FORM_TO_DOC_TYPE: dict[str, DocType] = {
-    "10-K": DocType.SEC_10K, "10-K/A": DocType.SEC_10K,
-    "10-Q": DocType.SEC_10Q, "10-Q/A": DocType.SEC_10Q,
-    "20-F": DocType.SEC_20F, "20-F/A": DocType.SEC_20F,
-    "40-F": DocType.SEC_40F, "40-F/A": DocType.SEC_40F,
-    "8-K": DocType.SEC_8K, "8-K/A": DocType.SEC_8K,
-    "6-K": DocType.SEC_6K, "6-K/A": DocType.SEC_6K,
+    "10-K": DocType.SEC_10K,
+    "10-K/A": DocType.SEC_10K,
+    "10-Q": DocType.SEC_10Q,
+    "10-Q/A": DocType.SEC_10Q,
+    "20-F": DocType.SEC_20F,
+    "20-F/A": DocType.SEC_20F,
+    "40-F": DocType.SEC_40F,
+    "40-F/A": DocType.SEC_40F,
+    "8-K": DocType.SEC_8K,
+    "8-K/A": DocType.SEC_8K,
+    "6-K": DocType.SEC_6K,
+    "6-K/A": DocType.SEC_6K,
 }
 
 
@@ -173,9 +201,7 @@ def upsert_accession_documents(
         if doc_type is None:
             continue
         sha256 = hashlib.sha256(accn.encode("utf-8")).hexdigest()
-        cur = conn.execute(
-            "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)
-        )
+        cur = conn.execute("SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,))
         row = cur.fetchone()
         if row is not None:
             accession_to_doc_id[accn] = int(row["id"])
@@ -263,8 +289,12 @@ def _resolve_fiscal_period_type(
             if fp:
                 try:
                     fpt = FiscalPeriodType(fp)
-                    if fpt in (FiscalPeriodType.Q1, FiscalPeriodType.Q2,
-                              FiscalPeriodType.Q3, FiscalPeriodType.Q4):
+                    if fpt in (
+                        FiscalPeriodType.Q1,
+                        FiscalPeriodType.Q2,
+                        FiscalPeriodType.Q3,
+                        FiscalPeriodType.Q4,
+                    ):
                         return fpt
                 except ValueError:
                     pass
@@ -363,7 +393,10 @@ def insert_facts_from_companyfacts(
                         currency=currency,
                         unit=Unit.ACTUAL.value,
                         source_doc_id=accession_to_doc_id[accn],
-                        confidence=1.0,
+                        confidence=score_confidence(
+                            tier=tier_for_source_type(SourceType.SEC_XBRL),
+                            extracted_by="sec_xbrl",
+                        ),
                         extracted_by="sec_xbrl",
                         locator=locator.to_json(),
                     )
@@ -392,6 +425,4 @@ def ingest_for_ticker(
     facts_inserted = insert_facts_from_companyfacts(
         conn, ticker=ticker, payload=payload, accession_to_doc_id=accession_to_doc_id
     )
-    return IngestStats(
-        accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted
-    )
+    return IngestStats(accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted)
