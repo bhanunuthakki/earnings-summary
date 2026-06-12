@@ -20,13 +20,7 @@ from pathlib import Path
 from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
 
 _PANEL_STYLE = """<style>
-.ir-cov-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.ir-cov-table th, .ir-cov-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.ir-cov-table td.num, .ir-cov-table th.num { text-align:right; }
 .ir-cov-table td.tk { font-weight:600; font-family:var(--mono); }
-.ir-pill { display:inline-block; padding:2px 9px; border-radius:var(--radius-full);
-  font-size:var(--fs-caption); font-weight:600; white-space:nowrap; }
 .ir-ok { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
 .ir-gap { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
 tr.ir-gap-row td { background:color-mix(in srgb, var(--bad) 7%, transparent); }
@@ -87,7 +81,7 @@ def _kpi_strip(covered: int, gaps: int, total_docs: int) -> str:
 def _coverage_table(rows: list[IrCoverageRow]) -> str:
     body = "".join(_row(r) for r in rows)
     return (
-        '<table class="ir-cov-table"><thead><tr>'
+        '<table class="p-table ir-cov-table"><thead><tr>'
         "<th>Ticker</th><th>Name</th><th>List</th>"
         '<th class="num">IR docs</th><th>Latest period</th><th>Last fetched</th>'
         "<th>Last crawl</th><th>Status</th>"
@@ -99,14 +93,14 @@ def _coverage_table(rows: list[IrCoverageRow]) -> str:
 def _row(r: IrCoverageRow) -> str:
     if r.has_docs:
         plural = "s" if r.doc_count != 1 else ""
-        status_cell = f'<span class="ir-pill ir-ok">&#10003; {r.doc_count} doc{plural}</span>'
+        status_cell = f'<span class="p-pill ir-ok">&#10003; {r.doc_count} doc{plural}</span>'
         docs_cell = f'<td class="num">{r.doc_count}</td>'
         period = escape(r.latest_period or "—")
         fetched = _fmt_date(r.last_doc_at)
         row_attr = ""
     else:
         status_cell = (
-            '<span class="ir-pill ir-gap">manual pull</span>'
+            '<span class="p-pill ir-gap">manual pull</span>'
             f'<div class="ir-reason">{escape(_gap_reason(r))}</div>'
         )
         docs_cell = '<td class="num muted">0</td>'

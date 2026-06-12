@@ -21,11 +21,6 @@ from html import escape
 from pathlib import Path
 
 _PANEL_STYLE = """<style>
-.ch-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.ch-table th, .ch-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.ch-table td.num, .ch-table th.num {
-  text-align:right; font-variant-numeric:tabular-nums; }
 .ch-dir { font-weight:600; white-space:nowrap; }
 .ch-dots { white-space:nowrap; }
 .ch-dot { display:inline-block; width:11px; height:11px; border-radius:2px;
@@ -158,7 +153,7 @@ def _timeline_table(
         )
 
     return (
-        '<table class="ch-table"><thead><tr>'
+        '<table class="p-table"><thead><tr>'
         "<th>Job</th>"
         f"{header}"
         "<th>Last status</th>"

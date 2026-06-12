@@ -17,10 +17,6 @@ from html import escape
 from pathlib import Path
 
 _PANEL_STYLE = """<style>
-.rs-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
-.rs-table th, .rs-table td {
-  padding:6px 10px; border-bottom:1px solid var(--border); text-align:left; }
-.rs-table td.num, .rs-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .rs-was { color:var(--muted); text-decoration:line-through; }
 .rs-now { font-weight:600; }
 .rs-up { color:var(--ok); }
@@ -238,7 +234,7 @@ def _rows_table(ov: RestatementOverview) -> str:
         else ""
     )
     return (
-        '<table class="rs-table"><thead><tr>'
+        '<table class="p-table"><thead><tr>'
         "<th>Ticker</th><th>Line item</th>"
         '<th class="num">Period</th><th class="num">Was</th><th class="num">Now</th>'
         '<th class="num">Δ</th><th>New filing</th><th>Open</th>'

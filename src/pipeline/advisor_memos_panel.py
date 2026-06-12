@@ -191,8 +191,8 @@ def _screen_section(
 
 def _bar_cell(s: SwapCandidate) -> str:
     if s.cleared:
-        return '<span class="am-pill am-pill-cleared">clears the bar</span>'
-    return '<span class="am-pill am-pill-held">discipline holds</span>'
+        return '<span class="p-pill am-pill-cleared">clears the bar</span>'
+    return '<span class="p-pill am-pill-held">discipline holds</span>'
 
 
 def _memos_section(memos: list[AdvisorMemoRow], scores: dict[int, StanceScoreRow]) -> str:
@@ -259,7 +259,7 @@ def _score_pill(score: StanceScoreRow) -> str:
         f"basis {score.benchmark_basis}"
     )
     return (
-        f'<span class="am-pill am-verdict-{tone}" title="{escape(tip)}">'
+        f'<span class="p-pill am-verdict-{tone}" title="{escape(tip)}">'
         f"{escape(score.verdict.replace('_', ' '))}{escape(detail)}</span>"
     )
 
@@ -276,14 +276,14 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
         # Every displayed stance carries its track record (directive): the
         # graded verdict once scored, the pending state until then.
         stance = (
-            f'<span class="am-pill am-stance" title="scoring {escape(m.score_status)}">'
+            f'<span class="p-pill am-stance" title="scoring {escape(m.score_status)}">'
             f"stance: {escape(m.stance)}{escape(horizon)}</span>"
         )
     if score is not None:
         stance += _score_pill(score)
     elif m.score_status == "pending" and m.kind == "swap_check":
         stance += (
-            '<span class="am-pill am-verdict-muted" title="screen grades at horizon">'
+            '<span class="p-pill am-verdict-muted" title="screen grades at horizon">'
             "scoring pending</span>"
         )
     links: list[str] = []
@@ -294,7 +294,7 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
     link_str = f' · <span class="muted">{escape(" · ".join(links))}</span>' if links else ""
     return (
         f'<details class="am-card"><summary>'
-        f'<span class="am-pill am-kind-{escape(m.kind)}">{escape(kind)}</span>'
+        f'<span class="p-pill am-kind-{escape(m.kind)}">{escape(kind)}</span>'
         f'<span class="am-scope">{escape(scope)}</span>'
         f"{stance}"
         f'<span class="am-title">{escape(m.title)}</span>'
@@ -321,8 +321,6 @@ _PANEL_CSS = """<style>
   font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 .am-screen td { vertical-align: middle; }
 .am-cleared { color: var(--warn); font-weight: 600; }
-.am-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
 .am-pill-cleared { background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn); }
 .am-pill-held { background: color-mix(in srgb, var(--ok) 16%, transparent);

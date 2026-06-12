@@ -140,6 +140,22 @@ a.k-tick-sym:hover { color: var(--accent); }
 @media (max-width: 768px) {
   input, select, textarea { font-size: 16px; }
 }
+
+/* ---- pipeline panel table (canonical layout for command-center tabs) ---- */
+.p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+.p-table th, .p-table td {
+  padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left;
+  vertical-align: top;
+}
+.p-table td.num, .p-table th.num {
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+
+/* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */
+.p-pill {
+  display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
+}
 """
 
 
