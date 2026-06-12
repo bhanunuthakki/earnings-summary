@@ -40,9 +40,13 @@ Sanctioned escapes — everything else snaps to the scale:
    **display ramp** (15px lede → 28px section title → 60px identity ticker →
    100px hero mark). The report is an editorial surface; its larger type is
    deliberately surface-specific (see `workspace_styles.py` docstring).
+   **The exception is type ONLY**: the report's radii, chip shapes, status
+   colors, fills, and shadows follow the system like every other surface.
 2. `font-size: 0.93em` for inline mono inside running text (optical
    correction, not an importance level).
-3. The 8.5px `.src-chip` per-number provenance mark.
+3. The 8.5px / 3px-corner `.src-chip` per-number provenance mark (size AND
+   corner — at that size the chip shape doesn't read; keep its
+   `ui/source_chip.py` shell twin identical).
 4. SVG chart internals (`charts_v2.py`) — axis/label sizes are tuned to the
    plot geometry, not the UI scale.
 
@@ -65,6 +69,13 @@ not colors, in all surface CSS — **zero raw hex outside tokens.py**:
 Status pills derive from semantic tokens (`color` + `color-mix(...45%,
 transparent)` border) — never freehand a new background/foreground pair per
 status (the old `#14361f/#6ee7a0` family is exactly the drift this kills).
+
+One scoped exception to "accent = interactive": the workspace REPORT's
+category/kind tags (`.qa-tag`, `.ir-type`, `.decision-action`, `.oi-kind`)
+keep a single `--accent-soft`/`--accent` treatment as editorial wayfinding
+marks in long prose. That is the report's ONE category treatment — status
+there still routes through `--ok/--warn/--bad`, and dashboards keep
+category-quiet.
 
 ## 3. Chrome
 
