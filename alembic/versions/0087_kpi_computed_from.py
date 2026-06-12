@@ -45,9 +45,28 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _has_table(insp: sa.Inspector, name: str) -> bool:
+    return name in insp.get_table_names()
+
+
 def upgrade() -> None:
-    op.add_column("kpi_facts", sa.Column("computed_from", sa.Text(), nullable=True))
+    # No-op when kpi_facts is absent (minimal test DBs run the whole chain —
+    # the test_locator_schema contract; same guard pattern as 0075/0076) and
+    # when the column already exists (idempotent re-run).
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if not _has_table(insp, "kpi_facts"):
+        return
+    cols = {c["name"] for c in insp.get_columns("kpi_facts")}
+    if "computed_from" not in cols:
+        op.add_column("kpi_facts", sa.Column("computed_from", sa.Text(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("kpi_facts", "computed_from")
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    if not _has_table(insp, "kpi_facts"):
+        return
+    cols = {c["name"] for c in insp.get_columns("kpi_facts")}
+    if "computed_from" in cols:
+        op.drop_column("kpi_facts", "computed_from")
