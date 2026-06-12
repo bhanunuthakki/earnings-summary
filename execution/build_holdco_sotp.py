@@ -6,11 +6,15 @@ can't be valued on consolidated earnings or an FCFF DCF — the value is the NAV
 the parts BN's shareholders actually own. This builds the SOTP, corrected per an
 independent Opus review:
 
-  ① Asset management  = BAM total FRE × FRE multiple × BN ownership %
-                        (captures fees + BAM's 2/3 of FUTURE carry)
-  ② Carried interest  = BN-RETAINED ONLY (100% legacy accrued + 1/3 future),
-                        net of the employee pool + a realization haircut, after tax
-                        (NEVER × the 73% BAM ratio — that double-counts BAM's 2/3)
+  ① Asset management  = BAM LTM FRE × FRE multiple × BN ownership %
+                        (calibrate the multiple to BAM's own listed valuation —
+                        the stake is marketable, so the mark shouldn't stray far
+                        from 0.74 × BAM's market cap)
+  ② Carried interest  = BN-RETAINED ONLY, disclosure-shaped:
+                        accrued × legacy margin (mgmt: ~65%) × (1 − realization
+                        haircut) + BN-net annual generated carry × a capitalization
+                        multiple, all after tax. (NEVER × the 74% BAM ratio — BAM's
+                        2/3 of post-2022 carry belongs to ①'s multiple.)
   ③ Insurance (BWS)   = BWS distributable earnings × a DE multiple   (NOT a bank
                         ROE-excess-return model — a spread insurer's value isn't ROE-on-equity)
   ④ Invested capital  = listed affiliates at market × ownership + private/RE × (1 − haircut)
@@ -20,18 +24,27 @@ independent Opus review:
   SOTP equity = ① + ② + ③ + ④ − ⑤ ;  ÷ diluted shares (incl. BNT exchangeables).
 
 The holdco discount is an OUTPUT (price-to-NAV gap = the thesis), not an input — only
-PV(corporate overhead) is deducted. A scenario block (base / moderate / worst) and a
+PV(corporate overhead) is deducted. Scenarios follow the S6 bear/base/bull convention
+(base feeds dcf_runs; bull/bear ride in assumption_snapshot_json["scenarios"]), and a
 reverse-solve (what the market implies for carry + private real estate at the current
-price) are the most useful artifacts. DE-capitalization is a sanity BAND, not an
+price) is the most useful artifact. DE-capitalization is a sanity BAND, not an
 independent cross-check (DE already sums the same four buckets).
 
-Env (like build_bank_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT. Values in $B.
+Editability: every mark loads from data/dcf_assumptions/<T>.json["sotp"]["marks"]
+(each entry {"value": x, "note": "written justification"} — the note is the
+provenance surfaced by the assumptions tooling), then any yellow Dashboard cell
+edited in an existing v2 workbook overrides the JSON (the redesign capture-inject
+convention; price always refreshes live), and the effective values sync back to
+the JSON so it stays the from-scratch source of truth.
+
+Env (like build_redesigned_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT. Values in $B.
 A Python value-of-record mirrors the in-sheet formulas exactly (openpyxl can't
-evaluate offline) — verify with the `formulas` lib.
+evaluate offline) — verified against the `formulas` lib in tests.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sqlite3
@@ -39,9 +52,11 @@ import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.worksheet import Worksheet
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
@@ -68,40 +83,40 @@ MULT = '0.0"x"'
 
 @dataclass
 class Sotp:
-    """All inputs in $B unless noted. Defaults seeded to reproduce an independent
-    SOTP bracket (worst ~$44 / moderate ~$57 / base ~$70); CALIBRATE against BN's
-    quarterly supplemental."""
+    """All inputs in $B unless noted. Defaults = the 2026-06 calibration against
+    Q1'26 disclosures (BN Q1'26 release, BAM Q1'26 8-K, Sep-2025 Investor Day);
+    the written justification per mark lives in
+    data/dcf_assumptions/BN.json["sotp"]["marks"], which overrides these."""
 
     # ① asset management (fee business)
-    bam_fre: float = 4.0  # BAM total annualized fee-related earnings
-    fre_mult: float = 20.0  # peers ~14-24x; BN's lower-fee mix → ~18-22x
-    bn_own: float = 0.73  # BN's economic interest in BAM
-    # ② carried interest — BN-retained only
-    carry_accrued_gross: float = 11.8  # accumulated unrealized (gross, legacy → 100% BN)
-    carry_pool: float = 0.22  # employee carry pool deduction
-    carry_haircut: float = 0.40  # realization/timing haircut on accrued
-    carry_future_annual: float = 2.4  # future carry generated per year (gross)
-    carry_bn_future_share: float = 0.333  # BN keeps 1/3 of post-spin carry (BAM gets 2/3)
-    carry_future_mult: float = 5.0  # risk-haircut capitalization of BN-share future carry
+    bam_fre: float = 3.1  # BAM LTM fee-related earnings (Q1'26 8-K)
+    fre_mult: float = 24.0  # ≈ BAM's own trading multiple (~$75B / $3.1B LTM FRE)
+    bn_own: float = 0.74  # 70% direct + ~4% via BWS (Q1'26 release)
+    # ② carried interest — BN-retained only, disclosure-shaped
+    carry_accrued_gross: float = 11.8  # accumulated unrealized (gross), Q1'26 disclosed
+    carry_legacy_margin: float = 0.65  # mgmt: legacy funds ~65% combined margin
+    carry_haircut: float = 0.30  # realization/timing haircut on accrued
+    carry_future_net_annual: float = 1.5  # BN-NET generated carry/yr (mgmt: $0.5B'25→$3B'30)
+    carry_future_mult: float = 5.0  # risk-haircut capitalization (mgmt plan uses 10x)
     carry_tax: float = 0.18  # cash tax on realized carry
     # ③ insurance (Brookfield Wealth Solutions) — DE multiple, NOT a bank model
-    bws_de: float = 1.7  # BWS distributable earnings (LTM)
-    bws_mult: float = 13.0  # ~12-15x DE (market/mgmt convention)
+    bws_de: float = 1.72  # BWS annualized DE (Q1'26: $430M x 4)
+    bws_mult: float = 13.0  # mgmt plan 15x; annuity comps ~8-12x earnings
     # ④ invested capital
-    ic_listed: float = 45.0  # BEP/BEPC, BIP/BIPC, BBU at market × BN ownership
-    ic_private: float = 35.0  # real estate (BPG) + private at IFRS/appraised
-    ic_re_haircut: float = 0.30  # haircut on private/RE (office-heavy RE is the contested line)
+    ic_listed: float = 23.5  # BEP 45% + BIP ~27% + BBU 69% at market (June 2026)
+    ic_private: float = 38.0  # direct fund investments $12B + real estate $26B (IFRS)
+    ic_re_haircut: float = 0.25  # haircut on private/RE (office-heavy RE is the contested line)
     # ⑤ corporate (subtract)
-    corp_recourse_debt: float = 12.0  # recourse corporate debt ONLY (not the $250B non-recourse)
+    corp_recourse_debt: float = 14.3  # recourse corporate borrowings (FY25 letter)
     corp_preferred: float = 4.1
     corp_overhead_pv: float = 6.0  # PV of corporate G&A = the real "holdco cost"
     # discount / market
     ke: float = (
         0.10  # blended cost of equity (β-1.85 CAPM ~13-14% is too punitive on the fee annuity)
     )
-    shares_m: float = 2367.0  # diluted, incl. BNT exchangeables
-    price: float = 45.06
-    plan_value: float = 68.0  # management's published plan value/share
+    shares_m: float = 2371.0  # diluted, incl. exchangeables (Q1'26 LTM DE $5.5B / $2.32)
+    price: float = 44.61
+    plan_value: float = 68.0  # management's plan value/share (Sep-2025 Investor Day)
 
 
 def _am(s: Sotp) -> float:
@@ -109,10 +124,12 @@ def _am(s: Sotp) -> float:
 
 
 def _carry(s: Sotp) -> float:
-    accrued = s.carry_accrued_gross * (1 - s.carry_pool) * (1 - s.carry_haircut)
-    future = (
-        s.carry_future_annual * s.carry_bn_future_share * (1 - s.carry_pool) * s.carry_future_mult
-    )
+    """Accrued at the legacy margin less a realization haircut, plus BN-net
+    future generated carry capitalized — both after tax. Mirrors the disclosure
+    shape: legacy funds are 100% BN at ~65% margin; post-2022 carry reaches BN
+    as a net 33% royalty, so the future term takes BN-NET dollars directly."""
+    accrued = s.carry_accrued_gross * s.carry_legacy_margin * (1 - s.carry_haircut)
+    future = s.carry_future_net_annual * s.carry_future_mult
     return (accrued + future) * (1 - s.carry_tax)
 
 
@@ -170,9 +187,14 @@ def persist_dcf_run(
 
 
 def _run_bn() -> int:
-    s = _load(T)
+    s, notes = _load(T)
     eq, vps = value(s)
-    build(s, DEST)
+    # scenarios — S6 convention: base = the calibrated marks (feeds dcf_runs);
+    # bull = no haircuts (full accrued carry + full IFRS private/RE marks);
+    # bear = zero credit for carry AND private/RE.
+    bull = _scn(s, carry_haircut=0.0, ic_re_haircut=0.0)
+    bear = _scn(s, carry_zero=True, ic_private=0.0)
+    build(s, DEST, notes=notes, scenarios=(bear, vps, bull))
     snap: dict[str, object] = {
         "model": "holdco_sotp",
         "ke": s.ke,
@@ -184,11 +206,15 @@ def _run_bn() -> int:
         "insurance_b": _bws(s),
         "invested_capital_b": _ic(s),
         "corporate_b": -_corp(s),
+        "marks": {field: getattr(s, field) for field, _row, _label, _fmt in _SOTP_SPEC},
+        "scenarios": {
+            "base": {"fair_value_per_share_usd": vps},
+            "bull": {"fair_value_per_share_usd": bull},
+            "bear": {"fair_value_per_share_usd": bear},
+        },
     }
     persisted = persist_dcf_run(eq, vps, s.price, s.ke, snap)
-    # scenarios
-    base = _scn(s, carry_haircut=0.0, ic_re_haircut=0.0)
-    worst = _scn(s, carry_zero=True, ic_private=0.0)
+    synced = _sync_sotp_json(T, s)
     # reverse-solve: what the market implies for carry + private RE at the price
     implied_eq = s.price * s.shares_m / 1000.0
     floor = _am(s) + _bws(s) + s.ic_listed - _corp(s)  # AM + BWS + listed only − corp
@@ -197,17 +223,16 @@ def _run_bn() -> int:
     print(
         f"RESULT\t{T}\tSOTP/sh=${vps:.2f}\tprice=${s.price:.2f}\tupside={vps / s.price - 1:+.0%}"
         f"\tvs plan ${s.plan_value:.0f}={vps / s.plan_value - 1:+.0%}"
-        f"\tdcf_runs={'ok' if persisted else 'skip'}\t-> {DEST}"
+        f"\tdcf_runs={'ok' if persisted else 'skip'}\tjson_sync={'ok' if synced else 'skip'}"
+        f"\t-> {DEST}"
     )
     print(f"  (1) Asset mgmt (FRE x{s.fre_mult:.0f} x {s.bn_own:.0%})... ${_am(s):6.1f}B")
-    print(f"  (2) Carry (BN-retained, net pool/haircut/tax) ${_carry(s):6.1f}B")
+    print(f"  (2) Carry (BN-retained, net margin/haircut/tax) ${_carry(s):6.1f}B")
     print(f"  (3) Insurance BWS (DE x{s.bws_mult:.0f})............ ${_bws(s):6.1f}B")
     print(f"  (4) Invested capital (listed+private-haircut). ${_ic(s):6.1f}B")
     print(f"  (5) - Corporate (recourse debt+pref+overhead). ${-_corp(s):6.1f}B")
     print(f"  = SOTP equity ................................ ${eq:6.1f}B  -> ${vps:.2f}/sh")
-    print(
-        f"\n  Scenarios: worst ${worst:.2f} (carry+RE=0) | moderate ${vps:.2f} | base ${base:.2f}"
-    )
+    print(f"\n  Scenarios: bear ${bear:.2f} (carry+RE=0) | base ${vps:.2f} | bull ${bull:.2f}")
     print(
         f"  REVERSE-SOLVE: at ${s.price:.2f}, market implies ${implied_carry_re:.1f}B for "
         f"carry+private-RE vs ${model_carry_re:.1f}B modeled -- the thesis is in that gap."
@@ -224,13 +249,133 @@ def _scn(s: Sotp, **over: object) -> float:
         setattr(s2, k, v)
     if carry_zero:
         s2.carry_accrued_gross = 0.0
-        s2.carry_future_annual = 0.0
+        s2.carry_future_net_annual = 0.0
     return value(s2)[1]
 
 
-def _load(ticker: str) -> Sotp:
-    """Seed price/shares from FMP if present; everything else uses calibrated defaults."""
+def _sotp_json_path(ticker: str) -> Path:
+    return REPO / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
+
+
+def _json_marks(ticker: str) -> tuple[dict[str, float], dict[str, str]]:
+    """(values, notes) from data/dcf_assumptions/<T>.json["sotp"]["marks"].
+
+    Each mark is {"value": x, "note": "justification"} (or a bare number);
+    unknown keys are ignored so the JSON can carry marks for future fields."""
+    path = _sotp_json_path(ticker)
+    if not path.exists():
+        return {}, {}
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}, {}
+    if not isinstance(raw, dict):
+        return {}, {}
+    sotp_obj = cast("dict[str, object]", raw).get("sotp")
+    if not isinstance(sotp_obj, dict):
+        return {}, {}
+    marks_obj = cast("dict[str, object]", sotp_obj).get("marks")
+    if not isinstance(marks_obj, dict):
+        return {}, {}
+    values: dict[str, float] = {}
+    notes: dict[str, str] = {}
+    for key, entry in cast("dict[str, object]", marks_obj).items():
+        if isinstance(entry, (int, float)) and not isinstance(entry, bool):
+            values[key] = float(entry)
+            continue
+        if isinstance(entry, dict):
+            ed = cast("dict[str, object]", entry)
+            v = ed.get("value")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                values[key] = float(v)
+            n = ed.get("note")
+            if isinstance(n, str) and n:
+                notes[key] = n
+    return values, notes
+
+
+_SOTP_MARKER = "sotp-inputs-v2"
+
+
+def _capture_bn_inputs(path: Path) -> dict[str, float]:
+    """Yellow-cell values from an existing BN workbook, keyed by Sotp field.
+
+    Only workbooks carrying the v2 marker (Dashboard!D1) are captured — v1
+    workbooks hold the retired pre-calibration seeds and must not override the
+    calibrated JSON marks on their first rebuild. Price is never captured (it
+    always refreshes live). Label-keyed so row drift can't mis-assign values."""
+    if not path.exists():
+        return {}
+    try:
+        wb = openpyxl.load_workbook(str(path), data_only=False)
+    except (OSError, KeyError, InvalidFileException):
+        return {}
+    if "Dashboard" not in wb.sheetnames:
+        return {}
+    dsh = wb["Dashboard"]
+    if dsh["D1"].value != _SOTP_MARKER:
+        return {}
+    by_label = {label: field for field, _row, label, _fmt in _SOTP_SPEC}
+    out: dict[str, float] = {}
+    for label_cell, value_cell in dsh.iter_rows(min_row=2, max_row=40, min_col=1, max_col=2):
+        field = by_label.get(str(label_cell.value))
+        v = value_cell.value
+        if field and field != "price" and isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[field] = float(v)
+    return out
+
+
+def _sync_sotp_json(ticker: str, s: Sotp) -> bool:
+    """Mirror the effective marks back into the assumptions JSON (the redesign
+    `sync_assumptions_json` convention): numeric values only — the per-mark
+    justification notes are never touched. Price is live, not a mark, so it is
+    skipped. Returns True when written."""
+    path = _sotp_json_path(ticker)
+    if not path.exists():
+        return False
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    data = cast("dict[str, object]", raw)
+    sotp_obj = data.setdefault("sotp", {})
+    if not isinstance(sotp_obj, dict):
+        return False
+    sotp = cast("dict[str, object]", sotp_obj)
+    marks_obj = sotp.setdefault("marks", {})
+    if not isinstance(marks_obj, dict):
+        return False
+    marks = cast("dict[str, object]", marks_obj)
+    for field, _row, _label, _fmt in _SOTP_SPEC:
+        if field == "price":
+            continue
+        entry = marks.get(field)
+        if isinstance(entry, dict):
+            cast("dict[str, object]", entry)["value"] = getattr(s, field)
+        else:
+            marks[field] = {"value": getattr(s, field)}
+    sotp["last_synced"] = date.today().isoformat()
+    try:
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
+    """Effective marks + their justification notes. Precedence (the redesign
+    convention): calibrated dataclass defaults < JSON marks < yellow cells the
+    user edited in an existing v2 workbook; price always refreshes from FMP."""
     s = Sotp()
+    values, notes = _json_marks(ticker)
+    fields = {f.name for f in dataclasses.fields(Sotp)}
+    for key, v in values.items():
+        if key in fields:
+            setattr(s, key, v)
+    for key, v in _capture_bn_inputs(DEST).items():
+        setattr(s, key, v)
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
         try:
@@ -241,7 +386,7 @@ def _load(ticker: str) -> Sotp:
                 s.price = float(d["price"])
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
-    return s
+    return s, notes
 
 
 # --------------------------------------------------------------------------- #
@@ -251,113 +396,117 @@ def _hdr(ws: Worksheet, cell: str, text: str) -> None:
     ws[cell].font = HEAD_FONT
 
 
-def _inp(ws: Worksheet, row: int, label: str, val: float, fmt: str = USDB) -> None:
+def _inp(ws: Worksheet, row: int, label: str, val: float, fmt: str = USDB, note: str = "") -> None:
     ws.cell(row=row, column=1, value=label).font = Font(color="6B7280")
     c = ws.cell(row=row, column=2, value=val)
     c.fill = YELLOW
     c.number_format = fmt
     c.border = BORDER
+    if note:
+        n = ws.cell(row=row, column=3, value=note)
+        n.font = Font(color="9CA3AF", italic=True, size=9)
 
 
-# Dashboard input rows (canonical cells the SOTP sheet references)
-R = {
-    "bam_fre": 3,
-    "fre_mult": 4,
-    "bn_own": 5,
-    "c_accr": 7,
-    "c_pool": 8,
-    "c_hair": 9,
-    "c_fut": 10,
-    "c_futshr": 11,
-    "c_futmult": 12,
-    "c_tax": 13,
-    "bws_de": 15,
-    "bws_mult": 16,
-    "ic_listed": 18,
-    "ic_priv": 19,
-    "ic_hair": 20,
-    "corp_debt": 22,
-    "corp_pref": 23,
-    "corp_oh": 24,
-    "ke": 26,
-    "shares": 27,
-    "price": 28,
-    "plan": 29,
-}
+# Dashboard input spec — the single source of truth for build (rows/labels),
+# capture (label→field), and the JSON sync (field list). (field, row, label, fmt);
+# the SOTP sheet formulas reference these rows, so keep them aligned.
+_SOTP_SPEC: list[tuple[str, int, str, str]] = [
+    ("bam_fre", 3, "BAM total FRE (LTM)", USDB),
+    ("fre_mult", 4, "FRE multiple", MULT),
+    ("bn_own", 5, "BN ownership of BAM", PCT),
+    ("carry_accrued_gross", 7, "Accrued carry (gross, legacy=100% BN)", USDB),
+    ("carry_legacy_margin", 8, "Legacy carry margin (after costs)", PCT),
+    ("carry_haircut", 9, "Realization/timing haircut", PCT),
+    ("carry_future_net_annual", 10, "Future carry / yr (BN-net)", USDB),
+    ("carry_future_mult", 11, "Future-carry capitalization", MULT),
+    ("carry_tax", 12, "Cash tax on carry", PCT),
+    ("bws_de", 14, "BWS distributable earnings (annualized)", USDB),
+    ("bws_mult", 15, "BWS DE multiple", MULT),
+    ("ic_listed", 17, "Listed affiliates @ market × own", USDB),
+    ("ic_private", 18, "Private + real estate (IFRS)", USDB),
+    ("ic_re_haircut", 19, "Private/RE haircut", PCT),
+    ("corp_recourse_debt", 21, "Recourse corporate debt", USDB),
+    ("corp_preferred", 22, "Preferred equity", USDB),
+    ("corp_overhead_pv", 23, "PV corporate overhead", USDB),
+    ("ke", 25, "Blended cost of equity Ke", PCT),
+    ("shares_m", 26, "Diluted shares (M, incl. exchangeables)", "#,##0"),
+    ("price", 27, "Current price ($)", USD2),
+    ("plan_value", 28, "Management plan value ($)", USD2),
+]
+_SOTP_ROW = {field: row for field, row, _label, _fmt in _SOTP_SPEC}
+# Section headers: row → title.
+_SOTP_SECTIONS: list[tuple[int, str]] = [
+    (2, "① Asset management (fee business)"),
+    (6, "② Carried interest — BN-RETAINED ONLY (never ×74%)"),
+    (13, "③ Insurance (BWS) — DE multiple"),
+    (16, "④ Invested capital"),
+    (20, "⑤ Corporate (subtract)"),
+    (24, "Discount / market"),
+]
 
 
-def build(s: Sotp, dest: Path) -> None:
+def build(
+    s: Sotp,
+    dest: Path,
+    notes: dict[str, str] | None = None,
+    scenarios: tuple[float, float, float] | None = None,
+) -> None:
+    """Write the workbook. ``notes`` = per-mark justification (column C, from the
+    assumptions JSON). ``scenarios`` = (bear, base, bull) value/share — Python
+    statics rewritten on every refresh (the S6 sensitivity-grid convention)."""
     wb = openpyxl.Workbook()
     dash = wb.active
     dash.title = "Dashboard"
     sotp = wb.create_sheet("SOTP")
     scen = wb.create_sheet("Scenarios")
     D = "Dashboard"
+    notes = notes or {}
 
     _hdr(dash, "A1", f"{T} — Holdco Sum-of-the-Parts · Dashboard ($B)")
-    dash["A2"] = "① Asset management (fee business)"
-    dash["A2"].font = SUB_FONT
-    _inp(dash, R["bam_fre"], "BAM total FRE", s.bam_fre)
-    _inp(dash, R["fre_mult"], "FRE multiple", s.fre_mult, MULT)
-    _inp(dash, R["bn_own"], "BN ownership of BAM", s.bn_own, PCT)
-    dash["A6"] = "② Carried interest — BN-RETAINED ONLY (never ×73%)"
-    dash["A6"].font = SUB_FONT
-    _inp(dash, R["c_accr"], "Accrued carry (gross, legacy=100% BN)", s.carry_accrued_gross)
-    _inp(dash, R["c_pool"], "Employee carry pool", s.carry_pool, PCT)
-    _inp(dash, R["c_hair"], "Realization/timing haircut", s.carry_haircut, PCT)
-    _inp(dash, R["c_fut"], "Future carry / yr (gross)", s.carry_future_annual)
-    _inp(dash, R["c_futshr"], "BN share of future carry (1/3)", s.carry_bn_future_share, PCT)
-    _inp(dash, R["c_futmult"], "Future-carry capitalization", s.carry_future_mult, MULT)
-    _inp(dash, R["c_tax"], "Cash tax on carry", s.carry_tax, PCT)
-    dash["A14"] = "③ Insurance (BWS) — DE multiple"
-    dash["A14"].font = SUB_FONT
-    _inp(dash, R["bws_de"], "BWS distributable earnings", s.bws_de)
-    _inp(dash, R["bws_mult"], "BWS DE multiple", s.bws_mult, MULT)
-    dash["A17"] = "④ Invested capital"
-    dash["A17"].font = SUB_FONT
-    _inp(dash, R["ic_listed"], "Listed affiliates @ market × own", s.ic_listed)
-    _inp(dash, R["ic_priv"], "Private + real estate (IFRS)", s.ic_private)
-    _inp(dash, R["ic_hair"], "Private/RE haircut", s.ic_re_haircut, PCT)
-    dash["A21"] = "⑤ Corporate (subtract)"
-    dash["A21"].font = SUB_FONT
-    _inp(dash, R["corp_debt"], "Recourse corporate debt", s.corp_recourse_debt)
-    _inp(dash, R["corp_pref"], "Preferred equity", s.corp_preferred)
-    _inp(dash, R["corp_oh"], "PV corporate overhead", s.corp_overhead_pv)
-    dash["A25"] = "Discount / market"
-    dash["A25"].font = SUB_FONT
-    _inp(dash, R["ke"], "Blended cost of equity Ke", s.ke, PCT)
-    _inp(dash, R["shares"], "Diluted shares (M, incl. exchangeables)", s.shares_m, "#,##0")
-    _inp(dash, R["price"], "Current price ($)", s.price, USD2)
-    _inp(dash, R["plan"], "Management plan value ($)", s.plan_value, USD2)
+    # capture marker: only v2 workbooks are edit-preserved across rebuilds
+    dash["D1"] = _SOTP_MARKER
+    dash["D1"].font = Font(color="D1D5DB", size=8)
+    for row, title in _SOTP_SECTIONS:
+        dash.cell(row=row, column=1, value=title).font = SUB_FONT
+    for field, row, label, fmt in _SOTP_SPEC:
+        _inp(dash, row, label, getattr(s, field), fmt, note=notes.get(field, ""))
     dash.column_dimensions["A"].width = 40
     dash.column_dimensions["B"].width = 13
+    dash.column_dimensions["C"].width = 80
 
     # ---- SOTP build (formula-first off the Dashboard inputs) ----
     _hdr(sotp, "A1", f"{T} — Sum-of-the-Parts build ($B)")
 
-    def b(r: int) -> str:
-        return f"{D}!$B${r}"
+    def b(field: str) -> str:
+        return f"{D}!$B${_SOTP_ROW[field]}"
 
     rows = [
-        ("① Asset management", f"={b(R['bam_fre'])}*{b(R['fre_mult'])}*{b(R['bn_own'])}"),
+        ("① Asset management", f"={b('bam_fre')}*{b('fre_mult')}*{b('bn_own')}"),
         (
             "② Carried interest (BN-retained)",
-            f"=({b(R['c_accr'])}*(1-{b(R['c_pool'])})*(1-{b(R['c_hair'])})"
-            f"+{b(R['c_fut'])}*{b(R['c_futshr'])}*(1-{b(R['c_pool'])})*{b(R['c_futmult'])})*(1-{b(R['c_tax'])})",
+            f"=({b('carry_accrued_gross')}*{b('carry_legacy_margin')}*(1-{b('carry_haircut')})"
+            f"+{b('carry_future_net_annual')}*{b('carry_future_mult')})*(1-{b('carry_tax')})",
         ),
-        ("③ Insurance (BWS)", f"={b(R['bws_de'])}*{b(R['bws_mult'])}"),
-        ("④ Invested capital", f"={b(R['ic_listed'])}+{b(R['ic_priv'])}*(1-{b(R['ic_hair'])})"),
-        ("⑤ − Corporate", f"=-({b(R['corp_debt'])}+{b(R['corp_pref'])}+{b(R['corp_oh'])})"),
+        ("③ Insurance (BWS)", f"={b('bws_de')}*{b('bws_mult')}"),
+        (
+            "④ Invested capital",
+            f"={b('ic_listed')}+{b('ic_private')}*(1-{b('ic_re_haircut')})",
+        ),
+        (
+            "⑤ − Corporate",
+            f"=-({b('corp_recourse_debt')}+{b('corp_preferred')}+{b('corp_overhead_pv')})",
+        ),
         ("= SOTP equity value", "=SUM(B3:B7)"),
-        ("÷ shares → value / share ($)", f"=B8*1000/{b(R['shares'])}"),
-        ("Upside vs price", f"=B9/{b(R['price'])}-1"),
-        ("Discount to plan value", f"=B9/{b(R['plan'])}-1"),
+        ("÷ shares → value / share ($)", f"=B8*1000/{b('shares_m')}"),
+        ("Upside vs price", f"=B9/{b('price')}-1"),
+        ("Discount to plan value", f"=B9/{b('plan_value')}-1"),
         (
             "Market-implied $ for carry+private-RE",
-            f"={b(R['price'])}*{b(R['shares'])}/1000-({b(R['bam_fre'])}*{b(R['fre_mult'])}*{b(R['bn_own'])}"
-            f"+{b(R['bws_de'])}*{b(R['bws_mult'])}+{b(R['ic_listed'])}-({b(R['corp_debt'])}+{b(R['corp_pref'])}+{b(R['corp_oh'])}))",
+            f"={b('price')}*{b('shares_m')}/1000-({b('bam_fre')}*{b('fre_mult')}*{b('bn_own')}"
+            f"+{b('bws_de')}*{b('bws_mult')}+{b('ic_listed')}"
+            f"-({b('corp_recourse_debt')}+{b('corp_preferred')}+{b('corp_overhead_pv')}))",
         ),
-        ("Modeled $ for carry+private-RE", f"=B4+{b(R['ic_priv'])}*(1-{b(R['ic_hair'])})"),
+        ("Modeled $ for carry+private-RE", f"=B4+{b('ic_private')}*(1-{b('ic_re_haircut')})"),
     ]
     rr = 3
     for label, formula in rows:
@@ -376,25 +525,53 @@ def build(s: Sotp, dest: Path) -> None:
     sotp.column_dimensions["A"].width = 40
     sotp.column_dimensions["B"].width = 13
 
-    # ---- Scenarios (note: the bracket is computed by the Python mirror; this
-    #      sheet documents the structure so the user can re-derive in-sheet) ----
-    _hdr(scen, "A1", "Scenarios & the thesis")
-    notes = [
-        "Worst case  (carry = 0, private/RE = 0): only AM + BWS + listed − corporate.",
-        "Moderate    (defaults): realization/timing haircut on carry + RE haircut.",
-        "Base case   (no haircuts): full carry + full private/RE marks.",
+    # ---- Scenarios — S6 bear/base/bull convention. The values are Python
+    #      statics rewritten on every refresh (openpyxl can't evaluate offline);
+    #      base is what feeds dcf_runs, bull/bear ride in the snapshot JSON. ----
+    _hdr(scen, "A1", "Scenarios (bear · base · bull)")
+    if scenarios is not None:
+        bear, base_v, bull = scenarios
+        scen["A3"] = "Scenario"
+        scen["B3"] = "Value / share ($)"
+        scen["C3"] = "vs price"
+        for cell in ("A3", "B3", "C3"):
+            scen[cell].font = SUB_FONT
+        for i, (name, v) in enumerate(
+            [
+                ("Bear (carry=0, private/RE=0)", bear),
+                ("Base (calibrated marks)", base_v),
+                ("Bull (no haircuts)", bull),
+            ],
+            start=4,
+        ):
+            scen.cell(row=i, column=1, value=name).font = Font(color="374151")
+            vc = scen.cell(row=i, column=2, value=v)
+            vc.number_format = USD2
+            if s.price:
+                pc = scen.cell(row=i, column=3, value=v / s.price - 1)
+                pc.number_format = PCT
+    scen_notes = [
+        "Bear: zero credit for the carried-interest stack AND the private/RE marks",
+        "      (AM + BWS + listed affiliates − corporate only).",
+        "Base: calibrated marks — accrued carry at the legacy margin less a",
+        "      realization haircut; private/RE at IFRS less the haircut.",
+        "Bull: no haircuts — full accrued carry and full IFRS private/RE marks.",
         "",
-        "THE THESIS: the current price ≈ the WORST case — i.e. the market is paying",
-        "almost nothing for the carried-interest stack and the private real estate.",
-        "The reverse-solve on the SOTP sheet quantifies exactly how little.",
+        "2026-06 calibration: the reverse-solve on the SOTP sheet shows the market",
+        "discounting the carry + private/RE buckets vs the base marks — it is NOT",
+        "paying zero for them (the pre-calibration framing; that was an artifact of",
+        "a mis-seeded listed-affiliates mark). Management's plan value additionally",
+        "capitalizes target carry at 10x and BWS DE at 15x.",
         "",
         "Holdco discount is an OUTPUT (price-to-NAV gap), not an input — only PV of",
         "corporate overhead is deducted. DE-capitalization is a sanity band, not an",
         "independent cross-check (DE already sums the same four buckets).",
     ]
-    for i, n in enumerate(notes, start=3):
+    for i, n in enumerate(scen_notes, start=9):
         scen.cell(row=i, column=1, value=n).font = Font(color="374151")
     scen.column_dimensions["A"].width = 78
+    scen.column_dimensions["B"].width = 16
+    scen.column_dimensions["C"].width = 10
 
     dest.parent.mkdir(parents=True, exist_ok=True)
     wb.save(dest)
