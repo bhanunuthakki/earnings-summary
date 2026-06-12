@@ -231,6 +231,15 @@ existing = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exis
 existing["redesign"] = data
 if data.get("narrative"):
     existing.setdefault("narrative", data["narrative"])
+# Provenance: snapshot the fresh Opus values as the immutable baseline the
+# Assumptions sheet classifies against (refresh syncs workbook edits into
+# "redesign", which would otherwise erase what Opus originally said), and
+# reset the override ledger — overrides are relative to a baseline, and this
+# is a new one.
+from dcf.assumptions_doc import baseline_from_opus_pass  # noqa: E402
+
+existing["opus_baseline"] = baseline_from_opus_pass(data)
+existing.pop("assumption_overrides", None)
 cache_path.parent.mkdir(parents=True, exist_ok=True)
 cache_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 _vm = data.get("valuation_model") or ("fcff_dcf" if data.get("dcf_applicable") else "?")

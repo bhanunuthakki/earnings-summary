@@ -20,6 +20,7 @@ BUILDER = Path(__file__).resolve().parents[1] / "execution" / "build_redesigned_
 SHEETS = [
     "Cover",
     "Dashboard",
+    "Assumptions",
     "Color Code",
     "WACC",
     "Model",

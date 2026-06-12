@@ -43,6 +43,7 @@ BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 REDESIGN_SHEETS = [
     "Cover",
     "Dashboard",
+    "Assumptions",
     "Color Code",
     "WACC",
     "Model",
@@ -734,6 +735,100 @@ def test_refresh_redesign_syncs_assumptions_json(
     assert rd["exit_multiple"] == pytest.approx(8.0)
     assert rd["beta"] == pytest.approx(1.55)
     assert rd["narrative"] == "keep me"
+
+
+def test_refresh_provenance_end_to_end(refresh_repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Full provenance round-trip through the real builder + refresher:
+
+    1. first refresh seeds the immutable opus_baseline and writes the
+       Assumptions sheet with the Opus-sourced exit multiple;
+    2. the user edits the exit multiple in the workbook; the next refresh
+       classifies it user-edited, records the override (Opus value + date) in
+       the ledger, annotates the yellow cell — while sync rewrites the
+       redesign block to 8x and the baseline provably stays at 11x.
+    """
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "dcf_applicable": True,
+                    "business_model": "operating",
+                    "segments": {
+                        "Cloud": {"near_term_growth": 0.12, "terminal_growth": 0.04},
+                        "Devices": {"near_term_growth": 0.05, "terminal_growth": 0.02},
+                    },
+                    "near_term_op_margin": 0.18,
+                    "terminal_op_margin": 0.22,
+                    "tax_rate": 0.22,
+                    "terminal_capex_da": 1.05,
+                    "terminal_method": "Exit multiple",
+                    "exit_basis": "EV/EBITDA",
+                    "exit_multiple": 11.0,
+                    "terminal_growth_g": 0.035,
+                    "narrative": "STORY PROSE",
+                    "reasoning": "JUDGMENT PROSE",
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    res1 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res1["status"] == "ok", res1
+    prov1 = res1["assumption_provenance"]
+    assert isinstance(prov1, dict) and prov1["status"] == "ok"
+    data = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
+    assert data["opus_baseline"]["values"]["exit_multiple"] == 11.0
+    assert data["opus_baseline"]["seeded"] is True
+    wb = openpyxl.load_workbook(str(dest))
+    try:
+        assert "Assumptions" in wb.sheetnames
+        text = "\n".join(
+            str(c.value)
+            for row in wb["Assumptions"].iter_rows()
+            for c in row
+            if c.value is not None
+        )
+        assert "STORY PROSE" in text and "JUDGMENT PROSE" in text
+        dsh = wb["Dashboard"]
+        assert dsh.cell(row=45, column=2).value == pytest.approx(11.0)  # Opus applied
+        dsh.cell(row=45, column=2, value=8.0)  # the user's edit
+        wb.save(str(dest))
+    finally:
+        wb.close()
+
+    res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res2["status"] == "ok", res2
+    sources = res2["assumption_provenance"]["sources"]
+    assert sources.get("user-edited", 0) >= 1
+
+    data = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))
+    # sync mirrored the edit into the redesign block (from-scratch builds
+    # reproduce it) while the baseline kept the original Opus value.
+    assert data["redesign"]["exit_multiple"] == pytest.approx(8.0)
+    assert data["opus_baseline"]["values"]["exit_multiple"] == 11.0
+    assert data["assumption_overrides"]["exit_multiple"]["opus_value"] == 11.0
+
+    wb = openpyxl.load_workbook(str(dest))
+    try:
+        comment = wb["Dashboard"]["B45"].comment
+        assert comment is not None
+        assert "overridden from Opus 11.0x" in comment.text
+        text = "\n".join(
+            str(c.value)
+            for row in wb["Assumptions"].iter_rows()
+            for c in row
+            if c.value is not None
+        )
+        assert "overridden from Opus 11.0x" in text
+    finally:
+        wb.close()
 
 
 def test_builder_reads_wacc_override_from_block(
