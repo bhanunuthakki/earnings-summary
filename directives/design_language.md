@@ -514,7 +514,7 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 11. The Discovery rule (weighted candidate ranking)
+## 12. The Discovery rule (weighted candidate ranking)
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight
