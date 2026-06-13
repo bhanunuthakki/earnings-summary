@@ -344,6 +344,20 @@
 .position-stat-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
 .position-stat-sub { font-family: var(--mono); font-size: var(--fs-caption); margin-top: 4px; color: var(--muted); }
 .position-stat-value { font-family: var(--mono); font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose code { font-family: var(--mono); font-size: 0.93em; background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
+.prose em { font-style: italic; }
+.prose h3 { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-2); }
+.prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600; color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
+.prose hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
+.prose li { margin-bottom: var(--sp-1); }
+.prose p { margin: 0 0 var(--sp-3); }
+.prose strong { font-weight: 600; color: var(--fg); }
+.prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); margin: 0 0 var(--sp-3); }
+.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.prose th, .prose td { padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.prose ul, .prose ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
 .prose-pad li { margin-bottom: 4px; }
 .prose-pad p { margin: 0 0 10px; }
 .prose-pad p:last-child { margin-bottom: 0; }
@@ -547,6 +561,7 @@
 /* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on the left, filters + actions on the SAME flex row to the right — never a title band stacked over a filter band. Emitted by panel_toolbar(). ---- */ .k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 /* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */ .p-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
 /* ---- pipeline panel table (canonical layout for command-center tabs) ---- */ .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+/* ---- rendered prose: the shared container for render_prose() output (design_language §9; src/ui/prose.py). ONE token-only treatment for every stored analyst/LLM body / note / memo / narrative. render_prose starts headings at <h3> (a panel owns the <h2> above its prose), so h3 is the top content tier and h4-h6 step down. A surface adds ONLY the wrapper's padding/width — it never re-skins the rendered children. ---- */ .prose { font-size: var(--fs-body); line-height: 1.6; color: var(--fg-soft); }
 /* ---- shared popover list (combobox results, palette rows) ---- */ .k-menu { margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 /* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards, callouts, tone rows) — same color-mix family, box radius instead of full. Ink stays --fg; a status word inside can take its own .k-pill. ---- */ .k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
 /* ---- status/score pills: ONE filled badge — a soft status fill + token ink (design_language §3). This is the canonical replacement for the per-panel raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone pairs): a status pill never freehands a background/foreground hex pair. ---- */ .k-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); color: var(--fg-soft); }
