@@ -18,7 +18,7 @@ import pytest
 
 from alerts import AlertRow
 from dashboard.inbox import InboxItem
-from dashboard.inbox_rank import annotate_and_rank
+from dashboard.inbox_rank import annotate_and_rank, inbox_label, note_semantic_kind
 
 NOW = datetime(2026, 6, 10, 12, 0, 0)
 
@@ -64,6 +64,7 @@ def _item(
     body: str = "body",
     status: str | None = None,
     title: str = "t",
+    semantic_kind: str | None = None,
 ) -> InboxItem:
     return InboxItem(
         kind=kind,
@@ -72,6 +73,7 @@ def _item(
         title=title,
         body=body,
         status=status,
+        semantic_kind=semantic_kind,
     )
 
 
@@ -288,6 +290,63 @@ def test_advisor_memo_ledger_entry_rides_the_synthesis_weight() -> None:
     ranked = _rank([memo, plain, news])
     assert [it.category for it in ranked] == ["thesis", "news", "synthesis"]
     assert ranked[-1].title == "Advisor memo"
+
+
+def test_advisor_memo_note_demotes_to_synthesis_by_identity() -> None:
+    """The portfolio next-dollar memo reaches the inbox ONLY as an advisor
+    analyst_note (no ledger echo — ticker=None, write_ledger=False). It must
+    still demote to synthesis weight by IDENTITY (semantic_kind), not by the
+    ledger title — that path doesn't exist for it."""
+    when = NOW - timedelta(hours=2)
+    memo_note = _item(
+        "note", ticker=None, when=when, title="observation", semantic_kind="advisor_memo"
+    )
+    plain_note = _item("note", ticker="NU", when=when, title="watch")
+    news = _alert_item(
+        trigger_kind="material_news",
+        status="open",
+        when=when,
+        evidence={"headline": "NU opens hub"},
+    )
+    # annotate_and_rank returns fresh objects (dataclasses.replace), so locate
+    # the ranked items by stable attributes, not input identity.
+    ranked = _rank([memo_note, plain_note, news])
+    memo = next(it for it in ranked if it.semantic_kind == "advisor_memo")
+    plain = next(it for it in ranked if it.kind == "note" and it.semantic_kind is None)
+    event = next(it for it in ranked if it.kind == "alert")
+    assert memo.category == "synthesis"
+    assert plain.category == "watch"
+    # The machine-authored memo sits below the plain news event of equal age.
+    assert ranked.index(event) < ranked.index(memo)
+
+
+def test_inbox_label_resolves_identity_not_source_table() -> None:
+    """The one shared resolver: advisor memos read as "Advisor memo" whichever
+    table they echoed through; note kinds humanize (the raw enum never shows);
+    reconcile-pending notes carry the prefix."""
+    advisor_note = _item("note", title="observation", semantic_kind="advisor_memo")
+    advisor_ledger = _item("ledger", title="Advisor memo")  # back-compat: title only
+    plain_obs = _item("note", title="observation")
+    watch = _item("note", title="watch")
+    reconcile = _item("note", title="watch", status="pending")
+    assert inbox_label(advisor_note) == "Advisor memo"
+    assert inbox_label(advisor_ledger) == "Advisor memo"
+    assert inbox_label(plain_obs) == "Note"
+    assert inbox_label(watch) == "Watch item"
+    assert inbox_label(reconcile) == "Reconcile · Watch item"
+    # No raw enum survives the resolver.
+    for it in (advisor_note, plain_obs, watch, reconcile):
+        assert "observation" not in inbox_label(it)
+
+
+def test_note_semantic_kind_reads_provenance() -> None:
+    """Identity is read from the note's source/source_ref/context — ANY of the
+    three advisor signals is sufficient; an ordinary note gets None."""
+    assert note_semantic_kind("advisor", "advisor_memo:7", {"memo_id": 7}) == "advisor_memo"
+    assert note_semantic_kind("manual", "advisor_memo:7", None) == "advisor_memo"
+    assert note_semantic_kind("comment", None, {"memo_id": 7}) == "advisor_memo"
+    assert note_semantic_kind("comment", "TICK/2026-06-10/c1", None) is None
+    assert note_semantic_kind("manual", None, {"intent": "edit_thesis"}) is None
 
 
 def test_recency_floor_ties_break_newest_first() -> None:

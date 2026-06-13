@@ -189,7 +189,7 @@ def test_feed_stream_carries_unread_tracking_markup(db_path: Path) -> None:
     assert 'data-ix-surface="feed"' in html
     assert 'data-when="' in html
     assert "ix-last-seen:" in html
-    assert 'class="ix-act' not in html
+    assert '<button class="ix-act' not in html  # rail-only: no quick-action buttons in feed HTML
 
 
 # ----------------------------------------------------------------------------
