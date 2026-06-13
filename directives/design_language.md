@@ -465,6 +465,55 @@ backlog + journal until then.
 
 ---
 
+## Diet-vs-alert (the information-diet substrate)
+
+A thesis-breach ALERTER and an information-diet CURATOR are **inverse products**
+and must not share one pipe. The repo's original `news` → decaying inbox scorer
+→ materiality veto was built for the alerter; pushed through it, informative-
+but-not-breaching signal (a sell-side downgrade, an upcoming investor day) gets
+vetoed away as "not material to the thesis." Sources of truth in code:
+`alembic 0095` (the `signals` table), `src/signals/store.py` (the taxonomy +
+readers), `src/pipeline/diet_panel.py` (the pull surface).
+
+**Two lanes from one typed taxonomy.** `signal_type` is STORED at ingest (not a
+render-time headline regex), with `event_date` (a forward-dated item is a
+queryable ROW, not LLM prose), `weight` (curation salience, decoupled from
+urgency decay), and `cadence` (`quarterly`/`scheduled`/`event`).
+
+- **The ALERT lane is the decaying PUSH lane** — thesis-breach only. It is the
+  EXISTING `material_news` → trigger → alert → inbox pipeline, unchanged.
+- **The DIET lane is the non-decaying PULL lane** — "what a diligent analyst
+  should ingest." The diet panel reads `signals` directly: an ingest stream
+  (`consensus_rating` + `general_news`, newest first) and a forward agenda
+  (`investor_day`, soonest first, off the dedicated `event_date` index).
+
+**The invariant (guard `tests/test_signals_diet_guard.py`):** a `signals` DIET
+row NEVER enters the urgency-decay scorer or the materiality veto. The guarantee
+is structural — a `SignalRow` is never converted into an `InboxItem`, and
+`collect_inbox` never reads the `signals` table — so the order of a fixed set of
+diet rows is independent of the wall clock.
+
+- **News-mirrored vs diet-only.** Two types — `general_news`, `consensus_rating`
+  — carry a `news_id` and can ALSO back an alert via the news pipeline; that
+  escalation reads the `news` row, not the signal row. `_categorize` consults
+  the stored `signal_type` (identity over source) to type such an alert,
+  **scoped to these mirrored types** — it EXTENDS the S3 categorizer, never
+  re-cuts it. The other three (`investor_day`, `buyside_rating`,
+  `estimate_revision`) are diet-only and never alert.
+- **Identity over source for ratings.** `yf_grades` (free, already running) is
+  routed into the typed `consensus_rating` lane, replacing the render-time
+  headline regex sniff with a type stored at ingest.
+- **Disclosed, not promised.** `buyside_rating` + `estimate_revision` are
+  scaffolded `signal_type`s with no free data path (FMP analyst is Ultimate-
+  gated). The panel names them as fast-follows; it never invents the data.
+- **Investor days extend the calendar.** The `investor_day` feed reuses the
+  `expected_earnings` calendar machinery (`record_investor_day` is the writer
+  the IR-events scrape calls), materialized into `signals.event_date` rows —
+  not a greenfield event store. Post-event takeaway summarization is a later
+  owner; the substrate STORES the event rows it will summarize.
+
+---
+
 ## Appendix A — fresh-eyes audit (2026-06-11): historical note
 
 > **Superseded — no longer the source of truth.** This appendix once held a

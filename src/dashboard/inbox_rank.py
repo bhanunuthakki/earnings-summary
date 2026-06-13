@@ -46,6 +46,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from signals.store import SIGNAL_CONSENSUS_RATING
+
 if TYPE_CHECKING:
     from dashboard.inbox import InboxItem
 
@@ -378,6 +380,34 @@ def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str
     return {int(r[0]): (str(r[1] or "").lower(), str(r[2] or "").lower()) for r in rows}
 
 
+def _signal_types_by_news(db_path: Path | None, news_ids: list[int]) -> dict[int, str]:
+    """news.id → signals.signal_type for the mirrored diet rows (alembic 0095).
+
+    The diet substrate mirrors every `news` row into `signals` with a TYPE
+    stored at INGEST. ``_categorize`` reads that stored type so a rating change
+    is identified by IDENTITY (Law 1 — identity over source), not by re-sniffing
+    the headline at render time. Best-effort: a pre-0095 DB (no `signals` table)
+    → ``{}``, and the source-feed / headline-regex legs stay the fallback for
+    un-mirrored rows."""
+    if db_path is None or not news_ids or not Path(db_path).exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        marks = ",".join("?" for _ in news_ids)
+        rows = conn.execute(
+            f"SELECT news_id, signal_type FROM signals WHERE news_id IN ({marks})",
+            [int(i) for i in news_ids],
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {int(r[0]): str(r[1]) for r in rows if r[0] is not None}
+
+
 def _alert_news_evidence(item: InboxItem) -> tuple[int | None, str]:
     """(news_id, headline) from a material_news alert's evidence_json."""
     if item.alert is None or not item.alert.evidence_json:
@@ -411,6 +441,7 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
             if news_id is not None:
                 news_ids.append(news_id)
     meta = _news_meta(db_path, news_ids)
+    signal_types = _signal_types_by_news(db_path, news_ids)
 
     out: list[str] = []
     for idx, it in enumerate(items):
@@ -419,7 +450,16 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
             if it.title == "material_news":
                 news_id, headline = evidence.get(idx, (None, ""))
                 source, source_feed = meta.get(news_id or -1, ("", ""))
-                if source_feed in _GRADES_SOURCE_FEEDS:
+                # Identity over source (Law 1): the ``consensus_rating``
+                # signal_type the diet substrate STORED at ingest is
+                # authoritative — it types the alert as a rating change without
+                # the render-time headline regex. The ``source_feed`` grades
+                # leg is the fallback for un-mirrored (pre-0095) rows; both land
+                # in Rating changes, so they share the branch.
+                if (
+                    signal_types.get(news_id or -1) == SIGNAL_CONSENSUS_RATING
+                    or source_feed in _GRADES_SOURCE_FEEDS
+                ):
                     category = CATEGORY_RATING
                 elif source_feed == _EDGAR_8K_FEED:
                     category = _edgar_8k_category(headline)
