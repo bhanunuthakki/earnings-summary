@@ -306,6 +306,11 @@ matcher, Opus-summarize on a hit). All ride the `news`/`signals` tables via new
   entry threshold (fewer candidates generated) AND cap the render top-N. S6 owns both.
 - **Ask font mismatch** beyond the input row (`.ask-turn-*`/`.vx-row` sublabels): S8 fixes the
   input row; the other tiers are asserted legitimate role distinctions — confirm with the owner.
+- **Peer *selection* (vs steering)** — S5 (row 2) made the peer panel steerable + added a
+  quality override, but the *generator* is still the FMP sector/cap screen (`load_peer_comp`),
+  the actual root cause of the "shit peers" complaint. The fix — an LLM `peer_selection` call
+  for business-model comparables — is **spec'd, not built**: `directives/peer_selection_llm.md`,
+  one dedicated session (owner decision 2026-06-13).
 
 ## 9. Status (2026-06-12)
 
