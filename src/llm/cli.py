@@ -130,6 +130,13 @@ LLM_MODELS: dict[str, str] = {
     # correct $145B insurance-asset figure where Opus misstated it). Switched
     # down to Sonnet for ~40% lower cost at equal-or-better quality.
     "company_description": DEFAULT_MODEL,
+    # Peer selection — the generator behind the §4 peer-comp panel
+    # (src/compute/peer_selection.py, directives/peer_selection_llm.md). Proposes
+    # the 6-10 best business-model comparables (replacing the FMP sector/cap
+    # screen's wrong head). Starts at Sonnet; the peer_selection eval golden set
+    # decides Sonnet-vs-Opus empirically rather than by belief. One cached call
+    # per ticker on the LLM build — cost bounded.
+    "peer_selection": DEFAULT_MODEL,
     # Platform diagram is a narrowly-scoped JSON-output task (one diagram
     # string + one caption string). Sonnet was taking 6-20 min per call and
     # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.

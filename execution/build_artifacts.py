@@ -33,6 +33,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
 import ticker_settings  # noqa: E402
+from compute.peer_selection import (  # noqa: E402
+    extract_for_ticker as _extract_peer_selection,
+)
 from compute.segment_definitions import (  # noqa: E402
     extract_for_ticker as _extract_segment_definitions,
 )
@@ -140,6 +143,39 @@ def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
                 "error": f"{type(e).__name__}: {e}",
             },
         )
+    finally:
+        conn.close()
+
+
+def _ensure_peer_selection(ticker: str, repo_root: Path) -> None:
+    """Idempotently populate data/peer_selection/<T>.json before render (LLM
+    builds only).
+
+    Keyed on a hash of the LLM inputs (name + business description + segments +
+    sector/industry); a fast no-op when unchanged. On a fresh input it fires one
+    peer_selection call (~Sonnet) for business-model comparables and a best-effort
+    free-tier FMP fetch of each suggestion's fundamentals. Failures don't abort
+    the build — the renderer falls back to the FMP sector/cap screen for this
+    ticker (directives/peer_selection_llm.md)."""
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        _emit("peer_selection_skipped", {"ticker": ticker, "reason": "no DB"})
+        return
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        result = _extract_peer_selection(ticker, repo_root, conn)
+        _emit(
+            "peer_selection_refreshed",
+            {
+                "ticker": ticker,
+                "suggested": len(result.suggestions),
+                "fetched": len(result.fetched_peers),
+                "skipped": result.skipped_reason,
+            },
+        )
+    except Exception as e:
+        _emit("peer_selection_error", {"ticker": ticker, "error": f"{type(e).__name__}: {e}"})
     finally:
         conn.close()
 
@@ -365,6 +401,13 @@ def _build_one(
     # ticker_specific block is fresh. Subprocess-isolated; failures land
     # in stderr but don't abort the build.
     _run_ticker_specific_extractors(ticker, repo_root)
+
+    # LLM business-model peer selection (the §4 peer-comp generator). LLM build
+    # only — it makes an LLM call + a free-tier FMP fetch; input-sha-keyed so
+    # it's a fast no-op when the inputs are unchanged. The renderer degrades to
+    # the FMP screen when the cache is absent, so this is purely additive.
+    if enable_llm:
+        _ensure_peer_selection(ticker, repo_root)
 
     # Persistent per-ticker override: the dashboard's "always ignore caps" toggle
     # (ticker_settings.bypass_budget) ORs with the one-shot --force-budget-bypass.
