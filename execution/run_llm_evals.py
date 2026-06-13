@@ -56,7 +56,14 @@ GOLDEN_PURPOSES = (
     "ask_claim_grounding",
     "injection_canaries",
 )
-AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar", "peer_selection")
+AUDIT_PURPOSES = (
+    "bear_case",
+    "transcript_summary",
+    "advisor_next_dollar",
+    "peer_selection",
+    "earnings_themes_split",
+    "qa_topics",
+)
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 
 

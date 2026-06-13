@@ -83,6 +83,15 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # peer-count coverage. Corpus = data/peer_selection/<T>.json files written
     # by compute.peer_selection.extract_for_ticker on the --enable-llm build.
     "peer_selection": AuditSpec("peer_selection", RUBRICS_DIR / "peer_selection.md"),
+    # Earnings themes split: cross-quarter prepared-remarks vs Q&A theme
+    # rollup. Corpus = data/earnings_themes/<T>.json files written by
+    # report.sections.earnings on the --enable-llm build.
+    "earnings_themes_split": AuditSpec(
+        "earnings_themes_split", RUBRICS_DIR / "earnings_themes_split.md"
+    ),
+    # Q&A topic labels: the JSON array of per-question topic/tag pairs
+    # produced by generate_qa_topics per quarter. Corpus = data/qa_topics/<T>.json.
+    "qa_topics": AuditSpec("qa_topics", RUBRICS_DIR / "qa_topics.md"),
 }
 
 _THRESHOLD_RX = re.compile(r"^Pass threshold:\s*([0-9.]+)\s*$", re.MULTILINE)

@@ -146,6 +146,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # RSS description copy. Bump when _build_prompt is materially rewritten and
     # re-run the golden-set eval (evals/golden/podcast_takeaway_summary.json).
     "podcast_takeaway_summary": "v1",
+    # Rubric-audited prose purposes (Chip 2). Bump when the generating prompt
+    # in llm_client.extract_qa_vs_prepared_themes / generate_qa_topics is
+    # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.
+    "earnings_themes_split": "v1",
+    "qa_topics": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

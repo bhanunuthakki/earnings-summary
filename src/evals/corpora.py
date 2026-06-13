@@ -265,6 +265,91 @@ def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_earnings_themes_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every cached earnings-themes artifact, newest mtime first.
+
+    Reads from ``data/earnings_themes/<TICKER>.json`` files written by
+    ``report.sections.earnings._write_themes_cache`` on the --enable-llm
+    build. The rubric judge scores the prepared-vs-Q&A theme split for
+    distinctiveness, cross-quarter grounding, evidence specificity, and
+    correct lane assignment.
+
+    Missing directory or no files → empty corpus (nothing generated yet).
+    """
+    out: list[AuditItem] = []
+    themes_dir = Path(repo_root) / "data" / "earnings_themes"
+    if not themes_dir.exists():
+        return out
+    for path in sorted(themes_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        ticker = path.stem.upper()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        raw_dict = cast("dict[str, object]", raw)
+        payload = raw_dict.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        content = json.dumps(payload, indent=2, ensure_ascii=False)
+        out.append(
+            AuditItem(
+                item_id=f"earnings_themes:{ticker}",
+                label=f"earnings_themes_split/{ticker}",
+                ticker=ticker,
+                content=_clip(content),
+                produced_at=_mtime_naive_utc(path),
+            )
+        )
+    return out
+
+
+def load_qa_topics_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every cached Q&A-topic-label set, newest mtime first.
+
+    Reads from ``data/qa_topics/<TICKER>.json`` files written by
+    ``report.sections.qa_roster._save_topics_cache`` on the --enable-llm
+    build. The file contains a ``by_key`` dict mapping cache-key hashes to
+    topic arrays; each entry becomes one AuditItem scored independently so
+    per-quarter label quality is visible.
+
+    Missing directory or no files → empty corpus (nothing generated yet).
+    """
+    out: list[AuditItem] = []
+    topics_dir = Path(repo_root) / "data" / "qa_topics"
+    if not topics_dir.exists():
+        return out
+    for path in sorted(topics_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        ticker = path.stem.upper()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        raw_dict = cast("dict[str, object]", raw)
+        by_key = raw_dict.get("by_key")
+        if not isinstance(by_key, dict):
+            continue
+        for i, (_cache_key, topics) in enumerate(
+            cast("dict[str, object]", by_key).items()
+        ):
+            if not isinstance(topics, list):
+                continue
+            content = json.dumps(topics, indent=2, ensure_ascii=False)
+            out.append(
+                AuditItem(
+                    item_id=f"qa_topics:{ticker}:{i}",
+                    label=f"qa_topics/{ticker} entry {i}",
+                    ticker=ticker,
+                    content=_clip(content),
+                    produced_at=_mtime_naive_utc(path),
+                )
+            )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -273,6 +358,8 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
     "peer_selection": load_peer_selection_corpus,
+    "earnings_themes_split": load_earnings_themes_corpus,
+    "qa_topics": load_qa_topics_corpus,
 }
 
 
