@@ -146,10 +146,12 @@ _gemini_neutral_cwd_cache: str | None = None
 
 
 def gemini_allowed_purposes() -> frozenset[str]:
-    """The effective routing allowlist: the code-level eval-gated frozenset
-    plus any purposes in the GEMINI_BACKEND_PURPOSES env var (comma-separated,
-    local-trial escape hatch). Re-read per call so a test or an operator
-    shell can flip it without a process restart."""
+    """Deprecated. Production routing now dispatches by model family (set a
+    Gemini model ID in LLM_MODELS / model_pin_overrides to route a purpose to
+    Gemini). This function is retained for backward-compat; call_llm no longer
+    consults it. Returns the code-level frozenset plus the env-var escape hatch
+    (comma-separated list in GEMINI_BACKEND_PURPOSES) — both still empty by
+    default."""
     raw = os.environ.get(GEMINI_BACKEND_PURPOSES_ENV_VAR, "")
     env_purposes = {p.strip() for p in raw.split(",") if p.strip()}
     return GEMINI_BACKEND_ALLOWED_PURPOSES | frozenset(env_purposes)
@@ -281,16 +283,18 @@ def parse_gemini_json_output(stdout: str) -> tuple[str, dict[str, object]]:
     return response, payload_dict
 
 
-def usage_meta_from_gemini_stats(payload: dict[str, object]) -> dict[str, object]:
+def usage_meta_from_gemini_stats(
+    payload: dict[str, object], *, model: str | None = None
+) -> dict[str, object]:
     """Gemini session stats → the claude-shaped usage meta the shared ledger
     writer (llm.ledger.record_llm_call → usage_from_json_meta) consumes.
 
     Token mapping, summed across every model the session touched (the
     consumer tier can transparently reroute pro → flash under load):
     ``tokens.prompt`` → input_tokens, ``tokens.candidates`` → output_tokens,
-    ``tokens.cached`` → cache_read_input_tokens. Cost is pinned to $0.0 —
-    subscription billing has no marginal per-call cost, and an explicit zero
-    (vs NULL) marks "measured: free" in spend reports and budget sums.
+    ``tokens.cached`` → cache_read_input_tokens. Cost is computed from the
+    public API list price for ``model`` (pass the resolved model id from the
+    caller). Unknown or absent model → 0.0 (cost unknown, not free).
     Defensive throughout: junk stats yield zero counts, never a raise.
     """
     prompt_tokens = 0
@@ -310,13 +314,15 @@ def usage_meta_from_gemini_stats(payload: dict[str, object]) -> dict[str, object
                 prompt_tokens += _token_count(tokens_dict, "prompt")
                 candidate_tokens += _token_count(tokens_dict, "candidates")
                 cached_tokens += _token_count(tokens_dict, "cached")
+    from llm.model_ladder import estimated_call_usd
+
     return {
         "usage": {
             "input_tokens": prompt_tokens,
             "output_tokens": candidate_tokens,
             "cache_read_input_tokens": cached_tokens,
         },
-        "total_cost_usd": 0.0,
+        "total_cost_usd": estimated_call_usd(model, prompt_tokens, candidate_tokens),
     }
 
 
@@ -425,7 +431,7 @@ def call_gemini(
             scope=scope,
             run_id=run_id,
             response_text=text,
-            meta=usage_meta_from_gemini_stats(meta),
+            meta=usage_meta_from_gemini_stats(meta, model=resolved_model),
         )
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:

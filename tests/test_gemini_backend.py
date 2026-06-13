@@ -3,21 +3,22 @@
 # These tests deliberately reach module-private surface (_gemini_subprocess_env,
 # _NULL_CONTEXT_FILENAME, compare_backends._smoke_prompts) — that IS the unit
 # under test. Module-scoped directive per the repo's cli.py precedent.
-"""Tests for the eval-gated Gemini second backend (src/llm/gemini_backend.py)
-and call_llm's backend-selection logic.
+"""Tests for the Gemini second backend (src/llm/gemini_backend.py) and
+call_llm's model-family-based backend-selection logic.
 
 Every test monkeypatches subprocess.run (or the backend entry points) — the
 suite never spawns a real CLI and never spends. Coverage:
 
-  * the eval gate: GEMINI_BACKEND_ALLOWED_PURPOSES ships EMPTY, env-var merge;
-  * backend selection in call_llm (default Claude, allowlist routing,
-    explicit force, explicit-model pin stays on Claude, unknown backend);
-  * failure policy (allowlist-routed operational failure degrades to Claude;
+  * legacy allowlist symbols (GEMINI_BACKEND_ALLOWED_PURPOSES, env-var merge)
+    retained for backward-compat; call_llm no longer consults them;
+  * backend selection in call_llm (model-family dispatch: Gemini model id →
+    Gemini backend, Claude model id → Claude backend; explicit backend= force);
+  * failure policy (Gemini operational failure degrades to Claude;
     forced-gemini failures raise; hard stops always propagate);
   * the no-silent-API-key guard (subprocess env strips keys, forces consumer
     OAuth, trusts the neutral workspace, suppresses context files);
   * the subprocess contract (stdin prompt, UTF-8, absolute path, JSON parse,
-    token/usage mapping, $0 subscription cost, ledger rows, auth-failure →
+    token/usage mapping, real API-price cost, ledger rows, auth-failure →
     LLMSetupError classification).
 """
 
@@ -96,14 +97,14 @@ def _run_returning(stdout: str) -> Callable[..., subprocess.CompletedProcess[str
 
 
 # ---------------------------------------------------------------------------
-# The eval gate: allowlist ships empty
+# Legacy allowlist symbols (retained for backward-compat; routing no longer
+# uses them — Gemini is now selected by model family, not by allowlist).
 
 
 def test_allowlist_ships_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE GATE. Nothing routes to Gemini until judges pass a purpose — the
-    code-level allowlist must be empty and stay empty until an eval signs
-    off (directives/gemini_backend.md). If this test fails because someone
-    added a purpose, the PR must link the eval verdict."""
+    """GEMINI_BACKEND_ALLOWED_PURPOSES is the legacy routing allowlist; it ships
+    empty and stays empty (routing is now model-family-based). Kept as a canary:
+    if something accidentally adds to this set, the PR should document why."""
     monkeypatch.delenv(gemini_backend.GEMINI_BACKEND_PURPOSES_ENV_VAR, raising=False)
     assert not gemini_backend.GEMINI_BACKEND_ALLOWED_PURPOSES
     assert not gemini_backend.gemini_allowed_purposes()
@@ -168,8 +169,12 @@ def test_call_llm_defaults_to_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == ["claude"]
 
 
-def test_call_llm_routes_allowlisted_purpose_to_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(gemini_backend.GEMINI_BACKEND_PURPOSES_ENV_VAR, "viewspec_compile")
+def test_call_llm_gemini_model_id_routes_to_gemini_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When LLM_MODELS pins a purpose to a Gemini model id, call_llm dispatches
+    to the Gemini backend and passes the resolved model id explicitly."""
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
     seen: dict[str, object] = {}
 
     def _fake_gemini(prompt: str, **kwargs: object) -> str:
@@ -191,7 +196,7 @@ def test_call_llm_routes_allowlisted_purpose_to_gemini(monkeypatch: pytest.Monke
     assert seen["ticker"] == "NU"
     assert seen["scope"] == "s"
     assert seen["run_id"] == "r1"
-    assert seen["model"] is None  # purpose-resolved inside call_gemini
+    assert seen["model"] == "gemini-3.5-flash"  # resolved in call_llm, passed explicitly
 
 
 def test_call_llm_explicit_backend_forces_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,10 +213,8 @@ def test_call_llm_explicit_backend_forces_gemini(monkeypatch: pytest.MonkeyPatch
     assert seen["model"] == "gemini-2.5-flash"  # explicit model rides through
 
 
-def test_call_llm_explicit_model_pin_stays_on_claude(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The allowlist only reroutes purpose-resolved calls: an explicit Claude
-    model id (a debugging pin) must never be sent to Gemini."""
-    monkeypatch.setenv(gemini_backend.GEMINI_BACKEND_PURPOSES_ENV_VAR, "bear_case")
+def test_call_llm_explicit_claude_model_stays_on_claude(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit Claude model id dispatches to Claude regardless of purpose."""
     claude_seen: dict[str, object] = {}
 
     def _fake_claude(prompt: str, **kw: object) -> str:
@@ -221,11 +224,31 @@ def test_call_llm_explicit_model_pin_stays_on_claude(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(llm_cli, "_call_claude", _fake_claude)
 
     def _fail(*args: object, **kwargs: object) -> str:
-        raise AssertionError("explicit-model calls must stay on claude")
+        raise AssertionError("claude model id must never route to gemini")
 
     monkeypatch.setattr(gemini_backend, "call_gemini", _fail)
     assert llm_cli.call_llm("p", purpose="bear_case", model="claude-opus-4-7") == "C"
     assert claude_seen["model"] == "claude-opus-4-7"
+
+
+def test_call_llm_explicit_gemini_model_routes_to_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit Gemini model id dispatches to the Gemini backend via family
+    detection, without needing backend='gemini' explicitly."""
+    seen: dict[str, object] = {}
+
+    def _fake_gemini(prompt: str, **kw: object) -> str:
+        seen.update(kw)
+        return "G"
+
+    monkeypatch.setattr(gemini_backend, "call_gemini", _fake_gemini)
+
+    def _fail(prompt: str, **kw: object) -> str:
+        raise AssertionError("gemini model id must not route to claude")
+
+    monkeypatch.setattr(llm_cli, "_call_claude", _fail)
+    out = llm_cli.call_llm("p", purpose="bear_case", model="gemini-3.1-pro-preview")
+    assert out == "G"
+    assert seen["model"] == "gemini-3.1-pro-preview"
 
 
 def test_call_llm_unknown_backend_raises() -> None:
@@ -233,13 +256,12 @@ def test_call_llm_unknown_backend_raises() -> None:
         llm_cli.call_llm("p", purpose="bear_case", backend="grok")
 
 
-def test_allowlisted_gemini_operational_failure_falls_back_to_claude(
+def test_gemini_model_pin_operational_failure_falls_back_to_claude(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Enabling a purpose must never be able to break the pipeline: a
-    transient Gemini failure on an allowlist-routed call degrades to the
-    Claude path (which records its own ledger rows)."""
-    monkeypatch.setenv(gemini_backend.GEMINI_BACKEND_PURPOSES_ENV_VAR, "viewspec_compile")
+    """Pinning a purpose to Gemini must never break the pipeline: a transient
+    Gemini failure degrades to Claude (which records its own ledger rows)."""
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
 
     def _boom(prompt: str, **kw: object) -> str:
         raise RuntimeError("gemini transient failure")
@@ -253,8 +275,8 @@ def test_allowlisted_gemini_operational_failure_falls_back_to_claude(
 
     monkeypatch.setattr(llm_cli, "_call_claude", _fake_claude)
     assert llm_cli.call_llm("p", purpose="viewspec_compile") == "C"
-    # Claude resolves its own model for the purpose (Haiku tier here).
-    assert claude_seen["model"] == llm_cli.FAST_CLASSIFIER_MODEL
+    # The purpose's pinned model is Gemini, so Claude fallback uses DEFAULT_MODEL.
+    assert claude_seen["model"] == llm_cli.DEFAULT_MODEL
 
 
 def test_forced_gemini_operational_failure_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,9 +307,8 @@ def test_gemini_hard_stops_propagate_without_claude_fallback(
     monkeypatch: pytest.MonkeyPatch, exc: Exception
 ) -> None:
     """Setup + budget errors are hard stops (llm.cli.is_hard_stop): degrading
-    an allowlist-routed call to Claude would mask an operator-actionable
-    problem, so they propagate even though Claude could have answered."""
-    monkeypatch.setenv(gemini_backend.GEMINI_BACKEND_PURPOSES_ENV_VAR, "viewspec_compile")
+    to Claude would mask an operator-actionable problem, so they propagate."""
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
 
     def _boom(prompt: str, **kw: object) -> str:
         raise exc
@@ -369,7 +390,7 @@ def test_call_gemini_subprocess_contract(monkeypatch: pytest.MonkeyPatch) -> Non
 # Subprocess outcomes: parsing, ledger, failure classification
 
 
-def test_call_gemini_records_usage_and_zero_cost(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_call_gemini_records_usage_and_real_cost(monkeypatch: pytest.MonkeyPatch) -> None:
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
     rows: list[dict[str, object]] = []
@@ -393,7 +414,13 @@ def test_call_gemini_records_usage_and_zero_cost(monkeypatch: pytest.MonkeyPatch
     assert row["run_id"] == "r9"
     assert row["response_text"] == "answer text"
     meta = cast("dict[str, object]", row["meta"])
-    assert meta["total_cost_usd"] == 0.0  # subscription: measured-free, not unknown
+    # Real API pricing: gemini-3.1-pro-preview $1.25/$10.00 per MTok.
+    # 1010 input + 205 output tokens → non-zero cost.
+    from llm.model_ladder import estimated_call_usd
+
+    expected = estimated_call_usd(gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL, 1010, 205)
+    assert meta["total_cost_usd"] == pytest.approx(expected)
+    assert expected > 0.0
     usage = cast("dict[str, object]", meta["usage"])
     assert usage["input_tokens"] == 1010
     assert usage["output_tokens"] == 205

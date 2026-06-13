@@ -37,12 +37,17 @@ GPRO = "gemini-3.1-pro-preview"
 
 
 def test_rank_ordering() -> None:
-    # Gemini (subscription, marginal $0) is cheapest; then haiku < sonnet < opus.
-    assert model_ladder.model_rank(GFLASH) == 0.0
-    assert model_ladder.model_rank(GPRO) == 0.0
-    assert model_ladder.model_rank(HAIKU) is not None
-    assert model_ladder.model_rank(HAIKU) < model_ladder.model_rank(SONNET)  # type: ignore[operator]
-    assert model_ladder.model_rank(SONNET) < model_ladder.model_rank(OPUS)  # type: ignore[operator]
+    # Ladder (cheapest first): Gemini Flash < Haiku < Gemini Pro < Sonnet < Opus.
+    gflash_rank = model_ladder.model_rank(GFLASH)
+    gpro_rank = model_ladder.model_rank(GPRO)
+    haiku_rank = model_ladder.model_rank(HAIKU)
+    sonnet_rank = model_ladder.model_rank(SONNET)
+    opus_rank = model_ladder.model_rank(OPUS)
+    assert None not in (gflash_rank, gpro_rank, haiku_rank, sonnet_rank, opus_rank)
+    assert gflash_rank < haiku_rank  # type: ignore[operator]
+    assert haiku_rank < gpro_rank  # type: ignore[operator]
+    assert gpro_rank < sonnet_rank  # type: ignore[operator]
+    assert sonnet_rank < opus_rank  # type: ignore[operator]
 
 
 def test_is_cheaper() -> None:
@@ -60,13 +65,15 @@ def test_is_cheaper_unknown_model() -> None:
 def test_cheaper_candidates_sonnet() -> None:
     cands = model_ladder.cheaper_candidates(SONNET)
     assert set(cands) == {GFLASH, GPRO, HAIKU}
-    assert cands[-1] == HAIKU  # cheapest-first -> the priciest "cheaper" tier is last
+    # Cheapest-first: Flash < Haiku < Pro (all cheaper than Sonnet)
+    assert cands[0] == GFLASH
+    assert cands[-1] == GPRO  # priciest of the three cheaper options
     assert OPUS not in cands  # opus is dearer, not a downgrade
 
 
 def test_cheaper_candidates_haiku_has_only_gemini() -> None:
     cands = model_ladder.cheaper_candidates(HAIKU)
-    assert set(cands) == {GFLASH, GPRO}  # no cheaper Claude tier than Haiku
+    assert set(cands) == {GFLASH}  # only Gemini Flash is cheaper than Haiku; Pro > Haiku
     assert model_ladder.cheaper_candidates(HAIKU, include_gemini=False) == []
 
 
@@ -81,8 +88,10 @@ def test_cheaper_candidates_unknown_incumbent() -> None:
 def test_estimated_call_usd() -> None:
     # Sonnet: 25k in @ $3/M + 5k out @ $15/M = 0.075 + 0.075 = 0.15.
     assert model_ladder.estimated_call_usd(SONNET, 25_000, 5_000) == pytest.approx(0.15)
-    assert model_ladder.estimated_call_usd(GPRO, 25_000, 5_000) == 0.0  # subscription
+    # Gemini Pro: 25k in @ $1.25/M + 5k out @ $10/M = 0.03125 + 0.05 = 0.08125.
+    assert model_ladder.estimated_call_usd(GPRO, 25_000, 5_000) == pytest.approx(0.08125)
     assert model_ladder.estimated_call_usd("unknown", 1, 1) == 0.0
+    assert model_ladder.estimated_call_usd(None, 1, 1) == 0.0
 
 
 # ---------------------------------------------------------------------------
