@@ -464,6 +464,18 @@ def sync_position_lifecycle(
                         (price, now, int(row["id"])),
                     )
 
+        # Materialize the per-ticker book weights from the SAME live snapshot so
+        # the inbox render reads them from disk instead of re-fetching the
+        # tracker on the GET / boot path (directive §4 S12). Best-effort: a cache
+        # write failure must not fail the reconcile, and an offline snapshot
+        # leaves the last-good weights in place (materialize_weights no-ops).
+        try:
+            from portfolio_weights import materialize_weights
+
+            materialize_weights(repo_root, portfolio)
+        except Exception:  # pragma: no cover - cache write is non-critical
+            log.warning({"event": "position_weights_materialize_failed"})
+
         conn.commit()
         return {
             "opened": opened,

@@ -233,6 +233,39 @@ def test_open_uses_buy_transaction_then_avg_cost(repo: Path) -> None:
     assert meli.entry_price == 1800.0  # avg-cost fallback
 
 
+def test_reconciler_materializes_position_weights(repo: Path) -> None:
+    """Stage 0c reconcile writes the weight cache the inbox render reads from
+    disk, so the render never re-fetches the tracker (directive S12 latency
+    fix). Weights are percent → fraction, upper-cased."""
+    import portfolio_weights as pw
+
+    _set_portfolio(repo, ["NU", "MELI"])
+    tracker = _online(
+        positions=[
+            LivePosition("NU", None, 1.0, None, None, None, 30.0),
+            LivePosition("MELI", None, 1.0, None, None, None, 4.0),
+        ]
+    )
+    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    assert pw.read_materialized_weights(repo) == {"NU": 0.30, "MELI": 0.04}
+
+
+def test_reconciler_offline_preserves_last_good_weights(repo: Path) -> None:
+    """An OFFLINE reconcile leaves the prior cache intact — a transient tracker
+    outage must not blank the render's ranking factor."""
+    import portfolio_weights as pw
+
+    _set_portfolio(repo, ["NU"])
+    sync_position_lifecycle(
+        db_path=_db(repo),
+        portfolio=_online(positions=[LivePosition("NU", None, 1.0, None, None, None, 50.0)]),
+    )
+    assert pw.read_materialized_weights(repo) == {"NU": 0.50}
+
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    assert pw.read_materialized_weights(repo) == {"NU": 0.50}  # unchanged
+
+
 def test_close_on_portfolio_exit_with_sell_enrichment(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())

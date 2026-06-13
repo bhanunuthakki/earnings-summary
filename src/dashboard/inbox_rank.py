@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -58,7 +57,6 @@ __all__ = [
     "SEMANTIC_ADVISOR_MEMO",
     "annotate_and_rank",
     "inbox_label",
-    "live_position_weights",
     "note_semantic_kind",
 ]
 
@@ -290,47 +288,67 @@ _THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "breach": 1.5
 
 
 # ----------------------------------------------------------------------------
-# Live position weights (best-effort, TTL-cached)
+# DB lookups (best-effort, off the render hot path)
 # ----------------------------------------------------------------------------
+#
+# The render must not block on the network or re-scan growing tables every
+# build (directive §4 S12). Two moves:
+#   * position weights come from the morning-pipeline-materialized disk cache
+#     (``portfolio_weights.read_materialized_weights``), NOT the live tracker;
+#   * ``_thesis_tones`` (a full ``thesis_evaluations`` scan that grows with
+#     every evaluation) and ``_news_meta`` are memoized per (resolved path, file
+#     mtime): an unchanged DB serves repeated renders for free, and any committed
+#     write busts the memo by bumping the mtime — no time-based staleness window,
+#     no schema. A scoped two-read cache, NOT a universal spine.
 
-_WEIGHTS_TTL_SECONDS = 300.0
-_weights_cache: tuple[float, dict[str, float]] | None = None
+_TONES_MEMO: dict[str, tuple[int, dict[str, str]]] = {}
+_NEWS_META_MEMO: dict[tuple[str, tuple[int, ...]], tuple[int, dict[int, tuple[str, str]]]] = {}
 
 
-def live_position_weights() -> dict[str, float]:
-    """Ticker → fraction-of-book from the companion tracker, ``{}`` when the
-    tracker is unreachable (the scorer then falls back to equal weighting).
-    Failures are cached for the same TTL as successes so an offline tracker
-    costs one ~1s connect-refusal per 5 minutes, not one per render."""
-    global _weights_cache
-    now = time.monotonic()
-    if _weights_cache is not None and now - _weights_cache[0] < _WEIGHTS_TTL_SECONDS:
-        return _weights_cache[1]
-    weights: dict[str, float] = {}
+def _db_mtime_ns(db_path: Path) -> int | None:
+    """File mtime in ns — the memo invalidation key. ``None`` when the file is
+    gone (a vanished DB busts the memo, which is the safe default)."""
     try:
-        from integrations.portfolio_tracker_client import fetch_live_portfolio
-
-        live = fetch_live_portfolio()
-        if live.available:
-            for p in live.positions:
-                if p.ticker and p.percent_of_portfolio is not None:
-                    weights[p.ticker.upper()] = max(p.percent_of_portfolio, 0.0) / 100.0
-    except Exception:  # pragma: no cover - any import/transport failure → equal-weight
-        weights = {}
-    _weights_cache = (now, weights)
-    return weights
+        return db_path.stat().st_mtime_ns
+    except OSError:
+        return None
 
 
-# ----------------------------------------------------------------------------
-# DB lookups (best-effort)
-# ----------------------------------------------------------------------------
+def _materialized_weights(db_path: Path | None) -> dict[str, float]:
+    """Position weights for the ranking factor, read from the morning-pipeline
+    disk cache (``data/portfolio_weights.json`` beside the DB). Never touches
+    the network; ``{}`` when no DB or no cache → equal weighting. ``db_path`` is
+    ``<repo_root>/data/portfolio.db``, so the repo root is two parents up."""
+    if db_path is None:
+        return {}
+    try:
+        from portfolio_weights import read_materialized_weights
+
+        return read_materialized_weights(Path(db_path).resolve().parent.parent)
+    except Exception:  # pragma: no cover - a cache read must never fail a render
+        return {}
 
 
 def _thesis_tones(db_path: Path | None) -> dict[str, str]:
     """Latest thesis-evaluation tone per ticker: 'ok' | 'warn' | 'breach'.
-    Missing DB/table → {} (factor 1.0 everywhere)."""
-    if db_path is None or not Path(db_path).exists():
+    Missing DB/table → {} (factor 1.0 everywhere). Memoized per (path, mtime)."""
+    if db_path is None:
         return {}
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+    key = str(path.resolve())
+    mtime = _db_mtime_ns(path)
+    cached = _TONES_MEMO.get(key)
+    if cached is not None and mtime is not None and cached[0] == mtime:
+        return cached[1]
+    tones = _compute_thesis_tones(path)
+    if mtime is not None:
+        _TONES_MEMO[key] = (mtime, tones)
+    return tones
+
+
+def _compute_thesis_tones(db_path: Path) -> dict[str, str]:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
@@ -360,8 +378,27 @@ def _thesis_tones(db_path: Path | None) -> dict[str, str]:
 
 
 def _news_meta(db_path: Path | None, news_ids: list[int]) -> dict[int, tuple[str, str]]:
-    """news.id → (source, source_feed), lowercased, for material_news refinement."""
-    if db_path is None or not news_ids or not Path(db_path).exists():
+    """news.id → (source, source_feed), lowercased, for material_news refinement.
+    Memoized per (path, mtime, requested-id-set) — the same stream's
+    material-news ids repeat across re-renders of an unchanged DB."""
+    if db_path is None or not news_ids:
+        return {}
+    path = Path(db_path)
+    if not path.exists():
+        return {}
+    key = (str(path.resolve()), tuple(sorted(set(int(i) for i in news_ids))))
+    mtime = _db_mtime_ns(path)
+    cached = _NEWS_META_MEMO.get(key)
+    if cached is not None and mtime is not None and cached[0] == mtime:
+        return cached[1]
+    meta = _compute_news_meta(path, list(key[1]))
+    if mtime is not None:
+        _NEWS_META_MEMO[key] = (mtime, meta)
+    return meta
+
+
+def _compute_news_meta(db_path: Path, news_ids: list[int]) -> dict[int, tuple[str, str]]:
+    if not news_ids:
         return {}
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -551,11 +588,14 @@ def annotate_and_rank(
     """Assign category/score/score_why to every item and order the stream
     flat: score descending, newest-first on ties (recency lives inside the
     score as decay, not as a sort tier). ``position_weights`` is ticker →
-    fraction-of-book; ``None`` means "try the live tracker" (TTL-cached,
-    equal-weight when offline) — pass ``{}`` to force equal weighting."""
+    fraction-of-book; ``None`` reads the morning-pipeline-materialized weight
+    cache (``portfolio_weights.read_materialized_weights`` — a disk read, never
+    the live tracker; empty → equal weighting), ``{}`` forces equal weighting."""
     if not items:
         return []
-    weights = dict(position_weights) if position_weights is not None else live_position_weights()
+    weights = (
+        dict(position_weights) if position_weights is not None else _materialized_weights(db_path)
+    )
     tones = _thesis_tones(db_path)
     categories = _categorize(items, db_path)
     annotated: list[InboxItem] = []

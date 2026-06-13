@@ -419,6 +419,40 @@ def list_queued_actions_for_alert(
         conn.close()
 
 
+def list_queued_actions_for_alerts(
+    alert_ids: list[int], db_path: Path | str | None = None
+) -> dict[int, list[QueuedActionRow]]:
+    """Queued actions for many alerts in ONE ``IN`` query — the batched form of
+    ``list_queued_actions_for_alert`` for callers rendering a stream of alerts
+    (the unified inbox builds one row per alert and previously opened a fresh
+    connection + ran one query PER alert: an N+1 on the GET / boot path).
+
+    Returns ``{alert_id: [actions oldest-first]}`` with an entry for EVERY
+    requested id (empty list when an alert has no drafts), so callers can index
+    without a ``.get`` guard. Empty input short-circuits to ``{}`` (no
+    connection opened)."""
+    if not alert_ids:
+        return {}
+    out: dict[int, list[QueuedActionRow]] = {aid: [] for aid in alert_ids}
+    marks = ",".join("?" for _ in alert_ids)
+    conn = _open(db_path)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM queued_actions
+            WHERE alert_id IN ({marks})
+            ORDER BY alert_id ASC, created_at ASC, id ASC
+            """,
+            [int(a) for a in alert_ids],
+        ).fetchall()
+    finally:
+        conn.close()
+    for r in rows:
+        action = _row_to_action(r)
+        out[action.alert_id].append(action)
+    return out
+
+
 def list_pending_actions(
     *,
     user_id: str = DEFAULT_USER_ID,

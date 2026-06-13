@@ -404,6 +404,41 @@ def test_list_queued_actions_for_alert_oldest_first(db_path: Path) -> None:
     assert [r.id for r in rows] == [first.id, second.id]
 
 
+def test_list_queued_actions_for_alerts_batches(db_path: Path) -> None:
+    """The batched IN-query returns the SAME per-alert lists the per-alert
+    function does, in one round trip — the inbox N+1 fix."""
+    a1 = _fire(db_path, signature="sig-batch-1")
+    a2 = _fire(db_path, signature="sig-batch-2")
+    a3 = _fire(db_path, signature="sig-batch-3")  # no actions
+    a1_first = store.queue_action(
+        alert_id=a1.id, action_kind="thesis_update", payload={"o": 1}, db_path=db_path
+    )
+    a1_second = store.queue_action(
+        alert_id=a1.id, action_kind="bear_append", payload={"o": 2}, db_path=db_path
+    )
+    a2_only = store.queue_action(
+        alert_id=a2.id, action_kind="sizing_update", payload={"o": 3}, db_path=db_path
+    )
+
+    batched = store.list_queued_actions_for_alerts([a1.id, a2.id, a3.id], db_path=db_path)
+
+    # Every requested id is present (a3 maps to an empty list — index without a guard).
+    assert set(batched) == {a1.id, a2.id, a3.id}
+    assert [r.id for r in batched[a1.id]] == [a1_first.id, a1_second.id]  # oldest-first
+    assert [r.id for r in batched[a2.id]] == [a2_only.id]
+    assert batched[a3.id] == []
+    # Parity with the per-alert function.
+    for aid in (a1.id, a2.id, a3.id):
+        assert [r.id for r in batched[aid]] == [
+            r.id for r in store.list_queued_actions_for_alert(aid, db_path=db_path)
+        ]
+
+
+def test_list_queued_actions_for_alerts_empty_no_db_touch() -> None:
+    """Empty input short-circuits — no db_path needed, no connection opened."""
+    assert store.list_queued_actions_for_alerts([], db_path=None) == {}
+
+
 # ----------------------------------------------------------------------------
 # compute_signature_sha
 # ----------------------------------------------------------------------------

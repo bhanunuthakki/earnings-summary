@@ -322,6 +322,50 @@ matcher, Opus-summarize on a hit). All ride the `news`/`signals` tables via new
   substrate + S6 + S10 each rebase migrations on the live head and reconcile the signal
   taxonomy with the single arbiter (§6).
 
+### Program close-out — S12b gate resolved (2026-06-13): **signals spine NOT built.**
+
+Waves 1–3 all merged. S12-first-half (`fact_ref` deep-links) shipped (#527). S12b — the
+profiling gate — ran the cheap inbox fixes, re-measured, and resolved the gate. **The
+8-writer signals spine is formally not built**, and the Instrument-Paradigm program closes
+here. The identity-at-write-time rule it would have generalized is already codified
+(design_language §Streams + GEMINI.md, enforced by `inbox_rank`'s shared resolver); the
+spine was always conditional on profiling, and the profile says it would fix the wrong thing.
+
+**What S12b did (the cheap inbox fixes, measured against prod's 726k-fact DB):**
+- Batched the per-alert queued-action N+1 (`list_queued_actions_for_alerts`, one `IN`-query):
+  ~31ms → ~10ms for 3 alerts, and now O(1) in alert count instead of one connection-open each.
+- Moved `live_position_weights` OFF the render path: the morning reconciler (stage 0c,
+  `sync_position_lifecycle`) materializes `data/portfolio_weights.json` from the live
+  snapshot; the inbox render reads that disk cache, never the tracker. Eliminates the
+  **~507ms cold connect-refusal spike** the first render of every process/5-min window paid.
+  Offline reconcile preserves last-good (no blanking on a transient outage).
+- Memoized `_thesis_tones` (a full `thesis_evaluations` scan) + `_news_meta` per (path,
+  mtime): ~24ms → ~0.9ms on repeated renders, auto-busting on any DB write. No schema, no
+  spine — a scoped two-read cache.
+- Extended `execution/render_latency_baseline.py` with `inbox (home rail)` and
+  `boot (GET / full inline)` panels — the S9 harness measured only the cockpit grid and
+  silently omitted the inbox rail GET / also renders inline.
+
+**Re-measure (same harness/DB; machine noisy, so the deterministic floors are what matter):**
+- inbox (home rail): **~80–92ms** — well within budget; the named offenders are gone.
+- boot (GET / full inline): **~1.7–1.9s p50** — STILL misses the sub-500ms target.
+- **The residual offender is NOT the inbox.** It is `research_cockpit._eval_fundamentals`:
+  a **~1.2s** (min 1135ms, deterministic) `ROW_NUMBER()` double-scan of all 726k
+  `financial_facts` rows inside `build_cockpit_rows`. `tier_coverage_summary` is 21ms; the
+  inbox is ~80ms. Even a perfect inbox/spine cannot pull boot under ~1.2s while that scan
+  is on the render path.
+
+**Decision rationale.** The gate ("build the spine only if a profiled render still misses
+target") is satisfied in the letter but not the spirit: the render misses target, but the
+spine targets the *inbox* (rank/dedupe over UNION'd source tables), and the inbox is already
+cheap (~80ms). The spine would save tens of ms and never touch the 1.2s scan. So it is the
+wrong fix — **not built.** Per the directive's "still misses → STOP, recommend, hand to
+owner" branch: the real latency lever is a **separate, owner-go-decision follow-up** —
+precompute per-ticker `rev_yoy` / `fcf_margin` (the eval-table fundamentals) in the morning
+pipeline the same way weights now are, OR add a covering index / narrow the `_eval_fundamentals`
+scan. High confidence (the 1.2s floor is deterministic and reproduces across runs). This is
+out of S12b's named scope (inbox offenders only) and is handed off, not built.
+
 ---
 
 ## 8. Highest-leverage first moves (the critic's ranking)
