@@ -31,11 +31,18 @@ from pathlib import Path
 
 from signals.store import (
     SIGNAL_CONSENSUS_RATING,
+    SIGNAL_GENERAL_NEWS,
+    SIGNAL_MEDIA_APPEARANCE,
     SignalRow,
     load_diet_signals,
     load_forward_agenda,
 )
 from ui.controls import ticker_label
+
+# The non-forward-dated reading lanes shown in the ingest stream: news-backed
+# ratings + news (mirrored) plus media appearances (written direct, free path).
+# Forward-dated investor days have their own lens (the forward agenda).
+_STREAM_TYPES = (SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING, SIGNAL_MEDIA_APPEARANCE)
 
 # Token-only scoped styles (guard-clean: every value is a token — radius via
 # --radius, type via the --fs-* scale, color via palette vars / color-mix).
@@ -62,6 +69,7 @@ _TYPE_PILL: dict[str, tuple[str, str]] = {
     SIGNAL_CONSENSUS_RATING: ("Rating", "k-pill-accent"),
     "general_news": ("News", ""),
     "investor_day": ("Investor day", "k-pill-accent"),
+    SIGNAL_MEDIA_APPEARANCE: ("Podcast", "k-pill-accent"),
 }
 
 
@@ -70,7 +78,7 @@ def render_diet_panel(db_path: Path) -> str:
     disclosed fast-follow note. Pure read over the `signals` substrate; degrades
     to a quiet empty state on a pre-0095 DB (no `signals` table)."""
     today = datetime.now(UTC).date()
-    stream = load_diet_signals(db_path, limit=80)
+    stream = load_diet_signals(db_path, types=_STREAM_TYPES, limit=80)
     agenda = load_forward_agenda(db_path, on_or_after=today, limit=40)
     return "".join(
         [

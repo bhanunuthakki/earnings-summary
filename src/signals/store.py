@@ -22,10 +22,14 @@ The lane model (design_language "Diet-vs-alert"):
     ``signal_type`` (identity over source) to type such an alert, scoped to
     these mirrored types.
 
-  * Three DIET-ONLY types never alert: ``investor_day`` (forward-dated, carries
-    an ``event_date``), and the two disclosed fast-follow scaffolds
-    ``buyside_rating`` / ``estimate_revision`` (no free data path yet — schema
-    scaffolded, never promised).
+  * The DIET-ONLY types never alert — written DIRECTLY, never mirrored from
+    `news`, so a story of these can't become a ``material_news`` candidate:
+    ``investor_day`` (forward-dated, carries an ``event_date``);
+    ``media_appearance`` (a tracked exec / rostered investor on a curated
+    podcast — a live free path via the RSS allowlist, alembic 0102); and the two
+    disclosed fast-follow scaffolds ``buyside_rating`` / ``estimate_revision``
+    (no free data path yet — schema scaffolded, never promised; the directive's
+    "model revision" lane IS ``estimate_revision``, not a second type).
 
 ``event_date`` makes a forward-dated investor day a queryable ROW (sorted by a
 dedicated ASC index — the opposite sort from the recency lane), not LLM prose.
@@ -58,6 +62,7 @@ __all__ = [
     "SIGNAL_ESTIMATE_REVISION",
     "SIGNAL_GENERAL_NEWS",
     "SIGNAL_INVESTOR_DAY",
+    "SIGNAL_MEDIA_APPEARANCE",
     "SIGNAL_TYPES",
     "SignalRow",
     "is_diet_only",
@@ -65,6 +70,7 @@ __all__ = [
     "load_diet_signals",
     "load_forward_agenda",
     "record_investor_day",
+    "record_media_appearance",
     "sync_news_to_signals",
 ]
 
@@ -77,6 +83,11 @@ SIGNAL_CONSENSUS_RATING = "consensus_rating"
 SIGNAL_INVESTOR_DAY = "investor_day"
 SIGNAL_BUYSIDE_RATING = "buyside_rating"
 SIGNAL_ESTIMATE_REVISION = "estimate_revision"
+# A tracked-company exec or a rostered investor appearing on a curated podcast
+# (alembic 0102, S11). DIET-only and written DIRECTLY (never mirrored from
+# `news`), so it can't become a material_news alert. `estimate_revision` already
+# IS the "model revision" lane the directive also names — no second synonym.
+SIGNAL_MEDIA_APPEARANCE = "media_appearance"
 
 SIGNAL_TYPES: frozenset[str] = frozenset(
     {
@@ -85,6 +96,7 @@ SIGNAL_TYPES: frozenset[str] = frozenset(
         SIGNAL_INVESTOR_DAY,
         SIGNAL_BUYSIDE_RATING,
         SIGNAL_ESTIMATE_REVISION,
+        SIGNAL_MEDIA_APPEARANCE,
     }
 )
 
@@ -114,6 +126,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     SIGNAL_INVESTOR_DAY: 0.7,
     SIGNAL_BUYSIDE_RATING: 0.85,
     SIGNAL_ESTIMATE_REVISION: 0.75,
+    SIGNAL_MEDIA_APPEARANCE: 0.7,
     SIGNAL_GENERAL_NEWS: 0.5,
 }
 
@@ -364,6 +377,60 @@ def record_investor_day(
             stamp,
             w,
             CADENCE_SCHEDULED,
+            source_feed,
+            stamp,
+        ),
+    )
+    conn.commit()
+    return bool(cur.rowcount and cur.rowcount > 0)
+
+
+def record_media_appearance(
+    conn: sqlite3.Connection,
+    ticker: str,
+    title: str,
+    *,
+    url: str,
+    firm: str | None = None,
+    body: str | None = None,
+    published_at: datetime | None = None,
+    source_feed: str = "podcast_rss",
+    weight: float | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Record one media appearance (a tracked exec or rostered investor on a
+    curated podcast); return True iff inserted.
+
+    The writer the podcast-RSS feed calls on a ticker/entity-matcher hit. A
+    DIET-ONLY row written DIRECTLY — never via `news`, so it can't enter the
+    decaying inbox scorer or become a ``material_news`` alert (the diet/alert
+    lanes stay disjoint). Idempotent on ``ux_signals_media_url`` (ticker, url)
+    among media rows, so re-polling the same episode is a no-op. ``published_at``
+    is the EPISODE date (the recency sort key) — defaults to ``now`` when the
+    feed gives none; ``url`` is the episode link (the dedup key + listen-through;
+    a media row without one can't dedup, so it is required). ``firm`` carries the
+    show name. Caller commits via this function."""
+    pub = (published_at or now or datetime.now(UTC)).replace(tzinfo=None).strftime(_DATETIME_FORMAT)
+    stamp = _now_stamp(now)
+    w = weight if weight is not None else DEFAULT_WEIGHTS[SIGNAL_MEDIA_APPEARANCE]
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO signals
+            (ticker, signal_type, title, body, url, firm,
+             event_date, published_at, weight, cadence, source_feed,
+             news_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?)
+        """,
+        (
+            ticker.upper(),
+            SIGNAL_MEDIA_APPEARANCE,
+            title,
+            body,
+            url,
+            firm,
+            pub,
+            w,
+            CADENCE_EVENT,
             source_feed,
             stamp,
         ),
