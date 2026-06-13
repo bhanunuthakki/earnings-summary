@@ -131,6 +131,251 @@
 })();
 
 
+(function () {
+  if (window.CCOverlay) return;
+
+  // ---- in-memory open-surface stack (ephemeral; NOT cc_state sessionStorage) ----
+  var surfaces = [];     // every registered MODAL surface
+  var dismissers = [];   // non-modal Escape-only closers: fn() -> bool (closed?)
+  var seqCounter = 0;    // recency tie-break for equal priorities
+
+  // ---- ONE shared scrim (S1's .k-scrim look; CCOverlay owns z-index + click) ----
+  var scrim = document.createElement('div');
+  scrim.className = 'k-scrim';
+  scrim.id = 'cc-overlay-scrim';
+  scrim.hidden = true;
+  scrim.setAttribute('aria-hidden', 'true');
+  function ensureScrim() {
+    if (!scrim.parentNode && document.body) document.body.appendChild(scrim);
+  }
+  scrim.addEventListener('click', function () {
+    var s = topScrimSurface();
+    if (s) doClose(s);
+  });
+
+  function reduceMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  function zOf(el) {
+    var z = el ? parseInt(getComputedStyle(el).zIndex, 10) : 0;
+    return isNaN(z) ? 0 : z;
+  }
+
+  function focusableIn(c) {
+    if (!c) return [];
+    return Array.prototype.slice.call(c.querySelectorAll(
+      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),' +
+      'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+    )).filter(function (el) { return el.offsetParent !== null || el === document.activeElement; });
+  }
+
+  // The top open MODAL surface BY PRIORITY (palette > peek > drawer > dock) —
+  // never merely the most-recently-opened. Ties (same priority) fall back to
+  // recency so two equal surfaces still resolve deterministically.
+  function topModalSurface() {
+    var best = null;
+    for (var i = 0; i < surfaces.length; i++) {
+      var s = surfaces[i];
+      if (!s.isOpen || !s.opts.modal) continue;
+      if (!best ||
+          s.opts.priority > best.opts.priority ||
+          (s.opts.priority === best.opts.priority && s.seq > best.seq)) {
+        best = s;
+      }
+    }
+    return best;
+  }
+
+  // The scrim sits beneath the VISUALLY topmost scrim-requesting surface, so
+  // resolve by computed z-index (a surface may opt out of the scrim while a
+  // lower one keeps it).
+  function topScrimSurface() {
+    var best = null, bestZ = -1;
+    for (var i = 0; i < surfaces.length; i++) {
+      var s = surfaces[i];
+      if (!s.isOpen || !s.opts.modal || !s.opts.scrim) continue;
+      var z = zOf(s.el);
+      if (!best || z >= bestZ) { best = s; bestZ = z; }
+    }
+    return best;
+  }
+
+  // Snap the scrim under the top scrim-requesting surface, or hide it. The
+  // FADE-out on the last surface leaving is driven concurrently from doClose
+  // (so scrim + surface animate together), not here.
+  function syncScrim() {
+    var s = topScrimSurface();
+    if (s) {
+      ensureScrim();
+      scrim.classList.remove('cc-scrim-out');
+      scrim.style.zIndex = String(zOf(s.el) - 1);
+      scrim.style.background = (s.opts.scrimOpacity != null)
+        ? 'rgba(0, 0, 0, ' + s.opts.scrimOpacity + ')' : '';
+      scrim.hidden = false;
+    } else {
+      scrim.classList.remove('cc-scrim-out');
+      scrim.hidden = true;
+    }
+  }
+
+  // The symmetric close: animate the surface out along its open axis, then
+  // hide. Falls straight through when motion is off / disabled.
+  function animateOut(el, motion, done) {
+    if (!el || motion === 'none' || reduceMotion()) { done(); return; }
+    var mcls = 'cc-m-' + motion;
+    el.classList.add('cc-anim-out', mcls);
+    var finished = false;
+    function fin() {
+      if (finished) return; finished = true;
+      el.removeEventListener('transitionend', onEnd);
+      el.classList.remove('cc-anim-out', mcls);
+      done();
+    }
+    function onEnd(e) { if (e.target === el) fin(); }
+    el.addEventListener('transitionend', onEnd);
+    setTimeout(fin, 240);  // fallback if transitionend never fires
+  }
+
+  function doOpen(s) {
+    if (s.isOpen) return;
+    // Mutual exclusion: opening a grouped surface closes its open siblings.
+    if (s.opts.group) {
+      for (var i = 0; i < surfaces.length; i++) {
+        var o = surfaces[i];
+        if (o !== s && o.isOpen && o.opts.group === s.opts.group) doClose(o);
+      }
+    }
+    if (s.opts.restoreFocus) s.opener = document.activeElement;
+    s.isOpen = true;
+    s.seq = ++seqCounter;
+    if (s.el) {
+      s.el.classList.remove('cc-anim-out', 'cc-m-rise', 'cc-m-slide-right', 'cc-m-pop');
+      // A persistent surface (e.g. the dock) drives its own visibility via a
+      // data-attr/CSS — CCOverlay only tracks it for Escape/scrim — so it opts
+      // out of the [hidden] toggle.
+      if (s.opts.toggleHidden !== false) s.el.hidden = false;
+    }
+    syncScrim();
+    if (s.opts.onOpen) { try { s.opts.onOpen(); } catch (e) {} }
+    // Focus: closeId by default; a surface that drives its own focus passes
+    // autofocus:false (and focuses in onOpen); autofocus:'<id>' overrides.
+    if (s.opts.autofocus !== false) {
+      var target = null;
+      if (typeof s.opts.autofocus === 'string') target = document.getElementById(s.opts.autofocus);
+      if (!target && s.opts.closeId) target = document.getElementById(s.opts.closeId);
+      if (!target && s.el) target = focusableIn(s.el)[0] || null;
+      if (target && target.focus) { try { target.focus(); } catch (e) {} }
+    }
+  }
+
+  function doClose(s) {
+    if (!s.isOpen) return;  // idempotent — re-entrant onClose calls are no-ops
+    s.isOpen = false;
+    var el = s.el;
+    // With s.isOpen now false, this reflects who still needs the scrim AFTER s
+    // leaves. If nobody does, fade the scrim out concurrently with the surface.
+    var stillScrim = topScrimSurface();
+    if (s.opts.scrim && !stillScrim && !scrim.hidden && !reduceMotion()) {
+      scrim.classList.add('cc-scrim-out');
+    }
+    function finish() {
+      if (el && s.opts.toggleHidden !== false) el.hidden = true;
+      if (stillScrim) syncScrim();  // reposition under the now-top surface
+      else { scrim.classList.remove('cc-scrim-out'); scrim.hidden = true; }
+      if (s.opts.onClose) { try { s.opts.onClose(); } catch (e) {} }
+      if (s.opts.restoreFocus && s.opener && s.opener.focus) {
+        try { s.opener.focus(); } catch (e) {}
+        s.opener = null;
+      }
+    }
+    animateOut(el, s.opts.motion, finish);
+  }
+
+  // ---- ONE keydown listener: Escape (priority-resolved) + Tab (focus trap) --
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape') {
+      // Non-modal popovers (cite-marks / source-chip / hover) claim Escape
+      // first — they are the innermost, lightest layer.
+      for (var i = dismissers.length - 1; i >= 0; i--) {
+        var closed = false;
+        try { closed = dismissers[i](); } catch (e) {}
+        if (closed) { ev.preventDefault(); return; }
+      }
+      var top = topModalSurface();
+      if (top) { ev.preventDefault(); doClose(top); }
+      return;
+    }
+    if (ev.key === 'Tab') {
+      var m = topModalSurface();
+      if (!m || !m.opts.trapFocus || !m.el) return;
+      var els = focusableIn(m.el);
+      if (!els.length) return;
+      var first = els[0], last = els[els.length - 1];
+      if (ev.shiftKey) {
+        if (document.activeElement === first || !m.el.contains(document.activeElement)) {
+          ev.preventDefault(); last.focus();
+        }
+      } else if (document.activeElement === last) {
+        ev.preventDefault(); first.focus();
+      }
+    }
+  });
+
+  function register(el, opts) {
+    opts = opts || {};
+    if (opts.modal === undefined) opts.modal = true;
+    opts.priority = opts.priority || 0;
+    opts.scrim = !!opts.scrim;
+    opts.trapFocus = !!opts.trapFocus;
+    opts.restoreFocus = opts.restoreFocus !== false;  // default: restore
+    opts.motion = opts.motion || 'rise';
+    var s = { el: el, opts: opts, isOpen: false, seq: 0, opener: null };
+    surfaces.push(s);
+    // The close control (x): auto-wire its click to dismiss. A surface whose
+    // close control is a multi-state toggle (e.g. the dock's collapse-one-level
+    // x) declares closeId for the contract + default focus but passes
+    // wireClose:false to drive close from its own listener instead.
+    if (opts.closeId && opts.wireClose !== false) {
+      var btn = document.getElementById(opts.closeId);
+      if (btn) {
+        btn.addEventListener('click', function (e) {
+          if (!s.isOpen) return;
+          if (e && e.preventDefault) e.preventDefault();
+          doClose(s);
+        });
+      }
+    }
+    return {
+      open: function () { doOpen(s); },
+      close: function () { doClose(s); },
+      isOpen: function () { return s.isOpen; },
+      el: el,
+    };
+  }
+
+  window.CCOverlay = {
+    register: register,
+    // Non-modal Escape-only dismissal for phrasing-content popovers. fn() must
+    // close at most ONE open popover and return whether it did.
+    addPopoverDismisser: function (fn) { if (typeof fn === 'function') dismissers.push(fn); },
+    // Priority ladder (matches the z-order): higher wins Escape.
+    PRIORITY: { DOCK: 10, DRAWER: 30, PEEK: 40, PALETTE: 50 },
+  };
+})();
+
+
+(function () {
+  if (window.__ccSrcChipEsc || !window.CCOverlay) return;
+  window.__ccSrcChipEsc = true;
+  window.CCOverlay.addPopoverDismisser(function () {
+    var open = document.querySelectorAll('details.src-pop[open]');
+    if (open.length) { open[open.length - 1].removeAttribute('open'); return true; }
+    return false;
+  });
+})();
+
+
 (function() {
   // ---------------------------------------------------------------
   // Boot data — embedded by the renderer.
@@ -452,16 +697,40 @@
     if (typeof pollHealth === 'function') pollHealth();
   }
 
+  // Visual open/close — the push-sidebar's own .open class + width transition.
+  function applyOpenVisual(open) {
+    if (!sidebar) return;
+    sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
+    sidebar.classList.toggle('open', open);
+    if (open) document.documentElement.style.setProperty('--sidebar-open-width', '380px');
+    else document.documentElement.style.removeProperty('--sidebar-open-width');
+  }
+
+  // CCOverlay registration (S4, Law 3): a gesture push-sidebar. scrim:false is
+  // a DELIBERATE, DECLARED carve-out — the no-outside-click dismissal is
+  // load-bearing (an outside-click listener raced the floater's mousedown-open
+  // and closed the sidebar on the same gesture; see the comment above the
+  // sidebar wiring). motion:'none' + toggleHidden:false (its own .open class +
+  // width transition drive visuals); grouped 'report-sidebar' so opening it
+  // closes the chat sidebar (replaces the window.__close* handshake). Escape is
+  // CCOverlay's one listener — no per-sidebar keydown.
+  var cmtOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
+    modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
+    motion: 'none', toggleHidden: false, autofocus: false,
+    group: 'report-sidebar', closeId: 'cmt-close', wireClose: false,
+    onOpen: function() { applyOpenVisual(true); },
+    onClose: function() { applyOpenVisual(false); currentAnchor = null; }
+  });
+
   // Single entry point — pins call with a humanAnchor label, floater /
   // marks supply their own free-text label.
   function openWithAnchor(anchor, label) {
     if (!sidebar) return;
-    // One-open-at-a-time: opening a comment collapses the chat sidebar.
-    if (window.__closeChatSidebar) window.__closeChatSidebar();
     currentAnchor = anchor;
-    sidebar.setAttribute('aria-hidden', 'false');
-    sidebar.classList.add('open');
-    document.documentElement.style.setProperty('--sidebar-open-width', '380px');
+    // open() handles the visual open + one-open-at-a-time (closes chat via the
+    // 'report-sidebar' group); idempotent when already open (content still
+    // refreshes below for the new anchor).
+    if (cmtOv) cmtOv.open(); else applyOpenVisual(true);
     document.getElementById('cmt-anchor-label').textContent = label;
     renderList();
     // Rehydrate the draft for this anchor (if any). Hint that a draft
@@ -480,14 +749,8 @@
   }
 
   function closeSidebar() {
-    if (!sidebar) return;
-    sidebar.setAttribute('aria-hidden', 'true');
-    sidebar.classList.remove('open');
-    document.documentElement.style.removeProperty('--sidebar-open-width');
-    currentAnchor = null;
+    if (cmtOv) cmtOv.close(); else { applyOpenVisual(false); currentAnchor = null; }
   }
-  // Let the chat module collapse this sidebar when chat opens.
-  window.__closeCommentSidebar = closeSidebar;
 
   function humanAnchor(a) {
     return (a.type.replace(/_/g, ' ') + ' · ' + a.key).substring(0, 80);
@@ -851,9 +1114,16 @@
     if (!sel || sel.isCollapsed) hideFloater();
   });
   document.addEventListener('scroll', hideFloater, true);
-  document.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') { hideFloater(); closeSidebar(); }
-  });
+  // The selection floater is a transient popover — Escape-only via CCOverlay's
+  // one keydown (no second listener, no scrim/trap). It claims Escape first
+  // (innermost layer); a further Escape then closes the sidebar through its
+  // CCOverlay registration. The sidebar's own close (x) stays wired to closeSidebar.
+  if (window.CCOverlay) {
+    window.CCOverlay.addPopoverDismisser(function() {
+      if (floater && floater.style.display !== 'none') { hideFloater(); return true; }
+      return false;
+    });
+  }
 
   // Re-render highlights after a successful POST so new free_text
   // comments light up without a page reload.
@@ -947,9 +1217,8 @@
     // sidebar's left edge.
     var CHAT_WIDTH = '460px';
 
-    function setOpen(open) {
-      // One-open-at-a-time: opening chat collapses the comments sidebar.
-      if (open && window.__closeCommentSidebar) window.__closeCommentSidebar();
+    // Visual open/close — the push-sidebar's own .open class + width transition.
+    function applyOpen(open) {
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
@@ -960,12 +1229,28 @@
         document.documentElement.style.removeProperty('--sidebar-open-width');
       }
     }
-    // Let the comments module collapse chat when a comment is opened.
-    window.__closeChatSidebar = function() { setOpen(false); };
+
+    // Dismissal (x + Esc) and one-open-at-a-time with the comments sidebar are
+    // CCOverlay's now (S4, Law 3): a push-sidebar gesture surface — scrim:false
+    // (the report stays readable beside it), motion:'none' + toggleHidden:false
+    // (its own .open class + width transition drive visuals), grouped
+    // 'report-sidebar' so opening one closes the other. This replaces the
+    // cross-document window.__close* handshake AND the per-sidebar Escape
+    // keydown — the open-surface stack now owns both.
+    var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
+      modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
+      motion: 'none', toggleHidden: false, autofocus: false,
+      group: 'report-sidebar', closeId: 'chat-close', wireClose: false,
+      onOpen: function() { applyOpen(true); },
+      onClose: function() { applyOpen(false); }
+    });
+    function setOpen(open) {
+      if (!chatOv) { applyOpen(open); return; }  // degrade if the primitive is absent
+      if (open) chatOv.open(); else chatOv.close();
+    }
 
     toggle.addEventListener('click', function() { setOpen(sidebar.getAttribute('aria-hidden') === 'true'); });
     sidebar.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
-    document.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') setOpen(false); });
 
     // Cmd+Enter / Ctrl+Enter submits
     form.message.addEventListener('keydown', function(ev) {

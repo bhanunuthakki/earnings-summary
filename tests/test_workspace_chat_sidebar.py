@@ -52,15 +52,18 @@ def test_chat_css_is_a_push_sidebar() -> None:
 
 
 # ---------------------------------------------------------------------------
-# JS — one-open-at-a-time. Each module exposes a closer the other calls, and
-# both drive the shared --sidebar-open-width that pushes the document.
+# JS — one-open-at-a-time. Since S4 PR3 this is the CCOverlay open-surface
+# stack: both sidebars register in the 'report-sidebar' group (opening one
+# closes the other), replacing the cross-document window.__close* handshake.
+# Both still drive the shared --sidebar-open-width that pushes the document.
 # ---------------------------------------------------------------------------
 
 
 def test_chat_js_enforces_mutual_exclusivity_and_push() -> None:
-    # Opening chat collapses comments; chat exposes its own closer.
-    assert "window.__closeCommentSidebar" in CHAT_JS
-    assert "window.__closeChatSidebar" in CHAT_JS
+    # Mutual exclusivity is the shared group, not a cross-document global.
+    assert "group: 'report-sidebar'" in CHAT_JS
+    assert "window.__closeCommentSidebar" not in CHAT_JS
+    assert "window.__closeChatSidebar =" not in CHAT_JS
     # Chat drives the same push variable the comments sidebar uses.
     assert "--sidebar-open-width" in CHAT_JS
     # No stale references to the removed floating panel element.
@@ -68,9 +71,10 @@ def test_chat_js_enforces_mutual_exclusivity_and_push() -> None:
 
 
 def test_comments_js_closes_chat_when_a_comment_opens() -> None:
-    # Reverse direction: opening a comment collapses chat, and the comments
-    # module exposes its closer for the chat module to call.
-    assert "window.__closeChatSidebar" in COMMENTS_JS
-    assert "window.__closeCommentSidebar = closeSidebar" in COMMENTS_JS
+    # Reverse direction: the same 'report-sidebar' group closes chat when a
+    # comment opens — no window.__close* global on either side.
+    assert "group: 'report-sidebar'" in COMMENTS_JS
+    assert "window.__closeChatSidebar" not in COMMENTS_JS
+    assert "window.__closeCommentSidebar = closeSidebar" not in COMMENTS_JS
     # Selecting text inside the chat sidebar must not pop the comment floater.
     assert "contains('chat-sidebar')" in COMMENTS_JS

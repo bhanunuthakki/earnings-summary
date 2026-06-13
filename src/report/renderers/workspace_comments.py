@@ -333,16 +333,40 @@ JS = r"""
     if (typeof pollHealth === 'function') pollHealth();
   }
 
+  // Visual open/close — the push-sidebar's own .open class + width transition.
+  function applyOpenVisual(open) {
+    if (!sidebar) return;
+    sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
+    sidebar.classList.toggle('open', open);
+    if (open) document.documentElement.style.setProperty('--sidebar-open-width', '380px');
+    else document.documentElement.style.removeProperty('--sidebar-open-width');
+  }
+
+  // CCOverlay registration (S4, Law 3): a gesture push-sidebar. scrim:false is
+  // a DELIBERATE, DECLARED carve-out — the no-outside-click dismissal is
+  // load-bearing (an outside-click listener raced the floater's mousedown-open
+  // and closed the sidebar on the same gesture; see the comment above the
+  // sidebar wiring). motion:'none' + toggleHidden:false (its own .open class +
+  // width transition drive visuals); grouped 'report-sidebar' so opening it
+  // closes the chat sidebar (replaces the window.__close* handshake). Escape is
+  // CCOverlay's one listener — no per-sidebar keydown.
+  var cmtOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
+    modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
+    motion: 'none', toggleHidden: false, autofocus: false,
+    group: 'report-sidebar', closeId: 'cmt-close', wireClose: false,
+    onOpen: function() { applyOpenVisual(true); },
+    onClose: function() { applyOpenVisual(false); currentAnchor = null; }
+  });
+
   // Single entry point — pins call with a humanAnchor label, floater /
   // marks supply their own free-text label.
   function openWithAnchor(anchor, label) {
     if (!sidebar) return;
-    // One-open-at-a-time: opening a comment collapses the chat sidebar.
-    if (window.__closeChatSidebar) window.__closeChatSidebar();
     currentAnchor = anchor;
-    sidebar.setAttribute('aria-hidden', 'false');
-    sidebar.classList.add('open');
-    document.documentElement.style.setProperty('--sidebar-open-width', '380px');
+    // open() handles the visual open + one-open-at-a-time (closes chat via the
+    // 'report-sidebar' group); idempotent when already open (content still
+    // refreshes below for the new anchor).
+    if (cmtOv) cmtOv.open(); else applyOpenVisual(true);
     document.getElementById('cmt-anchor-label').textContent = label;
     renderList();
     // Rehydrate the draft for this anchor (if any). Hint that a draft
@@ -361,14 +385,8 @@ JS = r"""
   }
 
   function closeSidebar() {
-    if (!sidebar) return;
-    sidebar.setAttribute('aria-hidden', 'true');
-    sidebar.classList.remove('open');
-    document.documentElement.style.removeProperty('--sidebar-open-width');
-    currentAnchor = null;
+    if (cmtOv) cmtOv.close(); else { applyOpenVisual(false); currentAnchor = null; }
   }
-  // Let the chat module collapse this sidebar when chat opens.
-  window.__closeCommentSidebar = closeSidebar;
 
   function humanAnchor(a) {
     return (a.type.replace(/_/g, ' ') + ' · ' + a.key).substring(0, 80);
@@ -732,9 +750,16 @@ JS = r"""
     if (!sel || sel.isCollapsed) hideFloater();
   });
   document.addEventListener('scroll', hideFloater, true);
-  document.addEventListener('keydown', function(ev) {
-    if (ev.key === 'Escape') { hideFloater(); closeSidebar(); }
-  });
+  // The selection floater is a transient popover — Escape-only via CCOverlay's
+  // one keydown (no second listener, no scrim/trap). It claims Escape first
+  // (innermost layer); a further Escape then closes the sidebar through its
+  // CCOverlay registration. The sidebar's own close (x) stays wired to closeSidebar.
+  if (window.CCOverlay) {
+    window.CCOverlay.addPopoverDismisser(function() {
+      if (floater && floater.style.display !== 'none') { hideFloater(); return true; }
+      return false;
+    });
+  }
 
   // Re-render highlights after a successful POST so new free_text
   // comments light up without a page reload.

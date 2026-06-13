@@ -71,7 +71,7 @@ def _comment_sidebar_shell(body: StringIO) -> None:
         '<div class="cmt-sidebar-title">Comments</div>'
         '<div class="cmt-sidebar-sub" id="cmt-anchor-label"></div>'
         "</div>"
-        '<button class="cmt-close" type="button" aria-label="close">&times;</button>'
+        '<button class="cmt-close" id="cmt-close" type="button" aria-label="close">&times;</button>'
         "</header>"
         '<div class="cmt-list" id="cmt-list"></div>'
         '<form class="cmt-form" id="cmt-form">'
@@ -132,7 +132,7 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         f'<a href="http://localhost:7421/socratic/{_esc(ticker)}" target="_blank" '
         'rel="noopener">think it through &rarr;</a></div>'
         "</div>"
-        '<button class="chat-close" type="button" aria-label="close">&times;</button>'
+        '<button class="chat-close" id="chat-close" type="button" aria-label="close">&times;</button>'
         "</header>"
         '<div class="chat-thread" id="chat-thread"></div>'
         '<form class="chat-form" id="chat-form">'

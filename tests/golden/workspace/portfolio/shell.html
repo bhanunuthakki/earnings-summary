@@ -259,7 +259,7 @@
 <div class="cmt-sidebar-sub" id="cmt-anchor-label">
 </div>
 </div>
-<button class="cmt-close" type="button" aria-label="close">&times;</button>
+<button class="cmt-close" id="cmt-close" type="button" aria-label="close">&times;</button>
 </header>
 <div class="cmt-list" id="cmt-list">
 </div>
@@ -298,7 +298,7 @@
 <div class="chat-sub">2026-06-11 &middot; streams from comments_server &middot; <a href="http://localhost:7421/socratic/TEST" target="_blank" rel="noopener">think it through &rarr;</a>
 </div>
 </div>
-<button class="chat-close" type="button" aria-label="close">&times;</button>
+<button class="chat-close" id="chat-close" type="button" aria-label="close">&times;</button>
 </header>
 <div class="chat-thread" id="chat-thread">
 </div>
@@ -317,6 +317,13 @@
 <span class="chat-toggle-label">Chat</span>
 </button>
 </aside>
+<script>[EXTRACTED]</script>
+<!-- The one transient-surface primitive (S4, Law 3), inlined again in this
+     separate document so the chat + comments sidebars register against one
+     open-surface stack (one Escape, one scrim listener) instead of the old
+     cross-document window.__close* handshake. SOURCE_CHIP_JS gives the report's
+     source-chip <details> Escape-only dismissal. -->
+<script>[EXTRACTED]</script>
 <script>[EXTRACTED]</script>
 <script>[EXTRACTED]</script>
 <script>[EXTRACTED]</script>
