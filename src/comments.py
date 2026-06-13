@@ -174,6 +174,12 @@ class Anchor(BaseModel):
     tab: str | None = None  # which tab (thesis / earnings / saydo / ...)
     parent_landmark: str | None = None  # nearest section/panel title (free_text only)
     occurrence_index: int | None = None  # which match if landmark has duplicates
+    # Stable doorway handle (S12) the anchored datum carried —
+    # ``kpi:{ticker}:{def_id}`` / ``fin:…`` — captured from its ``data-fact-ref``
+    # so a comment re-binds across a metric rename even though ``key`` (the
+    # display name) moved. None for text-keyed anchors. Mirrored onto the note
+    # (analyst_notes.fact_ref, 0099) by ``user_state.notes.sync_store_comments``.
+    fact_ref: str | None = None
 
 
 class ThreadEntry(BaseModel):

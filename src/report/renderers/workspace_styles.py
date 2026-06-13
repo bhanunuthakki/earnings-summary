@@ -1255,6 +1255,17 @@ details.panel > summary:hover { background: var(--paper); }
 /* Dim a stale row's data but keep the flag itself at full strength. */
 .ledger-stale-row td { opacity: 0.55; }
 .ledger-stale-row .ledger-stale { opacity: 1; }
+/* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like
+   the bold label it replaces; reveals a dashed accent underline on
+   hover/keyboard focus so the affordance reads without crowding the table. */
+.fact-doorway {
+  font: inherit; font-weight: 600; color: var(--fg);
+  background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+  border-bottom: 1px dashed transparent;
+}
+.fact-doorway:hover, .fact-doorway:focus-visible {
+  color: var(--accent); border-bottom-color: var(--accent); outline: none;
+}
 .ledger-tracked-only {
   padding: 9px var(--panel-pad-x) 12px;
   border-top: 1px dashed var(--hairline);

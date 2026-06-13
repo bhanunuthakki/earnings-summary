@@ -348,3 +348,47 @@ def test_unpatched_router_is_blocked_by_conftest_and_degrades(repo: Path) -> Non
     items = _gather(repo, "TST revenue trend")
     assert any(i.kind == "fact" for i in items)
     assert all(i.kind in ("fact", "filing", "transcript") for i in items)
+
+
+# ----------------------------------------------------------------------------
+# fact_ref PK fast-path (S12, Instrument Paradigm Law 2)
+
+
+def test_fact_ref_kpi_resolves_exact_series_by_pk(repo: Path) -> None:
+    """A ``kpi:{ticker}:{def_id}`` token resolves the exact series by PK, sets
+    the item's ``fact_ref``, and dedupes its NL twin away (one Customers item)."""
+    items = _gather(repo, "Total Customers (millions) — kpi:TST:7")
+    facts = [i for i in items if i.kind == "fact"]
+    pinned = [i for i in facts if i.fact_ref == "kpi:TST:7"]
+    assert len(pinned) == 1, facts
+    it = pinned[0]
+    assert it.label == "TST · Total Customers (millions)"
+    assert "Q3'25 110" in it.text
+    assert it.chip_payload()["fact_ref"] == "kpi:TST:7"
+    # The fast-path leads the fact channel, and the NL match for the same
+    # metric is deduped against it — exactly one Customers item.
+    assert sum(1 for i in facts if "Customers" in i.label) == 1
+
+
+def test_fact_ref_fin_resolves_financial_line_item(repo: Path) -> None:
+    items = _gather(repo, "fin:TST:revenue:Q")
+    pinned = [i for i in items if i.fact_ref == "fin:TST:revenue:Q"]
+    assert len(pinned) == 1, items
+    assert pinned[0].label == "TST · Revenue"
+    assert "150.0M" in pinned[0].text
+
+
+def test_fact_ref_unknown_or_mismatched_resolves_nothing(repo: Path) -> None:
+    """The handle is PK + ticker guarded: an unknown def_id, and a real def_id
+    under the wrong ticker, both resolve nothing — and never raise."""
+    assert not [i for i in _gather(repo, "kpi:TST:999") if i.fact_ref]
+    assert not [i for i in _gather(repo, "kpi:OTHER:7", tickers=["OTHER"]) if i.fact_ref]
+
+
+def test_nl_matched_facts_carry_no_fact_ref(repo: Path) -> None:
+    """The string-match path is the FALLBACK: its items resolve no handle."""
+    items = _gather(repo, "TST total customers and revenue trend")
+    facts = [i for i in items if i.kind == "fact"]
+    assert facts
+    assert all(i.fact_ref is None for i in facts)
+    assert all(i.chip_payload()["fact_ref"] is None for i in facts)

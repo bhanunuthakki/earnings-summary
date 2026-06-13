@@ -734,6 +734,43 @@ def test_thesis_tab_forwards_report_date_to_ledger() -> None:
     assert "ledger-stale" in html  # the 2023 row flagged once the date reaches the ledger
 
 
+def test_thesis_ledger_emits_fact_ref_doorway_when_resolved() -> None:
+    """S12, Law 2: a KPI that resolves to a definition id renders as a
+    `.fact-doorway` button carrying the stable `kpi:{ticker}:{def_id}` handle
+    alongside the (display) anchor key; without a ticker it degrades to the
+    plain bold label and the name-keyed anchor."""
+    thesis = ThesisSection(
+        status=SectionStatus.OK,
+        thesis_full="t",
+        overall_breach_status="ok",
+        kpi_ledger=[
+            KpiLedgerRow(
+                name="Risk-adjusted NIM (NIM minus cost of risk)",
+                tier="tier_1",
+                unit="%",
+                kpi_definition_id=42,
+                current_status="green",
+                history=[("2025-09-30", 9.1), ("2025-12-31", 9.3)],
+            )
+        ],
+    )
+
+    out = StringIO()
+    _thesis_hygiene_panels(out, thesis, None, ticker="nu")
+    doorway = out.getvalue()
+    assert 'data-fact-ref="kpi:NU:42"' in doorway  # ticker uppercased into the handle
+    assert 'class="fact-doorway"' in doorway
+    assert 'data-anchor-key="Risk-adjusted NIM (NIM minus cost of risk)"' in doorway
+
+    # Degrade: no ticker → no handle, the name stays a plain bold label.
+    out2 = StringIO()
+    _thesis_hygiene_panels(out2, thesis, None)
+    degraded = out2.getvalue()
+    assert "data-fact-ref" not in degraded
+    assert "fact-doorway" not in degraded
+    assert "<strong>Risk-adjusted NIM</strong>" in degraded
+
+
 def test_company_tab_hides_cold_p3_panels_keeps_concentration_fact() -> None:
     """P4.2 hide-don't-stub: cold strategic-targets / lease panels disappear;
     customer concentration keeps its informative empty state because "no

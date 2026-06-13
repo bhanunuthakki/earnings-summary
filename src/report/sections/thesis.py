@@ -210,14 +210,15 @@ def _build_ledger(
                 name = str(kd.get("name", ""))
                 if conn is not None:
                     history, latest_excerpt = _kpi_history_conn(conn, ticker, name)
-                    notes, db_unit = _kpi_definition_meta(conn, ticker, name)
+                    def_id, notes, db_unit = _kpi_definition_meta(conn, ticker, name)
                 else:
-                    history, latest_excerpt, notes, db_unit = [], None, None, None
+                    history, latest_excerpt, def_id, notes, db_unit = [], None, None, None, None
                 holdings_unit = str(kd.get("unit")) if kd.get("unit") else None
                 tier_rows.append(
                     KpiLedgerRow(
                         name=name,
                         tier=tier_label,  # type: ignore[arg-type]
+                        kpi_definition_id=def_id,
                         # Backfill the unit from the resolved definition when the
                         # holdings JSON declares none (schema-v2 tickers like NU
                         # leave it blank) so the Unit column stops rendering empty.
@@ -316,9 +317,14 @@ def _derive_definition(name: str, notes: str | None, db_unit: str | None) -> str
 
 def _kpi_definition_meta(
     conn: sqlite3.Connection, ticker: str, kpi_name: str
-) -> tuple[str | None, str | None]:
-    """Return ``(notes, unit)`` for the kpi_definitions row best matching
-    ``kpi_name``, or ``(None, None)``.
+) -> tuple[int | None, str | None, str | None]:
+    """Return ``(id, notes, unit)`` for the kpi_definitions row best matching
+    ``kpi_name``, or ``(None, None, None)``.
+
+    The ``id`` is the metric's stable PK handle — the same row is already being
+    resolved here for its notes/unit, so surfacing the id is free, and it lets
+    the renderer emit a ``fact_ref`` doorway (Instrument Paradigm Law 2)
+    instead of leaning on the fragile display name.
 
     Resolution is *independent of whether facts exist* — unlike
     ``_kpi_history_conn``, which goes through the fact-requiring resolver — so a
@@ -328,15 +334,15 @@ def _kpi_definition_meta(
     normalized match.
     """
     if not kpi_name or not has_table(conn, "kpi_definitions"):
-        return None, None
+        return None, None, None
     # Defensive: `notes` (and, on minimal fixtures, `unit`) may not exist on
     # older / test DBs. Detect columns and alias missing ones to NULL so the
     # query never references a phantom column — same pattern as `_kpi_history_conn`
-    # guarding `source_excerpt`.
+    # guarding `source_excerpt`. `id` is the PK, always present.
     cols = {c["name"] for c in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()}
     notes_sel = "notes" if "notes" in cols else "NULL AS notes"
     unit_sel = "unit" if "unit" in cols else "NULL AS unit"
-    meta_cols = f"{notes_sel}, {unit_sel}"
+    meta_cols = f"id, {notes_sel}, {unit_sel}"
     resolved = resolve_kpi_definition_name(conn, ticker, kpi_name)
     for candidate in (resolved, kpi_name):
         if candidate is None:
@@ -346,15 +352,26 @@ def _kpi_definition_meta(
             (ticker.upper(), candidate),
         ).fetchone()
         if row is not None:
-            return row["notes"], row["unit"]
+            return _coerce_int(row["id"]), row["notes"], row["unit"]
     want = normalize_kpi_name(kpi_name)
     for row in conn.execute(
         f"SELECT name, {meta_cols} FROM kpi_definitions WHERE ticker = ?",
         (ticker.upper(),),
     ):
         if normalize_kpi_name(str(row["name"])) == want:
-            return row["notes"], row["unit"]
-    return None, None
+            return _coerce_int(row["id"]), row["notes"], row["unit"]
+    return None, None, None
+
+
+def _coerce_int(raw: object) -> int | None:
+    """A kpi_definitions.id (an INTEGER PK) coerced to int, or None — defensive
+    against the NULL-aliased ``id`` a phantom-column schema could yield."""
+    if raw is None:
+        return None
+    try:
+        return int(cast("int", raw))
+    except (TypeError, ValueError):
+        return None
 
 
 _BreachStatusLiteral = Literal["ok", "warn", "breach", "unresolved", "unknown"]

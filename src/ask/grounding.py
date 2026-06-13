@@ -70,6 +70,21 @@ _TRANSCRIPT_SNIPPET_CHARS = 400
 
 _TICKERISH_RX = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
 
+# fact_ref handles (S12, Instrument Paradigm Law 2): the stable identity a
+# clickable datum carries so Ask resolves the EXACT series by PK instead of
+# re-phrase-matching the display name. Two grammars:
+#   kpi:{ticker}:{def_id}                     → kpi_facts by kpi_definition_id PK
+#   fin:{ticker}:{line_item}:{fiscal_period}  → financial_facts by (line_item, fpt)
+# A token may sit anywhere in the question (the doorway appends it to a readable
+# label); the NL name-match (`_fact_evidence`) is the FALLBACK, not the primary.
+_FACT_REF_KPI_RX = re.compile(r"\bkpi:([A-Za-z][A-Za-z0-9.\-]{0,9}):(\d{1,9})\b")
+_FACT_REF_FIN_RX = re.compile(
+    r"\bfin:([A-Za-z][A-Za-z0-9.\-]{0,9}):([a-z0-9_]{1,60}):([A-Za-z0-9]{1,8})\b"
+)
+# fiscal_period_type tokens that name a single cadence (else default to the
+# quarterly series, matching `_fact_evidence`'s financial-facts filter).
+_FIN_SPECIFIC_FPT = frozenset({"Q1", "Q2", "Q3", "Q4", "FY", "TTM", "H1", "H2"})
+
 # Question words + glue that carry no retrieval signal. Domain words
 # ("margin", "deposit", "guidance") deliberately stay in.
 _STOPWORDS = frozenset(
@@ -195,6 +210,12 @@ class EvidenceItem:
     # legacy DBs without the column leave it None. The citation popover
     # renders it as a %.
     confidence: float | None = None
+    # The stable handle that resolved this item via the PK fast-path
+    # (``kpi:{ticker}:{def_id}`` / ``fin:{ticker}:{line_item}:{fpt}``), when it
+    # came from a fact_ref token rather than NL name-matching (S12, Law 2).
+    # None for NL-matched facts and every non-fact channel. Surfaced in the
+    # chip payload so a follow-up can re-pin the exact series.
+    fact_ref: str | None = None
 
     def chip_payload(self) -> dict[str, object]:
         return {
@@ -204,6 +225,7 @@ class EvidenceItem:
             "href": self.href,
             "source_url": self.source_url,
             "confidence": self.confidence,
+            "fact_ref": self.fact_ref,
         }
 
 
@@ -396,6 +418,94 @@ def _dedupe_series(
         out.append(row)
         if len(out) >= _SERIES_POINTS:
             break
+    return out
+
+
+def _fact_ref_kpi_item(
+    conn: sqlite3.Connection, ticker: str, def_id: int
+) -> dict[str, object] | None:
+    """Resolve a ``kpi:{ticker}:{def_id}`` handle to its series by PK."""
+    try:
+        drow = conn.execute(
+            "SELECT name, unit FROM kpi_definitions WHERE id = ? AND ticker = ?",
+            (def_id, ticker),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if drow is None:
+        return None
+    name = str(drow[0])
+    unit = str(drow[1] or "")
+    rows = _dedupe_series(
+        _series_rows_conf(
+            conn,
+            "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
+            "FROM kpi_facts WHERE ticker = ? AND kpi_definition_id = ? "
+            "ORDER BY period_end DESC, id DESC LIMIT 64",
+            (ticker, def_id),
+        )
+    )
+    if not rows:
+        return None
+    item = _fact_item(ticker, name, unit or str(rows[0][3] or ""), rows, conn)
+    item["fact_ref"] = f"kpi:{ticker}:{def_id}"
+    return item
+
+
+def _fact_ref_fin_item(
+    conn: sqlite3.Connection, ticker: str, line_item: str, fpt: str
+) -> dict[str, object] | None:
+    """Resolve a ``fin:{ticker}:{line_item}:{fpt}`` handle to its series."""
+    clauses = "ticker = ? AND line_item = ?"
+    params: list[object] = [ticker, line_item]
+    fpt_u = fpt.upper()
+    if fpt_u in _FIN_SPECIFIC_FPT:
+        clauses += " AND fiscal_period_type = ?"
+        params.append(fpt_u)
+    else:
+        clauses += " AND fiscal_period_type IN ('Q1','Q2','Q3','Q4')"
+    sql = (
+        "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
+        f"FROM financial_facts WHERE {clauses} ORDER BY period_end DESC, id DESC LIMIT 64"
+    )
+    rows = _dedupe_series(_series_rows_conf(conn, sql, tuple(params)))
+    if not rows:
+        return None
+    label = line_item.replace("_", " ").title()
+    item = _fact_item(ticker, label, str(rows[0][3] or ""), rows, conn)
+    item["fact_ref"] = f"fin:{ticker}:{line_item}:{fpt}"
+    return item
+
+
+def _fact_ref_evidence(conn: sqlite3.Connection, question: str) -> list[dict[str, object]]:
+    """The PK fast-path: every fact_ref token in ``question`` resolves its exact
+    series directly, bypassing NL name-matching. The token names its own ticker
+    (the authoritative handle), so this is independent of the scope/named-ticker
+    heuristics. Resolved series lead the fact channel; ``_fact_evidence`` then
+    fills the rest and is deduped against these by label."""
+    out: list[dict[str, object]] = []
+    seen_kpi: set[int] = set()
+    for m in _FACT_REF_KPI_RX.finditer(question):
+        def_id = int(m.group(2))
+        if def_id in seen_kpi:
+            continue
+        seen_kpi.add(def_id)
+        item = _fact_ref_kpi_item(conn, m.group(1).upper(), def_id)
+        if item is not None:
+            out.append(item)
+        if len(out) >= _MAX_FACT_ITEMS:
+            return out
+    seen_fin: set[tuple[str, str, str]] = set()
+    for m in _FACT_REF_FIN_RX.finditer(question):
+        key = (m.group(1).upper(), m.group(2), m.group(3))
+        if key in seen_fin:
+            continue
+        seen_fin.add(key)
+        item = _fact_ref_fin_item(conn, key[0], key[1], key[2])
+        if item is not None:
+            out.append(item)
+        if len(out) >= _MAX_FACT_ITEMS:
+            return out
     return out
 
 
@@ -808,7 +918,17 @@ def gather_evidence(
         conn = _connect(db_path)
         try:
             if conn is not None:
-                raw.extend(_fact_evidence(conn, question_squashed, tickers))
+                # PK fast-path first: fact_ref tokens resolve the EXACT series
+                # and lead the fact channel; the NL name-match then fills the
+                # rest, deduped by label so a token doesn't double its metric.
+                ref_facts = _fact_ref_evidence(conn, q)
+                raw.extend(ref_facts)
+                pinned = {str(it["label"]) for it in ref_facts}
+                raw.extend(
+                    it
+                    for it in _fact_evidence(conn, question_squashed, tickers)
+                    if str(it["label"]) not in pinned
+                )
             raw.extend(_filing_evidence(conn, repo_root, terms, tickers))
             if conn is not None:
                 raw.extend(_transcript_evidence(conn, repo_root, terms, tickers))
@@ -828,6 +948,7 @@ def gather_evidence(
                     href=cast("str | None", item["href"]),
                     source_url=cast("str | None", item["source_url"]),
                     confidence=cast("float | None", item.get("confidence")),
+                    fact_ref=cast("str | None", item.get("fact_ref")),
                 )
             )
         return items
@@ -946,6 +1067,7 @@ def gather_requested_evidence(
                     doc_id=cast("int | None", item["doc_id"]),
                     href=href,
                     source_url=cast("str | None", item["source_url"]),
+                    fact_ref=cast("str | None", item.get("fact_ref")),
                 )
             )
             if len(out) >= max_items:
