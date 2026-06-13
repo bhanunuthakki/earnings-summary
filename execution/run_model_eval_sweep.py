@@ -253,6 +253,9 @@ def _evaluate_candidate(
 
     tally: dict[str, list[int]] = {jb: [0, 0, 0] for jb in judges}
     judged: list[tuple[str, object]] = []
+    cand_chars_total = 0
+    inc_chars_total = 0
+    n_ok = 0  # cases where the candidate succeeded (used for char mean denominator)
 
     for case in cases:
         cand = run_model(
@@ -268,6 +271,9 @@ def _evaluate_candidate(
             for jb in judges:
                 tally[jb][1] += 1
             continue
+        cand_chars_total += cand.output_chars
+        inc_chars_total += len(case.incumbent_response)
+        n_ok += 1
         for jb in judges:
             jp = judge_case(
                 case,
@@ -304,6 +310,8 @@ def _evaluate_candidate(
         )
 
     per_judge = {jb: (t[0], t[1], t[2]) for jb, t in tally.items()}
+    cand_chars_mean = cand_chars_total / n_ok if n_ok else 0.0
+    inc_chars_mean = inc_chars_total / n_ok if n_ok else 0.0
     verdict = decide_switch(
         purpose=purpose,
         incumbent=incumbent,
@@ -312,6 +320,8 @@ def _evaluate_candidate(
         judge_agreement=_agreement(judged, judges),
         min_n=min_n,
         parity_threshold=parity_threshold,
+        candidate_output_chars_mean=cand_chars_mean,
+        incumbent_output_chars_mean=inc_chars_mean,
     )
     return verdict, case_audit
 
@@ -409,7 +419,15 @@ def run_sweep(
                 # summary_json = full verdict + every per-case judge rationale,
                 # so the switch decision is auditable from the DB alone.
                 summary_json = json.dumps(
-                    {"verdict": dataclasses.asdict(verdict), "cases": case_audit},
+                    {
+                        "verdict": dataclasses.asdict(verdict),
+                        "token_efficiency": {
+                            "candidate_output_chars_mean": verdict.candidate_output_chars_mean,
+                            "incumbent_output_chars_mean": verdict.incumbent_output_chars_mean,
+                            "ratio": verdict.token_efficiency_ratio,
+                        },
+                        "cases": case_audit,
+                    },
                     ensure_ascii=False,
                 )
                 record_verdict(

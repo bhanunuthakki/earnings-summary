@@ -28,7 +28,7 @@ from llm.model_eval import (
 HAIKU = "claude-haiku-4-5-20251001"
 SONNET = "claude-sonnet-4-6"
 OPUS = "claude-opus-4-8"
-GFLASH = "gemini-3.5-flash"
+GFLASH = "gemini-2.5-flash"
 GPRO = "gemini-3.1-pro-preview"
 
 

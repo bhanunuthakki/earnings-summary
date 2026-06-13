@@ -102,11 +102,11 @@ def test_suggest_peers_forwards_backend_kwarg(monkeypatch: pytest.MonkeyPatch) -
         segments=[],
         sector=None,
         industry=None,
-        model="gemini-3.5-flash",
+        model="gemini-2.5-flash",
         backend="gemini",
     )
     assert captured.get("backend") == "gemini"
-    assert captured.get("model") == "gemini-3.5-flash"
+    assert captured.get("model") == "gemini-2.5-flash"
 
 
 def test_suggest_peers_propagates_parse_failure(monkeypatch: pytest.MonkeyPatch) -> None:

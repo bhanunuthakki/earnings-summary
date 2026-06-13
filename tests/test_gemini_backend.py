@@ -174,7 +174,7 @@ def test_call_llm_gemini_model_id_routes_to_gemini_backend(
 ) -> None:
     """When LLM_MODELS pins a purpose to a Gemini model id, call_llm dispatches
     to the Gemini backend and passes the resolved model id explicitly."""
-    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-2.5-flash")
     seen: dict[str, object] = {}
 
     def _fake_gemini(prompt: str, **kwargs: object) -> str:
@@ -196,7 +196,7 @@ def test_call_llm_gemini_model_id_routes_to_gemini_backend(
     assert seen["ticker"] == "NU"
     assert seen["scope"] == "s"
     assert seen["run_id"] == "r1"
-    assert seen["model"] == "gemini-3.5-flash"  # resolved in call_llm, passed explicitly
+    assert seen["model"] == "gemini-2.5-flash"  # resolved in call_llm, passed explicitly
 
 
 def test_call_llm_explicit_backend_forces_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -261,7 +261,7 @@ def test_gemini_model_pin_operational_failure_falls_back_to_claude(
 ) -> None:
     """Pinning a purpose to Gemini must never break the pipeline: a transient
     Gemini failure degrades to Claude (which records its own ledger rows)."""
-    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-2.5-flash")
 
     def _boom(prompt: str, **kw: object) -> str:
         raise RuntimeError("gemini transient failure")
@@ -308,7 +308,7 @@ def test_gemini_hard_stops_propagate_without_claude_fallback(
 ) -> None:
     """Setup + budget errors are hard stops (llm.cli.is_hard_stop): degrading
     to Claude would mask an operator-actionable problem, so they propagate."""
-    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-3.5-flash")
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "viewspec_compile", "gemini-2.5-flash")
 
     def _boom(prompt: str, **kw: object) -> str:
         raise exc
