@@ -416,7 +416,7 @@ at render time.
 
 ---
 
-## 10. Comments — closed under no-fit
+## 11. Comments — closed under no-fit
 
 The comment classifier is **closed under no-fit, and every commentable surface
 is steerable** (Instrument Paradigm §1 — *closed under no-fit, explainable by
