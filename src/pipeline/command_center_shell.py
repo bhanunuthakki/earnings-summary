@@ -85,6 +85,7 @@ from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
 from ui.controls import controls_css
+from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -291,6 +292,11 @@ def render_shell(
             # inlined BEFORE the dock and shell scripts so both register their
             # overlays against the same open-surface stack.
             f"<script>{CC_OVERLAY_JS}</script>",
+            # Escape-only dismissal for the JS-free source-chip <details>
+            # popovers anywhere in the shell document (Law 3 / §3.1) — a
+            # non-modal CCOverlay dismisser, not the full triad. The cite-mark
+            # popover registers its own from CITE_MARKS_JS (loaded via the dock).
+            f"<script>{SOURCE_CHIP_JS}</script>",
             # The persistent Ask dock (Ask v5): shell chrome, not panel
             # content — outside .cc-panels so it survives every tab switch.
             render_ask_dock(),

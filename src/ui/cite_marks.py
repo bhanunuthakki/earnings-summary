@@ -106,6 +106,19 @@ CITE_MARKS_JS = r"""
       + bad.length + ' unverified claim' + (bad.length === 1 ? '' : 's') + '</span>';
   }
   window.ccCiteMarks = { linkify: linkify, unverifiedChipHtml: unverifiedChipHtml };
+  // Escape-only dismissal (Law 3 / design_language §3.1): a cite popover is
+  // phrasing content revealed on :focus-within — NOT a modal, so it must not
+  // gain a scrim or focus trap. Register a CCOverlay dismisser that blurs the
+  // focused .cite-wrap; the :hover variant just leaves on mouseout. Runs once
+  // per document (the ccCiteMarks guard above), and only when CCOverlay is
+  // present (e.g. the shell + the report iframe).
+  if (window.CCOverlay) {
+    window.CCOverlay.addPopoverDismisser(function () {
+      var ae = document.activeElement;
+      if (ae && ae.closest && ae.closest('.cite-wrap')) { ae.blur(); return true; }
+      return false;
+    });
+  }
 })();
 """
 
