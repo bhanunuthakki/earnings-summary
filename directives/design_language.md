@@ -514,6 +514,66 @@ diet rows is independent of the wall clock.
 
 ---
 
+## 11. The Discovery rule (weighted candidate ranking)
+
+The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
+scores **by a weighted sum of typed, dated signals through a source-weight
+registry — never an equal-weight count** — carries its `score_why`, and is
+*closed by construction* (a weak name never enters; a strong one is capped to a
+ranked top-N, not printed 500-deep). Sources of truth in code:
+`src/discovery/scoring.py` (the engine), `src/discovery/sources.py` (the
+registry), `src/discovery/store.py` (the typed rows), `src/pipeline/discovery_panel.py`
+(the one lens).
+
+**The schema is the contract** (alembic 0096–0098): a `discovery_signals`
+typed child (`signal_class`, `source_key`, `weight`, `raw_strength`,
+`observed_at`) holds one row per `(user, ticker, class, source)`; the
+`discovery_candidates.score` is a weighted sum over those rows and `score_json`
+is its breakdown; `discovery_sources` is the **editable weight registry** — one
+row per factor screen, adjacency channel, and rostered 13F investor, with a
+`base_weight` the owner tunes and quarterly recalibration writes.
+
+**The score** (one place, `scoring.py`): per-signal contribution =
+`weight × raw_strength × action_mult × decay`, summed into a *fundamental* term
+(screens + adjacency) and an *investor* term (13F). Four shaping rules, each a
+guard test, not prose:
+
+- **Action asymmetry.** A 13F NEW initiation ≫ an incremental ADD, and the gap
+  is WIDER for low-turnover long-only funds (a new Edgewood/Loomis position is
+  loud; their adds are routine) than for higher-frequency hedge funds (whose
+  adds are momentum signals). `trim`/`exit` are not discovery signals.
+- **Investor clamp.** A name surfaced ONLY by investor research (no
+  screen/adjacency corroboration) can *surface* but **cannot top the queue on
+  investor weight alone** — its investor term is capped below any fundamentally-
+  corroborated name.
+- **Corroboration is super-linear.** 2+ distinct funds on the same name multiply
+  the investor term by `n_funds ** CORROB_EXP`.
+- **Recency decay.** A per-class half-life fades stale signals (a 45-day-lagged
+  13F decays within ~2 quarters; screens/adjacency re-derive each run).
+
+**Both gates, owner-decided.** Raise the *entry* threshold so weak singletons
+never enter the queue (`ENTRY_THRESHOLD`; an existing candidate is still
+refreshed) AND cap the *render* to a ranked top-N. Crowding is fixed at both
+the generation and the display boundary.
+
+**One band, one lens.** The panel is an instrument under the Research →
+Discovery tab: `panel_toolbar()` (one operating band — `.k-chip` filter toggles
++ actions on the same row, never a title band over a filter band), `.p-table` /
+`.p-pill` rows, `ticker_label()` for ticker+name, and the `score_json` evidence
+collapsed behind a peek (the one-line `score_evidence_line()` inline, the full
+per-signal breakdown on demand). The roster's weights are editable from the
+panel's Sources surface (the existing POST route + SSE), and editing a weight
+re-ranks — the guard asserts exactly that.
+
+**13F sourcing is top-of-funnel, never a trigger** (the rule the miner
+encodes): EDGAR 13F-HR direct (free; FMP `form13F` is Ultimate-gated), with a
+45-day lag, longs-only, and non-US/sub-$100M managers invisible. A move on a
+TRACKED ticker is a `news` row; a move on an UNTRACKED ticker is a
+`discovery_signals` row — this surface never writes the information-diet
+`signals` table.
+
+---
+
 ## Appendix A — fresh-eyes audit (2026-06-11): historical note
 
 > **Superseded — no longer the source of truth.** This appendix once held a

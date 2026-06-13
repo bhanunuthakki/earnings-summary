@@ -26,6 +26,7 @@ from discovery.screens import load_ticker_metrics, run_screens
 from discovery.store import (
     get_candidate,
     list_candidates,
+    list_signals,
     set_status,
     upsert_candidate,
 )
@@ -62,15 +63,58 @@ CREATE TABLE discovery_candidates (
     status TEXT NOT NULL DEFAULT 'new',
     score FLOAT NOT NULL DEFAULT 0,
     evidence_json TEXT NOT NULL,
+    score_json TEXT,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CONSTRAINT ck_discovery_candidates_status
         CHECK (status IN ('new', 'queued', 'building', 'built', 'dismissed')),
     CONSTRAINT ck_discovery_candidates_evidence_json CHECK (json_valid(evidence_json)),
+    CONSTRAINT ck_discovery_candidates_score_json
+        CHECK (score_json IS NULL OR json_valid(score_json)),
     CONSTRAINT uq_discovery_candidates_user_ticker UNIQUE (user_id, ticker)
 );
+CREATE TABLE discovery_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'bhanu',
+    ticker TEXT NOT NULL,
+    signal_class TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    weight FLOAT NOT NULL DEFAULT 1.0,
+    raw_strength FLOAT NOT NULL DEFAULT 1.0,
+    observed_at TEXT NOT NULL,
+    detail TEXT,
+    meta_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CONSTRAINT uq_discovery_signals_identity
+        UNIQUE (user_id, ticker, signal_class, source_key)
+);
+CREATE TABLE discovery_sources (
+    source_key TEXT PRIMARY KEY,
+    signal_class TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    base_weight FLOAT NOT NULL DEFAULT 1.0,
+    tier TEXT NOT NULL DEFAULT 'structural',
+    style_tags TEXT,
+    cik TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    last_calibrated_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
+
+# The structural source weights the seed migration (0096) lands; mirrored in
+# the fixture so the end-to-end test scores against real, non-unit weights.
+_STRUCTURAL_SOURCES = [
+    ("quality_compounder", "screen", "Quality compounder", 1.0),
+    ("fcf_value", "screen", "FCF value", 0.9),
+    ("growth_inflection", "screen", "Growth inflection", 1.0),
+    ("watchlist", "adjacency", "Watchlist", 1.0),
+    ("transcript", "adjacency", "Transcript", 0.7),
+    ("news", "adjacency", "News", 0.5),
+]
 
 # Quarterly income rows newest-first: (date, revenue, grossProfit, operatingIncome).
 _GOODCO_INCOME = [
@@ -163,6 +207,11 @@ def repo(tmp_path: Path) -> Path:
         "INSERT INTO news (ticker, headline, url, published_at, snippet) VALUES"
         " ('AAA', 'Alpha and Valco announce partnership', 'https://x', '2026-06-01 00:00:00',"
         " 'Valco Corp deal')"
+    )
+    conn.executemany(
+        "INSERT INTO discovery_sources (source_key, signal_class, display_name, base_weight,"
+        " created_at, updated_at) VALUES (?, ?, ?, ?, 'seed', 'seed')",
+        _STRUCTURAL_SOURCES,
     )
     conn.commit()
     conn.close()
@@ -365,31 +414,62 @@ def test_store_upsert_preserves_status(repo: Path) -> None:
 
 
 def test_discover_end_to_end(repo: Path) -> None:
+    db = repo / "data" / "portfolio.db"
     results = run_discovery.discover(repo)
     scores = {t: s for t, s, _n in results}
-    # GOODCO: 3 screens, no adjacency. MRVL: watchlist + transcript = 2 sources.
-    # VALCO: 1 screen + news. KLAC: watchlist only.
-    assert scores["GOODCO"] == 3.0
-    assert scores["MRVL"] == 2.0
-    assert scores["VALCO"] == 2.0
-    assert scores["KLAC"] == 1.0
+    # Weighted, not counted: GOODCO = quality(1.0)+fcf(0.9)+growth(1.0) = 2.9;
+    # MRVL = watchlist(1.0)+transcript(0.7) = 1.7 (decay ~1.0 same-day).
+    assert scores["GOODCO"] == pytest.approx(2.9, abs=0.01)
+    assert scores["MRVL"] == pytest.approx(1.7, abs=0.01)
+    assert scores["GOODCO"] > scores["MRVL"]
+    # The raised entry bar (ENTRY_THRESHOLD 1.5) keeps weak singletons OUT:
+    # VALCO = fcf(0.9)+news(0.5) = 1.4 and KLAC = watchlist(1.0) = 1.0 never
+    # enter the queue as new names.
+    assert "VALCO" not in scores
+    assert "KLAC" not in scores
     assert "BADCO" not in scores
     assert "GHOST" not in scores
     assert "STALE" not in scores
 
-    rows = list_candidates(db_path=repo / "data" / "portfolio.db")
+    rows = list_candidates(db_path=db)
     by_ticker = {c.ticker: c for c in rows}
-    assert by_ticker["GOODCO"].score == 3.0
+    assert set(by_ticker) == {"GOODCO", "MRVL"}
+    # score_json carries the per-class breakdown the panel peeks.
+    why = by_ticker["GOODCO"].score_json
+    assert why is not None and why["terms"] == {"screen": pytest.approx(2.9, abs=0.01)}
     sources = {str(e.get("source")) for e in by_ticker["MRVL"].evidence}
     assert sources == {"adjacency:watchlist", "adjacency:transcript"}
-    assert any("competitive watchlist" in str(e.get("detail")) for e in by_ticker["KLAC"].evidence)
 
-    # Re-run refreshes without duplicating evidence rows.
+    # The typed signals landed (3 screen rows for GOODCO, 2 adjacency for MRVL).
+    goodco_sig = list_signals("GOODCO", db_path=db)
+    assert {s.source_key for s in goodco_sig} == {
+        "quality_compounder",
+        "fcf_value",
+        "growth_inflection",
+    }
+    assert all(s.signal_class == "screen" for s in goodco_sig)
+    mrvl_sig = list_signals("MRVL", db_path=db)
+    assert {s.source_key for s in mrvl_sig} == {"watchlist", "transcript"}
+
+    # Re-run refreshes without duplicating evidence OR signal rows.
     run_discovery.discover(repo)
-    again = list_candidates(db_path=repo / "data" / "portfolio.db")
+    again = list_candidates(db_path=db)
     assert len(again) == len(rows)
+    assert len(list_signals("GOODCO", db_path=db)) == 3
     mrvl = next(c for c in again if c.ticker == "MRVL")
     assert len(mrvl.evidence) == 2
+
+
+def test_discover_existing_below_threshold_is_refreshed(repo: Path) -> None:
+    """A NEW weak name stays out, but a name already IN the queue is always
+    refreshed (its score/lifecycle stays current even below the entry bar)."""
+    db = repo / "data" / "portfolio.db"
+    # Seed KLAC (watchlist-only, score ~1.0 < 1.5) as a pre-existing candidate.
+    upsert_candidate(ticker="KLAC", name="KLA Corp", score=9.0, evidence=[], db_path=db)
+    run_discovery.discover(repo)
+    klac = next(c for c in list_candidates(db_path=db) if c.ticker == "KLAC")
+    assert klac.score == pytest.approx(1.0, abs=0.01)  # refreshed down, not skipped
+    assert klac.score_json is not None
 
 
 def test_discover_skip_flags(repo: Path) -> None:
@@ -432,3 +512,48 @@ def test_migration_creates_table(tmp_path: Path) -> None:
             " last_seen_at, updated_at) VALUES ('Z', 'not json', 'a', 'a', 'a')"
         )
     conn.close()
+
+
+def test_migration_discovery_scoring_tables(tmp_path: Path) -> None:
+    """0095 (discovery_signals) + 0097 (discovery_sources seed) on top of the
+    live head. 0096 (score_json) no-ops without discovery_candidates, fine here."""
+    db = tmp_path / "mig2.db"
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    command.stamp(cfg, "0095_signals")
+    command.upgrade(cfg, "0098_discovery_sources")
+    conn = sqlite3.connect(db)
+    try:
+        # The roster seeded from §5's two tiers: 3 screens + 3 adjacency + 33 funds.
+        by_class = dict(
+            conn.execute(
+                "SELECT signal_class, count(*) FROM discovery_sources GROUP BY signal_class"
+            ).fetchall()
+        )
+        assert by_class == {"screen": 3, "adjacency": 3, "investor_13f": 33}
+        # Appaloosa's CIK is the one verified seed; the rest resolve in the miner.
+        cik = conn.execute(
+            "SELECT cik FROM discovery_sources WHERE source_key = 'appaloosa'"
+        ).fetchone()[0]
+        assert cik == "0001656456"
+        # discovery_signals identity is UNIQUE per (user, ticker, class, source).
+        conn.execute(
+            "INSERT INTO discovery_signals (user_id, ticker, signal_class, source_key,"
+            " observed_at, created_at, updated_at)"
+            " VALUES ('bhanu', 'X', 'screen', 'fcf_value', 'a', 'a', 'a')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO discovery_signals (user_id, ticker, signal_class, source_key,"
+                " observed_at, created_at, updated_at)"
+                " VALUES ('bhanu', 'X', 'screen', 'fcf_value', 'b', 'b', 'b')"
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO discovery_signals (user_id, ticker, signal_class, source_key,"
+                " observed_at, meta_json, created_at, updated_at)"
+                " VALUES ('bhanu', 'Y', 'screen', 's', 'a', 'not json', 'a', 'a')"
+            )
+    finally:
+        conn.close()
