@@ -78,6 +78,11 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "bear_case": AuditSpec("bear_case", RUBRICS_DIR / "bear_case.md"),
     "transcript_summary": AuditSpec("transcript_summary", RUBRICS_DIR / "transcript_summary.md"),
     "advisor_next_dollar": AuditSpec("advisor_next_dollar", RUBRICS_DIR / "advisor_next_dollar.md"),
+    # Peer selection (directives/peer_selection_llm.md): graded on
+    # business-model match, why-string specificity, cross-boundary range, and
+    # peer-count coverage. Corpus = data/peer_selection/<T>.json files written
+    # by compute.peer_selection.extract_for_ticker on the --enable-llm build.
+    "peer_selection": AuditSpec("peer_selection", RUBRICS_DIR / "peer_selection.md"),
 }
 
 _THRESHOLD_RX = re.compile(r"^Pass threshold:\s*([0-9.]+)\s*$", re.MULTILINE)
