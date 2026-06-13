@@ -280,6 +280,69 @@ a.k-tick-sym:hover { color: var(--accent); }
 .prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em; }
 
+/* ---- provenance / data-quality rows (design_language §10; Law: provenance is
+   actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary
+   for any data-quality row — the report Sources tab, the System Validation
+   panel, the freshness peek, the evals failed-case drawer. The severity tick is
+   the single home of the halt/warn/grey decision: tone resolves through the live
+   models.validation.Severity enum (prov_severity_tone), so a writer↔reader drift
+   can't mute a halt. ---- */
+.k-prov { display: flex; flex-direction: column; gap: var(--sp-1); }
+.k-prov-row { display: flex; align-items: baseline; gap: var(--sp-3);
+  padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.k-prov-row:last-child { border-bottom: none; }
+.k-prov-label { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body);
+  color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.k-prov-stamp { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-note { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-actions { flex: none; display: inline-flex; align-items: center;
+  gap: var(--sp-2); }
+
+/* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is
+   decided (prov_severity_tone) — an unknown severity degrades to a muted tick,
+   never the wrong color. */
+.k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
+.k-prov-tick::before { content: ""; width: 7px; height: 7px; flex: none;
+  border-radius: var(--radius-full); background: currentColor; }
+.k-prov-tick-bad   { color: var(--bad); }
+.k-prov-tick-warn  { color: var(--warn); }
+.k-prov-tick-ok    { color: var(--ok); }
+.k-prov-tick-muted { color: var(--muted); }
+
+/* inline action: a small quiet control (resolve/refresh/diagnose) or a /source
+   deep-link, radius-full like a chip. */
+.k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600;
+  color: var(--accent); background: transparent; border: 1px solid var(--border);
+  border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer;
+  text-decoration: none; white-space: nowrap;
+  transition: border-color var(--transition), color var(--transition); }
+.k-prov-act:hover { border-color: var(--accent); }
+.k-prov-act[disabled], .k-prov-act[aria-disabled="true"] { color: var(--muted);
+  border-color: var(--border); cursor: progress; }
+
+/* drill-down drawer (generalizes the evals failed-case drawer): a <details>
+   whose summary toggles the body; per-case rows nest inside. */
+.k-prov-drawer { margin: var(--sp-1) 0; }
+.k-prov-drawer > summary, .k-prov-case > summary { cursor: pointer;
+  list-style: none; font-size: var(--fs-caption); color: var(--muted);
+  padding: var(--sp-1) 0; }
+.k-prov-drawer > summary:hover, .k-prov-case > summary:hover { color: var(--fg); }
+.k-prov-case { margin: var(--sp-1) 0; padding-left: var(--sp-3);
+  border-left: 2px solid var(--border); }
+.k-prov-case > summary { display: flex; align-items: baseline; gap: var(--sp-2); }
+.k-prov-rationale { font-size: var(--fs-caption); color: var(--fg-soft);
+  margin: var(--sp-1) 0; }
+.k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2); margin: var(--sp-1) 0; }
+.k-prov-evidence-label { font-size: var(--fs-micro); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-micro);
+  color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
+  white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+
 :root {
   --pad-x: 28px;
   --pad-y: 18px;

@@ -2153,6 +2153,34 @@ def create_app(
             201,
         )
 
+    @app.route("/actions/resolve-issue", methods=["POST", "OPTIONS"])
+    def resolve_issue():
+        """Mark one open ``validation_issues`` row resolved (S10 — provenance is
+        actionable). Unlike the sibling ``/actions/*`` endpoints this is a
+        SYNCHRONOUS DB write, not a streamed job: JSON body
+        ``{"issue_id": int, "resolution_note"?: str, "resolved_by"?: str}``.
+        Returns ``{"ok": true, "issue_id", "resolved_at"}`` on success, 404 when
+        the id is unknown or already resolved, 400 on a missing/bad id."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from validation_issues_store import resolve_validation_issue
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        issue_id = _opt_int(payload.get("issue_id"))
+        if issue_id is None:
+            return ({"error": "issue_id (int) required"}, 400)
+        note_raw = payload.get("resolution_note")
+        by_raw = payload.get("resolved_by")
+        resolved_at = resolve_validation_issue(
+            issue_id,
+            resolved_by=str(by_raw) if by_raw is not None else DEFAULT_USER_ID,
+            resolution_note=str(note_raw) if note_raw is not None else None,
+            db_path=db_path,
+        )
+        if resolved_at is None:
+            return ({"error": f"issue {issue_id} not found or already resolved"}, 404)
+        return {"ok": True, "issue_id": issue_id, "resolved_at": resolved_at}
+
     @app.route("/actions/advisor-memo", methods=["POST", "OPTIONS"])
     def start_advisor_memo():
         """Run an advisor memo generation (master build P2.3) as a streamed

@@ -222,6 +222,27 @@
 .k-pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .k-pill-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .k-pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.k-prov-act:hover { border-color: var(--accent); }
+.k-prov-act[disabled], .k-prov-act[aria-disabled="true"] { color: var(--muted); border-color: var(--border); cursor: progress; }
+.k-prov-actions { flex: none; display: inline-flex; align-items: center; gap: var(--sp-2); }
+.k-prov-case > summary { display: flex; align-items: baseline; gap: var(--sp-2); }
+.k-prov-case { margin: var(--sp-1) 0; padding-left: var(--sp-3); border-left: 2px solid var(--border); }
+.k-prov-drawer > summary, .k-prov-case > summary { cursor: pointer; list-style: none; font-size: var(--fs-caption); color: var(--muted); padding: var(--sp-1) 0; }
+.k-prov-drawer > summary:hover, .k-prov-case > summary:hover { color: var(--fg); }
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-micro); color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0; white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+.k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin: var(--sp-1) 0; }
+.k-prov-evidence-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.k-prov-label { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body); color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.k-prov-note { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-rationale { font-size: var(--fs-caption); color: var(--fg-soft); margin: var(--sp-1) 0; }
+.k-prov-row { display: flex; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.k-prov-row:last-child { border-bottom: none; }
+.k-prov-stamp { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-tick-bad { color: var(--bad); }
+.k-prov-tick-muted { color: var(--muted); }
+.k-prov-tick-ok { color: var(--ok); }
+.k-prov-tick-warn { color: var(--warn); }
+.k-prov-tick::before { content: ""; width: 7px; height: 7px; flex: none; border-radius: var(--radius-full); background: currentColor; }
 .k-scrim[hidden], .k-overlay[hidden] { display: none; }
 .k-tick-name { font-family: var(--sans); font-weight: 400; font-size: var(--fs-caption); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: var(--k-tick-max, 20ch); }
 .k-tick-sym { font-family: var(--mono); font-weight: 600; letter-spacing: 0.02em; color: var(--fg); text-decoration: none; }
@@ -561,6 +582,7 @@
 /* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on the left, filters + actions on the SAME flex row to the right — never a title band stacked over a filter band. Emitted by panel_toolbar(). ---- */ .k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 /* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */ .p-pill { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; white-space: nowrap; }
 /* ---- pipeline panel table (canonical layout for command-center tabs) ---- */ .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
+/* ---- provenance / data-quality rows (design_language §10; Law: provenance is actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary for any data-quality row — the report Sources tab, the System Validation panel, the freshness peek, the evals failed-case drawer. The severity tick is the single home of the halt/warn/grey decision: tone resolves through the live models.validation.Severity enum (prov_severity_tone), so a writer↔reader drift can't mute a halt. ---- */ .k-prov { display: flex; flex-direction: column; gap: var(--sp-1); }
 /* ---- rendered prose: the shared container for render_prose() output (design_language §9; src/ui/prose.py). ONE token-only treatment for every stored analyst/LLM body / note / memo / narrative. render_prose starts headings at <h3> (a panel owns the <h2> above its prose), so h3 is the top content tier and h4-h6 step down. A surface adds ONLY the wrapper's padding/width — it never re-skins the rendered children. ---- */ .prose { font-size: var(--fs-body); line-height: 1.6; color: var(--fg-soft); }
 /* ---- shared popover list (combobox results, palette rows) ---- */ .k-menu { margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 /* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards, callouts, tone rows) — same color-mix family, box radius instead of full. Ink stays --fg; a status word inside can take its own .k-pill. ---- */ .k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
@@ -625,6 +647,9 @@
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
+/* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
+/* inline action: a small quiet control (resolve/refresh/diagnose) or a /source deep-link, radius-full like a chip. */ .k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer; text-decoration: none; white-space: nowrap; transition: border-color var(--transition), color var(--transition); }
+/* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is decided (prov_severity_tone) — an unknown severity degrades to a muted tick, never the wrong color. */ .k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
 /* §3.5 signal cards — severity via token-backed classes (P6.1; these previously carried hardcoded inline rgba colors + a literal font stack). */ .signal-card { border: 1px solid var(--hairline); border-left: 3px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; }
 ::placeholder { color: var(--muted-2); opacity: 1; }
 :root { --pad-x: 28px; --pad-y: 18px; --panel-pad-x: 18px; --panel-pad-y: 14px; --row-pad-y: 11px; --gap: 18px; --gap-lg: 24px; --section-gap: 28px; --kpi-pad: 22px; --table-pad-y: 10px; /* Aliases used by chat/comments modules */ --bg-elev: var(--surface); --panel: var(--surface); --panel-alt: var(--paper); --ink: var(--fg); --ink-muted: var(--muted); --font-mono: var(--mono); --font-body: var(--sans); }

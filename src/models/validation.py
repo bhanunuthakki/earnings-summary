@@ -17,6 +17,17 @@ class Severity(StrEnum):
     HALT = "halt"
 
 
+#: Canonical severity priority, **most severe first** — the quarantine/sort
+#: order. Derived consumers (the report Sources ``ORDER BY`` CASE, the prov_row
+#: severity tick) build their mapping from this/the enum so a renamed or added
+#: severity can't silently sort last or render the wrong color. The writer emits
+#: ``halt``/``warn`` (``record_validation_issue``); a reader that hard-codes a
+#: different vocabulary (the shipped ``error``/``warning`` bug) is exactly the
+#: drift ``test_provenance_severity_contract`` guards against — it asserts this
+#: tuple covers every ``Severity`` member.
+SEVERITY_ORDER: tuple[Severity, ...] = (Severity.HALT, Severity.WARN)
+
+
 class ValidationRule(StrEnum):
     """Closed enum of validation rules. Never freeform-classify a violation."""
 
@@ -49,4 +60,9 @@ class ValidationIssue(BaseModel):
     raw_value: str | None
     expected: str | None
     raised_at: datetime
-    resolved_at: datetime | None
+    resolved_at: datetime | None = None
+    # Who resolved it + their note (alembic 0094) — the actionable-provenance
+    # audit trail. None on an open issue and on legacy rows raised before the
+    # resolve writer existed.
+    resolved_by: str | None = None
+    resolution_note: str | None = None
