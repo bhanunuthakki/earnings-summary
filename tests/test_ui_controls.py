@@ -415,7 +415,9 @@ QUARANTINE: dict[str, frozenset[str]] = {
     "pipeline/restatements_panel.py": frozenset({"radius"}),
     "pipeline/source_calls_panel.py": frozenset({"radius"}),
     "pipeline/source_viewers.py": frozenset({"radius"}),
-    "pipeline/validation_issues_panel.py": frozenset({"radius"}),
+    # validation_issues_panel graduated in the S10 resolve-wiring pass: its lone
+    # off-scale 4px (.vi-note code) moved to var(--radius) when the detail rows
+    # were rebuilt onto prov_row. Now fully token-clean.
     # (pipeline/command_center_shell.py graduated in S1 PR2 — the shell namespace
     #  unfork; the dashboard / cockpit long-tail graduated in the S7 sweep —
     #  legacy-alias fallbacks, the .calib-fill gradient, the .cockpit-badge tone

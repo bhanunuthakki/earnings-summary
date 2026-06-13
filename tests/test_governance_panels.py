@@ -89,6 +89,40 @@ def test_validation_panel_empty_and_missing_states(tmp_path: Path) -> None:
     assert "alembic upgrade head" in render_validation_panel(tmp_path / "missing.db")
 
 
+def test_validation_panel_renders_resolve_controls(tmp_path: Path) -> None:
+    """Each open issue carries a Resolve control keyed by its row id, wired to
+    the synchronous /actions/resolve-issue route — NOT the streaming
+    data-prov-post path that peeks.py's global listener hijacks."""
+    db = tmp_path / "v.db"
+    _seed_validation_db(db)
+    html = render_validation_panel(db)
+    # Open issues are ids 1, 2, 3 (id 4 is resolved → never listed).
+    assert 'data-resolve-issue="1"' in html
+    assert 'data-resolve-issue="3"' in html
+    assert 'data-resolve-issue="4"' not in html
+    # The resolve fetch targets the synchronous route, never the streaming one.
+    assert "/actions/resolve-issue" in html
+    assert "data-prov-post" not in html
+    # KPI counts are addressable so the listener can decrement on success.
+    assert 'data-vi-count="halt"' in html
+    assert 'data-vi-count="resolved"' in html
+    # The detail rows render through the shared prov kit, not the old table.
+    assert "k-prov-row" in html
+
+
+def test_validation_panel_no_resolve_control_when_clean(tmp_path: Path) -> None:
+    """Empty / missing tables degrade with no resolve control and no crash."""
+    db = tmp_path / "empty.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_VALIDATION_DDL)
+    conn.commit()
+    conn.close()
+    html = render_validation_panel(db)
+    assert "No open issues." in html
+    assert "data-resolve-issue" not in html
+    assert "data-resolve-issue" not in render_validation_panel(tmp_path / "missing.db")
+
+
 def test_ticker_settings_panel(tmp_path: Path) -> None:
     db = tmp_path / "ts.db"
     conn = sqlite3.connect(db)
