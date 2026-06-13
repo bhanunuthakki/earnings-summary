@@ -685,17 +685,18 @@ def call_llm(
     through call_llm so retunes (model swap, timeout change, billing change,
     fallback policy) happen in one place.
 
-    Backend resolution (Claude stays the default):
+    Backend resolution (model-first: the resolved model id determines the backend):
       * ``backend="claude"`` / ``backend="gemini"`` — explicit force. The
         compare harness (execution/compare_backends.py) uses this; a forced
         Gemini call that fails raises rather than silently switching, because
         the caller asked for THAT backend's answer.
-      * ``backend=None`` (default) — Gemini only when ``model`` is None (a
-        purpose-resolved call) AND ``purpose`` is in the eval-gated allowlist
-        (``llm.gemini_backend.gemini_allowed_purposes()``, ships empty).
-        An allowlist-routed Gemini call that fails OPERATIONALLY degrades to
-        Claude so enabling a purpose can never break the pipeline; setup and
-        budget errors propagate per ``is_hard_stop``.
+      * ``backend=None`` (default) — dispatches by the model family (``family_of``
+        from ``llm.model_ladder``): a Gemini model id → Gemini backend, a Claude
+        model id → Claude backend. Set a Gemini id in ``LLM_MODELS`` or
+        ``model_pin_overrides`` to route a purpose to Gemini. A Gemini-backend
+        call that fails OPERATIONALLY degrades to Claude so a model swap can
+        never break the pipeline; setup and budget errors propagate per
+        ``is_hard_stop``.
 
     Args:
         prompt: The fully-rendered prompt text.
@@ -720,25 +721,35 @@ def call_llm(
             entirely. Use sparingly — CLI tools that need to force a refresh
             past a hard cap should pass this. Soft caps log+proceed anyway,
             so this is only meaningful when the cap is hard-blocked.
-        backend: None (resolve via allowlist), "claude", or "gemini".
+        backend: None (resolve from model family), "claude", or "gemini".
     """
     if backend not in (None, "claude", "gemini"):
         raise ValueError(f"Unknown LLM backend {backend!r}: expected 'claude' or 'gemini'.")
-    resolved_backend = backend
-    if resolved_backend is None:
-        from llm.gemini_backend import gemini_allowed_purposes  # late — avoids import cycle
 
-        is_allowlisted = (
-            model is None and purpose is not None and purpose in gemini_allowed_purposes()
-        )
-        resolved_backend = "gemini" if is_allowlisted else "claude"
+    from llm.model_ladder import GEMINI as _GEMINI_FAMILY, family_of  # late — avoids import cycle
+
+    # Model-first: resolve the intended model (DB pin → LLM_MODELS → DEFAULT).
+    if model is None:
+        if purpose is None:
+            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
+            resolved_model = DEFAULT_MODEL
+        else:
+            resolved_model = _model_for(purpose)
+    else:
+        resolved_model = model
+
+    # Backend from the resolved model's family; explicit `backend` arg overrides.
+    resolved_backend = backend or (
+        "gemini" if family_of(resolved_model) == _GEMINI_FAMILY else "claude"
+    )
+
     if resolved_backend == "gemini":
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
 
         try:
             return call_gemini(
                 prompt,
-                model=model,
+                model=resolved_model,
                 timeout_seconds=timeout_seconds,
                 purpose=purpose,
                 ticker=ticker,
@@ -759,14 +770,14 @@ def call_llm(
                 }
             )
             # fall through to the Claude path below (its own ledger rows)
-    if model is None:
-        if purpose is None:
-            log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
-            resolved_model = DEFAULT_MODEL
-        else:
-            resolved_model = _model_for(purpose)
-    else:
-        resolved_model = model
+
+    # Claude path. If resolved_model is a Gemini ID (purpose pinned to Gemini but
+    # backend fell back), re-resolve a Claude model. Guard against Gemini IDs in
+    # LLM_MODELS (post-promotion) by falling back to DEFAULT_MODEL.
+    if family_of(resolved_model) == _GEMINI_FAMILY:
+        candidate = LLM_MODELS.get(purpose, DEFAULT_MODEL) if purpose is not None else DEFAULT_MODEL
+        resolved_model = candidate if family_of(candidate) != _GEMINI_FAMILY else DEFAULT_MODEL
+
     return _call_claude(
         prompt,
         model=resolved_model,
