@@ -26,6 +26,7 @@ from pipeline.analytical_dashboard import (
     TriggerLadderRow,
 )
 from ui.controls import controls_css
+from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -478,75 +479,15 @@ def _reread_card(r: PortfolioLensRow) -> str:
 
 
 def light_markdown_to_html(md: str) -> str:
-    """Cheap markdown subset: ##/### headers, **bold**, bullets, paragraphs.
-    Avoids a full markdown library so the dashboard stays dependency-free.
-    Handles enough to render lens outputs faithfully. Public: the advisor
-    Memos panel (P2.3) renders memo bodies through the same subset."""
-    import re
+    """Render stored markdown prose to HTML — thin re-export of the one prose
+    render boundary (:func:`ui.prose.render_prose`).
 
-    lines = md.splitlines()
-    out: list[str] = []
-    in_list = False
-    for raw in lines:
-        line = raw.rstrip()
-        if not line.strip():
-            if in_list:
-                out.append("</ul>")
-                in_list = False
-            out.append("")
-            continue
-        if line.startswith("### "):
-            if in_list:
-                out.append("</ul>")
-                in_list = False
-            out.append(f"<h4>{escape(line[4:])}</h4>")
-            continue
-        if line.startswith("## "):
-            if in_list:
-                out.append("</ul>")
-                in_list = False
-            out.append(f"<h3>{escape(line[3:])}</h3>")
-            continue
-        if line.startswith("# "):
-            if in_list:
-                out.append("</ul>")
-                in_list = False
-            out.append(f"<h2>{escape(line[2:])}</h2>")
-            continue
-        # Horizontal rule
-        if line.strip() in {"---", "***"}:
-            if in_list:
-                out.append("</ul>")
-                in_list = False
-            out.append("<hr>")
-            continue
-        # Bullet
-        bullet_match = re.match(r"^[-*]\s+(.+)", line)
-        if bullet_match:
-            if not in_list:
-                out.append("<ul>")
-                in_list = True
-            content = _inline_md(bullet_match.group(1))
-            out.append(f"<li>{content}</li>")
-            continue
-        # Paragraph
-        if in_list:
-            out.append("</ul>")
-            in_list = False
-        out.append(f"<p>{_inline_md(line)}</p>")
-    if in_list:
-        out.append("</ul>")
-    return "\n".join(out)
-
-
-def _inline_md(text: str) -> str:
-    import re
-
-    s = escape(text)
-    # Bold then italic — order matters
-    s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
-    s = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", s)
-    return re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    Was a divergent second renderer (##/### headers, bold, bullets — but no
+    tables or italics); collapsed in the Instrument Paradigm "one render per
+    content-kind" pass so the dashboard, the advisor Memos panel, and the
+    workspace report all render identical markdown identically. New code imports
+    ``ui.prose.render_prose`` directly."""
+    return render_prose(md)
 
 
 def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
@@ -740,10 +681,13 @@ _PAGE_HEAD = (
   /* Synthesis panel */
   .synthesis-panel {{ border-left: 3px solid var(--ok); }}
   .synthesis-body {{ font-size: var(--fs-section); line-height: 1.65; }}
-  .synthesis-body h2, .synthesis-body h3, .synthesis-body h4 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
+  .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
+  .synthesis-body h5, .synthesis-body h6 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
   .synthesis-body h2 {{ font-size: var(--fs-title); }}
   .synthesis-body h3 {{ font-size: var(--fs-section); }}
-  .synthesis-body h4 {{ font-size: var(--fs-body); color: var(--ok); }}
+  /* h4-h6 share the body size: the one prose boundary maps deep markdown
+     headings (###/####) here, and panels own the h2/h3 levels above them. */
+  .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--ok); }}
   .synthesis-body strong {{ color: var(--fg); }}
   .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 0.93em; }}
   .synthesis-body ul {{ padding-left: 22px; }}

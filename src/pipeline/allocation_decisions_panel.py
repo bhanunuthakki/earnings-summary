@@ -62,6 +62,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
 )
 from pipeline.research_cockpit import latest_dcf_runs
+from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
 from user_state.sizing import PositionSizingIntentRow, list_intents
@@ -721,7 +722,7 @@ def _timeline_section(timeline: list[TimelineEvent]) -> str:
         f'<td class="when">{escape(e.when.date().isoformat())}</td>'
         f'<td class="tk">{escape(e.ticker or "—")}</td>'
         f'<td><span class="p-pill ad-pill p-{escape(e.kind)}">{escape(e.label)}</span></td>'
-        f'<td class="ad-body">{escape(e.body)}</td>'
+        f'<td class="ad-body">{render_prose(e.body, inline=True)}</td>'
         "</tr>"
         for e in timeline
     )

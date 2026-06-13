@@ -163,6 +163,48 @@ not accidental:
 - **Don't** invent a new chip/badge/button variant — extend the kit in
   `controls.py` if a real gap exists, and document it here.
 
+## 9. Rendered prose (`src/ui/prose.py`)
+
+(Section 8 — "Streams & identity" — is owned by the S3 inbox-identity session
+per §6 of the interaction-paradigm directive; this section is numbered 9 to sit
+beside it.)
+
+**One render boundary per content-kind.** Any stored analyst/LLM
+**body / narrative / memo / note** that becomes HTML passes through the single
+boundary `ui.prose.render_prose(md, *, inline=False)`. It renders the markdown
+subset the product actually stores — headings, paragraphs, bullet lists, bold,
+italic, inline code, horizontal rules, pipe tables — and **always escapes its
+input first**, so it never emits unsanitized HTML (do not wrap it in a second
+sanitizer). Heading levels start at `<h3>` (`#`→h3, `##`→h4, …): a panel already
+owns the `<h2>` title above its prose, so content headings sit beneath it.
+
+- **`inline=True`** runs only the span pass (bold/italic/code, no block tags)
+  for `<td>`/`<p>` containers that must stay valid inline HTML; block markers
+  (`##`, `-`) survive as literal text rather than break a cell.
+- **Bare `escape()` of a prose field is forbidden** — it leaks raw `**bold**` /
+  `##` into the page. That is the exact "markdown leaking into rendered prose"
+  miss this boundary kills.
+- **Do not define a second markdown renderer.** There used to be three divergent
+  ones; `render_prose` is now their superset and the former server renderers
+  (`workspace _render_markdown`, dashboard `light_markdown_to_html`) are thin
+  re-exports. The ask-dock and iframe-chat JS `md()` functions are the ONLY
+  sanctioned client renderers — **pinned inline-subset mirrors** that can't be
+  server-rendered because they stream tokens and thread cite-marks client-side.
+  Keep them in rough inline parity; the server side is canonical.
+- **Excluded — deterministic non-markdown fields stay `escape()`d.** The
+  attribution narrative and the evals judge rationale are machine-authored plain
+  text with literal `*`/`#` that are NOT markdown; `render_prose` would corrupt
+  them, so they remain bare `escape()`.
+
+Enforced by `tests/test_ui_prose_boundary.py`: an opt-out scan denies the
+markdown-renderer signature outside a documented four-file allowlist (the
+boundary + the two JS mirrors + one markdown→plaintext stripper), and asserts
+each enumerated surface routes through `render_prose` while the two excluded
+fields keep `escape()`. (The shared `.prose` container styling lands in
+`controls.py` with the rest of the control kit — appended on the S1 token-kit
+merge per §6 of the interaction-paradigm directive; until then each surface's
+own container CSS styles the rendered children.)
+
 ---
 
 ## Appendix A — fresh-eyes audit (2026-06-11), the drift this version kills

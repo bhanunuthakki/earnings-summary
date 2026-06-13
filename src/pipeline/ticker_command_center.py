@@ -30,6 +30,7 @@ from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from ui.controls import controls_css, ticker_label
+from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
@@ -1142,7 +1143,7 @@ def _notes_rail_section(notes: list[AnalystNoteRow] | None) -> str:
                 f'<span class="rail-note-kind">{escape(n.kind)}</span>'
                 f"{stamp_html(n.created_at, mode='date', css='rail-note-when')}"
                 "</div>"
-                f'<div class="rail-note-body">{escape(n.body)}</div>'
+                f'<div class="rail-note-body">{render_prose(n.body)}</div>'
                 f'<div class="rail-note-meta">{" · ".join(meta_bits)}</div>'
                 "</div>"
             )

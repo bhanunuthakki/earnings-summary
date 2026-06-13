@@ -7,6 +7,7 @@ legacy report). Surfaces keep their own LAYOUT tokens (spacing, density) —
 only color/typography/branding are shared, because those are what drifted.
 """
 
+from ui.prose import render_prose
 from ui.tokens import (
     CHART_SERIES,
     FAVICON_LINK,
@@ -23,4 +24,5 @@ __all__ = [
     "PALETTE_LIGHT",
     "page_title",
     "palette_css",
+    "render_prose",
 ]

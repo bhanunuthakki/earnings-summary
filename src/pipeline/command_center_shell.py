@@ -731,10 +731,13 @@ code { font-family: var(--font-mono); font-size: 0.93em; color: var(--fg-soft); 
 /* Synthesis */
 .synthesis-panel { border-left: 3px solid var(--ok); }
 .synthesis-body { font-size: var(--fs-section); line-height: 1.65; }
-.synthesis-body h2, .synthesis-body h3, .synthesis-body h4 { color: var(--ink); margin-top: 1.2em; margin-bottom: 6px; }
+.synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
+.synthesis-body h5, .synthesis-body h6 { color: var(--ink); margin-top: 1.2em; margin-bottom: 6px; }
 .synthesis-body h2 { font-size: var(--fs-title); }
 .synthesis-body h3 { font-size: var(--fs-section); }
-.synthesis-body h4 { font-size: var(--fs-body); color: var(--ok); }
+/* h4-h6 share the body size: the one prose boundary maps deep markdown headings
+   (###/####) here, and panels already own the h2/h3 levels above them. */
+.synthesis-body h4, .synthesis-body h5, .synthesis-body h6 { font-size: var(--fs-body); color: var(--ok); }
 .synthesis-body strong { color: var(--ink); }
 .synthesis-body code { background: var(--paper); padding: 1px 5px; border-radius: 3px; }
 .synthesis-body ul { padding-left: 22px; }
@@ -899,6 +902,12 @@ td.ticker a:hover { color: var(--link); }
 .rail-note-when { font-family: var(--font-mono); font-size: var(--fs-micro); color: var(--muted); }
 .rail-note-body { font-size: var(--fs-body); line-height: 1.5; margin: 4px 0; color: var(--fg-soft);
   overflow-wrap: anywhere; }
+/* Rail note bodies render through ui.prose (markdown -> block HTML); collapse
+   the outer paragraph margins so a one-line note keeps its tight box. */
+.rail-note-body > :first-child { margin-top: 0; }
+.rail-note-body > :last-child { margin-bottom: 0; }
+.rail-note-body p { margin: 0 0 6px; }
+.rail-note-body ul { margin: 0 0 6px; padding-left: 20px; }
 .rail-note-meta { font-size: var(--fs-micro); color: var(--muted); overflow-wrap: anywhere; }
 .rail-note-meta code { font-size: var(--fs-micro); }
 

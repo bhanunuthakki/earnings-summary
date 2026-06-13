@@ -9,19 +9,16 @@ re-exports in ``workspace_html``."""
 from __future__ import annotations
 
 import html
-import re
 from collections.abc import Callable
 from io import StringIO
 from typing import TypeAlias
 
 from report.models import CellSource, MissingReason, SectionStatus
 from report.renderers.workspace_data import quarter_short
+from ui.prose import render_prose
 from ui.source_chip import source_chip_html, source_hover_title
 
 __all__ = [
-    "_BOLD_RX",
-    "_INLINE_CODE_RX",
-    "_ITAL_RX",
     "_STATUS_EMPTY_REASON",
     "TabDef",
     "TabGroup",
@@ -51,15 +48,6 @@ TabDef: TypeAlias = tuple[str, str, int | None, TabRenderFn]
 
 # A grouped top-level tab: (group_id, label, section tabs rendered inside).
 TabGroup: TypeAlias = tuple[str, str, list[TabDef]]
-
-
-_BOLD_RX = re.compile(r"\*\*([^*]+)\*\*")
-
-
-_ITAL_RX = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
-
-
-_INLINE_CODE_RX = re.compile(r"`([^`]+)`")
 
 
 # P3.3 chip anatomy — shared with the dashboard's Explore panel since P5.1:
@@ -243,85 +231,13 @@ def _missing_panel(
     )
 
 
-def _render_markdown(md: str) -> str:
-    """Tiny markdown → HTML renderer.
-
-    Handles: headings, paragraphs, bullet lists, bold, italic, inline code,
-    pipe tables. Enough for the LLM-emitted earnings / saydo content. Anything
-    fancier is escaped and presented as-is.
-    """
-    if not md:
-        return ""
-    lines = md.replace("\r\n", "\n").split("\n")
-    out: list[str] = []
-    in_ul = False
-    in_table = False
-    table_rows: list[list[str]] = []
-
-    def flush_table() -> None:
-        nonlocal in_table
-        if not table_rows:
-            return
-        out.append('<div class="table-scroll"><table class="tbl"><thead><tr>')
-        for c in table_rows[0]:
-            out.append(f"<th>{_inline_md(c)}</th>")
-        out.append("</tr></thead><tbody>")
-        for row in table_rows[2:]:  # skip separator at index 1
-            out.append("<tr>")
-            for c in row:
-                out.append(f"<td>{_inline_md(c)}</td>")
-            out.append("</tr>")
-        out.append("</tbody></table></div>")
-        table_rows.clear()
-        in_table = False
-
-    for raw in lines:
-        line = raw.rstrip()
-        if line.startswith("|") and line.endswith("|"):
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            table_rows.append(cells)
-            in_table = True
-            continue
-        if in_table:
-            flush_table()
-
-        if not line.strip():
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            continue
-
-        m_h = re.match(r"^(#{1,6})\s+(.*)$", line)
-        if m_h:
-            if in_ul:
-                out.append("</ul>")
-                in_ul = False
-            level = min(len(m_h.group(1)) + 2, 6)
-            out.append(f"<h{level}>{_inline_md(m_h.group(2))}</h{level}>")
-            continue
-
-        if re.match(r"^\s*[-*]\s+", line):
-            if not in_ul:
-                out.append("<ul>")
-                in_ul = True
-            content = re.sub(r"^\s*[-*]\s+", "", line)
-            out.append(f"<li>{_inline_md(content)}</li>")
-            continue
-
-        if in_ul:
-            out.append("</ul>")
-            in_ul = False
-        out.append(f"<p>{_inline_md(line)}</p>")
-
-    if in_ul:
-        out.append("</ul>")
-    if in_table:
-        flush_table()
-    return "".join(out)
+# Markdown → HTML for the workspace report's stored prose. The real renderer
+# now lives in :mod:`ui.prose` (the one prose render boundary — Instrument
+# Paradigm "one render per content-kind"); these keep the historical workspace
+# names resolving. New code imports ``ui.prose.render_prose`` directly.
+_render_markdown = render_prose
 
 
 def _inline_md(text: str) -> str:
-    text = _esc(text)
-    text = _BOLD_RX.sub(r"<strong>\1</strong>", text)
-    text = _ITAL_RX.sub(r"<em>\1</em>", text)
-    return _INLINE_CODE_RX.sub(r"<code>\1</code>", text)
+    """Inline-only markdown (bold/italic/code) for table cells and labels."""
+    return render_prose(text, inline=True)

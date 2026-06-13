@@ -40,9 +40,6 @@ from report.renderers.workspace_script import JS
 # `from report.renderers.workspace_html import _x` keeps resolving; new
 # code should import from the section modules directly.
 from report.renderers.workspace_sections._shared import (
-    _BOLD_RX,
-    _INLINE_CODE_RX,
-    _ITAL_RX,
     _STATUS_EMPTY_REASON,
     TabDef,
     TabGroup,
@@ -174,9 +171,6 @@ from report.renderers.workspace_styles import CSS
 from ui.tokens import FAVICON_LINK
 
 __all__ = [
-    "_BOLD_RX",
-    "_INLINE_CODE_RX",
-    "_ITAL_RX",
     "_LENS_LABELS",
     "_SIGNALS_SEVERITIES",
     "_STATUS_EMPTY_REASON",

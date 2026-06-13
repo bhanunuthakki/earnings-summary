@@ -34,8 +34,8 @@ from advisor.context import (
 from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
-from pipeline.analytical_dashboard_html import light_markdown_to_html
 from ui.controls import controls_css
+from ui.prose import render_prose
 from ui.tokens import FAVICON_LINK, palette_css
 
 _KIND_LABELS: dict[str, str] = {
@@ -269,7 +269,7 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
     scope = m.ticker or "portfolio"
     if m.counter_ticker:
         scope += f" vs {m.counter_ticker}"
-    body = light_markdown_to_html(m.body_md[:12000])
+    body = render_prose(m.body_md[:12000])
     stance = ""
     if m.stance:
         horizon = f" · {m.horizon_days}d" if m.horizon_days else ""

@@ -44,6 +44,7 @@ from journal_links import (
     pending_reconciliation,
     targets_for_notes,
 )
+from ui.prose import render_prose
 from user_state.notes import NOTE_KINDS, AnalystNoteRow, list_notes
 
 _PANEL_STYLE = """<style>
@@ -68,6 +69,13 @@ _PANEL_STYLE = """<style>
 .jr-status-superseded, .jr-status-archived { color:var(--muted); }
 .jr-when, .jr-src { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
 .jr-body { font-size:var(--fs-body); line-height:1.5; color:var(--fg-soft); }
+/* Note bodies render through ui.prose (markdown → block HTML); collapse the
+   first/last paragraph margins so a one-line note keeps its old tight box. */
+.jr-body > :first-child { margin-top:0; }
+.jr-body > :last-child { margin-bottom:0; }
+.jr-body p { margin:0 0 8px; }
+.jr-body ul { margin:0 0 8px; padding-left:20px; }
+.jr-body li { margin-bottom:3px; }
 .jr-resolution { margin-top:6px; font-size:var(--fs-caption); color:var(--muted); }
 .jr-anchor { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
 .jr-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
@@ -204,7 +212,7 @@ def _note_card(
         f"{anchor}"
         f"{_link_chip(n, targets)}"
         "</div>"
-        f'<div class="jr-body">{escape(n.body)}</div>'
+        f'<div class="jr-body">{render_prose(n.body)}</div>'
         f"{resolution}"
         f"{actions}"
         "</div>"
@@ -306,7 +314,7 @@ def _reconciliation_card(item: ReconciliationItem) -> str:
         f"{ticker_html}"
         f'<span class="jr-when">{escape(n.created_at.date().isoformat())}</span>'
         "</div>"
-        f'<div class="jr-body">{escape(n.body)}</div>'
+        f'<div class="jr-body">{render_prose(n.body)}</div>'
         f'<div class="jr-rec-concl">{escape(t.kind)} #{t.target_id} · '
         f"{escape(t.label)} — {escape(t.conclusion or 'concluded')}</div>"
         '<div class="jr-actions">'
