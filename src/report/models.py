@@ -896,6 +896,9 @@ class SourceDocRow(BaseModel):
     file_path: str
     sha256: str | None = None
     fetched_at: str | None = None
+    # documents.id — lets the Sources tab deep-link each row into the in-app
+    # /source/<doc_id> viewer (S10 PR2). None on legacy built reports.
+    doc_id: int | None = None
 
 
 class ValidationIssueRow(BaseModel):

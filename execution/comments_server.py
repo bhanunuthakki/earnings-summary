@@ -531,10 +531,24 @@ def create_app(
 
             return Response(render_validation_panel(db_path), mimetype="text/html")
 
+        if name == "provenance":
+            # System → Provenance (S10): the consolidated data-quality console —
+            # one page composing the 8 diagnostics builders (Coverage prominent
+            # + Validation + Evals + IR/cache/cron/DCF/restatements). Replaces the
+            # old 8-tab strip; the killed ids alias here (_LEGACY_PANEL_REDIRECTS).
+            from pipeline.provenance_panel import render_provenance_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_provenance_panel(db_path, repo_root, user_id=user_id),
+                mimetype="text/html",
+            )
+
         if name == "section_coverage":
             # Per-ticker section coverage (P4.2): the visible counterpart of
             # the hide-don't-stub policy — reports hide cold sections, this
-            # matrix is where the gaps stay accountable.
+            # matrix is where the gaps stay accountable. Still served standalone
+            # for the Provenance console's anchor + any direct fetch.
             from pipeline.section_coverage_panel import render_section_coverage_panel
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)

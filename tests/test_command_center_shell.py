@@ -95,7 +95,8 @@ def test_render_shell_five_section_structure() -> None:
     # The old three-theme ids are gone from the nav.
     for dead in ("research", "governance"):
         assert f'data-theme-target="{dead}"' not in html
-    # Surviving sub-tabs, each tagged with its section.
+    # Surviving sub-tabs, each tagged with its section. System collapsed its
+    # 8-tab diagnostics strip into the single "provenance" console (S10).
     for target in (
         "overview",
         "holding",
@@ -107,13 +108,13 @@ def test_render_shell_five_section_structure() -> None:
         "decisions_record",
         "advisor_memos",
         "holdings",
-        "section_coverage",
-        "ir_coverage",
-        "source_calls",
-        "validation",
-        "restatements",
+        "provenance",
     ):
         assert f'data-tab-target="{target}"' in html
+    # The collapsed System diagnostics ids are no longer sub-tabs (they alias to
+    # the provenance console via _LEGACY_PANEL_REDIRECTS).
+    for collapsed in ("section_coverage", "ir_coverage", "source_calls", "validation"):
+        assert f'data-tab-target="{collapsed}"' not in html
     for drawered in ("budget", "actions"):
         assert f'data-tab-target="{drawered}"' not in html
     # Overview is inlined verbatim and marked loaded.
@@ -151,9 +152,11 @@ def test_single_tab_sections_suppress_their_sub_row() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-cc-theme="home" data-single="1"' in html
     assert 'data-cc-theme="ask" data-single="1"' in html
+    # System collapsed to one Provenance sub-tab (S10) → its row is now single
+    # and suppressed too, exactly like Home / Ask.
+    assert 'data-cc-theme="system" data-single="1"' in html
     assert 'data-cc-theme="companies" data-single="1"' not in html
     assert 'data-cc-theme="portfolio" data-single="1"' not in html
-    assert 'data-cc-theme="system" data-single="1"' not in html
     # The CSS that suppresses single-tab rows + the [hidden] restatement that
     # keeps inactive rows from stacking (display:flex used to beat [hidden]).
     assert '.cc-subtabs[data-single="1"] { display: none; }' in SHELL_CSS
@@ -179,7 +182,8 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         assert f'data-panel="{killed}"' not in html
         # The JS REDIRECTS map carries every killed panel.
         assert f"{killed}:" in SHELL_JS.replace("'", "")
-    # Python-side map mirrors the JS one (keep-in-sync contract).
+    # Python-side map mirrors the JS one (keep-in-sync contract). S10 added the
+    # 8 collapsed System diagnostics ids — all aliasing to the provenance console.
     assert set(_LEGACY_PANEL_REDIRECTS) == {
         "prereads",
         "insiders",
@@ -192,7 +196,28 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "companies",
         "ask",
         "system",
+        "section_coverage",
+        "ir_coverage",
+        "source_calls",
+        "cron_health",
+        "dcf_coverage",
+        "evals",
+        "validation",
+        "restatements",
     }
+    # The collapsed diagnostics ids alias to the one console.
+    for collapsed in (
+        "section_coverage",
+        "ir_coverage",
+        "source_calls",
+        "cron_health",
+        "dcf_coverage",
+        "evals",
+        "validation",
+        "restatements",
+    ):
+        assert _LEGACY_PANEL_REDIRECTS[collapsed] == "provenance"
+        assert f"{collapsed}:" in SHELL_JS.replace("'", "")
     for alias in ("home", "companies", "ask", "system"):
         assert f"{alias}:" in SHELL_JS.replace("'", "")
     for new_home in _LEGACY_PANEL_REDIRECTS.values():
@@ -204,7 +229,7 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     assert _LEGACY_PANEL_REDIRECTS["home"] == "overview"
     assert _LEGACY_PANEL_REDIRECTS["companies"] == "holding"
     assert _LEGACY_PANEL_REDIRECTS["ask"] == "explore"
-    assert _LEGACY_PANEL_REDIRECTS["system"] == "section_coverage"
+    assert _LEGACY_PANEL_REDIRECTS["system"] == "provenance"
     # The drawer-section legacy ids also auto-open the drawer on arrival.
     assert "DRAWER_OPENERS = { budget: 1, actions: 1 }" in SHELL_JS
 
@@ -213,7 +238,7 @@ def test_render_shell_lazy_endpoints_and_pickers() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     # Lazy panels carry their fetch endpoint and start unloaded.
     assert 'data-endpoint="/api/panel/holdings"' in html
-    assert 'data-endpoint="/api/panel/validation"' in html
+    assert 'data-endpoint="/api/panel/provenance"' in html
     assert 'data-loaded="0"' in html
     # The Holding drill-down is ticker-scoped (data-picker routes the hash ticker
     # to loadBody), but the picker UI is now a search combobox INSIDE the holding
@@ -345,8 +370,7 @@ def test_sub_tab_buttons_carry_their_section() -> None:
     assert 'data-tab-target="explore" data-cc-theme="ask"' in html
     assert 'data-tab-target="portfolio_synthesis" data-cc-theme="portfolio"' in html
     assert 'data-tab-target="decisions_record" data-cc-theme="portfolio"' in html
-    assert 'data-tab-target="validation" data-cc-theme="system"' in html
-    assert 'data-tab-target="ir_coverage" data-cc-theme="system"' in html
+    assert 'data-tab-target="provenance" data-cc-theme="system"' in html
 
 
 def test_synthesis_subtab_sits_right_after_performance() -> None:

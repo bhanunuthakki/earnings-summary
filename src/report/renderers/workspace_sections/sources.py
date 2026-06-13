@@ -18,6 +18,13 @@ from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
 from ui.controls import prov_severity_tick
 
+# The research server the report deep-links into. The report opens via file://,
+# so console links (the in-app /source/<doc_id> viewers, the live data-quality
+# console) must be absolute — same hardcoded base the chat/socratic links use
+# (workspace_sections/boot.py). The viewers 302 to the original URL when a doc
+# isn't in-app-viewable, so the link is never a dead end.
+_CONSOLE_BASE = "http://localhost:7421"
+
 __all__ = [
     "_prompt_quality_panel",
     "_sources_tab",
@@ -40,7 +47,16 @@ def _sources_tab(
         f"{len(app.transcripts)} transcript{'s' if len(app.transcripts) != 1 else ''} inline."
         "</h2>"
     )
-    body.write("</div></div>")
+    body.write("</div>")
+    # Deep-link into the running command-center's consolidated data-quality
+    # console (System → Provenance) — resolve / refresh / diagnose live there.
+    body.write(
+        '<div class="row-actions">'
+        f'<a class="k-btn k-btn-quiet k-btn-sm" href="{_CONSOLE_BASE}/#provenance" '
+        'target="_blank" rel="noopener">Open the live data-quality console &rarr;</a>'
+        "</div>"
+    )
+    body.write("</div>")
 
     # Transcripts first — most-used scroll target per user request.
     if app.transcripts:
@@ -124,10 +140,21 @@ def _sources_tab(
             "</tr></thead><tbody>"
         )
         for d in prov.source_docs:
+            # Path deep-links the in-app /source/<doc_id> viewer (numbered
+            # transcript reader / section-keyed 10-K reader / metadata card with
+            # the outbound link) when the row carries a doc_id; older built
+            # reports without it fall back to the plain path text.
+            if d.doc_id is not None:
+                path_cell = (
+                    f'<a href="{_CONSOLE_BASE}/source/{d.doc_id}" target="_blank" '
+                    f'rel="noopener">{_esc(d.file_path)}</a>'
+                )
+            else:
+                path_cell = _esc(d.file_path)
             body.write(
                 f"<tr><td>{_esc(d.doc_type)}</td>"
                 f"<td>{_esc(d.period_end or '—')}</td>"
-                f"<td>{_esc(d.file_path)}</td>"
+                f"<td>{path_cell}</td>"
                 f"<td>{_esc(d.fetched_at or '—')}</td></tr>"
             )
         body.write("</tbody></table></div></div>")

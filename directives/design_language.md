@@ -416,7 +416,7 @@ at render time.
 
 ---
 
-## 10. Comments — closed under no-fit
+## 11. Comments — closed under no-fit
 
 The comment classifier is **closed under no-fit, and every commentable surface
 is steerable** (Instrument Paradigm §1 — *closed under no-fit, explainable by
@@ -514,7 +514,7 @@ diet rows is independent of the wall clock.
 
 ---
 
-## 11. The Discovery rule (weighted candidate ranking)
+## 12. The Discovery rule (weighted candidate ranking)
 
 The discovery queue is a **ranked surface**, so by the Instrument Paradigm it
 scores **by a weighted sum of typed, dated signals through a source-weight
