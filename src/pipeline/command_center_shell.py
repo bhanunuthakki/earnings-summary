@@ -159,30 +159,15 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     (
         "system",
         "System",
-        (
-            # Per-ticker section coverage (P4.2): which report sections are
-            # filled for which names — the visible counterpart of the
-            # hide-don't-stub policy (reports no longer show cold stubs).
-            ("section_coverage", "Coverage", "/api/panel/section_coverage", False, False),
-            ("ir_coverage", "IR Docs", "/api/panel/ir_coverage", False, False),
-            ("source_calls", "Data Cache", "/api/panel/source_calls", False, False),
-            # Last-7-day pipeline run history from ingestion_runs (S1 fund-grade
-            # build): backup + morning pipeline verdict + per-directive dot grid.
-            ("cron_health", "Cron Health", "/api/panel/cron_health", False, False),
-            # Which DCF workbooks are live / stale / skipped / orphaned (S11):
-            # per-name freshness + assumptions-JSON state + sync outcome (0091).
-            ("dcf_coverage", "DCF Coverage", "/api/panel/dcf_coverage", False, False),
-            # LLM eval scores (llm_evals_plan §2.6): latest run per purpose +
-            # prompt-version A/B strip + failed-case drawers + call health,
-            # with run buttons over the jobs SSE machinery.
-            ("evals", "Evals", "/api/panel/evals", False, False),
-            # Whole-book data-quality state over validation_issues (P3.4) —
-            # previously reachable only per-ticker inside workspace reports.
-            ("validation", "Validation", "/api/panel/validation", False, False),
-            # "was X, now Y" over the supersede chains (P3.5), linking both
-            # filings into the /source/<doc_id> viewers.
-            ("restatements", "Restatements", "/api/panel/restatements", False, False),
-        ),
+        # One consolidated Provenance console (S10): the old 8-tab diagnostics
+        # strip (Coverage / IR Docs / Data Cache / Cron Health / DCF Coverage /
+        # Evals / Validation / Restatements) collapsed into a single page that
+        # composes all 8 builders (pipeline/provenance_panel.py), Coverage
+        # prominent + an anchor-nav band. A single sub-tab suppresses the subnav
+        # row entirely (data-single), so the System icon opens it directly. Every
+        # old panel id aliases here via _LEGACY_PANEL_REDIRECTS, so existing
+        # #section_coverage / #validation / #evals … deep-links still resolve.
+        (("provenance", "Provenance", "/api/panel/provenance", False, False),),
     ),
 )
 
@@ -198,12 +183,24 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "predictions": "overview",
     "decisions": "decisions_record",
     "thesis_ledger": "decisions_record",
-    "budget": "ir_coverage",
-    "actions": "ir_coverage",
+    "budget": "provenance",
+    "actions": "provenance",
     "home": "overview",
     "companies": "holding",
     "ask": "explore",
-    "system": "section_coverage",
+    "system": "provenance",
+    # S10: the 8 System diagnostics tabs collapsed into the one Provenance
+    # console — their old deep-links land there (the console's anchor-nav jumps
+    # to each section, e.g. #prov-validation). The /api/panel/<id> fetch routes
+    # for each builder stay live (the console + any direct fetch use them).
+    "section_coverage": "provenance",
+    "ir_coverage": "provenance",
+    "source_calls": "provenance",
+    "cron_health": "provenance",
+    "dcf_coverage": "provenance",
+    "evals": "provenance",
+    "validation": "provenance",
+    "restatements": "provenance",
 }
 
 
@@ -484,14 +481,9 @@ _SKELETON_KINDS: dict[str, str] = {
     "decisions_record": "table",
     "advisor_memos": "cards",
     "holdings": "table",
-    "section_coverage": "table",
-    "ir_coverage": "table",
-    "source_calls": "kpis",
-    "cron_health": "kpis",
-    "dcf_coverage": "table",
-    "evals": "table",
-    "validation": "table",
-    "restatements": "table",
+    # The 8 System diagnostics tabs collapsed into one Provenance console (S10) —
+    # it leads with the Coverage matrix above several stacked panels.
+    "provenance": "kpis",
 }
 
 
@@ -1196,12 +1188,21 @@ SHELL_JS = r"""
     predictions: 'overview',
     decisions: 'decisions_record',
     thesis_ledger: 'decisions_record',
-    budget: 'ir_coverage',
-    actions: 'ir_coverage',
+    budget: 'provenance',
+    actions: 'provenance',
     home: 'overview',
     companies: 'holding',
     ask: 'explore',
-    system: 'section_coverage'
+    system: 'provenance',
+    // S10: the 8 System diagnostics tabs collapsed into one Provenance console.
+    section_coverage: 'provenance',
+    ir_coverage: 'provenance',
+    source_calls: 'provenance',
+    cron_health: 'provenance',
+    dcf_coverage: 'provenance',
+    evals: 'provenance',
+    validation: 'provenance',
+    restatements: 'provenance'
   };
   // Legacy panels that became settings-drawer sections (P3.4): their old
   // deep-links also auto-open the drawer after landing on Governance.

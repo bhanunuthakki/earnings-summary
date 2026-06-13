@@ -98,7 +98,7 @@ def _source_docs(conn: sqlite3.Connection, ticker: str) -> list[SourceDocRow]:
     cursor = conn.cursor()
     cursor.execute(
         """
-        SELECT doc_type, period_end, file_path, sha256, fetched_at
+        SELECT id, doc_type, period_end, file_path, sha256, fetched_at
         FROM documents
         WHERE ticker = ?
         ORDER BY period_end DESC, doc_type
@@ -112,6 +112,7 @@ def _source_docs(conn: sqlite3.Connection, ticker: str) -> list[SourceDocRow]:
             file_path=str(r["file_path"]),
             sha256=str(r["sha256"]) if r["sha256"] else None,
             fetched_at=str(r["fetched_at"]) if r["fetched_at"] else None,
+            doc_id=int(r["id"]) if r["id"] is not None else None,
         )
         for r in cursor.fetchall()
     ]

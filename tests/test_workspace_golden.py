@@ -1069,12 +1069,14 @@ def _provenance() -> ProvenanceSection:
                 file_path="data/historical/sec/TEST_10q_2026Q1.json",
                 sha256="ab12cd34",
                 fetched_at="2026-05-02T08:00:00",
+                doc_id=101,  # deep-links the /source/<doc_id> viewer
             ),
             SourceDocRow(
                 doc_type="transcript",
                 period_end="2026-03-31",
                 file_path="data/transcripts/TEST_Q1_2026.txt",
                 fetched_at="2026-04-30T21:00:00",
+                # doc_id left None — exercises the plain-path fallback for legacy rows
             ),
         ],
         open_validation_issues=2,
