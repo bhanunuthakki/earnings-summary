@@ -922,7 +922,8 @@ def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
 _COMBO_STYLE = """<style>
 .cc-combo { position: relative; flex: 1 1 280px; max-width: 420px; min-width: 200px; }
 /* The input itself is skinned by the shared control kit (ui/controls.py);
-   the results list is the kit's .k-menu surface with combo positioning.
+   the results list is anchored furniture fused to the bar (see .cc-combo-list
+   below), NOT a floating .k-menu popover (feedback #4 / Law 3).
    (.cc-combo prefix: outranks the kit's input[type] baseline so the mono
    ticker face survives the baseline's `font: inherit`.) */
 .cc-combo .cc-combo-input { width: 100%; box-sizing: border-box; padding: 6px 11px;
@@ -936,11 +937,21 @@ _COMBO_STYLE = """<style>
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   pointer-events: none; }
 .cc-combo:focus-within .cc-combo-name { display: none; }
-.cc-combo-list { position: absolute; z-index: 25; top: calc(100% + 4px); left: 0; right: 0;
+/* The results are in-section furniture, not a floating overlay (Law 3 / §6.1):
+   they sit flush under the search bar (no gap, no pop shadow) and share the
+   focused input's accent border, so the input + results read as ONE seated
+   control belonging to the Holding band — not a tooltip hovering over the
+   report. Absolute positioning keeps the band height stable. */
+.cc-combo-list { position: absolute; z-index: 25; top: 100%; left: 0; right: 0;
   margin: 0; padding: 4px 0; list-style: none; max-height: 320px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+  background: var(--surface); border: 1px solid var(--accent); border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius); }
 .cc-combo-list[hidden] { display: none; }
+/* While the results are open the input squares its bottom edge so it meets the
+   flush results panel cleanly at the corners (its own 1px bottom border is the
+   divider between the search field and its results). */
+.cc-combo .cc-combo-input[aria-expanded="true"] { border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0; }
 .cc-combo-list li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px;
   cursor: pointer; font-size: var(--fs-body); }
 .cc-combo-list li.sel, .cc-combo-list li:hover { background: var(--paper); }
