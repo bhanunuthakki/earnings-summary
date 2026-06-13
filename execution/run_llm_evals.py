@@ -55,9 +55,8 @@ GOLDEN_PURPOSES = (
     "ask_evidence_followup",
     "ask_claim_grounding",
     "injection_canaries",
-    "peer_selection",
 )
-AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar")
+AUDIT_PURPOSES = ("bear_case", "transcript_summary", "advisor_next_dollar", "peer_selection")
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 
 
@@ -246,19 +245,6 @@ def main() -> int:
                 args.golden or (PROJECT_ROOT / CANARY_DIR / "injection_canaries.json")
             ).resolve()
             summary = run_canary_eval(
-                golden_path=golden_path,
-                code_root=PROJECT_ROOT,
-                limit=args.limit,
-            )
-        elif args.purpose == "peer_selection":
-            # LLM peer generator (directives/peer_selection_llm.md): one live
-            # suggest_peers call per case, scored by recall of the hand-picked
-            # business-model comps — deterministic, no judge (--no-judge no-op).
-            from evals.peer_selection import DEFAULT_GOLDEN_RELPATH as PEER_GOLDEN
-            from evals.peer_selection import run_peer_selection_eval
-
-            golden_path = (args.golden or (PROJECT_ROOT / PEER_GOLDEN)).resolve()
-            summary = run_peer_selection_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,

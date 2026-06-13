@@ -834,7 +834,8 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
             v is not None
             for v in (row.market_cap_usd, row.revenue_ttm_usd, row.net_margin_ttm, row.roic_ttm)
         )
-        if not has_metrics and not named:
+        thesis_peer = peer in llm_tickers
+        if not has_metrics and not named and not thesis_peer:
             continue  # an all-dash row says nothing — hide-don't-stub
         out.append(row)
 

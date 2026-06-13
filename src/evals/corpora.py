@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -217,6 +218,53 @@ def load_advisor_next_dollar_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every cached peer selection artifact, newest first.
+
+    Reads from ``data/peer_selection/<TICKER>.json`` files written by
+    ``compute.peer_selection.extract_for_ticker`` on the --enable-llm build.
+    The rubric judge scores each list for business-model match, why-string
+    specificity, cross-boundary coverage, and peer count.
+
+    Missing directory or no files → empty corpus (nothing generated yet — not
+    a grading failure).
+    """
+    out: list[AuditItem] = []
+    peer_dir = Path(repo_root) / "data" / "peer_selection"
+    if not peer_dir.exists():
+        return out
+    for path in sorted(peer_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        ticker = path.stem.upper()
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        raw_dict = cast("dict[str, object]", raw)
+        suggestions = raw_dict.get("suggestions")
+        if not isinstance(suggestions, list):
+            continue
+        extracted_at = raw_dict.get("extracted_at")
+        produced_at: datetime | None = None
+        if isinstance(extracted_at, str):
+            try:
+                produced_at = datetime.fromisoformat(extracted_at)
+            except ValueError:
+                produced_at = None
+        content = json.dumps(suggestions, indent=2, ensure_ascii=False)
+        out.append(
+            AuditItem(
+                item_id=f"peer_selection:{ticker}",
+                label=f"peer_selection/{ticker}",
+                ticker=ticker,
+                content=_clip(content),
+                produced_at=produced_at,
+            )
+        )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -224,6 +272,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "bear_case": load_bear_case_corpus,
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
+    "peer_selection": load_peer_selection_corpus,
 }
 
 
