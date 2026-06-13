@@ -417,10 +417,9 @@ QUARANTINE: dict[str, frozenset[str]] = {
     "pipeline/source_viewers.py": frozenset({"radius"}),
     "pipeline/ticker_command_center.py": frozenset({"font-size"}),
     "pipeline/validation_issues_panel.py": frozenset({"radius"}),
-    # --- the shell itself: the S1 unfork target — graduates in S1 PR2 ---
-    "pipeline/command_center_shell.py": frozenset(
-        {"alias", "color", "font-family", "font-size", "radius"}
-    ),
+    # (pipeline/command_center_shell.py graduated in S1 PR2 — the shell namespace
+    #  unfork: legacy-alias :root deleted, ~60 rules onto canonical tokens, the
+    #  .calib-fill gradient / .qa-yes/.qa-no hex / 20px glyphs / 3-4px radii fixed.)
     # --- the editorial report surfaces — a report-unfork pass (S2-adjacent) ---
     "report/renderers/workspace_charts.py": frozenset({"radius"}),
     "report/renderers/workspace_chat.py": frozenset(
