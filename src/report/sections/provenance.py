@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from models.validation import SEVERITY_ORDER
 from report.models import (
     CoverageRow,
     ProvenanceSection,
@@ -13,6 +14,17 @@ from report.models import (
     ValidationIssueRow,
 )
 from report.sections._common import has_table, missing, open_repo_db
+
+# Severity sort order derived from the live Severity enum (S10): most-severe
+# first. The prior CASE matched 'error'/'warning' — a vocabulary no writer
+# emits — so every row fell to the ELSE bucket and the severity sort was a
+# silent no-op (HALT issues didn't float to the top). Built from SEVERITY_ORDER
+# so it can't drift; values are fixed enum literals (no injection surface).
+_SEVERITY_SORT_SQL = (
+    "CASE severity "
+    + " ".join(f"WHEN '{s.value}' THEN {i}" for i, s in enumerate(SEVERITY_ORDER))
+    + f" ELSE {len(SEVERITY_ORDER)} END"
+)
 
 
 def build(ticker: str, repo_root: Path) -> ProvenanceSection:
@@ -129,13 +141,11 @@ def _open_validation_issues(
     if n == 0:
         return 0, []
     cursor.execute(
-        """
+        f"""
         SELECT severity, rule, raw_value, expected, raised_at
         FROM validation_issues
         WHERE ticker = ? AND resolved_at IS NULL
-        ORDER BY
-          CASE severity WHEN 'error' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
-          raised_at DESC
+        ORDER BY {_SEVERITY_SORT_SQL}, raised_at DESC
         LIMIT 50
         """,
         (ticker.upper(),),

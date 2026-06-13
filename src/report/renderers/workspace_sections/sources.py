@@ -16,6 +16,7 @@ from llm.calibration import VersionSummary, daily_avg_scores, summarize_by_promp
 from report.models import AppendixSection, ProvenanceSection
 from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
+from ui.controls import prov_severity_tick
 
 __all__ = [
     "_prompt_quality_panel",
@@ -70,13 +71,13 @@ def _sources_tab(
             "</tr></thead><tbody>"
         )
         for v in prov.open_issues_detail:
-            sev_cls = {
-                "error": "neg",
-                "warning": "warn",
-            }.get(v.severity.lower(), "muted")
+            # Severity tick via the shared kit (prov_severity_tick) so the tone
+            # derives from the live Severity enum — the writer emits halt/warn,
+            # and the prior hand-typed {error,warning} map rendered every real
+            # issue (incl. HALT) muted grey. See test_provenance_severity_contract.
             body.write(
                 f"<tr>"
-                f'<td class="num {sev_cls}">{_esc(v.severity.upper() or "—")}</td>'
+                f"<td>{prov_severity_tick(v.severity)}</td>"
                 f"<td>{_esc(v.rule)}</td>"
                 f"<td>{_esc(v.raw_value or '—')}</td>"
                 f"<td>{_esc(v.expected or '—')}</td>"

@@ -1077,15 +1077,25 @@ def _provenance() -> ProvenanceSection:
                 fetched_at="2026-04-30T21:00:00",
             ),
         ],
-        open_validation_issues=1,
+        open_validation_issues=2,
         open_issues_detail=[
+            # Real severities the writer actually emits (models.validation.Severity:
+            # halt/warn) — exercises the fixed severity tick so a HALT renders red,
+            # not the muted grey the prior {error,warning} renderer produced.
             ValidationIssueRow(
-                severity="warning",
-                rule="cross_source_revenue_delta",
+                severity="halt",
+                rule="magnitude_jump",
+                raw_value="1810.0",
+                expected="≤ 1600.0",
+                raised_at="2026-05-03T08:30:00",
+            ),
+            ValidationIssueRow(
+                severity="warn",
+                rule="source_disagreement",
                 raw_value="1810.0",
                 expected="1807.0",
-                raised_at="2026-05-03T08:30:00",
-            )
+                raised_at="2026-05-02T09:15:00",
+            ),
         ],
     )
 

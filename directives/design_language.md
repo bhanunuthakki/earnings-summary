@@ -318,6 +318,50 @@ fields keep `escape()`. (The shared `.prose` container styling lands in
 merge per §6 of the interaction-paradigm directive; until then each surface's
 own container CSS styles the rendered children.)
 
+## 10. Provenance & data quality (`src/ui/controls.py`)
+
+**Provenance is actionable, and drift-proof by construction** (Instrument
+Paradigm; the "one render boundary per content-kind" corollary applied to
+data-quality rows). Any data-quality surface — the report Sources tab, the
+System Validation panel, the freshness peek, the evals failed-case drawer —
+renders through ONE kit, not a bespoke per-surface builder:
+
+- **`prov_row(label, *, severity=, stamp=, note=, actions=, drawer=)`** — one
+  actionable row: a severity tick (when `severity` is given) + label + a
+  *relative* `stamp` (via `ui.time.stamp_html`) + a plain `note` aside + ≥1
+  inline `actions` + an optional drill-down `drawer`. A data-quality row that
+  shows a problem but offers no way to act on it (resolve / refresh / diagnose /
+  open `/source`) is the inert-table miss this kills.
+- **`prov_drawer(summary, items)`** + **`prov_case(title, *, score=,
+  rationale=, expected=, actual=)`** — the collapsible drill-down (the proven
+  evals failed-case drawer, lifted): a `<details>` of per-case rows showing
+  judge rationale + an expected/actual split. `expected`/`actual` are machine
+  text — `escape()`d, never `render_prose`'d (§9 exclusion).
+- **`prov_action(label, *, href= | post_url=, post_body=, issue_id=)`** — one
+  inline action: a `/source`-style deep LINK, or a resolve/refresh BUTTON
+  carrying its endpoint + JSON body as `data-prov-*` attributes for the
+  surface's delegated listener (the freshness-peek streaming contract, or the
+  resolve fetch).
+
+**Severity color derives from the live enum — never a hand-typed set.**
+`prov_severity_tick()` resolves tone through `prov_severity_tone()`, which keys a
+map on `models.validation.Severity` (`HALT`→bad, `WARN`→warn). The writer emits
+`halt`/`warn` (`record_validation_issue`); the report renderer used to match a
+dead `{error, warning}` vocabulary, so a **HALT issue rendered muted grey** and
+the `ORDER BY` severity sort was a silent no-op — the *worst* issues hidden. The
+fix is structural: the renderer tone map AND the Sources `ORDER BY` CASE both
+build from the enum (`SEVERITY_ORDER`), and an unknown severity degrades to a
+neutral tick instead of mis-coloring. `tests/test_provenance_severity_contract.py`
+asserts both maps cover every `Severity` member — add a severity and it lands
+red until mapped.
+
+**Resolution is a first-class verb.** `validation_issues` carries
+`resolved_at` / `resolved_by` / `resolution_note` (alembic 0094); the resolve
+writer (`src/validation_issues_store.py::resolve_validation_issue`, idempotent —
+scoped to `resolved_at IS NULL`) is wired behind `POST /actions/resolve-issue`
+(a synchronous write, not a streamed job). A `prov_row`'s resolve `prov_action`
+POSTs it.
+
 ---
 
 ## 8. Streams & identity

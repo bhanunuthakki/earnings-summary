@@ -54,6 +54,14 @@ Composition contract — ``controls_css(default)`` rides immediately after
   treatment for every stored analyst/LLM body / note / memo. Headings start at
   ``<h3>`` (the panel owns the ``<h2>`` above); a surface adds only the
   wrapper's padding/width and never re-skins the rendered children.
+* ``.k-prov*`` + :func:`prov_row` / :func:`prov_drawer` / :func:`prov_case` /
+  :func:`prov_severity_tick` / :func:`prov_action` — the ONE render boundary for
+  any data-quality row (design_language §10; Law "provenance is actionable"):
+  a severity tick + relative stamp + drill-down + ≥1 inline action. Severity
+  tone resolves through the LIVE :class:`models.validation.Severity` enum
+  (:func:`prov_severity_tone`), so the report Sources tab, the System Validation
+  panel and the freshness peek can't drift into the shipped bug where a ``halt``
+  rendered muted grey. ``test_provenance_severity_contract`` guards the map.
 
 Like ``palette_css``, the output contains literal CSS braces: surfaces that
 splice it into ``str.format`` templates must brace-double it the same way
@@ -61,6 +69,13 @@ they already do for the palette block.
 """
 
 from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from models.validation import Severity
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 # Chevron for single-selects, URL-encoded (no literal braces/quotes/#: the
 # string survives both raw f-string assembly and brace-doubled .format
@@ -261,6 +276,69 @@ a.k-tick-sym:hover { color: var(--accent); }
   border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ---- provenance / data-quality rows (design_language §10; Law: provenance is
+   actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary
+   for any data-quality row — the report Sources tab, the System Validation
+   panel, the freshness peek, the evals failed-case drawer. The severity tick is
+   the single home of the halt/warn/grey decision: tone resolves through the live
+   models.validation.Severity enum (prov_severity_tone), so a writer↔reader drift
+   can't mute a halt. ---- */
+.k-prov { display: flex; flex-direction: column; gap: var(--sp-1); }
+.k-prov-row { display: flex; align-items: baseline; gap: var(--sp-3);
+  padding: var(--sp-2) 0; border-bottom: 1px solid var(--hairline); }
+.k-prov-row:last-child { border-bottom: none; }
+.k-prov-label { flex: 1 1 auto; min-width: 0; font-size: var(--fs-body);
+  color: var(--fg); overflow: hidden; text-overflow: ellipsis; }
+.k-prov-stamp { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-note { flex: none; font-size: var(--fs-caption); color: var(--muted); }
+.k-prov-actions { flex: none; display: inline-flex; align-items: center;
+  gap: var(--sp-2); }
+
+/* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is
+   decided (prov_severity_tone) — an unknown severity degrades to a muted tick,
+   never the wrong color. */
+.k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1);
+  font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
+.k-prov-tick::before { content: ""; width: 7px; height: 7px; flex: none;
+  border-radius: var(--radius-full); background: currentColor; }
+.k-prov-tick-bad   { color: var(--bad); }
+.k-prov-tick-warn  { color: var(--warn); }
+.k-prov-tick-ok    { color: var(--ok); }
+.k-prov-tick-muted { color: var(--muted); }
+
+/* inline action: a small quiet control (resolve/refresh/diagnose) or a /source
+   deep-link, radius-full like a chip. */
+.k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600;
+  color: var(--accent); background: transparent; border: 1px solid var(--border);
+  border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer;
+  text-decoration: none; white-space: nowrap;
+  transition: border-color var(--transition), color var(--transition); }
+.k-prov-act:hover { border-color: var(--accent); }
+.k-prov-act[disabled], .k-prov-act[aria-disabled="true"] { color: var(--muted);
+  border-color: var(--border); cursor: progress; }
+
+/* drill-down drawer (generalizes the evals failed-case drawer): a <details>
+   whose summary toggles the body; per-case rows nest inside. */
+.k-prov-drawer { margin: var(--sp-1) 0; }
+.k-prov-drawer > summary, .k-prov-case > summary { cursor: pointer;
+  list-style: none; font-size: var(--fs-caption); color: var(--muted);
+  padding: var(--sp-1) 0; }
+.k-prov-drawer > summary:hover, .k-prov-case > summary:hover { color: var(--fg); }
+.k-prov-case { margin: var(--sp-1) 0; padding-left: var(--sp-3);
+  border-left: 2px solid var(--border); }
+.k-prov-case > summary { display: flex; align-items: baseline; gap: var(--sp-2); }
+.k-prov-rationale { font-size: var(--fs-caption); color: var(--fg-soft);
+  margin: var(--sp-1) 0; }
+.k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2); margin: var(--sp-1) 0; }
+.k-prov-evidence-label { font-size: var(--fs-micro); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; }
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-micro);
+  color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
+  white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 """
 
 
@@ -354,3 +432,173 @@ def panel_toolbar(
     if not head and not controls:
         return ""
     return f'<div class="k-toolbar">{head}{controls}</div>'
+
+
+# ---------------------------------------------------------------------------
+# Provenance / data-quality primitives (design_language §10; Instrument
+# Paradigm — "provenance is actionable"). prov_row/prov_drawer are the ONE
+# render boundary for any data-quality row; every severity color decision flows
+# through prov_severity_tone so writer↔reader drift can't mute a halt.
+# ---------------------------------------------------------------------------
+
+# Severity → kit tone, keyed by the LIVE enum (NOT hand-typed severity strings).
+# The writer emits ``halt``/``warn`` (record_validation_issue); the report
+# Sources renderer used to match ``error``/``warning``, so a HALT issue resolved
+# to neither and rendered MUTED GREY — the worst issue, hidden. Keying on the
+# enum means a renamed/added severity that nobody maps degrades to a neutral
+# tick, and ``test_provenance_severity_contract`` fails until it is mapped here.
+_SEVERITY_TONE: dict[Severity, str] = {
+    Severity.HALT: "bad",
+    Severity.WARN: "warn",
+}
+
+
+def prov_severity_tone(severity: str | None) -> str:
+    """Kit tone token (``'bad'`` / ``'warn'`` / ``'ok'`` / ``'muted'``) for a
+    stored validation-severity string. Resolved through the live
+    :class:`models.validation.Severity` enum; an unknown or blank value degrades
+    to ``'muted'`` rather than mis-coloring. THE single source of the
+    halt↔warn↔grey decision (S10) — the report Sources tab, the System
+    Validation panel, and the freshness peek all route severity through here."""
+    if not severity:
+        return "muted"
+    try:
+        sev = Severity(severity.strip().lower())
+    except ValueError:
+        return "muted"
+    return _SEVERITY_TONE.get(sev, "muted")
+
+
+def prov_severity_tick(severity: str | None, *, label: str | None = None) -> str:
+    """The canonical data-quality severity indicator: a tone dot + short label
+    (HALT / WARN). Tone via :func:`prov_severity_tone`; ``label`` overrides the
+    text (default: the severity itself, upper-cased; blank → an em-dash)."""
+    from html import escape
+
+    tone = prov_severity_tone(severity)
+    text = (label if label is not None else (severity or "")).strip().upper() or "—"
+    return f'<span class="k-prov-tick k-prov-tick-{tone}">{escape(text)}</span>'
+
+
+def prov_action(
+    label: str,
+    *,
+    href: str | None = None,
+    post_url: str | None = None,
+    post_body: dict[str, object] | None = None,
+    title: str = "",
+    issue_id: int | None = None,
+) -> str:
+    """One inline data-quality action — a ``/source``-style deep LINK (``href``)
+    or a resolve/refresh/diagnose BUTTON (``post_url`` + optional ``post_body``).
+
+    The button carries its endpoint + JSON body as ``data-prov-post`` /
+    ``data-prov-body`` attributes; the consuming surface's small delegated
+    listener POSTs it (the freshness peek's streaming contract, or the resolve
+    fetch). ``issue_id`` rides as ``data-issue-id`` so a resolve handler can
+    target the row. Returns escaped HTML."""
+    import json
+    from html import escape
+
+    attrs = f' title="{escape(title, quote=True)}"' if title else ""
+    if issue_id is not None:
+        attrs += f' data-issue-id="{int(issue_id)}"'
+    if href is not None:
+        return f'<a class="k-prov-act" href="{escape(href, quote=True)}"{attrs}>{escape(label)}</a>'
+    if post_url is not None:
+        body = escape(json.dumps(post_body or {}), quote=True)
+        return (
+            '<button type="button" class="k-prov-act" '
+            f'data-prov-post="{escape(post_url, quote=True)}" '
+            f'data-prov-body="{body}"{attrs}>{escape(label)}</button>'
+        )
+    # No destination — a defensive inert marker (shouldn't happen in practice).
+    return f'<span class="k-prov-act" aria-disabled="true"{attrs}>{escape(label)}</span>'
+
+
+def prov_row(
+    label: str,
+    *,
+    severity: str | None = None,
+    stamp: datetime | str | None = None,
+    stamp_prefix: str = "",
+    note: str | None = None,
+    actions: str = "",
+    drawer: str = "",
+) -> str:
+    """One actionable data-quality row (Law: provenance is actionable).
+
+    A severity tick (when ``severity`` is given) + ``label`` + a relative
+    ``stamp`` + a plain-text ``note`` aside + inline ``actions`` (pre-rendered
+    :func:`prov_action` HTML), with an optional ``drawer`` (:func:`prov_drawer`)
+    drilling down beneath the row. ``stamp`` is an ISO string / ``datetime``
+    rendered relative via :func:`ui.time.stamp_html`. Returns escaped HTML."""
+    from html import escape
+
+    from ui.time import stamp_html
+
+    tick = f"{prov_severity_tick(severity)} " if severity is not None else ""
+    stamp_span = (
+        stamp_html(stamp, css="k-prov-stamp", prefix=stamp_prefix) if stamp is not None else ""
+    )
+    note_span = f'<span class="k-prov-note">{escape(note)}</span>' if note else ""
+    actions_span = f'<span class="k-prov-actions">{actions}</span>' if actions else ""
+    row = (
+        '<div class="k-prov-row">'
+        f'<span class="k-prov-label">{tick}{escape(label)}</span>'
+        f"{stamp_span}{note_span}{actions_span}"
+        "</div>"
+    )
+    return f'<div class="k-prov">{row}{drawer}</div>'
+
+
+def prov_drawer(summary: str, items: str, *, is_open: bool = False) -> str:
+    """The collapsible drill-down: a ``<details>`` labeled ``summary`` wrapping
+    the pre-rendered ``items`` (e.g. :func:`prov_case` rows). Lifts the proven
+    evals failed-case drawer into the kit so any data-quality surface drops a
+    "N failed cases — expected vs actual" expander in one call."""
+    from html import escape
+
+    open_attr = " open" if is_open else ""
+    return (
+        f'<details class="k-prov-drawer"{open_attr}>'
+        f"<summary>{escape(summary)}</summary>{items}</details>"
+    )
+
+
+def prov_case(
+    title: str,
+    *,
+    score: float | None = None,
+    score_tone: str = "bad",
+    meta: str = "",
+    rationale: str = "",
+    expected: str = "",
+    actual: str = "",
+) -> str:
+    """One drill-down case (a failed eval / a disputed fact): a ``<details>``
+    whose summary shows an optional ``score`` pill (``.k-pill``, ``score_tone``)
+    + ``title`` + a muted ``meta`` aside, and whose body shows the ``rationale``
+    and an expected/actual evidence split. ``expected`` / ``actual`` are shown
+    verbatim in ``<pre>`` blocks (machine text — escaped, NOT markdown)."""
+    from html import escape
+
+    pill = (
+        f'<span class="k-pill k-pill-{score_tone}">{score:.2f}</span> ' if score is not None else ""
+    )
+    meta_span = f'<span class="k-prov-note">{escape(meta)}</span>' if meta else ""
+    rationale_p = f'<p class="k-prov-rationale">{escape(rationale)}</p>' if rationale else ""
+    evidence = ""
+    if expected or actual:
+        evidence = (
+            '<div class="k-prov-evidence">'
+            '<div><span class="k-prov-evidence-label">expected</span>'
+            f"<pre>{escape(expected or '—')}</pre></div>"
+            '<div><span class="k-prov-evidence-label">actual</span>'
+            f"<pre>{escape(actual or '—')}</pre></div>"
+            "</div>"
+        )
+    return (
+        f'<details class="k-prov-case"><summary>{pill}{escape(title)}{meta_span}</summary>'
+        f"{rationale_p}{evidence}</details>"
+    )
