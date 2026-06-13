@@ -44,12 +44,15 @@ CREATE TABLE discovery_candidates (
     status TEXT NOT NULL DEFAULT 'new',
     score FLOAT NOT NULL DEFAULT 0,
     evidence_json TEXT NOT NULL,
+    score_json TEXT,
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     CONSTRAINT ck_discovery_candidates_status
         CHECK (status IN ('new', 'queued', 'building', 'built', 'dismissed')),
     CONSTRAINT ck_discovery_candidates_evidence_json CHECK (json_valid(evidence_json)),
+    CONSTRAINT ck_discovery_candidates_score_json
+        CHECK (score_json IS NULL OR json_valid(score_json)),
     CONSTRAINT uq_discovery_candidates_user_ticker UNIQUE (user_id, ticker)
 );
 """

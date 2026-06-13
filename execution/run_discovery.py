@@ -14,9 +14,14 @@ Usage:
     python execution/run_discovery.py --skip-adjacency
     python execution/run_discovery.py --repo-root /path --top 30
 
-Scoring (rank-only, deliberately coarse): one point per screen passed plus
-one per adjacency source that named the ticker (capped at 3) — a name that
-screens well AND keeps coming up near the portfolio outranks either alone.
+Scoring (the Discovery rule; ``src/discovery/scoring.py``): a weighted sum of
+typed, dated signals through the ``discovery_sources`` weight registry, NOT an
+equal-weight count. Each screen pass and each adjacency channel is a typed
+``Signal`` carrying its source's editable ``base_weight`` and a recency decay;
+the 13F miner adds ``investor_13f`` signals (clamped so an investor-only name
+can surface but not top the queue). A NEW name must clear ``ENTRY_THRESHOLD``
+to enter the queue at all; an existing candidate is always refreshed. The
+candidate's ``score_json`` carries the per-class ``score_why`` the panel peeks.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -32,17 +38,34 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discovery.adjacency import AdjacencyHit, mine_adjacency  # noqa: E402
+from discovery.scoring import (  # noqa: E402
+    Signal,
+    adjacency_signal,
+    score_candidate,
+    screen_signal,
+)
 from discovery.screens import ScreenHit, run_screens  # noqa: E402
-from discovery.store import upsert_candidate  # noqa: E402
+from discovery.sources import load_source_map, weight_for  # noqa: E402
+from discovery.store import (  # noqa: E402
+    SignalWrite,
+    existing_candidate_tickers,
+    replace_signals,
+    upsert_candidate,
+)
 from identity import DEFAULT_USER_ID  # noqa: E402
+
+# The screen+adjacency run owns exactly these signal classes; the 13F miner
+# owns 'investor_13f'. replace_signals refreshes only the classes a producer
+# owns, so the two never clobber each other's rows.
+_FUNDAMENTAL_CLASSES: tuple[str, ...] = ("screen", "adjacency")
 
 
 def _new_evidence() -> list[dict[str, object]]:
     return []
 
 
-def _new_sources() -> set[str]:
-    return set()
+def _new_signals() -> list[Signal]:
+    return []
 
 
 @dataclass(slots=True)
@@ -51,8 +74,15 @@ class _Acc:
 
     name: str | None = None
     evidence: list[dict[str, object]] = field(default_factory=_new_evidence)
-    screens: int = 0
-    adj_sources: set[str] = field(default_factory=_new_sources)
+    signals: list[Signal] = field(default_factory=_new_signals)
+
+
+@dataclass(slots=True)
+class _AdjAgg:
+    """Per (ticker, channel) adjacency aggregate before it becomes one Signal."""
+
+    count: int = 0
+    holdings: list[str] = field(default_factory=list[str])
 
 
 def discover(
@@ -64,10 +94,13 @@ def discover(
     per_holding_transcripts: int = 4,
     min_transcript_mentions: int = 3,
 ) -> list[tuple[str, float, int]]:
-    """Run the pipelines and upsert candidates. Returns (ticker, score,
-    evidence_count) tuples sorted by score for the caller's summary."""
+    """Run the pipelines, score by weighted typed signals, persist the signals
+    and the scored candidates. Returns (ticker, score, evidence_count) tuples
+    sorted by score for the caller's summary."""
     db_path = repo_root / "data" / "portfolio.db"
     fmp_dir = repo_root / "data" / "historical" / "fmp"
+    source_map = load_source_map(db_path=db_path)
+    as_of = date.today()
 
     screen_hits: list[ScreenHit] = (
         run_screens(db_path, fmp_dir, user_id=user_id) if include_screens else []
@@ -96,29 +129,80 @@ def discover(
     for sh in screen_hits:
         acc = _slot(sh.ticker, sh.name)
         acc.evidence.append({"source": f"screen:{sh.screen}", "detail": sh.detail})
-        acc.screens += 1
+        acc.signals.append(
+            screen_signal(
+                sh.screen,
+                weight=weight_for(source_map, sh.screen),
+                observed_at=as_of,
+                detail=sh.detail,
+            )
+        )
 
+    # Adjacency: aggregate every mention of a ticker through one channel into a
+    # single weighted signal whose strength is the (capped) holding count.
+    adj_agg: dict[tuple[str, str], _AdjAgg] = {}
     for ah in adjacency_hits:
-        acc = _slot(ah.ticker, ah.name)
+        _slot(ah.ticker, ah.name)
+        acc = by_ticker[ah.ticker]
         acc.evidence.append(
             {"source": f"adjacency:{ah.source}", "holding": ah.holding, "detail": ah.detail}
         )
-        acc.adj_sources.add(ah.source)
+        agg = adj_agg.setdefault((ah.ticker, ah.source), _AdjAgg())
+        agg.count += 1
+        agg.holdings.append(ah.holding)
+    for (ticker, channel), agg in adj_agg.items():
+        near = ", ".join(sorted(set(agg.holdings))[:5])
+        detail = f"named near {len(set(agg.holdings))} holding(s): {near}"
+        by_ticker[ticker].signals.append(
+            adjacency_signal(
+                channel,
+                weight=weight_for(source_map, channel),
+                observed_at=as_of,
+                occurrences=float(agg.count),
+                detail=detail,
+            )
+        )
 
+    existing = existing_candidate_tickers(user_id=user_id, db_path=db_path)
+    signal_writes: list[SignalWrite] = []
     results: list[tuple[str, float, int]] = []
     for ticker, acc in by_ticker.items():
-        score = float(acc.screens + min(len(acc.adj_sources), 3))
-        upsert_candidate(
-            ticker=ticker,
-            name=acc.name,
-            score=score,
-            evidence=acc.evidence,
-            user_id=user_id,
-            db_path=db_path,
-        )
-        results.append((ticker, score, len(acc.evidence)))
+        result = score_candidate(acc.signals)
+        # A NEW name must clear the entry bar; an existing candidate is always
+        # refreshed (its score/lifecycle stays current even if it slips below).
+        if ticker in existing or result.passes_entry:
+            upsert_candidate(
+                ticker=ticker,
+                name=acc.name,
+                score=result.score,
+                evidence=acc.evidence,
+                score_json=result.why,
+                user_id=user_id,
+                db_path=db_path,
+            )
+            signal_writes.extend(_to_signal_writes(ticker, acc.signals))
+            results.append((ticker, result.score, len(acc.evidence)))
+
+    replace_signals(signal_writes, classes=_FUNDAMENTAL_CLASSES, user_id=user_id, db_path=db_path)
     results.sort(key=lambda r: (-r[1], r[0]))
     return results
+
+
+def _to_signal_writes(ticker: str, signals: list[Signal]) -> list[SignalWrite]:
+    """Persistence view of one candidate's scoring signals."""
+    return [
+        SignalWrite(
+            ticker=ticker,
+            signal_class=s.signal_class,
+            source_key=s.source_key,
+            weight=s.weight,
+            raw_strength=s.raw_strength,
+            observed_at=s.observed_at.isoformat(),
+            detail=s.detail or None,
+            meta={"action": s.action} if s.action else {},
+        )
+        for s in signals
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
