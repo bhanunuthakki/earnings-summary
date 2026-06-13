@@ -86,6 +86,29 @@ def test_suggest_peers_validates_dedupes_drops_self_and_prose(
     assert out[0].why == "LatAm digital bank"
 
 
+def test_suggest_peers_forwards_backend_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """suggest_peers(..., backend="gemini") must pass backend through to call_llm_structured."""
+    captured: dict[str, object] = {}
+
+    def _fake_structured(_prompt: str, **kwargs: object) -> object:
+        captured.update(kwargs)
+        return [{"ticker": "INTR", "name": "Inter & Co", "why": "digital bank"}]
+
+    monkeypatch.setattr(ps, "call_llm_structured", _fake_structured)
+    suggest_peers(
+        ticker="NU",
+        name="Nu Holdings",
+        business_description="digital bank",
+        segments=[],
+        sector=None,
+        industry=None,
+        model="gemini-3.5-flash",
+        backend="gemini",
+    )
+    assert captured.get("backend") == "gemini"
+    assert captured.get("model") == "gemini-3.5-flash"
+
+
 def test_suggest_peers_propagates_parse_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*_a: object, **_k: object) -> object:
         raise StructuredParseError("unusable twice", raw_head="not json")

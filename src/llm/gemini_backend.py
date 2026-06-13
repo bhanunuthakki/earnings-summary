@@ -72,9 +72,11 @@ log = logging.getLogger(__name__)
 # derivation in gemini_model_for keeps these two aligned with LLM_MODELS so
 # retuning a purpose's Claude tier automatically retunes its Gemini mirror.
 # Pro = gemini-3.1-pro-preview (current Pro baseline; gemini-3-pro-preview was
-# discontinued 2026-03 and there is no 3.5 Pro — only 3.5 Flash). CLI-verified.
+# discontinued 2026-03 and there is no 3.5 Pro — only 3.5 Flash).
+# Flash = gemini-2.5-flash (gemini-3.5-flash is not a valid CLI model id —
+# returns ModelNotFoundError; corrected 2026-06-13 per peer_selection eval run).
 GEMINI_BACKEND_DEFAULT_MODEL = "gemini-3.1-pro-preview"
-GEMINI_BACKEND_FAST_MODEL = "gemini-3.5-flash"
+GEMINI_BACKEND_FAST_MODEL = "gemini-2.5-flash"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
 # derivation (Claude fast-classifier purposes → Flash, everything else → Pro)

@@ -154,6 +154,7 @@ def suggest_peers(
     sector: str | None,
     industry: str | None,
     model: str | None = None,
+    backend: str | None = None,
     max_peers: int = 10,
 ) -> list[PeerSuggestion]:
     """One LLM call → validated business-model comparables.
@@ -174,7 +175,7 @@ def suggest_peers(
         max_peers=max_peers,
     )
     payload = call_llm_structured(
-        prompt, purpose=PURPOSE, ticker=ticker, model=model, expect="array"
+        prompt, purpose=PURPOSE, ticker=ticker, model=model, backend=backend, expect="array"
     )
     out: list[PeerSuggestion] = []
     seen: set[str] = set()
