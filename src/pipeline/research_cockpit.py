@@ -914,7 +914,7 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     if thin:
         cells.append(f"<td class='num'>{_score_cell(row)}</td>")
     if not thin:
-        cells.append(f"<td class='kpi-moves'>{_kpi_chips(row.kpi_deltas)}</td>")
+        cells.append(f"<td class='kpi-moves'>{_kpi_chips(row.kpi_deltas, row.base.ticker)}</td>")
     cells.extend(
         [
             f"<td class='num'>{_price_cell(row)}</td>",
@@ -986,21 +986,29 @@ def _verdict_badge(row: CockpitRow, now: datetime) -> str:
     return f"<span class='cockpit-badge b-{tone}'{title}>{escape(status)}</span>"
 
 
-def _kpi_chips(deltas: list[KpiDelta]) -> str:
+def _kpi_chips(deltas: list[KpiDelta], ticker: str) -> str:
+    """Each tier-1 move is a doorway (Law 2): a ``data-ask-q`` button that opens
+    the KPI as a chart in Ask. The question uses RELATIVE-window phrasing ("…,
+    last 12 quarters") — the ViewSpec compiler parses period counts, not ISO
+    date ranges (nl_compile) — so the period dates live only in the hover
+    ``title``, never in the question. The bare-name form (unit parenthetical
+    stripped, untruncated) resolves to the right kpi token; the visible chip
+    text keeps the 18-char ellipsis."""
     if not deltas:
         return _muted()
     chips: list[str] = []
     for d in deltas:
-        short = d.name.split(" (")[0]
-        if len(short) > 18:
-            short = short[:17] + "…"
+        metric = d.name.split(" (")[0]
+        short = metric if len(metric) <= 18 else metric[:17] + "…"
         title = (
             f"{d.name}: {d.prior_value:g} → {d.latest_value:g} {d.unit} "
             f"({d.prior_period} → {d.latest_period})"
         )
+        ask_q = f"{metric} for {ticker}, last 12 quarters"
         chips.append(
-            f"<span class='kpi-chip chip-{d.tone}' title='{escape(title)}'>"
-            f"{escape(short)} <b>{escape(d.delta_display)}</b></span>"
+            f"<button type='button' class='kpi-chip chip-{d.tone}' "
+            f"data-ask-q='{escape(ask_q, quote=True)}' title='{escape(title)}'>"
+            f"{escape(short)} <b>{escape(d.delta_display)}</b></button>"
         )
     return "".join(chips)
 
@@ -1064,9 +1072,17 @@ def _inbox_cell(row: CockpitRow) -> str:
             f"{'s' if row.pending_alerts != 1 else ''}</a>"
         )
     if row.new_docs:
+        # Doorway (Law 2): the pill peeks the documents fetched since the last
+        # build in place (the same rows the count was derived from — UX9),
+        # mirroring the alerts pill. ``/#holding=`` stays the real href for
+        # middle-click / new tab.
+        t = escape(row.base.ticker)
         pills.append(
-            f"<span class='pill pill-accent' title='documents fetched since the last "
-            f"report build'>{row.new_docs} new doc{'s' if row.new_docs != 1 else ''}</span>"
+            f"<a class='pill pill-accent' href='/#holding={t}' "
+            f"data-peek-url='/api/peek/documents?ticker={t}' "
+            f"data-peek-title='New documents · {t}' "
+            f"title='documents fetched since the last report build'>"
+            f"{row.new_docs} new doc{'s' if row.new_docs != 1 else ''}</a>"
         )
     if row.base.open_comments_count:
         n = row.base.open_comments_count
@@ -1140,9 +1156,13 @@ _COCKPIT_CSS = """
 .cockpit-badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .cockpit-badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .cockpit-badge.b-muted { background: var(--border); color: var(--muted); }
+/* A KPI move is a doorway (<button data-ask-q>): explicit font resets the
+   button default, and it gets a real hover affordance. */
 .kpi-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-family: var(--mono); background: var(--paper);
-  border: 1px solid var(--border); color: var(--muted); cursor: default; }
+  font-size: var(--fs-caption); font-family: var(--mono); line-height: 1.4; background: var(--paper);
+  border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+  transition: border-color var(--transition); }
+.kpi-chip:hover { border-color: var(--accent); }
 .kpi-chip b { font-weight: 600; color: var(--fg); }
 .kpi-chip.chip-bad { border-color: var(--bad); }
 .kpi-chip.chip-bad b { color: var(--bad); }

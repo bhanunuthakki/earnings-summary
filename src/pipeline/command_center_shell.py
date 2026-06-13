@@ -50,6 +50,12 @@ Design — thin shell + lazy panels:
   ``/source/<doc_id>`` links peek their ``fragment=1`` variant automatically;
   ticker links grow a hover mini-card from ``/api/peek/ticker/<T>``. Report
   iframes are separate documents and stay drill-through.
+* **Ask-q doorways (Law 2)**: any datum carrying ``data-ask-q`` outside the Ask
+  panel (cockpit KPI chips, landing stats) hands its relative-window question to
+  Ask over the goAsk stash-and-jump rail on a plain click — scoped to exclude
+  ``data-panel="explore"`` (Ask wires its own chips). ``data-fact-ref`` (exact
+  series) takes precedence over ``data-ask-q`` (relative window) on any cell
+  carrying both — coordinated with the fact_ref session (directive §6).
 * **The Ask dock is shell chrome (Ask v5)**: ``pipeline.ask_dock`` renders
   once into the body, OUTSIDE ``.cc-panels``, so the conversational dock
   persists across every tab switch. Three states — min pill / floating card /
@@ -1917,6 +1923,37 @@ SHELL_JS = r"""
       anchor: a,
       anchorId: info.anchorId
     });
+  });
+
+  // ----- Ask-q doorways (Law 2, S9) -----
+  // Any datum carrying data-ask-q OUTSIDE the Ask panel (a cockpit KPI chip, a
+  // landing stat) is a doorway: a plain left click hands its relative-window
+  // question to the Ask panel over the SAME stash-and-jump rail the palette
+  // uses (goAsk). data-ask-q is the whole carrier — Ask has no URL for a query,
+  // so these are <button>/<a> with data-ask-q and nothing else; there is no
+  // middle-click destination to preserve. Phrase the question with period
+  // COUNTS ("…, last 12 quarters"), never an ISO date range — the ViewSpec
+  // compiler parses counts (nl_compile), and a date range compiles to nothing.
+  //
+  // Scope: EXCLUDES the Ask panel (data-panel="explore"). The Ask panel wires
+  // its OWN data-ask-q example chips (submitAsk — see explore_panel); a
+  // shell-level handler over them would double-fire (jump to #explore AND
+  // resubmit). One owner per region.
+  //
+  // Precedence (coordinated with the fact_ref session, directive §6): a cell
+  // may carry BOTH data-fact-ref (an exact PK series) and data-ask-q (a looser
+  // relative window). data-fact-ref WINS — this handler bails on any element
+  // that also carries data-fact-ref, leaving the exact series to the fact_ref
+  // handler, so a richer anchor is never overridden by the relative question.
+  document.addEventListener('click', function (ev) {
+    if (ev.defaultPrevented || ev.button !== 0) return;
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+    if (!ev.target.closest) return;
+    var a = ev.target.closest('[data-ask-q]');
+    if (!a || a.hasAttribute('data-fact-ref')) return;   // fact_ref wins (exact series)
+    if (a.closest('[data-panel="explore"]')) return;     // Ask owns its own chips
+    ev.preventDefault();
+    goAsk(a.getAttribute('data-ask-q'))();
   });
 
   // Approve / dismiss inside the peek: run the same GET /approve the cards

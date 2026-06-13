@@ -29,7 +29,7 @@ from dashboard.inbox import collect_inbox, render_inbox_stream
 from pipeline.analytical_dashboard_html import render_tier_coverage_strip
 from pipeline.command_center_shell import SHELL_JS, render_shell
 from pipeline.dashboard_status import DashboardRow
-from pipeline.peeks import render_provenance_peek
+from pipeline.peeks import render_new_docs_peek, render_provenance_peek
 from pipeline.portfolio_panel import render_next_dollar_panel
 from pipeline.research_cockpit import CockpitRow, render_research_cockpit
 from pipeline.ticker_command_center import build_ticker_command_center, render_ticker_fragment
@@ -455,6 +455,76 @@ def test_provenance_peek_degrades_without_data(client: FlaskClient, tmp_path: Pa
 
 
 # ----------------------------------------------------------------------------
+# /api/peek/documents (S9 — the cockpit "N new docs" pill)
+# ----------------------------------------------------------------------------
+
+
+def _seed_new_docs(db_path: Path, ticker: str = "NU") -> int:
+    """A built company with one doc fetched AFTER the build (new) and one
+    BEFORE (not new). Returns the new doc's id."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, last_built_at) "
+            "VALUES (?, 'Nu Holdings', 'portfolio', '2026-06-09 04:00:00')",
+            (ticker,),
+        )
+        cur = conn.execute(
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+            "fetched_at, fetch_status) VALUES (?, 'sec', 'form_10q', "
+            "'data/historical/fmp/NU_form_10q_2026.json', 'x', '2026-06-10 08:00:00', 'ok')",
+            (ticker,),
+        )
+        new_id = int(cur.lastrowid or 0)
+        conn.execute(
+            "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+            "fetched_at, fetch_status) VALUES (?, 'sec', 'form_10k', "
+            "'data/historical/fmp/NU_form_10k_2025.json', 'y', '2026-06-08 08:00:00', 'ok')",
+            (ticker,),
+        )
+        conn.commit()
+        return new_id
+    finally:
+        conn.close()
+
+
+def test_peek_documents_lists_docs_since_build(client: FlaskClient, db_path: Path) -> None:
+    new_id = _seed_new_docs(db_path)
+    resp = client.get("/api/peek/documents?ticker=nu")  # lowercase: uppercased internally
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
+    # The new doc shows, linked by id to the /source viewer (peek retargets there).
+    assert f'href="/source/{new_id}"' in body
+    assert "Form 10Q" in body  # humanized doc_type label
+    assert "NU_form_10q_2026.json" in body  # basename, derived from file_path
+    # The doc fetched BEFORE the build is not "new".
+    assert "NU_form_10k_2025.json" not in body
+    assert "open the holding" in body  # the overflow path
+
+
+def test_peek_documents_empty_state(client: FlaskClient, db_path: Path) -> None:
+    # Tracked but never built (last_built_at NULL) → nothing is "new".
+    conn = sqlite3.connect(db_path)
+    conn.execute("INSERT INTO tracked_companies (ticker, name) VALUES ('ABC', 'A')")
+    conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status) VALUES ('ABC', 'sec', 'form_10q', 'x.json', 'z', "
+        "'2026-06-10 08:00:00', 'ok')"
+    )
+    conn.commit()
+    conn.close()
+    assert "No documents fetched" in client.get("/api/peek/documents?ticker=ABC").data.decode()
+    # No ticker → its own empty state, still 200.
+    assert client.get("/api/peek/documents").status_code == 200
+
+
+def test_new_docs_peek_degrades_without_db(tmp_path: Path) -> None:
+    html = render_new_docs_peek(tmp_path / "missing" / "portfolio.db", ticker="NU")
+    assert "No documents fetched" in html
+
+
+# ----------------------------------------------------------------------------
 # Markup contracts: peek triggers keep their real hrefs
 # ----------------------------------------------------------------------------
 
@@ -473,6 +543,27 @@ def test_shell_carries_peek_primitive() -> None:
     assert 'a[href^="/source/"]' in SHELL_JS
     assert "/api/peek/ticker/" in SHELL_JS
     assert "fragment=1" in SHELL_JS
+    # The data-ask-q doorway rail (S9): a separate delegate that reuses goAsk,
+    # excludes the Ask panel, and yields to data-fact-ref (precedence contract).
+    assert "ev.target.closest('[data-ask-q]')" in SHELL_JS
+    assert "a.hasAttribute('data-fact-ref')" in SHELL_JS  # fact_ref wins
+    assert "a.closest('[data-panel=\"explore\"]')" in SHELL_JS  # Ask owns its own chips
+
+
+def test_cockpit_new_docs_pill_peeks_documents() -> None:
+    base = DashboardRow(
+        ticker="NU",
+        list_type="portfolio",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    html = render_research_cockpit({"portfolio": [CockpitRow(base=base, new_docs=3)]})
+    assert "data-peek-url='/api/peek/documents?ticker=NU'" in html
+    assert "href='/#holding=NU'" in html  # real destination preserved for middle-click
+    assert "3 new docs" in html
 
 
 def test_inbox_review_link_peeks_with_href_fallback(db_path: Path) -> None:

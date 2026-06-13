@@ -182,6 +182,44 @@ results, palettes).
 
 Field captions: `.k-label` (caption size, 600, uppercase, 0.06em).
 
+### 4.1 Doorways — every datum is a depth (Law 2)
+
+Any number, count, KPI, cell, or stream item **with a deeper view** is rendered
+as an `<a>`/`<button>` carrying **exactly ONE** shell-handled action attribute.
+A `title=` tooltip is a *supplement*, never the only depth — an inert `<span>`
+whose payload is buried in a tooltip is forbidden. The three rails (all
+delegated once at the document level in `command_center_shell`, so lazily
+injected panels are covered):
+
+| Attribute        | Opens                                   | Carrier example |
+|------------------|-----------------------------------------|-----------------|
+| `data-peek-url`  | the backing collection in the shared peek popover (href stays the real middle-click destination) | a count/pill → its rows (`/api/peek/documents`, `/api/peek/alerts`) |
+| `data-ask-q`     | the datum as a chart/series in Ask, via the goAsk stash-and-jump rail | a KPI chip → its time series |
+| `data-fact-ref`  | the datum as its **exact PK series** in Ask (degrades to name) | a report KPI cell → that fact's series |
+
+Rules:
+
+- **`data-ask-q` uses relative-window phrasing — period COUNTS, never ISO date
+  ranges** (`"Net margin for NU, last 12 quarters"`, not `"…2025-01-01 to
+  2026-03-31"`). The ViewSpec compiler (`viewspec/nl_compile`) parses counts; an
+  ISO range compiles to an empty chart. Period dates ride in `title=`.
+- **`data-ask-q` is scoped to exclude the Ask panel** (`data-panel="explore"`):
+  the Ask panel wires its own example chips (`submitAsk`), so a shell-level
+  handler over them would double-fire. One owner per region.
+- **Precedence — `data-fact-ref` beats `data-ask-q`.** A cell may carry both (an
+  exact series *and* a relative-window question). The fact-ref handler claims
+  the click; the ask-q handler bails on any element that also carries
+  `data-fact-ref`, so the looser relative window never overrides the exact
+  series. (Cockpit stats own `data-ask-q`; report KPI cells own `data-fact-ref`
+  — directive §6.)
+- A **primary picker** is in-section furniture, not a floating overlay (§6.1) —
+  it is not a doorway; it *is* the section's own control.
+
+Enforced by the `no-inert-stat` guard (`tests/test_no_inert_stat.py`): it
+renders a populated cockpit and asserts each paradigm doorway stat is an
+`<a>`/`<button>` with exactly one action attr, never an inert `<span>`, and that
+the KPI chip's `data-ask-q` carries no ISO date.
+
 ## 5. The ticker label
 
 **Never render `f"{ticker} · {name}"` (or ` — `) as one string.** Use
