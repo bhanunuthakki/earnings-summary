@@ -80,11 +80,19 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
     """
     if not rows:
         return
+    # The peers panel carries a structured `peer_comp` anchor so a comment on
+    # the comparable set is classified as `curate_peers` and routed to a
+    # persisted peer-override artifact — not flattened into a memo (S5, the
+    # owner's "these are shit peers, remove unless better" feedback).
     body.write(
         _panel_head(
             "Peer comparison",
             sub=f"{len(rows)} comparable{'s' if len(rows) != 1 else ''} · TTM key metrics",
             classes="peer-comp-panel",
+            attrs=(
+                'data-commentable="true" data-anchor-type="peer_comp" '
+                'data-anchor-key="peer_comp" data-anchor-tab="company"'
+            ),
         )
     )
     body.write(

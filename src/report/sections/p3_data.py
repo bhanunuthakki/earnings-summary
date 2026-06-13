@@ -22,6 +22,7 @@ environments without the matching migration applied keep working.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -534,6 +535,91 @@ def _watchlist_names(ticker: str, repo_root: Path) -> list[str]:
     return [str(n) for n in cast("list[object]", wl) if isinstance(n, str) and n.strip()]
 
 
+def _peer_curation(ticker: str, repo_root: Path) -> tuple[list[str], dict[str, object] | None]:
+    """The owner's `curate_peers` artifacts from the thesis JSON (S5):
+
+    - ``peer_exclude`` — rivals to drop from the shown set (ticker or name),
+      the one thing the +3 ``competitive_watchlist`` pin list can't express.
+    - ``peers_section_override`` — the re-evaluable hide-unless-quality
+      condition modelling "remove this section UNLESS you show better peers".
+
+    Best-effort: ``([], None)`` on any miss."""
+    raw = _read_json(Path(repo_root) / "micro_thesis" / "holdings" / f"{ticker}.json")
+    if not isinstance(raw, dict):
+        return [], None
+    payload = cast("dict[str, object]", raw)
+    excl_raw = payload.get("peer_exclude")
+    exclude = (
+        [str(n) for n in cast("list[object]", excl_raw) if isinstance(n, str) and n.strip()]
+        if isinstance(excl_raw, list)
+        else []
+    )
+    ov_raw = payload.get("peers_section_override")
+    override = cast("dict[str, object]", ov_raw) if isinstance(ov_raw, dict) else None
+    return exclude, override
+
+
+# A bare exchange-ticker-shaped token: leading letter, ≤7 chars total, no
+# spaces. Distinguishes a pinned ticker ("HOOD") from a prose rival name
+# ("Itau Unibanco") so only genuine tickers get injected into the FMP pool.
+_TICKER_RX = re.compile(r"[A-Z][A-Z0-9.\-]{0,6}")
+
+
+def _looks_like_ticker(token: str) -> bool:
+    return bool(_TICKER_RX.fullmatch(token))
+
+
+def _has_peer_metrics(row: PeerCompRow) -> bool:
+    """True when a peer carries at least one computed TTM multiple — a real
+    comp, not a wall-of-em-dashes row."""
+    return any(
+        v is not None
+        for v in (row.market_cap_usd, row.revenue_ttm_usd, row.net_margin_ttm, row.roic_ttm)
+    )
+
+
+def evaluate_peers_override(
+    override: dict[str, object] | None, rows: list[PeerCompRow]
+) -> tuple[bool, dict[str, object]]:
+    """Re-evaluate a persisted peers-section override against freshly scored
+    rows (S5 — the owner's "remove this section UNLESS you show better peers /
+    computed multiples", modelled as an actionable, re-checkable condition
+    rather than verbatim-logged text).
+
+    A peer counts as *quality* when it satisfies the override's requirements:
+    ``require_named`` (the owner vouched for it via the watchlist) and/or
+    ``require_metrics`` (it carries at least one computed TTM multiple). The
+    section is hidden only while fewer than ``min_quality_peers`` qualify; the
+    moment enough credible rivals are pinned the condition flips and the panel
+    returns — no manual un-hide, the directive's "act on the condition".
+
+    Returns ``(hide, detail)``. ``hide`` is always False for a missing /
+    malformed override or any ``action`` other than ``"hide"``.
+    """
+    if not isinstance(override, dict) or override.get("action") != "hide":
+        return False, {"evaluated": False}
+    require_named = bool(override.get("require_named", True))
+    require_metrics = bool(override.get("require_metrics", True))
+    raw_min = override.get("min_quality_peers", 2)
+    min_quality = max(1, int(raw_min) if isinstance(raw_min, (int, float)) else 2)
+
+    quality = sum(
+        1
+        for r in rows
+        if (not require_named or "named rival" in r.match_reasons)
+        and (not require_metrics or _has_peer_metrics(r))
+    )
+    hide = quality < min_quality
+    return hide, {
+        "evaluated": True,
+        "quality_peers": quality,
+        "min_quality_peers": min_quality,
+        "require_named": require_named,
+        "require_metrics": require_metrics,
+        "satisfied": not hide,
+    }
+
+
 def _normalize_name(name: str) -> str:
     """Accent-stripped, lowercased, alnum-only — for rival-name matching."""
     import unicodedata
@@ -575,16 +661,45 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
     of em-dashes (the owner's "shit peers" UBER table: six semicap/SaaS names
     with every cell blank). A named rival survives even metric-less (it's
     informative by itself). Empty result → the renderer hides the panel.
+
+    S5 (steerable peers) layers the owner's `curate_peers` directives on top of
+    the screen:
+      - a pinned bare TICKER absent from the FMP pool is INJECTED so an
+        explicit pin always shows (the screen routinely omits a deliberately
+        chosen rival); name pins keep working via the +3 watchlist match;
+      - ``peer_exclude`` drops a rival from the shown set by ticker or name;
+      - ``peers_section_override`` is re-evaluated here so the "remove unless
+        better peers" condition hides — and later un-hides — the whole panel
+        on its own as the pinned set crosses the quality bar.
     """
     fmp_dir = Path(repo_root) / "data" / "historical" / "fmp"
     ticker = ticker.upper()
     pool = _fmp_peer_pool(fmp_dir, ticker)
-    if not pool:
-        return []
 
     _, target_sector, target_industry, target_cap = _profile_fields(fmp_dir, ticker)
     watchlist = _watchlist_names(ticker, repo_root)
+    peer_exclude, override = _peer_curation(ticker, repo_root)
     tracked = _tracked_tickers(repo_root)
+
+    # Inject pinned tickers the FMP screen omitted (resolve cached metrics if we
+    # have them). Only ticker-shaped, already-uppercase watchlist entries are
+    # treated as injectable pins — a prose name ("Itau Unibanco") still scores
+    # purely via the name match below, never as a fabricated pool ticker.
+    pool_tickers = {p[0] for p in pool}
+    pinned_tickers: set[str] = set()
+    for entry in watchlist:
+        tok = entry.strip()
+        if tok and tok == tok.upper() and tok != ticker and _looks_like_ticker(tok):
+            pinned_tickers.add(tok)
+            if tok not in pool_tickers:
+                pool.append((tok, None, None))
+                pool_tickers.add(tok)
+
+    if not pool:
+        return []
+
+    exclude_tickers = {e.strip().upper() for e in peer_exclude}
+    exclude_names = {_normalize_name(e) for e in peer_exclude if e.strip()}
 
     scored: list[tuple[float, int, str, str | None, float | None, tuple[str, ...], bool]] = []
     for idx, (peer, pool_name, pool_cap) in enumerate(pool):
@@ -595,9 +710,13 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
         # to the identity the peers payload itself carries.
         peer_name = prof_name or pool_name
         peer_cap = prof_cap if prof_cap is not None else pool_cap
+        # Owner exclusion drops a rival from the shown set by ticker or name,
+        # however well it would otherwise score.
+        if peer in exclude_tickers or (peer_name and _normalize_name(peer_name) in exclude_names):
+            continue
         score = 0.0
         reasons: list[str] = []
-        named = _is_named_rival(peer_name, watchlist)
+        named = _is_named_rival(peer_name, watchlist) or peer in pinned_tickers
         if named:
             score += 3
             reasons.append("named rival")
@@ -640,6 +759,13 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
         if not has_metrics and not named:
             continue  # an all-dash row says nothing — hide-don't-stub
         out.append(row)
+
+    # The owner's "remove this section unless better peers" condition is
+    # re-evaluated every build: hide the whole panel while too few credible
+    # comps qualify, return it the moment enough are pinned (S5).
+    hide, _detail = evaluate_peers_override(override, out)
+    if hide:
+        return []
     return out
 
 
