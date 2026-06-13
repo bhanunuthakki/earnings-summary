@@ -13,6 +13,11 @@ take action based on the comment's `intent`.
                      LLM call. Applied per-comment.
   ask_question     → ask Opus the question (with ReportSpec context); append
                      the answer to follow_up_thread as an `assistant` turn
+  curate_peers     → steer the comparable-company set: APPEND pins to the
+                     holdings `competitive_watchlist`, write exclusions to
+                     `peer_exclude`, and persist the re-evaluable
+                     `peers_section_override` for a conditional ("remove this
+                     section unless better peers") directive
   fix_data         → log a TODO in directives/data_fixes.md (manual ticket)
   rewrite_section  → ask Opus to rewrite the targeted section (company
                      overview / valuation rationale / bear failure mode);
@@ -22,6 +27,10 @@ take action based on the comment's `intent`.
                      is for single-ticker data corrections) so it doesn't get
                      confused with brief-level edits. Skipped by auto-rebuild
                      (no holdings JSON mutation).
+  needs_triage     → closed-under-no-fit terminal: a comment that maps to no
+                     router above is parked in directives/data_fixes.md for
+                     human disposition (NOT force-bucketed into ask_question)
+                     and mirrored to the journal as an open question-kind note.
 
 Comments with `intent = null` get auto-classified via a Haiku bucketer first.
 
@@ -81,6 +90,7 @@ import subprocess
 import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -458,8 +468,10 @@ _HOLDINGS_MUTATING_INTENTS: frozenset[str] = frozenset(
     # All of these change DB or holdings-JSON state that the brief reads;
     # auto-rebuild fires whenever any of them succeed. `extract_kpi` writes
     # to kpi_facts (not holdings JSON), but still warrants a refresh so the
-    # thesis tab's KPI ledger reflects the new value.
-    {"edit_thesis", "edit_structured", "drop_kpi", "extract_kpi"}
+    # thesis tab's KPI ledger reflects the new value. `curate_peers` mutates
+    # competitive_watchlist / peer_exclude / the peers override, all of which
+    # the eval peer-comp panel reads at render time.
+    {"edit_thesis", "edit_structured", "drop_kpi", "extract_kpi", "curate_peers"}
 )
 
 
@@ -798,6 +810,8 @@ def _route(
         return _route_edit_structured(repo_root, ticker, c, apply=apply)
     if intent == "extract_kpi":
         return _route_extract_kpi(repo_root, ticker, c, apply=apply)
+    if intent == "curate_peers":
+        return _route_curate_peers(repo_root, ticker, c, apply=apply)
     if intent == "ask_question":
         return _route_ask_question(repo_root, ticker, report_date, c)
     if intent == "fix_data":
@@ -806,6 +820,8 @@ def _route(
         return _route_rewrite_section(repo_root, ticker, c, apply=apply)
     if intent == "platform_change":
         return _route_platform_change(repo_root, ticker, c, apply=apply)
+    if intent == "needs_triage":
+        return _route_needs_triage(repo_root, ticker, c, apply=apply)
     return {"summary": f"no router for intent={intent!r} — left as open"}
 
 
@@ -1463,6 +1479,146 @@ markdown fence, no prose.
         conn.close()
 
 
+def _as_list(value: object) -> list[object]:
+    """JSON-boundary coercion: a list, or [] for anything else."""
+    return cast("list[object]", value) if isinstance(value, list) else []
+
+
+def _route_curate_peers(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
+    """Steer the comparable-company set from a comment on the peers panel (S5).
+
+    Three composable directives, parsed from the comment by one LLM call:
+      - PIN rivals → APPENDED to the holdings ``competitive_watchlist`` (the
+        already-whitelisted field the peer scorer gives a +3 "named rival"
+        boost). A pin given as a bare TICKER also gets injected into the FMP
+        pool by ``load_peer_comp``, so a deliberately-chosen rival the screen
+        omitted still shows.
+      - EXCLUDE bad rivals → the new ``peer_exclude`` field (the one thing the
+        watchlist can't express).
+      - HIDE-UNLESS-QUALITY → the ``peers_section_override`` artifact, a
+        re-evaluable condition modelling "remove this section unless you show
+        better peers / computed multiples". ``load_peer_comp`` re-checks it on
+        every build and the panel returns on its own once the bar is met — the
+        owner's actual ask is to ACT on the condition, not log the text.
+
+    No full pin/exclude/hidden/note block is invented — pins reuse
+    competitive_watchlist; only peer_exclude + peers_section_override are new.
+    """
+    path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return {"summary": "curate_peers: holdings JSON not found"}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    current_watchlist = [
+        str(n) for n in _as_list(payload.get("competitive_watchlist")) if str(n).strip()
+    ]
+
+    prompt = f"""You are interpreting an analyst's comment about the PEER COMPARISON section for {ticker.upper()}.
+
+The comment may ask to (a) PIN specific companies as comparables, (b) EXCLUDE / remove bad peers, and/or (c) conditionally HIDE the whole section unless the peer set improves.
+
+CURRENT competitive_watchlist (rival names already pinned):
+{json.dumps(current_watchlist)}
+
+ANCHOR: {c.anchor.type} / {c.anchor.key}
+ANALYST COMMENT:
+\"\"\"
+{c.comment}
+\"\"\"
+
+Return ONLY a JSON object:
+{{
+  "pin": [ ... ],                 // companies to ADD as comparables. Prefer the STOCK TICKER symbol (e.g. "HOOD", "SOFI") when you know it; else the company name. [] if none.
+  "exclude": [ ... ],            // peers to REMOVE from the shown set (ticker or name). [] if none.
+  "hide_unless_quality": <bool>, // true ONLY if the analyst said to REMOVE / HIDE the whole section UNLESS better peers / real computed multiples are shown
+  "min_quality_peers": <int>,    // how many credible comparables the analyst wants before the section shows (default 2)
+  "diff_summary": "<one sentence describing the curation>"
+}}
+
+No markdown fence, no prose outside the JSON.
+"""
+    raw = call_llm(prompt, purpose="intake_classifier").strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RE.sub("", raw).strip()
+    parsed_obj = json.loads(raw)
+    if not isinstance(parsed_obj, dict):
+        return {"summary": "curate_peers: LLM did not return a JSON object"}
+    parsed = cast("dict[str, object]", parsed_obj)
+
+    pins = [str(p).strip() for p in _as_list(parsed.get("pin")) if str(p).strip()]
+    excludes = [str(e).strip() for e in _as_list(parsed.get("exclude")) if str(e).strip()]
+    hide = bool(parsed.get("hide_unless_quality"))
+    raw_min = parsed.get("min_quality_peers")
+    min_quality = max(1, int(raw_min)) if isinstance(raw_min, (int, float)) else 2
+    diff = str(parsed.get("diff_summary") or "(no diff summary)")
+
+    # Pins APPEND to competitive_watchlist (case-insensitive dedupe, append-only
+    # so a curation never silently drops a previously-pinned rival).
+    seen = {w.casefold() for w in current_watchlist}
+    new_watchlist = list(current_watchlist)
+    pinned_added: list[str] = []
+    for p in pins:
+        if p.casefold() not in seen:
+            new_watchlist.append(p)
+            seen.add(p.casefold())
+            pinned_added.append(p)
+
+    # Excludes merge into peer_exclude (case-insensitive dedupe).
+    current_exclude = [str(n) for n in _as_list(payload.get("peer_exclude")) if str(n).strip()]
+    excl_seen = {e.casefold() for e in current_exclude}
+    new_exclude = list(current_exclude)
+    excluded_added: list[str] = []
+    for e in excludes:
+        if e.casefold() not in excl_seen:
+            new_exclude.append(e)
+            excl_seen.add(e.casefold())
+            excluded_added.append(e)
+
+    touched: list[str] = []
+    if pinned_added:
+        payload["competitive_watchlist"] = new_watchlist
+        touched.append("competitive_watchlist")
+    if excluded_added:
+        payload["peer_exclude"] = new_exclude
+        touched.append("peer_exclude")
+
+    override: dict[str, object] | None = None
+    if hide:
+        override = {
+            "action": "hide",
+            "condition": "peers_quality",
+            "require_named": True,
+            "require_metrics": True,
+            "min_quality_peers": min_quality,
+            "rationale": c.comment[:480],
+            "source_comment_id": c.id,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        payload["peers_section_override"] = override
+        touched.append("peers_section_override")
+
+    if not touched:
+        return {
+            "summary": f"curate_peers: {diff} (no actionable curation parsed)",
+            "diff_summary": diff,
+            "fields_touched": [],
+            "dry_run": not apply,
+        }
+
+    if apply:
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    return {
+        "summary": f"curate_peers: {diff}",
+        "diff_summary": diff,
+        "fields_touched": touched,
+        "pinned": pinned_added,
+        "excluded": excluded_added,
+        "section_override": override,
+        "dry_run": not apply,
+    }
+
+
 def _route_ask_question(
     repo_root: Path, ticker: str, report_date: date, c: Comment
 ) -> dict[str, object]:
@@ -1579,6 +1735,34 @@ def _route_platform_change(
     }
 
 
+def _route_needs_triage(repo_root: Path, ticker: str, c: Comment, apply: bool) -> dict[str, object]:
+    """Closed-under-no-fit terminal (Instrument Paradigm §1): park an
+    un-routable comment for human disposition instead of force-bucketing it
+    into ask_question.
+
+    Reuses the existing directives/data_fixes.md backlog (a dedicated triage
+    panel/route is deferred to S11). The comment is ALSO mirrored to the
+    analyst journal as an open question-kind note (notes._INTENT_TO_KIND), so
+    the open loop is visible in two actionable places — never silently
+    flattened into an inert observation.
+    """
+    out = repo_root / "directives" / "data_fixes.md"
+    line = (
+        f"- [ ] **TRIAGE** **{ticker}** ({c.anchor.type} · `{c.anchor.key}` "
+        f"· tab={c.anchor.tab or '-'}) — needs disposition, reported "
+        f"{datetime.now(UTC).date().isoformat()}: {c.comment}\n"
+    )
+    if apply:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("a", encoding="utf-8") as f:
+            f.write(line)
+    return {
+        "summary": f"needs_triage: parked in {out.relative_to(repo_root)} for disposition",
+        "line": line.strip(),
+        "dry_run": not apply,
+    }
+
+
 def _route_rewrite_section(
     repo_root: Path, ticker: str, c: Comment, apply: bool
 ) -> dict[str, object]:
@@ -1640,6 +1824,13 @@ buckets:
   for a SPECIFIC KPI (typically anchored to a kpi_ledger_row). Picks this
   when the comment is asserting a number, not asking for the thesis or
   structured fields to change.
+- curate_peers: the comment is about WHICH COMPARABLE PEERS the report shows
+  — pin / add a specific rival to compare against, exclude / remove a bad
+  peer, or conditionally hide the peer-comparison section unless better peers
+  are shown. Strong signals: the anchor type is peer_comp, the comment says
+  the peer list is wrong / bad ("these are shit peers"), names rival
+  companies to compare against, or says "remove this section unless ...".
+  Pick this OVER fix_data / edit_structured for peer-set curation.
 - ask_question: user is asking a question or wanting more info about THIS
   ticker's numbers / thesis / data
 - fix_data: user is reporting a data error / inaccuracy SPECIFIC to this
@@ -1649,12 +1840,16 @@ buckets:
   everyone".
 - rewrite_section: user wants a specific section (company overview,
   valuation rationale, failure mode) rewritten for THIS ticker
+- needs_triage: NONE of the buckets above fit cleanly — the comment is
+  ambiguous, conditional, or a directive the system can't yet route. Pick
+  this INSTEAD of forcing a wrong bucket: it is always better to triage than
+  to mis-route, and a human dispositions it.
 
 Anchor type: {c.anchor.type}
 Anchor key: {c.anchor.key}
 Comment: \"\"\"{c.comment}\"\"\"
 
-Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi, ask_question, fix_data, rewrite_section
+Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured, extract_kpi, curate_peers, ask_question, fix_data, rewrite_section, needs_triage
 """
     raw = call_llm(prompt, purpose="intake_classifier").strip().lower()
     valid = {
@@ -1663,14 +1858,18 @@ Reply with just one of: platform_change, drop_kpi, edit_thesis, edit_structured,
         "edit_thesis",
         "edit_structured",
         "extract_kpi",
+        "curate_peers",
         "ask_question",
         "fix_data",
         "rewrite_section",
+        "needs_triage",
     }
     for tok in raw.split():
         if tok in valid:
             return tok
-    return "ask_question"  # safest default
+    # Closed under no-fit: an unparseable / out-of-vocabulary answer parks the
+    # comment for human disposition rather than mis-routing it to ask_question.
+    return "needs_triage"
 
 
 # ---------------------------------------------------------------------------

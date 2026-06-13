@@ -77,13 +77,14 @@ def _comment_sidebar_shell(body: StringIO) -> None:
         '<form class="cmt-form" id="cmt-form">'
         '<textarea name="comment" rows="3" required '
         'placeholder="Write a comment&hellip; '
-        "(tip: prefix with /kpi /thesis /q /ask /fix /update /rewrite "
+        "(tip: prefix with /kpi /thesis /q /ask /fix /update /rewrite /peers "
         'to skip auto-classify)"></textarea>'
         '<div class="cmt-form-row">'
         '<select name="intent" title="What should the processor do?">'
         '<option value="">Auto-classify</option>'
         '<option value="drop_kpi">Drop this KPI</option>'
         '<option value="edit_thesis">Edit thesis</option>'
+        '<option value="curate_peers">Curate peers</option>'
         '<option value="ask_question">Ask question</option>'
         '<option value="fix_data">Flag data issue</option>'
         '<option value="rewrite_section">Rewrite this section</option>'

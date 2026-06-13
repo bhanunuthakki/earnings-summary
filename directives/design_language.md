@@ -372,6 +372,55 @@ at render time.
 
 ---
 
+## 10. Comments — closed under no-fit
+
+The comment classifier is **closed under no-fit, and every commentable surface
+is steerable** (Instrument Paradigm §1 — *closed under no-fit, explainable by
+construction*). Sources of truth: `src/comments.py` (`IntentType` / `AnchorType`),
+`execution/process_report_comments.py` (classifier + routers),
+`src/user_state/notes.py` (the notes mirror). The full implementation contract
+lives in `directives/report_comments_and_chat.md`.
+
+- **A classifier always has an explicit `needs_triage` terminal.** The intent
+  bucketer is forced-choice over a closed vocabulary, but that vocabulary
+  ALWAYS includes `needs_triage` — both an answer the model may pick and the
+  hard fallback for an unparseable / out-of-vocabulary answer. The old inert
+  `return "ask_question"` default is forbidden: a directive that doesn't fit
+  is parked for human disposition (the existing `data_fixes.md` backlog), not
+  silently mis-routed. It is always better to triage than to mis-bucket.
+- **A no-fit comment is never flattened into an inert note.** The notes mirror
+  maps `needs_triage` → an open `question` (a reconcilable loop), NOT
+  `observation`. The fix this enforces: an unmappable or *conditional*
+  directive used to collapse to `observation` and die there.
+- **Every commentable surface carries a structured anchor type — including
+  computed panels.** A peek-only computed section (peers, charts) is not exempt:
+  the peers panel emits `data-anchor-type="peer_comp"` so a comment on the
+  comparable set classifies as `curate_peers` and routes to a *structured*
+  artifact, not a memo.
+- **A steerable computed section persists a re-evaluable override the routers
+  mutate.** A conditional directive ("remove this section UNLESS you show
+  better peers / computed multiples") is modelled as a persisted artifact with
+  a machine-checkable condition (`peers_section_override` → a `peers_quality`
+  flag), NOT verbatim-logged text. The accessor re-evaluates it on every build
+  (`p3_data.evaluate_peers_override`), so the section hides while the bar is
+  unmet and returns on its own once it is — the system *acts on the condition*.
+- **Curation reuses existing structured fields before inventing new ones.**
+  Peer pins APPEND to the already-whitelisted `competitive_watchlist` (reusing
+  its +3 scorer coupling); only what that field can't express is new
+  (`peer_exclude`, `peers_section_override`). A pinned bare ticker absent from
+  the upstream pool is injected so an explicit pin always renders.
+
+Guards: `tests/test_comment_taxonomy.py` (no-fit fallback + the notes mirror
+never collapsing `needs_triage` to `observation`), `tests/test_peer_curation.py`
+(the `curate_peers` routes + the override-scoring contract), and the workspace
+golden (`evaluation/pane_company.html` pins the `peer_comp` anchor).
+
+Deferred to S11 (disclosed, not dropped): a dedicated triage panel/route and
+the journal-silo redesign — `needs_triage` rides the existing `data_fixes.md`
+backlog + journal until then.
+
+---
+
 ## Appendix A — fresh-eyes audit (2026-06-11): historical note
 
 > **Superseded — no longer the source of truth.** This appendix once held a

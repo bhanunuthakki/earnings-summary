@@ -61,14 +61,22 @@ NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual", "advisor"
 # every thesis/KPI mutation directive is a *decision*; data-quality and
 # style notes are *observations*. platform_change is deliberately absent —
 # cross-workspace bugs go to the platform backlog, not analyst memory.
+#
+# `needs_triage` maps to *question*, NOT observation: a comment the classifier
+# couldn't route is an open loop awaiting human disposition (Instrument
+# Paradigm §1 — closed under no-fit, never silently flattened into an inert
+# observation). It reconciles like any question — when the analyst reclassifies
+# the comment to a real intent, the next sync rewrites the kind.
 _INTENT_TO_KIND: dict[str, str] = {
     "ask_question": "question",
     "edit_thesis": "decision",
     "edit_structured": "decision",
     "drop_kpi": "decision",
     "extract_kpi": "decision",
+    "curate_peers": "decision",
     "fix_data": "observation",
     "rewrite_section": "observation",
+    "needs_triage": "question",
 }
 
 _COMMENT_STATUS_TO_NOTE: dict[str, str] = {

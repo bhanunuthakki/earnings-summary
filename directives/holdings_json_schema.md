@@ -25,7 +25,9 @@ mean. When a field's semantics change, edit here in the same PR.
   "tier_2_kpis": [...],
   "tier_3_kpis": [...],
 
-  "competitive_watchlist": [...],
+  "competitive_watchlist": [...],         // pinned rival names/tickers (peer-comp +3 boost)
+  "peer_exclude": [...],                   // optional; rivals to drop from the peer panel (S5)
+  "peers_section_override": {...},         // optional; re-evaluable hide-unless-quality rule (S5)
   "thesis_breakers_qualitative": [...],   // free-text breakers, narrative only
 
   "break_rules": [...],                   // hard universal tripwires (see below)
@@ -76,6 +78,37 @@ Authoring workflow for a fresh IPO:
 The flag is informational — it doesn't change rule evaluation or DCF math.
 It only switches the narrative source. Once a 10-K is filed, flip
 `data_anchor` to `"10k"` (or drop both fields).
+
+## Peer-curation fields (S5)
+
+The comparable-company panel is owner-steerable through the `curate_peers`
+comment intent (see `directives/report_comments_and_chat.md`). Three fields
+feed `src/report/sections/p3_data.py::load_peer_comp`:
+
+- `competitive_watchlist` — pinned rival names (existing). Each name gives a
+  matching pool peer a +3 "named rival" score. A pin written as a bare
+  **ticker** ("HOOD") that the upstream FMP pool omits is INJECTED into the
+  pool so the explicit pin still renders.
+- `peer_exclude` — optional list of tickers and/or names to DROP from the
+  shown set, however well they'd otherwise score. The one curation the
+  watchlist can't express.
+- `peers_section_override` — optional, re-evaluable "remove this section
+  unless better peers" condition. Shape:
+  ```jsonc
+  {
+    "action": "hide",                 // only "hide" today
+    "condition": "peers_quality",
+    "require_named": true,            // count only watchlist-vouched peers
+    "require_metrics": true,          // …that carry ≥1 computed TTM multiple
+    "min_quality_peers": 2,           // hide while fewer than this qualify
+    "rationale": "<owner's words>",
+    "source_comment_id": "cmt_…",
+    "created_at": "2026-06-13T…"
+  }
+  ```
+  `load_peer_comp` re-checks it every build (`evaluate_peers_override`): the
+  panel hides while too few credible comps qualify and returns on its own once
+  enough are pinned — the condition is acted on, not just recorded.
 
 ## Hard break rules — `break_rules` and `business_model_rules`
 

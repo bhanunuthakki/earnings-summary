@@ -44,7 +44,10 @@ ticker, single source of truth. Each comment is:
   },
   "selected_text": "Monthly ARPAC (USD) ... break_condition: ...",
   "comment": "this KPI is immaterial after the SuperCore split, drop it",
-  "intent": "drop_kpi" | "edit_thesis" | "ask_question" | "fix_data" | null,
+  // closed vocabulary — see "Intent taxonomy" below. ALWAYS includes needs_triage.
+  "intent": "drop_kpi" | "edit_thesis" | "edit_structured" | "extract_kpi"
+          | "curate_peers" | "ask_question" | "fix_data" | "rewrite_section"
+          | "platform_change" | "needs_triage" | null,
   "status": "open" | "addressed" | "dismissed",
   "created_at": "2026-05-18T22:14:00Z",
   "addressed_at": null,
@@ -88,12 +91,59 @@ For each open comment, route by `intent`:
   show it inline next to the original comment.
 - `fix_data`: log the comment as a TODO in `directives/data_fixes.md`
   (some fixes need manual intervention).
+- `curate_peers`: steer the comparable-company set (see "Steerable peers"
+  below).
+- `needs_triage`: the closed-under-no-fit terminal — park the comment for
+  human disposition (see "Closed under no-fit" below).
 - `null` (intent not classified): run a first-pass Haiku classifier to
   bucket into one of the above, then route.
 
 After processing, the next `--enable-llm` rebuild picks up the thesis/KPI
 edits automatically; comment status flips to `addressed` with
 `resolution_note` showing what changed.
+
+### Intent taxonomy — closed under no-fit (S5)
+
+The classifier (`execution/process_report_comments.py::_classify_intent`) is
+forced-choice over a **closed** vocabulary, but the vocabulary ALWAYS includes
+`needs_triage`. This is the "closed under no-fit" rule (Instrument Paradigm §1;
+`directives/design_language.md` §10):
+
+- The Haiku bucketer is told it may pick `needs_triage` when NONE of the
+  actionable buckets fit — "it is always better to triage than to mis-route."
+- The hard fallback for an unparseable / out-of-vocabulary answer is
+  `needs_triage`, NOT the old inert `ask_question`.
+- `_route_needs_triage` parks the comment in `directives/data_fixes.md` (the
+  existing backlog — a dedicated triage panel is deferred to S11) AND the notes
+  mirror records it as an open `question` (`notes._INTENT_TO_KIND`), never an
+  inert `observation`. The owner's "remove this section unless you select
+  better peers" was previously filed as a memo precisely because the classifier
+  had no no-fit terminal and the notes mirror collapsed unmappable directives
+  to `observation`.
+
+### Steerable peers — `curate_peers` + a re-evaluable override (S5)
+
+The peers panel (`_peer_comp_panel`) carries a `peer_comp` anchor, so a comment
+on the comparable set classifies as `curate_peers` and routes to STRUCTURED
+artifacts in `micro_thesis/holdings/<T>.json` — not a memo:
+
+- **Pins** APPEND to the existing `competitive_watchlist` (reusing its +3
+  "named rival" scorer boost in `p3_data.load_peer_comp`). A pin given as a
+  bare TICKER absent from the upstream FMP pool is **injected** into the pool so
+  an explicitly-chosen rival the screen omitted still renders.
+- **Exclusions** write the new `peer_exclude` field (the one thing the
+  watchlist can't express) — `load_peer_comp` drops those rows by ticker or
+  name.
+- **The conditional** ("remove this section UNLESS you show better peers /
+  computed multiples") is modelled as the new `peers_section_override`
+  artifact — a persisted, machine-checkable condition, NOT logged text.
+  `p3_data.evaluate_peers_override` re-checks it on every build: the panel
+  hides while fewer than `min_quality_peers` credible comps qualify (a quality
+  peer = a named rival WITH at least one computed multiple) and returns on its
+  own once enough are pinned. The system **acts on the condition**.
+
+No full pin/exclude/hidden/note block is invented — only `peer_exclude` and
+`peers_section_override` are new (see `directives/holdings_json_schema.md`).
 
 **Clear** — `python execution/process_report_comments.py --ticker NU --clear`
 drops all `addressed` + `dismissed` comments. `open` comments survive

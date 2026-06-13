@@ -64,6 +64,7 @@ AnchorType = Literal[
     "valuation_rationale",  # key = "valuation_rationale" (singular per report)
     "thesis_lede",  # key = "thesis_lede" (singular per report)
     "company_overview",  # key = "company_overview" (singular per report)
+    "peer_comp",  # key = "peer_comp" — the comparable-company panel (singular per report)
     "free_text",  # key = arbitrary selection text (fallback)
 ]
 
@@ -72,10 +73,15 @@ IntentType = Literal[
     "edit_thesis",
     "edit_structured",  # mutate structured fields (break_rules, tier_*_kpis, etc.)
     "extract_kpi",  # supply a KPI value (with quote/source) via comment text
+    "curate_peers",  # steer the comparable-company set (pin/exclude/hide-unless-quality)
     "ask_question",
     "fix_data",
     "rewrite_section",
     "platform_change",  # cross-workspace bug or feature — not a single-ticker brief edit
+    # Closed-under-no-fit terminal (Instrument Paradigm §1): a comment the
+    # classifier can't map to any actionable router lands here for human
+    # disposition — never silently force-bucketed into ask_question.
+    "needs_triage",
     None,  # not yet classified — processor will run an LLM bucketer first
 ]
 
@@ -113,6 +119,8 @@ _KEYWORD_TO_INTENT: dict[str, str] = {
     "platform": "platform_change",  # cross-workspace bug or feature
     "feature": "platform_change",
     "bug": "platform_change",
+    "peers": "curate_peers",  # steer the comparable-company set
+    "curate": "curate_peers",  # alias
 }
 
 _KEYWORD_RX = re.compile(
@@ -372,9 +380,9 @@ def append_comment(
 
     If the caller didn't pass an explicit ``intent`` and the comment text
     starts with a recognized slash-keyword (``/kpi``, ``/thesis``, ``/q``,
-    ``/ask``, ``/fix``, ``/update``, ``/rewrite``), the keyword is extracted
-    + stripped from the stored text and the matching intent is recorded.
-    Explicit ``intent`` always wins over the keyword.
+    ``/ask``, ``/fix``, ``/update``, ``/rewrite``, ``/peers``), the keyword is
+    extracted + stripped from the stored text and the matching intent is
+    recorded. Explicit ``intent`` always wins over the keyword.
     """
     if intent is None:
         keyword_intent, cleaned = extract_intent_from_text(text)
