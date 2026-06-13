@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from html import escape
 from pathlib import Path
 
+from ui.prose import render_prose
 from user_state.ledger import ThesisLedgerEntryRow, list_recent_entries
 
 # Human labels for entry_kind — kept in lockstep with src/dashboard/digest.py.
@@ -104,6 +105,6 @@ def _row(e: ThesisLedgerEntryRow) -> str:
         f'<td class="when">{when}</td>'
         f'<td class="tk">{escape(e.ticker)}</td>'
         f'<td><span class="p-pill tl-pill {pill_cls}">{escape(label)}</span></td>'
-        f'<td class="tl-body">{escape(e.body)}</td>'
+        f'<td class="tl-body">{render_prose(e.body, inline=True)}</td>'
         "</tr>"
     )

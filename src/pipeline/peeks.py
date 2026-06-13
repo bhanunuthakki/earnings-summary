@@ -43,9 +43,9 @@ from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_ale
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
-from pipeline.analytical_dashboard_html import light_markdown_to_html
 from pipeline.research_cockpit import latest_dcf_runs, next_earnings, profile_quote
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
+from ui.prose import render_prose
 from ui.time import stamp_html
 
 __all__ = [
@@ -273,7 +273,7 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
         '<div class="cc-peek-memo">'
         f'<div class="cc-peek-memo-head"><h2>{escape(title)}</h2>'
         f"{stamp_html(created_at, mode='date')}</div>"
-        f'<div class="synthesis-body">{light_markdown_to_html(body_md[:20000])}</div>'
+        f'<div class="synthesis-body">{render_prose(body_md[:20000])}</div>'
         "</div>"
     )
 

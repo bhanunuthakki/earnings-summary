@@ -173,6 +173,12 @@ _DOCK_JS = r"""
   function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
+  // PINNED INLINE-SUBSET MIRROR of ui.prose.render_prose (the one server prose
+  // boundary). This is the ONE sanctioned client renderer: Ask streams tokens
+  // and threads cite-marks through this same string client-side, so it cannot
+  // be server-rendered. Keep it in rough inline parity (code/bold/bullets/
+  // paragraphs); the server side in src/ui/prose.py is canonical. Do NOT grow a
+  // fourth markdown renderer — see directives/design_language.md "Rendered prose".
   function md(text) {
     var html = esc(text || '');
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
