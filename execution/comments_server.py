@@ -1090,6 +1090,7 @@ def create_app(
         note_ticker = str(ticker_raw).strip().upper() or None if ticker_raw is not None else None
         anchor_type_raw = payload.get("anchor_type")
         anchor_key_raw = payload.get("anchor_key")
+        fact_ref_raw = payload.get("fact_ref")
         context_raw = payload.get("context")
         # Optional 0093 links at capture time ("note this decision" flows).
         # Validated like the /link action — a dangling target is a 404.
@@ -1114,6 +1115,7 @@ def create_app(
                 body=note_body,
                 anchor_type=str(anchor_type_raw) if anchor_type_raw is not None else None,
                 anchor_key=str(anchor_key_raw) if anchor_key_raw is not None else None,
+                fact_ref=str(fact_ref_raw) if fact_ref_raw is not None else None,
                 source="manual",
                 context=cast("dict[str, object]", context_raw)
                 if isinstance(context_raw, dict)

@@ -380,7 +380,14 @@ JS = r"""
   }
 
   function openSidebar(type, key, anchorNode) {
-    var anchor = {type: type, key: key, tab: anchorNode.getAttribute('data-anchor-tab')};
+    // Capture the stable doorway handle (S12) when the anchored cell carries
+    // one, so the comment — and the note it mirrors — re-binds across a metric
+    // rename even though `key` (the display name) is what moved.
+    var anchor = {
+      type: type, key: key,
+      tab: anchorNode.getAttribute('data-anchor-tab'),
+      fact_ref: anchorNode.getAttribute('data-fact-ref') || null
+    };
     openWithAnchor(anchor, humanAnchor(anchor));
   }
 
@@ -514,6 +521,7 @@ JS = r"""
         body: text,
         anchor_type: anchorAtSubmit.type,
         anchor_key: anchorAtSubmit.key,
+        fact_ref: anchorAtSubmit.fact_ref || null,
         context: {report_date: REPORT_DATE, tab: anchorAtSubmit.tab || null}
       })
     }).then(function(r) {

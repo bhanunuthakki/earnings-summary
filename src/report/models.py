@@ -258,6 +258,14 @@ class KpiLedgerRow(BaseModel):
     tier: Literal["tier_1", "tier_2", "tier_3"]
     unit: str | None = None
     source_hint: str | None = None
+    # Stable PK handle for the metric (kpi_definitions.id), resolved at build
+    # time alongside the definition metadata. This is the metric's identity
+    # at write-time (Instrument Paradigm Law 2): the renderer emits it as a
+    # `fact_ref` doorway (`kpi:{ticker}:{id}`) so a click resolves the exact
+    # series by PK instead of re-phrase-matching the fragile display name.
+    # None when the name carries no resolvable definition (degrade to the
+    # name-keyed anchor).
+    kpi_definition_id: int | None = None
     break_condition: str | None = None
     history: list[tuple[str, float | None]] = Field(default_factory=list)  # [(period, value)]
     current_status: Literal["green", "yellow", "red", "unknown"] = "unknown"

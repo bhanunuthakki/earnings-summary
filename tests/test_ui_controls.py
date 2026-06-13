@@ -773,3 +773,20 @@ def test_single_sub_tab_panels_do_not_reprint_their_section_title() -> None:
         "single-sub-tab panel re-prints its section name as <h2> — delete it; "
         f"the nav owns the title (design_language §6.1): {offenders}"
     )
+
+
+def test_fact_anchor_attrs_emits_handle_and_degrades() -> None:
+    """The doorway-handle helper (S12, Law 2): the anchor key is always present;
+    the stable fact_ref is emitted only when known (else degrade), with
+    data-fact-ref ordered before data-ask-q (exact wins). Values are escaped."""
+    from ui.controls import fact_anchor_attrs
+
+    # Degrade: no handle → name-keyed anchor only.
+    assert fact_anchor_attrs(None, "NPL ratio") == 'data-anchor-key="NPL ratio"'
+    # With a handle → both, anchor-key first.
+    both = fact_anchor_attrs("kpi:NU:42", 'Risk "adj" NIM')
+    assert 'data-anchor-key="Risk &quot;adj&quot; NIM"' in both  # quotes escaped
+    assert 'data-fact-ref="kpi:NU:42"' in both
+    # Precedence: a cell carrying both — data-fact-ref ordered before data-ask-q.
+    triple = fact_anchor_attrs("kpi:NU:42", "NIM", ask_q="How has NIM trended?")
+    assert triple.index("data-fact-ref") < triple.index("data-ask-q")

@@ -602,3 +602,37 @@ def prov_case(
         f'<details class="k-prov-case"><summary>{pill}{escape(title)}{meta_span}</summary>'
         f"{rationale_p}{evidence}</details>"
     )
+
+
+def fact_anchor_attrs(
+    fact_ref: str | None,
+    label: str,
+    *,
+    ask_q: str | None = None,
+) -> str:
+    """Doorway anchor attributes for a clickable datum (Instrument Paradigm
+    Law 2 — "every datum is a doorway").
+
+    ``label`` is the human display that doubles as the comment ``data-anchor-key``
+    (ALWAYS emitted, so a comment still anchors even with no deeper view).
+    ``fact_ref`` is the metric's STABLE handle —
+    ``kpi:{ticker}:{def_id}`` / ``fin:{ticker}:{line_item}:{fiscal_period_type}`` —
+    emitted as ``data-fact-ref`` so a click resolves the EXACT series by PK
+    (``ask.grounding`` fast-path), never by re-phrase-matching the label. When
+    ``fact_ref`` is absent the cell degrades to the name-keyed anchor.
+
+    ``ask_q`` is the relative-window question phrasing cockpit stats use (S9).
+    **Precedence contract:** a cell may carry both; the click delegate resolves
+    ``data-fact-ref`` (exact) BEFORE ``data-ask-q`` (phrasing) — the exact
+    handle always wins. The label is a *display*, never a *handle*.
+
+    Returns escaped HTML attributes, space-joined, no leading/trailing space.
+    """
+    from html import escape
+
+    attrs = [f'data-anchor-key="{escape(label, quote=True)}"']
+    if fact_ref:
+        attrs.append(f'data-fact-ref="{escape(fact_ref, quote=True)}"')
+    if ask_q:
+        attrs.append(f'data-ask-q="{escape(ask_q, quote=True)}"')
+    return " ".join(attrs)

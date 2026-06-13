@@ -119,6 +119,10 @@ class AnalystNoteRow:
     decision_id: int | None = None
     position_entry_id: int | None = None
     link_auto_resolve: bool = False
+    # 0099 — the stable doorway handle (kpi:{ticker}:{def_id} / fin:…) the
+    # anchored element carried, so the note re-binds across a metric rename.
+    # None on a pre-0099 schema or a text-keyed anchor (decoded defensively).
+    fact_ref: str | None = None
 
 
 @dataclass(slots=True)
@@ -139,6 +143,7 @@ def create_note(
     body: str,
     anchor_type: str | None = None,
     anchor_key: str | None = None,
+    fact_ref: str | None = None,
     source: str = "manual",
     source_ref: str | None = None,
     context: dict[str, object] | None = None,
@@ -149,8 +154,10 @@ def create_note(
 ) -> AnalystNoteRow:
     """INSERT one open note. ``ticker=None`` records a portfolio-level note.
 
-    The link params are written verbatim (no cross-table validation here) —
-    callers that take user input go through ``journal_links.link_note``."""
+    ``fact_ref`` is the stable doorway handle (0099) the anchored datum carried;
+    it lets the note re-bind across a metric rename. The link params are written
+    verbatim (no cross-table validation here) — callers that take user input go
+    through ``journal_links.link_note``."""
     _validate("kind", kind, NOTE_KINDS)
     _validate("source", source, NOTE_SOURCES)
     if not body.strip():
@@ -166,6 +173,7 @@ def create_note(
             body=body,
             anchor_type=anchor_type,
             anchor_key=anchor_key,
+            fact_ref=fact_ref,
             source=source,
             source_ref=source_ref,
             supersedes_id=None,
@@ -420,6 +428,7 @@ def supersede_note(
             body=body,
             anchor_type=old.anchor_type,
             anchor_key=old.anchor_key,
+            fact_ref=old.fact_ref,
             source="manual",
             source_ref=None,
             supersedes_id=old.id,
@@ -562,6 +571,7 @@ def _insert_from_comment(
         body=comment.comment,
         anchor_type=comment.anchor.type,
         anchor_key=comment.anchor.key,
+        fact_ref=comment.anchor.fact_ref,
         source="comment",
         source_ref=ref,
         supersedes_id=None,
@@ -599,6 +609,11 @@ def _update_from_comment(
     if (comment.resolution_note or None) != note.resolution_note:
         sets.append("resolution_note = ?")
         params.append(comment.resolution_note)
+    # Backfill/refresh the stable handle (0099) — a comment whose anchor gained a
+    # fact_ref since the last sync re-binds the mirrored note by identity.
+    if (comment.anchor.fact_ref or None) != note.fact_ref:
+        sets.append("fact_ref = ?")
+        params.append(comment.anchor.fact_ref)
     if new_ctx != ctx:
         sets.append("context_json = ?")
         params.append(json.dumps(new_ctx))
@@ -641,6 +656,7 @@ def _insert(
     decision_id: int | None = None,
     position_entry_id: int | None = None,
     link_auto_resolve: bool = False,
+    fact_ref: str | None = None,
 ) -> int:
     now = now_iso()
     columns = [
@@ -665,13 +681,15 @@ def _insert(
         now,
         resolved_at,
     ]
-    # Link columns (0093) join the statement only when actually set, so the
-    # default write path keeps working against pre-0093 / hand-rolled test
-    # schemas; passing a link there fails loudly instead (linking needs 0093).
+    # Optional columns (0093 links + 0099 fact_ref) join the statement only when
+    # actually set, so the default write path keeps working against pre-0093 /
+    # pre-0099 / hand-rolled test schemas; passing one against a schema that
+    # lacks the column fails loudly instead (the feature needs the migration).
     for column, value in (
         ("decision_id", decision_id),
         ("position_entry_id", position_entry_id),
         ("link_auto_resolve", 1 if link_auto_resolve else None),
+        ("fact_ref", fact_ref),
     ):
         if value is not None:
             columns.append(column)
@@ -735,6 +753,16 @@ def _link_col(row: sqlite3.Row, name: str) -> int | None:
     return None if raw is None else int(raw)
 
 
+def _text_col(row: sqlite3.Row, name: str) -> str | None:
+    """A nullable text column that may be absent on a pre-migration / hand-rolled
+    schema (e.g. 0099's ``fact_ref``)."""
+    try:
+        raw = row[name]
+    except IndexError:
+        return None
+    return None if raw is None else str(raw)
+
+
 def _row_to_dc(row: sqlite3.Row) -> AnalystNoteRow:
     raw_ctx = row["context_json"]
     context: dict[str, object] | None = None
@@ -768,4 +796,5 @@ def _row_to_dc(row: sqlite3.Row) -> AnalystNoteRow:
         decision_id=_link_col(row, "decision_id"),
         position_entry_id=_link_col(row, "position_entry_id"),
         link_auto_resolve=bool(_link_col(row, "link_auto_resolve") or 0),
+        fact_ref=_text_col(row, "fact_ref"),
     )

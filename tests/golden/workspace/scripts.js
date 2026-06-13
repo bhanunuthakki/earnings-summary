@@ -744,7 +744,14 @@
   }
 
   function openSidebar(type, key, anchorNode) {
-    var anchor = {type: type, key: key, tab: anchorNode.getAttribute('data-anchor-tab')};
+    // Capture the stable doorway handle (S12) when the anchored cell carries
+    // one, so the comment — and the note it mirrors — re-binds across a metric
+    // rename even though `key` (the display name) is what moved.
+    var anchor = {
+      type: type, key: key,
+      tab: anchorNode.getAttribute('data-anchor-tab'),
+      fact_ref: anchorNode.getAttribute('data-fact-ref') || null
+    };
     openWithAnchor(anchor, humanAnchor(anchor));
   }
 
@@ -878,6 +885,7 @@
         body: text,
         anchor_type: anchorAtSubmit.type,
         anchor_key: anchorAtSubmit.key,
+        fact_ref: anchorAtSubmit.fact_ref || null,
         context: {report_date: REPORT_DATE, tab: anchorAtSubmit.tab || null}
       })
     }).then(function(r) {
@@ -1358,6 +1366,26 @@
         streamEl.textContent = '[ERROR] ' + err.message;
         hintEl.textContent = 'The research server is not reachable - chat is offline.';
       });
+    });
+
+    // ----- Fact doorway (Law 2 — every datum is a doorway) -----
+    // A KPI cell rendered as a .fact-doorway carries a stable fact_ref handle
+    // (kpi:{ticker}:{def_id}) on its row. Clicking it opens this chat on the
+    // EXACT series: we submit the handle alongside the clean label, and
+    // ask.grounding's fast-path resolves it by PK (the name phrase-match is the
+    // fallback). The handle rides in the question text so resolution never
+    // depends on re-typing the metric's fragile display name.
+    document.addEventListener('click', function(ev) {
+      var dw = ev.target.closest && ev.target.closest('.fact-doorway');
+      if (!dw) return;
+      var host = dw.closest('[data-fact-ref]');
+      var ref = host && host.getAttribute('data-fact-ref');
+      if (!ref) return;
+      ev.preventDefault();
+      setOpen(true);
+      var label = (dw.textContent || '').replace(/\s+/g, ' ').trim();
+      form.message.value = label ? (label + ' — ' + ref) : ref;
+      form.requestSubmit();
     });
 
     function appendTurn(role, text, diff) {

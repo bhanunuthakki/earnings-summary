@@ -114,6 +114,47 @@ def test_create_and_list_round_trip(db_path: Path) -> None:
     assert {r.id for r in everything} == {row.id, portfolio_level.id}
 
 
+def test_fact_ref_persists_round_trips_and_inherits(db_path: Path) -> None:
+    """The 0099 doorway handle is written, decoded, and inherited on supersede,
+    so a note re-binds by stable identity even after the KPI's display name
+    changes; a text-keyed anchor degrades to None."""
+    row = notes.create_note(
+        ticker="NU",
+        kind="watch",
+        body="NIM vs cost of risk",
+        anchor_type="kpi_ledger_row",
+        anchor_key="Risk-adjusted NIM",
+        fact_ref="kpi:NU:42",
+        db_path=db_path,
+    )
+    assert row.fact_ref == "kpi:NU:42"
+    fetched = notes.get_note(row.id, db_path=db_path)
+    assert fetched is not None
+    assert fetched.fact_ref == "kpi:NU:42"
+    # No handle → None (the text-keyed anchor degrade path).
+    plain = notes.create_note(ticker="NU", kind="observation", body="x", db_path=db_path)
+    assert plain.fact_ref is None
+    # Supersede carries the handle forward — the replacement is the same datum.
+    superseded = notes.supersede_note(row.id, body="NIM below cost-of-risk floor", db_path=db_path)
+    assert superseded.fact_ref == "kpi:NU:42"
+
+
+def test_sync_mirrors_anchor_fact_ref_onto_note(repo_root: Path, db_path: Path) -> None:
+    """A comment whose anchor carries a doorway handle mirrors it onto the
+    note (analyst_notes.fact_ref); a text-keyed anchor leaves it None."""
+    anchored = comments.Anchor(
+        type="kpi_ledger_row",
+        key="Risk-adjusted NIM",
+        fact_ref="kpi:NU:42",
+    )  # pyright: ignore[reportArgumentType]
+    c = _add(repo_root, "watch NIM vs cost of risk", anchor=anchored)
+    plain = _add(repo_root, "broad observation")  # default thesis_lede anchor, no handle
+    notes.sync_store_comments(repo_root, ticker="NU", report_date=RD, db_path=db_path)
+    rows = {r.source_ref: r for r in notes.list_notes(ticker="NU", db_path=db_path)}
+    assert rows[_ref(c)].fact_ref == "kpi:NU:42"
+    assert rows[_ref(plain)].fact_ref is None
+
+
 def test_vocab_validation(db_path: Path) -> None:
     with pytest.raises(ValueError):
         notes.create_note(ticker="NU", kind="musing", body="x", db_path=db_path)

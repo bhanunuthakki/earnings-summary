@@ -38,6 +38,7 @@ from report.renderers.workspace_sections._shared import (
 )
 from report.renderers.workspace_sections.valuation import _TIMES
 from report.sections.p3_data import DecisionHistorySummary, MacroSensitivityRow
+from ui.controls import fact_anchor_attrs
 
 __all__ = [
     "_assumptions_sync_row",
@@ -102,7 +103,7 @@ def _thesis_tab(
     # breakers (soft thesis-breakers), competitive watchlist (who to track),
     # full tier-2/3 KPI ledger (collapsible). Each panel skips itself when
     # the underlying list is empty so the tab doesn't stack stub panels.
-    _thesis_hygiene_panels(body, thesis, report_date)
+    _thesis_hygiene_panels(body, thesis, report_date, ticker=snap.ticker)
     body.write("</div>")
     # NOTE: bear case (`bear` arg) is rendered separately by `_bear_tab` —
     # it's promoted to a first-class tab. Arg kept here for back-compat
@@ -283,10 +284,18 @@ def _bear_tab(body: StringIO, bear: BearCaseSection) -> None:
 
 
 def _thesis_hygiene_panels(
-    body: StringIO, thesis: ThesisSection, report_date: date | None = None
+    body: StringIO,
+    thesis: ThesisSection,
+    report_date: date | None = None,
+    *,
+    ticker: str | None = None,
 ) -> None:
     """Render break_conditions / qualitative_breakers / competitive_watchlist
-    side-by-side, then the full KPI ledger as a collapsible details panel."""
+    side-by-side, then the full KPI ledger as a collapsible details panel.
+
+    ``ticker`` builds each ledger row's ``fact_ref`` doorway handle
+    (``kpi:{ticker}:{def_id}``); None degrades the rows to name-keyed anchors.
+    """
     cards: list[tuple[str, str, list[str]]] = []
     if thesis.break_conditions:
         cards.append(
@@ -352,7 +361,7 @@ def _thesis_hygiene_panels(
             "</tr></thead><tbody>"
         )
         for r in shown:
-            _kpi_ledger_row(body, r, report_date)
+            _kpi_ledger_row(body, r, report_date, ticker=ticker)
         body.write("</tbody></table></div>")
         if tracked_only:
             names = ", ".join(_esc(clean_kpi_name(r.name)) for r in tracked_only)
@@ -368,9 +377,24 @@ def _kpi_has_data(row: KpiLedgerRow) -> bool:
     return any(v is not None for _, v in row.history)
 
 
-def _kpi_ledger_row(body: StringIO, r: KpiLedgerRow, report_date: date | None) -> None:
+def _kpi_ledger_row(
+    body: StringIO,
+    r: KpiLedgerRow,
+    report_date: date | None,
+    *,
+    ticker: str | None = None,
+) -> None:
     """One enriched ledger row: clean name + definition gloss, latest value with
-    a staleness flag, and a sparkline + YoY/QoQ delta off ``r.history``."""
+    a staleness flag, and a sparkline + YoY/QoQ delta off ``r.history``.
+
+    When the KPI resolves to a definition id and a ``ticker`` is known, the row
+    carries a ``fact_ref`` doorway (``kpi:{ticker}:{def_id}``) and the name
+    renders as a ``.fact-doorway`` button: a click opens Ask on the EXACT
+    series by PK (Instrument Paradigm Law 2). Otherwise it degrades to the
+    plain name-keyed anchor."""
+    fact_ref: str | None = None
+    if ticker and r.kpi_definition_id is not None:
+        fact_ref = f"kpi:{ticker.upper()}:{r.kpi_definition_id}"
     status_cls = {
         "green": "pos",
         "yellow": "warn",
@@ -418,14 +442,21 @@ def _kpi_ledger_row(body: StringIO, r: KpiLedgerRow, report_date: date | None) -
 
     # KPI cell — clean (de-parenthesized) name, with the qualifier demoted to a
     # muted definition line so the name reads cleanly and the definition isn't
-    # duplicated inside it.
-    name_html = f"<strong>{_esc(clean_kpi_name(r.name))}</strong>"
+    # duplicated inside it. When the row has a fact_ref the name becomes a
+    # doorway button (Law 2 — a number/KPI with depth is a clickable element,
+    # never an inert span); without one it stays a plain bold label.
+    clean_name = _esc(clean_kpi_name(r.name))
+    name_html = (
+        f'<button type="button" class="fact-doorway">{clean_name}</button>'
+        if fact_ref
+        else f"<strong>{clean_name}</strong>"
+    )
     if r.definition:
         name_html += f'<div class="ledger-def muted xsmall">{_esc(r.definition)}</div>'
 
     body.write(
         f'<tr class="{row_cls}" data-commentable="true" data-anchor-type="kpi_ledger_row" '
-        f'data-anchor-key="{_esc(r.name)}" data-anchor-tab="thesis">'
+        f'{fact_anchor_attrs(fact_ref, r.name)} data-anchor-tab="thesis">'
         f"<td>{name_html}</td>"
         f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
         f"<td>{_esc(r.unit or '')}</td>"

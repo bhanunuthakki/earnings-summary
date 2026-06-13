@@ -162,6 +162,7 @@
 .decision-thesis { font-size: 12.5px; color: var(--fg-soft); line-height: 1.55; margin: 0; }
 .elevator-block::before { content: 'Elevator pitch'; display: block; font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .eyebrow { font-size: var(--fs-caption); font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
+.fact-doorway:hover, .fact-doorway:focus-visible { color: var(--accent); border-bottom-color: var(--accent); outline: none; }
 .failure { display: flex; gap: 14px; padding: 14px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .failure-body { flex: 1; }
 .failure-label { font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.06em; color: var(--accent); text-transform: uppercase; padding-top: 1px; }
@@ -615,6 +616,7 @@
 /* Break-rules detail row — appears under each main rule row when narrative / detail / observations are present. Quieter background so the parent row reads first. */ .break-detail td { padding: 4px var(--panel-pad-x) 10px !important; border-top: 0 !important; background: var(--paper); color: var(--muted); }
 /* Dark-mode override for the charts_v2 YoY matrix — the upstream CSS is light-themed (white/grey backgrounds, dark text). Override the colors to match the workspace dark palette so the matrix doesn't stand out. */ :root[data-theme="dark"] .cv2-matrix-wrap { color: var(--fg-soft); }
 /* Dim a stale row's data but keep the flag itself at full strength. */ .ledger-stale-row td { opacity: 0.55; }
+/* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: 1px dashed transparent; }
 /* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness flag, and the "tracked, no data yet" footnote. */ .kpi-ledger-table td:first-child { white-space: normal; max-width: 300px; }
 /* Financials */ .chart-panel { padding-bottom: var(--panel-pad-y); }
 /* Floating "+ Comment" button on text selection (Google-Docs style) */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }

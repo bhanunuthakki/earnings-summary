@@ -220,6 +220,38 @@ renders a populated cockpit and asserts each paradigm doorway stat is an
 `<a>`/`<button>` with exactly one action attr, never an inert `<span>`, and that
 the KPI chip's `data-ask-q` carries no ISO date.
 
+### 4.2 Doorway handles — the `fact_ref` grammar (Law 2)
+
+The `data-fact-ref` rail (§4.1) carries a **stable handle**, not the display
+name: the label is what the reader sees; the handle is what the click resolves.
+A human label drifts (KPIs get renamed); a handle does not. Emit the handle +
+its name-keyed comment anchor together with one helper —
+`ui.controls.fact_anchor_attrs(fact_ref, label)` — never hand-write the
+attributes. It always emits `data-anchor-key="{label}"` (the comment anchor +
+degrade path) and adds `data-fact-ref="{handle}"` only when the datum resolves
+to a stable identity (else the cell degrades to the name-keyed anchor). It also
+accepts an `ask_q=` and orders `data-fact-ref` before `data-ask-q`, baking the
+§4.1 precedence.
+
+**Grammar** (`fact_ref` is `prefix:ticker:…`):
+
+| Form | Resolves to | Emitted by |
+|---|---|---|
+| `kpi:{ticker}:{def_id}` | `kpi_facts` by `kpi_definition_id` PK | KPI ledger rows (`thesis_risk`) |
+| `fin:{ticker}:{line_item}:{fiscal_period_type}` | `financial_facts` by `(line_item, fpt)` | financial line-item cells |
+
+`fpt` is a single cadence (`Q1`…`Q4`, `FY`, `TTM`, …) or any other token to mean
+the quarterly series.
+
+**PK fast-path vs string degrade.** A cell gets a `fact_ref` only when it maps
+to a queryable series by primary key. Cells whose anchor is inherently
+text-keyed — segment names, say/do rows, failure-mode hypotheses, news
+headlines — stay name-keyed (`data-anchor-key` only): there is no PK to point
+at, so they keep the free-text anchor regime. `ask.grounding` reads any
+`fact_ref` token in a question and resolves the **exact** series by PK; its NL
+name-match is the FALLBACK. A note (and the report comment it mirrors) persists
+the handle in `analyst_notes.fact_ref` (0101) so it re-binds across a rename.
+
 ## 5. The ticker label
 
 **Never render `f"{ticker} · {name}"` (or ` — `) as one string.** Use
