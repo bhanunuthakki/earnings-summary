@@ -163,6 +163,60 @@ def test_panel_list_fragment_filters(db_path: Path) -> None:
     assert "NU watch item." in render_journal_list(db_path, kind="bogus", status="weird")
 
 
+def test_journal_silos_separate_owner_from_advisor(db_path: Path) -> None:
+    """S11: machine-authored advisor memos demote into a collapsed synthesis
+    silo BELOW the owner's own journal — split by identity, not source table."""
+    create_note(ticker="NU", kind="watch", body="OWNER watch item.", db_path=db_path)
+    create_note(
+        ticker=None,
+        kind="observation",
+        body="ADVISOR next-dollar synthesis.",
+        source="advisor",
+        source_ref="advisor_memo:7",
+        context={"memo_id": 7, "kind": "next_dollar"},
+        db_path=db_path,
+    )
+    html = render_journal_list(db_path)
+    assert "jr-synthesis" in html
+    assert "OWNER watch item." in html
+    assert "ADVISOR next-dollar synthesis." in html
+    # Owner note renders before the silo; the advisor memo inside it.
+    assert html.index("OWNER watch item.") < html.index("jr-synthesis")
+    assert html.index("ADVISOR next-dollar synthesis.") > html.index("jr-synthesis")
+    # The advisor card is demoted + read-oriented: Open-in-Memos + archive only,
+    # never the owner-thinking lifecycle (supersede / reclassify / resolve).
+    assert "jr-synth-note" in html
+    assert "Open in Memos" in html
+    synth = html[html.index("jr-synthesis") :]
+    assert 'data-act="archive"' in synth
+    assert 'data-act="supersede"' not in synth
+    assert 'data-act="resolve"' not in synth
+    assert 'data-act="reclassify"' not in synth
+
+
+def test_journal_no_silo_when_only_owner(db_path: Path) -> None:
+    create_note(ticker="NU", kind="watch", body="Just an owner note.", db_path=db_path)
+    html = render_journal_list(db_path)
+    assert "Just an owner note." in html
+    assert "jr-synthesis" not in html  # silo only appears when there are memos
+
+
+def test_journal_owner_empty_hint_when_only_advisor(db_path: Path) -> None:
+    create_note(
+        ticker="NU",
+        kind="observation",
+        body="Only advisor here.",
+        source="advisor",
+        source_ref="advisor_memo:1",
+        context={"memo_id": 1, "kind": "swap_checks"},
+        db_path=db_path,
+    )
+    html = render_journal_list(db_path)
+    assert "No notes of your own match this filter." in html
+    assert "jr-synthesis" in html
+    assert "Only advisor here." in html
+
+
 def test_panel_route_serves_fragment(client: FlaskClient, db_path: Path) -> None:
     create_note(ticker="NU", kind="watch", body="Route-served note.", db_path=db_path)
     full = client.get("/api/panel/journal")
