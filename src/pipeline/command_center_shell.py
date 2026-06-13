@@ -80,6 +80,7 @@ from html import escape
 from dashboard.inbox import INBOX_CSS, INBOX_JS
 from dashboard.upcoming import UPCOMING_CSS
 from pipeline.ask_dock import render_ask_dock
+from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
@@ -286,6 +287,10 @@ def render_shell(
             # scripts (and therefore before any lazily-injected fragment
             # script) so every consumer sees the same store.
             f"<script>{CC_STATE_JS}</script>",
+            # The one transient-surface primitive (S4, Law 3): window.CCOverlay,
+            # inlined BEFORE the dock and shell scripts so both register their
+            # overlays against the same open-surface stack.
+            f"<script>{CC_OVERLAY_JS}</script>",
             # The persistent Ask dock (Ask v5): shell chrome, not panel
             # content — outside .cc-panels so it survives every tab switch.
             render_ask_dock(),
@@ -303,7 +308,7 @@ def render_shell(
 # open/closed state from the client store (key drawer:<endpoint>; the
 # pre-S14 cc-drawer-sec:<endpoint> localStorage keys migrate on first read).
 _SETTINGS_DRAWER_HTML = (
-    '<div class="cc-drawer-scrim" id="cc-drawer-scrim" hidden></div>'
+    # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
     '<aside class="cc-drawer" id="cc-drawer" role="dialog" aria-modal="true" hidden aria-label="Settings">'
     '<div class="cc-drawer-head"><span>Settings &amp; maintenance</span>'
     '<button class="cc-drawer-close" id="cc-drawer-close" type="button" '
@@ -328,7 +333,7 @@ _SETTINGS_DRAWER_HTML = (
 # ticker as scope when one is open. Quick-add wiring lives in the fragment; it
 # calls window.ccReloadNotesDrawer (exposed by SHELL_JS) after a save.
 _NOTES_DRAWER_HTML = (
-    '<div class="cc-drawer-scrim" id="cc-notes-scrim" hidden></div>'
+    # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
     '<aside class="cc-drawer cc-notes-drawer" id="cc-notes-drawer" role="dialog" aria-modal="true" hidden aria-label="Notes">'
     '<div class="cc-drawer-head"><span>Notes</span>'
     '<button class="cc-drawer-close" id="cc-notes-close" type="button" '
@@ -410,8 +415,12 @@ def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
 # overlay — no routing of its own, every result lands on an existing hash or
 # URL.
 _PALETTE_HTML = (
-    '<div class="cc-palette-scrim" id="cc-palette-scrim" hidden></div>'
+    # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
     '<div class="cc-palette" id="cc-palette" hidden role="dialog" aria-modal="true" aria-label="Command palette">'
+    # The triad's close control (x + Esc + scrim click-out) — corner-anchored
+    # so it doesn't disturb the input/list layout.
+    '<button class="cc-palette-close" id="cc-palette-close" type="button" '
+    'aria-label="Close">&times;</button>'
     '<input id="cc-palette-input" type="text" role="combobox" '
     'aria-label="Search commands, tickers and views" '
     'aria-expanded="false" aria-controls="cc-palette-list" aria-autocomplete="list" '
@@ -428,7 +437,7 @@ _PALETTE_HTML = (
 # fetched lazily as an HTML fragment and injected through the same script
 # re-execution path the lazy panels use.
 _PEEK_HTML = (
-    '<div class="cc-peek-scrim" id="cc-peek-scrim" hidden></div>'
+    # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
     '<div class="cc-peek" id="cc-peek" hidden role="dialog" aria-modal="true" aria-label="Quick look">'
     '<div class="cc-peek-head">'
     '<span class="cc-peek-title" id="cc-peek-title"></span>'
@@ -551,6 +560,9 @@ def _render_panels(
 SHELL_CSS = (
     palette_css("dark")
     + controls_css("dark")
+    # CCOverlay (S4) close motion — paired with the kit's .k-scrim/.k-overlay
+    # open motion so every overlay dismissal animates out instead of snapping.
+    + CC_OVERLAY_CSS
     + """
 * { box-sizing: border-box; }
 body { margin: 0; padding: 0; font-family: var(--sans); background: var(--bg);
@@ -559,13 +571,16 @@ a { color: var(--accent); transition: color var(--transition); }
 button { transition: color var(--transition), border-color var(--transition),
   background var(--transition); }
 
-/* Standardized motion: overlays slide/fade IN over the standard timing
-   (exit stays instant — the [hidden] toggle can't animate display:none). */
+/* Standardized motion: overlays slide/fade IN over the standard timing; the
+   symmetric exit is CCOverlay's (.cc-anim-out runs before the [hidden] toggle
+   so dismissal animates too — see pipeline/cc_overlay.py). */
 @keyframes cc-slide-in-right { from { transform: translateX(18px); opacity: 0; }
   to { transform: none; opacity: 1; } }
 @keyframes cc-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop-in { from { transform: translateX(-50%) scale(0.985); opacity: 0; }
   to { transform: translateX(-50%) scale(1); opacity: 1; } }
+@keyframes cc-rise-in { from { transform: translateY(6px); opacity: 0; }
+  to { transform: none; opacity: 1; } }
 
 /* Skip link — visible on :focus so keyboard users can bypass the top bar */
 .cc-skip { position: absolute; top: -200px; left: 0; z-index: 100;
@@ -663,9 +678,9 @@ button { transition: color var(--transition), border-color var(--transition),
 @media (prefers-reduced-motion: reduce) {
   .cc-skel-line, .cc-skel-row, .cc-skel-kpi, .cc-skel-card, .cc-skel-input,
   .cc-skel-chip, .cc-skel-band, .cc-skel-frame, .cc-loading::after { animation: none; }
-  .cc-drawer, .cc-drawer-scrim,
-  .cc-palette, .cc-palette-scrim,
-  .cc-peek, .cc-peek-scrim { animation: none; transition-duration: 0.01ms; }
+  /* Scrims are now the one shared .k-scrim (kit + CCOverlay handle its
+     reduced-motion); the surfaces keep their own open keyframes. */
+  .cc-drawer, .cc-palette, .cc-peek { animation: none; transition-duration: 0.01ms; }
 }
 
 /* The Holding tab's ticker picker is now a search combobox inside the holding
@@ -1006,13 +1021,11 @@ td.ticker a:hover { color: var(--accent); }
   font-family: var(--sans); margin-left: 6px; line-height: 1.2; }
 .cc-notes-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-notes-drawer { width: min(560px, 94vw); }
-.cc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 38;
-  animation: cc-fade-in var(--transition); }
 .cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 39;
   display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35);
   animation: cc-slide-in-right var(--transition); }
-.cc-drawer[hidden], .cc-drawer-scrim[hidden] { display: none; }
+.cc-drawer[hidden] { display: none; }
 .cc-drawer-head { display: flex; justify-content: space-between; align-items: center;
   padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
 .cc-drawer-close { background: transparent; border: none; color: var(--muted);
@@ -1034,16 +1047,19 @@ td.ticker a:hover { color: var(--accent); }
   border-radius: var(--radius); padding: 5px 9px; font-size: var(--fs-caption); cursor: pointer;
   font-family: var(--mono); }
 .cc-palette-btn:hover { border-color: var(--accent); color: var(--accent); }
-.cc-palette-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 48;
-  animation: cc-fade-in var(--transition); }
 .cc-palette { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
   width: min(560px, 92vw); background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); z-index: 49; box-shadow: 0 18px 48px rgba(0,0,0,0.5);
   overflow: hidden; animation: cc-pop-in var(--transition); }
-.cc-palette[hidden], .cc-palette-scrim[hidden] { display: none; }
+.cc-palette[hidden] { display: none; }
+/* Corner close (the triad's x on the palette) — over the input's right edge. */
+.cc-palette-close { position: absolute; top: 8px; right: 10px; z-index: 1;
+  background: transparent; border: none; color: var(--muted); font-size: var(--fs-display);
+  line-height: 1; cursor: pointer; padding: 0 4px; }
+.cc-palette-close:hover { color: var(--fg); }
 .cc-palette input { width: 100%; box-sizing: border-box; background: transparent;
   border: none; border-bottom: 1px solid var(--border); border-radius: 0; color: var(--fg);
-  padding: 13px 16px; font-size: var(--fs-section); font-family: var(--sans); outline: none; }
+  padding: 13px 40px 13px 16px; font-size: var(--fs-section); font-family: var(--sans); outline: none; }
 /* The palette field is the dialog's own chrome — no kit focus ring. */
 .cc-palette input:focus-visible { border-color: var(--border); border-bottom-color: var(--accent);
   box-shadow: none; }
@@ -1064,12 +1080,11 @@ td.ticker a:hover { color: var(--accent); }
    z-order: ask dock (35) < drawer (39) < peek (45) < hover card (46)
    < palette (49).
    ============================================================ */
-.cc-peek-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 44; }
 .cc-peek { position: fixed; z-index: 45; width: min(680px, 92vw);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: 0 18px 48px rgba(0,0,0,0.5); display: flex; flex-direction: column;
-  overflow: hidden; }
-.cc-peek[hidden], .cc-peek-scrim[hidden], .cc-hovercard[hidden] { display: none; }
+  overflow: hidden; animation: cc-rise-in var(--transition); }
+.cc-peek[hidden], .cc-hovercard[hidden] { display: none; }
 .cc-peek-head { display: flex; align-items: center; gap: 12px; padding: 9px 14px;
   border-bottom: 1px solid var(--border); flex: none; }
 .cc-peek-title { font-weight: 700; font-size: var(--fs-body); margin-right: auto;
@@ -1188,23 +1203,8 @@ SHELL_JS = r"""
     setTimeout(function () { liveRegion.textContent = msg; }, 50);
   }
 
-  function focusableIn(container) {
-    return Array.prototype.slice.call(container.querySelectorAll(
-      'button:not([disabled]),[href],input:not([disabled]),select:not([disabled]),' +
-      'textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
-    ));
-  }
-
-  function trapFocus(container, ev) {
-    var els = focusableIn(container);
-    if (!els.length) return;
-    var first = els[0], last = els[els.length - 1];
-    if (ev.shiftKey) {
-      if (document.activeElement === first) { ev.preventDefault(); last.focus(); }
-    } else {
-      if (document.activeElement === last) { ev.preventDefault(); first.focus(); }
-    }
-  }
+  // Focus trap + restore is CCOverlay's now (pipeline/cc_overlay.py) — the
+  // shell's former focusableIn()/trapFocus() helpers moved into the primitive.
 
   function firstPanelOfTheme(tid) {
     for (var i = 0; i < tabs.length; i++) {
@@ -1500,9 +1500,10 @@ SHELL_JS = r"""
   }
 
   // ----- Settings drawer (P3.4) -----
+  // Dismissal (x + Esc + scrim click-out + focus trap/restore) and the
+  // one-right-drawer-at-a-time exclusion are CCOverlay's now (group
+  // 'cc-primary'); this keeps only the drawer's content logic.
   var drawer = document.getElementById('cc-drawer');
-  var drawerScrim = document.getElementById('cc-drawer-scrim');
-  var drawerOpener = null;  // element to restore focus to on close
 
   function loadDrawerSection(sec) {
     if (!sec || sec.getAttribute('data-loaded') === '1') return;
@@ -1521,31 +1522,22 @@ SHELL_JS = r"""
     });
   }
 
-  function openDrawer() {
-    if (!drawer) return;
-    closeNotesDrawer();  // one right-drawer at a time
-    drawerOpener = document.activeElement;
-    drawer.hidden = false;
-    if (drawerScrim) drawerScrim.hidden = false;
-    var closeBtn = document.getElementById('cc-drawer-close');
-    if (closeBtn) closeBtn.focus();
-    var secs = drawer.querySelectorAll('.cc-drawer-sec[open]');
-    for (var i = 0; i < secs.length; i++) loadDrawerSection(secs[i]);
-  }
-
-  function closeDrawer() {
-    if (drawer) drawer.hidden = true;
-    if (drawerScrim) drawerScrim.hidden = true;
-    if (drawerOpener && drawerOpener.focus) { drawerOpener.focus(); drawerOpener = null; }
-  }
+  var drawerOv = drawer && window.CCOverlay.register(drawer, {
+    priority: window.CCOverlay.PRIORITY.DRAWER,
+    scrim: true, trapFocus: true, restoreFocus: true,
+    motion: 'slide-right', group: 'cc-primary', closeId: 'cc-drawer-close',
+    onOpen: function () {
+      var secs = drawer.querySelectorAll('.cc-drawer-sec[open]');
+      for (var i = 0; i < secs.length; i++) loadDrawerSection(secs[i]);
+    }
+  });
+  function openDrawer() { if (drawerOv) drawerOv.open(); }
+  function closeDrawer() { if (drawerOv) drawerOv.close(); }
 
   var settingsBtn = document.getElementById('cc-settings-toggle');
   if (settingsBtn) settingsBtn.addEventListener('click', function () {
-    if (drawer && drawer.hidden) openDrawer(); else closeDrawer();
+    if (drawerOv && !drawerOv.isOpen()) openDrawer(); else closeDrawer();
   });
-  var drawerClose = document.getElementById('cc-drawer-close');
-  if (drawerClose) drawerClose.addEventListener('click', closeDrawer);
-  if (drawerScrim) drawerScrim.addEventListener('click', closeDrawer);
 
   // ----- Shared ✎ Notes drawer (UX9b) -----
   // One lazy fragment (/api/panel/notes_drawer), re-fetched on EVERY open so
@@ -1553,9 +1545,7 @@ SHELL_JS = r"""
   // quick-add form inside the fragment calls window.ccReloadNotesDrawer after
   // a successful POST /api/notes so the list refreshes in place.
   var notesDrawer = document.getElementById('cc-notes-drawer');
-  var notesScrim = document.getElementById('cc-notes-scrim');
   var notesBody = document.getElementById('cc-notes-drawer-body');
-  var notesOpener = null;
 
   function holdingTicker() {
     // The drawer's ticker scope: the Holding panel's current selection, but
@@ -1581,31 +1571,21 @@ SHELL_JS = r"""
   }
   window.ccReloadNotesDrawer = loadNotesDrawer;
 
-  function openNotesDrawer() {
-    if (!notesDrawer) return;
-    closeDrawer();
-    closePalette();
-    notesOpener = document.activeElement;
-    notesDrawer.hidden = false;
-    if (notesScrim) notesScrim.hidden = false;
-    var closeBtn = document.getElementById('cc-notes-close');
-    if (closeBtn) closeBtn.focus();
-    loadNotesDrawer();
-  }
-
-  function closeNotesDrawer() {
-    if (notesDrawer) notesDrawer.hidden = true;
-    if (notesScrim) notesScrim.hidden = true;
-    if (notesOpener && notesOpener.focus) { notesOpener.focus(); notesOpener = null; }
-  }
+  // Same 'cc-primary' group as the settings drawer + palette, so opening any
+  // one closes the others (replaces the old closeDrawer()/closePalette() calls).
+  var notesOv = notesDrawer && window.CCOverlay.register(notesDrawer, {
+    priority: window.CCOverlay.PRIORITY.DRAWER,
+    scrim: true, trapFocus: true, restoreFocus: true,
+    motion: 'slide-right', group: 'cc-primary', closeId: 'cc-notes-close',
+    onOpen: loadNotesDrawer
+  });
+  function openNotesDrawer() { if (notesOv) notesOv.open(); }
+  function closeNotesDrawer() { if (notesOv) notesOv.close(); }
 
   var notesBtn = document.getElementById('cc-notes-toggle');
   if (notesBtn) notesBtn.addEventListener('click', function () {
-    if (notesDrawer && notesDrawer.hidden) openNotesDrawer(); else closeNotesDrawer();
+    if (notesOv && !notesOv.isOpen()) openNotesDrawer(); else closeNotesDrawer();
   });
-  var notesClose = document.getElementById('cc-notes-close');
-  if (notesClose) notesClose.addEventListener('click', closeNotesDrawer);
-  if (notesScrim) notesScrim.addEventListener('click', closeNotesDrawer);
 
   // Any ✎ button inside an injected fragment (e.g. the Holding header's)
   // opens the SAME shared drawer — delegated so lazily-injected panels count.
@@ -1621,13 +1601,11 @@ SHELL_JS = r"""
   // One input over sections, sub-tabs, tickers (lazy from /api/tickers), and
   // a few global actions. Every result lands on an existing hash or URL.
   var pal = document.getElementById('cc-palette');
-  var palScrim = document.getElementById('cc-palette-scrim');
   var palInput = document.getElementById('cc-palette-input');
   var palList = document.getElementById('cc-palette-list');
   var palItems = [];
   var palMatches = [];
   var palSel = 0;
-  var palOpener = null;
 
   function escHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1726,13 +1704,10 @@ SHELL_JS = r"""
     }
   }
 
-  function openPalette() {
-    if (!pal) return;
-    closeDrawer();
-    closeNotesDrawer();
-    palOpener = document.activeElement;
-    pal.hidden = false;
-    if (palScrim) palScrim.hidden = false;
+  // Content setup, run on open — CCOverlay shows/hides the dialog, restores
+  // focus, and closes the other 'cc-primary' surfaces; this only fills the
+  // searchable corpus and focuses the input.
+  function fillPalette() {
     if (palInput) palInput.setAttribute('aria-expanded', 'true');
     palInput.value = '';
     palSel = 0;
@@ -1777,12 +1752,18 @@ SHELL_JS = r"""
     setTimeout(function () { palInput.focus(); }, 0);
   }
 
-  function closePalette() {
-    if (pal) pal.hidden = true;
-    if (palScrim) palScrim.hidden = true;
-    if (palInput) palInput.setAttribute('aria-expanded', 'false');
-    if (palOpener && palOpener.focus) { palOpener.focus(); palOpener = null; }
-  }
+  var palOv = pal && window.CCOverlay.register(pal, {
+    priority: window.CCOverlay.PRIORITY.PALETTE,
+    scrim: true, trapFocus: true, restoreFocus: true,
+    motion: 'pop', group: 'cc-primary', closeId: 'cc-palette-close',
+    autofocus: false,  // fillPalette focuses the input itself
+    onOpen: fillPalette,
+    onClose: function () {
+      if (palInput) palInput.setAttribute('aria-expanded', 'false');
+    }
+  });
+  function openPalette() { if (palOv) palOv.open(); }
+  function closePalette() { if (palOv) palOv.close(); }
 
   function runPalSelection() {
     if (!palMatches.length) return;
@@ -1805,7 +1786,6 @@ SHELL_JS = r"""
     palSel = parseInt(li.getAttribute('data-idx'), 10) || 0;
     runPalSelection();
   });
-  if (palScrim) palScrim.addEventListener('click', closePalette);
   var palBtn = document.getElementById('cc-palette-open');
   if (palBtn) palBtn.addEventListener('click', openPalette);
 
@@ -1817,13 +1797,11 @@ SHELL_JS = r"""
   // real destination. Report iframes are separate documents, so in-report
   // links are untouched by these document-level listeners.
   var peek = document.getElementById('cc-peek');
-  var peekScrim = document.getElementById('cc-peek-scrim');
   var peekBody = document.getElementById('cc-peek-body');
   var peekTitle = document.getElementById('cc-peek-title');
   var peekFull = document.getElementById('cc-peek-openfull');
   var peekSeq = 0;       // stale-response guard across rapid open/close
   var peekFragUrl = null;  // current fragment URL (re-fetched after approve/dismiss)
-  var peekOpener = null;
 
   function positionPeek(anchor) {
     var w = Math.min(680, Math.round(window.innerWidth * 0.92));
@@ -1865,31 +1843,29 @@ SHELL_JS = r"""
     });
   }
 
+  var peekOv = peek && window.CCOverlay.register(peek, {
+    priority: window.CCOverlay.PRIORITY.PEEK,
+    scrim: true, trapFocus: true, restoreFocus: true,
+    motion: 'rise', closeId: 'cc-peek-close',
+    onClose: function () {
+      peekBody.innerHTML = '';
+      peekFragUrl = null;
+      peekSeq++;  // invalidate any in-flight fragment fetch
+    }
+  });
+
   function openPeek(fragUrl, opts) {
-    if (!peek) return;
+    if (!peekOv) return;
     opts = opts || {};
     closeHover();
-    peekOpener = document.activeElement;
     peekTitle.textContent = opts.title || 'Quick look';
     if (opts.fullHref) { peekFull.href = opts.fullHref; peekFull.hidden = false; }
     else { peekFull.hidden = true; }
-    peek.hidden = false;
-    peekScrim.hidden = false;
-    positionPeek(opts.anchor || null);
+    positionPeek(opts.anchor || null);  // place BEFORE showing so it rises in place
+    peekOv.open();                       // show + shared scrim + focus the x button
     loadPeek(fragUrl, opts.anchorId || null);
-    var closeBtn = document.getElementById('cc-peek-close');
-    if (closeBtn) closeBtn.focus();
   }
-
-  function closePeek() {
-    if (!peek || peek.hidden) return;
-    peek.hidden = true;
-    peekScrim.hidden = true;
-    peekBody.innerHTML = '';
-    peekFragUrl = null;
-    peekSeq++;
-    if (peekOpener && peekOpener.focus) { peekOpener.focus(); peekOpener = null; }
-  }
+  function closePeek() { if (peekOv) peekOv.close(); }
 
   // /source/<id>[?...][#L<n>] -> its fragment variant + the line to highlight.
   function peekUrlForSource(href) {
@@ -1951,9 +1927,8 @@ SHELL_JS = r"""
     });
   });
 
-  var peekClose = document.getElementById('cc-peek-close');
-  if (peekClose) peekClose.addEventListener('click', closePeek);
-  if (peekScrim) peekScrim.addEventListener('click', closePeek);
+  // The peek's x and the shared scrim click-out are wired by CCOverlay
+  // (closeId 'cc-peek-close' + the one .k-scrim listener).
 
   // ----- Ticker hover mini-card (UX9) -----
   // Hovering a ticker link (cockpit rows, analytical .ticker-link cells, or
@@ -2047,28 +2022,21 @@ SHELL_JS = r"""
     });
   }
 
+  // The hover card is a non-modal affordance (no scrim/trap/close button) —
+  // register it as an Escape-only dismisser so CCOverlay's one keydown closes
+  // it before any modal surface, without a second listener here.
+  window.CCOverlay.addPopoverDismisser(function () {
+    if (hovercard && !hovercard.hidden) { closeHover(); return true; }
+    return false;
+  });
+
+  // Ctrl/Cmd+K, plus Ctrl+Space (UX9b) — ev.code so the spacebar binding is
+  // keyboard-layout independent. (Escape + Tab/focus-trap are CCOverlay's now;
+  // this listener never touches Escape, so the shell keeps exactly one.)
   document.addEventListener('keydown', function (ev) {
-    // Ctrl/Cmd+K, plus Ctrl+Space (UX9b) — ev.code so the spacebar binding is
-    // keyboard-layout independent.
     if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K' || ev.code === 'Space')) {
       ev.preventDefault();
-      if (pal && pal.hidden) openPalette(); else closePalette();
-      return;
-    }
-    if (ev.key === 'Escape') {
-      if (pal && !pal.hidden) closePalette();
-      else if (peek && !peek.hidden) closePeek();
-      else if (hovercard && !hovercard.hidden) closeHover();
-      else if (notesDrawer && !notesDrawer.hidden) closeNotesDrawer();
-      else closeDrawer();
-      return;
-    }
-    // Tab focus trap: keep Tab cycling inside whichever modal dialog is open.
-    if (ev.key === 'Tab') {
-      if (pal && !pal.hidden) { trapFocus(pal, ev); return; }
-      if (peek && !peek.hidden) { trapFocus(peek, ev); return; }
-      if (drawer && !drawer.hidden) { trapFocus(drawer, ev); return; }
-      if (notesDrawer && !notesDrawer.hidden) { trapFocus(notesDrawer, ev); return; }
+      if (palOv && !palOv.isOpen()) openPalette(); else closePalette();
     }
   });
   // Drawer sections ship collapsed; each remembers its own open/closed state
