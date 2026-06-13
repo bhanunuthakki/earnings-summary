@@ -34,6 +34,8 @@ sys.path.insert(0, str(SRC))
 from pipeline.ask_dock import _DOCK_JS, render_ask_dock  # noqa: E402
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS  # noqa: E402
 from pipeline.command_center_shell import SHELL_JS, render_shell  # noqa: E402
+from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS  # noqa: E402
+from ui.source_chip import SOURCE_CHIP_JS  # noqa: E402
 
 SHELL_HTML = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
 DOCK_HTML = render_ask_dock()
@@ -167,3 +169,35 @@ def test_dock_registers_as_a_scrimless_gesture_surface() -> None:
     assert "scrim: false" in _DOCK_JS
     # Persistent surface: never toggled [hidden] by the primitive.
     assert "toggleHidden: false" in _DOCK_JS
+
+
+# ---------------------------------------------------------------------------
+# Non-modal phrasing popovers: Escape-only, NOT the full modal triad
+# ---------------------------------------------------------------------------
+
+
+def test_cite_mark_popover_is_escape_only_dismisser_not_modal() -> None:
+    # Registers a dismisser (Escape-only) — never register()s as a modal, never
+    # gains a scrim or focus trap (its :focus-within popover is phrasing content
+    # that would split the paragraph as a <details>).
+    assert "addPopoverDismisser" in CITE_MARKS_JS
+    assert ".cite-wrap" in CITE_MARKS_JS
+    assert "CCOverlay.register" not in CITE_MARKS_JS
+    assert "k-scrim" not in CITE_MARKS_JS and "k-scrim" not in CITE_MARKS_CSS
+
+
+def test_source_chip_popover_is_escape_only_dismisser_not_modal() -> None:
+    assert "addPopoverDismisser" in SOURCE_CHIP_JS
+    assert "details.src-pop[open]" in SOURCE_CHIP_JS
+    assert "CCOverlay.register" not in SOURCE_CHIP_JS
+    # Self-guarded so the many surfaces embedding the chip register it once.
+    assert "__ccSrcChipEsc" in SOURCE_CHIP_JS
+
+
+def test_shell_wires_both_popover_dismissers() -> None:
+    # The source-chip dismisser is inlined once after CCOverlay; the cite-mark
+    # dismisser rides CITE_MARKS_JS (loaded via the always-present dock).
+    assert SOURCE_CHIP_JS in SHELL_HTML
+    assert "addPopoverDismisser" in SHELL_HTML  # cite + source both present
+    # SOURCE_CHIP_JS must come AFTER the primitive so window.CCOverlay exists.
+    assert SHELL_HTML.index(CC_OVERLAY_JS) < SHELL_HTML.index(SOURCE_CHIP_JS)

@@ -237,3 +237,21 @@ SOURCE_CHIP_CSS = """
 .src-pop-input .src-chip { opacity: 1; }
 .src-pop-input a.src-chip { text-decoration: none; }
 """
+
+# Escape-only dismissal (Law 3 / design_language §3.1). The chip's popover is a
+# JS-free ``<details>`` — flow content split inside a table cell, NOT a modal —
+# so it gets Escape-only via a CCOverlay dismisser, never the full triad (no
+# scrim, no focus trap). Self-guarded + idempotent across the many surfaces that
+# embed the chip; registers only when CCOverlay is present (shell + report
+# iframe). A document that wants chip-Escape inlines this once after CCOverlay.
+SOURCE_CHIP_JS = r"""
+(function () {
+  if (window.__ccSrcChipEsc || !window.CCOverlay) return;
+  window.__ccSrcChipEsc = true;
+  window.CCOverlay.addPopoverDismisser(function () {
+    var open = document.querySelectorAll('details.src-pop[open]');
+    if (open.length) { open[open.length - 1].removeAttribute('open'); return true; }
+    return false;
+  });
+})();
+"""
