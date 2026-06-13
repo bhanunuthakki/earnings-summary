@@ -156,6 +156,19 @@ def upsert_news_rows(conn: sqlite3.Connection, rows: Iterable[NewsRow]) -> tuple
         if cur.rowcount > 0:
             inserted += 1
     conn.commit()
+    # Mirror the freshly-written stories into the typed diet substrate
+    # (`signals`, alembic 0095) so the information-diet panel stays current
+    # off the same fetch — no new cron. Best-effort and idempotent
+    # (INSERT OR IGNORE on ux_signals_news_id): a pre-0095 DB with no `signals`
+    # table degrades to a no-op, so the news write path is never blocked by the
+    # mirror. The `news` table itself is untouched (non-destructive).
+    if inserted:
+        try:
+            from signals.store import sync_news_to_signals
+
+            sync_news_to_signals(conn)
+        except Exception:  # pragma: no cover - the mirror never blocks news
+            pass
     return inserted, total - inserted
 
 

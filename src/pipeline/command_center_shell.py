@@ -119,6 +119,12 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # New-name discovery queue (P5.4): screened/adjacency candidates
             # with why-surfaced evidence; approval gates every eval build.
             ("discovery", "Discovery", "/api/panel/discovery", False, False),
+            # Information-diet curation layer (the alerts→diet split): the PULL
+            # lane over the typed `signals` substrate — sell-side ratings + news
+            # (non-decaying) + the forward investor-day agenda. Sibling to
+            # Discovery: Discovery sources NEW names, Diet curates signal on the
+            # names you already track.
+            ("diet", "Diet", "/api/panel/diet", False, False),
             # The analyst journal's lifecycle home (P4.5): list / filter /
             # resolve / reclassify / supersede over analyst_notes.
             ("journal", "Journal", "/api/panel/journal", False, False),
@@ -470,6 +476,7 @@ _PEEK_HTML = (
 _SKELETON_KINDS: dict[str, str] = {
     "holding": "band",
     "discovery": "table",
+    "diet": "table",
     "journal": "cards",
     "explore": "form",
     "portfolio": "kpis",

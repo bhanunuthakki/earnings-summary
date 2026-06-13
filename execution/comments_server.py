@@ -556,6 +556,15 @@ def create_app(
                 )
             return Response(render_explore_panel(db_path, user_id=user_id), mimetype="text/html")
 
+        if name == "diet":
+            # Companies → Diet: the information-diet curation layer (the
+            # alerts→diet split). The PULL lane over the typed `signals`
+            # substrate — non-decaying sell-side ratings + news + the forward
+            # investor-day agenda. Pure read; never feeds the inbox scorer.
+            from pipeline.diet_panel import render_diet_panel
+
+            return Response(render_diet_panel(db_path), mimetype="text/html")
+
         if name == "discovery":
             # Research → Discovery (P5.4): the candidate approval queue —
             # the budget gate ("queue, never auto-build"). ``?fragment=list``
