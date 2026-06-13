@@ -414,6 +414,82 @@ def test_thesis_relevance_boosts_warn_and_breach_tickers(tmp_path: Path) -> None
     assert "thesis 1.00 (ok)" in ranked[2].score_why
 
 
+def test_none_weights_read_materialized_cache_not_network(tmp_path: Path) -> None:
+    """``position_weights=None`` reads the disk cache beside the DB (no tracker
+    call) — the render-path weight source after the S12 latency fix. The cache
+    lives at ``<repo>/data/portfolio_weights.json`` and the DB at
+    ``<repo>/data/portfolio.db``, so the repo root is two parents up."""
+    import portfolio_weights as pw
+    from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+
+    (tmp_path / "data").mkdir()
+    db = tmp_path / "data" / "portfolio.db"
+    db.write_bytes(b"")  # exists (thesis_tones degrades to {} on the empty file)
+    pw.materialize_weights(
+        tmp_path,
+        LivePortfolio(
+            available=True,
+            api_url="x",
+            positions=[
+                LivePosition("NU", "NU", 1.0, None, None, None, 25.0),
+                LivePosition("MELI", "MELI", 1.0, None, None, None, 1.0),
+            ],
+        ),
+    )
+    when = NOW - timedelta(hours=2)
+    ranked = annotate_and_rank(
+        [_alert_item(ticker="MELI", when=when), _alert_item(ticker="NU", when=when)],
+        db_path=db,
+        now=NOW,
+        position_weights=None,
+    )
+    assert [it.ticker for it in ranked] == ["NU", "MELI"]
+    assert "25.0% of book" in ranked[0].score_why
+
+
+def test_none_weights_no_cache_falls_back_to_equal_weight(tmp_path: Path) -> None:
+    (tmp_path / "data").mkdir()
+    db = tmp_path / "data" / "portfolio.db"
+    db.write_bytes(b"")  # no portfolio_weights.json beside it
+    ranked = annotate_and_rank([_alert_item()], db_path=db, now=NOW, position_weights=None)
+    assert "equal-weight" in ranked[0].score_why
+
+
+def test_thesis_tones_memo_invalidates_on_db_write(tmp_path: Path) -> None:
+    """The (path, mtime) memo serves repeated renders for free but busts when
+    the DB file changes — no stale ranking factor after a re-evaluation."""
+    import os
+
+    db = tmp_path / "thesis.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE thesis_evaluations (ticker TEXT, overall_status TEXT, evaluated_at TEXT)"
+    )
+    conn.execute("INSERT INTO thesis_evaluations VALUES ('NU','ok','2026-06-09')")
+    conn.commit()
+    conn.close()
+
+    when = NOW - timedelta(hours=2)
+    first = annotate_and_rank(
+        [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
+    )
+    assert "thesis 1.00 (ok)" in first[0].score_why
+
+    conn = sqlite3.connect(str(db))
+    conn.execute("INSERT INTO thesis_evaluations VALUES ('NU','breach','2026-06-11')")
+    conn.commit()
+    conn.close()
+    # Force a clearly-later mtime so the bust is observable regardless of
+    # filesystem mtime resolution.
+    later = db.stat().st_mtime + 5
+    os.utime(db, (later, later))
+
+    second = annotate_and_rank(
+        [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
+    )
+    assert "thesis 1.50 (breach)" in second[0].score_why
+
+
 def test_why_string_names_every_factor() -> None:
     why = _rank([_alert_item()])[0].score_why
     for token in ("severity", "x recency", "x position", "x thesis", "="):

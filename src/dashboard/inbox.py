@@ -38,7 +38,7 @@ from alerts import (
     QueuedActionRow,
     list_alerts,
     list_pending_actions,
-    list_queued_actions_for_alert,
+    list_queued_actions_for_alerts,
 )
 from dashboard._card import render_alert_card, render_queued_action
 from dashboard.inbox_rank import (
@@ -157,9 +157,10 @@ def collect_inbox(
     honest). ``kinds`` filters the sources; ``status`` / ``trigger_kind`` apply
     to alerts only. ``now`` anchors recency decay (defaults to UTC now; pass a
     historical date to rank as that morning would have). ``position_weights``
-    is ticker → fraction-of-book for the ranking factor — ``None`` tries the
-    live tracker (TTL-cached, equal-weight when offline), ``{}`` forces equal
-    weighting. Best-effort: a missing DB or table yields []. The returned list
+    is ticker → fraction-of-book for the ranking factor — ``None`` reads the
+    morning-pipeline-materialized weight cache beside the DB (a disk read, never
+    the live tracker; empty → equal weighting), ``{}`` forces equal weighting.
+    Best-effort: a missing DB or table yields []. The returned list
     is ordered score-descending (newest first on ties) and capped at
     ``limit``.
     """
@@ -192,11 +193,15 @@ def collect_inbox(
         if trigger_kind:
             alerts = [a for a in alerts if a.trigger_kind == trigger_kind]
         alerts = [a for a in alerts if _in_window(_as_naive_utc(a.fired_at), windowed=True)]
+        # One batched IN-query for every alert's queued actions, not one
+        # connection-open + query PER alert (the GET / boot N+1).
+        try:
+            actions_by_alert = list_queued_actions_for_alerts(
+                [a.id for a in alerts], db_path=db_path
+            )
+        except sqlite3.Error:
+            actions_by_alert = {}
         for a in alerts:
-            try:
-                actions = list_queued_actions_for_alert(a.id, db_path=db_path)
-            except sqlite3.Error:
-                actions = []
             shown_alert_ids.add(a.id)
             items.append(
                 InboxItem(
@@ -207,7 +212,7 @@ def collect_inbox(
                     body="",
                     status=a.status,
                     alert=a,
-                    actions=tuple(actions),
+                    actions=tuple(actions_by_alert.get(a.id, ())),
                 )
             )
 
