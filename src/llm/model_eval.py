@@ -48,6 +48,7 @@ class ModelRunResult:
     response: str
     error: str | None
     elapsed_ms: int
+    output_chars: int = 0  # len(response) — proxy for output token cost (~4 chars/token)
 
 
 def run_model(
@@ -76,7 +77,9 @@ def run_model(
             timeout_seconds=timeout_seconds,
             force_budget_bypass=True,
         )
-        return ModelRunResult(model_id, True, response, None, int((time.monotonic() - t0) * 1000))
+        return ModelRunResult(
+            model_id, True, response, None, int((time.monotonic() - t0) * 1000), len(response)
+        )
     except Exception as exc:  # every failure mode is a recordable outcome
         return ModelRunResult(
             model_id,
@@ -147,6 +150,13 @@ class CandidateVerdict:
     judge_agreement: float  # fraction of cases both judges agreed on the winner
     recommendation: str
     reason: str
+    # Token-efficiency signals (output chars as ~4-chars/token proxy). The ratio
+    # is candidate / incumbent: <1 is more concise, >1 is more verbose. A cheaper
+    # model that uses far more tokens may cost more than it saves, so the ratio is
+    # a secondary signal even when parity is met. 0.0 when no successful runs.
+    candidate_output_chars_mean: float = 0.0
+    incumbent_output_chars_mean: float = 0.0
+    token_efficiency_ratio: float = 0.0  # candidate_chars / incumbent_chars
 
 
 def decide_switch(
@@ -158,11 +168,18 @@ def decide_switch(
     judge_agreement: float,
     min_n: int,
     parity_threshold: float,
+    candidate_output_chars_mean: float = 0.0,
+    incumbent_output_chars_mean: float = 0.0,
 ) -> CandidateVerdict:
     """Turn the per-judge tallies into a switch recommendation. Conservative:
     a downgrade ships only when EVERY judge says the cheaper model holds parity
     on a strong majority AND the judges agree — the cost of a bad downgrade
-    (worse production output) outweighs the saving."""
+    (worse production output) outweighs the saving.
+
+    ``candidate_output_chars_mean`` / ``incumbent_output_chars_mean`` are token-
+    efficiency signals (output character count as a ~4-chars/token proxy). They
+    are advisory — the switch gate is quality-only — but are recorded in the
+    verdict so a verbose candidate that costs more than it saves can be spotted."""
     # n is the case count (same across judges); take the max judge's total.
     totals = [cw + iw + ti for (cw, iw, ti) in per_judge.values()]
     n = max(totals) if totals else 0
@@ -198,6 +215,11 @@ def decide_switch(
 
     total = cand_wins + inc_wins + ties
     parity_rate = (cand_wins + ties) / total if total else 0.0
+    token_efficiency_ratio = (
+        candidate_output_chars_mean / incumbent_output_chars_mean
+        if incumbent_output_chars_mean > 0
+        else 0.0
+    )
     return CandidateVerdict(
         purpose=purpose,
         incumbent=incumbent,
@@ -210,4 +232,7 @@ def decide_switch(
         judge_agreement=judge_agreement,
         recommendation=rec,
         reason=reason,
+        candidate_output_chars_mean=candidate_output_chars_mean,
+        incumbent_output_chars_mean=incumbent_output_chars_mean,
+        token_efficiency_ratio=token_efficiency_ratio,
     )

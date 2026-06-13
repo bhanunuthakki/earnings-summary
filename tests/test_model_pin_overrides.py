@@ -87,8 +87,8 @@ def test_active_override_returns_most_recently_set(db_path: Path) -> None:
 
     write_pin_override("bear_case", "claude-haiku-4-5-20251001", db_path=db_path)
     # write_pin_override deactivates the first row and inserts a second.
-    write_pin_override("bear_case", "gemini-3.5-flash", db_path=db_path)
-    assert active_override("bear_case", db_path=db_path) == "gemini-3.5-flash"
+    write_pin_override("bear_case", "gemini-2.5-flash", db_path=db_path)
+    assert active_override("bear_case", db_path=db_path) == "gemini-2.5-flash"
     # First row should now be inactive (only one active row).
     conn = sqlite3.connect(str(db_path))
     rows = conn.execute(
@@ -96,7 +96,7 @@ def test_active_override_returns_most_recently_set(db_path: Path) -> None:
     ).fetchall()
     conn.close()
     assert rows[0] == ("claude-haiku-4-5-20251001", 0), "first row should be inactive"
-    assert rows[1] == ("gemini-3.5-flash", 1), "second row should be active"
+    assert rows[1] == ("gemini-2.5-flash", 1), "second row should be active"
 
 
 def test_active_override_returns_none_when_db_missing() -> None:

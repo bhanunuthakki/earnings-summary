@@ -50,9 +50,11 @@ MODEL_LADDER: dict[str, ModelCost] = {
     "claude-opus-4-7": ModelCost("claude-opus-4-7", CLAUDE, 15.00, 75.00),
     "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 15.00, 75.00),
     # Gemini API tiers (public API prices, $/MTok in/out, 2026-06).
-    # Current GA tiers: 3.5-flash + 3.1-pro-preview (3-pro-preview discontinued
-    # 2026-03, no 3.5 Pro exists). Both CLI-verified.
-    "gemini-3.5-flash": ModelCost("gemini-3.5-flash", GEMINI, 0.30, 2.50),
+    # CLI-verified model ids: gemini-2.5-flash (gemini-3.5-flash is invalid, returns
+    # ModelNotFoundError) + gemini-3.1-pro-preview (3-pro-preview discontinued 2026-03,
+    # no 3.5 Pro exists). Matches GEMINI_BACKEND_FAST_MODEL / _DEFAULT_MODEL in
+    # src/llm/gemini_backend.py.
+    "gemini-2.5-flash": ModelCost("gemini-2.5-flash", GEMINI, 0.30, 2.50),
     "gemini-3.1-pro-preview": ModelCost("gemini-3.1-pro-preview", GEMINI, 1.25, 10.00),
 }
 
