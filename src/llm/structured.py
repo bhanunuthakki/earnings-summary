@@ -94,6 +94,7 @@ def call_llm_structured(
     scope: str | None = None,
     run_id: str | None = None,
     model: str | None = None,
+    backend: str | None = None,
     expect: Literal["object", "array"] = "object",
     required_keys: tuple[str, ...] = (),
 ) -> object:
@@ -104,7 +105,15 @@ def call_llm_structured(
         budget/setup problems must never be reshaped into parse errors);
       * ``StructuredParseError`` when both attempts returned unusable JSON.
     """
-    raw = call_llm(prompt, purpose=purpose, ticker=ticker, scope=scope, run_id=run_id, model=model)
+    raw = call_llm(
+        prompt,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
+        model=model,
+        backend=backend,
+    )
     try:
         return parse_json_payload(raw, expect=expect, required_keys=required_keys)
     except ValueError as first_exc:
@@ -124,6 +133,7 @@ def call_llm_structured(
         scope=scope,
         run_id=run_id,
         model=model,
+        backend=backend,
     )
     try:
         return parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
