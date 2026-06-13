@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 import math
 import os
@@ -634,6 +635,21 @@ def create_app(
                 mimetype="text/html",
             )
 
+        if name == "triage":
+            # Companies → Triage (S11): the parked-comment disposition queue —
+            # comments the classifier couldn't route (`needs_triage`). A lens
+            # over analyst_notes; ``?fragment=list`` returns just the table the
+            # panel JS refreshes after a route / resolve / dismiss.
+            from pipeline.triage_panel import render_triage_list, render_triage_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            t_renderer = (
+                render_triage_list
+                if request.args.get("fragment") == "list"
+                else render_triage_panel
+            )
+            return Response(t_renderer(db_path, user_id=user_id), mimetype="text/html")
+
         if name == "ticker_settings":
             # Settings-drawer section (P3.4): per-ticker persistent overrides
             # (bypass_budget) listed + editable via /api/ticker-settings/<T>.
@@ -1162,6 +1178,27 @@ def create_app(
                 from journal_links import unlink_note
 
                 updated = unlink_note(note_id, db_path=db_path)
+            elif action == "route":
+                # S11 Triage: route a parked `needs_triage` note to the real
+                # comment intent the classifier missed. The note-side write is
+                # durable; mirror it onto the underlying comment (system-of-
+                # record) when that report build still exists, so a later
+                # comment re-sync keeps the two in step instead of reverting.
+                route_intent = str(payload.get("intent") or "").strip()
+                updated = notes_store.route_triage_note(
+                    note_id, intent=route_intent, db_path=db_path
+                )
+                if updated is not None and updated.source_ref:
+                    parts = updated.source_ref.split("/")
+                    if len(parts) == 3:
+                        with contextlib.suppress(Exception):
+                            comments.update_comment(
+                                repo_root,
+                                parts[0],
+                                date.fromisoformat(parts[1]),
+                                parts[2],
+                                intent=cast("comments.IntentType", route_intent),
+                            )
             else:
                 return ({"error": f"unknown action {action!r}"}, 404)
         except ValueError as exc:

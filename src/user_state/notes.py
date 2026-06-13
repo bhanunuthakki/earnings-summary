@@ -85,6 +85,15 @@ _COMMENT_STATUS_TO_NOTE: dict[str, str] = {
     "dismissed": "archived",
 }
 
+# A comment the classifier parked at the closed-under-no-fit terminal mirrors
+# here as a kind="question" note whose context_json["intent"] == "needs_triage"
+# — the durable discriminator the dedicated Triage surface (S11) filters on (a
+# comment dies with its report build; this table is the cross-build record).
+# ROUTABLE_INTENTS are the real comment intents the owner can route a parked
+# item to (every _INTENT_TO_KIND key except the terminal itself).
+TRIAGE_INTENT = "needs_triage"
+ROUTABLE_INTENTS: tuple[str, ...] = tuple(k for k in _INTENT_TO_KIND if k != TRIAGE_INTENT)
+
 
 @dataclass(slots=True)
 class AnalystNoteRow:
@@ -227,6 +236,74 @@ def list_notes(
             params,
         ).fetchall()
         return [_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_triage_notes(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    limit: int = 200,
+    db_path: Path | str | None = None,
+) -> list[AnalystNoteRow]:
+    """Open comments the classifier couldn't route (``needs_triage``), newest
+    first — the dedicated Triage surface's query (S11).
+
+    Filters on ``context_json['intent'] == 'needs_triage'`` in Python from the
+    decoded context rather than a SQL ``json_extract`` so the reader stays
+    portable across SQLite builds without the json1 extension. Best-effort: a
+    missing DB / pre-0074 schema degrades to ``[]`` (the surface shows its empty
+    state instead of 500-ing the tab)."""
+    try:
+        conn = open_conn(db_path)
+    except (sqlite3.Error, OSError):
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT * FROM analyst_notes WHERE user_id = ? AND source = 'comment' "
+            "AND status = 'open' ORDER BY created_at DESC, id DESC LIMIT ?",
+            (user_id, int(limit)),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    decoded = [_row_to_dc(r) for r in rows]
+    return [n for n in decoded if (n.context or {}).get("intent") == TRIAGE_INTENT]
+
+
+def route_triage_note(
+    note_id: int,
+    *,
+    intent: str,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow | None:
+    """Route a parked ``needs_triage`` note to the real comment ``intent`` the
+    classifier missed (S11 Triage surface). Rewrites the note ``kind`` (via the
+    intent→kind map) AND the ``context_json['intent']`` watermark, so the note
+    leaves the triage queue durably. Returns the updated row, or None when the
+    note is missing; raises ``ValueError`` on a non-routable intent.
+
+    The comment store stays system-of-record — the Triage route handler also
+    best-effort updates the underlying comment's intent so a later re-sync keeps
+    the two in step. When the report build that owned the comment is gone, this
+    note-side write stands on its own: the next sync sees ``comment.intent ==
+    context['intent']`` and never reverts it."""
+    if intent not in ROUTABLE_INTENTS:
+        raise ValueError(f"intent must be one of {ROUTABLE_INTENTS}, got {intent!r}")
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None:
+            return None
+        ctx = dict(_row_to_dc(row).context or {})
+        ctx["intent"] = intent
+        conn.execute(
+            "UPDATE analyst_notes SET kind = ?, context_json = ?, updated_at = ? WHERE id = ?",
+            (_INTENT_TO_KIND[intent], json.dumps(ctx), now_iso(), note_id),
+        )
+        conn.commit()
+        return _fetch_one(conn, note_id)
     finally:
         conn.close()
 
