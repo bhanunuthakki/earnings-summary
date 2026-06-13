@@ -70,9 +70,11 @@ _ACTION_MULT_DEFAULT: dict[str, float] = {"new": 1.0, "add": 0.55, "trim": 0.0, 
 CORROB_EXP: float = 0.4
 
 #: The ceiling on the investor term for a name with NO screen/adjacency
-#: corroboration — it can surface but cannot top the queue on investor weight
-#: alone. Sits below a name carrying even one fresh screen + a modest fund.
-INVESTOR_ONLY_CAP: float = 1.0
+#: corroboration — it can SURFACE (the cap sits above ``ENTRY_THRESHOLD`` so a
+#: corroborated investor-only name enters the queue) but cannot TOP it (the cap
+#: sits below a fundamentally-corroborated name, whose investor term is
+#: uncapped). A single fund's move stays below the entry bar; 2+ funds clear it.
+INVESTOR_ONLY_CAP: float = 2.0
 
 #: Adjacency strength caps at this many occurrences (distinct holdings naming
 #: it / capped transcript mentions) so a name on three watchlists doesn't

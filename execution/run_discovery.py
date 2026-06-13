@@ -28,9 +28,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -45,11 +47,12 @@ from discovery.scoring import (  # noqa: E402
     screen_signal,
 )
 from discovery.screens import ScreenHit, run_screens  # noqa: E402
-from discovery.sources import load_source_map, weight_for  # noqa: E402
+from discovery.sources import SourceRow, load_source_map, weight_for  # noqa: E402
 from discovery.store import (  # noqa: E402
     SignalWrite,
     existing_candidate_tickers,
     replace_signals,
+    signals_by_ticker,
     upsert_candidate,
 )
 from identity import DEFAULT_USER_ID  # noqa: E402
@@ -163,6 +166,12 @@ def discover(
             )
         )
 
+    # Fold in the 13F miner's investor_13f signals (written by execution/
+    # fetch_13f.py). run_discovery is the single scorer, so the clamp and
+    # corroboration bump only work when one scorer sees every class — an
+    # investor-only name enters here (and stays clamped below the fundamentals).
+    _attach_investor_signals(by_ticker, _slot, source_map, db_path, user_id)
+
     existing = existing_candidate_tickers(user_id=user_id, db_path=db_path)
     signal_writes: list[SignalWrite] = []
     results: list[tuple[str, float, int]] = []
@@ -189,7 +198,8 @@ def discover(
 
 
 def _to_signal_writes(ticker: str, signals: list[Signal]) -> list[SignalWrite]:
-    """Persistence view of one candidate's scoring signals."""
+    """Persistence view of one candidate's FUNDAMENTAL signals — investor_13f
+    rows belong to the 13F miner, which replaces that class separately."""
     return [
         SignalWrite(
             ticker=ticker,
@@ -202,7 +212,67 @@ def _to_signal_writes(ticker: str, signals: list[Signal]) -> list[SignalWrite]:
             meta={"action": s.action} if s.action else {},
         )
         for s in signals
+        if s.signal_class in _FUNDAMENTAL_CLASSES
     ]
+
+
+def _attach_investor_signals(
+    by_ticker: dict[str, _Acc],
+    slot: Callable[[str, str | None], _Acc],
+    source_map: dict[str, SourceRow],
+    db_path: Path,
+    user_id: str,
+) -> None:
+    """Load the 13F miner's persisted ``investor_13f`` signals and attach them
+    to the per-ticker accumulators (creating a slot for an investor-only name),
+    so the single scorer ranks every class together."""
+    investor_rows = signals_by_ticker("investor_13f", user_id=user_id, db_path=db_path)
+    if not investor_rows:
+        return
+    names = _ticker_names(db_path, user_id)
+    for ticker, rows in investor_rows.items():
+        acc = by_ticker.get(ticker) or slot(ticker, names.get(ticker))
+        for r in rows:
+            try:
+                observed = datetime.fromisoformat(r.observed_at)
+            except ValueError:
+                continue  # an unparseable stamp can't decay correctly — skip it
+            src = source_map.get(r.source_key)
+            action = r.meta.get("action")
+            acc.signals.append(
+                Signal(
+                    signal_class="investor_13f",
+                    source_key=r.source_key,
+                    weight=r.weight,
+                    raw_strength=r.raw_strength,
+                    observed_at=observed,
+                    detail=r.detail or "",
+                    action=action if isinstance(action, str) else None,
+                    style_tags=src.style_tags if src is not None else (),
+                )
+            )
+            acc.evidence.append({"source": f"investor:{r.source_key}", "detail": r.detail or ""})
+
+
+def _ticker_names(db_path: Path, user_id: str) -> dict[str, str]:
+    """``{ticker: name}`` across the tracked universe — fills the company name
+    for an investor-only candidate (which has no screen/adjacency name).
+    Best-effort: ``{}`` on a missing DB."""
+    if not db_path.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+    except sqlite3.Error:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT ticker, name FROM tracked_companies WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return {str(t).upper(): str(n) for t, n in rows if n}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
 
 
 def main(argv: list[str] | None = None) -> int:
