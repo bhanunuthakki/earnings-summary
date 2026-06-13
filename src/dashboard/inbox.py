@@ -559,6 +559,8 @@ def _render_item(
     body = _display_body(it)
     if body:
         out.write(f'<div class="ix-body">{_esc(body)}</div>')
+    if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
+        _render_memo_actions(out, it)
     if not compact and it.kind == "draft" and it.action is not None:
         out.write('<div class="ix-actions">')
         render_queued_action(out, it.action)
@@ -602,6 +604,29 @@ def _display_body(it: InboxItem) -> str:
     if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
         return _LEADING_TAG_RE.sub("", body)
     return body
+
+
+def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
+    """Affordances for an advisor-memo card (Law-1 identity), built from the
+    shared control kit (``.k-chip``) — not the bespoke ``.ix-act`` quick
+    buttons that approve queued drafts:
+
+    * **open memo** → the Memos surface (``/#advisor_memos``). Per directive
+      §7, "record in journal / update thesis" route to the company/Memos
+      surface, not net-new write paths; a portfolio-level memo (ticker=None)
+      has no company to click into, so it opens the memo record instead.
+    * **dismiss** → archives the note-backed memo via the existing
+      ``POST /api/notes/<id>/archive`` endpoint (note-backed memos only; a
+      ledger-echo survivor carries no ``note_id`` and gets open-memo alone).
+    """
+    out.write('<div class="ix-memo-acts">')
+    out.write('<a class="k-chip k-chip-btn ix-memo-open" href="/#advisor_memos">open memo</a>')
+    if it.note_id is not None:
+        out.write(
+            '<button type="button" class="k-chip k-chip-btn ix-note-dismiss" '
+            f'data-note-id="{it.note_id}" title="Archive this memo note">dismiss</button>'
+        )
+    out.write("</div>")
 
 
 def _quick_action_id(it: InboxItem) -> int | None:
@@ -653,6 +678,11 @@ INBOX_CSS = """
 .ix-actions { margin-top: 6px; }
 .ix-open { margin-top: 4px; font-size: var(--fs-caption); }
 .ix-open a { color: var(--accent); text-decoration: none; }
+/* Advisor-memo affordances — the shared .k-chip kit (controls.py), so the
+   memo card carries dismiss + open-memo without a bespoke button system. */
+.ix-memo-acts { display: flex; gap: 6px; margin-top: 7px; }
+.ix-memo-open { text-decoration: none; }
+.ix-note-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-empty { color: var(--muted); font-size: var(--fs-body); padding: 14px 4px; }
 /* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
    in the existing header row and flip visibility (layout stays reserved, so
@@ -813,6 +843,34 @@ INBOX_JS = r"""
       for (var k = 0; k < btns.length; k++) btns[k].disabled = false;
       btn.classList.add('ix-act-fail');
       btn.title = String((err && err.message) || err);
+    });
+  });
+
+  // Advisor-memo dismiss chip (.ix-note-dismiss): archive the note-backed memo
+  // via the REST endpoint the journal already uses, then fade the card in
+  // place. Distinct from the .ix-act quick buttons above (those POST /approve
+  // on queued drafts) — this is the memo card's own affordance.
+  document.addEventListener('click', function (ev) {
+    if (!ev.target || !ev.target.closest) return;
+    var chip = ev.target.closest('.ix-note-dismiss');
+    if (!chip || chip.disabled) return;
+    var noteId = chip.getAttribute('data-note-id');
+    var card = chip.closest('.ix-card');
+    chip.disabled = true;
+    fetch('/api/notes/' + encodeURIComponent(noteId) + '/archive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    }).then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      if (!card) return;
+      card.classList.add('ix-dismissed');
+      var acts = card.querySelector('.ix-memo-acts');
+      if (acts) acts.innerHTML = '<span class="ix-acted ix-acted-applied">✓ dismissed</span>';
+    }).catch(function (err) {
+      chip.disabled = false;
+      chip.classList.add('ix-act-fail');
+      chip.title = String((err && err.message) || err);
     });
   });
 })();

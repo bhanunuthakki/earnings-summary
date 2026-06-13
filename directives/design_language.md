@@ -203,6 +203,12 @@ ranks and labels identically whichever table surfaced it.
 - **Ranking is a weighted sum of typed, dated signals**, never an equal-weight
   count — severity (category × status) × recency decay × position weight ×
   thesis relevance, each factor named in the card's `score_why` tooltip.
+- **A card's affordances come from the shared kit, by identity.** Advisor-memo
+  cards carry their actions as `.k-chip` controls (open-memo → the Memos
+  surface; dismiss → the existing `/api/notes/<id>/archive` endpoint), not a
+  bespoke per-card button system. "Record in journal / update thesis" route to
+  the company/Memos surface, never a net-new write path (a portfolio-level
+  memo has no company target — disclosed, not silently dropped).
 
 `semantic_kind` is the deliberate **unified-item-model seed**: the information-
 diet substrate and the S12 signals spine EXTEND this discriminator vocabulary

@@ -218,6 +218,81 @@ def test_no_raw_enum_or_internal_tag_reaches_a_label_or_body(db_path: Path) -> N
 
 
 # ----------------------------------------------------------------------------
+# Memo action chips (S3 PR2): .k-chip dismiss + open-memo, by identity
+# ----------------------------------------------------------------------------
+
+
+def test_portfolio_memo_note_card_carries_dismiss_and_open_memo_chips(db_path: Path) -> None:
+    """The portfolio next-dollar memo (note-only) gets the shared-kit
+    affordances: an open-memo link to the Memos surface and a dismiss chip on
+    the /api/notes archive endpoint — keyed by its own note id. Plain notes do
+    NOT get them."""
+    from advisor.memos import persist_memo
+
+    persist_memo(
+        db_path=db_path,
+        user_id=DEFAULT_USER_ID,
+        kind="next_dollar",
+        ticker=None,
+        counter_ticker=None,
+        title="Next-dollar memo · 2026-06-12",
+        body_md="Deepen the highest-conviction names where the DCF gap is widest.",
+        context={},
+        write_ledger=False,
+    )
+    create_note(
+        user_id=DEFAULT_USER_ID, ticker="NU", kind="watch",
+        body="An ordinary watch item, no chips.", db_path=db_path,
+    )  # fmt: skip
+
+    items = collect_inbox(db_path)
+    memo = next(it for it in items if it.semantic_kind == "advisor_memo")
+    assert memo.note_id is not None
+    for compact in (True, False):
+        html = render_inbox_stream(items, db_path=db_path, compact=compact)
+        assert f'class="k-chip k-chip-btn ix-note-dismiss" data-note-id="{memo.note_id}"' in html
+        assert '<a class="k-chip k-chip-btn ix-memo-open" href="/#advisor_memos">' in html
+        # Exactly one card carries the affordances — the memo, not the watch.
+        assert html.count("ix-memo-acts") == 1
+
+
+def test_ledger_advisor_memo_gets_open_memo_without_dismiss(db_path: Path) -> None:
+    """A ticker-scoped swap memo collapses to its ledger echo (no note_id on
+    the survivor): it still opens the memo record, but has no dismiss chip —
+    archiving targets a note, and this survivor isn't one."""
+    from advisor.memos import persist_memo
+
+    persist_memo(
+        db_path=db_path,
+        user_id=DEFAULT_USER_ID,
+        kind="swap_check",
+        ticker="RBRK",
+        counter_ticker="S",
+        title="RBRK vs S swap margin",
+        body_md="The screened margin survives the tax drag by ~9 points.",
+        context={},
+        write_ledger=True,
+    )
+    items = collect_inbox(db_path)
+    survivor = next(it for it in items if it.semantic_kind == "advisor_memo")
+    assert survivor.kind == "ledger"
+    assert survivor.note_id is None
+
+    html = render_inbox_stream(items, db_path=db_path)
+    assert 'class="k-chip k-chip-btn ix-memo-open"' in html
+    assert "ix-note-dismiss" not in html
+
+
+def test_inbox_js_wires_memo_dismiss() -> None:
+    """Rendered-markup contract: the dismiss chip POSTs the note-archive
+    endpoint and fades the card — distinct from the .ix-act /approve path."""
+    assert "ix-note-dismiss" in INBOX_JS
+    assert "/api/notes/" in INBOX_JS
+    assert "/archive" in INBOX_JS
+    assert "ix-dismissed" in INBOX_JS
+
+
+# ----------------------------------------------------------------------------
 # Quick approve/dismiss (Inbox v2): hover ✓/✕ on the compact rail only
 # ----------------------------------------------------------------------------
 
