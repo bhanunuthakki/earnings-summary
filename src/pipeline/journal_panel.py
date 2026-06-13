@@ -34,6 +34,7 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+from dashboard.inbox_rank import SEMANTIC_ADVISOR_MEMO, note_semantic_kind
 from identity import DEFAULT_USER_ID
 from journal_links import (
     TARGET_DECISION,
@@ -107,6 +108,20 @@ _PANEL_STYLE = """<style>
   padding:9px 12px; margin-bottom:8px; }
 .jr-rec .jr-rec-row { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
 .jr-rec-concl { font-size:var(--fs-caption); color:var(--warn); margin:4px 0 6px; }
+/* Machine-authored silo (S11): advisor/synthesis memos demote out of the
+   owner's journal into a collapsed, recessed section — the journal analog of
+   the inbox's identity-based synthesis demotion. */
+.jr-synthesis { margin-top:16px; border-top:1px solid var(--border); padding-top:10px; }
+.jr-synthesis > summary { cursor:pointer; display:flex; align-items:baseline; gap:8px;
+  padding:4px 0; list-style:none; }
+.jr-synthesis > summary::-webkit-details-marker { display:none; }
+.jr-silo-title { font-size:var(--fs-caption); font-weight:600; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.04em; }
+.jr-synth-note { border:1px dashed var(--border); border-radius:var(--radius);
+  background:var(--paper); padding:10px 14px; margin-bottom:8px; }
+.jr-actions a { color:var(--muted); text-decoration:none; border:1px solid var(--border);
+  border-radius:var(--radius); padding:3px 9px; font-size:var(--fs-caption); }
+.jr-actions a:hover { border-color:var(--accent); color:var(--accent); }
 </style>"""
 
 _STATUS_FILTERS = ("open", "resolved", "superseded", "archived", "all")
@@ -219,6 +234,55 @@ def _note_card(
     )
 
 
+def _is_synthesis(n: AnalystNoteRow) -> bool:
+    """Identity test (Law 1) — a machine-authored advisor/synthesis memo, read
+    through the SAME resolver the inbox uses (``note_semantic_kind``), never by
+    re-sniffing the source table. The journal-silo demotion (S11) builds on the
+    S3 identity model; it does not re-cut it."""
+    return note_semantic_kind(n.source, n.source_ref, n.context) == SEMANTIC_ADVISOR_MEMO
+
+
+def _synthesis_card(n: AnalystNoteRow) -> str:
+    """A demoted, read-oriented card for a machine-authored memo: the body, an
+    Open-in-Memos link to its real home, and Archive (the only lifecycle action
+    that fits — a regenerated memo is never superseded/reclassified by hand).
+    Matches the inbox contract (open-memo → the Memos surface; dismiss →
+    /api/notes/<id>/archive)."""
+    ticker_html = (
+        f'<span class="jr-ticker">{escape(n.ticker)}</span>'
+        if n.ticker
+        else '<span class="jr-ticker" style="color:var(--muted)">PORTFOLIO</span>'
+    )
+    return (
+        f'<div class="jr-synth-note" data-note="{n.id}">'
+        '<div class="jr-head">'
+        '<span class="jr-kind">Advisor memo</span>'
+        f"{ticker_html}"
+        f'<span class="jr-when">{escape(n.created_at.date().isoformat())}</span>'
+        "</div>"
+        f'<div class="jr-body">{render_prose(n.body)}</div>'
+        f'<div class="jr-actions" data-note-id="{n.id}">'
+        '<a href="#advisor_memos" title="Open the advisor Memos surface">Open in Memos</a>'
+        '<button type="button" data-act="archive">Archive</button>'
+        "</div></div>"
+    )
+
+
+def _synthesis_silo(notes: list[AnalystNoteRow]) -> str:
+    """Collapse the machine-authored memos into one recessed, closed-by-default
+    section below the owner's journal — the literal #1 complaint (an advisor
+    memo crowding the owner's own thinking) fixed for the journal too."""
+    cards = "".join(_synthesis_card(n) for n in notes)
+    n = len(notes)
+    plural = "s" if n != 1 else ""
+    return (
+        '<details class="jr-synthesis">'
+        '<summary><span class="jr-silo-title">Advisor synthesis</span>'
+        f'<span class="jr-count">{n} machine-authored memo{plural}</span></summary>'
+        f"{cards}</details>"
+    )
+
+
 def render_journal_list(
     db_path: Path,
     *,
@@ -252,11 +316,17 @@ def render_journal_list(
             "report comments, chat, alert reviews, advisor memos — or directly "
             "from the form above.</div>"
         )
-    targets = targets_for_notes(notes, db_path=db_path)
+    # Two silos (S11): the owner's own journal vs machine-authored advisor
+    # synthesis, split by IDENTITY (not source table). The owner silo keeps the
+    # full lifecycle; the synthesis silo demotes into a collapsed section so a
+    # generated memo never crowds the analyst's own thinking.
+    owner = [n for n in notes if not _is_synthesis(n)]
+    synthesis = [n for n in notes if _is_synthesis(n)]
+    targets = targets_for_notes(owner, db_path=db_path)
     # Link dropdowns: one targets fetch per distinct ticker among the OPEN
-    # unlinked notes (the only cards that render the control).
+    # unlinked owner notes (the only cards that render the control).
     options_by_ticker: dict[str, list[LinkTarget]] = {}
-    for n in notes:
+    for n in owner:
         if (
             n.status == "open"
             and n.ticker
@@ -267,14 +337,17 @@ def render_journal_list(
             options_by_ticker[n.ticker] = linkable_targets(
                 ticker=n.ticker, db_path=db_path, user_id=user_id
             )
-    return "".join(
-        _note_card(
-            n,
-            targets=targets,
-            link_options=options_by_ticker.get(n.ticker or "", []),
+    owner_html = (
+        "".join(
+            _note_card(n, targets=targets, link_options=options_by_ticker.get(n.ticker or "", []))
+            for n in owner
         )
-        for n in notes
+        or '<div class="jr-empty">No notes of your own match this filter.</div>'
     )
+    parts = [owner_html]
+    if synthesis:
+        parts.append(_synthesis_silo(synthesis))
+    return "".join(parts)
 
 
 def render_reconciliation_list(
