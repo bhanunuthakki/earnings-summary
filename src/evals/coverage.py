@@ -45,6 +45,7 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "ask_claim_grounding",
         "injection_canaries",
         "peer_selection",
+        "podcast_takeaway_summary",
         *CLASSIFIER_PURPOSES,
     }
 )

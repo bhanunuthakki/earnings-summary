@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Daily curated podcast-RSS feed poller (S11 diet layer). Polls 7 allowlisted shows (BG2, Invest Like the Best, Acquired, Logan Bartlett, In Good Company, Odd Lots, Stratechery) and writes DIET-lane media_appearance signals when a tracked company or rostered investor is mentioned in an episode title or description within the last 7 days. Re-polling the same episode URL is a no-op (ux_signals_media_url dedup). Best-effort: feed errors degrade to no new signals without blocking anything else.</Description>
+    <Description>Daily DIET-lane podcast RSS poller + takeaway summarizer (S11). Polls 7 curated shows (BG2, Invest Like the Best, Acquired, Logan Bartlett, In Good Company, Odd Lots, Stratechery), matches episode titles and descriptions against tracked company names and rostered investor display names, writes media_appearance signals in the DIET lane. Follows with a Sonnet takeaway pass that replaces short/absent RSS copy with a 2-4 sentence investment briefing (budget-capped $5/month).</Description>
     <URI>\earnings-summary\fetch_podcast_rss</URI>
   </RegistrationInfo>
   <Triggers>

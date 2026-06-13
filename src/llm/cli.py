@@ -137,6 +137,11 @@ LLM_MODELS: dict[str, str] = {
     # decides Sonnet-vs-Opus empirically rather than by belief. One cached call
     # per ticker on the LLM build — cost bounded.
     "peer_selection": DEFAULT_MODEL,
+    # DIET-lane podcast takeaway summarizer (S11): replaces short/absent RSS
+    # description bodies with a 2-4 sentence investment-relevant briefing.
+    # Sonnet: grounded distillation from marketing copy, latency unimportant
+    # (batch daily after the RSS poll). Budget-capped at $5/month via 0103.
+    "podcast_takeaway_summary": DEFAULT_MODEL,
     # Platform diagram is a narrowly-scoped JSON-output task (one diagram
     # string + one caption string). Sonnet was taking 6-20 min per call and
     # timing out on long 10-Ks; Haiku produces the same shape ~5x faster.
