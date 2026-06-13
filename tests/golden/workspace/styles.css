@@ -111,7 +111,7 @@ select:not([multiple]) {
   padding-right: 28px;
 }
 select[multiple] { padding: 4px; }
-select[multiple] option { padding: 3px 8px; border-radius: 4px; }
+select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
 select:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -198,6 +198,59 @@ a.k-tick-sym:hover { color: var(--accent); }
   display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
 }
+
+/* ---- status/score pills: ONE filled badge — a soft status fill + token ink
+   (design_language §3). This is the canonical replacement for the per-panel
+   raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone
+   pairs): a status pill never freehands a background/foreground hex pair. ---- */
+.k-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 9px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; line-height: 1.5;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--paper); color: var(--fg-soft);
+}
+.k-pill-ok     { background: color-mix(in srgb, var(--ok) 16%, transparent);     color: var(--ok); }
+.k-pill-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent);   color: var(--warn); }
+.k-pill-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent);    color: var(--bad); }
+.k-pill-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+
+/* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards,
+   callouts, tone rows) — same color-mix family, box radius instead of full.
+   Ink stays --fg; a status word inside can take its own .k-pill. ---- */
+.k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
+.k-well-ok     { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.k-well-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.k-well-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
+   CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
+   trap/restore); the kit owns their look + open motion. Exit is instant — the
+   [hidden] toggle can't animate display:none. The scrim is a neutral wash, not
+   a palette color. ---- */
+.k-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  z-index: 40; animation: k-overlay-fade var(--transition); }
+.k-overlay { position: fixed; z-index: 41; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-pop); animation: k-overlay-rise var(--transition); }
+.k-scrim[hidden], .k-overlay[hidden] { display: none; }
+@keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; }
+  to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .k-scrim, .k-overlay { animation-duration: 0.01ms; }
+}
+
+/* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on
+   the left, filters + actions on the SAME flex row to the right — never a
+   title band stacked over a filter band. Emitted by panel_toolbar(). ---- */
+.k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  margin-bottom: var(--sp-3); }
+.k-toolbar-title { font-size: var(--fs-title); font-weight: 600; margin: 0;
+  margin-right: auto; }
+.k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2);
+  flex-wrap: wrap; margin-left: auto; }
 
 :root {
   --pad-x: 28px;
