@@ -1899,6 +1899,19 @@ def create_app(
             mimetype="text/html",
         )
 
+    @app.route("/api/peek/documents", methods=["GET"])
+    def peek_documents():
+        """The documents fetched for ``?ticker=`` since its last report build —
+        the click-through behind the cockpit's "N new docs" pill. Each row links
+        by its id to the ``/source/<id>`` viewer. Always 200 — a missing ticker
+        or empty window renders the peek's empty state."""
+        from pipeline.peeks import render_new_docs_peek
+
+        return Response(
+            render_new_docs_peek(db_path, ticker=request.args.get("ticker") or ""),
+            mimetype="text/html",
+        )
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         """Full per-ticker command-center state as JSON: identity/freshness,

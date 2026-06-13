@@ -52,6 +52,7 @@ __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
     "render_memo_peek",
+    "render_new_docs_peek",
     "render_provenance_peek",
     "render_ticker_peek",
 ]
@@ -136,6 +137,107 @@ def _alert_cards_html(alerts: list[AlertRow], db_path: Path) -> str:
         )
     out.write("</div>")
     return out.getvalue()
+
+
+# ----------------------------------------------------------------------------
+# New-documents peek (cockpit "N new docs" pill)
+# ----------------------------------------------------------------------------
+
+
+def render_new_docs_peek(db_path: Path, *, ticker: str, limit: int = 12) -> str:
+    """The documents fetched for ``ticker`` since its last report build — the
+    click-through behind the cockpit's "N new docs" pill. Mirrors
+    :func:`render_alerts_list_peek`: it renders the very rows the count was
+    derived from (``fetched_at`` after ``tracked_companies.last_built_at``),
+    newest first, each linking by its existing id to the ``/source/<id>``
+    viewer (clicking a row retargets the peek in place). The ``documents`` table
+    has no title column, so the label is derived from ``doc_type`` + the
+    ``file_path`` basename. Always renders — an empty slice is a valid answer
+    (the same window the count uses); a missing DB/table degrades to empty."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return '<div class="cc-empty">No ticker.</div>'
+    rows = _new_doc_rows(db_path, t, limit)
+    if not rows:
+        return '<div class="cc-empty">No documents fetched since the last build.</div>'
+    body = "".join(_doc_row_html(r) for r in rows)
+    foot = (
+        f'<div class="cc-peek-foot"><a href="/#holding={escape(t, quote=True)}">'
+        "open the holding →</a></div>"
+    )
+    return f'<div class="cc-peek-docs">{body}</div>{foot}<style>{_DOCS_CSS}</style>'
+
+
+class _DocRow(NamedTuple):
+    doc_id: int
+    kind: str  # humanized doc_type
+    name: str  # file basename (or source host) — the muted secondary label
+    fetched_at: str | None
+
+
+def _new_doc_rows(db_path: Path, t: str, limit: int) -> list[_DocRow]:
+    """Documents whose ``fetched_at`` is after the ticker's ``last_built_at`` —
+    the same "new since the build" window :func:`_new_doc_counts` counts. The
+    ``ticker = ?`` predicate rides ``ix_documents_ticker_doctype_period``; the
+    threshold is a scalar subquery (NULL last_built_at → no rows, matching the
+    count's ``last_built_at IS NOT NULL`` guard)."""
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        cur = conn.execute(
+            "SELECT d.id, d.doc_type, d.file_path, d.source_url, d.fetched_at "
+            "FROM documents d "
+            "WHERE d.ticker = ? AND julianday(d.fetched_at) > ("
+            "  SELECT julianday(last_built_at) FROM tracked_companies "
+            "  WHERE ticker = ? AND last_built_at IS NOT NULL) "
+            "ORDER BY d.fetched_at DESC, d.id DESC LIMIT ?",
+            (t, t, limit),
+        )
+        fetched = cur.fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    out: list[_DocRow] = []
+    for doc_id, doc_type, file_path, source_url, fetched_at in fetched:
+        kind = str(doc_type or "").replace("_", " ").strip().title() or "Document"
+        name = Path(str(file_path)).name if file_path else _host(str(source_url or ""))
+        out.append(_DocRow(int(doc_id), kind, name, str(fetched_at) if fetched_at else None))
+    return out
+
+
+def _host(url: str) -> str:
+    """The bare host of an external-only document's source URL, for its label."""
+    rest = url.split("://", 1)[-1]
+    return rest.split("/", 1)[0] if rest else ""
+
+
+def _doc_row_html(row: _DocRow) -> str:
+    name = f'<span class="cc-doc-name" title="{escape(row.name, quote=True)}">{escape(row.name)}</span>'
+    when = stamp_html(row.fetched_at, css="cc-doc-when")
+    return (
+        f'<a class="cc-doc-row" href="/source/{row.doc_id}">'
+        f'<span class="cc-doc-kind">{escape(row.kind)}</span>'
+        f"{name}{when}</a>"
+    )
+
+
+_DOCS_CSS = """
+.cc-peek-docs { display: flex; flex-direction: column; }
+.cc-doc-row { display: flex; align-items: baseline; gap: 10px; padding: 6px 2px;
+  border-bottom: 1px solid var(--hairline); text-decoration: none; color: var(--fg);
+  font-size: var(--fs-body); }
+.cc-doc-row:last-child { border-bottom: none; }
+.cc-doc-row:hover { background: var(--paper); }
+.cc-doc-kind { flex: 0 0 auto; font-weight: 600; }
+.cc-doc-name { flex: 1 1 auto; min-width: 0; color: var(--muted); font-family: var(--mono);
+  font-size: var(--fs-caption); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-doc-when { flex: 0 0 auto; color: var(--muted); font-size: var(--fs-caption); }
+""".strip()
 
 
 # ----------------------------------------------------------------------------
