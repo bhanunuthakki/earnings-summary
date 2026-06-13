@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Quarterly EDGAR 13F-HR miner (S6 discovery, investor lane). Runs the 16th of Feb/May/Aug/Nov - one to two days after the 45-day 13F filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14) so the quarter's filings are in. Polls every active rostered manager (discovery_sources rows with a cik), diffs its two latest 13F-HRs, and writes investor_13f discovery_signals (untracked universe names) + news rows (tracked names), then re-runs run_discovery so the fresh investor signals re-rank the queue immediately. Best-effort - an unreachable manager / unparseable filing contributes nothing.</Description>
+    <URI>\earnings-summary\fetch_13f</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-08-16T08:15:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByMonth>
+        <DaysOfMonth>
+          <Day>16</Day>
+        </DaysOfMonth>
+        <Months>
+          <February /><May /><August /><November />
+        </Months>
+      </ScheduleByMonth>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT30M</Interval>
+      <Count>1</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_fetch_13f.bat</Command>
+    </Exec>
+  </Actions>
+</Task>

@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Sixteen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a weekly Thursday audit verifies every task XML is registered and on schedule.
+Seventeen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a quarterly task mines the rostered 13F managers one to two days after each 13F filing deadline; and a weekly Thursday audit verifies every task XML is registered and on schedule.
 
 ### Pre-chain backup
 
@@ -87,6 +87,14 @@ Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before `weekly_p2
 | `earnings-summary\discover_ir_failing` | Twice weekly, Wed + Sat 02:30 | `discover_ir_failing.task.xml` | `run_discover_ir_failing.bat` | **Failing-crawler rescan.** Runs `execution/discover_ir_documents_all.py --only-failing`, which reads the live document store (`documents.source_type='ir_doc'`), computes the portfolio/evaluation names with **zero** registered IR docs, and runs just those through the normal discover → fetch+register → process chain. Catches a previously bot-protected (HTTP 403), HTTP/2-broken, or load-stalled IR site that starts cooperating — days sooner than the Sunday full sweep, at a fraction of the cost (only the gaps). A name that succeeds drops out of the gap set; one that keeps failing stays surfaced in the dashboard's **IR Docs** coverage tab with its last crawl reason. Idempotent; never aborts on one ticker's failure; exit code = count of FAILED tickers. **Requires the optional `ir` extra** (headless browser). |
 
 The failing-only rescan is the cheap mid-week companion to the Sunday full sweep: the full sweep re-checks every name weekly, this re-checks only the still-failing ones on Wednesday + Saturday so a recovered site is picked up within ~3 days. Coverage + each name's last crawl outcome are visible in the command center's **IR Docs** tab (`GET /api/panel/ir_coverage`), which also shows where to drop a manually-pulled file for the names that stay blocked.
+
+### Quarterly 13F miner
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\fetch_13f` | Quarterly, 16th of Feb/May/Aug/Nov @ 08:15 | `fetch_13f.task.xml` | `run_fetch_13f.bat` | **EDGAR 13F-HR miner (S6 discovery, investor lane).** Fires 1–2 days after the 45-day 13F filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14) so the quarter's filings are in. Two steps: (1) `execution/fetch_13f.py` polls every active rostered manager (`discovery_sources` rows **with a `cik`**), diffs its two latest `13F-HR` filings, and writes `investor_13f` `discovery_signals` for untracked universe names + `news` rows (`source_feed='edgar_13f'`) for tracked names — a full-class replace, so a sold position drops; (2) `execution/run_discovery.py` re-scores the queue so the fresh investor signals re-rank immediately (the clamp + corroboration math runs there). Best-effort — an unreachable manager / unparseable filing contributes nothing; a roster with no CIK-resolved managers is a no-op. Only managers whose CIK is set fire; resolve more with `python execution/resolve_manager_ciks.py --apply` (it auto-applies only a single recent, strong-name 13F-HR match and reports the ambiguous/stale ones for the owner to paste via the Sources panel). |
+
+13F is quarterly with a 45-day lag, so a quarterly poll is ample; the miner uses the two latest filings, so a manager that files a few days late is picked up the next quarter. Verify a run via the JSON summary in `.tmp/cron_logs/fetch_13f_*.log` (`{ "signals": N, "untracked_names": N, "tracked_news": N, "managers": N }`) and new `investor_13f` rows in `discovery_signals` / re-ranked rows in the Discovery panel.
 
 ## Switching FMP tier
 
@@ -228,6 +236,9 @@ schtasks /create /tn "earnings-summary\discover_ir_failing" ^
 
 schtasks /create /tn "earnings-summary\verify_cron" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\verify_cron.task.xml"
+
+schtasks /create /tn "earnings-summary\fetch_13f" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_13f.task.xml"
 ```
 
 The `/tn` value is the registered task name (used by all `schtasks` commands
