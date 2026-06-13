@@ -45,7 +45,10 @@ from dashboard.inbox_rank import (
     ADVISOR_MEMO_TITLE,
     CATEGORY_LABELS,
     CATEGORY_ORDER,
+    SEMANTIC_ADVISOR_MEMO,
     annotate_and_rank,
+    inbox_label,
+    note_semantic_kind,
 )
 from identity import DEFAULT_USER_ID
 from ui.time import stamp_html
@@ -75,9 +78,17 @@ _KIND_RICHNESS: dict[str, int] = {"alert": 4, "draft": 3, "synthesis": 2, "ledge
 
 @dataclass(frozen=True)
 class InboxItem:
-    """One stream entry. ``kind`` ∈ alert | draft | ledger | note | synthesis.
+    """One stream entry. ``kind`` ∈ alert | draft | ledger | note | synthesis —
+    the inbox's own lane taxonomy (which card renders, which JS owns it).
+    ``semantic_kind`` is the orthogonal *identity* discriminator (Law 1): WHAT
+    the item is, stamped from the source row's provenance at collect time, so
+    category/label/actions resolve from identity not source table (an advisor
+    memo is ``SEMANTIC_ADVISOR_MEMO`` whether it arrived as a note or a ledger
+    echo). ``None`` for items with no identity refinement.
+
     Alerts carry their row + nested queued actions; standalone drafts (pending
-    actions whose alert fell outside the window) carry just the action.
+    actions whose alert fell outside the window) carry just the action;
+    note-backed items carry ``note_id`` for their lifecycle actions.
     ``category`` / ``score`` / ``score_why`` are assigned by
     ``inbox_rank.annotate_and_rank`` (the filter chips + ranking tooltip)."""
 
@@ -93,6 +104,8 @@ class InboxItem:
     category: str = ""
     score: float = 0.0
     score_why: str = ""
+    semantic_kind: str | None = None
+    note_id: int | None = None
 
 
 def _norm_body(text: str) -> str:
@@ -253,6 +266,9 @@ def collect_inbox(
                     when=when,
                     title=_LEDGER_KIND_LABELS.get(e.entry_kind, e.entry_kind),
                     body=e.body,
+                    semantic_kind=(
+                        SEMANTIC_ADVISOR_MEMO if e.entry_kind == "advisor_memo" else None
+                    ),
                 )
             )
 
@@ -278,14 +294,21 @@ def collect_inbox(
             if not _in_window(when, windowed=False):  # standing: until only
                 continue
             conclusion = reconcile_why.get(n.id)
+            # title carries the RAW note kind; inbox_label() resolves the human
+            # caption (+ the "Reconcile · " prefix, derived from the pending
+            # status) so the raw enum never reaches a card. semantic_kind lifts
+            # advisor memos to machine-authored identity (source/source_ref/
+            # context → note_semantic_kind).
             items.append(
                 InboxItem(
                     kind="note",
                     ticker=n.ticker,
                     when=when,
-                    title=f"reconcile · {n.kind}" if conclusion else n.kind,
+                    title=n.kind,
                     body=f"{n.body} — {conclusion}" if conclusion else n.body,
                     status="pending" if conclusion else None,
+                    semantic_kind=note_semantic_kind(n.source, n.source_ref, n.context),
+                    note_id=n.id,
                 )
             )
 
@@ -533,7 +556,7 @@ def _render_item(
         )
     out.write(stamp_html(it.when, css="ix-when"))
     out.write("</div>")
-    body = it.body or _alert_memo(it)
+    body = _display_body(it)
     if body:
         out.write(f'<div class="ix-body">{_esc(body)}</div>')
     if not compact and it.kind == "draft" and it.action is not None:
@@ -561,9 +584,24 @@ def _render_item(
 
 
 def _title_for(it: InboxItem) -> str:
-    # collect_inbox sets a specific title per kind: alert → trigger kind,
-    # draft/ledger → the action/entry-kind label, note → watch|question|…
-    return it.title
+    # The kind chip's text. Delegates FULLY to the one shared identity-aware
+    # resolver (inbox_rank.inbox_label): advisor memos read as "Advisor memo"
+    # whichever table they echoed through, note kinds humanize, and no raw
+    # enum or source-table string ever reaches the chip.
+    return inbox_label(it)
+
+
+def _display_body(it: InboxItem) -> str:
+    """The card body text. Legacy advisor-memo notes (prod rows written before
+    the clean-body fix) carry the retired ``[advisor memo #N · kind]`` lead
+    tag; strip it PERMANENTLY at render so no internal-format string reaches a
+    user-facing body (design_language §Streams). Scoped to advisor-memo
+    identity so an ordinary note that legitimately opens with a bracket is
+    untouched."""
+    body = it.body or _alert_memo(it)
+    if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
+        return _LEADING_TAG_RE.sub("", body)
+    return body
 
 
 def _quick_action_id(it: InboxItem) -> int | None:

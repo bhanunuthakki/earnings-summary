@@ -33,6 +33,7 @@ from flask.testing import FlaskClient
 
 from alembic import command
 from dashboard.inbox import collect_inbox
+from dashboard.inbox_rank import inbox_label
 from journal_links import (
     link_note,
     linkable_targets,
@@ -501,9 +502,14 @@ def test_inbox_marks_reconciliation_notes(db_path: Path) -> None:
     items = collect_inbox(db_path, kinds=("note",), position_weights={})
     by_body = {it.body.split(" — ")[0]: it for it in items}
     marked = by_body["reconcile me in the inbox"]
-    assert marked.title == "reconcile · watch"
+    # title carries the RAW kind; the reconcile marker is the pending status,
+    # and the human label (with the "Reconcile · " prefix) comes from the one
+    # shared resolver — never the raw enum.
+    assert marked.title == "watch"
     assert marked.status == "pending"
+    assert inbox_label(marked) == "Reconcile · Watch item"
     assert "graded correct" in marked.body
     plain = by_body["ordinary watch item"]
     assert plain.title == "watch"
     assert plain.status is None
+    assert inbox_label(plain) == "Watch item"

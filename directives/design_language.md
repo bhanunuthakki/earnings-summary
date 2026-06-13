@@ -165,6 +165,52 @@ not accidental:
 
 ---
 
+## 8. Streams & identity
+
+The inbox/feed is **one ranked stream of items with stored identity**, not a
+union of source tables wearing a render-time costume (Instrument Paradigm
+Law 1 — *identity over source*). Sources of truth in code:
+`src/dashboard/inbox.py` (the item model + renderer) and
+`src/dashboard/inbox_rank.py` (identity resolvers + the transparent scorer).
+
+**A stream item's category, label, and actions derive from WHAT it is, not
+the table it was UNION-ed out of.** Each `InboxItem` carries a `semantic_kind`
+discriminator — stamped at *collect* time from the source row's provenance
+(`note_semantic_kind()` reads an analyst note's `source` / `source_ref` /
+`context`; a `thesis_ledger` echo reads its `entry_kind`) — orthogonal to the
+`kind` lane (which card renders / which JS owns it). The advisor's
+memory-everywhere write echoes ONE memo through both `analyst_notes` and
+`thesis_ledger_entries`; both echoes get `SEMANTIC_ADVISOR_MEMO`, so the memo
+ranks and labels identically whichever table surfaced it.
+
+- **One label resolver.** `inbox_rank.inbox_label(item)` is the single
+  human-facing kind label; `inbox._title_for` delegates to it FULLY. It maps
+  identity → caption: advisor/synthesis memos → "Advisor memo"; analyst-note
+  kinds → a human caption (`observation`/`watch`/… never shows raw); a
+  reconcile-pending note gets the "Reconcile · " prefix. Never read a raw enum
+  or source-table name into a chip.
+- **Machine-authored reading ranks at synthesis weight, by identity.** A
+  just-generated advisor/synthesis memo is background reading, not an event —
+  `_categorize` demotes it to the synthesis category (the floor severity)
+  whenever `semantic_kind` says it's a memo, not only when a ledger title
+  happens to match. A portfolio memo can never float to the top of the stream.
+- **No internal-format string reaches a label or body.** The write site emits
+  a clean body (`"{title} — {summary}"`), and the renderer strips the retired
+  `[advisor memo #N · kind]` lead tag permanently for legacy rows
+  (`_display_body`, scoped to advisor identity). Guard: `test_inbox_rank` +
+  `test_dashboard_inbox` assert no `observation` / `[advisor memo …` ever
+  renders as a label or body, for any kind.
+- **Ranking is a weighted sum of typed, dated signals**, never an equal-weight
+  count — severity (category × status) × recency decay × position weight ×
+  thesis relevance, each factor named in the card's `score_why` tooltip.
+
+`semantic_kind` is the deliberate **unified-item-model seed**: the information-
+diet substrate and the S12 signals spine EXTEND this discriminator vocabulary
+(and scope `_categorize`), never re-cut it and never re-sniff the source table
+at render time.
+
+---
+
 ## Appendix A — fresh-eyes audit (2026-06-11), the drift this version kills
 
 Catalogued against `origin/main` @ `5d37519` (file:line). Headline counts:

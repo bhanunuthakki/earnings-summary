@@ -109,6 +109,115 @@ def test_same_body_different_tickers_do_not_collapse(db_path: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# Semantic identity (S3): rank/label/body by stored identity, not source table
+# ----------------------------------------------------------------------------
+
+
+def test_swap_memo_note_and_ledger_collapse_with_clean_body(db_path: Path) -> None:
+    """The write site stopped emitting the "[advisor memo #N · kind]" tag and
+    pins the note body to "{title} — {summary}". The ticker-scoped swap memo
+    still writes BOTH a note and a ledger echo ("{title} (memo #N) — {summary}")
+    — they must still _fuzzy_norm-collapse to ONE card (the richer ledger), now
+    carrying advisor identity so it labels "Advisor memo" and demotes to
+    synthesis."""
+    from advisor.memos import persist_memo
+
+    persist_memo(
+        db_path=db_path,
+        user_id=DEFAULT_USER_ID,
+        kind="swap_check",
+        ticker="RBRK",
+        counter_ticker="S",
+        title="RBRK vs S swap margin",
+        body_md="The screened margin survives the tax drag by ~9 points.",
+        context={},
+        write_ledger=True,
+    )
+    items = collect_inbox(db_path)
+    echoes = [it for it in items if "margin survives the tax drag" in it.body]
+    assert len(echoes) == 1
+    survivor = echoes[0]
+    assert survivor.kind == "ledger"
+    assert survivor.semantic_kind == "advisor_memo"
+    assert survivor.category == "synthesis"
+
+    html = render_inbox_stream(items, db_path=db_path)
+    assert html.count("margin survives the tax drag") == 1
+    assert ">Advisor memo<" in html
+    assert "[advisor memo" not in html
+
+
+def test_portfolio_memo_note_ranks_at_synthesis_not_top(db_path: Path) -> None:
+    """The owner's #1 complaint: a portfolio next-dollar memo reaches the inbox
+    ONLY as an advisor note (ticker=None, no ledger echo). By identity it must
+    demote to synthesis weight and sit BELOW a real, fresher event — never on
+    top of the stream."""
+    from advisor.memos import persist_memo
+
+    persist_memo(
+        db_path=db_path,
+        user_id=DEFAULT_USER_ID,
+        kind="next_dollar",
+        ticker=None,
+        counter_ticker=None,
+        title="Next-dollar memo · 2026-06-12",
+        body_md="Where the next dollar works hardest: deepen the highest-conviction names.",
+        context={},
+        write_ledger=False,  # portfolio-level: note only, no ledger sibling
+    )
+    append_entry(
+        ticker="NU", entry_kind="thesis_update", body="Q2 take-rate inflected up.", db_path=db_path
+    )
+
+    items = collect_inbox(db_path, position_weights={})
+    memo = next(it for it in items if it.semantic_kind == "advisor_memo")
+    assert memo.kind == "note"
+    assert memo.category == "synthesis"
+    # The fresh thesis change (severity 2.8) outranks the memo (synthesis 1.0).
+    assert items[0].semantic_kind != "advisor_memo"
+    assert items.index(memo) > 0
+
+
+def test_no_raw_enum_or_internal_tag_reaches_a_label_or_body(db_path: Path) -> None:
+    """Guard (Law 1): no source-table string or raw enum — ``observation``,
+    ``[advisor memo #N · kind]`` — ever surfaces as a card label OR body, for
+    any kind. Covers a LEGACY advisor note still carrying the retired tag
+    (prod rows persist it; the inbox strips it at render)."""
+    create_note(
+        user_id=DEFAULT_USER_ID,
+        ticker=None,
+        kind="observation",
+        body="[advisor memo #5 · next_dollar] Next-dollar memo · 2026-06-12 — Deepen NU.",
+        source="advisor",
+        source_ref="advisor_memo:5",
+        context={"memo_id": 5, "kind": "next_dollar"},
+        db_path=db_path,
+    )
+    # Plain notes whose kind is the raw enum 'observation' / 'watch' — their
+    # bodies deliberately avoid the word so the assertion catches a LEAKED enum
+    # (the kind chip), not legitimate user prose.
+    create_note(
+        user_id=DEFAULT_USER_ID, ticker="NU", kind="observation",
+        body="A plain analyst note about the print.", db_path=db_path,
+    )  # fmt: skip
+    create_note(
+        user_id=DEFAULT_USER_ID, ticker="NU", kind="watch",
+        body="Watch the funding mix next quarter.", db_path=db_path,
+    )  # fmt: skip
+
+    items = collect_inbox(db_path)
+    for compact in (True, False):
+        html = render_inbox_stream(items, db_path=db_path, compact=compact)
+        assert "observation" not in html  # raw note-kind enum never reaches a chip
+        assert "[advisor memo" not in html  # retired internal tag never reaches a body
+        # The retired tag's body survived as clean prose, identity as a label,
+        # and the plain observation note humanized to "Note".
+        assert ">Advisor memo<" in html
+        assert "Deepen NU." in html
+        assert ">Note<" in html
+
+
+# ----------------------------------------------------------------------------
 # Quick approve/dismiss (Inbox v2): hover ✓/✕ on the compact rail only
 # ----------------------------------------------------------------------------
 

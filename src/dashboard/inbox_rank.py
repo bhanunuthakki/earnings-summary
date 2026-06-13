@@ -53,8 +53,11 @@ __all__ = [
     "ADVISOR_MEMO_TITLE",
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
+    "SEMANTIC_ADVISOR_MEMO",
     "annotate_and_rank",
+    "inbox_label",
     "live_position_weights",
+    "note_semantic_kind",
 ]
 
 # ----------------------------------------------------------------------------
@@ -116,6 +119,90 @@ _KIND_CATEGORIES: dict[str, str] = {
 # ride the synthesis weight (owner feedback 2026-06-11: the advisor memo
 # must not sit on top of the stream).
 ADVISOR_MEMO_TITLE = "Advisor memo"
+
+# ----------------------------------------------------------------------------
+# Semantic identity (Law 1 — "identity over source")
+# ----------------------------------------------------------------------------
+#
+# A stream item's category, label, and actions derive from WHAT it is — a
+# discriminator stored at write time — not from the source table it was
+# UNION-ed out of. The advisor's memory-everywhere write echoes ONE memo
+# through BOTH analyst_notes (source='advisor', source_ref='advisor_memo:<id>',
+# context={'memo_id', 'kind'}) and thesis_ledger_entries (entry_kind=
+# 'advisor_memo'); collect_inbox stamps both echoes with this identity so they
+# rank + label as machine-authored reading regardless of which table surfaced
+# them. This is the deliberate unified-item-model seed the diet substrate and
+# the S12 spine generalize — extend the discriminator vocabulary here, never
+# re-sniff the source table at render time.
+
+SEMANTIC_ADVISOR_MEMO = "advisor_memo"
+
+# Human captions for the analyst-note kinds. The raw enum (the source-table
+# value: ``observation`` / ``watch`` / …) never reaches a card label —
+# inbox_label() maps it through here.
+_NOTE_KIND_LABELS: dict[str, str] = {
+    "question": "Open question",
+    "decision": "Decision",
+    "watch": "Watch item",
+    "assumption": "Assumption",
+    "observation": "Note",
+}
+
+
+def note_semantic_kind(
+    source: str, source_ref: str | None, context: Mapping[str, object] | None
+) -> str | None:
+    """Semantic identity for an ``analyst_notes``-backed stream item, read from
+    its provenance columns. An advisor/synthesis memo — written by the
+    advisor's memory-everywhere path (``source='advisor'``,
+    ``source_ref='advisor_memo:<id>'``, ``context={'memo_id', 'kind'}``) —
+    reads as machine-authored reading whatever its raw note ``kind``. Returns
+    ``None`` for an ordinary analyst note (no refinement; it keeps its kind).
+    Any one of the three signals is sufficient (a legacy row may carry only
+    some)."""
+    if source == "advisor":
+        return SEMANTIC_ADVISOR_MEMO
+    if (source_ref or "").startswith("advisor_memo:"):
+        return SEMANTIC_ADVISOR_MEMO
+    if context is not None and "memo_id" in context:
+        return SEMANTIC_ADVISOR_MEMO
+    return None
+
+
+def _is_advisor_memo(it: InboxItem) -> bool:
+    """Identity test, source-table-independent. The primary signal is the
+    stored ``semantic_kind`` (set on both the note and the ledger echo in
+    collect_inbox); the ledger-title check is the back-compat fallback for
+    items built before ``semantic_kind`` existed (and for direct-construction
+    unit tests)."""
+    if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
+        return True
+    return it.kind == "ledger" and it.title == ADVISOR_MEMO_TITLE
+
+
+def inbox_label(it: InboxItem) -> str:
+    """The ONE human-facing kind label for a stream card (design_language
+    §Streams). Resolved from semantic identity — never a source-table string
+    or a raw enum:
+
+    * machine-authored reading (advisor/synthesis memos) → "Advisor memo",
+      whichever table it echoed through;
+    * an analyst note → its kind's human caption (the raw ``observation`` /
+      ``watch`` / … enum never shows), with a "Reconcile · " prefix while it
+      awaits reconciliation (status 'pending', set by collect_inbox);
+    * everything else (alerts, drafts, ledger entries, synthesis sections)
+      already carries a composed title from collect_inbox and passes through.
+
+    ``dashboard.inbox._title_for`` delegates here fully — this is the single
+    label resolver.
+    """
+    if _is_advisor_memo(it):
+        return ADVISOR_MEMO_TITLE
+    if it.kind == "note":
+        label = _NOTE_KIND_LABELS.get(it.title, it.title)
+        return f"Reconcile · {label}" if (it.status or "") == "pending" else label
+    return it.title
+
 
 # news.source substrings (lowercased) that mark a story as issuer PR-wire
 # distribution rather than journalism.
@@ -342,7 +429,11 @@ def _categorize(items: list[InboxItem], db_path: Path | None) -> list[str]:
                     category = CATEGORY_PRESS
         else:
             category = _KIND_CATEGORIES.get(it.kind, CATEGORY_WATCH)
-            if it.kind == "ledger" and it.title == ADVISOR_MEMO_TITLE:
+            # Demote machine-authored reading by IDENTITY (not source table):
+            # an advisor memo rides the synthesis weight whether it reached the
+            # stream as a thesis-ledger echo OR as an analyst note — so a
+            # just-generated portfolio memo can't outrank real events.
+            if _is_advisor_memo(it):
                 category = CATEGORY_SYNTHESIS
         out.append(category)
     return out

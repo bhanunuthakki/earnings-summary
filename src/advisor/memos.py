@@ -200,11 +200,20 @@ def persist_memo(
     ledger_id: int | None = None
     summary = _memo_summary_line(body_md)
     try:
+        # Clean body — exactly "{title} — {summary}". The memo's identity rides
+        # the provenance columns (source='advisor', source_ref, context), NOT
+        # an inline "[advisor memo #N · kind]" tag: the inbox reads those
+        # columns (dashboard.inbox_rank.note_semantic_kind) to rank + label the
+        # card, so the internal-format string never needs to reach the body.
+        # Pinned to this shape so the write_ledger=True ledger sibling
+        # ("{title} (memo #N) — {summary}") still _fuzzy_norm-collapses to ONE
+        # card. (Legacy prod notes keep the old tag; the inbox strips it at
+        # render — dashboard.inbox._display_body.)
         note = create_note(
             user_id=user_id,
             ticker=ticker,
             kind="observation",
-            body=f"[advisor memo #{memo.id} · {kind}] {title} — {summary}",
+            body=f"{title} — {summary}",
             source="advisor",
             source_ref=f"advisor_memo:{memo.id}",
             context={"memo_id": memo.id, "kind": kind},
