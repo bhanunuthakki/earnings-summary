@@ -49,9 +49,8 @@ JS = (
     // sidebar's left edge.
     var CHAT_WIDTH = '460px';
 
-    function setOpen(open) {
-      // One-open-at-a-time: opening chat collapses the comments sidebar.
-      if (open && window.__closeCommentSidebar) window.__closeCommentSidebar();
+    // Visual open/close — the push-sidebar's own .open class + width transition.
+    function applyOpen(open) {
       sidebar.setAttribute('aria-hidden', open ? 'false' : 'true');
       sidebar.classList.toggle('open', open);
       toggle.classList.toggle('open', open);
@@ -62,12 +61,28 @@ JS = (
         document.documentElement.style.removeProperty('--sidebar-open-width');
       }
     }
-    // Let the comments module collapse chat when a comment is opened.
-    window.__closeChatSidebar = function() { setOpen(false); };
+
+    // Dismissal (x + Esc) and one-open-at-a-time with the comments sidebar are
+    // CCOverlay's now (S4, Law 3): a push-sidebar gesture surface — scrim:false
+    // (the report stays readable beside it), motion:'none' + toggleHidden:false
+    // (its own .open class + width transition drive visuals), grouped
+    // 'report-sidebar' so opening one closes the other. This replaces the
+    // cross-document window.__close* handshake AND the per-sidebar Escape
+    // keydown — the open-surface stack now owns both.
+    var chatOv = window.CCOverlay && window.CCOverlay.register(sidebar, {
+      modal: true, priority: 30, scrim: false, trapFocus: false, restoreFocus: true,
+      motion: 'none', toggleHidden: false, autofocus: false,
+      group: 'report-sidebar', closeId: 'chat-close', wireClose: false,
+      onOpen: function() { applyOpen(true); },
+      onClose: function() { applyOpen(false); }
+    });
+    function setOpen(open) {
+      if (!chatOv) { applyOpen(open); return; }  // degrade if the primitive is absent
+      if (open) chatOv.open(); else chatOv.close();
+    }
 
     toggle.addEventListener('click', function() { setOpen(sidebar.getAttribute('aria-hidden') === 'true'); });
     sidebar.querySelector('.chat-close').addEventListener('click', function() { setOpen(false); });
-    document.addEventListener('keydown', function(ev) { if (ev.key === 'Escape') setOpen(false); });
 
     // Cmd+Enter / Ctrl+Enter submits
     form.message.addEventListener('keydown', function(ev) {

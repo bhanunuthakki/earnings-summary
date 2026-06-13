@@ -26,6 +26,7 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 
+from pipeline.cc_overlay import CC_OVERLAY_JS
 from report.models import ReportFlavor, ReportSpec
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.workspace_chat import CSS as CHAT_CSS
@@ -168,6 +169,7 @@ from report.renderers.workspace_sections.thesis_risk import (
 )
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CSS
+from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
 
 __all__ = [
@@ -368,6 +370,13 @@ def _document(spec: ReportSpec, body: str) -> str:
 <body>
 {body}
 <script>{JS}</script>
+<!-- The one transient-surface primitive (S4, Law 3), inlined again in this
+     separate document so the chat + comments sidebars register against one
+     open-surface stack (one Escape, one scrim listener) instead of the old
+     cross-document window.__close* handshake. SOURCE_CHIP_JS gives the report's
+     source-chip <details> Escape-only dismissal. -->
+<script>{CC_OVERLAY_JS}</script>
+<script>{SOURCE_CHIP_JS}</script>
 <script>{COMMENTS_JS}</script>
 <script>{CHAT_JS}</script>
 </body>

@@ -23,9 +23,11 @@ memo); these source-level assertions are the CI guard.
 
 from __future__ import annotations
 
+import inspect
 import re
 import sys
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src"
@@ -34,6 +36,14 @@ sys.path.insert(0, str(SRC))
 from pipeline.ask_dock import _DOCK_JS, render_ask_dock  # noqa: E402
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS  # noqa: E402
 from pipeline.command_center_shell import SHELL_JS, render_shell  # noqa: E402
+from report.renderers import workspace_html  # noqa: E402
+from report.renderers.workspace_chat import JS as CHAT_JS  # noqa: E402
+from report.renderers.workspace_comments import JS as COMMENTS_JS  # noqa: E402
+from report.renderers.workspace_script import JS as REPORT_JS  # noqa: E402
+from report.renderers.workspace_sections.boot import (  # noqa: E402
+    _chat_drawer_shell,
+    _comment_sidebar_shell,
+)
 from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS  # noqa: E402
 from ui.source_chip import SOURCE_CHIP_JS  # noqa: E402
 
@@ -201,3 +211,59 @@ def test_shell_wires_both_popover_dismissers() -> None:
     assert "addPopoverDismisser" in SHELL_HTML  # cite + source both present
     # SOURCE_CHIP_JS must come AFTER the primitive so window.CCOverlay exists.
     assert SHELL_HTML.index(CC_OVERLAY_JS) < SHELL_HTML.index(SOURCE_CHIP_JS)
+
+
+# ---------------------------------------------------------------------------
+# The report iframe (a SEPARATE document): same ONE-Escape / ONE-scrim contract
+# ---------------------------------------------------------------------------
+
+# Everything the report document inlines, in load order. The iframe re-inlines
+# the primitive (it can't import controls_css across the document boundary).
+_IFRAME_SCRIPTS = (CC_OVERLAY_JS, SOURCE_CHIP_JS, COMMENTS_JS, CHAT_JS, REPORT_JS)
+
+
+def test_iframe_emits_exactly_one_escape_and_one_scrim_listener() -> None:
+    escape = sum(js.count("ev.key === 'Escape'") for js in _IFRAME_SCRIPTS)
+    scrim = sum(js.count("scrim.addEventListener('click'") for js in _IFRAME_SCRIPTS)
+    assert escape == 1, f"iframe has {escape} Escape handlers (want 1: CCOverlay)"
+    assert scrim == 1, f"iframe has {scrim} scrim listeners (want 1: CCOverlay)"
+    # CCOverlay + the source-chip dismisser are inlined into the report document.
+    src = inspect.getsource(workspace_html)
+    assert "{CC_OVERLAY_JS}" in src and "{SOURCE_CHIP_JS}" in src
+
+
+def test_iframe_sidebars_drop_the_cross_document_globals() -> None:
+    # The window.__close* handshake is gone — exclusivity is the stack's job.
+    assert "window.__closeChatSidebar =" not in CHAT_JS
+    assert "window.__closeCommentSidebar =" not in COMMENTS_JS
+    assert "window.__closeCommentSidebar()" not in CHAT_JS
+    assert "window.__closeChatSidebar()" not in COMMENTS_JS
+
+
+def test_iframe_sidebars_register_grouped_and_scrimless() -> None:
+    for js in (CHAT_JS, COMMENTS_JS):
+        assert "CCOverlay" in js and "register" in js
+        assert "group: 'report-sidebar'" in js  # one-open-at-a-time via the stack
+        assert "scrim: false" in js  # push-sidebar gesture surface, declared
+        assert "toggleHidden: false" in js  # visibility is its own .open class
+
+
+def test_comments_sidebar_keeps_its_deliberate_no_click_out() -> None:
+    # PRESERVED: the comments sidebar's no-outside-click is load-bearing (an
+    # outside-click raced the floater's mousedown-open) — scrim:false is a
+    # DECLARED option, and its floater is Escape-only via a dismisser, not a
+    # second keydown.
+    assert "scrim: false" in COMMENTS_JS
+    assert "addPopoverDismisser" in COMMENTS_JS
+    assert COMMENTS_JS.count("document.addEventListener('keydown'") == 0
+
+
+def test_iframe_close_controls_exist_in_the_shells() -> None:
+    chat = StringIO()
+    _chat_drawer_shell(chat, "NU", "2026-06-01")
+    cmt = StringIO()
+    _comment_sidebar_shell(cmt)
+    assert 'id="chat-close"' in chat.getvalue()
+    assert "closeId: 'chat-close'" in CHAT_JS
+    assert 'id="cmt-close"' in cmt.getvalue()
+    assert "closeId: 'cmt-close'" in COMMENTS_JS
