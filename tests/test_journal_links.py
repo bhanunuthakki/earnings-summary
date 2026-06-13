@@ -196,7 +196,11 @@ def test_migration_round_trip(tmp_path: Path) -> None:
     assert "ix_analyst_notes_position_entry" in indexes
     conn.close()
 
-    command.downgrade(cfg, "-1")
+    # Downgrade to 0093's explicit down_revision (not a head-relative "-1"):
+    # once a later migration stacks on top, "-1" only undoes THAT migration and
+    # leaves 0093 intact. Targeting the revision below 0093 keeps this round-trip
+    # honest as the chain grows.
+    command.downgrade(cfg, "0092_merge_followup_dcf_heads")
     conn = sqlite3.connect(str(db))
     cols = {r[1] for r in conn.execute("PRAGMA table_info(analyst_notes)")}
     assert not {"decision_id", "position_entry_id", "link_auto_resolve"} & cols
