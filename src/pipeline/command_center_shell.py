@@ -128,6 +128,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # The analyst journal's lifecycle home (P4.5): list / filter /
             # resolve / reclassify / supersede over analyst_notes.
             ("journal", "Journal", "/api/panel/journal", False, False),
+            # The parked-comment disposition queue (S11): comments the classifier
+            # couldn't route (`needs_triage`) — route / resolve / dismiss. A lens
+            # over the same analyst_notes spine the Journal reads.
+            ("triage", "Triage", "/api/panel/triage", False, False),
         ),
     ),
     (
@@ -475,6 +479,7 @@ _SKELETON_KINDS: dict[str, str] = {
     "discovery": "table",
     "diet": "table",
     "journal": "cards",
+    "triage": "table",
     "explore": "form",
     "portfolio": "kpis",
     "portfolio_synthesis": "cards",

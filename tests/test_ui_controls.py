@@ -363,6 +363,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/thesis_ledger_panel.py",
         "pipeline/ticker_command_center.py",
         "pipeline/ticker_settings_panel.py",
+        "pipeline/triage_panel.py",
         "pipeline/validation_issues_panel.py",
         "report/renderers/charts_v2.py",
         "report/renderers/workspace_charts.py",
