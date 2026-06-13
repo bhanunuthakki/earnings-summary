@@ -219,6 +219,9 @@ def test_deterministic_fields_keep_escape() -> None:
     assert "escape(a.narrative)" in attr
     assert "render_prose(a.narrative" not in attr
 
+    # The evals judge rationale now routes through the provenance kit's
+    # prov_case (S10; design_language §10), which escape()s it as machine text —
+    # still deliberately NOT render_prose'd.
     evals = _read("src/pipeline/evals_panel.py")
-    assert "escape(c.judge_rationale)" in evals
+    assert "rationale=c.judge_rationale" in evals
     assert "render_prose(c.judge_rationale" not in evals

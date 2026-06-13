@@ -35,6 +35,7 @@ from html import escape
 from pathlib import Path
 
 from llm.calibration import VersionSummary, summarize_by_prompt_version
+from ui.controls import prov_case, prov_drawer
 
 # Purposes the run bar offers — mirrors execution/run_llm_evals.py PURPOSES
 # (asserted in tests so the two can't drift).
@@ -56,6 +57,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
 CALL_HEALTH_WINDOW_DAYS = 30
 _FAILED_CASES_PER_RUN = 8
 _CALL_HEALTH_MAX_ROWS = 40
+# Cap each evidence blob in the failed-case drawer — these are raw model/golden
+# JSON dumps that can run long; the drawer is a peek, not a viewer.
+_EVIDENCE_CHARS = 1200
 
 
 @dataclass(slots=True)
@@ -298,10 +302,18 @@ def _run_bar() -> str:
 
 
 def _score_pill(avg: float | None) -> str:
+    """A score as the kit's one filled status pill (``.k-pill``); ``None`` is the
+    neutral (untoned) pill showing an em-dash."""
     if avg is None:
-        return '<span class="ev-pill ev-score-muted">—</span>'
+        return '<span class="k-pill">—</span>'
     tone = "ok" if avg >= 0.8 else ("warn" if avg >= 0.6 else "bad")
-    return f'<span class="ev-pill ev-score-{tone}">{avg:.2f}</span>'
+    return f'<span class="k-pill k-pill-{tone}">{avg:.2f}</span>'
+
+
+def _mode_pill(mode: str) -> str:
+    """The run mode as a kit pill: ``live`` accent-toned, ``audit`` neutral."""
+    tone = " k-pill-accent" if mode == "live" else ""
+    return f'<span class="k-pill{tone}">{escape(mode)}</span>'
 
 
 def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow]]) -> str:
@@ -327,7 +339,7 @@ def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow
             f'<td class="ticker">{escape(r.purpose)}</td>'
             f"<td>{_score_pill(r.avg_score)}</td>"
             f'<td class="num">{escape(pass_rate)}</td>'
-            f'<td><span class="ev-pill ev-mode-{escape(r.mode)}">{escape(r.mode)}</span></td>'
+            f"<td>{_mode_pill(r.mode)}</td>"
             f'<td class="mono">{escape(r.prompt_version)}</td>'
             f'<td class="num">{cost}<span class="muted"> · {r.call_count} calls</span></td>'
             f'<td class="mono muted">{escape(r.started_at)}'
@@ -350,34 +362,25 @@ def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow
 
 
 def _failed_drawer(cases: list[FailedCaseRow]) -> str:
-    items: list[str] = []
-    for c in cases:
-        stage = f" · stage: {escape(c.failure_stage)}" if c.failure_stage else ""
-        rationale = (
-            f'<p class="ev-rationale">{escape(c.judge_rationale)}</p>' if c.judge_rationale else ""
+    """The failed-case drill-down, rendered through the shared provenance kit
+    (``prov_drawer`` + ``prov_case``; design_language §10). Each case is one
+    ``prov_case`` — a bad-toned score pill + the case id, the question (+ failure
+    stage) as the muted meta aside, the judge rationale, and the expected/actual
+    JSON as an escaped evidence split (machine text, never markdown)."""
+    items = "".join(
+        prov_case(
+            c.case_id,
+            score=c.score,
+            meta=f"{c.question[:160]}{f' · stage: {c.failure_stage}' if c.failure_stage else ''}",
+            rationale=c.judge_rationale or "",
+            expected=(c.expected_json or "")[:_EVIDENCE_CHARS],
+            actual=(c.actual_json or "")[:_EVIDENCE_CHARS],
         )
-        evidence = ""
-        if c.expected_json or c.actual_json:
-            evidence = (
-                '<div class="ev-evidence">'
-                f"<div><span class='muted'>expected/rubric</span><pre>"
-                f"{escape((c.expected_json or '—')[:1200])}</pre></div>"
-                f"<div><span class='muted'>actual</span><pre>"
-                f"{escape((c.actual_json or '—')[:1200])}</pre></div>"
-                "</div>"
-            )
-        items.append(
-            f'<details class="ev-case"><summary>'
-            f'<span class="ev-pill ev-score-bad">{c.score:.2f}</span> '
-            f'<span class="mono">{escape(c.case_id)}</span>'
-            f'<span class="muted">{escape(c.question[:160])}{stage}</span>'
-            f"</summary>{rationale}{evidence}</details>"
-        )
-    return (
-        f'<details class="ev-drawer"><summary>{len(cases)} failed case'
-        f"{'s' if len(cases) != 1 else ''} — expected vs actual + judge rationale</summary>"
-        f"{''.join(items)}</details>"
+        for c in cases
     )
+    n = len(cases)
+    summary = f"{n} failed case{'s' if n != 1 else ''} — expected vs actual + judge rationale"
+    return prov_drawer(summary, items)
 
 
 def _versions_section(versions: list[VersionSummary]) -> str:
@@ -438,43 +441,29 @@ def _health_section(health: list[CallHealthRow]) -> str:
     )
 
 
+# Token-clean local CSS. Score/mode pills now ride the kit's .k-pill and the
+# failed-case drawer rides .k-prov-drawer/.k-prov-case (controls.py), so this
+# carries only the run bar, the log, the version chip, and a couple of table
+# tweaks — all on the type/radius/color tokens.
 _PANEL_CSS = """<style>
 .ev-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; margin-bottom: 18px; font-size: 12.5px; }
-.ev-runbar-label { font-family: var(--mono); font-size: 11px; text-transform: uppercase;
-  letter-spacing: 0.5px; color: var(--muted); }
-.ev-btn { background: var(--accent); color: #0d1117; border: none; border-radius: 4px;
-  padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer;
-  font-family: var(--mono); }
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+.ev-runbar-label { font-family: var(--mono); font-size: var(--fs-caption);
+  text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.ev-btn { background: var(--accent); color: var(--accent-contrast); border: none;
+  border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-body);
+  font-weight: 600; cursor: pointer; font-family: var(--mono); }
 .ev-btn[disabled] { opacity: 0.45; cursor: wait; }
-.ev-note { font-size: 11.5px; }
+.ev-note { font-size: var(--fs-caption); }
 .ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
-  border: 1px solid var(--border); border-radius: 4px; font-family: var(--mono);
-  font-size: 11px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
-.ev-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px;
-  font-weight: 600; white-space: nowrap; font-family: var(--mono); }
-.ev-score-ok { background: #14361f; color: #6ee7a0; }
-.ev-score-warn { background: #422006; color: var(--warn); }
-.ev-score-bad { background: #3a1f1f; color: #f0a0a0; }
-.ev-score-muted { background: #2a2c30; color: var(--muted); }
-.ev-mode-live { background: #1f2b3a; color: #8fb6e6; }
-.ev-mode-audit { background: #2b2440; color: #c4b5fd; }
+  border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
+  font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 .ev-runs td, .ev-health td { vertical-align: middle; }
 .ev-drawer-row > td { padding: 0 0 10px 12px; border: none; }
-.ev-drawer > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-.ev-case { background: var(--paper); border: 1px solid var(--border); border-radius: 6px;
-  padding: 6px 10px; margin: 6px 0; }
-.ev-case summary { cursor: pointer; display: flex; gap: 8px; align-items: baseline;
-  flex-wrap: wrap; font-size: 12px; }
-.ev-rationale { font-size: 12.5px; margin: 8px 0 4px; }
-.ev-evidence { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.ev-evidence pre { background: var(--surface); border: 1px solid var(--border);
-  border-radius: 4px; padding: 6px 8px; font-size: 10.5px; white-space: pre-wrap;
-  word-break: break-word; max-height: 220px; overflow-y: auto; }
 .ev-vchip { display: inline-flex; gap: 6px; align-items: baseline; margin-right: 14px;
-  font-family: var(--mono); font-size: 12px; cursor: help; }
-.ev-bad { color: #f0a0a0; font-weight: 600; }
+  font-family: var(--mono); font-size: var(--fs-body); cursor: help; }
+.ev-bad { color: var(--bad); font-weight: 600; }
 .ev-warn { color: var(--warn); font-weight: 600; }
 .mono { font-family: var(--mono); }
 </style>"""

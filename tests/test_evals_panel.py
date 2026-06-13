@@ -207,11 +207,12 @@ def test_render_full_panel(tmp_path: Path) -> None:
     for p in RUNNABLE_PURPOSES:
         assert f'data-purpose="{p}"' in html
     assert "/actions/run-eval" in html
-    # Latest runs: v2 surfaced with pass-rate + cost; audit mode pill.
+    # Latest runs: v2 surfaced with pass-rate + cost; audit mode pill (kit).
     assert "16/16" in html
     assert "$0.0030" in html
-    assert "ev-mode-audit" in html
-    # Failed-case drawer carries the judge's evidence.
+    assert '<span class="k-pill">audit</span>' in html
+    # Failed-case drawer carries the judge's evidence, rendered through the kit.
+    assert "k-prov-drawer" in html and "k-prov-case" in html
     assert "generic risks, no math chain" in html
     assert "facet_scores" in html
     # Version strip shows both version chips; health table shows the rates.
@@ -228,6 +229,44 @@ def test_render_empty_db_degrades(tmp_path: Path) -> None:
     assert "/actions/run-eval" in html  # the run bar still works
     missing = render_evals_panel(tmp_path / "nope.db")
     assert "No eval runs recorded yet" in missing
+
+
+def test_failed_drawer_renders_through_prov_kit_and_escapes(tmp_path: Path) -> None:
+    """The failed-case drawer renders through the shared provenance kit
+    (prov_drawer/prov_case; design_language §10), not the panel's old hand-rolled
+    <details>/CSS — and still escapes the untrusted case id / question / rationale
+    / expected / actual text (model + golden-set content, never markup)."""
+    db = tmp_path / "p.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_DDL)
+    conn.execute(
+        "INSERT INTO eval_runs (run_id, purpose, mode, prompt_version, model, judge_model,"
+        " n_cases, n_pass, avg_score, started_at)"
+        " VALUES ('rid_x', 'bear_case', 'audit', 'v1', 'sonnet', 'haiku',"
+        " 1, 0, 0.1, '2026-06-11T02:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO eval_case_results (eval_run_id, case_id, question, expected_json,"
+        " actual_json, passed, score, failure_stage, judge_rationale, created_at)"
+        " VALUES (1, '<b>CID</b>', '<i>q</i>', '<script>x</script>',"
+        " '<img src=x onerror=alert(1)>', 0, 0.1, 'mismatch',"
+        " '<u>why</u>', '2026-06-11T02:01:00')"
+    )
+    conn.commit()
+    conn.close()
+    html = render_evals_panel(db)
+    # Through the kit, not the retired per-panel drawer/pill classes.
+    assert "k-prov-drawer" in html and "k-prov-case" in html
+    assert "ev-case" not in html and "ev-score-bad" not in html
+    assert "k-pill-bad" in html  # the failing score rides the kit's bad pill
+    # Untrusted text is escaped — no live markup reaches the page.
+    assert "<script>x</script>" not in html
+    assert "&lt;script&gt;x&lt;/script&gt;" in html  # expected JSON, escaped
+    assert "<img src=x onerror=alert(1)>" not in html
+    assert "&lt;img src=x onerror=alert(1)&gt;" in html  # actual JSON, escaped
+    assert "&lt;i&gt;q&lt;/i&gt;" in html  # the question (drawer meta), escaped
+    assert "&lt;u&gt;why&lt;/u&gt;" in html  # the judge rationale, escaped
+    assert "&lt;b&gt;CID&lt;/b&gt;" in html  # the case id (drawer title), escaped
 
 
 def test_runnable_purposes_match_runner_cli() -> None:

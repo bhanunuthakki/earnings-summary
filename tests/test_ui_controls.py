@@ -410,7 +410,6 @@ QUARANTINE: dict[str, frozenset[str]] = {
     #     workspace_sections/chrome) — those came off this map. ---
     "pipeline/cron_health_panel.py": frozenset({"radius"}),
     "pipeline/dcf_coverage_panel.py": frozenset({"radius"}),
-    "pipeline/evals_panel.py": frozenset({"color", "font-size", "radius"}),
     "pipeline/ir_coverage_panel.py": frozenset({"radius"}),
     "pipeline/restatements_panel.py": frozenset({"radius"}),
     "pipeline/source_calls_panel.py": frozenset({"radius"}),
@@ -418,6 +417,11 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # validation_issues_panel graduated in the S10 resolve-wiring pass: its lone
     # off-scale 4px (.vi-note code) moved to var(--radius) when the detail rows
     # were rebuilt onto prov_row. Now fully token-clean.
+    # evals_panel graduated in the S10 evals-drawer pass: its failed-case drawer
+    # moved onto prov_drawer/prov_case and its score/mode pills onto .k-pill, so
+    # the off-scale ev-pill/ev-score-*/ev-mode-* colors + radii + font-sizes were
+    # deleted; the surviving run-bar / log / vchip CSS went onto the type/radius
+    # tokens. All three dimensions (color/font-size/radius) now clean.
     # (pipeline/command_center_shell.py graduated in S1 PR2 — the shell namespace
     #  unfork; the dashboard / cockpit long-tail graduated in the S7 sweep —
     #  legacy-alias fallbacks, the .calib-fill gradient, the .cockpit-badge tone
