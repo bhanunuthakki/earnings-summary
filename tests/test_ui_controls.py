@@ -698,3 +698,78 @@ def test_palette_rows_and_combobox_render_two_part_ticker_labels() -> None:
     assert 'value="NU"' in combo
     assert '<span class="cc-combo-name"' in combo
     assert "NU · Nu Holdings" not in combo
+
+
+# ===========================================================================
+# S8 — Ask title-ownership + control-row sizing (interaction_paradigm §3 "Ask").
+# Two narrowly-scoped structural guards so the class of miss can't regress:
+#   #2  no explicit font-size on a ``*-inputrow`` control — input/buttons inherit
+#       the kit baseline (--fs-body) so they MATCH each other, and the panel rule
+#       never overrides the mobile 16px floor.
+#   #1  a single-sub-tab panel must not re-print its section name as a top-level
+#       <h2> — the nav owns the title (design_language §6.1; Law 3).
+# ===========================================================================
+
+# A CSS rule whose selector names a ``*-inputrow`` AND whose body sets font-size.
+# (The opt-out hex/px guard can't catch this: ``font-size: var(--fs-section)`` is
+# a valid token — just the WRONG one for a control row, which should match the
+# 13px ``.k-btn`` buttons beside it.)
+_INPUTROW_FONT_RULE = re.compile(r"[^{}]*-inputrow[^{}]*\{[^{}]*font-size\s*:[^{}]*\}")
+
+
+def test_no_font_size_on_inputrow_controls() -> None:
+    """Guard #2: an Ask/DIY-style ``*-inputrow`` row pins no font-size on its
+    input or buttons — they inherit the kit baseline (--fs-body, 13px) so the
+    input matches the ``.k-btn`` buttons beside it and the mobile 16px floor
+    (controls.py) is never overridden by a panel rule. Scanned over every
+    registered CSS surface, not just the Ask panel."""
+    offenders: dict[str, list[str]] = {}
+    for rel in sorted(REGISTERED - EXEMPT):
+        hits = _INPUTROW_FONT_RULE.findall(_css_text(SRC / rel))
+        if hits:
+            offenders[rel] = [" ".join(h.split()) for h in hits]
+    assert not offenders, (
+        "a *-inputrow control pins a font-size — drop it so the control inherits "
+        f"the kit baseline (--fs-body, matching the .k-btn buttons): {offenders}"
+    )
+
+
+def test_single_sub_tab_panels_do_not_reprint_their_section_title() -> None:
+    """Guard #1 (scoped NARROWLY): a panel that is the single sub-tab of an
+    already-labeled nav section must not re-print its own section/tab name as a
+    top-level <h2> — the nav owns the title (design_language §6.1; Law 3). Only
+    an <h2> whose text EQUALS the section label is forbidden, NOT every <h2>: a
+    panel's internal section headings stay legal, and multi-sub-tab sections
+    (whose visible sub-tab row IS the title) are not checked at all. The
+    ``len(subs) <= 1`` discriminator is the shell's own (see _render_subnav_rows
+    / _render_panels)."""
+    from pipeline.command_center_shell import _THEMES  # pyright: ignore[reportPrivateUsage]
+
+    # The module backing each single-sub-tab pid's /api/panel/<pid> render. The
+    # equality assertion below fails loudly if a new single-sub section appears
+    # without a source mapping here.
+    panel_source = {
+        "overview": "pipeline/command_center_shell.py",  # render_overview_panel (inlined)
+        "explore": "pipeline/explore_panel.py",
+        "provenance": "pipeline/provenance_panel.py",
+    }
+    single_sub = {
+        pid: {tlabel, label}
+        for _tid, tlabel, subs in _THEMES
+        if len(subs) <= 1
+        for pid, label, *_rest in subs
+    }
+    assert set(single_sub) == set(panel_source), (
+        "single-sub-tab sections changed — map each pid to its panel source: "
+        f"{sorted(set(single_sub) ^ set(panel_source))}"
+    )
+    offenders: dict[str, list[str]] = {}
+    for pid, labels in single_sub.items():
+        text = _css_text(SRC / panel_source[pid])
+        for lbl in labels:
+            if re.search(rf"<h2[^>]*>\s*{re.escape(lbl)}\s*</h2>", text):
+                offenders.setdefault(pid, []).append(lbl)
+    assert not offenders, (
+        "single-sub-tab panel re-prints its section name as <h2> — delete it; "
+        f"the nav owns the title (design_language §6.1): {offenders}"
+    )

@@ -122,9 +122,11 @@ _PANEL_STYLE = """<style>
 .ask-cmd { font-family:var(--mono); font-size:var(--fs-caption); white-space:pre-wrap;
   color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
-.ask-inputrow input { flex:1; padding:9px 13px; font-size:var(--fs-section); }
-.ask-inputrow button { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
-  border-radius:var(--radius); padding:9px 16px; font-size:var(--fs-body); cursor:pointer; }
+/* No font-size here: the input inherits the kit baseline (--fs-body, 13px) so it
+   matches the .k-btn buttons beside it, and the mobile 16px floor (controls.py)
+   is no longer overridden. The Ask/DIY buttons are .k-btn (primary/quiet) — no
+   bespoke .ask-inputrow button rule. */
+.ask-inputrow input { flex:1; padding:9px 13px; }
 .ask-ctx { color:var(--muted); font-size:var(--fs-caption); }
 .ask-ctx a { color:var(--accent); cursor:pointer; }
 .ask-builder-pop { border:1px solid var(--accent); border-radius:var(--radius); background:var(--surface);
@@ -134,8 +136,6 @@ _PANEL_STYLE = """<style>
 .ask-pop-head button { background:transparent; border:none; color:var(--muted); font-size:var(--fs-display);
   cursor:pointer; padding:0 4px; }
 .ask-pop-head button:hover { color:var(--fg); }
-.ask-inputrow #ask-diy { color:var(--muted); border-color:var(--border); background:transparent; }
-.ask-inputrow #ask-diy:hover { color:var(--accent); border-color:var(--accent); }
 .ask-advanced .vx-builder { border:none; padding-left:0; padding-right:0; margin-top:0; }
 </style>"""
 
@@ -446,6 +446,9 @@ _PANEL_JS = """
     if (!query) { askInput.focus(); return; }
     askBusy = true;
     askInput.value = '';
+    // After the first question the example placeholder is stale — every later
+    // turn refines the last answer, so prompt for a follow-up (mirrors ask_dock).
+    askInput.placeholder = 'Ask a follow-up…';
     clearHello();
     var user = document.createElement('div');
     user.className = 'ask-turn-user';
@@ -735,9 +738,13 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     saved = render_saved_views_list(db_path, user_id=user_id)
     first = tickers[0] if tickers else "NU"
     second = tickers[1] if len(tickers) > 1 else "MELI"
+    # No <h2>Ask</h2>: this panel is the single sub-tab of an already-labeled
+    # nav section, so the nav owns the title (design_language §6.1 — single-sub-
+    # tab sections suppress their own section name; the shell hides the sub-tab
+    # row via data-single and never re-injects the title). Re-printing it here
+    # was the redundant horizontal "Ask" bar.
     return f"""{_PANEL_STYLE}
 {CITE_MARKS_SNIPPET}
-<h2>Ask</h2>
 <div id="vx-root">
 <div class="ask-thread" id="ask-thread">
   <div class="ask-hello">Ask anything across the tracked universe. Metric questions
@@ -760,8 +767,8 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
 </div>
 <div class="ask-inputrow">
   <input id="ask-q" placeholder="Ask — e.g. {escape(first)} vs {escape(second)} revenue growth, last 8 quarters" autocomplete="off">
-  <button type="button" id="ask-go">Ask</button>
-  <button type="button" id="ask-diy"
+  <button type="button" id="ask-go" class="k-btn k-btn-primary">Ask</button>
+  <button type="button" id="ask-diy" class="k-btn k-btn-quiet"
     title="Build a view by hand — tickers, metrics, transform, saved views">DIY</button>
   <span class="ask-ctx" id="ask-ctx" hidden>refining the last view &middot;
  <a id="ask-ctx-clear">start fresh</a></span>
