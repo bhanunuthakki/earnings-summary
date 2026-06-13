@@ -84,7 +84,7 @@ from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
-from ui.controls import controls_css
+from ui.controls import controls_css, panel_section_title
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -256,6 +256,12 @@ def render_shell(
     """
     stamp = stamp_html(generated_at or datetime.now(UTC), css="cc-stamp", prefix="updated ")
     flat_tabs = tuple(t for _tid, _tlabel, subs in themes for t in subs)
+    # Single-sub-tab sections (Home, Ask, System): the same discriminator that
+    # hides the sub-tab row (data-single) marks the panels whose title the SHELL
+    # owns — see _render_panels (design_language §6.1; the nav owns the title).
+    single_sub_pids = frozenset(
+        pid for _tid, _tlabel, subs in themes if len(subs) <= 1 for pid, *_rest in subs
+    )
     return "".join(
         [
             _DOC_HEAD,
@@ -280,7 +286,7 @@ def render_shell(
             f"{stamp}</div>",
             _render_subnav_rows(themes),
             '<main class="cc-panels" id="cc-main" tabindex="-1">',
-            _render_panels(flat_tabs, overview_html),
+            _render_panels(flat_tabs, overview_html, single_sub_pids),
             "</main>",
             _SETTINGS_DRAWER_HTML,
             _NOTES_DRAWER_HTML,
@@ -525,16 +531,28 @@ def _skeleton_html(kind: str) -> str:
 
 
 def _render_panels(
-    tabs: tuple[tuple[str, str, str | None, bool, bool], ...], overview_html: str
+    tabs: tuple[tuple[str, str, str | None, bool, bool], ...],
+    overview_html: str,
+    single_sub_pids: frozenset[str],
 ) -> str:
     out: list[str] = []
-    for pid, _label, endpoint, picker, _required in tabs:
+    for pid, label, endpoint, picker, _required in tabs:
+        # The nav owns a single-sub-tab section's title: its sub-tab row is hidden
+        # (data-single), so the SHELL — not the lazy panel fragment — decides the
+        # title, and design_language §6.1 collapses it (suppressed=True). Routing
+        # every single-sub panel through panel_section_title() keeps that decision
+        # in ONE place instead of each fragment re-printing its own <h2> (the
+        # redundant "Ask" bar). It sits OUTSIDE .cc-panel-body so a future
+        # un-suppressed title would survive the lazy reload that rewrites the body.
+        section_title = (
+            panel_section_title(label, suppressed=True) if pid in single_sub_pids else ""
+        )
         if pid == "overview":
             out.append(
                 f'<section class="cc-panel" role="tabpanel" id="cc-panel-{escape(pid)}" '
                 f'aria-labelledby="cc-tab-{escape(pid)}" '
                 f'data-panel="{escape(pid)}" data-loaded="1">'
-                f'<div class="cc-panel-body">{overview_html}</div></section>'
+                f'{section_title}<div class="cc-panel-body">{overview_html}</div></section>'
             )
             continue
         ep = f' data-endpoint="{escape(endpoint)}"' if endpoint else ""
@@ -550,7 +568,7 @@ def _render_panels(
             f'aria-labelledby="cc-tab-{escape(pid)}" '
             f'data-panel="{escape(pid)}"{ep}{pk} '
             f'data-loaded="0" data-current-ticker="" hidden>'
-            f'<div class="cc-panel-body">{skel}</div>'
+            f'{section_title}<div class="cc-panel-body">{skel}</div>'
             "</section>"
         )
     return "".join(out)
