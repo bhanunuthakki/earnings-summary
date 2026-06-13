@@ -462,7 +462,10 @@ def test_provenance_peek_degrades_without_data(client: FlaskClient, tmp_path: Pa
 def test_shell_carries_peek_primitive() -> None:
     html = render_shell(overview_html="<p>x</p>")
     assert 'id="cc-peek"' in html
-    assert 'id="cc-peek-scrim"' in html
+    # The peek's scrim is the one shared CCOverlay .k-scrim now (no per-surface
+    # cc-peek-scrim); the peek registers as a modal surface with its closeId.
+    assert 'id="cc-peek-scrim"' not in html
+    assert "closeId: 'cc-peek-close'" in SHELL_JS
     assert 'id="cc-hovercard"' in html
     # The JS contract: explicit opt-in attr, automatic /source peeks, the
     # hover endpoint, and the fragment variant marker.

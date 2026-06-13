@@ -94,10 +94,13 @@ def test_dock_three_states_and_persistence() -> None:
     assert "CCState.set('dockMode', mode)" in html
     assert "var TAIL_KEY = 'askTail'" in html
     assert "var SID_KEY = 'askSessionId'" in html
-    # Esc exits split, deferring to the shell's overlays first.
-    assert "'Escape'" in html
-    for overlay in ("cc-palette", "cc-peek", "cc-notes-drawer", "cc-drawer"):
-        assert overlay in html
+    # Esc exits split via CCOverlay (S4): the dock registers at the lowest
+    # priority so every shell overlay keeps first claim on Escape STRUCTURALLY
+    # — no second keydown listener, no hardcoded overlay-id registry.
+    assert "window.CCOverlay.PRIORITY.DOCK" in html
+    assert "if (dock.dataset.mode === 'split') setMode('float')" in html
+    assert "overlays = [" not in html
+    assert "'cc-palette', 'cc-peek'" not in html
 
 
 def _block_z_index(css: str, selector: str) -> int:
@@ -108,12 +111,14 @@ def _block_z_index(css: str, selector: str) -> int:
 
 def test_dock_stacks_under_shell_overlays() -> None:
     """The dock sits above the panels but BELOW every shell overlay — the
-    drawers (Settings/Notes), peek, and palette all cover it, so split mode
-    never fights them."""
+    drawers (Settings/Notes), peek, and palette all cover it (the one shared
+    CCOverlay scrim sits just under whichever is topmost), so split mode never
+    fights them."""
     dock_z = _block_z_index(render_ask_dock(), ".ask-dock")
-    drawer_scrim_z = _block_z_index(SHELL_CSS, ".cc-drawer-scrim")
+    drawer_z = _block_z_index(SHELL_CSS, ".cc-drawer")
+    peek_z = _block_z_index(SHELL_CSS, ".cc-peek")
     palette_z = _block_z_index(SHELL_CSS, ".cc-palette")
-    assert dock_z < drawer_scrim_z < palette_z
+    assert dock_z < drawer_z < peek_z < palette_z
 
 
 def test_dock_is_shell_chrome_not_home_panel_content() -> None:

@@ -92,10 +92,65 @@ by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
 - **One popover elevation**: `box-shadow: var(--shadow-pop)`.
 - **Close glyphs** (the `×` buttons on drawers/popovers/peeks):
   `var(--fs-display)`, muted → fg on hover. (Was a magic `20px`; the §7 guard
-  denies off-scale font-size px, so the glyph now takes the top scale step. The
-  dismissal *behavior* contract is S4's §3 Chrome pass.)
+  denies off-scale font-size px, so the glyph now takes the top scale step.)
 - **Soft status fills**: `color-mix(in srgb, var(--ok|warn|bad|accent) ~16%,
   transparent)` + token ink — never a freehand dark-well/pastel hex pair.
+
+### 3.1 Surface dismissal — the `CCOverlay` contract (Law 3)
+
+Every transient surface — drawer, peek, palette, dock, sidebar, popover — is an
+instance of ONE primitive, `window.CCOverlay` (`src/pipeline/cc_overlay.py`),
+registered into a single in-memory open-surface stack. No surface re-derives its
+own dismissal; there is no per-surface `close*` function wired to its own scrim,
+no enumerated Escape `switch`, no hardcoded id registry, no cross-document
+`window.__close*` handshake. The look + open motion of `.k-scrim` / `.k-overlay`
+are the control kit's (§4); CCOverlay owns dismissal + close motion. Guarded by
+`tests/test_overlay_dismissal.py`.
+
+```js
+var handle = window.CCOverlay.register(el, {
+  modal, priority, scrim, scrimOpacity, trapFocus, restoreFocus,
+  group, motion, closeId, wireClose, toggleHidden, autofocus, onOpen, onClose,
+});
+handle.open(); handle.close(); handle.isOpen();
+```
+
+- **Modal surfaces get the full triad by construction:** close-control (`×`,
+  declared via `closeId`) + Escape + scrim click-out, plus focus-trap and
+  focus-restore. A registered modal surface MUST declare a `closeId` whose
+  element exists in the markup.
+- **Escape resolves by stored modality + PRIORITY, never recency.** The ladder
+  is `PALETTE (50) > PEEK (40) > DRAWER (30) > DOCK (10)` — a drawer opened
+  *after* the palette never steals Escape from it. Recency breaks ties between
+  equal priorities only.
+- **One scrim, one Escape, one scrim-click listener per document.** A single
+  `.k-scrim` element is shown beneath the topmost `scrim:true` surface, its
+  `z-index` set just under that surface; the per-surface scrims are deleted.
+- **Non-modal phrasing popovers get Escape-only.** Cite-marks and the
+  source-chip `<details>` register a *dismisser* (`addPopoverDismisser`), closed
+  first and Escape-only — NOT the full modal triad. Their `<details>` /
+  phrasing-content split-paragraph constraint is real; they must not gain a
+  scrim or focus trap.
+- **Gesture / persistent surfaces declare `scrim:false`** — a deliberate,
+  documented carve-out, not an undocumented divergence. The Ask dock (a
+  side-by-side copilot) and the report comments sidebar (its no-click-out is
+  load-bearing — an outside-click raced the floater's mousedown-open) both
+  declare it. The dock also passes `toggleHidden:false` (its visibility is
+  `data-mode`/CSS, never `[hidden]`) and the lowest priority, so every shell
+  overlay keeps first claim on Escape *structurally*.
+- **Mutual exclusion is `group`, not cross-calls.** Surfaces sharing a `group`
+  string are one-open-at-a-time; opening one closes its siblings. The shell's
+  settings/notes drawers + palette share `cc-primary`.
+- **Motion is the deliverable, not an afterthought.** Open motion is the kit's
+  (`k-overlay-rise`) or each surface's own keyframe; CCOverlay adds the
+  symmetric *close* (`motion: rise | slide-right | pop | none`) — animating
+  **transform + opacity only** (never layout), over one `var(--transition)`
+  step, fading the scrim concurrently, and respecting
+  `prefers-reduced-motion`.
+- **Out of v1:** History/Back-button dismissal (collides with the shell's
+  `hashchange`-closes-panels logic) — tracked, not built. The stack is
+  in-memory and ephemeral; it does NOT join `cc_state`'s `cc:v1:*`
+  sessionStorage (which surface is open should not survive a reload).
 
 ## 4. Controls (`src/ui/controls.py`)
 

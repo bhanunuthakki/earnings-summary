@@ -14,8 +14,14 @@ boolean ``askDockOpen`` keys migrate on first read):
 * **split** (◫) — a fixed right-side column under the top bar; the shell
   reflows beside it (``body[data-ask-split="1"] .cc-panels`` gains a right
   margin over the standard ``--transition`` timing), a side-by-side copilot
-  usable while browsing any panel or report. Esc exits split — the shell's
-  overlays (palette, peek, hover card, drawers) keep first claim on the key.
+  usable while browsing any panel or report. Esc (and the x control) exit
+  split — but the shell's overlays (palette, peek, hover card, drawers) keep
+  first claim on Escape *structurally*: the dock registers with
+  ``window.CCOverlay`` (S4) at the lowest priority, so its dismissal resolves
+  only after every shell overlay. ``scrim:false`` is a declared carve-out (a
+  page-darkening scrim would defeat a side-by-side copilot — same rationale as
+  the report comments sidebar). There is no second ``keydown`` listener and no
+  hardcoded overlay-id registry anymore; the open-surface stack owns Escape.
 
 Same engine and SSE contract as the Ask tab (``POST /api/ask/stream``:
 stage/delta/fragment/final/citations/error/session frames); the dock renders
@@ -203,15 +209,35 @@ _DOCK_JS = r"""
     var bar = document.querySelector('.cc-topbar');
     if (bar) dock.style.setProperty('--ask-dock-top', bar.offsetHeight + 'px');
   }
+
+  // CCOverlay registration (S4). The dock is a PERSISTENT / gesture surface,
+  // not a blocking modal: scrim:false (a page-darkening scrim would defeat a
+  // side-by-side copilot — the same declared carve-out as the report comments
+  // sidebar) and the LOWEST priority, so every shell overlay (palette / peek /
+  // drawers) keeps first claim on Escape — STRUCTURALLY, replacing the old
+  // hardcoded ['cc-palette', …] id registry. toggleHidden:false: the dock's
+  // visibility is data-mode/CSS, never [hidden]. Escape (and the x) exit
+  // split -> float via onClose.
+  var splitOv = window.CCOverlay && window.CCOverlay.register(dock, {
+    modal: true, priority: window.CCOverlay.PRIORITY.DOCK,
+    scrim: false, trapFocus: false, restoreFocus: false,
+    motion: 'none', toggleHidden: false, autofocus: false,
+    closeId: 'ask-dock-close', wireClose: false,
+    onClose: function () { if (dock.dataset.mode === 'split') setMode('float'); }
+  });
+
   function setMode(mode, skipFocus) {
     if (mode !== 'float' && mode !== 'split') mode = 'min';
+    var wasSplit = dock.dataset.mode === 'split';
     dock.dataset.mode = mode;
     if (mode !== 'min') expandedMode = mode;
     if (mode === 'split') {
       syncTop();
       document.body.setAttribute('data-ask-split', '1');
+      if (splitOv) splitOv.open();
     } else {
       document.body.removeAttribute('data-ask-split');
+      if (wasSplit && splitOv) splitOv.close();
     }
     window.CCState.set('dockMode', mode);
     if (mode !== 'min' && !skipFocus) input.focus();
@@ -234,17 +260,14 @@ _DOCK_JS = r"""
     ev.stopPropagation();
     setMode(dock.dataset.mode === 'split' ? 'float' : 'split');
   });
-
-  // Esc exits split — but the shell's overlays own the key first: while the
-  // palette, peek, hover card, or either drawer is open, leave it to them.
-  document.addEventListener('keydown', function (ev) {
-    if (ev.key !== 'Escape' || dock.dataset.mode !== 'split') return;
-    var overlays = ['cc-palette', 'cc-peek', 'cc-hovercard', 'cc-notes-drawer', 'cc-drawer'];
-    for (var i = 0; i < overlays.length; i++) {
-      var el = document.getElementById(overlays[i]);
-      if (el && !el.hidden) return;
-    }
-    setMode('float');
+  // The x collapses one level: split -> float, float -> min. In split, Escape
+  // resolves the same exit through CCOverlay's priority stack (this handler's
+  // mode check defers to it), so the dock keeps NO second keydown listener and
+  // NO hardcoded overlay-id registry — the stack decides who owns Escape.
+  var closeBtn = document.getElementById('ask-dock-close');
+  if (closeBtn) closeBtn.addEventListener('click', function (ev) {
+    ev.stopPropagation();
+    setMode(dock.dataset.mode === 'split' ? 'float' : 'min');
   });
 
   // ⇗ pop-out: hand the dock conversation to the full Ask tab (same store
@@ -279,17 +302,27 @@ _DOCK_JS = r"""
     } catch (e) { return ''; }
   }
 
+  // The thread-list (⇿) is a contained sub-overlay over the dock body: no
+  // scrim (it opaquely covers the body), but Escape now dismisses it through
+  // CCOverlay — at a priority above the dock-split so Escape closes threads
+  // first, then exits split. CCOverlay toggles its [hidden]; this drives the
+  // close from the ⇿ / x controls (wireClose:false).
+  var threadsOv = threadsPanel && window.CCOverlay && window.CCOverlay.register(threadsPanel, {
+    modal: true, priority: window.CCOverlay.PRIORITY.DOCK + 5,
+    scrim: false, trapFocus: false, restoreFocus: true,
+    motion: 'none', closeId: 'ask-dock-threads-close', wireClose: false, autofocus: false
+  });
   function openThreads() {
-    threadsPanel.hidden = false;
+    if (threadsOv) threadsOv.open(); else threadsPanel.hidden = false;
     loadThreadsList();
   }
   function closeThreads() {
-    threadsPanel.hidden = true;
+    if (threadsOv) threadsOv.close(); else threadsPanel.hidden = true;
   }
 
   threadsBtn.addEventListener('click', function (ev) {
     ev.stopPropagation();
-    if (!threadsPanel.hidden) { closeThreads(); return; }
+    if (threadsOv ? threadsOv.isOpen() : !threadsPanel.hidden) { closeThreads(); return; }
     openThreads();
   });
   threadsClose.addEventListener('click', function (ev) {
@@ -649,6 +682,8 @@ def render_ask_dock() -> str:
       title="Split view beside the page (Esc exits)" aria-label="Toggle split view">&#x25EB;</button>
     <button type="button" class="ask-dock-ctl" id="ask-dock-pop" title="Continue in the Ask tab"
       aria-label="Continue in the Ask tab">&#x21D7;</button>
+    <button type="button" class="ask-dock-ctl" id="ask-dock-close"
+      title="Collapse (Esc in split)" aria-label="Collapse the dock">&times;</button>
   </div>
   <div class="ask-dock-body" id="ask-dock-body">
     <div id="ask-dock-threads" class="ask-dock-threads" hidden>
