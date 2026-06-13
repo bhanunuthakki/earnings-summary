@@ -190,7 +190,7 @@ _ANALYTICS_CSS = """<style>
 .pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: var(--fs-body); }
 .pf-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .pf-chip strong { color: var(--fg); font-variant-numeric: tabular-nums; }
-.pf-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.pf-swatch { width: 10px; height: 10px; border-radius: var(--radius); display: inline-block; }
 .pf-chart { width: 100%; height: auto; display: block; }
 .pf-policy { font-size: var(--fs-caption); margin: 10px 0 0; }
 .pf-warn { color: var(--warn); }
@@ -199,7 +199,7 @@ _ANALYTICS_CSS = """<style>
 .pf-alloc-row { display: grid; grid-template-columns: minmax(110px, 1.3fr) 2fr 52px 76px;
   gap: 10px; align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-alloc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-bar { background: var(--hairline); border-radius: 3px; height: 10px; overflow: hidden; }
+.pf-bar { background: var(--hairline); border-radius: var(--radius); height: 10px; overflow: hidden; }
 .pf-bar-fill { background: var(--accent); opacity: 0.75; height: 100%; display: block; }
 .pf-alloc-pct { text-align: right; font-variant-numeric: tabular-nums; }
 .pf-alloc-val { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
@@ -237,7 +237,7 @@ _INSIGHTS_CSS = """<style>
 .pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;
   align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-exp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-exp-bar { background: var(--paper, #1a1d23); border-radius: var(--radius); height: 9px; overflow: hidden; }
+.pf-exp-bar { background: var(--paper); border-radius: var(--radius); height: 9px; overflow: hidden; }
 .pf-exp-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
 .pf-exp-pct { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .pf-nd-excerpt { font-size: var(--fs-body); line-height: 1.55; }
@@ -246,7 +246,7 @@ _INSIGHTS_CSS = """<style>
 .pf-nd-row { display: grid; grid-template-columns: 56px 1fr 56px 70px; gap: 10px;
   align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-nd-ticker { font-family: var(--mono); }
-.pf-nd-bar { background: var(--paper, #1a1d23); border-radius: var(--radius); height: 9px; overflow: hidden; }
+.pf-nd-bar { background: var(--paper); border-radius: var(--radius); height: 9px; overflow: hidden; }
 .pf-nd-bar span { display: block; height: 100%; background: var(--accent); border-radius: var(--radius); }
 .pf-nd-alloc { text-align: right; font-variant-numeric: tabular-nums; }
 .pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }

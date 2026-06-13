@@ -400,28 +400,29 @@ _RADIUS_SANCTIONED: dict[str, frozenset[str]] = {
 # quarantine can only SHRINK (test_quarantine_only_shrinks). Seeded empirically
 # from the scanner — NOT hand-curated, so it is the true current state.
 QUARANTINE: dict[str, frozenset[str]] = {
-    # --- long-tail dashboard / pipeline panels — S7 mechanical sweep ---
-    "dashboard/_styles.py": frozenset({"radius"}),
-    "dashboard/upcoming.py": frozenset({"color"}),
-    "pipeline/analytical_dashboard_html.py": frozenset({"color", "radius"}),
-    "pipeline/ask_dock.py": frozenset({"radius"}),
+    # --- provenance / evals / sources / coverage console — S10 owns these.
+    #     S10 rebuilds them onto prov_row/prov_drawer this wave; S7 left them
+    #     quarantined rather than race that rebuild. The S7 mechanical sweep
+    #     graduated the dashboard / cockpit / pipeline long-tail (_styles,
+    #     upcoming, analytical_dashboard_html, ask_dock, dashboard_html,
+    #     explore_panel, portfolio_panel, research_cockpit, ticker_command_center,
+    #     workspace_sections/chrome) — those came off this map. ---
     "pipeline/cron_health_panel.py": frozenset({"radius"}),
-    "pipeline/dashboard_html.py": frozenset({"alias"}),
     "pipeline/dcf_coverage_panel.py": frozenset({"radius"}),
     "pipeline/evals_panel.py": frozenset({"color", "font-size", "radius"}),
-    "pipeline/explore_panel.py": frozenset({"color", "font-size", "radius"}),
     "pipeline/ir_coverage_panel.py": frozenset({"radius"}),
-    "pipeline/portfolio_panel.py": frozenset({"color", "radius"}),
-    "pipeline/research_cockpit.py": frozenset({"color", "radius"}),
     "pipeline/restatements_panel.py": frozenset({"radius"}),
     "pipeline/source_calls_panel.py": frozenset({"radius"}),
     "pipeline/source_viewers.py": frozenset({"radius"}),
-    "pipeline/ticker_command_center.py": frozenset({"font-size"}),
     "pipeline/validation_issues_panel.py": frozenset({"radius"}),
     # (pipeline/command_center_shell.py graduated in S1 PR2 — the shell namespace
-    #  unfork: legacy-alias :root deleted, ~60 rules onto canonical tokens, the
-    #  .calib-fill gradient / .qa-yes/.qa-no hex / 20px glyphs / 3-4px radii fixed.)
-    # --- the editorial report surfaces — a report-unfork pass (S2-adjacent) ---
+    #  unfork; the dashboard / cockpit long-tail graduated in the S7 sweep —
+    #  legacy-alias fallbacks, the .calib-fill gradient, the .cockpit-badge tone
+    #  wells, 20px close glyphs and 2-4px radii all fixed onto tokens / color-mix.)
+    # --- the report iframe / editorial surfaces — serialized S4 → S2-report-
+    #     wiring → S10-PR2. The legacy-alias :root that chat / comments / charts /
+    #     cite_marks consume is defined in workspace_styles; unforking it is one
+    #     coupled change in that chain, not an independent S7 file-sweep. ---
     "report/renderers/workspace_charts.py": frozenset({"radius"}),
     "report/renderers/workspace_chat.py": frozenset(
         {"alias", "font-family", "font-size", "radius"}
@@ -429,7 +430,6 @@ QUARANTINE: dict[str, frozenset[str]] = {
     "report/renderers/workspace_comments.py": frozenset(
         {"alias", "font-family", "font-size", "radius"}
     ),
-    "report/renderers/workspace_sections/chrome.py": frozenset({"color", "radius"}),
     "report/renderers/workspace_styles.py": frozenset({"alias", "font-family", "radius"}),
     "ui/cite_marks.py": frozenset({"alias", "radius"}),
 }

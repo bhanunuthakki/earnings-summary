@@ -281,8 +281,8 @@ def _forgone_strip(body: StringIO, forgone: list[BudgetSkip]) -> None:
     names = _esc(", ".join(f.section for f in forgone))
     body.write(
         '<div class="forgone-strip" style="margin:8px 0;padding:8px 12px;'
-        "border-left:3px solid #d97706;background:rgba(217,119,6,0.10);"
-        'border-radius:6px;font-size:13px;line-height:1.5;">'
+        "border-left:3px solid var(--warn);background:color-mix(in srgb, var(--warn) 10%, transparent);"
+        'border-radius:var(--radius);font-size:13px;line-height:1.5;">'
         f"⏭ <strong>{n} {word} forgone to stay under budget:</strong> {names}. "
         "Raise the cap or override, then rebuild."
         "</div>"

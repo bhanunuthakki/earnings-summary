@@ -134,7 +134,7 @@ button { transition: color var(--transition), border-color var(--transition),
   border: 1px solid var(--border-2);
   background: var(--surface);
   color: var(--fg-soft);
-  border-radius: 3px;
+  border-radius: var(--radius);
   font-size: var(--fs-micro); font-weight: 600;
   letter-spacing: 0.05em; text-transform: uppercase;
 }
@@ -191,7 +191,7 @@ button { transition: color var(--transition), border-color var(--transition),
   display: inline-block; font-size: var(--fs-micro);
   font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--fg-soft); border: 1px solid var(--border-2);
-  border-radius: 3px; padding: 0 5px; margin-right: 6px;
+  border-radius: var(--radius); padding: 0 5px; margin-right: 6px;
 }
 .evidence-malformed {
   padding: 10px;

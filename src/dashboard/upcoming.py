@@ -183,10 +183,10 @@ def _esc(text: str) -> str:
 
 UPCOMING_CSS = """
 /* "Upcoming earnings" — the compact Home-rail strip above the Inbox. */
-.up-strip { background: var(--surface, #16171a); border-radius: var(--radius);
+.up-strip { background: var(--surface); border-radius: var(--radius);
   padding: 9px 12px; margin-bottom: var(--sp-2); }
 .up-strip-head { display: flex; justify-content: space-between; align-items: baseline;
-  color: var(--muted, #888); font-size: var(--fs-micro); font-weight: 600;
+  color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
 .up-strip-sub { font-weight: 400; letter-spacing: 0; text-transform: none;
   font-family: var(--mono, monospace); }
@@ -194,9 +194,9 @@ UPCOMING_CSS = """
 .up-strip-list li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0;
   font-size: var(--fs-caption); cursor: help; }
 .up-ticker { font-family: var(--mono, monospace); font-weight: 700;
-  color: var(--fg, #e8e8e3); }
-.up-est { color: var(--muted, #888); font-size: var(--fs-micro); font-weight: 600;
+  color: var(--fg); }
+.up-est { color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; }
 .up-date { margin-left: auto; font-family: var(--mono, monospace);
-  color: var(--muted, #888); white-space: nowrap; }
+  color: var(--muted); white-space: nowrap; }
 """.strip()

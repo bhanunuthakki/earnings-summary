@@ -689,7 +689,7 @@ _PAGE_HEAD = (
      headings (###/####) here, and panels own the h2/h3 levels above them. */
   .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--ok); }}
   .synthesis-body strong {{ color: var(--fg); }}
-  .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 0.93em; }}
+  .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: var(--radius); font-family: var(--mono); font-size: 0.93em; }}
   .synthesis-body ul {{ padding-left: 22px; }}
   .synthesis-body li {{ margin-bottom: 4px; }}
   .synthesis-body hr {{ border: none; border-top: 1px solid var(--border); margin: 16px 0; }}
@@ -724,7 +724,7 @@ _PAGE_HEAD = (
   .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }}
   .calib-label {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }}
   .calib-bar {{ background: var(--paper); border-radius: var(--radius-full); height: 14px; overflow: hidden; }}
-  .calib-fill {{ background: linear-gradient(90deg, #f87171 0%, #fbbf24 50%, #4ade80 100%); height: 100%; }}
+  .calib-fill {{ background: linear-gradient(90deg, var(--bad) 0%, var(--warn) 50%, var(--ok) 100%); height: 100%; }}
   .calib-value {{ font-family: var(--mono); color: var(--fg-soft); text-align: right; }}
   .decisions-table td.outcome-correct {{ color: var(--ok); }}
   .decisions-table td.outcome-wrong {{ color: var(--bad); }}
@@ -745,7 +745,7 @@ _PAGE_HEAD = (
   /* Tier coverage strip */
   .tier-strip {{ background: var(--surface); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
   .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
-  .tier-chip {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 2px 6px; border-radius: 3px; cursor: help; }}
+  .tier-chip {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 2px 6px; border-radius: var(--radius); cursor: help; }}
   a.tier-chip {{ text-decoration: none; cursor: pointer; }}
   .tier-ok {{ color: var(--ok); }}
   .tier-stale {{ color: var(--warn); }}

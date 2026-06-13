@@ -1134,11 +1134,11 @@ _COCKPIT_CSS = """
 /* The Evaluation table is secondary to the Portfolio table — caption-tier
    type + tighter padding marks it as the lower-importance grid. */
 .cockpit-thin td, .cockpit-thin th { padding: 4px 10px; font-size: var(--fs-caption); }
-.cockpit-badge { display: inline-block; padding: 1px 8px; border-radius: 3px; font-size: var(--fs-micro);
+.cockpit-badge { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-micro);
   text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; cursor: default; }
-.cockpit-badge.b-ok { background: #14532d; color: var(--ok); }
-.cockpit-badge.b-warn { background: #422006; color: var(--warn); }
-.cockpit-badge.b-bad { background: #450a0a; color: var(--bad); }
+.cockpit-badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.cockpit-badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.cockpit-badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .cockpit-badge.b-muted { background: var(--border); color: var(--muted); }
 .kpi-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-family: var(--mono); background: var(--paper);
@@ -1158,8 +1158,8 @@ _COCKPIT_CSS = """
 .pill { display: inline-block; margin-right: 4px; padding: 1px 7px; border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-weight: 600; text-decoration: none; cursor: default; }
 a.pill { cursor: pointer; }
-.pill-bad { background: #450a0a; color: var(--bad); }
-.pill-warn { background: #422006; color: var(--warn); }
+.pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+.pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .pill-accent { background: var(--accent-soft); color: var(--accent); }
 .er-soon { color: var(--warn); font-weight: 600; }
 .stale-dot { font-size: var(--fs-micro); cursor: help; }

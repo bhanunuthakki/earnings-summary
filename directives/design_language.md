@@ -372,73 +372,27 @@ at render time.
 
 ---
 
-## Appendix A — fresh-eyes audit (2026-06-11), the drift this version kills
+## Appendix A — fresh-eyes audit (2026-06-11): historical note
 
-> **Historical snapshot (dated 2026-06-11), no longer the source of truth.** The
-> live, authoritative inventory of remaining drift is the executable guard
-> (§7.1, `tests/test_ui_controls.py`): its `QUARANTINE` map is the current
-> burn-down list, ratcheted shrink-only. This file:line catalogue is kept for
-> archaeology — *do not* hand-maintain it as work lands; it will go stale. When
-> the guard's quarantine empties, this appendix can be deleted.
-
-Catalogued against `origin/main` @ `5d37519` (file:line). Headline counts:
-**241** hardcoded `font-size: *px` declarations across 24 files, **~240** raw
-hex colors outside tokens.py, **45** native `<select>/<input>` emissions
-across 13 files with ~10 distinct ad-hoc skins and zero custom chevrons, ≥6
-button treatments, ≥9 chip variants across 5 radii (2/3/4/5/6/8/10px).
-
-**Native/inconsistent controls (the "I don't like the dropdowns" complaint):**
-`explore_panel.py:53–68,128` (builder inputs + 3 native multi-selects + 2
-selects; `var(--font-mono, monospace)` fallback at 120–125 breaks standalone),
-`journal_panel.py:32–37,55–62` (raw hex `#1a1d23/#2a2d31/#8aa8ff`, radii
-6/5px, 12.5px), `ticker_command_center.py:420–433` (quicknote: radius 6px,
-12.5/12px, old-palette fallbacks `#7aa2f7/#0d1117`), `:894–916` (combobox:
-ad-hoc menu shadow `rgba(0,0,0,0.5)`), `advisor_memos_panel.py:344–355`
-(radius 4px, mono select), `allocation_decisions_panel.py:647–652` (radius
-4px + `#0d1117` on accent), `discovery_panel.py:38–40`,
-`dashboard_html.py:55–64` (alien `ui-monospace` stack, radius 4px, `#fff` on
-`--link`), `workspace_comments.py:903–920` (radius 4px, `#0d1117` ink on
-accent — near-invisible in the report's light theme), `portfolio_panel.py:238`
-(date input, only surface with `color-scheme: dark`), shell
-`command_center_shell.py:617` (budget selects). None killed the native arrow.
-
-**Off-scale type (worst):** `journal_panel.py:42` (9.5px kind chip!), `:46,50,53`
-(10.5/11px), `section_coverage_panel.py:247` (18px KPI), `:233,242` (10px),
-`thesis_ledger_panel.py:85` (15px), `advisor_memos_panel.py:310–358`
-(10.5–14px spread + 565–571: 20/17px), `allocation_decisions_panel.py:627–661`
-(11/12/12.5px), `dashboard_html.py:52–72` (11–13px),
-`source_viewers.py:53–79` (11–16px), `ir_coverage_panel.py:29–35`,
-`restatements_panel.py:29–31`, `source_calls_panel.py:36`,
-`validation_issues_panel.py:30–32`, `ticker_settings_panel.py:86–89`,
-`viewspec/render.py:42–45`, `ask_dock.py:54` (10.5px),
-`report/renderers/html.py` (renderer retired and the file deleted in #458,
-2026-06-11 — workspace is the only HTML report; was 35 sizes 10.5–28px + own
-font stacks, predating tokens entirely), `workspace_chat.py` (15),
-`workspace_comments.py` (18). Workspace reading/display ramps in
-`workspace_styles.py` are sanctioned (§1) — its *chrome* tiers were already
-tokenized.
-
-**Raw hex hot-spots:** `advisor_memos_panel.py:313–362` (a parallel pill tone
-system: `#14361f/#6ee7a0/#1f2b3a/#8fb6e6/#2b2440/#c4b5fd/#103039/#7dd3fc/
-#3b2f14/#422006/#3a1f1f/#f0a0a0/#2a2c30/#f5f5f0`),
-`allocation_decisions_panel.py:630–660` (same family + `b-ok/b-warn/b-bad`
-badge wells `#14532d/#422006/#450a0a`, also `ticker_command_center.py:1412–1414`),
-`journal_panel.py:33–58`, `section_coverage_panel.py:239–249`
-(`#4ade80/#5b5e66/#3a3d44/#f5c66a/#1a1d23/#1f2125`),
-`dashboard_html.py:65–70` (`#b88a1f/#3a8a3a/#b04040/#1c1c1c/#e6e6e6`),
-`inbox.py:592–657` + `_styles.py` (OLD-palette `var(--x,#hex)` fallbacks:
-`#7aa2f7` accent, `#fbbf24`, `#f87171`, `#16171a`, `#2a2c30`, `#888`;
-`ix-badge` ink `#101114`), `charts_v2.py:786–798` (`#67737d/#1a1f2e` + literal
-font stacks), `workspace_chat.py`, `peeks.py`.
-
-**Ticker+name as one string:** `ticker_command_center.py:773` (combobox input
-value `"NU · Nu Holdings Ltd."`), `:692` (standalone h1),
-`command_center_shell.py:1288` (palette row label), `html.py:760`
-(`<strong>T</strong> — name`; renderer retired in #458), `markdown.py:224`.
-Done right (two-part) only
-in the combobox dropdown rows (`cc-combo-tk/-nm`) and the peek mini-card
-(`cc-mini-ticker/-name`) — now canonized as `.k-tick`.
-
-**Density drift:** card paddings 8/9/10/12/14/16/18px mixed per surface;
-`.actions-section` radius 4px vs panels 8px; menu shadows 0.35/0.45/0.5/0.55
-alpha at 4 geometries.
+> **Superseded — no longer the source of truth.** This appendix once held a
+> file:line catalogue of the primitive-literal drift this design language was
+> written to kill — headline counts against `origin/main` @ `5d37519`: ≈241
+> hardcoded `font-size: *px` declarations across 24 files, ≈240 raw hex colors
+> outside `tokens.py`, 45 native `<select>/<input>` emissions with ~10 ad-hoc
+> skins and zero custom chevrons, ≥6 button treatments, and ≥9 chip variants
+> across 5 radii. That was a point-in-time snapshot; it went stale the moment
+> work landed, so the catalogue has been **removed rather than hand-maintained**
+> (its warning predicted exactly this).
+>
+> The live, authoritative inventory of remaining drift is the **executable
+> guard** (§7.1 above — `tests/test_ui_controls.py`): its `QUARANTINE` map is
+> the current burn-down list, ratcheted shrink-only, and
+> `test_full_conformance_is_red` flips from `xfail` to a hard failure the moment
+> it empties. Run `python -m pytest tests/test_ui_controls.py -q` for the exact
+> state — never re-derive it here.
+>
+> Burn-down lineage: **S1** unforked the shell namespace and added the
+> `.k-well/.k-pill` status kit; **S7** swept the dashboard / cockpit / pipeline
+> long-tail onto tokens and `color-mix` (deleting the reinvented pill systems);
+> the provenance / evals / sources console (**S10**) and the report iframe /
+> editorial surfaces are the last quarantined surfaces.

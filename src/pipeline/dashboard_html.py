@@ -46,17 +46,17 @@ _ACTIONS_BLOCK = """
   <pre id="ir-output" class="actions-output" hidden></pre>
 </section>
 <style>
-.actions-section { margin: 0 0 28px; padding: 16px 18px; background: var(--bg-card);
+.actions-section { margin: 0 0 28px; padding: 16px 18px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); }
 .actions-section h2 { margin: 0 0 6px; }
-.actions-help { font-size: var(--fs-caption); color: var(--fg-muted); margin: 0 0 12px;
+.actions-help { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 12px;
   max-width: 760px; }
 .actions-help code { font-family: var(--mono); font-size: 0.93em; }
 .actions-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* Inputs: skinned by the shared control kit (ui/controls.py). input.ir-ticker
    outranks the kit's input[type] baseline so the mono face survives. */
 input.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mono); }
-.ir-quarters-label { font-size: var(--fs-caption); color: var(--fg-muted); display: inline-flex;
+.ir-quarters-label { font-size: var(--fs-caption); color: var(--muted); display: inline-flex;
   align-items: center; gap: 6px; }
 .ir-quarters { width: 60px; }
 #ir-submit { padding: 7px 14px; font-size: var(--fs-body); font-weight: 600;
