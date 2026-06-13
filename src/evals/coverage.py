@@ -36,7 +36,7 @@ from llm.prompt_versions import registered_purposes
 # the classifier trio landed in PR 4; ask_pack_router (evals.ask_router) in S4;
 # ask_evidence_followup (evals.ask_loop) in S7; ask_claim_grounding
 # (evals.ask_citations — citation accuracy) in S8; injection_canaries
-# (evals.injection_canaries) in S9.
+# (evals.injection_canaries) in S9; news_structuring (Chip 2) in PR C.
 GOLDEN_PURPOSES: frozenset[str] = frozenset(
     {
         "viewspec_compile",
@@ -44,6 +44,7 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "ask_evidence_followup",
         "ask_claim_grounding",
         "injection_canaries",
+        "news_structuring",
         "peer_selection",
         "podcast_takeaway_summary",
         *CLASSIFIER_PURPOSES,
