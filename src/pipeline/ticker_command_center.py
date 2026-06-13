@@ -1051,7 +1051,7 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
 .tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
   padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
 .tcc-drawer-close { background: transparent; border: none; color: var(--muted);
-  font-size: 20px; cursor: pointer; line-height: 1; padding: 2px 6px;
+  font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px;
   transition: color var(--transition); }
 .tcc-drawer-close:hover { color: var(--fg); }
 .tcc-drawer-body { overflow-y: auto; padding: 14px 18px 40px; }

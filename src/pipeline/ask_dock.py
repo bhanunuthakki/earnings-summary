@@ -94,7 +94,7 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
 .ask-dock-empty { color:var(--muted); font-size:var(--fs-caption); }
 .ask-dock-user { align-self:flex-end; max-width:80%; background:var(--accent-soft);
   border:1px solid var(--accent); color:var(--fg);
-  border-radius:var(--radius) var(--radius) 4px var(--radius); padding:5px 10px;
+  border-radius:var(--radius); padding:5px 10px;
   font-size:var(--fs-caption); }
 .ask-dock-asst { align-self:stretch; border:1px solid var(--border);
   background:var(--paper); border-radius:var(--radius); padding:8px 10px;

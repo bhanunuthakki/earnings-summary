@@ -91,7 +91,7 @@ _PANEL_STYLE = """<style>
   transition:color var(--transition), border-color var(--transition); }
 .ask-chip:hover { border-color:var(--accent); color:var(--accent); }
 .ask-turn-user { align-self:flex-end; max-width:70%; background:var(--accent-soft); border:1px solid var(--accent);
-  color:var(--fg); border-radius:var(--radius) var(--radius) 4px var(--radius); padding:8px 14px; font-size:var(--fs-body); }
+  color:var(--fg); border-radius:var(--radius); padding:8px 14px; font-size:var(--fs-body); }
 .ask-turn-assistant { align-self:stretch; border:1px solid var(--border); background:var(--surface);
   border-radius:var(--radius); padding:12px 14px; }
 .ask-meta { color:var(--muted); font-size:var(--fs-caption); margin-bottom:8px; display:flex; gap:10px;
@@ -115,7 +115,7 @@ _PANEL_STYLE = """<style>
 .ask-prose ul { margin:4px 0 8px 18px; padding:0; }
 .ask-prose li { margin:2px 0; }
 .ask-prose code { font-family:var(--mono); font-size:0.93em;
-  background:rgba(255,255,255,0.05); padding:1px 4px; border-radius:3px; }
+  background:rgba(255,255,255,0.05); padding:1px 4px; border-radius:var(--radius); }
 .ask-prose pre.ask-code { background:rgba(0,0,0,0.3); border:1px solid var(--border);
   border-radius:var(--radius); padding:8px 10px; overflow-x:auto; font-size:var(--fs-caption);
   font-family:var(--mono); margin:6px 0; }
@@ -131,7 +131,7 @@ _PANEL_STYLE = """<style>
   padding:0 14px 12px; margin-top:10px; box-shadow:0 14px 44px rgba(0,0,0,0.5); }
 .ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
   font-size:var(--fs-body); font-weight:600; color:var(--fg); }
-.ask-pop-head button { background:transparent; border:none; color:var(--muted); font-size:20px;
+.ask-pop-head button { background:transparent; border:none; color:var(--muted); font-size:var(--fs-display);
   cursor:pointer; padding:0 4px; }
 .ask-pop-head button:hover { color:var(--fg); }
 .ask-inputrow #ask-diy { color:var(--muted); border-color:var(--border); background:transparent; }
@@ -276,7 +276,7 @@ _PANEL_JS = """
     if (ev.key === 'Escape') closeBuilder();
   });
 
-  // ---- Scored peers (Ask v4): /api/peers/<T> serves the PR #400 peer
+  // ---- Scored peers (Ask v4): /api/peers/<T> serves the PR 400 peer
   // scoring; "+ Peers" widens a view to the comparable set. ----
   function fetchPeers(base, cb) {
     fetch('/api/peers/' + encodeURIComponent(base))
