@@ -105,6 +105,17 @@ def load_source_map(*, db_path: Path | str | None = None) -> dict[str, SourceRow
     return {s.source_key: s for s in list_sources(db_path=db_path)}
 
 
+def active_investor_sources(*, db_path: Path | str | None = None) -> list[tuple[str, str]]:
+    """``(source_key, cik)`` for every active rostered 13F manager WITH a CIK —
+    the set the 13F miner polls. A rostered-but-unresolved fund (no CIK) is
+    configured-yet-dormant and simply absent here, not an error."""
+    return [
+        (s.source_key, s.cik)
+        for s in list_sources(signal_class="investor_13f", active_only=True, db_path=db_path)
+        if s.cik
+    ]
+
+
 def weight_for(source_map: dict[str, SourceRow], source_key: str) -> float:
     """The resolved ``base_weight`` for a source, or ``DEFAULT_WEIGHT`` when the
     roster doesn't know it (a name still scores, at unit weight)."""

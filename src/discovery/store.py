@@ -370,3 +370,30 @@ def list_signals(
         return [_signal_row_to_dc(r) for r in rows]
     finally:
         conn.close()
+
+
+def signals_by_ticker(
+    signal_class: str, *, user_id: str = DEFAULT_USER_ID, db_path: Path | str | None = None
+) -> dict[str, list[SignalRow]]:
+    """All signals of one class, grouped by ticker — the scorer (run_discovery)
+    loads another producer's class (e.g. the 13F miner's ``investor_13f`` rows)
+    to score them alongside the fundamentals it just computed. Degrades to ``{}``
+    on a missing DB / pre-0096 schema."""
+    clause, params = _user_in(user_id)
+    try:
+        conn = open_conn(db_path)
+    except (sqlite3.Error, FileNotFoundError, RuntimeError):
+        return {}
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM discovery_signals WHERE {clause} AND signal_class = ?",
+            [*params, signal_class],
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    out: dict[str, list[SignalRow]] = {}
+    for r in rows:
+        out.setdefault(str(r["ticker"]).upper(), []).append(_signal_row_to_dc(r))
+    return out
