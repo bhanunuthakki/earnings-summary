@@ -559,6 +559,55 @@ def _peer_curation(ticker: str, repo_root: Path) -> tuple[list[str], dict[str, o
     return exclude, override
 
 
+# Weights for the LLM business-model-comparables generator (S-peer / fund-grade
+# follow-on; directives/peer_selection_llm.md). THESIS_PEER_WEIGHT dominates the
+# FMP screen's max (industry 2 + tracked 2 + scale 1 = 5) so an LLM-vouched name
+# always outranks an FMP-only one; corroboration (the LLM name ALSO surfaced by
+# the FMP screen) ranks it higher still. Owner curation rides on top unchanged:
+# competitive_watchlist still pins (+3) and injects, peer_exclude still drops
+# (it runs in the same scoring loop, so it drops LLM-injected names too), and
+# peers_section_override still gates the whole panel.
+THESIS_PEER_WEIGHT = 6.0
+THESIS_CORROBORATION = 1.0
+
+
+def _llm_peer_suggestions(ticker: str, repo_root: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """The cached LLM business-model comparables for `ticker`, read straight
+    from data/peer_selection/<T>.json (no heavy import on the render path).
+
+    Returns ``(why_by_ticker, name_by_ticker)`` in LLM rank order is not
+    preserved — the screen re-scores — but the `why` becomes the panel's Why
+    column and the name fills in for foreign rivals outside the FMP-profile
+    universe. ``({}, {})`` on any miss / malformed cache (degrade to the FMP
+    screen). Generated on the --enable-llm build; absent here is the no-op that
+    makes load_peer_comp behave exactly as it did pre-generator."""
+    raw = _read_json(Path(repo_root) / "data" / "peer_selection" / f"{ticker.upper()}.json")
+    if not isinstance(raw, dict):
+        return {}, {}
+    suggestions = cast("dict[str, object]", raw).get("suggestions")
+    if not isinstance(suggestions, list):
+        return {}, {}
+    why_by: dict[str, str] = {}
+    name_by: dict[str, str] = {}
+    for entry in cast("list[object]", suggestions):
+        if not isinstance(entry, dict):
+            continue
+        rec = cast("dict[str, object]", entry)
+        tok = rec.get("ticker")
+        if not isinstance(tok, str) or not _looks_like_ticker(tok.strip().upper()):
+            continue
+        sym = tok.strip().upper()
+        why = rec.get("why")
+        name = rec.get("name")
+        if isinstance(why, str) and why.strip():
+            why_by[sym] = why.strip()
+        if isinstance(name, str) and name.strip():
+            name_by[sym] = name.strip()
+        else:
+            why_by.setdefault(sym, "")
+    return why_by, name_by
+
+
 # A bare exchange-ticker-shaped token: leading letter, ≤7 chars total, no
 # spaces. Distinguishes a pinned ticker ("HOOD") from a prose rival name
 # ("Itau Unibanco") so only genuine tickers get injected into the FMP pool.
@@ -676,6 +725,15 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
     ticker = ticker.upper()
     pool = _fmp_peer_pool(fmp_dir, ticker)
 
+    # The raw FMP screen (before pin / LLM injection) — used for corroboration:
+    # an LLM-vouched name that ALSO surfaced here ranks higher.
+    fmp_screen_tickers = {p[0] for p in pool}
+    # LLM business-model comparables (data/peer_selection/<T>.json, written on
+    # the --enable-llm build). The generator that fixes "shit peers"; absent
+    # here, scoring is exactly the pre-generator FMP screen.
+    llm_why, llm_names = _llm_peer_suggestions(ticker, repo_root)
+    llm_tickers = set(llm_why)
+
     _, target_sector, target_industry, target_cap = _profile_fields(fmp_dir, ticker)
     watchlist = _watchlist_names(ticker, repo_root)
     peer_exclude, override = _peer_curation(ticker, repo_root)
@@ -694,6 +752,15 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
             if tok not in pool_tickers:
                 pool.append((tok, None, None))
                 pool_tickers.add(tok)
+
+    # Seed the pool with LLM business-model comparables the FMP screen omitted
+    # (same mechanism as pins). Their fetched profile/metrics resolve via the
+    # cached FMP files written alongside the suggestion set; the self-ticker is
+    # guarded and peer_exclude still drops them in the scoring loop below.
+    for sym in llm_tickers:
+        if sym != ticker and sym not in pool_tickers:
+            pool.append((sym, llm_names.get(sym), None))
+            pool_tickers.add(sym)
 
     if not pool:
         return []
@@ -732,6 +799,17 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
         if target_cap and peer_cap and 0.2 <= peer_cap / target_cap <= 5.0:
             score += 1
             reasons.append("similar scale")
+        # LLM business-model comparability dominates the FMP screen: an
+        # LLM-vouched name leads, and one corroborated by the FMP screen leads
+        # further. The one-line `why` becomes the panel's Why column.
+        if peer in llm_tickers:
+            score += THESIS_PEER_WEIGHT
+            if peer in fmp_screen_tickers:
+                score += THESIS_CORROBORATION
+            reasons.append("thesis peer")
+            why = llm_why.get(peer)
+            if why:
+                reasons.append(why)
         if score < 1:
             continue
         # Tiebreak: original FMP order (idx) keeps the sort deterministic.

@@ -114,6 +114,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
     # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
     "decision_conditions_extract": "v1",
+    # LLM peer selection (src/compute/peer_selection.py, mode-A overlap golden
+    # set). Bump when _build_prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose peer_selection --min-score ...`.
+    "peer_selection": "v1",
     # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
     # templates). Bump when either judge prompt is materially reworded so
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay
