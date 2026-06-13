@@ -5,9 +5,13 @@ REM filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14) so the quarter's
 REM filings are in. Two steps: (1) fetch_13f.py polls every active rostered
 REM manager (discovery_sources rows WITH a cik), diffs its two latest 13F-HRs,
 REM and writes investor_13f discovery_signals (untracked names) + news rows
-REM (tracked names); (2) run_discovery.py re-scores the queue so the fresh
-REM investor signals re-rank immediately (the clamp/corroboration math runs
-REM there). Best-effort - an unreachable manager contributes nothing.
+REM (tracked names); (2) recalibrate_investor_weights.py snapshots this
+REM quarter's new buys + measures any whose 180d horizon has elapsed +
+REM nudges each fund's base_weight by its realized hit-rate (a no-op until
+REM ~2 quarters of history accumulate); (3) run_discovery.py re-scores the
+REM queue so the fresh investor signals + tuned weights re-rank immediately
+REM (the clamp/corroboration math runs there). Best-effort - an unreachable
+REM manager contributes nothing.
 
 setlocal
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
@@ -21,7 +25,9 @@ set LOG_FILE=%LOG_DIR%\fetch_13f_%TS%.log
 cd /d "%PROJECT_ROOT%"
 echo === fetch_13f (mine rostered managers) === > "%LOG_FILE%"
 python execution\fetch_13f.py >> "%LOG_FILE%" 2>&1
-echo === run_discovery (re-score with fresh investor signals) === >> "%LOG_FILE%"
+echo === recalibrate_investor_weights (snapshot + measure + tune weights) === >> "%LOG_FILE%"
+python execution\recalibrate_investor_weights.py >> "%LOG_FILE%" 2>&1
+echo === run_discovery (re-score with fresh signals + tuned weights) === >> "%LOG_FILE%"
 python execution\run_discovery.py >> "%LOG_FILE%" 2>&1
 
 endlocal
