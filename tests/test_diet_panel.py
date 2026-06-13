@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from pipeline.diet_panel import render_diet_panel
-from signals.store import record_investor_day
+from signals.store import record_investor_day, record_media_appearance
 
 from ._signals_fixtures import make_news_then_signals, signals_only
 
@@ -69,6 +69,24 @@ def test_renders_both_lenses_through_the_kit(db: Path) -> None:
     # kit classes only — no bespoke table/pill systems.
     for cls in ("p-table", "k-pill", "k-tick", "panel"):
         assert cls in html
+
+
+def test_media_appearance_renders_in_the_stream(db: Path) -> None:
+    conn = sqlite3.connect(str(db))
+    try:
+        record_media_appearance(
+            conn,
+            "NU",
+            "David Vélez on Invest Like the Best",
+            url="http://pod/ep1",
+            firm="Invest Like the Best",
+        )
+    finally:
+        conn.close()
+    html = render_diet_panel(db)
+    assert "David Vélez on Invest Like the Best" in html
+    assert 'k-pill-accent">Podcast' in html
+    assert "Invest Like the Best" in html  # the show name in the source column
 
 
 def test_signal_links_to_its_source(db: Path) -> None:

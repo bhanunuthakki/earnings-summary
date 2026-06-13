@@ -24,6 +24,7 @@ from signals.store import (
     SIGNAL_ESTIMATE_REVISION,
     SIGNAL_GENERAL_NEWS,
     SIGNAL_INVESTOR_DAY,
+    SIGNAL_MEDIA_APPEARANCE,
     SIGNAL_TYPES,
     SignalRow,
     is_diet_only,
@@ -31,6 +32,7 @@ from signals.store import (
     load_diet_signals,
     load_forward_agenda,
     record_investor_day,
+    record_media_appearance,
     sync_news_to_signals,
 )
 
@@ -165,6 +167,42 @@ def test_record_investor_day_is_idempotent(db_with_news: Path) -> None:
         conn.close()
 
 
+def test_record_media_appearance_is_diet_only_and_idempotent(db_with_news: Path) -> None:
+    conn = sqlite3.connect(str(db_with_news))
+    try:
+        first = record_media_appearance(
+            conn,
+            "nu",
+            "David Vélez on Invest Like the Best",
+            url="http://pod/ep1",
+            firm="Invest Like the Best",
+            published_at=None,
+        )
+        dup = record_media_appearance(conn, "NU", "Re-poll same episode", url="http://pod/ep1")
+        assert first is True
+        assert dup is False  # idempotent on (ticker, url) among media rows
+        row = conn.execute(
+            "SELECT ticker, signal_type, cadence, news_id, event_date, weight, firm "
+            "FROM signals WHERE signal_type = ?",
+            (SIGNAL_MEDIA_APPEARANCE,),
+        ).fetchone()
+        assert row[0] == "NU"  # ticker upper-cased
+        assert row[1] == SIGNAL_MEDIA_APPEARANCE
+        assert row[2] == "event"
+        assert row[3] is None  # written DIRECT — no news backing
+        assert row[4] is None  # not forward-dated
+        assert row[5] == pytest.approx(0.7)
+        assert row[6] == "Invest Like the Best"
+    finally:
+        conn.close()
+    # It is a pull-lane reading type — surfaces in the stream when requested.
+    rows = load_diet_signals(
+        db_with_news,
+        types=(SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING, SIGNAL_MEDIA_APPEARANCE),
+    )
+    assert any(r.signal_type == SIGNAL_MEDIA_APPEARANCE for r in rows)
+
+
 def test_readers_degrade_on_missing_table(tmp_path: Path) -> None:
     missing = tmp_path / "nope.db"
     assert load_diet_signals(missing) == []
@@ -185,7 +223,12 @@ def test_lane_partition_is_total_and_disjoint() -> None:
     assert not (NEWS_MIRRORED_TYPES & DIET_ONLY_TYPES)
     assert sorted(NEWS_MIRRORED_TYPES) == [SIGNAL_CONSENSUS_RATING, SIGNAL_GENERAL_NEWS]
     assert sorted(DIET_ONLY_TYPES) == sorted(
-        [SIGNAL_INVESTOR_DAY, SIGNAL_BUYSIDE_RATING, SIGNAL_ESTIMATE_REVISION]
+        [
+            SIGNAL_INVESTOR_DAY,
+            SIGNAL_BUYSIDE_RATING,
+            SIGNAL_ESTIMATE_REVISION,
+            SIGNAL_MEDIA_APPEARANCE,
+        ]
     )
     # The disclosed fast-follows are a diet-only subset (no free data path).
     assert sorted(SCAFFOLD_TYPES) == [SIGNAL_BUYSIDE_RATING, SIGNAL_ESTIMATE_REVISION]
@@ -197,6 +240,9 @@ def test_predicates() -> None:
     assert not is_news_mirrored(SIGNAL_INVESTOR_DAY)
     assert is_diet_only(SIGNAL_INVESTOR_DAY) and is_diet_only(SIGNAL_BUYSIDE_RATING)
     assert not is_diet_only(SIGNAL_CONSENSUS_RATING)
+    # media_appearance is diet-only (written direct, never a news-backed alert).
+    assert is_diet_only(SIGNAL_MEDIA_APPEARANCE)
+    assert not is_news_mirrored(SIGNAL_MEDIA_APPEARANCE)
 
 
 def test_signal_row_is_a_distinct_diet_type() -> None:

@@ -1,10 +1,13 @@
-"""Shared helpers for the `signals` substrate tests (alembic 0095).
+"""Shared helpers for the `signals` substrate tests (alembic 0095 + 0101).
 
 The fast path: stamp a tmp DB at the prior head, hand-create the minimal `news`
 table (verbatim 0065 schema) so the backfill has something to mirror, then run
-only 0095. Keeps the store / migration / panel tests hermetic and quick without
-the full migration chain (the diet-guard test needs the whole inbox schema and
-builds it separately).
+up to the signals head. ``SIGNALS_HEAD`` tracks the LATEST migration that shapes
+`signals` (0101 widened the signal_type CHECK with `media_appearance`), so the
+lockstep test sees the current schema; the intervening discovery migrations
+(0096–0100) are table-absence-guarded and no-op on this minimal schema. Keeps
+the store / migration / panel tests hermetic without the full chain (the
+diet-guard test needs the whole inbox schema and builds it separately).
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0094_validation_issue_resolution"
-SIGNALS_HEAD = "0095_signals"
+SIGNALS_HEAD = "0102_signals_media_appearance"
 
 # Verbatim 0065_news schema — the backfill SELECTs these columns.
 _NEWS_DDL = """
