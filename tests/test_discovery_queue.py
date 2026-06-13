@@ -55,6 +55,35 @@ CREATE TABLE discovery_candidates (
         CHECK (score_json IS NULL OR json_valid(score_json)),
     CONSTRAINT uq_discovery_candidates_user_ticker UNIQUE (user_id, ticker)
 );
+CREATE TABLE discovery_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'bhanu',
+    ticker TEXT NOT NULL,
+    signal_class TEXT NOT NULL,
+    source_key TEXT NOT NULL,
+    weight FLOAT NOT NULL DEFAULT 1.0,
+    raw_strength FLOAT NOT NULL DEFAULT 1.0,
+    observed_at TEXT NOT NULL,
+    detail TEXT,
+    meta_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CONSTRAINT uq_discovery_signals_identity
+        UNIQUE (user_id, ticker, signal_class, source_key)
+);
+CREATE TABLE discovery_sources (
+    source_key TEXT PRIMARY KEY,
+    signal_class TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    base_weight FLOAT NOT NULL DEFAULT 1.0,
+    tier TEXT NOT NULL DEFAULT 'structural',
+    style_tags TEXT,
+    cik TEXT,
+    active INTEGER NOT NULL DEFAULT 1,
+    last_calibrated_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -73,6 +102,16 @@ def _seed(db: Path) -> None:
         " VALUES ('bhanu', ?, ?, 'index_member')",
         [("WDC", "Western Digital"), ("EVR", "Evercore"), ("OLD", "Oldco"), ("DONE", "Doneco")],
     )
+    conn.executemany(
+        "INSERT INTO discovery_sources (source_key, signal_class, display_name, base_weight,"
+        " tier, style_tags, cik, created_at, updated_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, 'seed', 'seed')",
+        [
+            ("quality_compounder", "screen", "Quality compounder", 1.0, "structural", None, None),
+            ("watchlist", "adjacency", "Watchlist", 1.0, "structural", None, None),
+            ("appaloosa", "investor_13f", "Appaloosa", 0.85, "multi_cycle", "hedge", "0001656456"),
+        ],
+    )
     conn.commit()
     conn.close()
     upsert_candidate(
@@ -83,6 +122,20 @@ def _seed(db: Path) -> None:
             {"source": "screen:quality_compounder", "detail": "ROIC 27.3% TTM"},
             {"source": "adjacency:watchlist", "holding": "MU", "detail": "on MU's watchlist"},
         ],
+        score_json={
+            "total": 4.0,
+            "terms": {"screen": 2.0, "adjacency": 2.0},
+            "corroboration": {"n_funds": 0, "multiplier": 1.0},
+            "clamped": False,
+            "signals": [
+                {
+                    "class": "screen",
+                    "source_key": "quality_compounder",
+                    "contribution": 2.0,
+                    "detail": "ROIC 27.3% TTM",
+                }
+            ],
+        },
         db_path=db,
     )
     upsert_candidate(ticker="EVR", name="Evercore", score=3.0, evidence=[], db_path=db)
@@ -146,6 +199,74 @@ def test_shell_carries_discovery_tab() -> None:
     html_out = render_shell(overview_html="<div>x</div>")
     assert 'data-tab-target="discovery"' in html_out
     assert 'data-endpoint="/api/panel/discovery"' in html_out
+
+
+def test_panel_is_one_band_on_the_kit(repo: Path) -> None:
+    """The rebuilt panel: ONE toolbar band (no title band over a filter band),
+    chip status filters, .p-table rows, ticker_label, score pill, and a
+    collapsed score peek (design_language §6.1 + §10)."""
+    html_out = render_discovery_panel(repo / "data" / "portfolio.db")
+    assert "k-toolbar" in html_out  # the single operating band
+    assert "<h2>Discovery</h2>" not in html_out  # nav owns the title
+    assert "dq-statusfilter" in html_out and "k-chip-btn" in html_out  # chip filters
+    assert 'class="p-table"' in html_out  # kit table, not the bespoke .dq-table
+    assert "k-tick-sym" in html_out  # ticker_label, not a concatenated string
+    assert "k-pill" in html_out  # the score pill
+    assert 'class="dq-peek"' in html_out  # evidence behind a peek
+    # WDC's score_json drives the inline evidence line; the verbatim detail is
+    # in the (hidden) peek row.
+    assert "screens 2.0" in html_out
+    detail_marker = 'id="dq-detail-'
+    assert detail_marker in html_out and "ROIC 27.3% TTM" in html_out
+    assert "dq-sources-toggle" in html_out  # the weight-edit surface
+
+
+def test_render_cap_discloses_elision(repo: Path) -> None:
+    from pipeline import discovery_panel
+
+    db = repo / "data" / "portfolio.db"
+    for i in range(discovery_panel.RENDER_TOP_N + 5):
+        upsert_candidate(ticker=f"CAND{i}", name=None, score=float(i), evidence=[], db_path=db)
+    out = render_discovery_list(db)
+    assert f"top {discovery_panel.RENDER_TOP_N} of" in out  # the cap is disclosed, not silent
+
+
+# ----------------------------------------------------------------------------
+# sources weight registry (the Discovery rule's editable lever)
+# ----------------------------------------------------------------------------
+
+
+def test_sources_editor_fragment(client: FlaskClient) -> None:
+    frag = client.get("/api/panel/discovery?fragment=sources")
+    assert frag.status_code == 200
+    body = frag.get_data(as_text=True)
+    assert "Appaloosa" in body
+    assert 'data-src-weight="appaloosa"' in body  # the editable weight input
+    assert "0001656456" in body  # the seeded CIK
+    assert "dq-root" not in body  # fragment is just the editor
+
+
+def test_sources_json_api(client: FlaskClient) -> None:
+    rows = client.get("/api/discovery/sources").get_json()["sources"]
+    keys = {r["source_key"] for r in rows}
+    assert {"quality_compounder", "watchlist", "appaloosa"} <= keys
+    investors = client.get("/api/discovery/sources?signal_class=investor_13f").get_json()["sources"]
+    assert [r["source_key"] for r in investors] == ["appaloosa"]
+
+
+def test_source_weight_edit(client: FlaskClient, repo: Path) -> None:
+    db = repo / "data" / "portfolio.db"
+    res = client.post("/api/discovery/sources/appaloosa/weight", json={"weight": 0.95})
+    assert res.status_code == 200
+    assert res.get_json()["source"]["base_weight"] == 0.95
+    from discovery.sources import get_source
+
+    assert get_source("appaloosa", db_path=db).base_weight == 0.95  # type: ignore[union-attr]
+    # Validation + unknown key.
+    assert client.post("/api/discovery/sources/appaloosa/weight", json={}).status_code == 400
+    assert (
+        client.post("/api/discovery/sources/nope/weight", json={"weight": 1.0})
+    ).status_code == 404
 
 
 # ----------------------------------------------------------------------------

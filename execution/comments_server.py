@@ -568,23 +568,23 @@ def create_app(
         if name == "discovery":
             # Research → Discovery (P5.4): the candidate approval queue —
             # the budget gate ("queue, never auto-build"). ``?fragment=list``
-            # returns just the table for the panel JS's refreshes.
+            # returns just the table; ``?fragment=sources`` the weight editor.
             from pipeline.discovery_panel import (
                 render_discovery_list,
                 render_discovery_panel,
+                render_sources_editor,
             )
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            fragment = request.args.get("fragment")
+            if fragment == "sources":
+                return Response(render_sources_editor(db_path), mimetype="text/html")
             d_status = (request.args.get("status") or "live").strip() or "live"
             try:
                 d_min = float(request.args.get("min_score") or 0)
             except ValueError:
                 d_min = 0.0
-            d_renderer = (
-                render_discovery_list
-                if request.args.get("fragment") == "list"
-                else render_discovery_panel
-            )
+            d_renderer = render_discovery_list if fragment == "list" else render_discovery_panel
             return Response(
                 d_renderer(db_path, user_id=user_id, status=d_status, min_score=d_min),
                 mimetype="text/html",
@@ -1545,6 +1545,44 @@ def create_app(
         if row is None:
             return ({"error": f"candidate {cand_id} not found"}, 404)
         return {"candidate": _candidate_to_json(row)}
+
+    @app.route("/api/discovery/sources", methods=["GET"])
+    def discovery_sources_api():
+        """The discovery_sources weight registry as JSON (the Discovery rule's
+        editable lever). ``?signal_class=investor_13f`` filters one class."""
+        from dataclasses import asdict
+
+        from discovery.sources import list_sources
+
+        signal_class = request.args.get("signal_class") or None
+        try:
+            rows = list_sources(signal_class=signal_class, db_path=db_path)
+        except sqlite3.Error:
+            rows = []
+        return {"sources": [asdict(s) for s in rows]}
+
+    @app.route("/api/discovery/sources/<source_key>/weight", methods=["POST", "OPTIONS"])
+    def discovery_source_weight_api(source_key: str):
+        """Edit a source's ``base_weight`` (the panel's weight-edit surface +
+        quarterly recalibration). A non-negative float; re-ranks the queue on
+        the next refresh. 404 when the source_key is unknown."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from dataclasses import asdict
+
+        from discovery.sources import set_source_weight
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw = payload.get("weight")
+        if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+            return ({"error": "weight (number) required"}, 400)
+        try:
+            row = set_source_weight(source_key, float(raw), db_path=db_path)
+        except sqlite3.Error:
+            return ({"error": "discovery_sources table missing (run alembic upgrade)"}, 500)
+        if row is None:
+            return ({"error": f"source {source_key!r} not found"}, 404)
+        return {"source": asdict(row)}
 
     @app.route("/actions/discovery-run", methods=["POST", "OPTIONS"])
     def start_discovery_run():
