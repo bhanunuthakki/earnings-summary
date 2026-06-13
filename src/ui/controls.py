@@ -48,6 +48,12 @@ Composition contract — ``controls_css(default)`` rides immediately after
   :func:`panel_section_title` emits (or, when the nav owns the title, suppresses)
   the panel's ``<h2>`` so an in-shell single-sub-tab panel never re-prints its
   section name.
+* ``.prose`` (+ its ``h3``-``h6`` / ``p`` / ``ul`` / ``li`` / ``strong`` /
+  ``em`` / ``code`` / ``hr`` / ``table`` descendants) — the shared container for
+  :func:`ui.prose.render_prose` output (design_language §9): ONE token-only
+  treatment for every stored analyst/LLM body / note / memo. Headings start at
+  ``<h3>`` (the panel owns the ``<h2>`` above); a surface adds only the
+  wrapper's padding/width and never re-skins the rendered children.
 
 Like ``palette_css``, the output contains literal CSS braces: surfaces that
 splice it into ``str.format`` templates must brace-double it the same way
@@ -227,6 +233,34 @@ a.k-tick-sym:hover { color: var(--accent); }
   margin-right: auto; }
 .k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2);
   flex-wrap: wrap; margin-left: auto; }
+
+/* ---- rendered prose: the shared container for render_prose() output
+   (design_language §9; src/ui/prose.py). ONE token-only treatment for every
+   stored analyst/LLM body / note / memo / narrative. render_prose starts
+   headings at <h3> (a panel owns the <h2> above its prose), so h3 is the top
+   content tier and h4-h6 step down. A surface adds ONLY the wrapper's
+   padding/width — it never re-skins the rendered children. ---- */
+.prose { font-size: var(--fs-body); line-height: 1.6; color: var(--fg-soft); }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose p { margin: 0 0 var(--sp-3); }
+.prose h3 { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+  margin: var(--sp-4) 0 var(--sp-2); }
+.prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600;
+  color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
+.prose ul, .prose ol { margin: 0 0 var(--sp-3); padding-left: var(--sp-5); }
+.prose li { margin-bottom: var(--sp-1); }
+.prose strong { font-weight: 600; color: var(--fg); }
+.prose em { font-style: italic; }
+.prose code { font-family: var(--mono); font-size: 0.93em;
+  background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
+.prose hr { border: none; border-top: 1px solid var(--border); margin: var(--sp-4) 0; }
+.prose table { width: 100%; border-collapse: collapse; font-size: var(--fs-body);
+  margin: 0 0 var(--sp-3); }
+.prose th, .prose td { padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; }
 """
 
 
