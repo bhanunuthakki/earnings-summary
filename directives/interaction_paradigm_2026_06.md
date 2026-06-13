@@ -137,7 +137,7 @@ control-wiring conflict among siblings" is the default failure mode otherwise.
 | — | Provenance section illegible; consolidate with drilldowns/collapses; make it actionable (click issues, refresh, diagnose, read evals) | No shared data-quality primitive (8 bespoke builders), a **dead severity map** (writer emits `halt`/`warn`; reader expects `error`/`warning`, so `halt` renders muted grey), and build-time-static tables with no action affordances. | Principle "provenance is actionable": shared `prov_row`/`prov_drawer`, fix the severity-enum drift in BOTH sort and renderer (contract-tested), per-row resolve, one `provenance_panel` assembler, `/source` deep-links. Keep the working Coverage matrix prominent. (S10) |
 | — | Navigation everywhere (close/back/click-out/close-popup) as a rule; slick + delightful | No shared Surface abstraction — five hand-rolled `close*` fns, an enumerated Escape switch, a cross-document `window.__close*` handshake. Each surface re-derives dismissal; many lack it. | Law 3: one `CCOverlay` primitive + open-surface stack with explicit modality+priority; migrate all surfaces; codify §3 Chrome behavior. Back-button deferred (collides with hashchange); **motion/"delightful" polish is an explicit S4 deliverable** (transition tokens on open/close), not just affordance presence. (S4) |
 | — | Markdown formatting leaking into rendered prose | **Three divergent markdown renderers** + ~7 surfaces injecting bodies via bare `escape()`. | Boundary "one render per content-kind": `ui/prose.py::render_prose()` (lift the proven `_shared` renderer), inline variant for cells, guard test. Wire genuinely-markdown surfaces incl. the **7th site `ticker_command_center.py:1145`** the critic caught; exclude deterministic attribution/judge fields. (S2) |
-| — | Streamline discovery (too crowded) | (paired with #5) | Top-N cap + chip filters answer render density; **open question (§7): does "too many" mean raise the entry bar, or cap the render?** Default = cap render + tighten weighting; confirm. |
+| — | Streamline discovery (too crowded) | (paired with #5) | **Owner decided (2026-06-12): BOTH** — raise the *entry* threshold so weaker names never enter the queue AND cap the *render* to a ranked top-N with chip filters + collapsed evidence. (S6) |
 | — | Ask: redundant horizontal "Ask" bar; mismatched fonts; stale "e.g…" placeholder after a question | Title ownership ambiguous (panel re-prints its own `<h2>Ask</h2>` under an already-labeled tab); `.ask-inputrow input` carries a per-element `--fs-section` override vs `.k-btn` `--fs-body`; placeholder never reset after submit. | Law 3 (nav owns the title — drop the `<h2>`, shell injects single-sub-tab titles); delete the per-element font override + adopt `.k-btn`; reset placeholder to "Ask a follow-up…" after submit. (S8) |
 | — | Alerts should be an information-diet curation layer (sell+buy-side ratings, model changes, investor days + takeaways, exec/investor podcasts) | One table + one decaying scorer + a materiality veto force a **thesis-breach alerter and an information-diet curator** (inverse products) through one pipe; informative-but-not-breaching signal is vetoed away; there's nowhere to store `signal_type`/`event_date`/source-entity. | Principle "typed signal at ingest": a `signals` typed table feeding two lanes — decaying push ALERT (thesis-breach) and non-decaying pull DIET; investor days are `event_date` rows; **takeaway summarization (investor-day/podcast → note) is an explicit owner**, not just a calendar entry. (alerts substrate + S11) |
 
@@ -162,7 +162,7 @@ against a locked contract; Haiku for mechanical long-tail.**
 | # | Session | Model | Deps | One-line scope |
 |---|---|---|---|---|
 | S5 | Open the comment taxonomy: peer-curation + `needs_triage` + steerable peers | **Opus** | S1 | `needs_triage` terminal (replace the `ask_question` hard fallback); `peer_comp` anchor + `curate_peers` intent appending to `competitive_watchlist` + a new `peer_exclude`/`peers_hidden`; route triage to the existing data-fixes backlog. **Model the conditional ("remove UNLESS better peers") as intent, not just logged text.** |
-| S6 | Discovery: weighted multi-signal ranking + EDGAR-13F/investor source class + panel rebuild | **Opus** (contract: Signal type + `scoring.py` weight/decay + 3 migrations + roster) then Sonnet (miner + panel) | S1 | `discovery_signals` + `discovery_candidates.score_json` + `discovery_sources` roster; weighted+dated scoring replacing the count; **clamp** so an investor-only name can't top the queue on investor weight alone; EDGAR 13F-HR direct (free); panel on `panel_toolbar` + `.p-table/.p-pill` + top-N cap; weight-edit surface. |
+| S6 | Discovery: weighted multi-signal ranking + EDGAR-13F/investor source class + panel rebuild | **Opus** (contract: Signal type + `scoring.py` weight/decay + 3 migrations + roster) then Sonnet (miner + panel) | S1 | `discovery_signals` + `discovery_candidates.score_json` + `discovery_sources` roster **seeded from the §5 two-tier roster (crossover + multi-cycle growth tiers)**; weighted+dated scoring replacing the count, encoding the **action-type asymmetry** (new-position weight ≫ add weight for low-turnover long-only funds; hedge-fund moves higher-frequency); **clamp** so an investor-only name can't top the queue on investor weight alone; **BOTH raise the entry threshold AND cap the render top-N** (owner decision); EDGAR 13F-HR direct (free path; FMP form13F gated); panel on `panel_toolbar` + `.p-table/.p-pill` + chip filters + collapsed evidence; weight-edit surface; recalibrate weights quarterly vs realized forward returns. |
 | S10 | Consolidated provenance console: shared `prov_row`/`prov_drawer` | **Opus** | S1 (seq. after S4 for the iframe Sources tab) | PR1: primitive + severity-enum fix in sort AND renderer + contract test + `resolved_by/resolution_note` + resolve writer. PR2: `provenance_panel` assembler, collapse the 8-tab strip, `/source`-link the report Sources tab, regenerate `pane_sources` golden. Keep Coverage prominent. |
 | S7 | Universal design-token conformance sweep (drive S1 guard green) | Haiku/Sonnet | S1 | Mechanical rewrite of `evals_panel`/`analytical_dashboard_html`/`research_cockpit`/`portfolio_panel`/`chrome.py` onto `.k-well/.k-pill` + canonical tokens; rewrite design_language Appendix A into the Enforcement section. No design judgment (S1 made the calls). |
 | — | Information-diet curation substrate | **Opus** (substrate) | S1, S3 | `signals` typed table (signal_type/event_date/weight/cadence) feeding ALERT + DIET lanes; backfill `news` as `general_news`; route `yf_grades` into the typed `consensus_rating` lane (sell-side, free); investor-day feed reconciled with `expected_earnings`; guard that diet rows never enter the decaying scorer. **Buy-side ratings + estimate revisions are fast-follows (no free data path) — disclosed, not promised.** |
@@ -193,18 +193,52 @@ buy-not-build fallbacks. **Caveats (why moves are top-of-funnel, never a trigger
 lag, longs-only (shorts/net view invisible), non-US/sub-$100M managers don't file. **ARK is
 the one zero-lag source** (publishes holdings daily via CSV).
 
-**"Tuscaloosa" is not a real fund** — a mis-hear. Ranked candidates given your cohort:
-**(1) Whale Rock Capital** (strongest fit — concentrated tech L/S, +51% '24), (2) Tremblant
-Capital, (3) Tybourne (ruled down — wound down its US tech HF). I seeded all three; **please
-confirm which you meant.** "Sea Lane" also couldn't be positively identified — confirm the
-entity/CIK.
+**"Tuscaloosa" resolved (owner, 2026-06-12):** = **Whale Rock** + the owner also meant
+**Appaloosa (David Tepper)**. Both are in the roster below. The owner also directed:
+**expand the roster toward multi-decade, multiple-market-cycle-tested growth investors**
+("invested in growth through decades") — done below. ("Sea Lane" still unidentified — drop
+unless the owner supplies an entity/CIK.)
 
-**Investor roster (rated top-of-funnel weights, 0–1):** Altimeter 1.0 · Atreides 1.0 ·
-Whale Rock 0.9 · Light Street 0.85 · Coatue 0.8 · Lone Pine 0.8 · D1 0.75 · Sands 0.7 ·
-Baillie Gifford 0.65 (partial 13F) · Durable 0.6 · Viking 0.6 · Tiger Global 0.6 · Maverick
-0.6 · Tremblant 0.55 · Dragoneer 0.55 · Alkeon 0.55 · Greenoaks 0.5 · Addition 0.45 ·
-ARK 0.4 (daily data, low conviction-quality) · ICONIQ 0.4 · Tybourne 0.3 (wind-down). Weight
-by concentration × conviction/persistence × track-record × overlap-with-your-universe.
+**Investor roster — current-cycle crossover tier (rated top-of-funnel weights, 0–1):**
+Altimeter 1.0 · Atreides 1.0 · Whale Rock 0.9 · Light Street 0.85 · Coatue 0.8 · Lone Pine
+0.8 · D1 0.75 · Baillie Gifford 0.65 (partial 13F) · Durable 0.6 · Viking 0.6 · Tiger Global
+0.6 · Maverick 0.6 · Tremblant 0.55 · Dragoneer 0.55 · Alkeon 0.55 · Greenoaks 0.5 ·
+Addition 0.45 · ARK 0.4 (daily data, low conviction-quality) · ICONIQ 0.4 · Tybourne 0.3
+(wind-down). Weight by concentration × conviction/persistence × track-record × overlap.
+
+**Investor roster — multi-decade, multi-cycle growth tier (added 2026-06-12; selection lens
+= survived dot-com 2000–02 + GFC 2008–09 + 2022 while staying in growth/quality-compounders):**
+
+| Firm / principal | Cycles survived | Style | 13F | Weight | Why signal |
+|---|---|---|---|---|---|
+| Appaloosa / Tepper | 1993–; dot-com, GFC, 2022; ~25% ann. since inception | Hedge, concentrated (~31 names), big AI/hyperscaler tilt (AMZN/MU/GOOG/TSM) | Yes | **0.85** | Best living risk-taker; AI-infra book overlaps the universe directly |
+| Sands Capital ⬆ | 1992–; beat R1000G nearly every yr | Long-only Select Growth 25–35, high conviction | Yes | **0.80** (↑ from 0.7) | Multi-cycle lens *strengthens* it — a 30-yr concentrated growth shop, not a 2020 crossover |
+| Fidelity Contrafund / Danoff | mgr since 1990; 10,423% cum. | Long-only; concentrated at top (Meta+Nvidia ~22%) | Yes (FMR) | **0.70** | Greatest single-mgr growth record alive. **FLAG: Danoff retires end-2026** — re-weight at handoff |
+| WCM Investment Mgmt | 1976–; moat-trajectory + culture | Long-only concentrated quality-growth, low turnover | Yes | **0.70** | Distinctive moat-*trajectory* discipline; low turnover = high signal-per-add |
+| Loomis Sayles Growth / Hamzaogullari | team since 2010 (30+ yr career); 17.4% 10-yr | Long-only 30–40 names, ~7% turnover (lowest here) | Yes | **0.70** | A NEW position from a 7%-turnover shop is a loud signal |
+| Polen Capital (Focus Growth) | 1989–; 15% CAGR '89–'20 | Long-only ~25 high-ROIC names, low turnover | Yes | **0.65** | Textbook concentrated quality-growth, 35-yr record |
+| Akre Capital (Neff, CIO) | 1989–; three-legged-stool compounders | Long-only ~20 names, very low turnover | Yes | **0.65** | Tiny conviction-weighted book = every move matters; succession executed |
+| Edgewood Management | 1974–; composite to 1992 | Long-only **fixed 22-stock** large-cap growth | Yes | **0.65** | Sell-one-to-add-one cap → highest structural signal-per-move on the list |
+| Jennison Associates | 1969–; 11.8% since inception | Long-only large-cap growth sleeves | Yes (PGIM) | **0.60** | Pioneer growth DNA. **FLAG: founder Segalas died 2023**; team-based now, big book dilutes |
+| MS Counterpoint Global / Lynch | Lynch since 1998; huge '20, brutal '22, rebounded | Long-only disruptive/higher-beta | Yes (Morgan Stanley) | **0.55** | Strong disruptor idea-gen; treat as where-are-they-fishing, not conviction-anchor |
+| SGA (Sustainable Growth Advisers) | 2003–; pricing-power quality growth | Long-only concentrated global quality-growth | Yes (Virtus) | **0.50** | Clean screen + concentration; shorter record → second-tier |
+| Brown Capital (Small Co) / E. Brown | 1983–; GARP coiner | Long-only **small-cap** exceptional-growth, low turnover | Yes | **0.45** | Great record but small-cap → new-idea sourcing more than universe overlap |
+| Capital Group / Growth Fund of America | 1973–; every cycle | Long-only multi-manager, very large | Yes (Capital World/Research) | **0.45** | Deepest pedigree but multi-manager + huge book → *confirmation*, not a trigger |
+
+**Ruled out:** T. Rowe Blue Chip Growth (Puglia gone → no multi-cycle PM premium); Glenn
+Greenberg/Brave Warrior, SQ Advisors/Simpson (dormant), Sequoia/Ruane Cunniff, Gardner Russo
+(all **value/quality, not growth** — anchor a *separate* quality/value roster later if wanted);
+Wellington (13F is the whole 1,900-position firm — can't isolate a growth sleeve).
+**Correction to research notes:** "SQ Advisors / Chieftain (Greenberg)" was two different
+people — SQ = Simpson (dormant), Chieftain/Brave Warrior = Greenberg (value); both excluded here.
+
+**Signal nuance (long-only veterans vs hedge funds):** the multi-cycle long-only houses run
+far larger, lower-turnover books — **weight their NEW initiations heavily and their
+incremental adds lightly**, and treat the giant multi-manager houses (Capital Group,
+Wellington) as *confirmation* not *triggers*. The crossover hedge funds are higher-frequency
+(timing/momentum) signals; the long-only veterans are lower-frequency, higher-durability
+(durable-compounder surfacing) signals. The `scoring.py` weighting must encode this
+action-type asymmetry (new-position weight ≫ add weight for low-turnover funds).
 
 **Rating model:** an `investor_registry` table (cik, name, base_weight, style_tags,
 last_calibrated_at). Fold into discovery as a clamped weighted factor —
@@ -268,10 +302,20 @@ matcher, Opus-summarize on a hit). All ride the `news`/`signals` tables via new
   diet substrate must not promise data it can't fetch.
 - **"Reassess ranking"** is read as "weighted typed signals." If the crowding is partly
   *wrong names* (screen/adjacency miscalibration), weighting won't fix it — flagged for S6.
-- **Discovery "too many companies"** — default fix is render-cap + tighter weighting; **open
-  question:** does the owner want a higher *entry* threshold (fewer candidates generated)?
+- **Discovery "too many companies"** — RESOLVED (owner, 2026-06-12): do BOTH — raise the
+  entry threshold (fewer candidates generated) AND cap the render top-N. S6 owns both.
 - **Ask font mismatch** beyond the input row (`.ask-turn-*`/`.vx-row` sublabels): S8 fixes the
   input row; the other tiers are asserted legitimate role distinctions — confirm with the owner.
+
+## 9. Status (2026-06-12)
+
+- **Wave 1 SPAWNED** as 4 chips: S1 (Opus, keystone), S2 (Sonnet), S3 (Sonnet), S4 (Opus,
+  dep S1). S2/S3 dependency-free; S4 lands after S1; all four are zero-schema.
+- **Owner decisions folded in:** Tuscaloosa = Whale Rock + Appaloosa added; roster expanded
+  with the multi-cycle growth tier (§5); discovery = both (entry bar + render cap).
+- **Before Wave 2:** S6's `discovery_sources` roster seeds from §5's two tiers; the diet
+  substrate + S6 + S10 each rebase migrations on the live head and reconcile the signal
+  taxonomy with the single arbiter (§6).
 
 ---
 
