@@ -164,6 +164,41 @@ CHROME_TOKENS: dict[str, str] = {
 # Rides along inside every palette_css() :root block.
 _SCALE_TOKENS: dict[str, str] = {**TYPE_SCALE, **SPACING_SCALE, **CHROME_TOKENS}
 
+# ---------------------------------------------------------------------------
+# Scale introspection — the sanctioned-literal sets the opt-out conformance
+# guard (tests/test_ui_controls.py, design_language §2/§7) checks rendered CSS
+# against. Derived from the dicts above so the guard can NEVER drift from the
+# values: add a step to TYPE_SCALE and it is instantly a legal size. These are
+# data, not a runtime registry — there is no DB table or mutable state here.
+# ---------------------------------------------------------------------------
+
+#: Every on-scale ``font-size`` px literal (e.g. ``"13px"``). A px font-size
+#: outside this set is "off-scale" and denied (the workspace reading/display
+#: ramp and the ``.src-chip`` micro-mark are the only sanctioned escapes — see
+#: design_language §1).
+TYPE_SCALE_PX: frozenset[str] = frozenset(TYPE_SCALE.values())
+
+#: The only px ``border-radius`` literals the system allows: ``--radius`` (8px,
+#: every rectangular box) and ``--radius-full`` (999px, pills/dots). 3/4/5/6px
+#: corners are drift (design_language §3). Surfaces should write
+#: ``var(--radius)`` / ``var(--radius-full)``; the px values are what those
+#: resolve to, kept here so the guard accepts an inlined equivalent.
+RADIUS_PX: frozenset[str] = frozenset(
+    v for k, v in CHROME_TOKENS.items() if k.startswith("radius") and v.endswith("px")
+)
+
+#: The sanctioned ``font-family`` *values* — exactly the three FONT_TOKENS,
+#: referenced as CSS variables. There are three font ROLES (sans UI / serif
+#: reading-prose / mono annotation) and no fourth: any other family literal in
+#: a ``font-family`` declaration is the owner's "too many fonts" drift.
+FONT_FAMILY_TOKENS: frozenset[str] = frozenset(f"var(--{name})" for name in FONT_TOKENS)
+
+#: Generic fallback keywords that may stand beside (or instead of) a font
+#: token in a ``font-family`` value without counting as a new family.
+FONT_FAMILY_KEYWORDS: frozenset[str] = frozenset(
+    {"monospace", "sans-serif", "serif", "system-ui", "inherit", "initial", "unset"}
+)
+
 # Categorical chart series (Okabe-Ito, colorblind-safe). Values unchanged
 # from charts_v2's historical hardcode — exposed here so the next palette
 # decision happens in one place.
