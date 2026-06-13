@@ -77,6 +77,11 @@ marks in long prose. That is the report's ONE category treatment — status
 there still routes through `--ok/--warn/--bad`, and dashboards keep
 category-quiet.
 
+**Enforced, opt-out (§7).** "Zero raw hex outside tokens.py" is not a
+convention — it is checked on *rendered output* over every CSS-emitting surface
+by the executable guard `tests/test_ui_controls.py`. Status pills/wells use the
+`.k-pill` / `.k-well` kit (`controls.py`), never a freehand bg/fg hex pair.
+
 ## 3. Chrome
 
 - **One radius**: `--radius` (8px) for every rectangular box — cards, inputs,
@@ -85,8 +90,10 @@ category-quiet.
 - **One motion**: `var(--transition)` (150ms ease) with explicit properties —
   never `transition: all`.
 - **One popover elevation**: `box-shadow: var(--shadow-pop)`.
-- **Close glyphs** (the `×` buttons on drawers/popovers/peeks): `20px`,
-  muted → fg on hover. A glyph size, not a type-scale step.
+- **Close glyphs** (the `×` buttons on drawers/popovers/peeks):
+  `var(--fs-display)`, muted → fg on hover. (Was a magic `20px`; the §7 guard
+  denies off-scale font-size px, so the glyph now takes the top scale step. The
+  dismissal *behavior* contract is S4's §3 Chrome pass.)
 - **Soft status fills**: `color-mix(in srgb, var(--ok|warn|bad|accent) ~16%,
   transparent)` + token ink — never a freehand dark-well/pastel hex pair.
 
@@ -147,6 +154,23 @@ not accidental:
 - The report keeps its own density tokens (`--pad-*`, two densities) — they
   are layout, owned by the surface.
 
+### 6.1 One operating band per panel
+
+A panel sitting under an already-labeled tab is **one labeled instrument**
+(Instrument Paradigm, Law 3). It gets **at most ONE chrome band** before its
+content — never a title band stacked over a filter band:
+
+- Use `controls.py::panel_toolbar(title, filters=…, actions=…)`: the title sits
+  on the left, filters **and** actions share the SAME flex row to its right
+  (`.k-toolbar`). One band, one row.
+- The **nav owns the title.** A panel under a single-sub-tab section (Home, Ask)
+  must not re-print its own section name — the tab label already says it. Pass
+  `panel_section_title(title, suppressed=True)` (or `panel_toolbar(...,
+  suppress_title=True)`) and the heading collapses; the controls left-align into
+  the freed row.
+- Primary pickers are in-section furniture, not floating overlays: a section's
+  own search/filter renders in the toolbar band, not a `.k-menu` popover.
+
 ## 7. Do / don't
 
 - **Do** compose: `palette_css(mode) + controls_css(mode) + layout-only CSS`.
@@ -162,6 +186,40 @@ not accidental:
   `transition: all`, or a new radius/shadow/letter-spacing.
 - **Don't** invent a new chip/badge/button variant — extend the kit in
   `controls.py` if a real gap exists, and document it here.
+
+### 7.1 Enforcement — the executable guard
+
+Conformance is a property of **rendered output**, enforced **opt-out** by
+`tests/test_ui_controls.py` (the source of truth; this prose only summarizes
+it). It is not a curated allowlist — that was the old opt-in guard's blind spot,
+where the shell itself shipped a legacy-alias `:root` and passed green.
+
+- **Auto-discovery.** Every `.py` under `src/` whose source contains `var(--`
+  is a CSS-emitting surface (~41). The filesystem, not an import list, is the
+  set; a **new unregistered surface fails CI** until it is registered and
+  classified (clean / exempt / quarantined).
+- **Denied dimensions** (per surface, in CSS rules AND inline `style="…"`):
+  raw hex — including `var(--x, #hex)` fallbacks and hex inside
+  `linear-gradient(...)`; off-scale `font-size` px (not a `TYPE_SCALE` step);
+  off-scale `border-radius` px (not `--radius`/`--radius-full`); **font-family
+  literals** — only the three font tokens (`var(--sans|serif|mono)`) + generic
+  keywords are legal, any fourth family is the "too many fonts" drift; and
+  legacy alias var-names (`--panel`/`--ink`/`--link`/`--font-mono`/…).
+- **Dimension-scoped.** Layout px (width/margin/padding/gap/top/left/height) is
+  NEVER touched — only color/font/radius. The px checks anchor on `font-size:` /
+  `border-radius:`.
+- **Sanctioned escapes (§1) survive by construction:** the workspace
+  reading/display ramp (incl. 60/100px), the `.src-chip` 8.5px+3px mark, `0.93em`
+  inline mono, the `%23`-encoded chevron data-URIs, and `charts_v2.py` SVG
+  internals. `tokens.py` is the one place raw hex (the palette) lives.
+- **Red-state policy — allowlist-with-expiry, not block-on-merge.** Pre-existing
+  drift is **quarantined per (surface, dimension)** with an owner; the quarantine
+  can only **shrink** (a dimension that becomes clean must be graduated, or the
+  ratchet fails). New drift in any clean surface/dimension fails immediately.
+  `test_full_conformance_is_red` is an `xfail` asserting the quarantine is empty:
+  it "lands red" today and flips to a hard failure once the last surface
+  graduates. There is **no `--ignore` bypass** — the only way to green is to fix
+  the CSS. Run `python -m pytest tests/test_ui_controls.py -q` to see the state.
 
 ## 9. Rendered prose (`src/ui/prose.py`)
 
@@ -208,6 +266,13 @@ own container CSS styles the rendered children.)
 ---
 
 ## Appendix A — fresh-eyes audit (2026-06-11), the drift this version kills
+
+> **Historical snapshot (dated 2026-06-11), no longer the source of truth.** The
+> live, authoritative inventory of remaining drift is the executable guard
+> (§7.1, `tests/test_ui_controls.py`): its `QUARANTINE` map is the current
+> burn-down list, ratcheted shrink-only. This file:line catalogue is kept for
+> archaeology — *do not* hand-maintain it as work lands; it will go stale. When
+> the guard's quarantine empties, this appendix can be deleted.
 
 Catalogued against `origin/main` @ `5d37519` (file:line). Headline counts:
 **241** hardcoded `font-size: *px` declarations across 24 files, **~240** raw

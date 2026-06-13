@@ -30,6 +30,24 @@ Composition contract — ``controls_css(default)`` rides immediately after
 * ``.k-menu`` — the shared popover-list surface (combobox results, palette
   rows): one elevation (``--shadow-pop``), one hover treatment.
 * ``.k-label`` — the uppercase field/section caption.
+* ``.k-pill`` (+ ``-ok/-warn/-bad/-accent``) — the one FILLED status/score
+  badge: a soft ``color-mix`` status fill + token ink. THE replacement for the
+  per-panel raw-hex pill systems (``.ev-score-*``, ``.badge.b-*``, the
+  calib/cockpit/memo tone pairs); never freehand a bg/fg hex pair again.
+  (``.k-chip`` is the *outline* tag/filter chip; ``.k-pill`` is the *filled*
+  status pill; ``.p-pill`` stays the neutral pipeline-table pill.)
+* ``.k-well`` (+ ``-ok/-warn/-bad/-accent``) — the soft-filled BLOCK sibling of
+  ``.k-pill`` for KPI cards / callouts / tone rows: same ``color-mix`` family,
+  box radius.
+* ``.k-scrim`` + ``.k-overlay`` — the one transient-surface primitive (Law 3):
+  a neutral scrim + an elevated, radiused, motion-on-open panel. ``CCOverlay``
+  (S4) wires dismissal (close + Esc + scrim click-out + focus trap) on top; kit
+  owns the look + open motion.
+* ``.k-toolbar`` + :func:`panel_toolbar` — the ONE operating band a panel gets
+  (design_language §6.1): title left, filters + actions on the same flex row.
+  :func:`panel_section_title` emits (or, when the nav owns the title, suppresses)
+  the panel's ``<h2>`` so an in-shell single-sub-tab panel never re-prints its
+  section name.
 
 Like ``palette_css``, the output contains literal CSS braces: surfaces that
 splice it into ``str.format`` templates must brace-double it the same way
@@ -69,7 +87,7 @@ select:not([multiple]) {
   padding-right: 28px;
 }
 select[multiple] { padding: 4px; }
-select[multiple] option { padding: 3px 8px; border-radius: 4px; }
+select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
 select:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -156,6 +174,59 @@ a.k-tick-sym:hover { color: var(--accent); }
   display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
 }
+
+/* ---- status/score pills: ONE filled badge — a soft status fill + token ink
+   (design_language §3). This is the canonical replacement for the per-panel
+   raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone
+   pairs): a status pill never freehands a background/foreground hex pair. ---- */
+.k-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 9px; border-radius: var(--radius-full);
+  font-size: var(--fs-caption); font-weight: 600; line-height: 1.5;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+  background: var(--paper); color: var(--fg-soft);
+}
+.k-pill-ok     { background: color-mix(in srgb, var(--ok) 16%, transparent);     color: var(--ok); }
+.k-pill-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent);   color: var(--warn); }
+.k-pill-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent);    color: var(--bad); }
+.k-pill-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+
+/* ---- status wells: the soft-filled BLOCK sibling of .k-pill (KPI cards,
+   callouts, tone rows) — same color-mix family, box radius instead of full.
+   Ink stays --fg; a status word inside can take its own .k-pill. ---- */
+.k-well { background: var(--paper); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); }
+.k-well-ok     { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+.k-well-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.k-well-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
+   CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
+   trap/restore); the kit owns their look + open motion. Exit is instant — the
+   [hidden] toggle can't animate display:none. The scrim is a neutral wash, not
+   a palette color. ---- */
+.k-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+  z-index: 40; animation: k-overlay-fade var(--transition); }
+.k-overlay { position: fixed; z-index: 41; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-pop); animation: k-overlay-rise var(--transition); }
+.k-scrim[hidden], .k-overlay[hidden] { display: none; }
+@keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; }
+  to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .k-scrim, .k-overlay { animation-duration: 0.01ms; }
+}
+
+/* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on
+   the left, filters + actions on the SAME flex row to the right — never a
+   title band stacked over a filter band. Emitted by panel_toolbar(). ---- */
+.k-toolbar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  margin-bottom: var(--sp-3); }
+.k-toolbar-title { font-size: var(--fs-title); font-weight: 600; margin: 0;
+  margin-right: auto; }
+.k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2);
+  flex-wrap: wrap; margin-left: auto; }
 """
 
 
@@ -209,3 +280,43 @@ def ticker_label(
     )
     nm = f'<span class="k-tick-name">{escape(name)}</span>' if name else ""
     return f'<span class="{cls}"{title}{style}>{sym}{nm}</span>'
+
+
+def panel_section_title(title: str, *, suppressed: bool = False) -> str:
+    """The panel's own ``<h2>`` title — or ``""`` when the nav already owns it.
+
+    A panel sitting under an already-labeled tab must not re-print its section
+    name (design_language §6.1). The shell passes ``suppressed=True`` for a
+    single-sub-tab section (where the tab label IS the title) and the heading
+    collapses. Used standalone or composed by :func:`panel_toolbar`.
+    """
+    if suppressed or not title.strip():
+        return ""
+    from html import escape
+
+    return f'<h2 class="k-toolbar-title">{escape(title)}</h2>'
+
+
+def panel_toolbar(
+    title: str = "",
+    *,
+    filters: str = "",
+    actions: str = "",
+    suppress_title: bool = False,
+) -> str:
+    """The one operating band a panel gets before its content (design_language
+    §6.1): the title on the left, ``filters`` + ``actions`` on the SAME flex
+    row to the right. Never stack a title band over a filter band.
+
+    ``filters`` / ``actions`` are pre-rendered HTML fragments (``.k-chip``
+    filters, ``.k-btn`` actions, selects). ``suppress_title`` drops the heading
+    when the nav owns it (single-sub-tab in-shell panels); the controls then
+    left-align into the freed row. Returns ``""`` when there is nothing to draw.
+    """
+    head = panel_section_title(title, suppressed=suppress_title)
+    controls = (
+        f'<div class="k-toolbar-controls">{filters}{actions}</div>' if (filters or actions) else ""
+    )
+    if not head and not controls:
+        return ""
+    return f'<div class="k-toolbar">{head}{controls}</div>'
