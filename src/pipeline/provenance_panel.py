@@ -93,8 +93,13 @@ def render_provenance_panel(
 
     # Anchor-nav band (one operating band, design_language §6.1): jump-to chips
     # for the long page. The nav owns the "Provenance" title, so it's suppressed.
+    # Chips scroll via JS (data-prov-jump), NOT an href="#anchor": the shell's
+    # hashchange router treats an unknown hash as a panel id and would fall back
+    # to Overview — navigating AWAY from the console. A data-attr + scrollIntoView
+    # never touches the hash, so the router never fires.
     nav = "".join(
-        f'<a class="k-chip k-chip-btn" href="#prov-{anchor}">{escape(label)}</a>'
+        f'<button type="button" class="k-chip k-chip-btn" data-prov-jump="prov-{anchor}">'
+        f"{escape(label)}</button>"
         for anchor, label, _ in sections
     )
     toolbar = panel_toolbar(
@@ -107,4 +112,22 @@ def render_provenance_panel(
         f'<div class="prov-sec" id="prov-{anchor}">{_safe(label, fn)}</div>'
         for anchor, label, fn in sections
     )
-    return f'<div class="prov-console">{toolbar}{body}</div>'
+    return f'<div class="prov-console">{toolbar}{body}</div><script>{_PROV_NAV_JS}</script>'
+
+
+# One guarded document-level listener (re-injected fragments never double-wire)
+# that scrolls to a section without changing location.hash — see render_*'s note
+# on why an href anchor would break the shell router.
+_PROV_NAV_JS = """
+(function () {
+  if (window.__ccProvNav) return;
+  window.__ccProvNav = true;
+  document.addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-prov-jump]') : null;
+    if (!b) return;
+    ev.preventDefault();
+    var el = document.getElementById(b.getAttribute('data-prov-jump'));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();
+""".strip()

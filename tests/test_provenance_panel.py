@@ -55,7 +55,9 @@ def test_assembler_composes_all_eight_sections(tmp_path: Path) -> None:
     assert 'class="prov-console"' in html
     for anchor in _SECTIONS:
         assert f'id="prov-{anchor}"' in html  # the section wrapper
-        assert f'href="#prov-{anchor}"' in html  # the anchor-nav chip
+        assert f'data-prov-jump="prov-{anchor}"' in html  # the anchor-nav chip (JS-scroll)
+    # The chips must NOT be href anchors — that would trip the shell hash router.
+    assert 'href="#prov-' not in html
 
 
 def test_coverage_leads_prominently(tmp_path: Path) -> None:
