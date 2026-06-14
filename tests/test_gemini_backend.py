@@ -125,9 +125,15 @@ def test_env_var_merges_into_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_gemini_model_tiers_follow_claude_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Haiku fast-classifier purposes mirror to Flash.
-    assert llm_cli.LLM_MODELS["viewspec_compile"] == llm_cli.FAST_CLASSIFIER_MODEL
+    # Promoted purposes: LLM_MODELS already has the Gemini model id directly —
+    # gemini_model_for returns it verbatim (no tier derivation needed).
+    assert llm_cli.LLM_MODELS["viewspec_compile"] == gemini_backend.GEMINI_BACKEND_FAST_MODEL
     assert gemini_backend.gemini_model_for("viewspec_compile") == (
+        gemini_backend.GEMINI_BACKEND_FAST_MODEL
+    )
+    # Haiku-still purposes (not yet promoted) mirror to Flash via tier derivation.
+    monkeypatch.setitem(llm_cli.LLM_MODELS, "haiku_test_purpose", llm_cli.FAST_CLASSIFIER_MODEL)
+    assert gemini_backend.gemini_model_for("haiku_test_purpose") == (
         gemini_backend.GEMINI_BACKEND_FAST_MODEL
     )
     # Sonnet / Opus analytical purposes mirror to Pro.
@@ -142,7 +148,7 @@ def test_gemini_model_tiers_follow_claude_table(monkeypatch: pytest.MonkeyPatch)
         gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL
     )
     assert gemini_backend.gemini_model_for(None) == gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL
-    # An explicit GEMINI_MODELS pin beats the tier derivation.
+    # An explicit GEMINI_MODELS pin beats everything.
     monkeypatch.setitem(gemini_backend.GEMINI_MODELS, "viewspec_compile", "gemini-exp-pin")
     assert gemini_backend.gemini_model_for("viewspec_compile") == "gemini-exp-pin"
 
