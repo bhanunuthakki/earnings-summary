@@ -53,7 +53,9 @@ from html import escape
 from pathlib import Path
 from statistics import median
 
-from decision_calibration import CalibrationStats, build_calibration
+from attribution import SkillDecomposition, decompose_alpha
+from calibration_guard import is_confident
+from decision_calibration import CalibrationStats, CohortPeriod, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -495,9 +497,23 @@ def render_allocation_decisions_panel(
     )
     timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
     calibration = build_calibration(db_path=db_path)
-    return compose_decisions_page(
-        audit, timeline, live, analytics.position_alpha, calibration=calibration
+    attribution = decompose_alpha(
+        analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
+    return compose_decisions_page(
+        audit,
+        timeline,
+        live,
+        analytics.position_alpha,
+        calibration=calibration,
+        attribution=attribution,
+    )
+
+
+def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
+    """The stated-conviction map the shared attribution engine joins on — pulled
+    off the audit's conviction column so the engine never imports this panel."""
+    return {r.ticker: r.conviction for r in audit if r.conviction is not None}
 
 
 def compose_decisions_page(
@@ -506,14 +522,17 @@ def compose_decisions_page(
     live: LivePortfolio,
     alpha: PositionAlpha | None,
     calibration: CalibrationStats | None = None,
+    attribution: SkillDecomposition | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
-    None (pre-0046 substrate) hides the section entirely."""
+    None (pre-0046 substrate) hides the section entirely; ``attribution`` None
+    (tracker offline / nothing to decompose) hides the skill block."""
     return "".join(
         [
             _PANEL_CSS,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
+            _skill_decomposition_section(attribution) if attribution is not None else "",
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
         ]
@@ -663,6 +682,114 @@ def _audit_row(r: SizingAuditRow) -> str:
 
 _OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
 
+# How many trailing periods the trend curve renders (older ones roll off the
+# left so the recent trajectory stays legible).
+_MAX_TREND_PERIODS = 12
+
+
+def _trend_sparkline(cohorts: list[CohortPeriod]) -> str:
+    """An inline SVG of the period hit-rates — the 'am I getting better?' curve,
+    not a static number. Graded periods are plotted (filled dot = confident n,
+    hollow = thin); ungraded periods leave a gap in the line. y maps 0→100%."""
+    w, h, pad = max(160, 44 * len(cohorts)), 56, 8
+    span_x = max(1, len(cohorts) - 1)
+    plot_h = h - 2 * pad
+
+    def x_at(i: int) -> float:
+        return pad + (w - 2 * pad) * (i / span_x)
+
+    def y_at(rate: float) -> float:
+        return pad + plot_h * (1.0 - rate)
+
+    # The polyline only connects consecutive graded periods; a gap (ungraded
+    # period) breaks the line into separate segments so we never imply a value.
+    segments: list[list[str]] = []
+    current: list[str] = []
+    dots: list[str] = []
+    for i, c in enumerate(cohorts):
+        if c.hit_rate is None:
+            if current:
+                segments.append(current)
+                current = []
+            continue
+        px, py = x_at(i), y_at(c.hit_rate)
+        current.append(f"{px:.1f},{py:.1f}")
+        fill = "var(--accent)" if is_confident(c.graded) else "var(--bg)"
+        dots.append(
+            f'<circle cx="{px:.1f}" cy="{py:.1f}" r="3" fill="{fill}" '
+            f'stroke="var(--accent)" stroke-width="1.5"><title>'
+            f"{escape(c.period)}: {c.hit_rate * 100:.0f}% (n={c.graded})</title></circle>"
+        )
+    if current:
+        segments.append(current)
+    mid_y = y_at(0.5)
+    lines = "".join(
+        f'<polyline points="{" ".join(seg)}" fill="none" stroke="var(--accent)" stroke-width="2" />'
+        for seg in segments
+        if len(seg) >= 2
+    )
+    return (
+        f'<svg class="adc-spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" '
+        f'role="img" aria-label="Decision hit-rate by period">'
+        f'<line x1="{pad}" y1="{mid_y:.1f}" x2="{w - pad}" y2="{mid_y:.1f}" '
+        'stroke="var(--border)" stroke-width="1" stroke-dasharray="3 3" />'
+        f"{lines}{''.join(dots)}</svg>"
+    )
+
+
+def _cohort_trend_block(stats: CalibrationStats) -> str:
+    """The period-over-period trend: a headline direction + the sparkline + a
+    compact per-period table (hit-rate, conviction gap, reversal cost). Hidden
+    when fewer than two periods carry a graded call (no trend to draw yet)."""
+    graded_periods = [c for c in stats.cohorts if c.hit_rate is not None]
+    if len(graded_periods) < 2:
+        return ""
+    cohorts = stats.cohorts[-_MAX_TREND_PERIODS:]
+    grain = stats.cohort_granularity
+    if stats.hit_rate_delta is None:
+        headline = "Trend forming — keep grading to read the direction."
+    else:
+        pp = stats.hit_rate_delta * 100.0
+        word = "improving" if stats.improving else ("flat" if abs(pp) < 0.5 else "slipping")
+        tone = "pos" if stats.improving else ("muted" if abs(pp) < 0.5 else "neg")
+        headline = (
+            f'Latest {grain} hit-rate is <span class="{tone}">{word} ({pp:+.0f}pp</span> '
+            "vs the prior period)."
+        )
+
+    def _gap_cell(c: CohortPeriod) -> str:
+        if c.conviction_gap is None:
+            return '<span class="muted">&mdash;</span>'
+        g = c.conviction_gap * 100.0
+        tone = "pos" if g >= 0 else "neg"
+        return f'<span class="{tone}">{g:+.0f}pp</span>'
+
+    rows = "".join(
+        "<tr>"
+        f"<td>{escape(c.period)}</td>"
+        f'<td class="num">{c.graded}/{c.total}</td>'
+        f'<td class="num">{f"{c.hit_rate * 100:.0f}%" if c.hit_rate is not None else "&mdash;"}'
+        + ("" if c.hit_rate is None or is_confident(c.graded) else '<sup title="thin n">*</sup>')
+        + "</td>"
+        f'<td class="num">{_gap_cell(c)}</td>'
+        f'<td class="num">{c.reversals_cost or "&mdash;" if c.reversals_cost else "&mdash;"}</td>'
+        "</tr>"
+        for c in cohorts
+    )
+    return (
+        '<h3 class="adc-sub">Am I getting better? — hit rate by ' + escape(grain) + "</h3>"
+        f'<p class="adc-line">{headline}</p>'
+        f"{_trend_sparkline(cohorts)}"
+        '<table class="ad-table adc-table adc-trend"><thead><tr>'
+        f"<th>{escape(grain).capitalize()}</th>"
+        '<th class="num">Graded/made</th><th class="num">Hit rate</th>'
+        '<th class="num" title="high-conviction hit-rate minus the rest, that period">'
+        "Conviction gap</th>"
+        '<th class="num" title="reversals that cost — you overrode a call that graded correct">'
+        "Reversal cost</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    )
+
 
 def _calibration_section(stats: CalibrationStats) -> str:
     """The decisions-history analysis (S15 PR2): hit rate by conviction,
@@ -760,7 +887,11 @@ def _calibration_section(stats: CalibrationStats) -> str:
         else ""
     )
 
-    return f"{head}{kpis}{conviction_table}{mix_line}{timing_line}{reversal_table}</section>"
+    trend_block = _cohort_trend_block(stats)
+    return (
+        f"{head}{kpis}{trend_block}{conviction_table}{mix_line}{timing_line}"
+        f"{reversal_table}</section>"
+    )
 
 
 def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str:
@@ -773,6 +904,93 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     if vindicated is False:
         return f'{badge} <span class="neg">reversal cost</span>'
     return badge
+
+
+def _skill_decomposition_section(d: SkillDecomposition) -> str:
+    """The shared selection/sizing/timing decomposition (L8 §6), rendered as a
+    KPI strip + an edge-vs-leak read + the conviction → outcome join. The
+    arithmetic is the engine's; this only frames it."""
+    window = (
+        f"{escape(d.window_start)} → {escape(d.window_end)}"
+        if d.window_start and d.window_end
+        else "the tracker window"
+    )
+    head = (
+        '<section class="panel"><h2>Skill decomposition</h2>'
+        f'<p class="sub">Realized dollar alpha over {window}, split into the repeatable '
+        "decisions behind it — <b>selection</b> (which names, size-neutral), <b>sizing</b> "
+        "(did your weighting amplify selection), <b>timing</b> (did within-window adds/trims "
+        "lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
+        "diagnostic. Alpha is the tracker's SPY-counterfactual — never recomputed here.</p>"
+    )
+
+    def kpi(label: str, v: float | None) -> str:
+        body = _money(v, signed=True) if v is not None else "&mdash;"
+        tone = "" if v is None else (" pos" if v >= 0 else " neg")
+        return (
+            f'<span class="adc-kpi"><b class="sk-val{tone}">{body}</b>'
+            f'<span class="sk-lbl">{label}</span></span>'
+        )
+
+    kpis = (
+        '<div class="adc-kpis sk-kpis">'
+        + kpi("total alpha", d.total_alpha_usd)
+        + kpi("selection", d.selection_usd)
+        + kpi("sizing", d.sizing_usd)
+        + kpi("timing", d.timing_usd)
+        + "</div>"
+    )
+
+    read = _skill_read(d)
+
+    def _rating(v: float | None) -> str:
+        return f"{v:.1f}/5" if v is not None else "&mdash;"
+
+    conv_rows = "".join(
+        "<tr>"
+        f"<td>{escape(c.conviction)}</td>"
+        f'<td class="num">{c.n}</td>'
+        f'<td class="num">{_signed_span(c.alpha_usd)}</td>'
+        f'<td class="num">{_signed_span(c.sizing_usd)}</td>'
+        f'<td class="num">{_rating(c.mean_conviction)}</td></tr>'
+        for c in d.by_conviction
+    )
+    conv_table = (
+        '<h3 class="adc-sub">Conviction &rarr; outcome</h3>'
+        '<table class="ad-table adc-table"><thead><tr>'
+        '<th>Conviction</th><th class="num">Names</th><th class="num">Alpha</th>'
+        '<th class="num" title="this bucket\'s share of the weight-tilt term">Sizing</th>'
+        '<th class="num">Avg rating</th>'
+        f"</tr></thead><tbody>{conv_rows}</tbody></table>"
+        if conv_rows
+        else ""
+    )
+    notes = "".join(f'<p class="muted ad-note">{escape(n)}</p>' for n in d.notes)
+    return f"{head}{kpis}{read}{conv_table}{notes}</section>"
+
+
+def _signed_span(v: float) -> str:
+    return f'<span class="{"pos" if v >= 0 else "neg"}">{_money(v, signed=True)}</span>'
+
+
+def _skill_read(d: SkillDecomposition) -> str:
+    """One PM-voice line naming the edge (most positive leg) and the leak (most
+    negative), hedged when the book is too thin to assert a verdict."""
+    legs = [("selection", d.selection_usd), ("sizing", d.sizing_usd), ("timing", d.timing_usd)]
+    present = [(name, v) for name, v in legs if v is not None]
+    if not present:
+        return ""
+    edge_name, edge_v = max(present, key=lambda kv: kv[1])
+    leak_name, leak_v = min(present, key=lambda kv: kv[1])
+    bits: list[str] = []
+    if edge_v > 0:
+        bits.append(f"your edge was <b>{edge_name}</b> ({_money(edge_v, signed=True)})")
+    if leak_v < 0 and leak_name != edge_name:
+        bits.append(f"your leak was <b>{leak_name}</b> ({_money(leak_v, signed=True)})")
+    if not bits:
+        return ""
+    lead = "This window, " if d.confident else "Directional only (thin book) — this window, "
+    return f'<p class="adc-line sk-read">{lead}{"; ".join(bits)}.</p>'
 
 
 def _timeline_section(timeline: list[TimelineEvent]) -> str:
@@ -868,6 +1086,18 @@ _PANEL_CSS = """<style>
 .ad-body { font-size: var(--fs-body); line-height: 1.5; }
 td.pos, span.pos { color: var(--ok); }
 td.neg, span.neg { color: var(--bad); }
+/* Cohort trend curve (L8): sparkline + per-period table. */
+.adc-spark { width: 100%; max-width: 560px; height: 56px; display: block; margin: 2px 0 8px; }
+.adc-trend th, .adc-trend td { padding-top: 2px; padding-bottom: 2px; }
+.adc-trend sup { color: var(--muted); font-size: 0.7em; }
+/* Skill decomposition (L8): money KPIs stack a value over a label. */
+.sk-kpis .adc-kpi { display: flex; flex-direction: column; gap: 1px; }
+.sk-val { font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
+.sk-val.pos { color: var(--ok); }
+.sk-val.neg { color: var(--bad); }
+.sk-lbl { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
+  letter-spacing: 0.04em; }
+.sk-read { font-size: var(--fs-body); color: var(--fg); margin: 2px 0 10px; }
 </style>"""
 
 # Editor wiring: toggle a row's intent editor, POST to /api/sizing-intents,
