@@ -50,7 +50,12 @@ from typing import cast
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
-from decision_calibration import CalibrationStats, ConvictionBucket, build_calibration
+from decision_calibration import (
+    CalibrationStats,
+    ConvictionBucket,
+    build_calibration,
+    omission_clause,
+)
 from decision_conditions import DecisionCondition, parse_condition
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import fetch_portfolio_analytics
@@ -264,6 +269,11 @@ def grounding_block(inputs: CoachInputs) -> str:
                 f"REVERSALS — {cal.reversals_vindicated} vindicated (override was right) vs "
                 f"{cal.reversals_cost} cost (you overrode a call that graded correct)"
             )
+        om_clause = omission_clause(cal.omissions)
+        if om_clause is not None:
+            # The omission side (L11): how the names he PASSED on graded. Names a
+            # "passes winners" bias in HIS own avoided tickers, not a textbook's.
+            lines.append("OMISSIONS — " + om_clause)
     skill = inputs.skill
     if skill is not None:
 

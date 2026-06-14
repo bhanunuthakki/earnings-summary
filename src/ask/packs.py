@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import cast
 
 from calibration_guard import rate_phrase
-from decision_calibration import bucket_for_conviction, build_calibration
+from decision_calibration import bucket_for_conviction, build_calibration, omission_clause
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
@@ -578,6 +578,11 @@ def _calibration_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[s
             "median days to outcome — "
             + ", ".join(f"{t.kind} {round(t.median_days)}d" for t in stats.time_to_outcome[:3])
         )
+    om_clause = omission_clause(stats.omissions)
+    if om_clause is not None:
+        # The omission side (L11): names you PASSED on, graded by what they did
+        # next — so a fresh pass is weighed against your record of passing.
+        lines.append("omissions — " + om_clause)
     for t in focus[:_MAX_CALIBRATION_FOCUS]:
         cohort = _focus_conviction_cohort(db_path, t)
         if cohort is None:

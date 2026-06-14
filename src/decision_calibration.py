@@ -36,9 +36,16 @@ from datetime import datetime
 from pathlib import Path
 from statistics import median
 
+from calibration_guard import confidence_note
+
 CONVICTION_ORDER: tuple[str, ...] = ("high", "medium", "low", "unstated")
 GRADED_LABELS: frozenset[str] = frozenset({"correct", "wrong", "mixed"})
 ACTION_KINDS: tuple[str, ...] = ("followed", "ignored", "partial", "reversed")
+
+# The omission side (L11): a graded 'avoid' that RAN AWAY is an error of omission.
+# The grader inverts the verdict for passes (a passed name that rallied grades
+# 'wrong'), so 'wrong' avoid rows are the misses and 'correct' the dodges.
+_MAX_OMISSION_MISSES = 5
 
 # Cohort granularity for the period-over-period "am I getting better?" curve.
 COHORT_GRANULARITIES: frozenset[str] = frozenset({"quarter", "year"})
@@ -133,6 +140,32 @@ class ConvictionBucket:
 
 
 @dataclass(frozen=True, slots=True)
+class OmissionMiss:
+    """One pass that ran away — a graded 'avoid' the name rallied past, the
+    omission side's worst-case evidence (the named 'you passed on a winner')."""
+
+    ticker: str
+    made_at: str  # ISO date
+    outcome_pct: float | None  # the move since the pass (positive = it ran)
+    note: str | None  # the grader's outcome_notes
+
+
+@dataclass(frozen=True, slots=True)
+class OmissionStats:
+    """The errors-of-omission ledger (L11): how the names the owner PASSED on
+    turned out. ``missed`` = graded 'wrong' (the pass ran away — opportunity
+    cost); ``dodged`` = graded 'correct' (the pass was a non-mover/decliner).
+    ``miss_rate`` is missed/graded — surface it min-n gated, never bare."""
+
+    graded: int  # graded avoid decisions (correct + wrong + mixed)
+    dodged: int  # correct — avoiding cost nothing
+    missed: int  # wrong — the name ran away (the omission)
+    mixed: int
+    miss_rate: float | None  # missed / graded; None when nothing graded
+    worst_misses: list[OmissionMiss]  # the passes that ran the most, biggest first
+
+
+@dataclass(frozen=True, slots=True)
 class ReversalRecord:
     """One decision the owner reversed, with the eventual verdict."""
 
@@ -178,6 +211,10 @@ class CalibrationStats:
     # curve's direction. None when fewer than two periods have a graded call.
     hit_rate_delta: float | None = None
     improving: bool | None = None  # hit_rate_delta > 0 ("am I getting better?")
+    # The errors-of-omission ledger (L11): how the passed names graded. Defaulted
+    # so the pre-L11 hand-constructed call shapes still build; build_calibration
+    # always supplies it (None only when there are zero avoid rows).
+    omissions: OmissionStats | None = None
 
 
 def _open(db_path: Path | str) -> sqlite3.Connection | None:
@@ -319,9 +356,15 @@ def build_calibration(
     if conn is None:
         return None
     try:
+        # outcome_pct/outcome_notes feed the L11 omission ledger; both exist on
+        # every real DB (0046) but may be absent on a hand-rolled/old schema —
+        # degrade to NULL rather than error (the best-effort posture).
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+        opct = "outcome_pct" if "outcome_pct" in cols else "NULL AS outcome_pct"
+        onotes = "outcome_notes" if "outcome_notes" in cols else "NULL AS outcome_notes"
         rows = conn.execute(
             "SELECT id, ticker, recommendation_kind, conviction, made_at, "
-            "user_action_kind, outcome_at, outcome_label FROM decisions"
+            f"user_action_kind, outcome_at, outcome_label, {opct}, {onotes} FROM decisions"
         ).fetchall()
     finally:
         conn.close()
@@ -334,11 +377,35 @@ def build_calibration(
     durations: dict[str, list[float]] = {}
     periods: dict[str, _PeriodAcc] = {}
     graded_total = correct_total = 0
+    # Omission accumulators (L11): the graded 'avoid' rows, inverted so a pass
+    # that ran away ('wrong') is the miss.
+    om_graded = om_dodged = om_missed = om_mixed = 0
+    om_misses: list[OmissionMiss] = []
 
     for row in rows:
         label = str(row["outcome_label"] or "pending")
         is_graded = label in GRADED_LABELS
         is_correct = label == "correct"
+
+        if str(row["recommendation_kind"] or "") == "avoid" and is_graded:
+            om_graded += 1
+            if label == "correct":
+                om_dodged += 1
+            elif label == "wrong":
+                om_missed += 1
+                opct = row["outcome_pct"]
+                om_misses.append(
+                    OmissionMiss(
+                        ticker=str(row["ticker"]).upper(),
+                        made_at=str(row["made_at"] or "")[:10],
+                        outcome_pct=float(opct) if opct is not None else None,
+                        note=str(row["outcome_notes"])
+                        if row["outcome_notes"] is not None
+                        else None,
+                    )
+                )
+            else:
+                om_mixed += 1
 
         conviction = str(row["conviction"] or "").lower()
         if conviction not in CONVICTION_ORDER:
@@ -416,6 +483,19 @@ def build_calibration(
         key=lambda t: -t.n,
     )
     cohorts, hit_rate_delta, improving = _build_cohorts(periods)
+    omissions: OmissionStats | None = None
+    if om_graded:
+        om_misses.sort(
+            key=lambda m: m.outcome_pct if m.outcome_pct is not None else 0.0, reverse=True
+        )
+        omissions = OmissionStats(
+            graded=om_graded,
+            dodged=om_dodged,
+            missed=om_missed,
+            mixed=om_mixed,
+            miss_rate=om_missed / om_graded,
+            worst_misses=om_misses[:_MAX_OMISSION_MISSES],
+        )
     return CalibrationStats(
         total=len(rows),
         graded=graded_total,
@@ -430,4 +510,25 @@ def build_calibration(
         cohort_granularity=cohort_granularity,
         hit_rate_delta=hit_rate_delta,
         improving=improving,
+        omissions=omissions,
     )
+
+
+def omission_clause(om: OmissionStats | None) -> str | None:
+    """One honest, min-n-framed clause summarising the errors-of-omission ledger
+    (L11) — shared by the L1 calibration pack and the L8 coach grounding so the
+    two never diverge on phrasing. The caller prefixes its own label
+    ('omissions — ' / 'OMISSIONS — '). None when nothing graded yet to surface."""
+    if om is None or not om.graded:
+        return None
+    misses = "; ".join(
+        f"{m.ticker} {f'+{m.outcome_pct * 100:.0f}%' if m.outcome_pct is not None else 'ran'}"
+        for m in om.worst_misses
+    )
+    clause = (
+        f"of {om.graded} passed names graded, {om.missed} ran away from you (missed), "
+        f"{om.dodged} you correctly dodged ({confidence_note(om.graded)})"
+    )
+    if misses:
+        clause += f"; biggest passes that ran: {misses}"
+    return clause
