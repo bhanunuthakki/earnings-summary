@@ -406,21 +406,46 @@ class Concentration:
 
 
 @dataclass(slots=True)
-class Positioning:
-    """``GET /api/portfolio/positioning`` — allocation cuts + concentration.
+class PositionCorrelationRow:
+    """One holding's correlation + beta to each benchmark over the window
+    (``GET /api/portfolio/positioning`` → ``correlations``). Each
+    ``correlation_*`` / ``beta_*`` is None when the name lacks enough overlapping
+    price history (see ``sample_size``). L5 stopped discarding these rows — they
+    feed the book factor/style exposure roll-up."""
 
-    The endpoint also returns per-ticker correlation/beta rows; v1 consumes only
-    the book-level ``weighted_avg_correlation_spy`` single-number read.
+    security_id: int | None
+    ticker: str | None
+    name: str | None
+    value: float | None
+    weight_pct: float | None
+    sample_size: int | None
+    correlation_spy: float | None
+    beta_spy: float | None
+    correlation_qqq: float | None
+    beta_qqq: float | None
+    correlation_policy: float | None
+    beta_policy: float | None
+
+
+@dataclass(slots=True)
+class Positioning:
+    """``GET /api/portfolio/positioning`` — allocation cuts + concentration +
+    the per-ticker correlation/beta table.
+
+    ``weighted_avg_correlation_spy`` is the single book-level read; ``correlations``
+    (L5) is the per-name table behind it, consumed by the factor/style roll-up.
     """
 
     snapshot_date: str | None
     total_value: float | None
     concentration: Concentration | None
     weighted_avg_correlation_spy: float | None
+    has_policy: bool = False
     by_asset_type: list[AllocationBucket] = field(default_factory=list[AllocationBucket])
     by_sector: list[AllocationBucket] = field(default_factory=list[AllocationBucket])
     by_region: list[AllocationBucket] = field(default_factory=list[AllocationBucket])
     by_account_type: list[AllocationBucket] = field(default_factory=list[AllocationBucket])
+    correlations: list[PositionCorrelationRow] = field(default_factory=list[PositionCorrelationRow])
 
 
 @dataclass(slots=True)
@@ -666,11 +691,33 @@ def _parse_positioning(data: dict[str, object]) -> Positioning:
         total_value=_f(data.get("total_value")),
         concentration=concentration,
         weighted_avg_correlation_spy=_f(data.get("weighted_avg_correlation_spy")),
+        has_policy=bool(data.get("has_policy")),
         by_asset_type=_parse_buckets(data.get("by_asset_type")),
         by_sector=_parse_buckets(data.get("by_sector")),
         by_region=_parse_buckets(data.get("by_region")),
         by_account_type=_parse_buckets(data.get("by_account_type")),
+        correlations=_parse_correlations(data.get("correlations")),
     )
+
+
+def _parse_correlations(v: object) -> list[PositionCorrelationRow]:
+    return [
+        PositionCorrelationRow(
+            security_id=_i(r.get("security_id")),
+            ticker=_s(r.get("ticker")),
+            name=_s(r.get("name")),
+            value=_f(r.get("value")),
+            weight_pct=_f(r.get("weight_pct")),
+            sample_size=_i(r.get("sample_size")),
+            correlation_spy=_f(r.get("correlation_spy")),
+            beta_spy=_f(r.get("beta_spy")),
+            correlation_qqq=_f(r.get("correlation_qqq")),
+            beta_qqq=_f(r.get("beta_qqq")),
+            correlation_policy=_f(r.get("correlation_policy")),
+            beta_policy=_f(r.get("beta_policy")),
+        )
+        for r in _dicts(v)
+    ]
 
 
 def _parse_policy(data: dict[str, object]) -> PolicyMix:

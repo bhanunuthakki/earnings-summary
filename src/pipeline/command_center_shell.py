@@ -152,6 +152,11 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "Portfolio",
         (
             ("portfolio", "Performance", "/api/panel/portfolio", False, False),
+            # L5 — the whole-book risk cockpit: book drawdown (max DD + underwater
+            # curve + recovery), factor/style exposure rolled up from the
+            # per-ticker correlation/beta rows, and the macro-stress lens with a
+            # scenario picker. Grouped with Performance (same pillar).
+            ("portfolio_risk", "Risk", "/api/panel/portfolio_risk", False, False),
             # UX round 4 — the portfolio-level reading layer surfaced out of
             # Performance's bottom strip: thesis rollup + sector exposure, the
             # next-dollar allocation distribution, the cross-portfolio lens memo.
@@ -494,6 +499,7 @@ _SKELETON_KINDS: dict[str, str] = {
     "triage": "table",
     "explore": "form",
     "portfolio": "kpis",
+    "portfolio_risk": "kpis",
     "portfolio_synthesis": "cards",
     "decisions_record": "table",
     "advisor_memos": "cards",

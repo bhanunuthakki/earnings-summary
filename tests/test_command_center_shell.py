@@ -387,6 +387,18 @@ def test_synthesis_subtab_sits_right_after_performance() -> None:
     assert perf < synth < decisions
 
 
+def test_risk_subtab_sits_between_performance_and_synthesis() -> None:
+    """L5: the whole-book Risk cockpit is its own lazy sub-tab, grouped with
+    Performance (same pillar) — placed right after it, before Synthesis."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'data-endpoint="/api/panel/portfolio_risk"' in html
+    assert 'data-tab-target="portfolio_risk" data-cc-theme="portfolio"' in html
+    perf = html.index('data-tab-target="portfolio"')
+    risk = html.index('data-tab-target="portfolio_risk"')
+    synth = html.index('data-tab-target="portfolio_synthesis"')
+    assert perf < risk < synth
+
+
 def test_content_width_is_wide() -> None:
     """PR2: the 1280px cap left ~300px dead gutters per side at 1920 — the
     shell now flows to 1600."""

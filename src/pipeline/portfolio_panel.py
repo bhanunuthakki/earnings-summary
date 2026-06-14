@@ -53,10 +53,20 @@ from integrations.portfolio_tracker_client import (
     PolicyMix,
     PortfolioAnalytics,
     PositionAlpha,
+    PositionCorrelationRow,
     Positioning,
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from portfolio_risk import (
+    CrowdedName,
+    DrawdownPoint,
+    DrawdownStats,
+    FactorRollup,
+    compute_drawdown,
+    factor_exposure_rollup,
+)
+from ui.controls import ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
 
@@ -1137,6 +1147,407 @@ def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) 
     body = f'<p class="pf-nd-excerpt">{escape(excerpt)}</p>'
     heading = '<h3 class="panel-h3 pf-nd-memo-h">Advisor memo</h3>' if with_heading else ""
     return f"{heading}{meta}{body}"
+
+
+# ---------------------------------------------------------------------------
+# Portfolio → Risk tab (L5 — the whole-book risk cockpit). Three of the
+# performance/risk pillar's high-severity gaps in one panel:
+#   * book DRAWDOWN (max DD + underwater curve + time-to-recovery) computed
+#     client-side from the tracker's daily TWR series (no drawdown endpoint),
+#   * FACTOR/STYLE exposure rolled up from the per-ticker correlation/beta rows
+#     the client used to discard (+ a 10Y rate leg from macro_sensitivities),
+#   * the whole-book MACRO STRESS lens (CLI-only before) surfaced with a
+#     scenario picker that fires execution/run_scenario.py over an SSE job.
+# Macro stress reads the local cache, so it renders even with the tracker down;
+# drawdown + factor degrade to an offline note (the cached-snapshot path lands
+# alongside, L5 PR2).
+# ---------------------------------------------------------------------------
+
+_RISK_CSS = """<style>
+.pfr-uw { width: 100%; height: auto; display: block; margin-top: 6px; }
+.pfr-top { font-size: var(--fs-caption); color: var(--muted); margin: 6px 0 0; }
+.pfr-tops { margin-top: 8px; }
+.pfr-run { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
+.pfr-run select { font-size: var(--fs-body); }
+.pfr-log { display: none; max-height: 160px; overflow: auto; margin: 0 0 12px; }
+</style>"""
+
+# Fires the portfolio macro-stress lens (execution/run_scenario.py --portfolio)
+# over the standard /actions/stream SSE channel, then re-fetches the Risk panel
+# so the freshly-cached digest paints. Plain string — braces are literal JS.
+# (Mirrors _START_TRACKER_JS's reinject-on-done idiom.)
+_RUN_SCENARIO_JS = """
+(function () {
+  var btn = document.getElementById('pfr-run-scenario');
+  if (!btn || btn.dataset.wired) return;
+  btn.dataset.wired = '1';
+  var sel = document.getElementById('pfr-scenario');
+  var msg = document.getElementById('pfr-run-msg');
+  var log = document.getElementById('pfr-run-log');
+  function reinject(target, html) {
+    target.innerHTML = html;
+    var scripts = target.querySelectorAll('script');
+    for (var i = 0; i < scripts.length; i++) {
+      var old = scripts[i];
+      var s = document.createElement('script');
+      if (old.src) s.src = old.src; else s.textContent = old.textContent;
+      old.parentNode.replaceChild(s, old);
+    }
+  }
+  function reloadPanel() {
+    fetch('/api/panel/portfolio_risk').then(function (r) { return r.text(); }).then(function (html) {
+      var root = document.getElementById('pfr-root');
+      var target = root ? root.closest('.cc-panel-body') : null;
+      if (target) { reinject(target, html); } else { location.reload(); }
+    }).catch(function () { btn.disabled = false; });
+  }
+  btn.addEventListener('click', function () {
+    var scenario = sel ? sel.value : '';
+    if (!scenario) { msg.textContent = 'pick a scenario'; return; }
+    btn.disabled = true;
+    msg.textContent = 'running… (LLM digest, ~10-40s)';
+    log.style.display = 'block';
+    fetch('/actions/run-scenario', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scenario: scenario})
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+      .then(function (res) {
+        if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); btn.disabled = false; return; }
+        try {
+          var es = new EventSource(res.j.stream_url);
+          es.onmessage = function (ev) {
+            try {
+              var f = JSON.parse(ev.data);
+              if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
+              if (f.event === 'done') { es.close(); msg.textContent = 'done — refreshing digest…'; reloadPanel(); }
+            } catch (e) {}
+          };
+          es.onerror = function () { es.close(); btn.disabled = false; };
+        } catch (e) { btn.disabled = false; }
+      }).catch(function () { msg.textContent = 'network error'; btn.disabled = false; });
+  });
+})();
+"""
+
+
+def render_portfolio_risk_panel(
+    *,
+    api_url: str | None = None,
+    db_path: Path | None = None,
+) -> str:
+    """The Portfolio → Risk tab fragment: book drawdown + factor/style exposure
+    (from the live tracker) and the whole-book macro-stress lens (from the local
+    artifact cache, with a scenario picker). The tracker-fed sections degrade to
+    an offline note; the macro-stress section renders regardless."""
+    analytics = fetch_portfolio_analytics(
+        api_url=api_url, only={"performance", "positioning", "beta"}
+    )
+    drawdown = (
+        compute_drawdown(analytics.performance.points)
+        if analytics.performance is not None
+        else None
+    )
+    factor: FactorRollup | None = None
+    if analytics.positioning is not None:
+        rate_betas = _rate_betas(analytics.positioning.correlations, db_path)
+        factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
+    scenarios = _scenario_options()
+    digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
+    return compose_risk_page(
+        analytics, drawdown=drawdown, factor=factor, scenarios=scenarios, digest=digest
+    )
+
+
+def compose_risk_page(
+    analytics: PortfolioAnalytics,
+    *,
+    drawdown: DrawdownStats | None,
+    factor: FactorRollup | None,
+    scenarios: list[tuple[str, str]],
+    digest: str,
+) -> str:
+    """Pure assembly of the Risk page (testable without network or DB). The
+    ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
+    after a digest regenerates."""
+    parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
+    if analytics.available:
+        if analytics.beta is not None:
+            parts.append(_risk_section(analytics.beta))
+        parts.append(_drawdown_section(drawdown))
+        if factor is not None:
+            parts.append(_factor_exposure_section(factor))
+    else:
+        parts.append(_risk_offline_note(analytics))
+    parts.append(_macro_stress_section(scenarios, digest))
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _rate_betas(rows: list[PositionCorrelationRow], db_path: Path | None) -> dict[str, float]:
+    """Per-ticker 10Y-yield beta from the local ``macro_sensitivities`` table —
+    the rate-sensitivity leg of the factor roll-up. ``{}`` when the table or DB
+    is absent (the leg then hides itself)."""
+    if db_path is None or not db_path.exists():
+        return {}
+    try:
+        from macro_store import fetch_sensitivities
+    except ImportError:
+        return {}
+    out: dict[str, float] = {}
+    for r in rows:
+        if not r.ticker:
+            continue
+        try:
+            sens = fetch_sensitivities(ticker=r.ticker, db_path=db_path)
+        except Exception:  # defensive on a render path; absence is fine
+            continue
+        for s in sens:
+            if s.series_id == "us_10y":
+                out[r.ticker.upper()] = s.beta
+                break
+    return out
+
+
+def _scenario_options() -> list[tuple[str, str]]:
+    """(id, title) pairs for the scenario picker, in registry order."""
+    from macro_scenarios import SCENARIOS, all_scenario_ids
+
+    return [(sid, SCENARIOS[sid].title) for sid in all_scenario_ids()]
+
+
+def _cached_macro_digest_html(db_path: Path) -> str:
+    """The most recent cached portfolio macro-stress digest as rendered HTML
+    (heading + scenario title + 'as of' stamp + prose), or '' when none exists."""
+    if not db_path.exists():
+        return ""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return ""
+    try:
+        row = conn.execute(
+            "SELECT purpose, content_md, generated_at FROM llm_artifacts "
+            "WHERE scope = 'portfolio' AND purpose LIKE 'lens:portfolio_macro_stress:%' "
+            "AND superseded_by_id IS NULL AND content_md IS NOT NULL "
+            "ORDER BY generated_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    finally:
+        conn.close()
+    if row is None:
+        return ""
+    purpose, content_md, generated_at = str(row[0]), str(row[1]), str(row[2])
+    scenario_id = purpose.rsplit(":", 1)[-1]
+    title = scenario_id
+    try:
+        from macro_scenarios import get as get_scenario
+
+        sc = get_scenario(scenario_id)
+        if sc is not None:
+            title = sc.title
+    except ImportError:
+        pass
+    from pipeline.analytical_dashboard_html import light_markdown_to_html
+
+    meta = f'<p class="sub">Latest: {escape(title)} · {stamp_html(generated_at, mode="date")}</p>'
+    return f'<h3 class="panel-h3">Stress digest</h3>{meta}{light_markdown_to_html(content_md)}'
+
+
+def _risk_offline_note(analytics: PortfolioAnalytics) -> str:
+    """Tracker down → drawdown / benchmark-risk / factor exposure can't be read
+    live. (L5 PR2 swaps this for the last-known cached snapshot, stamped.)"""
+    reason = _offline_reason(next(iter(analytics.errors.values()), None))
+    return (
+        '<section class="panel"><h2>Risk &amp; drawdown</h2>'
+        '<p class="sub">Drawdown, benchmark-risk stats, and factor exposure come from the '
+        "live portfolio tracker.</p>"
+        f'<p class="muted">{escape(reason)}</p></section>'
+    )
+
+
+def _dd_window(dd: DrawdownStats) -> str:
+    if dd.peak_date and dd.trough_date:
+        return f"{dd.peak_date} → {dd.trough_date}"
+    return "peak → trough"
+
+
+def _drawdown_section(dd: DrawdownStats | None) -> str:
+    head = (
+        '<section class="panel"><h2>Drawdown</h2>'
+        '<p class="sub">Peak-to-trough decline of the book\'s time-weighted return over the '
+        "tracker's window — the worst loss ridden, and whether it has recovered.</p>"
+    )
+    if dd is None:
+        return f'{head}<p class="muted">No daily return series available for a drawdown read.</p></section>'
+    never_fell = dd.trough_date is None
+    cards = [
+        _kpi_card(
+            "Max drawdown",
+            _pct(dd.max_drawdown_pct, signed=True),
+            sub="no drawdown in window" if never_fell else _dd_window(dd),
+            tone="" if never_fell else _tone(dd.max_drawdown_pct),
+        ),
+        _kpi_card(
+            "Current drawdown",
+            _pct(dd.current_drawdown_pct, signed=True),
+            sub="at a high" if dd.current_drawdown_pct >= -0.05 else "below peak",
+            tone="" if dd.current_drawdown_pct >= -0.05 else "neg",
+        ),
+    ]
+    if never_fell:
+        cards.append(_kpi_card("Recovery", "none needed", sub="never below peak", tone="pos"))
+    elif dd.recovered:
+        rec = f"{dd.days_to_recovery}d" if dd.days_to_recovery is not None else "recovered"
+        cards.append(_kpi_card("Time to recovery", rec, sub="trough → new high", tone="pos"))
+    else:
+        cards.append(_kpi_card("Recovery", "underwater", sub="not yet recovered", tone="neg"))
+    return (
+        f"{head}"
+        f'<div class="kpi-strip">{"".join(cards)}</div>'
+        f"{_underwater_chart(dd.underwater)}</section>"
+    )
+
+
+def _underwater_chart(points: list[DrawdownPoint]) -> str:
+    """A filled underwater (drawdown) area chart: 0% at the top, the trough at
+    the bottom. Presentation only — the values are plotted as computed."""
+    coords = [(p.date, p.drawdown_pct) for p in points if p.date]
+    if len(coords) < 2:
+        return ""
+    if len(coords) > 240:
+        stride = -(-len(coords) // 240)  # ceil division
+        sampled = coords[::stride]
+        if sampled[-1] != coords[-1]:
+            sampled.append(coords[-1])
+        coords = sampled
+    vals = [v for _d, v in coords]
+    lo = min(min(vals), 0.0)
+    pad = (-lo or 1.0) * 0.08
+    y0, y1 = lo - pad, pad  # y1 just above 0 (the surface); y0 below the trough
+    width, height = 860.0, 180.0
+    pad_t, pad_r, pad_b, pad_l = 10.0, 14.0, 22.0, 46.0
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+    n = len(coords)
+
+    def x_of(i: int) -> float:
+        return pad_l + (i / max(n - 1, 1)) * plot_w
+
+    def y_of(v: float) -> float:
+        return pad_t + plot_h - ((v - y0) / (y1 - y0)) * plot_h
+
+    line = " ".join(
+        ("M" if i == 0 else "L") + f"{x_of(i):.1f},{y_of(v):.1f}"
+        for i, (_d, v) in enumerate(coords)
+    )
+    base_y = y_of(0.0)
+    area = (
+        f"M{x_of(0):.1f},{base_y:.1f} "
+        + " ".join(f"L{x_of(i):.1f},{y_of(v):.1f}" for i, (_d, v) in enumerate(coords))
+        + f" L{x_of(n - 1):.1f},{base_y:.1f} Z"
+    )
+    parts: list[str] = [
+        f'<svg class="pfr-uw" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
+        'aria-label="Underwater drawdown curve: percent below the running peak over the window">'
+    ]
+    # 0% surface line + the trough gridline with labels.
+    for tick in (0.0, lo):
+        ty = y_of(tick)
+        parts.append(
+            f'<line x1="{pad_l:.1f}" x2="{pad_l + plot_w:.1f}" y1="{ty:.1f}" y2="{ty:.1f}" '
+            'stroke="var(--border)" stroke-width="0.5" stroke-dasharray="2 3" />'
+        )
+        parts.append(
+            f'<text x="{pad_l - 6:.1f}" y="{ty + 3:.1f}" text-anchor="end" font-size="9.5" '
+            f'fill="var(--muted)" font-family="var(--mono)">{tick:.1f}%</text>'
+        )
+    anchors = {0: "start", n // 2: "middle", n - 1: "end"}
+    for i, anchor in anchors.items():
+        parts.append(
+            f'<text x="{x_of(i):.1f}" y="{height - 6:.1f}" text-anchor="{anchor}" '
+            'font-size="9.5" fill="var(--muted)" font-family="var(--mono)">'
+            f"{escape(coords[i][0])}</text>"
+        )
+    parts.append(f'<path d="{area}" fill="var(--bad)" fill-opacity="0.16" stroke="none" />')
+    parts.append(
+        f'<path d="{line}" fill="none" stroke="var(--bad)" stroke-width="1.6" '
+        'stroke-linejoin="round" stroke-linecap="round" />'
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _factor_exposure_section(factor: FactorRollup) -> str:
+    head = (
+        '<section class="panel"><h2>Factor &amp; style exposure</h2>'
+        '<p class="sub">Book value-weighted loadings from the per-holding correlation/beta '
+        "table — where the book crowds into market, growth, and rate sensitivity.</p>"
+    )
+    cards: list[str] = []
+    if factor.spy_beta is not None:
+        cards.append(_kpi_card("Market β (SPY)", _ratio(factor.spy_beta), sub="value-weighted"))
+    if factor.qqq_beta is not None:
+        cards.append(_kpi_card("Growth β (QQQ)", _ratio(factor.qqq_beta), sub="value-weighted"))
+    if factor.growth_tilt is not None:
+        cards.append(_kpi_card("Growth tilt", f"{factor.growth_tilt:+.2f}", sub="QQQ - SPY beta"))
+    if factor.avg_correlation_spy is not None:
+        cards.append(
+            _kpi_card("Crowding", _ratio(factor.avg_correlation_spy), sub="avg corr to SPY")
+        )
+    if factor.rate_beta_10y is not None:
+        cards.append(_kpi_card("Rate β (10Y)", _ratio(factor.rate_beta_10y), sub="vs 10Y yield"))
+    cov = f"{factor.names_priced} of {factor.names_total} names priced"
+    note = (
+        f'<p class="muted pfr-top">{escape(cov)}. Value / size / momentum loadings need a '
+        "factor-return series the tracker doesn't expose — not shown.</p>"
+    )
+    tops = (
+        '<div class="pfr-tops">'
+        f"{_factor_top_line('Most market-sensitive', factor.top_market)}"
+        f"{_factor_top_line('Most growth-leaning', factor.top_growth)}"
+        f"{_factor_top_line('Most crowded (corr SPY)', factor.top_crowding)}"
+        "</div>"
+    )
+    return f'{head}<div class="kpi-strip">{"".join(cards)}</div>{note}{tops}</section>'
+
+
+def _factor_top_line(label: str, names: list[CrowdedName]) -> str:
+    if not names:
+        return ""
+    chips = ", ".join(
+        f"{ticker_label(c.ticker, href=f'../research/{escape(c.ticker)}/')} "
+        f'<span class="muted">({c.loading:+.2f})</span>'
+        for c in names
+    )
+    return f'<p class="pfr-top"><strong>{escape(label)}:</strong> {chips}</p>'
+
+
+def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
+    options = "".join(
+        f'<option value="{escape(sid)}">{escape(title)}</option>' for sid, title in scenarios
+    )
+    body = (
+        digest
+        or '<p class="muted">No stress digest cached yet — pick a scenario and run it to '
+        "generate the per-holding beta x shock read-through.</p>"
+    )
+    return (
+        '<section class="panel"><h2>Whole-book macro stress</h2>'
+        "<p class=\"sub\">Apply a named scenario's shocks to each holding's betas — the "
+        "cross-name read-through, hedge clusters, and capital-allocation actions. Cached; "
+        "re-running a scenario is free.</p>"
+        '<div class="pfr-run">'
+        '<label class="k-label" for="pfr-scenario">Scenario</label>'
+        f'<select id="pfr-scenario">{options}</select>'
+        '<button type="button" class="k-btn k-btn-primary" id="pfr-run-scenario">'
+        "Run scenario</button>"
+        '<span class="muted" id="pfr-run-msg"></span>'
+        "</div>"
+        '<pre id="pfr-run-log" class="cli-hint pfr-log"></pre>'
+        f"{body}"
+        f"<script>{_RUN_SCENARIO_JS}</script>"
+        "</section>"
+    )
 
 
 def render_live_portfolio_section(live: LivePortfolio) -> str:
