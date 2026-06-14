@@ -130,6 +130,20 @@
       "notes": "the keystone case — a conviction-driven trim pulls the sizing trio (holdings+dcf+conviction) AND calibration so the move is weighed against documented accuracy"
     },
     {
+      "id": "rt-019-tax-loss-harvest",
+      "mode": "router",
+      "question": "Which lot should I sell to harvest a tax loss before year-end?",
+      "expected_packs": ["holdings"],
+      "notes": "pure tax-loss-harvest ask — per-account tax treatment + unrealized P&L live only in the holdings pack; not a valuation call, so no dcf"
+    },
+    {
+      "id": "rt-020-tax-aware-sell-account",
+      "mode": "router",
+      "question": "I need to raise some cash from NU — which account should I sell it from to minimize taxes?",
+      "expected_packs": ["holdings"],
+      "notes": "tax-aware-sell: which tax bucket (taxable vs sheltered) to draw from — holdings carries the per-account treatment"
+    },
+    {
       "id": "gr-001-trim-grounded",
       "mode": "grounded",
       "question": "Should I trim NU here?",
@@ -146,6 +160,15 @@
       "selected_includes": ["holdings"],
       "require_kinds": ["holdings"],
       "notes": "holdings selection + the item materializing either live or as an explicit offline marker"
+    },
+    {
+      "id": "gr-006-tax-harvest-grounded",
+      "mode": "grounded",
+      "question": "Which of my lots are sitting on a loss I could harvest in a taxable account?",
+      "focus_tickers": ["NU", "MELI"],
+      "selected_includes": ["holdings"],
+      "require_kinds": ["holdings"],
+      "notes": "holdings must be selected and materialize (live, or an explicit offline marker) — it now carries the per-account tax treatment a harvest answer needs"
     },
     {
       "id": "gr-003-decisions-grounded",

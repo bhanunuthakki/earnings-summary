@@ -129,6 +129,10 @@ Rules:
   high-conviction read") need "calibration". Add it to a conviction-driven
   sizing question ("should I trim this high-conviction name") so the answer
   can weigh the move against how that conviction cohort has actually graded.
+- Tax questions (tax-loss harvesting, "which lot/account do I sell to
+  minimize tax", taxable vs sheltered exposure) need "holdings" — it carries
+  each name's per-account tax treatment and unrealized P&L. Add "dcf" only
+  when the sale is also a valuation call, not for a pure tax/harvest ask.
 
 Question: {question}
 JSON:"""

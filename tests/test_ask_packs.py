@@ -23,6 +23,7 @@ from integrations.portfolio_tracker_client import (
     PositionAlpha,
     PositionAlphaRow,
     Positioning,
+    TaxLot,
 )
 
 _DDL = """
@@ -150,6 +151,42 @@ def _live(available: bool = True) -> LivePortfolio:
     )
 
 
+def _live_taxed() -> LivePortfolio:
+    """A live book whose positions carry per-account tax lots: NU split across a
+    taxable brokerage and a Roth (tax-free), MELI a wholly-taxable loser (the
+    harvest candidate)."""
+    nu = LivePosition(
+        ticker="NU",
+        name="Nu",
+        quantity=1000,
+        market_value=22_500.0,
+        cost_basis=15_000.0,
+        unrealized_pnl=7_500.0,
+        percent_of_portfolio=18.2,
+        accounts=[
+            TaxLot(1, "Brokerage", 800, 18_000.0, "taxable"),
+            TaxLot(2, "Roth IRA", 200, 4_500.0, "tax_free"),
+        ],
+    )
+    meli = LivePosition(
+        ticker="MELI",
+        name="Meli",
+        quantity=10,
+        market_value=15_000.0,
+        cost_basis=16_000.0,
+        unrealized_pnl=-1_000.0,
+        percent_of_portfolio=12.1,
+        accounts=[TaxLot(1, "Brokerage", 10, 15_000.0, "taxable")],
+    )
+    return LivePortfolio(
+        available=True,
+        api_url="x",
+        total_market_value=123_456.0,
+        positions=[nu, meli],
+        by_tax_treatment={"taxable": 33_000.0, "tax_deferred": 0.0, "tax_free": 4_500.0},
+    )
+
+
 def _analytics(available: bool = True) -> PortfolioAnalytics:
     if not available:
         return PortfolioAnalytics(available=False, api_url="x", errors={"performance": "down"})
@@ -239,6 +276,10 @@ def _fake_live_offline(**_k: object) -> LivePortfolio:
     return _live(available=False)
 
 
+def _fake_live_taxed(**_k: object) -> LivePortfolio:
+    return _live_taxed()
+
+
 def _fake_analytics(**_k: object) -> PortfolioAnalytics:
     return _analytics()
 
@@ -293,7 +334,54 @@ def test_holdings_offline_is_explicit_not_absent(db: Path, monkeypatch: pytest.M
     items = load_packs(["holdings"], db_path=db, focus_tickers=["NU"])
     assert len(items) == 1
     assert "tracker offline" in str(items[0]["text"])
+    assert "tax lots" in str(items[0]["text"])  # the offline marker names what's missing
     assert "(offline)" in str(items[0]["label"])
+
+
+def test_holdings_surfaces_tax_lots_split_book_and_guidance(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(packs, "fetch_live_portfolio", _fake_live_taxed)
+    monkeypatch.setattr(packs, "fetch_portfolio_analytics", _fake_analytics)
+    items = load_packs(["holdings"], db_path=db, focus_tickers=["NU", "MELI"])
+    assert len(items) == 1
+    text = str(items[0]["text"])
+    # Per-position split: NU spans a taxable brokerage + a Roth; MELI is wholly
+    # taxable (so its -$1.0K loss is the harvest candidate).
+    nu_line = "NU 18.2% · $22.5K · cost $15.0K · P&L +$7.5K · held: $18.0K taxable, $4.5K tax-free"
+    assert nu_line in text
+    assert "MELI 12.1% · $15.0K · cost $16.0K · P&L -$1.0K · held: $15.0K taxable" in text
+    # Book-wide roll-up (zero buckets dropped — the empty tax-deferred bucket
+    # must not appear in the roll-up segment itself).
+    assert "Book by tax treatment — $33.0K taxable, $4.5K tax-free" in text
+    rollup = text.split("Book by tax treatment — ")[1].split(".")[0]
+    assert "tax-deferred" not in rollup
+    # The reasoning rules that make the harvest/tax-aware-sell answerable, plus
+    # an honest fence around what the data does NOT contain.
+    assert "harvesting only realizes a deduction in TAXABLE lots" in text
+    assert "no current capital-gains tax" in text
+    assert "holding period (short- vs long-term) are NOT in this data" in text
+
+
+def test_holdings_tax_block_stays_within_budget(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(packs, "fetch_live_portfolio", _fake_live_taxed)
+    monkeypatch.setattr(packs, "fetch_portfolio_analytics", _fake_analytics)
+    item = load_packs(["holdings"], db_path=db, focus_tickers=[])[0]
+    spec = next(p for p in PACKS if p.key == "holdings")
+    # Same +120 header/marker slack the grounded eval contract allows.
+    assert len(str(item["text"])) <= spec.char_budget + 120
+
+
+def test_holdings_without_tax_data_is_unchanged(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The plain fixture carries no lots / no by_tax_treatment — the holdings
+    # pack must omit the tax block entirely (older tracker, or nothing
+    # classifiable), not emit empty scaffolding.
+    item = _one(db, "holdings", ["NU", "MELI"], monkeypatch)
+    assert item is not None
+    text = str(item["text"])
+    assert "held:" not in text
+    assert "Book by tax treatment" not in text
+    assert "harvesting" not in text
 
 
 def test_conviction_latest_per_kind_wins(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

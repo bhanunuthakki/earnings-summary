@@ -7,7 +7,9 @@ valuation, and what did I already decide" — the six portfolio stores a
 trim/add/size question needs:
 
   holdings     — live positions from the tracker API (weights, cost basis,
-                 unrealized P&L); the tracker owns all the math
+                 unrealized P&L, and per-account tax treatment so tax-loss-
+                 harvest / "which lot do I sell" is answerable); the tracker
+                 owns all the math
   conviction   — stated conviction + target weights (position_sizing_intent)
   dcf          — latest fair value vs live price per ticker (dcf_runs)
   decisions    — the recommendation ledger + outcomes (decisions)
@@ -51,7 +53,10 @@ from calibration_guard import rate_phrase
 from decision_calibration import bucket_for_conviction, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
+    TAX_BUCKETS,
+    LivePortfolio,
     LivePosition,
+    TaxLot,
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
@@ -93,9 +98,12 @@ PACKS: tuple[PackSpec, ...] = (
         "holdings",
         "Tracker · live holdings",
         "/#portfolio",
-        900,
-        "live position sizes: weights, market value, cost basis, unrealized "
-        'P&L — for trim/add/size/exposure/cost-basis/"do I own" questions',
+        1100,
+        "live position sizes (weights, market value, cost basis, unrealized "
+        "P&L) AND each name's per-account tax treatment (taxable / tax-deferred "
+        '/ tax-free) — for trim/add/size/exposure/cost-basis/"do I own" AND '
+        'tax-loss-harvesting / "which lot or account do I sell to minimize tax" '
+        "questions",
     ),
     PackSpec(
         "conviction",
@@ -261,8 +269,30 @@ def _day(v: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# holdings — live tracker positions
+# holdings — live tracker positions (+ per-account tax treatment)
 # ---------------------------------------------------------------------------
+
+# Display names for the tracker's tax-treatment buckets (TAX_BUCKETS order).
+# "untagged" reads better than the raw "unknown" when an account's Plaid
+# type/subtype didn't classify.
+_TAX_LABELS: dict[str, str] = {
+    "taxable": "taxable",
+    "tax_deferred": "tax-deferred",
+    "tax_free": "tax-free",
+    "unknown": "untagged",
+}
+
+
+def _tax_split(lots: list[TaxLot]) -> list[tuple[str, float]]:
+    """A position's lot market values summed by tax treatment, in display
+    order, dropping empty buckets. ``[]`` when no lot carries a value — the
+    tracker didn't surface per-account data for this name. Values are dollars
+    (the client already coerced any Decimal-as-string market value to float)."""
+    by: dict[str, float] = {}
+    for lot in lots:
+        if lot.market_value:
+            by[lot.tax_treatment] = by.get(lot.tax_treatment, 0.0) + lot.market_value
+    return [(b, by[b]) for b in TAX_BUCKETS if by.get(b)]
 
 
 def _position_line(ticker: str, p: LivePosition) -> str:
@@ -272,13 +302,37 @@ def _position_line(ticker: str, p: LivePosition) -> str:
         bits.append(f"cost {_money(p.cost_basis)}")
     if p.unrealized_pnl is not None:
         bits.append(f"P&L {_signed_money(p.unrealized_pnl)}")
+    split = _tax_split(p.accounts)
+    if split:
+        bits.append("held: " + ", ".join(f"{_money(v)} {_TAX_LABELS[b]}" for b, v in split))
     return f"{ticker} {' · '.join(bits)}"
+
+
+def _tax_context(live: LivePortfolio) -> str:
+    """Trailing tax block for the holdings item: the book-wide split by tax
+    treatment plus the rules that make "which lot do I sell" answerable.
+
+    Empty string when the tracker carries no per-account tax data (older
+    builds / nothing classifiable), so the holdings pack is byte-for-byte
+    unchanged when tax lots aren't available — and the tracker-offline path
+    omits it for free (the whole item is the offline marker)."""
+    present = [(b, live.by_tax_treatment[b]) for b in TAX_BUCKETS if live.by_tax_treatment.get(b)]
+    if not present:
+        return ""
+    book = ", ".join(f"{_money(v)} {_TAX_LABELS[b]}" for b, v in present)
+    return (
+        f" | Book by tax treatment — {book}. Tax-loss harvesting only realizes a "
+        "deduction in TAXABLE lots; selling appreciated shares from "
+        "tax-free/tax-deferred lots triggers no current capital-gains tax. "
+        "Per-lot cost basis and holding period (short- vs long-term) are NOT in "
+        "this data — don't infer them."
+    )
 
 
 def _holdings_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
     live = fetch_live_portfolio()
     if not live.available:
-        return _offline_item(spec, "Live holdings (weights, cost basis)", live.error)
+        return _offline_item(spec, "Live holdings (weights, cost basis, tax lots)", live.error)
     by_ticker = {(p.ticker or "").upper(): p for p in live.positions if p.ticker}
     if focus:
         lines = [
@@ -291,10 +345,13 @@ def _holdings_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str,
         rest = len(live.positions) - len(top)
         if rest > 0:
             lines.append(f"(+{rest} smaller positions)")
-    text = f"Live portfolio (tracker, total {_money(live.total_market_value)}): " + _join_capped(
-        lines, spec.char_budget
-    )
-    return _item(spec, text)
+    # Reserve the tax block's room so the per-position lines never crowd it out;
+    # _join_capped overshoots by at most the header, comfortably inside the
+    # eval's +120 budget slack.
+    tax = _tax_context(live)
+    header = f"Live portfolio (tracker, total {_money(live.total_market_value)}): "
+    body = _join_capped(lines, max(0, spec.char_budget - len(tax)))
+    return _item(spec, header + body + tax)
 
 
 # ---------------------------------------------------------------------------
