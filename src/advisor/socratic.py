@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from advisor.context import AdvisorContext, build_advisor_context
+from advisor.context import AdvisorContext, build_advisor_context, calibration_block
 from advisor.memos import MemoResult, persist_memo
 from advisor.store import STANCES
 from identity import DEFAULT_USER_ID
@@ -75,6 +75,11 @@ line. Required coverage:
 - their intended HORIZON for this position,
 - what specific, observable evidence would make them WRONG.
 
+When the context includes a "documented calibration" block, make at least one
+question challenge this conviction against the analyst's own track record — if
+this name sits in a conviction cohort that has graded poorly, ask directly what
+makes THIS call different from the ones that missed.
+
 Make every question pointed and grounded in a number or fact from the
 context above (cite it in the question). Never ask anything the data
 already answers. No sub-questions, no preamble, no closing text."""
@@ -99,7 +104,10 @@ The strongest case FOR, in 2-3 evidence-anchored points (cite the numbers).
 
 ## Bear
 The strongest case AGAINST, same discipline. Engage the owner's stated
-read — where could THEY specifically be wrong?
+read — where could THEY specifically be wrong? Challenge this conviction
+against the analyst's documented calibration above: if the conviction cohort
+this name sits in has historically graded poorly, name that track record here
+rather than reasoning around it.
 
 ## What would change my mind
 The 2-3 specific, observable triggers (a print, a KPI level, a competitive
@@ -144,7 +152,11 @@ def _ticker_context_block(ctx: AdvisorContext, ticker: str) -> str:
         )
     if len(lines) == 1:
         lines.append("- (no live sizing data — tracker offline and/or no DCF run)")
-    return "\n".join(lines)
+    block = "\n".join(lines)
+    # The L1 calibration return path: the owner's own track record on this
+    # conviction cohort rides into both the question and the memo step.
+    calib = calibration_block(ctx, t)
+    return f"{block}\n\n{calib}" if calib else block
 
 
 def _anchors_block(repo_root: Path, ticker: str) -> str:
