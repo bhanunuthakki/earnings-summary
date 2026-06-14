@@ -29,6 +29,7 @@ HAIKU = "claude-haiku-4-5-20251001"
 SONNET = "claude-sonnet-4-6"
 OPUS = "claude-opus-4-8"
 GFLASH = "gemini-2.5-flash"
+GFLASH3 = "gemini-3-flash-preview"
 GPRO = "gemini-3.1-pro-preview"
 
 
@@ -64,16 +65,16 @@ def test_is_cheaper_unknown_model() -> None:
 
 def test_cheaper_candidates_sonnet() -> None:
     cands = model_ladder.cheaper_candidates(SONNET)
-    assert set(cands) == {GFLASH, GPRO, HAIKU}
-    # Cheapest-first: Flash < Haiku < Pro (all cheaper than Sonnet)
-    assert cands[0] == GFLASH
-    assert cands[-1] == GPRO  # priciest of the three cheaper options
+    assert set(cands) == {GFLASH, GFLASH3, GPRO, HAIKU}
+    # Cheapest-first: both Flash ids tie at the bottom, then Haiku, then Pro.
+    assert set(cands[:2]) == {GFLASH, GFLASH3}
+    assert cands[-1] == GPRO  # priciest of the cheaper options
     assert OPUS not in cands  # opus is dearer, not a downgrade
 
 
 def test_cheaper_candidates_haiku_has_only_gemini() -> None:
     cands = model_ladder.cheaper_candidates(HAIKU)
-    assert set(cands) == {GFLASH}  # only Gemini Flash is cheaper than Haiku; Pro > Haiku
+    assert set(cands) == {GFLASH, GFLASH3}  # both Flash ids cheaper than Haiku; Pro > Haiku
     assert model_ladder.cheaper_candidates(HAIKU, include_gemini=False) == []
 
 
