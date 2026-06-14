@@ -198,18 +198,64 @@ def _is_model_not_found(exc: subprocess.CalledProcessError) -> bool:
     return "ModelNotFoundError" in combined
 
 
-def _anneal_fast_model(broken: str) -> str:
-    """Switch the in-process fast model to the stable fallback and return it."""
+def _discover_cli_flash_model() -> str | None:
+    """Fetch the gemini-cli model docs and return the highest-generation Flash
+    model ID currently listed. Uses stdlib urllib (no added deps). Returns None
+    on any network / parse failure so callers can fall through to the hardcoded
+    stable fallback without crashing."""
+    import re
+    import urllib.request
+
+    url = "https://raw.githubusercontent.com/google-gemini/gemini-cli/main/docs/cli/model.md"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "earnings-summary/gemini-anneal"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            content = resp.read().decode("utf-8", errors="replace")
+    except Exception as exc:
+        log.warning({"event": "gemini_anneal_doc_fetch_failed", "error": str(exc)[:200]})
+        return None
+    # Extract all Flash model IDs from the markdown table, e.g.
+    # "gemini-3-flash-preview", "gemini-2.5-flash"
+    flash_ids = re.findall(r"gemini-[\d.]+-flash[\w.-]*", content)
+    if not flash_ids:
+        log.warning({"event": "gemini_anneal_no_flash_models_in_docs"})
+        return None
+    # Rank by generation number (3 > 2.5 > 2 …); longer id breaks ties (more
+    # specific preview alias preferred over bare stable when both are listed).
+    def _rank(mid: str) -> tuple[float, int]:
+        m = re.match(r"gemini-([\d.]+)-flash", mid)
+        return (float(m.group(1)) if m else 0.0, len(mid))
+    best = max(set(flash_ids), key=_rank)
+    log.info({"event": "gemini_anneal_discovered_model", "model": best, "all": sorted(set(flash_ids))})
+    return best
+
+
+def _anneal_models(broken: str) -> list[str]:
+    """Build the ordered fallback sequence after `broken` returns ModelNotFoundError.
+
+    1. Fetch the gemini-cli docs to find the current Flash model ID — covers
+       the common case where a preview alias is renamed (e.g. -preview-05-20
+       → -preview-06-20) without a code change.
+    2. Always append _GEMINI_FAST_MODEL_FALLBACK (stable GA) as last resort.
+
+    Sets _effective_fast_model to the first candidate so all subsequent
+    in-process calls skip the broken alias immediately.
+    """
     global _effective_fast_model
-    _effective_fast_model = _GEMINI_FAST_MODEL_FALLBACK
+    candidates: list[str] = []
+    discovered = _discover_cli_flash_model()
+    if discovered and discovered != broken and discovered != _GEMINI_FAST_MODEL_FALLBACK:
+        candidates.append(discovered)
+    candidates.append(_GEMINI_FAST_MODEL_FALLBACK)
+    _effective_fast_model = candidates[0]
     log.warning(
         {
-            "event": "gemini_fast_model_annealed",
+            "event": "gemini_fast_model_annealing",
             "broken": broken,
-            "fallback": _GEMINI_FAST_MODEL_FALLBACK,
+            "sequence": candidates,
         }
     )
-    return _GEMINI_FAST_MODEL_FALLBACK
+    return candidates
 
 
 def _verify_gemini_setup_once() -> None:
@@ -433,10 +479,12 @@ def call_gemini(
     prompt_sha = sha256_text(prompt)
 
     # Self-annealing retry: _models starts as [resolved_model]. On a
-    # ModelNotFoundError (preview alias expired / rotated), _anneal_fast_model
-    # appends the stable fallback and the loop retries once. Every attempt
-    # writes its own ledger row so failures are auditable.
-    _models = [resolved_model]
+    # ModelNotFoundError (preview alias expired / rotated), _anneal_models
+    # web-fetches the CLI docs to find the current Flash model id, then appends
+    # [discovered, stable-fallback] so the loop retries in order. Every attempt
+    # writes its own ledger row so failures are fully auditable.
+    _models: list[str] = [resolved_model]
+    _annealed = False
     for _attempt, _try_model in enumerate(_models):
         started_at = datetime.now(UTC)
         t0 = time.monotonic()
@@ -493,13 +541,21 @@ def call_gemini(
                 error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
             )
             if (
-                _attempt == 0
-                and isinstance(gemini_error, subprocess.CalledProcessError)
+                isinstance(gemini_error, subprocess.CalledProcessError)
                 and _is_model_not_found(gemini_error)
-                and _try_model != _GEMINI_FAST_MODEL_FALLBACK
             ):
-                _models.append(_anneal_fast_model(_try_model))
-                continue
+                if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:
+                    # First ModelNotFoundError: web-discover the current CLI model
+                    # and build the fallback sequence.
+                    _models.extend(_anneal_models(_try_model))
+                    _annealed = True
+                    continue
+                if _attempt + 1 < len(_models):
+                    # Web-discovered model also 404 — advance _effective_fast_model
+                    # to the next candidate so future calls skip it too.
+                    global _effective_fast_model
+                    _effective_fast_model = _models[_attempt + 1]
+                    continue
             if isinstance(gemini_error, subprocess.CalledProcessError):
                 _classify_subprocess_failure(gemini_error)  # auth → LLMSetupError
             raise
