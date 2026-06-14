@@ -100,6 +100,9 @@ _DECISIONS_TIMEOUT_S = 900
 # + tracker holdings — pure SQLite + one loopback HTTP group (sub-second
 # connect cap when the tracker is down). 2 min is generous.
 _LIFECYCLE_TIMEOUT_S = 120
+# Stage 0d (cockpit fundamentals) runs the financial_facts double-scan that
+# was measured at ~1.2s on prod (726k rows). 60s is generous.
+_FUNDAMENTALS_TIMEOUT_S = 60
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -107,6 +110,7 @@ STAGE_PREFLIGHT = "stage_preflight"
 STAGE_NEWS = "stage_0_news"
 STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
+STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
@@ -115,6 +119,7 @@ _ALL_STAGE_KEYS = (
     STAGE_NEWS,
     STAGE_DECISIONS,
     STAGE_LIFECYCLE,
+    STAGE_FUNDAMENTALS,
     STAGE_TRIGGERS,
     STAGE_FEED,
     STAGE_VALIDATE,
@@ -256,6 +261,28 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *lifecycle_args,
                 ],
                 timeout_s=_LIFECYCLE_TIMEOUT_S,
+            )
+        )
+        # Stage 0d -- cockpit fundamentals precompute: materialises per-ticker
+        # rev_yoy / fcf_margin to data/cockpit_fundamentals.json so the GET /
+        # render reads the cache rather than running a ~1.2s ROW_NUMBER() scan
+        # over all ~726k financial_facts rows (S12b profiling finding, PR #535).
+        # Only --db-path is forwarded (no --user-id: the computation is not
+        # user-scoped). Skipped on the re-render-only path (--skip-triggers):
+        # financial_facts does not change during the morning pipeline itself.
+        fundamentals_db_args = (
+            ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        )
+        stages.append(
+            _Stage(
+                key=STAGE_FUNDAMENTALS,
+                label="Stage 0d - cockpit fundamentals (refresh_cockpit_fundamentals.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "refresh_cockpit_fundamentals.py"),
+                    *fundamentals_db_args,
+                ],
+                timeout_s=_FUNDAMENTALS_TIMEOUT_S,
             )
         )
 

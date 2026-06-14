@@ -45,6 +45,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from cockpit_fundamentals import compute_from_db as _compute_fundamentals, read_materialized_fundamentals
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
@@ -305,7 +306,12 @@ def build_cockpit_rows(
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
     kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers)
-    fundamentals = _eval_fundamentals(conn)
+    # Fast path: precomputed cache written by the morning pipeline (stage 0d).
+    # Falls back to the live DB scan when the cache is absent (fresh install,
+    # test env, dev run without the morning pipeline).
+    fundamentals = read_materialized_fundamentals(repo_root)
+    if not fundamentals:
+        fundamentals = _eval_fundamentals(conn)
     # Canonical calendar first (one batch query); the per-ticker FMP-cache file
     # read below remains as fallback for pre-0082 DBs / not-yet-refreshed rows.
     next_er = {t: d.isoformat() for t, d in upcoming_by_ticker(conn, ref.date()).items()}
@@ -390,214 +396,13 @@ def _safe_rows(
     return cur.fetchall()
 
 
-# _eval_fundamentals reads financial_facts directly instead of the metrics /
-# ratios views. Two reasons. Speed: the views ROW_NUMBER() over the ENTIRE
-# facts table on every query (~12s against prod's 726k rows, twice — the
-# whole landing-page budget); the same dedup restricted to the four line
-# items these pivots consume runs in well under a second. Correctness: the
-# view's MAX(period_end) spans all ~35 line items, so a stray row that files
-# a different quarter under the same (fiscal-year, period-type) slot — FMP
-# and SEC disagree on fiscal-quarter labels for off-calendar reporters —
-# stamps the group with another quarter's date and falsely trips the YoY/TTM
-# window guards below (MU/TOL/VEEV rendered em-dashes for exactly this).
-# The dedup CTE otherwise mirrors the metrics-view DDL (alembic 0075): one
-# winner per (ticker, fiscal_year, fiscal_period_type, line_item), newest
-# source doc first.
-_QUARTER_FUNDAMENTALS_SQL = """
-WITH dedup AS (
-    SELECT ticker,
-           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           fiscal_period_type, line_item, value, period_end,
-           ROW_NUMBER() OVER (
-               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
-                            fiscal_period_type, line_item
-               ORDER BY source_doc_id DESC, period_end DESC
-           ) AS rn
-    FROM financial_facts
-    WHERE fiscal_period_type LIKE 'Q%'
-      AND line_item IN ('revenue', 'free_cash_flow', 'operating_cash_flow',
-                        'capital_expenditure')
-)
-SELECT ticker,
-       MAX(period_end) AS period_end,
-       MAX(CASE WHEN line_item = 'revenue' THEN value END) AS revenue,
-       MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS free_cash_flow,
-       MAX(CASE WHEN line_item = 'operating_cash_flow' THEN value END) AS operating_cash_flow,
-       MAX(CASE WHEN line_item = 'capital_expenditure' THEN value END) AS capex
-FROM dedup
-WHERE rn = 1
-GROUP BY ticker, fiscal_year, fiscal_period_type
-HAVING MAX(CASE WHEN line_item = 'revenue' THEN value END) IS NOT NULL
-ORDER BY ticker, period_end DESC
-"""
-
-# fcf_margin = free_cash_flow / revenue, the ratios-view formula, on TTM rows
-# only (prod has none — the quarterly-sum fallback is the populated path).
-_TTM_FCF_MARGIN_SQL = """
-WITH dedup AS (
-    SELECT ticker,
-           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           line_item, value,
-           ROW_NUMBER() OVER (
-               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
-                            fiscal_period_type, line_item
-               ORDER BY source_doc_id DESC, period_end DESC
-           ) AS rn
-    FROM financial_facts
-    WHERE fiscal_period_type = 'TTM'
-      AND line_item IN ('revenue', 'free_cash_flow')
-)
-SELECT ticker,
-       CAST(MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS REAL)
-           / NULLIF(MAX(CASE WHEN line_item = 'revenue' THEN value END), 0) AS fcf_margin
-FROM dedup
-WHERE rn = 1
-GROUP BY ticker, fiscal_year
-ORDER BY ticker, fiscal_year
-"""
-
-
+# _eval_fundamentals is kept as a thin wrapper around cockpit_fundamentals so
+# the existing test imports and direct callers continue to work unchanged.
+# The build_cockpit_rows render path calls read_materialized_fundamentals (a
+# disk read) and only falls back here when no cache file exists.
 def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None, float | None]]:
-    """(rev_yoy_pct, fcf_margin_pct) per ticker for the eval table (PR7).
-
-    Revenue YoY: latest quarterly row vs the first row at least ~11 months
-    older (calendar-quarter aligned in practice). FCF margin: TTM — a TTM
-    facts row when financial_facts carries one, else summed on the fly from
-    the newest four quarterly rows (sum FCF / sum revenue; prod has no TTM
-    facts, so this path is what populates the column; semi-annual reporters
-    sum the newest two half-years instead). Best-effort — a missing table
-    degrades to {} and the columns render em-dashes.
-    """
-    fcf: dict[str, float] = {}
-    for r in _safe_rows(conn, _TTM_FCF_MARGIN_SQL):
-        try:
-            if r["fcf_margin"] is not None:
-                fcf[str(r["ticker"]).upper()] = float(r["fcf_margin"]) * 100.0
-        except (TypeError, ValueError):
-            continue
-
-    by_ticker: dict[str, list[tuple[str, float, float | None]]] = {}
-    for r in _safe_rows(conn, _QUARTER_FUNDAMENTALS_SQL):
-        try:
-            rev = float(r["revenue"])
-        except (TypeError, ValueError):
-            continue
-        by_ticker.setdefault(str(r["ticker"]).upper(), []).append(
-            (str(r["period_end"]), rev, _quarter_fcf(r))
-        )
-
-    out: dict[str, tuple[float | None, float | None]] = {}
-    for t, rows in by_ticker.items():
-        rev_yoy: float | None = None
-        if rows:
-            latest_end, latest_rev, _ = rows[0]
-            try:
-                latest_dt = datetime.fromisoformat(latest_end[:10])
-            except ValueError:
-                latest_dt = None
-            if latest_dt is not None and latest_rev:
-                for end, rev, _ in rows[1:]:
-                    try:
-                        dt = datetime.fromisoformat(end[:10])
-                    except ValueError:
-                        continue
-                    age = (latest_dt - dt).days
-                    if 330 <= age <= 430 and rev:
-                        rev_yoy = (latest_rev / rev - 1.0) * 100.0
-                        break
-        margin = fcf.get(t)
-        if margin is None:
-            margin = _ttm_fcf_margin(rows)
-        out[t] = (rev_yoy, margin)
-    for t, margin in fcf.items():
-        out.setdefault(t, (None, margin))
-    return out
-
-
-def _quarter_fcf(row: sqlite3.Row) -> float | None:
-    """One quarter's FCF from a ``metrics`` row: the free_cash_flow column
-    when present, else OCF + capex (capex is stored signed — a negative
-    outflow — so addition IS ocf-minus-spend)."""
-    try:
-        if row["free_cash_flow"] is not None:
-            return float(row["free_cash_flow"])
-        ocf, capex = row["operating_cash_flow"], row["capex"]
-        if ocf is not None and capex is not None:
-            return float(ocf) + float(capex)
-    except (TypeError, ValueError):
-        return None
-    return None
-
-
-_SEMI_ANNUAL_GAP_DAYS = (175, 200)  # half-year period-end spacing (Jun-30 ↔ Dec-31 is 181-184d)
-
-
-def _ttm_fcf_margin(rows: list[tuple[str, float, float | None]]) -> float | None:
-    """Sum FCF over revenue across the newest four FCF-bearing quarters.
-
-    ``rows`` arrive newest-first. Guards: four distinct quarter-ends spanning
-    at most ~11 months (a hole in the window — endpoints 365+ days apart —
-    would silently mix two fiscal years) and a positive revenue sum.
-
-    Semi-annual reporters (BHP: FMP lands half-years in the Q2/Q4 slots) fail
-    that span guard by construction — their newest four rows cover two fiscal
-    years — so they fall back to summing the newest TWO rows as the trailing
-    year, qualified by cadence so quarterly series with holes can't sneak in
-    (see ``_semi_annual_pair``).
-    """
-    window: list[tuple[datetime, float, float]] = []
-    for end, rev, q_fcf in rows:
-        if q_fcf is None:
-            continue
-        try:
-            dt = datetime.fromisoformat(end[:10])
-        except ValueError:
-            continue
-        if window and window[-1][0] == dt:  # defensive: duplicate period rows
-            continue
-        window.append((dt, rev, q_fcf))
-        if len(window) == 4:
-            break
-    if len(window) == 4 and (window[0][0] - window[-1][0]).days <= 330:
-        ttm = window
-    else:
-        ttm = _semi_annual_pair(rows, window)
-    if not ttm:
-        return None
-    rev_sum = sum(rev for _, rev, _ in ttm)
-    if rev_sum <= 0:
-        return None
-    return sum(f for _, _, f in ttm) / rev_sum * 100.0
-
-
-def _semi_annual_pair(
-    rows: list[tuple[str, float, float | None]],
-    window: list[tuple[datetime, float, float]],
-) -> list[tuple[datetime, float, float]]:
-    """The newest two FCF-bearing rows when the series is half-yearly, else [].
-
-    Two half-years ending ~180 days apart cover a trailing year. Qualifying
-    needs more than one such gap, though: 90-day quarters with one missing
-    quarter also put the newest two rows ~180 days apart. So the cadence must
-    repeat — window[0]→[1] AND window[1]→[2] both ~175-200 days (a quarterly
-    series with a single hole shows at most one) — and no raw row may sit
-    between the two rows being summed (alternating FCF-less quarters would
-    otherwise mimic the spacing while each row covers only ~90 days).
-    """
-    if len(window) < 3:
-        return []
-    lo, hi = _SEMI_ANNUAL_GAP_DAYS
-    if not all(lo <= (window[i][0] - window[i + 1][0]).days <= hi for i in (0, 1)):
-        return []
-    newer, older = window[0][0], window[1][0]
-    for end, _, _ in rows:
-        try:
-            dt = datetime.fromisoformat(end[:10])
-        except ValueError:
-            continue
-        if older < dt < newer:
-            return []
-    return window[:2]
+    """(rev_yoy_pct, fcf_margin_pct) per ticker — delegates to cockpit_fundamentals.compute_from_db."""
+    return _compute_fundamentals(conn)
 
 
 def _company_names(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, str]:
