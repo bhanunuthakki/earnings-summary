@@ -116,6 +116,20 @@
       "notes": "per-position alpha vs cashflow-matched benchmark"
     },
     {
+      "id": "rt-017-track-record",
+      "mode": "router",
+      "question": "Am I actually getting better at my high-conviction calls, or do I just think I am?",
+      "expected_packs": ["calibration"],
+      "notes": "self-assessment / track-record — the calibration pack is the only source of graded hit-rate by conviction"
+    },
+    {
+      "id": "rt-018-conviction-trim-calibrated",
+      "mode": "router",
+      "question": "I want to trim NU even though I rate it high conviction — how have my high-conviction calls historically graded, and what do I hold there now?",
+      "expected_packs": ["calibration", "holdings", "conviction", "dcf"],
+      "notes": "the keystone case — a conviction-driven trim pulls the sizing trio (holdings+dcf+conviction) AND calibration so the move is weighed against documented accuracy"
+    },
+    {
       "id": "gr-001-trim-grounded",
       "mode": "grounded",
       "question": "Should I trim NU here?",
@@ -150,6 +164,15 @@
       "selected_includes": ["journal"],
       "require_kinds": [],
       "notes": "journal must be selected; presence not required (open notes can legitimately be zero at any moment)"
+    },
+    {
+      "id": "gr-005-calibration-grounded",
+      "mode": "grounded",
+      "question": "How accurate have my high-conviction calls actually been?",
+      "focus_tickers": ["NU"],
+      "selected_includes": ["calibration"],
+      "require_kinds": [],
+      "notes": "calibration must be SELECTED; materialization not required — build_calibration returns None / the loader drops the pack when the decisions ledger is empty (the prod table is empty until decision_extractor runs, verified 2026-06-12)"
     }
   ]
 }

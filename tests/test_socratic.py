@@ -30,7 +30,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 import advisor.socratic as socratic_mod  # noqa: E402
-from advisor.context import AdvisorContext, TickerValuation  # noqa: E402
+from advisor.context import AdvisorContext, TickerValuation, calibration_block  # noqa: E402
 from advisor.socratic import (  # noqa: E402
     generate_decision_memo,
     generate_questions,
@@ -38,6 +38,7 @@ from advisor.socratic import (  # noqa: E402
     parse_stance,
 )
 from advisor.store import AdvisorMemoRow, get_memo  # noqa: E402
+from decision_calibration import CalibrationStats, ConvictionBucket  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -261,6 +262,73 @@ def test_decision_memo_transient_vs_hard_stop(
     monkeypatch.setattr(socratic_mod, "call_llm", hard)
     with pytest.raises(LLMSetupError):
         generate_decision_memo(tmp_path, "NU", questions=["q?"], answers=["a"], ctx=ctx)
+
+
+# --------------------------------------------------------------------------- #
+# Calibration injection (L1 — the calibration return path into the advisor)
+# --------------------------------------------------------------------------- #
+
+
+def _calib(*, high_hit: float = 0.4, high_n: int = 10) -> CalibrationStats:
+    correct = round(high_hit * high_n)
+    return CalibrationStats(
+        total=high_n + 2,
+        graded=high_n,
+        overall_hit_rate=high_hit if high_n else None,
+        by_conviction=[
+            ConvictionBucket(
+                conviction="high",
+                graded=high_n,
+                correct=correct,
+                wrong=high_n - correct,
+                mixed=0,
+                ungraded=0,
+                hit_rate=high_hit if high_n else None,
+            )
+        ],
+        action_mix={},
+        reversals=[],
+        reversals_vindicated=2,
+        reversals_cost=1,
+        time_to_outcome=[],
+    )
+
+
+def test_calibration_block_challenges_the_cohort(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, "NU")  # the audit row rates NU 4/5 → high cohort
+    ctx.calibration = _calib(high_hit=0.4, high_n=10)
+    block = calibration_block(ctx, "NU")
+    assert "challenge this conviction against your own" in block.lower()
+    assert "graded calls 40% correct (n=10)" in block
+    assert "NU is a high-conviction name (you rate it 4/5)" in block
+    assert "your high-conviction calls have graded 40% correct (n=10)" in block
+    assert "why THIS one is different" in block
+    assert "2 vindicated vs 1 cost" in block
+
+
+def test_calibration_block_empty_when_nothing_graded(tmp_path: Path) -> None:
+    ctx = _ctx(tmp_path, "NU")
+    assert calibration_block(ctx, "NU") == ""  # default calibration is None
+    ctx.calibration = _calib(high_n=0)
+    assert calibration_block(ctx, "NU") == ""  # graded == 0 → stay silent
+
+
+def test_socratic_prompts_carry_the_calibration_challenge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts: list[str] = []
+
+    def fake_llm(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return "1. read?\n2. horizon?\n3. wrong?"
+
+    monkeypatch.setattr(socratic_mod, "call_llm", fake_llm)
+    ctx = _ctx(tmp_path, "NU")
+    ctx.calibration = _calib(high_hit=0.4, high_n=10)
+    generate_questions(tmp_path, "NU", ctx=ctx)
+    # The block reached the prompt, and the prompt instructs the model to use it.
+    assert "your high-conviction calls have graded 40% correct (n=10)" in prompts[0]
+    assert "documented calibration" in prompts[0]
 
 
 # --------------------------------------------------------------------------- #

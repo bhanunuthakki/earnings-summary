@@ -11,6 +11,11 @@ trim/add/size question needs:
   conviction   — stated conviction + target weights (position_sizing_intent)
   dcf          — latest fair value vs live price per ticker (dcf_runs)
   decisions    — the recommendation ledger + outcomes (decisions)
+  calibration  — the analyst's OWN track record: hit-rate overall and by
+                 conviction cohort, reversal win/loss, days-to-outcome, and —
+                 when the question names a name with a live call — that
+                 cohort's documented accuracy (decision_calibration, the
+                 keystone "confront me at the decision moment" loop)
   journal      — open analyst notes (analyst_notes)
   performance  — window TWR vs benchmarks + per-name alpha + concentration
                  (tracker analytics API)
@@ -42,6 +47,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from calibration_guard import rate_phrase
+from decision_calibration import bucket_for_conviction, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePosition,
@@ -110,6 +117,17 @@ PACKS: tuple[PackSpec, ...] = (
         "/#decisions_record",
         800,
         "past add/trim/hold/sell recommendations, whether the analyst acted, and graded outcomes",
+    ),
+    PackSpec(
+        "calibration",
+        "Decision calibration · track record",
+        "/#decisions_record",
+        800,
+        "the analyst's OWN forecasting track record: hit-rate overall and by "
+        'stated conviction, reversal win/loss, days-to-outcome — for "am I '
+        'getting better", "how accurate are my calls", "can I trust my '
+        'high-conviction read", and conviction-driven trim/add where the '
+        "analyst's documented accuracy should temper the call",
     ),
     PackSpec(
         "journal",
@@ -430,6 +448,103 @@ def _decisions_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str
 
 
 # ---------------------------------------------------------------------------
+# calibration — the analyst's own track record (decision_calibration)
+# ---------------------------------------------------------------------------
+
+# Per-name cohort callouts (the "confront me at the decision moment" lines) are
+# capped so a wide focus can't blow the budget before the portfolio-wide stats.
+_MAX_CALIBRATION_FOCUS = 3
+
+
+def _focus_conviction_cohort(db_path: Path, ticker: str) -> tuple[str, str] | None:
+    """The conviction cohort a focus ticker's CURRENT stance belongs to, plus a
+    human descriptor — so the pack can put "your {bucket}-conviction calls have
+    graded X%" right where a fresh call on this name is being weighed.
+
+    A pending (ungraded) decision is the strongest signal of a live call;
+    failing that, the latest stated sizing conviction. None when neither exists
+    (no live stance, so no cohort to confront with)."""
+    pend = _rows(
+        db_path,
+        "SELECT conviction, recommendation_kind FROM decisions "
+        "WHERE UPPER(ticker) = ? AND (outcome_label IS NULL OR outcome_label = 'pending') "
+        "ORDER BY made_at DESC, id DESC LIMIT 1",
+        (ticker,),
+    )
+    if pend:
+        bucket = bucket_for_conviction(pend[0]["conviction"])
+        return bucket, f"a pending {bucket}-conviction {pend[0]['recommendation_kind']} call"
+    stated = _rows(
+        db_path,
+        "SELECT intent_value FROM position_sizing_intent "
+        "WHERE user_id = ? AND UPPER(ticker) = ? AND intent_kind = ? "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (DEFAULT_USER_ID, ticker, _CONVICTION_KIND),
+    )
+    if stated:
+        v = _f(stated[0]["intent_value"])
+        if v is not None:
+            bucket = bucket_for_conviction(v)
+            return bucket, f"a stated conviction of {v:g}/5 ({bucket})"
+    return None
+
+
+def _calibration_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
+    stats = build_calibration(db_path=db_path)
+    if stats is None or stats.total == 0:
+        return None  # no ledger / empty ledger — nothing to calibrate against
+    lines: list[str] = [
+        rate_phrase("overall", stats.overall_hit_rate, stats.graded)
+        if stats.graded
+        else f"{stats.total} calls logged, none graded yet (n=0)"
+    ]
+    conv = [
+        rate_phrase(f"{b.conviction}-conviction", b.hit_rate, b.graded)
+        for b in stats.by_conviction
+        if b.graded
+    ]
+    if conv:
+        lines.append("by conviction — " + ", ".join(conv))
+    if stats.reversals:
+        v, c = stats.reversals_vindicated, stats.reversals_cost
+        unresolved = len(stats.reversals) - v - c
+        parts: list[str] = []
+        if v:
+            parts.append(f"{v} vindicated (you were right to override)")
+        if c:
+            parts.append(f"{c} cost (the override hurt)")
+        if unresolved:
+            parts.append(f"{unresolved} still open")
+        lines.append("reversals — " + (", ".join(parts) or f"{len(stats.reversals)} logged"))
+    if stats.time_to_outcome:
+        lines.append(
+            "median days to outcome — "
+            + ", ".join(f"{t.kind} {round(t.median_days)}d" for t in stats.time_to_outcome[:3])
+        )
+    for t in focus[:_MAX_CALIBRATION_FOCUS]:
+        cohort = _focus_conviction_cohort(db_path, t)
+        if cohort is None:
+            continue
+        bucket, descriptor = cohort
+        cb = next((b for b in stats.by_conviction if b.conviction == bucket), None)
+        if cb is not None and cb.graded:
+            lines.append(
+                f"{t} carries {descriptor} — "
+                + rate_phrase(f"your {bucket}-conviction calls", cb.hit_rate, cb.graded)
+            )
+        else:
+            lines.append(
+                f"{t} carries {descriptor} — but no graded {bucket}-conviction "
+                "calls yet to calibrate against (n=0)"
+            )
+    return _item(
+        spec,
+        "Your decision calibration (graded outcomes from your own ledger — weigh a fresh "
+        "call against this track record): " + _join_capped(lines, spec.char_budget),
+    )
+
+
+# ---------------------------------------------------------------------------
 # journal — open analyst notes
 # ---------------------------------------------------------------------------
 
@@ -513,6 +628,7 @@ _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | No
     "conviction": _conviction_item,
     "dcf": _dcf_item,
     "decisions": _decisions_item,
+    "calibration": _calibration_item,
     "journal": _journal_item,
     "performance": _performance_item,
 }

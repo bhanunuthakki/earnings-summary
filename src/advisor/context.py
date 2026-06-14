@@ -27,6 +27,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from calibration_guard import rate_phrase
+from decision_calibration import CalibrationStats, bucket_for_conviction, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -96,6 +98,10 @@ class AdvisorContext:
     analytics: PortfolioAnalytics
     open_notes_block: str
     generated_at: str
+    # The analyst's own graded track record (L1 — the calibration return path);
+    # None when the decisions ledger is absent. Defaulted so callers/tests that
+    # assemble a context by hand need not supply it.
+    calibration: CalibrationStats | None = None
 
 
 def _dcf_age_ok(dcf_date: str | None, *, max_age_days: int, today: datetime) -> bool:
@@ -232,6 +238,7 @@ def build_advisor_context(
         analytics=analytics,
         open_notes_block=open_notes_block(db_path, user_id=user_id),
         generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+        calibration=build_calibration(db_path=db_path),
     )
 
 
@@ -402,6 +409,65 @@ def tax_block(ctx: AdvisorContext, ticker: str) -> str:
             "clear that drag too."
         )
     return ""
+
+
+def _ticker_conviction_bucket(ctx: AdvisorContext, ticker: str) -> tuple[str, str] | None:
+    """The conviction cohort this name's stated stance belongs to (read off the
+    sizing audit's conviction column), with a human descriptor. None when no
+    conviction is on file for the name."""
+    t = ticker.upper()
+    for r in ctx.audit_rows:
+        if r.ticker == t and r.conviction is not None:
+            bucket = bucket_for_conviction(r.conviction)
+            return bucket, f"a {bucket}-conviction name (you rate it {r.conviction:g}/5)"
+    return None
+
+
+def calibration_block(ctx: AdvisorContext, ticker: str) -> str:
+    """The analyst's own forecasting track record, framed to CHALLENGE the
+    conviction on this name — the L1 calibration return path into the advisor.
+
+    Reuses ``decision_calibration`` wholesale plus the shared minimum-n guard,
+    so a thin ledger is hedged rather than asserted, and the owner is never
+    confronted from a sparse denominator. Empty string when nothing is graded
+    yet (the prompts then fall back to evidence alone)."""
+    stats = ctx.calibration
+    if stats is None or stats.graded == 0:
+        return ""
+    lines = [
+        "**Your documented calibration (challenge this conviction against your own "
+        "track record — don't flatter it):**",
+        f"- Overall: {rate_phrase('graded calls', stats.overall_hit_rate, stats.graded)}, "
+        f"of {stats.total} logged.",
+    ]
+    conv = [
+        rate_phrase(b.conviction, b.hit_rate, b.graded) for b in stats.by_conviction if b.graded
+    ]
+    if conv:
+        lines.append("- By conviction: " + "; ".join(conv) + ".")
+    if stats.reversals_vindicated or stats.reversals_cost:
+        lines.append(
+            f"- Reversals: {stats.reversals_vindicated} vindicated vs "
+            f"{stats.reversals_cost} cost — weigh whether overriding your own call "
+            "has usually paid off."
+        )
+    cohort = _ticker_conviction_bucket(ctx, ticker)
+    if cohort is not None:
+        bucket, descriptor = cohort
+        cb = next((b for b in stats.by_conviction if b.conviction == bucket), None)
+        if cb is not None and cb.graded:
+            lines.append(
+                f"- {ticker.upper()} is {descriptor}: "
+                + rate_phrase(f"your {bucket}-conviction calls have graded", cb.hit_rate, cb.graded)
+                + ". If that rate undercuts the conviction here, the burden is to say why "
+                "THIS one is different."
+            )
+        else:
+            lines.append(
+                f"- {ticker.upper()} is {descriptor}, but you have no graded "
+                f"{bucket}-conviction calls yet (n=0) — one to calibrate going forward."
+            )
+    return "\n".join(lines)
 
 
 def swap_context_json(s: SwapCandidate, *, margin_pp: float) -> dict[str, object]:
