@@ -205,6 +205,71 @@ def test_sensitivity_grid_centered_on_base_and_monotonic() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# JSON constructor — to_dict / from_dict (the non-workbook transport for the
+# in-app recompute route; no xlsx in the loop)
+# --------------------------------------------------------------------------- #
+def test_to_dict_is_json_safe() -> None:
+    payload = _BASE.to_dict()
+    # Round-trips through json without raising; tuple → list, deltas → dicts.
+    assert isinstance(payload["segments"], list)
+    assert isinstance(payload["bull_deltas"], dict)
+    text = json.dumps(payload)
+    assert json.loads(text)["wacc"] == pytest.approx(_BASE.wacc)
+
+
+def test_to_dict_from_dict_round_trips() -> None:
+    """from_dict(to_dict(x)) reconstructs an equal input set with an identical
+    value-of-record — the recompute route can rebuild edits with no workbook."""
+    rebuilt = redesign.RedesignInputs.from_dict(_BASE.to_dict())
+    assert rebuilt == _BASE
+    assert redesign.value(rebuilt).value_per_share_usd == pytest.approx(
+        redesign.value(_BASE).value_per_share_usd
+    )
+
+
+def test_from_dict_applies_an_edit() -> None:
+    """A WACC edit posted as a dict recomputes a lower value (taken as given —
+    NOT re-derived from CAPM the way read_inputs does)."""
+    edited = _BASE.to_dict()
+    edited["wacc"] = 0.12
+    inp = redesign.RedesignInputs.from_dict(edited)
+    assert inp.wacc == pytest.approx(0.12)
+    assert redesign.value(inp).value_per_share_usd < redesign.value(_BASE).value_per_share_usd
+
+
+def test_from_dict_defaults_scenario_deltas_to_seeds() -> None:
+    payload = _BASE.to_dict()
+    del payload["bull_deltas"]
+    del payload["bear_deltas"]
+    inp = redesign.RedesignInputs.from_dict(payload)
+    assert inp.bull_deltas == redesign.BULL_SEED
+    assert inp.bear_deltas == redesign.BEAR_SEED
+
+
+def test_from_dict_rejects_missing_field() -> None:
+    payload = _BASE.to_dict()
+    del payload["wacc"]
+    with pytest.raises(redesign.RedesignError, match="wacc"):
+        redesign.RedesignInputs.from_dict(payload)
+
+
+def test_from_dict_rejects_non_numeric_field() -> None:
+    payload = _BASE.to_dict()
+    payload["wacc"] = "high"
+    with pytest.raises(redesign.RedesignError, match="must be a number"):
+        redesign.RedesignInputs.from_dict(payload)
+
+
+def test_from_dict_rejects_segment_without_growth() -> None:
+    """A segment present in the list but absent from a growth map fails loud
+    here, not with a KeyError deep in the projection."""
+    payload = _BASE.to_dict()
+    payload["segments"] = ["Total company", "Phantom"]
+    with pytest.raises(redesign.RedesignError, match="Phantom"):
+        redesign.RedesignInputs.from_dict(payload)
+
+
+# --------------------------------------------------------------------------- #
 # Fixtures: write FMP, run the real builder
 # --------------------------------------------------------------------------- #
 def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool = False) -> None:

@@ -93,6 +93,8 @@ from chat_session import apply_chat_diff, build_chat_response  # noqa: E402
 from dashboard import render_alert_feed  # noqa: E402
 from dashboard.inbox import collect_inbox, render_inbox_stream  # noqa: E402
 from dashboard.upcoming import render_upcoming_strip  # noqa: E402
+from dcf import persist as dcf_persist  # noqa: E402
+from dcf import redesign as dcf_redesign  # noqa: E402
 from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
@@ -191,6 +193,43 @@ def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None
     if isinstance(gid, str) and gid:
         return gid, f"https://docs.google.com/spreadsheets/d/{gid}/edit"
     return None, None
+
+
+def _dcf_recompute_payload(inp: dcf_redesign.RedesignInputs) -> dict[str, object]:
+    """Run the pure DCF engine over one assumption set → the JSON the in-app
+    valuation card consumes.
+
+    The whole in-app modify→recompute loop in one stateless call (resolves the
+    DCF round-trip gap): base fair value, the Bull/Base/Bear scenario triplet,
+    the live over/under (decimal, the 0076 convention), and the WACC × exit-
+    multiple sensitivity grid (computed today but trapped in xlsx cells). No
+    xlsx, no persistence — a save / Push-to-Sheets commit is a separate action.
+
+    Raises :class:`dcf_redesign.RedesignError` only for a degenerate BASE (e.g. a
+    perpetuity terminal with WACC ≤ g); a degenerate Bull/Bear degrades to
+    ``None`` inside ``scenario_values`` rather than raising.
+    """
+    sv = dcf_redesign.scenario_values(inp)
+    grid = dcf_redesign.sensitivity_grid(inp)
+    return {
+        "fair_value_per_share_usd": sv.base,
+        "scenarios": {"base": sv.base, "bull": sv.bull, "bear": sv.bear},
+        "over_under_pct": dcf_persist.derive_over_under(inp.current_price, sv.base),
+        "wacc": inp.wacc,
+        "terminal_method": inp.terminal_method,
+        "terminal_basis": inp.terminal_basis,
+        "exit_multiple": inp.exit_multiple,
+        "current_price": inp.current_price,
+        "sensitivity": {
+            "wacc_axis": list(grid.wacc_axis),
+            "multiple_axis": list(grid.multiple_axis),
+            "values": [list(r) for r in grid.values],
+            "base_wacc": grid.base_wacc,
+            "base_multiple": grid.base_multiple,
+            "basis": grid.basis,
+            "current_price": grid.current_price,
+        },
+    }
 
 
 def _note_to_json(note: object) -> dict[str, object]:
@@ -1993,6 +2032,55 @@ def create_app(
         t = ticker.upper()
         sheet_id, url = _linked_gsheet(repo_root, t)
         return {"ticker": t, "sheet_id": sheet_id, "url": url}
+
+    @app.route("/api/dcf/inputs/<ticker>", methods=["GET"])
+    def dcf_inputs(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """The current redesigned-DCF assumption set for a ticker as a JSON dict
+        — what the in-app recompute card edits and POSTs back.
+
+        Read once from the live workbook ``dcf/<T>.xlsx`` to seed the editable
+        controls; the recompute LOOP itself never touches the xlsx. 404 when
+        there is no redesigned workbook for the ticker, 422 when the workbook is
+        present but structurally unreadable."""
+        t = ticker.upper()
+        live = repo_root / "dcf" / f"{t}.xlsx"
+        if not live.exists():
+            abort(404)
+        try:
+            inp = dcf_redesign.read_inputs(live)
+        except dcf_redesign.RedesignError as e:
+            return ({"error": str(e)}, 422)
+        if inp is None:
+            abort(404)  # present but not redesigned-format
+        return {"ticker": t, "inputs": inp.to_dict()}
+
+    @app.route("/api/dcf/recompute", methods=["POST", "OPTIONS"])
+    def dcf_recompute():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Recompute a DCF from edited assumptions — NO xlsx in the loop.
+
+        Body: ``{"inputs": {<RedesignInputs.to_dict() with edits applied>}}``.
+        Runs the existing pure ``value()/scenario_values()/sensitivity_grid()``
+        and returns base fair value + Bull/Base/Bear + the WACC × exit-multiple
+        grid + the live over/under (decimal). Stateless: the in-app card calls it
+        on every assumption edit; persistence is a separate explicit save /
+        Push-to-Sheets commit, never this route. 400 on a malformed/invalid
+        input set, 422 on a degenerate but well-formed one (perpetuity WACC ≤ g)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return ({"error": "JSON body required"}, 400)
+        raw = body.get("inputs")
+        if not isinstance(raw, dict):
+            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
+        try:
+            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
+        except dcf_redesign.RedesignError as e:
+            return ({"error": f"invalid inputs: {e}"}, 400)
+        try:
+            return _dcf_recompute_payload(inp)
+        except dcf_redesign.RedesignError as e:
+            return ({"error": str(e)}, 422)
 
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
