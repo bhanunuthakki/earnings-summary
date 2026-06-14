@@ -1,5 +1,7 @@
 # Gemini second backend (consumer subscription, eval-gated)
 
+**ROUTING SUPERSEDED 2026-06-13 by `directives/cheapest_model_routing.md`:** Gemini is selected model-first via `family_of()` dispatch; the `GEMINI_BACKEND_ALLOWED_PURPOSES` allowlist is dead code; cost is real API price, not $0. This doc remains authoritative ONLY for backend MECHANICS (CLI wrapper, billing-guard env-stripping, context isolation, corpus/judge harness).
+
 **Decision (2026-06-11):** wire consumer-subscription Gemini as a SECOND LLM
 backend behind `call_llm`. Routing stays Claude-default; a purpose may route to
 Gemini only after the LLM-evals judges grade its per-purpose output quality.
@@ -12,7 +14,7 @@ Code: `src/llm/gemini_backend.py` (backend) + `src/llm/cli.py` (routing in
 
 | Touchpoint | Module | Auth / billing | When it runs |
 |---|---|---|---|
-| **Backend** (this doc) | `src/llm/gemini_backend.py` | Consumer OAuth (`gemini` CLI login) — $0 marginal | Purpose in the eval-gated allowlist, or `backend="gemini"` forced |
+| **Backend** (this doc) | `src/llm/gemini_backend.py` | Consumer OAuth (`gemini` CLI login); ledger cost = real API list price (not $0 — see banner) | Resolved model is Gemini (model-first dispatch), or `backend="gemini"` forced |
 | **Fallback** | `src/llm/fallback.py` | `GEMINI_API_KEY` from `.env` — metered API | Only when a CLAUDE call fails operationally |
 | **`.env` key** | `GEMINI_API_KEY=` | feeds the fallback ONLY | Never reaches the backend (stripped from its subprocess env) |
 
@@ -84,10 +86,11 @@ call_llm(purpose in allowlist)           -> Gemini, once judges pass it
 ## Models, cost, ledger
 
 * Model resolution: explicit `GEMINI_MODELS` pin → tier derivation from
-  `LLM_MODELS` (Haiku-tier purposes → `gemini-3.5-flash` (GA 2026-05-19),
-  everything else → `gemini-2.5-pro`). One table drives both backends' latency
-  tiers. Bump `GEMINI_BACKEND_FAST_MODEL` / `_DEFAULT_MODEL` when Google ships a
-  newer GA tier.
+  `LLM_MODELS` (Haiku-tier purposes → fast = `gemini-3-flash-preview`, with a
+  self-annealing fallback to `gemini-2.5-flash` on `ModelNotFoundError`
+  (#541/#542); everything else → default = `gemini-3.1-pro-preview`). One table
+  drives both backends' latency tiers. Bump `GEMINI_BACKEND_FAST_MODEL` /
+  `_DEFAULT_MODEL` when Google ships a newer GA tier.
 * Consumer-tier limits (Login with Google, free individual plan): ~60
   requests/min, ~1000/day, models can transparently reroute pro→flash under
   load; a paid Google AI plan raises the caps. Check the plan if bulk jobs
@@ -96,8 +99,10 @@ call_llm(purpose in allowlist)           -> Gemini, once judges pass it
   `gemini-` (with `fallback_used` NULL — fallback rows carry
   `fallback_used='gemini'` instead), token counts mapped from the CLI's
   session stats (`prompt`→input, `candidates`→output, `cached`→cache-read),
-  and `cost_estimate_usd=0.0` — an explicit zero meaning *measured: free
-  under the subscription*, so budget sums stay correct.
+  and `cost_estimate_usd` = **real API list price** (`model_ladder.estimated_call_usd`,
+  per `directives/cheapest_model_routing.md` §1c/§2) — NOT $0. The old "measured:
+  free under the subscription" zero is superseded: a flat-rate subscription makes
+  every marginal cost look like $0, which is useless for cheapest-at-parity ranking.
 * Timeout: `GEMINI_CLI_TIMEOUT_SECONDS` env (default 1200s), mirroring
   `CLAUDE_CLI_TIMEOUT_SECONDS`.
 

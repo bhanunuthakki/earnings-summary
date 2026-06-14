@@ -26,8 +26,10 @@ the candidate won. PROMOTE_CANDIDATE becomes **SWITCH_DOWN**.
 
 So the only genuinely new primitives are:
 - **`src/llm/model_ladder.py`** — a cost-ranked registry (the definition of
-  "cheaper"). Marginal $/MTok, output-weighted; subscription Gemini is $0 (cheapest)
-  but `rate_limited` is surfaced. `cheaper_candidates(incumbent)`.
+  "cheaper"). Cost basis is **real API list price** ($/MTok, output-weighted), NOT
+  $0-subscription — a flat-rate subscription makes every model look free, useless
+  for ranking. Cost authority: `directives/cheapest_model_routing.md` §2. Gemini's
+  `rate_limited` flag is still surfaced. `cheaper_candidates(incumbent)`.
 - **`src/llm/model_eval.py`** — `run_model` (family→backend dispatch, budget
   bypassed, `scope="model_eval"`), `judge_case` (the slot mapping), `decide_switch`
   (the conservative recommendation).
@@ -66,10 +68,10 @@ Run the eval phase with capture OFF so eval traffic never re-enters the corpus.
 
 | PR | Scope | Status |
 |---|---|---|
-| **1** | Foundation: `model_ladder` + `model_eval` (engine, reuses the judge) + `eval_model_downgrade` CLI + tests + this directive. Advisory verdicts to `data/model_eval/`. | **this PR** |
-| **2** | Standing verdict ledger + scheduled cron: a `model_eval_verdicts` table (rolling per-(purpose, candidate) tally across runs), a `run_model_eval_sweep` job that samples purposes/tickers, harvests, evals, and accumulates; a weekly Scheduled-Task rung. | planned |
-| **3** | Auto-switch with guardrails: a `model_pin_overrides` table (purpose→model, reversible) that `_model_for` consults BEFORE the code pin; the loop writes an override when a candidate clears a *high* bar (large min-n, both-judge agreement, margin), emits an alert, and **auto-demotes** (clears the override) if a later sweep regresses. Dashboard surface + manual override/lock. | planned |
-| **4** | Coverage: golden anti-regression cases per downgraded purpose (so a switched-down purpose is re-checked on prompt changes), and a cost-savings rollup ("$X/mo saved by N downgrades"). | planned |
+| **1** | Foundation: `model_ladder` + `model_eval` (engine, reuses the judge) + `eval_model_downgrade` CLI + tests + this directive. Advisory verdicts to `data/model_eval/`. | **DONE** |
+| **2** | Standing verdict ledger + scheduled cron: a `model_eval_verdicts` table (rolling per-(purpose, candidate) tally across runs), a `run_model_eval_sweep` job that samples purposes/tickers, harvests, evals, and accumulates; a weekly Scheduled-Task rung. | **DONE** — alembic 0084 `model_eval_verdicts` + `execution/run_weekly_model_eval.py` (#448/#450) |
+| **3** | Auto-switch with guardrails: a `model_pin_overrides` table (purpose→model, reversible) that `_model_for` consults BEFORE the code pin; the loop writes an override when a candidate clears a *high* bar (large min-n, both-judge agreement, margin), emits an alert, and **auto-demotes** (clears the override) if a later sweep regresses. Dashboard surface + manual override/lock. | **DONE** — `model_pin_overrides` + `src/llm/model_overrides.py` + auto-switch in `src/llm/cli.py::_model_for()` + `execution/apply_model_switches.py` (#443/#450) |
+| **4** | Coverage: golden anti-regression cases per downgraded purpose (so a switched-down purpose is re-checked on prompt changes), and a cost-savings rollup ("$X/mo saved by N downgrades"). | verify & close |
 
 **Why advisory-first (PR1) before auto (PR3):** you can't auto-switch without the
 measurement, and the measurement engine is unambiguous. Auto-switch flips

@@ -299,6 +299,10 @@ to add to the harness built here), and a written threat model for the news→tri
 chain. **Recommendation: a sec-llm L1/L2 pass as its own track; wire injection canaries
 into the eval harness as part of it.**
 
+**DONE** — shipped as Fund-Grade S9 (#480/#485): `src/llm/untrusted.py` `spotlight()`,
+`WEB_CONTENT_NOTICE`, `injection_canaries` eval purpose; threat model in
+`directives/llm_injection_threat_model.md`.
+
 ### 5.2 QA / test strategy — **healthy; targeted fixes, not a track**
 
 Strong: ~1950-test suite, full-suite CI gate, diff-aware ruff/format + pyright ratchet

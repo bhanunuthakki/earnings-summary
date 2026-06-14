@@ -1,9 +1,6 @@
 # Directive: LLM-driven peer selection (the generator behind the peer-comp panel)
 
-**Status:** spec — not yet built. One dedicated session. **Recommended model: Sonnet**
-to execute against this spec (escalate the *runtime* peer-selection call to Opus only
-if the eval shows a quality gap — see "LLM governance"). Authored 2026-06-13 as the
-follow-on to S5 (`directives/interaction_paradigm_2026_06.md` row 2).
+**Status: SHIPPED 2026-06-13** (Chip 1, #530 generator + #523 consumer; `src/compute/peer_selection.py`). OPEN follow-up: live Sonnet-vs-Opus eval to pick the production model (pinned to Sonnet today). The spec body below is kept as the as-built record. Authored 2026-06-13 as the follow-on to S5 (`directives/interaction_paradigm_2026_06.md` row 2).
 
 ## Problem
 

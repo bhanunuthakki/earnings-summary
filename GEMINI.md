@@ -1,8 +1,10 @@
-# Data Pipeline Repo — Agent Instructions
+# earnings-summary — Repo Agent Instructions
 
-This repo runs automated data pipelines (transcripts, financials, web scraping). Loads on top of the global `GEMINI.md`.
+Loads on top of the global `GEMINI.md`. This file adds ONLY earnings-summary-specific guidance — the general code standards, type discipline, testing, PR conventions, branching, engineering bar, and per-session model-selection rule all live in the global `GEMINI.md` and are not repeated here.
 
-LLMs are probabilistic, business logic is deterministic. This 3-layer architecture forces deterministic logic into code, leaving the LLM to handle routing and synthesis.
+**What this repo is.** A solo-built, pull-only, localhost equity-research platform. The business-logic library lives under `src/` (`llm`, `ui`, `compute`, `ask`, `signals`, `pipeline`, `report`, `dcf`, `models`); `execution/` holds thin single-purpose CLI entrypoints that import `src/` (data fetches, builds, the morning pipeline, and `execution/comments_server.py` — the Flask cockpit at http://127.0.0.1:7421). State lives in `data/portfolio.db` under alembic migrations; intermediate artifacts in `.tmp/`. It does run automated data pipelines (transcripts, financials, web scraping), and the layered discipline below applies to that work.
+
+LLMs are probabilistic, business logic is deterministic. The 3-layer architecture below forces deterministic logic into code, leaving the LLM to handle routing and synthesis.
 
 ## The 3-Layer Architecture
 
@@ -110,130 +112,15 @@ LLMs are probabilistic, business logic is deterministic. This 3-layer architectu
 - API keys passed to scripts via environment variables only — never as CLI args (they leak into shell history and process lists).
 - Secrets used in URL query strings get redacted in any logged output.
 
-## Session & Agent Model Selection (Token Discipline)
+## Session & Agent Model Selection — repo scope note
 
-When proposing or spawning work that spans multiple sessions/agents (chips, worktree sessions, subagents, scheduled agents), state a recommended model **per session**, chosen by task nature — never one global default. Any plan that proposes N sessions must list the model next to each session.
+The per-session AGENT model-selection rule (Opus/Sonnet/Haiku-class by task nature) lives in the global `GEMINI.md` → "Session & Agent Model Selection (Token Discipline)" and applies here unchanged.
 
-- **Opus-class** (Claude Opus 4.8 / Fable 5; Gemini Ultra-tier) — architecture or design under ambiguity, writing directives/plans for multi-session tracks, financial-judgment calibration (e.g. DCF/SOTP assumptions), prompt & eval-rubric design, anything where a wrong early decision is expensive to unwind. Few sessions should need this.
-- **Sonnet-class** (Claude Sonnet 4.6; Gemini Pro-tier) — the default for implementation: features with a directive/spec and acceptance criteria, refactors behind tests, bugfixes, pipeline/schema work. When unsure, pick Sonnet.
-- **Haiku-class** (Claude Haiku 4.5; Gemini Flash-tier) — mechanical work with no judgment: renames, formatting/checklist sweeps, fixed-recipe backfills, high-volume classification. Also the default tier for mechanical subagent fan-out (search, verification sweeps) inside any session.
+Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
-Rules of thumb: a directive with acceptance criteria exists → Sonnet executes it; writing the directive itself → Opus-class. Escalate a session's model only after it actually fails on quality, not preemptively.
+## General Code Standards — see global GEMINI.md
 
-Scope note: this governs **coding/session** model choice. In-app per-purpose LLM routing is governed separately by `LLM_MODELS` in `src/llm/cli.py` plus the model-downgrade eval loop (`directives/model_eval_loop.md`).
-
-
-# Backend Development Guidelines — Full Reference
-
-General-purpose rules for backend code. Examples are in Python/Pydantic but the principles port directly to TypeScript, Go, Rust, etc. Apply retroactively — update existing code to comply as you touch it.
-
-A short "always-load" subset lives in `BACKEND_CORE.md`.
-
-## Core Principles
-
-**Engineering bar.** When planning a feature, fixing a bug, or making any change — no matter how small — approach it as a senior principal engineer would. Think through the full picture before writing a single line: the data model, the API boundaries, the failure modes, the edge cases, the naming, the file organization, the testability. The architecture should be obvious to anyone reading it for the first time. The code should be minimal, precise, and self-explanatory — no over-engineering, no under-engineering. Every abstraction must earn its existence. Every function, module, and file should have a clear reason to exist and a clear place in the structure. If something feels hacky or bolted-on, redesign it. The bar is: would this pass a rigorous code review from the best engineer you know?
-
-**Branching.** Do not switch to a new branch unless explicitly instructed.
-
-**Multi-agent coordination.** Other agents or developers may be making changes in the same repos concurrently. Do not touch or revert unrelated changes you encounter — just continue with your own work. If those changes directly conflict with yours, ask before resolving conflicts.
-
-**Respect existing edits.** Assume any unexplained changes already in the tree were made intentionally. Do not "clean them up" without being asked.
-
-## Code Standards
-
-### NEVER
-
-- Inline imports — all imports at the top of each module
-- `getattr` gymnastics, permissive fallbacks, or defensive patterns that hide bugs
-- `try/except pass` (or equivalent) — never silence errors
-- `cast`, purposeless `isinstance` checks, or assert-driven type coercions
-- Type-error suppression directives (`# noqa`, `@ts-ignore`, etc.) unless explicitly instructed
-- `Any` / `unknown` / `interface{}` as a type — model types precisely
-- Keyword or substring matching to classify responses, detect intent, or branch logic
-- Magic strings or constants sprinkled through code — define enums or module-level constants
-- Silent fallbacks on unexpected input — let it raise
-
-### ALWAYS
-
-- Strong typing enforced by the strictest typechecker available — if a type is wrong, fix the annotations, don't escape them
-- Schema-validated models (Pydantic, Zod, Go structs with validators) for structured data, request/response payloads, and configuration surfaces
-- Functions under ~80 lines — break large conditionals into helpers
-- DRY — extract shared logic instead of copy/pasting
-- Fail loudly — raise clear exceptions when invariants are violated
-- Docstrings on every non-trivial module and class
-- Direct attribute access and explicit failures over permissive fallbacks
-
-### Type Discipline — Examples
-
-❌ **BAD**:
-```python
-def resolve_ticket(data: dict[str, Any]) -> dict[str, Any]: ...
-def get_config(settings: dict[str, dict[str, list[Any]]]): ...
-```
-
-✅ **GOOD**:
-```python
-class TicketResolution(BaseModel):
-    ticket_id: str
-    status: ResolutionStatus
-    actions_taken: list[ActionRecord]
-
-def resolve_ticket(data: TicketInput) -> TicketResolution: ...
-```
-
-### Classification & Intent Detection — Examples
-
-❌ **BAD**:
-```python
-if "password" in ticket.subject.lower():
-    category = "password_reset"
-if "confirmed" in human_message:
-    proceed = True
-```
-
-✅ **GOOD**: Use structured outputs, enums, or model-driven classification — never substring matching.
-
-## Testing & Quality Assurance
-
-- Scripts intended for CLI use must rely on repo-relative paths so they work from the project root.
-- **Never** write tests that assert on exact prompt wording, template labels, or sentence substrings (e.g., `assert "Current technician message:" in prompt`). Prompts and copy change constantly — these tests break immediately and provide zero value. Instead, test structural properties: output is non-empty, deterministic, differs between modes, includes user-supplied input values, respects length constraints, etc. If you find existing tests matching on prompt text, delete the offending assertions.
-- The same principle applies to any test that asserts on log messages, error message wording, or other human-readable strings that aren't part of the contract.
-
-### Pre-Push Checklist
-
-Run in order before every commit/push, adapted to the project's toolchain:
-
-1. Sync dependencies (if changed)
-2. Format
-3. Lint
-4. Typecheck (run all available typecheckers; e.g., `pyright` + `basedpyright`)
-5. Pre-commit hooks
-6. Tests
-
-If the project has a `Makefile` or task runner, keep it in sync when adding new tooling.
-
-## Pull Request Conventions
-
-### PR Title
-
-- Imperative mood ("Add webhook retry logic", not "Added webhook retry logic")
-- Short and focused on WHAT changed, not HOW
-
-### PR Description
-
-```
-## Why
-[Problem or motivation for the change]
-
-## Changes
-- [High-level change 1]
-- [High-level change 2]
-
-## Test Plan
-- [How this was verified]
-```
-
-Avoid line-by-line code narration or implementation details obvious from the diff.
+The full backend/code standards (typing, the NEVER/ALWAYS lists, classification, testing discipline, the pre-push checklist, PR conventions, Deep Modules) live in the global `GEMINI.md` and apply here unchanged — do not duplicate them in this file. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is the accepted pattern here; never `# type: ignore` (this matches the global NEVER list's JSON-boundary exception). See `src/log_redact.py` for the canonical credential-redaction helper the global secret-handling rules reference.
 
 ## Infrastructure as Code
 
