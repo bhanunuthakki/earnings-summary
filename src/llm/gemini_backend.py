@@ -73,10 +73,16 @@ log = logging.getLogger(__name__)
 # retuning a purpose's Claude tier automatically retunes its Gemini mirror.
 # Pro = gemini-3.1-pro-preview (current Pro baseline; gemini-3-pro-preview was
 # discontinued 2026-03 and there is no 3.5 Pro — only 3.5 Flash).
-# Flash = gemini-2.5-flash (gemini-3.5-flash is not a valid CLI model id —
-# returns ModelNotFoundError; corrected 2026-06-13 per peer_selection eval run).
+# Flash = gemini-3-flash-preview (the current Gemini 3 Flash tier on the CLI;
+# "gemini-3.5-flash" is the REST-API-key name for the same generation but is
+# NOT a valid CLI model id — 404 on all variants; confirmed 2026-06-13).
 GEMINI_BACKEND_DEFAULT_MODEL = "gemini-3.1-pro-preview"
-GEMINI_BACKEND_FAST_MODEL = "gemini-2.5-flash"
+GEMINI_BACKEND_FAST_MODEL = "gemini-3-flash-preview"
+# Stable GA fallback for the fast tier. If GEMINI_BACKEND_FAST_MODEL (a preview
+# alias) returns ModelNotFoundError, call_gemini self-anneals: it writes this id
+# into _effective_fast_model and retries — all subsequent in-process calls then
+# use the fallback automatically without operator intervention.
+_GEMINI_FAST_MODEL_FALLBACK = "gemini-2.5-flash"
 
 # Explicit per-purpose Gemini model pins. Ships EMPTY: the default tier
 # derivation (Claude fast-classifier purposes → Flash, everything else → Pro)
@@ -145,6 +151,7 @@ _NULL_CONTEXT_FILENAME = "ES_GEMINI_BACKEND_NULL_CONTEXT.md"
 _gemini_setup_verified: bool = False
 _gemini_cli_path: str | None = None
 _gemini_neutral_cwd_cache: str | None = None
+_effective_fast_model: str | None = None  # None = GEMINI_BACKEND_FAST_MODEL; set by _anneal_fast_model
 
 
 def gemini_allowed_purposes() -> frozenset[str]:
@@ -182,8 +189,27 @@ def gemini_model_for(purpose: str | None) -> str:
             if family_of(llm_model) == _GEMINI:
                 return llm_model  # already a Gemini id — return verbatim
             if llm_model == llm_cli.FAST_CLASSIFIER_MODEL:
-                return GEMINI_BACKEND_FAST_MODEL
+                return _effective_fast_model or GEMINI_BACKEND_FAST_MODEL
     return GEMINI_BACKEND_DEFAULT_MODEL
+
+
+def _is_model_not_found(exc: subprocess.CalledProcessError) -> bool:
+    combined = (exc.stdout if isinstance(exc.stdout, str) else "") + "\n" + (exc.stderr if isinstance(exc.stderr, str) else "")
+    return "ModelNotFoundError" in combined
+
+
+def _anneal_fast_model(broken: str) -> str:
+    """Switch the in-process fast model to the stable fallback and return it."""
+    global _effective_fast_model
+    _effective_fast_model = _GEMINI_FAST_MODEL_FALLBACK
+    log.warning(
+        {
+            "event": "gemini_fast_model_annealed",
+            "broken": broken,
+            "fallback": _GEMINI_FAST_MODEL_FALLBACK,
+        }
+    )
+    return _GEMINI_FAST_MODEL_FALLBACK
 
 
 def _verify_gemini_setup_once() -> None:
@@ -405,60 +431,76 @@ def call_gemini(
     from llm_call_ledger import sha256_text
 
     prompt_sha = sha256_text(prompt)
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-    try:
-        # Prompt rides stdin alone — gemini-cli enters non-interactive mode
-        # on piped stdin without -p (verified v0.46), and stdin dodges the
-        # Windows 32K CreateProcess command-line limit like the Claude path.
-        result = subprocess.run(
-            [_gemini_cli_path, "-o", "json", "-m", resolved_model],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
-            errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
-            check=True,
-            timeout=resolved_timeout,
-            cwd=_gemini_neutral_cwd(),
-            env=_gemini_subprocess_env(),
-        )
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        text, meta = parse_gemini_json_output(result.stdout.strip())
-        text = text.strip()
-        if not text:
-            raise RuntimeError(
-                f"gemini -o json returned empty `response`. stderr: {result.stderr.strip()[:200]}"
+
+    # Self-annealing retry: _models starts as [resolved_model]. On a
+    # ModelNotFoundError (preview alias expired / rotated), _anneal_fast_model
+    # appends the stable fallback and the loop retries once. Every attempt
+    # writes its own ledger row so failures are auditable.
+    _models = [resolved_model]
+    for _attempt, _try_model in enumerate(_models):
+        started_at = datetime.now(UTC)
+        t0 = time.monotonic()
+        try:
+            # Prompt rides stdin alone — gemini-cli enters non-interactive mode
+            # on piped stdin without -p (verified v0.46), and stdin dodges the
+            # Windows 32K CreateProcess command-line limit like the Claude path.
+            result = subprocess.run(
+                [_gemini_cli_path, "-o", "json", "-m", _try_model],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
+                errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
+                check=True,
+                timeout=resolved_timeout,
+                cwd=_gemini_neutral_cwd(),
+                env=_gemini_subprocess_env(),
             )
-        log.info({"event": "gemini_backend_call_done", "response_chars": len(text)})
-        record_llm_call(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=resolved_model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            response_text=text,
-            meta=usage_meta_from_gemini_stats(meta, model=resolved_model),
-        )
-        return text
-    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        record_llm_call(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=resolved_model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
-        )
-        if isinstance(gemini_error, subprocess.CalledProcessError):
-            _classify_subprocess_failure(gemini_error)  # auth → LLMSetupError
-        raise
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            text, meta = parse_gemini_json_output(result.stdout.strip())
+            text = text.strip()
+            if not text:
+                raise RuntimeError(
+                    f"gemini -o json returned empty `response`. stderr: {result.stderr.strip()[:200]}"
+                )
+            log.info({"event": "gemini_backend_call_done", "response_chars": len(text)})
+            record_llm_call(
+                started_at=started_at,
+                elapsed_ms=elapsed_ms,
+                model=_try_model,
+                prompt_sha=prompt_sha,
+                prompt_chars=len(prompt),
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                response_text=text,
+                meta=usage_meta_from_gemini_stats(meta, model=_try_model),
+            )
+            return text
+        except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            record_llm_call(
+                started_at=started_at,
+                elapsed_ms=elapsed_ms,
+                model=_try_model,
+                prompt_sha=prompt_sha,
+                prompt_chars=len(prompt),
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
+            )
+            if (
+                _attempt == 0
+                and isinstance(gemini_error, subprocess.CalledProcessError)
+                and _is_model_not_found(gemini_error)
+                and _try_model != _GEMINI_FAST_MODEL_FALLBACK
+            ):
+                _models.append(_anneal_fast_model(_try_model))
+                continue
+            if isinstance(gemini_error, subprocess.CalledProcessError):
+                _classify_subprocess_failure(gemini_error)  # auth → LLMSetupError
+            raise
+    raise RuntimeError("call_gemini: model sequence exhausted")  # unreachable
