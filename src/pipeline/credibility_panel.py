@@ -21,6 +21,8 @@ from pathlib import Path
 
 from calibration_guard import confidence_note
 from credibility.calibration import ReliabilityTable, build_reliability_table
+from credibility.priors import MeasuredPriors, build_measured_priors
+from pipeline.confidence import TIER_BASE, UNKNOWN_TIER_BASE
 
 _PANEL_STYLE = """<style>
 .cred-note { margin-top:14px; padding:10px 13px; background:var(--paper);
@@ -35,7 +37,7 @@ _PANEL_STYLE = """<style>
 
 def render_credibility_panel(db_path: Path, *, user_id: str = "bhanu") -> str:
     """The Credibility tab fragment: reliability table + Brier over the ledger."""
-    table = _load(db_path, user_id=user_id)
+    table, priors = _load(db_path, user_id=user_id)
     if table is None:
         return (
             '<section class="panel"><h2>Credibility</h2>'
@@ -61,25 +63,27 @@ def render_credibility_panel(db_path: Path, *, user_id: str = "bhanu") -> str:
             "cross-source disagreement contested. A gap is miscalibration.</p>",
             _kpi_strip(table),
             _reliability_table(table),
-            _tier_table(table),
+            _tier_table(table, priors),
             _footnote(table),
             "</section>",
         ]
     )
 
 
-def _load(db_path: Path, *, user_id: str) -> ReliabilityTable | None:
+def _load(db_path: Path, *, user_id: str) -> tuple[ReliabilityTable | None, MeasuredPriors | None]:
     if not db_path.exists():
-        return None
+        return None, None
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.Error:
-        return None
+        return None, None
     conn.row_factory = sqlite3.Row
     try:
-        return build_reliability_table(conn, user_id=user_id)
+        table = build_reliability_table(conn, user_id=user_id)
+        priors = build_measured_priors(conn, user_id=user_id) if table is not None else None
+        return table, priors
     except sqlite3.Error:
-        return None
+        return None, None
     finally:
         conn.close()
 
@@ -138,7 +142,19 @@ def _reliability_table(t: ReliabilityTable) -> str:
     )
 
 
-def _tier_table(t: ReliabilityTable) -> str:
+def _base_cell(tier: str, priors: MeasuredPriors | None) -> str:
+    """The tier's hand-set constant base and — when the cell has cleared the
+    min-n gate — the measured base it would be replaced by. Equal values render
+    as the constant alone (the prior hasn't earned a swap yet)."""
+    constant = TIER_BASE.get(tier, UNKNOWN_TIER_BASE)
+    measured = priors.tier_base(tier, fallback=constant) if priors is not None else constant
+    if abs(measured - constant) < 1e-9:
+        return f'<td class="num cred-thin">{constant:.2f}</td>'
+    cls = "cred-under" if measured < constant else "cred-over"
+    return f'<td class="num">{constant:.2f} &rarr; <span class="{cls}">{measured:.2f}</span></td>'
+
+
+def _tier_table(t: ReliabilityTable, priors: MeasuredPriors | None) -> str:
     if not t.tiers:
         return ""
     body: list[str] = []
@@ -152,6 +168,7 @@ def _tier_table(t: ReliabilityTable) -> str:
             f'<td class="num cred-spark">{_pct(tr.observed_rate)}</td>'
             f'<td class="num">{tr.brier:.3f}</td>'
             f"{_gap_cell(tr.mean_predicted, tr.observed_rate, tr.n, min_n=t.min_n)}"
+            f"{_base_cell(tr.tier, priors)}"
             "</tr>"
         )
     return (
@@ -160,6 +177,7 @@ def _tier_table(t: ReliabilityTable) -> str:
         "<th>Tier</th>"
         '<th class="num">n</th><th class="num">Predicted</th>'
         '<th class="num">Observed held</th><th class="num">Brier</th><th class="num">Gap</th>'
+        '<th class="num">Base (const&rarr;measured)</th>'
         f"</tr></thead><tbody>{''.join(body)}</tbody></table>"
     )
 

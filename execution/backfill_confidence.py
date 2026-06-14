@@ -41,6 +41,7 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from credibility.priors import MeasuredPriors, build_measured_priors  # noqa: E402
 from pipeline.confidence import RescoreOutcome, apply_confidence_scores  # noqa: E402
 
 
@@ -61,6 +62,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Write the recomputed scores. Without it: dry-run (counts only).",
     )
+    parser.add_argument(
+        "--use-measured-priors",
+        action="store_true",
+        help="Replace the hand-set tier base with the MEASURED credibility prior "
+        "(credibility.priors) for any (tier x ticker x line-item) cell that has cleared the "
+        "minimum-n gate. Cells below the floor keep the constant. Requires the "
+        "confidence_observations ledger (run build_confidence_observations.py first).",
+    )
     args = parser.parse_args(argv)
 
     db_path = args.db if args.db is not None else args.repo_root / "data" / "portfolio.db"
@@ -69,18 +78,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     conn = sqlite3.connect(str(db_path))
+    priors: MeasuredPriors | None = None
     try:
+        if args.use_measured_priors:
+            priors = build_measured_priors(conn)
         outcomes: list[RescoreOutcome] = [
             apply_confidence_scores(
-                conn, table="financial_facts", ticker=args.ticker, apply=args.apply
+                conn, table="financial_facts", ticker=args.ticker, apply=args.apply, priors=priors
             ),
-            apply_confidence_scores(conn, table="kpi_facts", ticker=args.ticker, apply=args.apply),
+            apply_confidence_scores(
+                conn, table="kpi_facts", ticker=args.ticker, apply=args.apply, priors=priors
+            ),
         ]
     finally:
         conn.close()
 
     mode = "APPLIED" if args.apply else "DRY-RUN"
-    print(f"confidence backfill [{mode}] db={db_path}")
+    prior_mode = "measured-priors" if args.use_measured_priors else "constants-only"
+    print(f"confidence backfill [{mode}] [{prior_mode}] db={db_path}")
     for o in outcomes:
         print(
             f"  {o.table}: examined={o.examined} "

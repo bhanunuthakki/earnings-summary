@@ -20,6 +20,7 @@ from triggers.decision_condition import DecisionConditionTrigger
 from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.material_news import MaterialNewsTrigger
+from triggers.restatement import RestatementTrigger
 from triggers.saydo_due import SayDoDueTrigger
 
 ENABLED_TRIGGERS: list[type[Trigger]] = [
@@ -28,6 +29,7 @@ ENABLED_TRIGGERS: list[type[Trigger]] = [
     SayDoDueTrigger,
     MaterialNewsTrigger,
     DecisionConditionTrigger,
+    RestatementTrigger,
 ]
 
 ALL_TRIGGERS: list[type[Trigger]] = [
@@ -36,4 +38,5 @@ ALL_TRIGGERS: list[type[Trigger]] = [
     SayDoDueTrigger,
     MaterialNewsTrigger,
     DecisionConditionTrigger,
+    RestatementTrigger,
 ]
