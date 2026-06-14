@@ -391,7 +391,7 @@ def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
             continue
         out.append(
             f'<button class="cc-tab cc-theme-tab" type="button" role="tab" '
-            f'data-theme-target="{escape(tid)}">{escape(tlabel)}</button>'
+            f'tabindex="-1" data-theme-target="{escape(tid)}">{escape(tlabel)}</button>'
         )
     out.append("</nav>")
     return "".join(out)
@@ -408,7 +408,7 @@ def _render_system_button(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ..
         sub_labels = " · ".join(label for _pid, label, _ep, _pk, _rq in subs)
         return (
             f'<button class="cc-theme-tab cc-system-btn" type="button" role="tab" '
-            f'data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
+            f'tabindex="-1" data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
             f'aria-label="{escape(tlabel)}" title="{escape(f"{tlabel} · {sub_labels}", quote=True)}"'
             f">▦</button>"
         )
@@ -431,7 +431,7 @@ def _render_subnav_rows(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
         for pid, label, _endpoint, _picker, _required in subs:
             out.append(
                 f'<button class="cc-tab" type="button" role="tab" '
-                f'id="cc-tab-{escape(pid)}" aria-selected="false" '
+                f'tabindex="-1" id="cc-tab-{escape(pid)}" aria-selected="false" '
                 f'aria-controls="cc-panel-{escape(pid)}" '
                 f'data-tab-target="{escape(pid)}" data-cc-theme="{escape(tid)}">'
                 f"{escape(label)}</button>"
@@ -1192,6 +1192,23 @@ td.ticker a:hover { color: var(--accent); }
   .cc-settings-btn, .cc-notes-btn, .cc-system-btn { min-height: 44px; }
   a.tier-chip { min-height: 44px; display: inline-flex; align-items: center; }
 }
+
+/* Offline banner (L13): fixed top ribbon, hidden when online. */
+.cc-offline-banner {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+  background: var(--warn); color: var(--bg); text-align: center;
+  padding: 8px 16px; font-size: var(--fs-caption); font-weight: 600;
+}
+
+/* Retry button inside panel error states (L13). */
+.cc-retry-btn {
+  display: inline-flex; align-items: center;
+  margin-left: 10px; padding: 3px 10px;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid var(--accent); border-radius: var(--radius);
+  font-size: var(--fs-caption); font-weight: 600; cursor: pointer;
+}
+.cc-retry-btn:hover { background: var(--accent); color: var(--accent-contrast); }
 """
     + VIEWER_CONTENT_CSS
     + INBOX_CSS
@@ -1254,6 +1271,45 @@ SHELL_JS = r"""
 
   // Focus trap + restore is CCOverlay's now (pipeline/cc_overlay.py) — the
   // shell's former focusableIn()/trapFocus() helpers moved into the primitive.
+
+  // ----- Offline banner (L13) -----
+  var offlineBanner = document.getElementById('cc-offline-banner');
+  function syncOnlineState() {
+    if (!offlineBanner) return;
+    offlineBanner.hidden = navigator.onLine;
+  }
+  window.addEventListener('online', syncOnlineState);
+  window.addEventListener('offline', syncOnlineState);
+  syncOnlineState();
+
+  // ----- WAI-ARIA roving-tabindex helper (L13) -----
+  // Sets up arrow-key navigation inside a role="tablist" element.
+  // Moving focus also fires a click (follow-focus pattern) to activate the tab.
+  function setupTablistNav(list) {
+    if (!list) return;
+    list.addEventListener('keydown', function (ev) {
+      if (ev.target.getAttribute('role') !== 'tab') return;
+      var btns = Array.prototype.slice.call(
+        list.querySelectorAll('[role="tab"]:not([disabled])'));
+      var idx = btns.indexOf(ev.target);
+      if (idx === -1) return;
+      var next = -1;
+      if (ev.key === 'ArrowRight' || ev.key === 'ArrowDown') {
+        next = (idx + 1) % btns.length;
+      } else if (ev.key === 'ArrowLeft' || ev.key === 'ArrowUp') {
+        next = (idx - 1 + btns.length) % btns.length;
+      } else if (ev.key === 'Home') {
+        next = 0;
+      } else if (ev.key === 'End') {
+        next = btns.length - 1;
+      } else {
+        return;
+      }
+      ev.preventDefault();
+      btns[next].focus();
+      btns[next].click();
+    });
+  }
 
   function firstPanelOfTheme(tid) {
     for (var i = 0; i < tabs.length; i++) {
@@ -1422,7 +1478,10 @@ SHELL_JS = r"""
       cacheSet(key, entry);
     }).catch(function (e) {
       if (!served) {
-        body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+        body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
+          + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+        var rb = body.querySelector('.cc-retry-btn');
+        if (rb) rb.onclick = function () { loadBody(panel, ticker); };
         announce((pid || 'panel') + ' failed to load');
       }
     });
@@ -1489,9 +1548,18 @@ SHELL_JS = r"""
       var on = t.getAttribute('data-tab-target') === panelId;
       t.classList.toggle('active', on);
       t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.setAttribute('tabindex', on ? '0' : '-1');
       if (on) activeTheme = t.getAttribute('data-cc-theme');
     });
     if (activeTheme) {
+      // Roving tabindex for the section nav: only one topnav tab focusable at a
+      // time; the system icon (outside .cc-topnav) keeps its own tabindex.
+      var topnavBtns = Array.prototype.slice.call(
+        document.querySelectorAll('.cc-topnav [role="tab"]'));
+      topnavBtns.forEach(function (t) {
+        var on = t.getAttribute('data-theme-target') === activeTheme;
+        t.setAttribute('tabindex', on ? '0' : '-1');
+      });
       themeTabs.forEach(function (t) {
         var on = t.getAttribute('data-theme-target') === activeTheme;
         t.classList.toggle('active', on);
@@ -1567,7 +1635,10 @@ SHELL_JS = r"""
       injectHtml(body, html);
     }).catch(function (e) {
       sec.setAttribute('data-loaded', '0');
-      body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+      body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
+        + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+      var rb = body.querySelector('.cc-retry-btn');
+      if (rb) rb.onclick = function () { loadDrawerSection(sec); };
     });
   }
 
@@ -1615,7 +1686,10 @@ SHELL_JS = r"""
       }).then(function (html) {
         injectHtml(notesBody, html);
       }).catch(function (e) {
-        notesBody.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+        notesBody.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
+          + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+        var rb = notesBody.querySelector('.cc-retry-btn');
+        if (rb) rb.onclick = loadNotesDrawer;
       });
   }
   window.ccReloadNotesDrawer = loadNotesDrawer;
@@ -2153,6 +2227,9 @@ SHELL_JS = r"""
     });
   });
 
+  // Wire arrow-key roving tabindex on each tablist (L13).
+  setupTablistNav(document.querySelector('.cc-topnav'));
+  subnavs.forEach(function (n) { setupTablistNav(n); });
 
   // A ticker link anywhere in the shell (analytical panels' .ticker-link, the
   // Overview status tables' td.ticker links) opens the per-ticker Holding tab
@@ -2207,6 +2284,7 @@ _DOC_HEAD = (
 <body>
 <a class="cc-skip" href="#cc-main">Skip to content</a>
 <div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
+<div id="cc-offline-banner" class="cc-offline-banner" hidden aria-live="polite">Offline — data panels cannot reload until you reconnect</div>
 """.replace("{css}", SHELL_CSS)
 )
 
