@@ -33,8 +33,10 @@ from __future__ import annotations
 import dataclasses
 import re
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -151,6 +153,29 @@ class ScenarioDeltas:
     exit_multiple: float = 0.0
     terminal_g: float = 0.0
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> ScenarioDeltas:
+        """Reconstruct a ScenarioDeltas from a JSON-decoded dict (the inverse of
+        ``dataclasses.asdict``). A missing lever defaults to 0.0 (no shift);
+        seed fallback for an absent *whole* block is the caller's concern
+        (``RedesignInputs.from_dict``). Raises ``RedesignError`` on a non-numeric
+        lever."""
+
+        def lever(key: str) -> float:
+            v = data.get(key, 0.0)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise RedesignError(f"scenario delta {key!r} must be a number")
+            return float(v)
+
+        return cls(
+            growth_near=lever("growth_near"),
+            growth_term=lever("growth_term"),
+            margin_near=lever("margin_near"),
+            margin_term=lever("margin_term"),
+            exit_multiple=lever("exit_multiple"),
+            terminal_g=lever("terminal_g"),
+        )
+
 
 # The documented seed offsets a fresh build writes into the Bull/Bear columns —
 # a deliberately moderate spread the user then edits per name.
@@ -212,6 +237,125 @@ class RedesignInputs:
     # workbook reads back as the seeds, giving every name a meaningful range.
     bull_deltas: ScenarioDeltas = BULL_SEED
     bear_deltas: ScenarioDeltas = BEAR_SEED
+
+    def to_dict(self) -> dict[str, object]:
+        """A JSON-safe dict of every input — the inverse of :meth:`from_dict`.
+
+        The transport for the in-app recompute route (``/api/dcf/recompute``):
+        segments as a list and the Bull/Bear ``ScenarioDeltas`` as plain dicts,
+        so the whole assumption set round-trips through ``json.dumps`` and back
+        with NO xlsx in the loop. The card edits a few fields and POSTs the
+        result; the server rebuilds via :meth:`from_dict` and runs the pure
+        engine.
+        """
+        payload: dict[str, object] = dataclasses.asdict(self)
+        payload["segments"] = list(self.segments)
+        return payload
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> RedesignInputs:
+        """Build a :class:`RedesignInputs` from a JSON-decoded dict — the
+        non-workbook constructor (the inverse of :meth:`to_dict`).
+
+        Where :func:`read_inputs` reads the yellow Dashboard cells and *derives*
+        WACC from the CAPM inputs, this takes every value as given: the in-app
+        card edits WACC (and the terminal/margin/growth levers) directly, then
+        POSTs the edited set so the pure engine recomputes with no Sheets/Excel
+        round-trip. Raises :class:`RedesignError` with a field-named message on a
+        missing, non-numeric, or structurally invalid input, mirroring the
+        ``read_inputs`` validation contract.
+        """
+
+        def req_float(key: str) -> float:
+            if key not in data:
+                raise RedesignError(f"missing DCF input: {key!r}")
+            v = data[key]
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise RedesignError(f"DCF input {key!r} must be a number")
+            return float(v)
+
+        def seg_map(key: str) -> dict[str, float]:
+            raw = data.get(key)
+            if not isinstance(raw, Mapping):
+                raise RedesignError(f"DCF input {key!r} must be a segment->number object")
+            out: dict[str, float] = {}
+            for seg, v in cast("Mapping[str, object]", raw).items():
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise RedesignError(f"DCF input {key!r}[{seg!r}] must be a number")
+                out[str(seg)] = float(v)
+            return out
+
+        raw_segs = data.get("segments")
+        if not isinstance(raw_segs, (list, tuple)) or not raw_segs:
+            raise RedesignError("DCF input 'segments' must be a non-empty list")
+        segments = tuple(str(s) for s in cast("tuple[object, ...]", raw_segs))
+
+        base_rev = seg_map("base_revenue_by_segment")
+        near = seg_map("near_growth_by_segment")
+        term = seg_map("terminal_growth_by_segment")
+        for seg in segments:
+            for label, m in (
+                ("base_revenue_by_segment", base_rev),
+                ("near_growth_by_segment", near),
+                ("terminal_growth_by_segment", term),
+            ):
+                if seg not in m:
+                    raise RedesignError(f"DCF input {label!r} missing segment {seg!r}")
+
+        cy_raw = data.get("consensus_years")
+        if isinstance(cy_raw, bool) or not isinstance(cy_raw, (int, float)):
+            raise RedesignError("DCF input 'consensus_years' must be an integer")
+        consensus_years = int(cy_raw)
+
+        method = data.get("terminal_method")
+        if not isinstance(method, str) or not method.strip():
+            raise RedesignError("DCF input 'terminal_method' must be a non-empty string")
+        basis = data.get("terminal_basis")
+        if not isinstance(basis, str) or not basis.strip():
+            raise RedesignError("DCF input 'terminal_basis' must be a non-empty string")
+
+        bull_raw = data.get("bull_deltas")
+        bull = (
+            ScenarioDeltas.from_dict(cast("Mapping[str, object]", bull_raw))
+            if isinstance(bull_raw, Mapping)
+            else BULL_SEED
+        )
+        bear_raw = data.get("bear_deltas")
+        bear = (
+            ScenarioDeltas.from_dict(cast("Mapping[str, object]", bear_raw))
+            if isinstance(bear_raw, Mapping)
+            else BEAR_SEED
+        )
+
+        return cls(
+            segments=segments,
+            base_revenue_by_segment=base_rev,
+            near_growth_by_segment=near,
+            terminal_growth_by_segment=term,
+            near_op_margin=req_float("near_op_margin"),
+            terminal_op_margin=req_float("terminal_op_margin"),
+            tax_rate=req_float("tax_rate"),
+            capex_2026_m=req_float("capex_2026_m"),
+            terminal_capex_da=req_float("terminal_capex_da"),
+            da_ratio=req_float("da_ratio"),
+            consensus_years=consensus_years,
+            wacc=req_float("wacc"),
+            beta=req_float("beta"),
+            risk_free_rate=req_float("risk_free_rate"),
+            equity_risk_premium=req_float("equity_risk_premium"),
+            cost_of_debt=req_float("cost_of_debt"),
+            terminal_method=method.strip(),
+            terminal_basis=basis.strip(),
+            exit_multiple=req_float("exit_multiple"),
+            terminal_growth_g=req_float("terminal_growth_g"),
+            current_price=req_float("current_price"),
+            cash_m=req_float("cash_m"),
+            total_debt_m=req_float("total_debt_m"),
+            diluted_shares_m=req_float("diluted_shares_m"),
+            fx_to_usd=req_float("fx_to_usd"),
+            bull_deltas=bull,
+            bear_deltas=bear,
+        )
 
 
 @dataclass(frozen=True)
