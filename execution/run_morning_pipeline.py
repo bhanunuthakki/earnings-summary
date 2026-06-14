@@ -103,6 +103,11 @@ _LIFECYCLE_TIMEOUT_S = 120
 # Stage 0d (cockpit fundamentals) runs the financial_facts double-scan that
 # was measured at ~1.2s on prod (726k rows). 60s is generous.
 _FUNDAMENTALS_TIMEOUT_S = 60
+# Stage 0e (DCF re-price) re-divides each persisted fair value by a fresh live
+# price (per-ticker source-stack read, no DCF rebuild) so the trim/sell ladder +
+# next-dollar "ret" factor don't run on a stale price leg. ~90 names, yfinance
+# self-healing to the FMP cache — 5 min covers a slow/throttled morning.
+_REPRICE_TIMEOUT_S = 300
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -111,6 +116,7 @@ STAGE_NEWS = "stage_0_news"
 STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
+STAGE_REPRICE = "stage_0e_reprice"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
@@ -120,6 +126,7 @@ _ALL_STAGE_KEYS = (
     STAGE_DECISIONS,
     STAGE_LIFECYCLE,
     STAGE_FUNDAMENTALS,
+    STAGE_REPRICE,
     STAGE_TRIGGERS,
     STAGE_FEED,
     STAGE_VALIDATE,
@@ -270,9 +277,7 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
         # Only --db-path is forwarded (no --user-id: the computation is not
         # user-scoped). Skipped on the re-render-only path (--skip-triggers):
         # financial_facts does not change during the morning pipeline itself.
-        fundamentals_db_args = (
-            ["--db-path", str(args.db_path)] if args.db_path is not None else []
-        )
+        fundamentals_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
         stages.append(
             _Stage(
                 key=STAGE_FUNDAMENTALS,
@@ -283,6 +288,26 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *fundamentals_db_args,
                 ],
                 timeout_s=_FUNDAMENTALS_TIMEOUT_S,
+            )
+        )
+        # Stage 0e -- DCF price-leg re-price (L6): re-divide each persisted fair
+        # value by a fresh live price so dcf_runs.over_under_pct + live_price are
+        # current BEFORE the trigger sweep reads them. refresh_dcf is opt-in with
+        # no cron, so without this the trim/sell ladder + 50%-weight next-dollar
+        # "ret" factor run on a price leg frozen at the last rebuild. Pure
+        # arithmetic over the stored fair value — no DCF rebuild. Only --db-path
+        # is forwarded (not user-scoped). Skipped on the re-render-only path.
+        reprice_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_REPRICE,
+                label="Stage 0e - DCF re-price (reprice_dcf.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "reprice_dcf.py"),
+                    *reprice_db_args,
+                ],
+                timeout_s=_REPRICE_TIMEOUT_S,
             )
         )
 

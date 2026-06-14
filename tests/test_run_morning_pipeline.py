@@ -2,7 +2,7 @@
 
 The orchestrator runs an unconditional environment preflight, then chains
 the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
-triggers -> feed -> validate). Its load-bearing contract is resilience: it
+reprice -> triggers -> feed -> validate). Its load-bearing contract is resilience: it
 must attempt every non-skipped stage even when an earlier one fails or times
 out, and report the
 count of failed stages as the exit code only after all stages have run.
@@ -32,6 +32,7 @@ NEWS_SCRIPT = "fetch_news.py"
 DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
+REPRICE_SCRIPT = "reprice_dcf.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
@@ -142,6 +143,7 @@ def test_all_stages_succeed(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -153,6 +155,7 @@ def test_all_stages_succeed(
     assert summary["stage_0b_decisions"] == "ok"
     assert summary["stage_0c_lifecycle"] == "ok"
     assert summary["stage_0d_fundamentals"] == "ok"
+    assert summary["stage_0e_reprice"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_2_feed"] == "ok"
     assert summary["stage_3_validate"] == "ok"
@@ -182,6 +185,7 @@ def test_stage1_failure_still_runs_feed(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -209,6 +213,7 @@ def test_feed_failure_still_runs_validation(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -223,8 +228,8 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all eight still attempted,
-    exit code == 8."""
+    """Every stage failing (preflight included) → all nine still attempted,
+    exit code == 9."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -232,6 +237,7 @@ def test_all_stages_fail_exit_code_counts_failures(
             DECISIONS_SCRIPT: 1,
             LIFECYCLE_SCRIPT: 1,
             FUNDAMENTALS_SCRIPT: 1,
+            REPRICE_SCRIPT: 1,
             TRIGGERS_SCRIPT: 1,
             FEED_SCRIPT: 1,
             VALIDATE_SCRIPT: 2,
@@ -241,13 +247,14 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 8
+    assert rc == 9
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -259,6 +266,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0b_decisions"] == "failed"
     assert summary["stage_0c_lifecycle"] == "failed"
     assert summary["stage_0d_fundamentals"] == "failed"
+    assert summary["stage_0e_reprice"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
     assert summary["stage_2_feed"] == "failed"
     assert summary["stage_3_validate"] == "failed"
@@ -287,6 +295,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -324,12 +333,14 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert DECISIONS_SCRIPT not in fake.scripts
     assert LIFECYCLE_SCRIPT not in fake.scripts
     assert FUNDAMENTALS_SCRIPT not in fake.scripts
+    assert REPRICE_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
     assert summary["stage_0b_decisions"] == "skipped"
     assert summary["stage_0c_lifecycle"] == "skipped"
     assert summary["stage_0d_fundamentals"] == "skipped"
+    assert summary["stage_0e_reprice"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_2_feed"] == "ok"
     # --skip-triggers (re-render only) also skips the validation gate.
@@ -381,6 +392,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -406,6 +418,7 @@ def test_skip_validation_removes_only_stage3(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
     ]
@@ -543,6 +556,7 @@ def test_skip_news_removes_only_stage0(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -584,6 +598,7 @@ def test_news_failure_does_not_stop_triggers(
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        REPRICE_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -636,6 +651,49 @@ def test_stage0c_lifecycle_runs_between_decisions_and_triggers(
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0c_lifecycle"] == "failed"
     assert summary["stage_1_triggers"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Stage 0e — DCF re-price (after fundamentals, before triggers)
+# ---------------------------------------------------------------------------
+
+
+def test_stage0e_reprice_runs_between_fundamentals_and_triggers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stage 0e re-prices the DCF over/under AFTER stage 0d (so the fresh price
+    leg is in place) and before the trigger sweep, which reads the trim/sell
+    ladder. Its failure must not block triggers — over/under degrades to the
+    last persisted price rather than blanking."""
+    fake = _RecordingRun(returncodes={REPRICE_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the reprice stage failed
+    assert fake.scripts.index(FUNDAMENTALS_SCRIPT) < fake.scripts.index(REPRICE_SCRIPT)
+    assert fake.scripts.index(REPRICE_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0e_reprice"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
+
+
+def test_stage0e_reprice_takes_db_path_but_not_user_or_cost(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The re-price is not user-scoped and runs no LLM: only --db-path flows
+    through (when set), never --user-id / --max-cost-usd."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+    db_path = tmp_path / "alt.db"
+
+    rc = run_morning_pipeline.main(["--db-path", str(db_path), "--user-id", "alice"])
+    assert rc == 0
+
+    reprice_argv = next(c for c in fake.calls if _script_of(c) == REPRICE_SCRIPT)
+    assert _has_flag(reprice_argv, "--db-path", str(db_path))
+    assert "--user-id" not in reprice_argv
+    assert "--max-cost-usd" not in reprice_argv
 
 
 def _has_flag(argv: list[str], flag: str, value: str) -> bool:
