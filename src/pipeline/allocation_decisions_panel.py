@@ -507,7 +507,24 @@ def render_allocation_decisions_panel(
         analytics.position_alpha,
         calibration=calibration,
         attribution=attribution,
+        scorecard_html=_scorecard_html(db_path),
     )
+
+
+def _scorecard_html(db_path: Path) -> str:
+    """The L8 coach's-read section (latest persisted scorecard) as ready-to-mount
+    HTML with its own <style>, or "" when none exists. Lazy-imports the coach +
+    scorecard panel so this module — which the coach imports — stays cycle-free,
+    and never lets a coach-side error break the decisions page."""
+    try:
+        from calibration_coach import load_latest_scorecard
+        from pipeline.calibration_scorecard_panel import SCORECARD_CSS, render_scorecard_section
+
+        card = load_latest_scorecard(db_path.resolve().parent.parent)
+        section = render_scorecard_section(card)
+        return f"<style>{SCORECARD_CSS}</style>{section}" if section else ""
+    except Exception:  # pragma: no cover - coaching must never break the page
+        return ""
 
 
 def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
@@ -523,16 +540,21 @@ def compose_decisions_page(
     alpha: PositionAlpha | None,
     calibration: CalibrationStats | None = None,
     attribution: SkillDecomposition | None = None,
+    scorecard_html: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
-    (tracker offline / nothing to decompose) hides the skill block."""
+    (tracker offline / nothing to decompose) hides the skill block;
+    ``scorecard_html`` "" (no L8 scorecard generated yet) hides the coach's-read
+    section. The coach section is pre-rendered upstream (with its own <style>) so
+    this module never imports calibration_coach (which imports this one)."""
     return "".join(
         [
             _PANEL_CSS,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
             _skill_decomposition_section(attribution) if attribution is not None else "",
+            scorecard_html,
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
         ]

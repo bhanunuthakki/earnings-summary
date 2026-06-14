@@ -85,6 +85,14 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # GOOD, not just whether its citations are hygienic. Corpus = the assistant
     # turns of the ask_turns table (evals.corpora.load_ask_advisory_answer_corpus).
     "ask_advisory_answer": AuditSpec("ask_advisory_answer", RUBRICS_DIR / "ask_advisory_answer.md"),
+    # Calibration coach (directives/close_the_loops_2026_06.md L8): the monthly
+    # personal scorecard's synthesised prose — named recurring biases + the
+    # period's behavioural experiment, graded on grounded-in-own-history,
+    # named-and-specific, falsifiable/actionable, and honest calibration. The
+    # eval IS the gate the coach runs inline before the prose reaches the owner
+    # (a coach that misreads his history is worse than silence). Corpus =
+    # data/calibration_scorecard/*.json (evals.corpora.load_calibration_coach_corpus).
+    "calibration_coach": AuditSpec("calibration_coach", RUBRICS_DIR / "calibration_coach.md"),
     # Peer selection (directives/peer_selection_llm.md): graded on
     # business-model match, why-string specificity, cross-boundary range, and
     # peer-count coverage. Corpus = data/peer_selection/<T>.json files written

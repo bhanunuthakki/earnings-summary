@@ -55,6 +55,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "transcript_summary",
     "advisor_next_dollar",
     "ask_advisory_answer",
+    # Calibration coach scorecard audit (close_the_loops L8) — keeps this run
+    # bar in sync with run_llm_evals.AUDIT_PURPOSES.
+    "calibration_coach",
     # Pre-existing omissions vs run_llm_evals.PURPOSES — the CLI runner gained
     # these audit purposes but the run bar wasn't updated (test_llm_evals_ask_loop
     # ::test_runner_purpose_lists_stay_in_sync was already red on main); folded in

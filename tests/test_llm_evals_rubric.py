@@ -30,6 +30,7 @@ from evals.corpora import (
     load_advisor_next_dollar_corpus,
     load_ask_advisory_answer_corpus,
     load_bear_case_corpus,
+    load_calibration_coach_corpus,
     load_transcript_summary_corpus,
 )
 from evals.harness import EvalAbortError, now_naive_utc, persist_summary
@@ -341,6 +342,27 @@ def test_advisor_corpus_tolerates_missing_table_and_db(tmp_path: Path) -> None:
     data.mkdir()
     sqlite3.connect(data / "portfolio.db").close()  # DB, no table
     assert load_advisor_next_dollar_corpus(tmp_path) == []
+
+
+def _write_scorecard(repo: Path, period: str, *, coached: bool) -> None:
+    base = repo / "data" / "calibration_scorecard"
+    base.mkdir(parents=True, exist_ok=True)
+    card: dict[str, object] = {"period": period, "prose": f"Scorecard {period} prose body"}
+    if coached:
+        card["biases"] = [{"name": "x", "pattern": "p", "evidence": ["e"], "tell": "t"}]
+    else:
+        card["biases"] = []
+        card["experiment"] = None
+    (base / f"{period}.json").write_text(json.dumps(card), encoding="utf-8")
+
+
+def test_calibration_coach_corpus_skips_thin_and_missing(tmp_path: Path) -> None:
+    assert load_calibration_coach_corpus(tmp_path) == []  # no dir
+    _write_scorecard(tmp_path, "2026-05", coached=True)
+    _write_scorecard(tmp_path, "2026-06", coached=False)  # thin → nothing to judge
+    items = load_calibration_coach_corpus(tmp_path)
+    assert [i.item_id for i in items] == ["calibration_coach:2026-05"]
+    assert "prose body" in items[0].content
 
 
 def _seed_ask_turns(repo: Path) -> None:

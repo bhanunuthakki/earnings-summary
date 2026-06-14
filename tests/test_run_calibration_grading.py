@@ -27,7 +27,7 @@ BEAR = "grade_bear_cases.py"
 EVALS = "run_llm_evals.py"
 
 # The full run order: outcome graders, then the four eval-audit rungs.
-ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS, EVALS]
+ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS, EVALS, EVALS]
 
 
 class _FakeCompleted:
@@ -143,7 +143,7 @@ def test_skip_omits_a_grader(
 
     rc = run_calibration_grading.main(["--skip", "bear_cases"])
     assert rc == 0
-    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS, EVALS]
+    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS, EVALS, EVALS]
     assert BEAR not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -182,6 +182,7 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
         "transcript_summary",
         "advisor_next_dollar",
         "ask_advisory_answer",
+        "calibration_coach",
     ]
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -189,6 +190,7 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
     assert summary["eval_transcript_summary"] == "ok"
     assert summary["eval_advisor_next_dollar"] == "ok"
     assert summary["eval_ask_advisory_answer"] == "ok"
+    assert summary["eval_calibration_coach"] == "ok"
 
 
 def test_skip_an_eval_rung(
@@ -200,6 +202,11 @@ def test_skip_an_eval_rung(
     rc = run_calibration_grading.main(["--skip", "eval_transcript_summary"])
     assert rc == 0
     eval_purposes = [c[c.index("--purpose") + 1] for c in fake.calls if _script_of(c) == EVALS]
-    assert eval_purposes == ["bear_case", "advisor_next_dollar", "ask_advisory_answer"]
+    assert eval_purposes == [
+        "bear_case",
+        "advisor_next_dollar",
+        "ask_advisory_answer",
+        "calibration_coach",
+    ]
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["eval_transcript_summary"] == "skipped"
