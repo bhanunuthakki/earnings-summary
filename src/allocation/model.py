@@ -4,10 +4,13 @@ Where should the next incremental dollar go, across the current portfolio
 holdings? Three inspectable factors per holding (each visible in the panel's
 waterfall, never a black-box composite):
 
-  ret   — absolute expected return: DCF fair-value upside on price,
-          (npv_per_share / live_price − 1) from the latest ``dcf_runs`` row.
-          Recomputed from the row's own two fields, never read from
-          ``over_under_pct`` (same convention rule as
+  ret   — absolute expected return: the probability-weighted DCF upside over
+          the latest ``dcf_runs`` row's bull/base/bear scenario range
+          (``dcf.scenario_reward``), so the reward leg reflects the asymmetry of
+          the range, not just its midpoint. Degrades to the base point estimate
+          (npv_per_share / live_price − 1) when the run carries no scenarios.
+          The base leg is recomputed from the row's own two fields, never read
+          from ``over_under_pct`` (same convention rule as
           ``research_cockpit.latest_dcf_runs``).
   div   — diversification: −(∂σ_p/∂w_i), the marginal volatility the next
           dollar of the name adds to the modeled book, off a Ledoit–Wolf
@@ -39,6 +42,7 @@ import numpy as np
 
 from allocation.covariance import ledoit_wolf, marginal_risk
 from allocation.price_history import build_aligned_returns, daily_log_returns, load_daily_closes
+from dcf.scenario_reward import scenario_reward
 from macro_store import Sensitivity, fetch_sensitivities, fetch_series
 
 # The blend, in plain sight. Keys are factor ids used throughout; values are
@@ -234,11 +238,16 @@ def _current_weights(
 
 
 def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float, str]]:
-    """Latest DCF upside per ticker: npv_per_share / live_price − 1.
+    """Latest DCF *expected* upside per ticker, asymmetry-aware.
 
-    Recomputed from the row's own two fields (currency-consistent with each
-    other), never from ``over_under_pct`` — the bank/holdco builders stored
-    that column in a different convention. Same rule as
+    The reward leg is the probability-weighted return over the run's bull/base/
+    bear scenario range (``dcf.scenario_reward``) — not the bare base point
+    estimate — so a name whose bear case is far below price is rewarded less than
+    a symmetric one with the same midpoint. Falls back to exactly the base point
+    estimate (``npv_per_share / live_price − 1``) when the run has no scenario
+    range. The base leg is recomputed from the row's own two fields (currency-
+    consistent), never from ``over_under_pct`` — the bank/holdco builders stored
+    that column in a different convention. Same base rule as
     ``research_cockpit.latest_dcf_runs``."""
     if not db_path.exists():
         return {}
@@ -248,8 +257,13 @@ def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
         return {}
     try:
         conn.row_factory = sqlite3.Row
+        # The scenario block lives in assumption_snapshot_json (migration 0024+);
+        # select it only when the column exists so hand-rolled test schemas (and
+        # very old data dirs) still score on the base leg.
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+        snap_sel = ", assumption_snapshot_json" if "assumption_snapshot_json" in cols else ""
         rows = conn.execute(
-            "SELECT ticker, valuation_date, npv_per_share, live_price "
+            f"SELECT ticker, valuation_date, npv_per_share, live_price{snap_sel} "
             "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC"
         ).fetchall()
     except sqlite3.Error:
@@ -264,11 +278,12 @@ def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
             continue
         fv = float(r["npv_per_share"]) if r["npv_per_share"] is not None else None
         px = float(r["live_price"]) if r["live_price"] is not None else None
-        if fv is None or px is None or fv <= 0.0 or px <= 0.0:
+        snapshot = r["assumption_snapshot_json"] if snap_sel else None
+        reward = scenario_reward(price=px, base_fv=fv, snapshot_json=snapshot)
+        if reward is None:
             continue
-        upside = fv / px - 1.0
         as_of = str(r["valuation_date"]) if r["valuation_date"] else "?"
-        out[t] = (upside, f"fair ${fv:,.2f} vs ${px:,.2f} ({as_of})")
+        out[t] = (reward.expected_return, f"{reward.detail} ({as_of})")
     return out
 
 

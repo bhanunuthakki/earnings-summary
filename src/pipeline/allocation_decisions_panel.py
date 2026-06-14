@@ -61,7 +61,7 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
-from pipeline.research_cockpit import latest_dcf_runs
+from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
 from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -97,6 +97,11 @@ class SizingAuditRow:
     alpha_frac: float | None  # alpha / value_at_end, when value > 0
     mismatch_score: float = 0.0
     mismatch_reasons: list[str] = field(default_factory=list[str])
+    # Scenario-range legs (asymmetry): price vs the bull / bear fair value, in
+    # the same +=above-FV convention as fv_gap_pct. None when the run carries no
+    # scenario range. Appended (defaulted) so existing constructors are unchanged.
+    bull_gap_pct: float | None = None
+    bear_gap_pct: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +120,14 @@ class TimelineEvent:
 # --------------------------------------------------------------------------- #
 
 
+def _gap_vs(price: float | None, fair_value: float | None) -> float | None:
+    """price / fair_value − 1 in percent (the fv_gap_pct convention: + = price
+    above this fair value). None when either leg is missing or non-positive."""
+    if price is None or fair_value is None or price <= 0.0 or fair_value <= 0.0:
+        return None
+    return (price / fair_value - 1.0) * 100.0
+
+
 def score_row(
     *,
     verdict: str | None,
@@ -125,9 +138,17 @@ def score_row(
     alpha_usd: float | None,
     alpha_frac: float | None,
     median_weight: float | None,
+    bull_gap_pct: float | None = None,
+    bear_gap_pct: float | None = None,
 ) -> tuple[float, list[str]]:
     """Score one holding's stated-vs-actual sizing tension. Returns
-    ``(points, reason chips)`` — every point contribution has a chip."""
+    ``(points, reason chips)`` — every point contribution has a chip.
+
+    ``bull_gap_pct`` / ``bear_gap_pct`` (price vs the bull / bear scenario fair
+    value, same sign as ``fv_gap_pct``: + = price above that case) let the
+    valuation-tension heuristic read the *asymmetry* of the DCF range, not just
+    the base point estimate — both default None (no scenario range → the base-
+    only behaviour, unchanged)."""
     pts = 0.0
     reasons: list[str] = []
     rel = (
@@ -173,6 +194,33 @@ def score_row(
                 "at below-median weight"
             )
 
+    # 4b. Scenario-range asymmetry — the point estimate can hide that even the
+    # bull case has no headroom, or that the bear case still clears the price.
+    # Additive over #4 and only firing when the run carries a scenario range.
+    if rel is not None:
+        if bull_gap_pct is not None and bull_gap_pct >= 0.0 and rel >= 1.0:
+            # Price at/above even the optimistic fair value: no upside if the
+            # thesis goes right, at size.
+            pts += min(bull_gap_pct / 25.0, 2.0) * min(rel, 2.0)
+            reasons.append(
+                f"+{bull_gap_pct:.0f}% vs the bull case (no upside even if it works) "
+                f"at {weight_pct:.1f}% of book"
+            )
+        if (
+            bear_gap_pct is not None
+            and bear_gap_pct <= 0.0
+            and conviction is not None
+            and conviction >= 4.0
+            and rel <= 0.9
+        ):
+            # Price below even the pessimistic fair value: downside-protected,
+            # yet sized below the median despite high conviction.
+            pts += min(-bear_gap_pct / 25.0, 2.0) * 1.5
+            reasons.append(
+                f"{bear_gap_pct:.0f}% vs the bear case (downside-protected) with conviction "
+                f"{conviction:g}/5 at below-median weight"
+            )
+
     # 5. Alpha drag — one window is weak evidence, so this contributes little.
     if (
         alpha_usd is not None
@@ -196,14 +244,19 @@ def build_sizing_audit_rows(
     intents: list[PositionSizingIntentRow],
     live: LivePortfolio,
     alpha: PositionAlpha | None,
+    dcf_scenarios: dict[str, tuple[float | None, float | None]] | None = None,
 ) -> list[SizingAuditRow]:
     """Assemble + score the audit, ranked worst-first (then by weight).
 
     Pure over already-fetched inputs — no network, no DB — so the scorer is
     directly testable. ``holdings`` is the research portfolio list; tracker
     positions outside it are deliberately not audited (see the coverage
-    footnote in the renderer).
+    footnote in the renderer). ``dcf_scenarios`` (ticker -> (bull_fv, bear_fv),
+    from ``research_cockpit.latest_dcf_scenarios``) lets the valuation-tension
+    heuristic read the asymmetry of each run's range; None / a missing name
+    keeps the base-only behaviour.
     """
+    dcf_scenarios = dcf_scenarios or {}
     latest_by_kind: dict[tuple[str, str], PositionSizingIntentRow] = {}
     for row in intents:  # list_intents returns newest-first; first one wins
         key = (row.ticker.upper(), row.intent_kind)
@@ -240,7 +293,11 @@ def build_sizing_audit_rows(
         conv = latest_by_kind.get((t, CONVICTION_KIND))
         target = latest_by_kind.get((t, TARGET_WEIGHT_KIND))
         weight_pct, market_value = weights.get(t, (None, None))
-        fv_gap = dcf_gaps.get(t, (None, None, None, None))[0]
+        _gap, _npv, live_price, _vd = dcf_gaps.get(t, (None, None, None, None))
+        fv_gap = _gap
+        bull_fv, bear_fv = dcf_scenarios.get(t, (None, None))
+        bull_gap = _gap_vs(live_price, bull_fv)
+        bear_gap = _gap_vs(live_price, bear_fv)
         alpha_usd, alpha_frac = alpha_by_ticker.get(t, (None, None))
         verdict = verdicts.get(t)
         score, reasons = score_row(
@@ -252,6 +309,8 @@ def build_sizing_audit_rows(
             alpha_usd=alpha_usd,
             alpha_frac=alpha_frac,
             median_weight=median_weight,
+            bull_gap_pct=bull_gap,
+            bear_gap_pct=bear_gap,
         )
         rows.append(
             SizingAuditRow(
@@ -269,6 +328,8 @@ def build_sizing_audit_rows(
                 alpha_frac=alpha_frac,
                 mismatch_score=score,
                 mismatch_reasons=reasons,
+                bull_gap_pct=bull_gap,
+                bear_gap_pct=bear_gap,
             )
         )
     rows.sort(key=lambda r: (-r.mismatch_score, -(r.weight_pct or 0.0), r.ticker))
@@ -420,6 +481,7 @@ def render_allocation_decisions_panel(
         holdings = portfolio_holdings(conn)
         verdicts = latest_verdicts(conn)
         dcf_gaps = latest_dcf_runs(conn)
+        dcf_scenarios = latest_dcf_scenarios(conn)
     finally:
         conn.close()
     try:
@@ -429,7 +491,7 @@ def render_allocation_decisions_panel(
     live = fetch_live_portfolio(api_url=api_url)
     analytics = fetch_portfolio_analytics(api_url=api_url, only={"position_alpha"})
     audit = build_sizing_audit_rows(
-        holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha
+        holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha, dcf_scenarios
     )
     timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
     calibration = build_calibration(db_path=db_path)
@@ -538,7 +600,15 @@ def _audit_row(r: SizingAuditRow) -> str:
     )
     if r.fv_gap_pct is not None:
         gap_tone = "neg" if r.fv_gap_pct > 0 else "pos"
-        gap = f'<span class="{gap_tone}">{r.fv_gap_pct:+.0f}%</span>'
+        # When the run carries a scenario range, the cell hover spells out the
+        # asymmetry the base gap hides (price vs the bear / bull fair value).
+        range_bits = [
+            f"vs {label} case {g:+.0f}%"
+            for label, g in (("bear", r.bear_gap_pct), ("bull", r.bull_gap_pct))
+            if g is not None
+        ]
+        title = f' title="{escape(" · ".join(range_bits))}"' if range_bits else ""
+        gap = f'<span class="{gap_tone}"{title}>{r.fv_gap_pct:+.0f}%</span>'
     else:
         gap = '<span class="muted">&mdash;</span>'
     if r.alpha_usd is not None:
