@@ -1,9 +1,10 @@
 """Tests for execution/run_morning_pipeline.py — the morning orchestrator.
 
 The orchestrator runs an unconditional environment preflight, then chains
-six subprocess stages (news -> decisions -> lifecycle -> triggers -> feed ->
-validate). Its load-bearing contract is resilience: it must attempt every
-non-skipped stage even when an earlier one fails or times out, and report the
+the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
+triggers -> feed -> validate). Its load-bearing contract is resilience: it
+must attempt every non-skipped stage even when an earlier one fails or times
+out, and report the
 count of failed stages as the exit code only after all stages have run.
 
 ``subprocess.run`` is monkeypatched throughout — no real processes are spawned.
@@ -30,6 +31,7 @@ PREFLIGHT_SCRIPT = "validate_environment.py"
 NEWS_SCRIPT = "fetch_news.py"
 DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
+FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
@@ -125,9 +127,9 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun) -> None:
 def test_all_stages_succeed(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Five stages return 0 → exit 0, summary all-ok, and the five scripts
-    are invoked exactly once each in news -> decisions -> triggers -> feed ->
-    validate order."""
+    """Every stage returns 0 → exit 0, summary all-ok, and the scripts are
+    invoked exactly once each in preflight -> news -> decisions -> lifecycle ->
+    fundamentals -> triggers -> feed -> validate order."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
@@ -139,6 +141,7 @@ def test_all_stages_succeed(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -149,6 +152,7 @@ def test_all_stages_succeed(
     assert summary["stage_0_news"] == "ok"
     assert summary["stage_0b_decisions"] == "ok"
     assert summary["stage_0c_lifecycle"] == "ok"
+    assert summary["stage_0d_fundamentals"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_2_feed"] == "ok"
     assert summary["stage_3_validate"] == "ok"
@@ -177,6 +181,7 @@ def test_stage1_failure_still_runs_feed(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -203,6 +208,7 @@ def test_feed_failure_still_runs_validation(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -217,14 +223,15 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all seven still attempted,
-    exit code == 7."""
+    """Every stage failing (preflight included) → all eight still attempted,
+    exit code == 8."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
             NEWS_SCRIPT: 1,
             DECISIONS_SCRIPT: 1,
             LIFECYCLE_SCRIPT: 1,
+            FUNDAMENTALS_SCRIPT: 1,
             TRIGGERS_SCRIPT: 1,
             FEED_SCRIPT: 1,
             VALIDATE_SCRIPT: 2,
@@ -234,12 +241,13 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 7
+    assert rc == 8
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -250,6 +258,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0_news"] == "failed"
     assert summary["stage_0b_decisions"] == "failed"
     assert summary["stage_0c_lifecycle"] == "failed"
+    assert summary["stage_0d_fundamentals"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
     assert summary["stage_2_feed"] == "failed"
     assert summary["stage_3_validate"] == "failed"
@@ -277,6 +286,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -313,11 +323,13 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert NEWS_SCRIPT not in fake.scripts
     assert DECISIONS_SCRIPT not in fake.scripts
     assert LIFECYCLE_SCRIPT not in fake.scripts
+    assert FUNDAMENTALS_SCRIPT not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
     assert summary["stage_0b_decisions"] == "skipped"
     assert summary["stage_0c_lifecycle"] == "skipped"
+    assert summary["stage_0d_fundamentals"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_2_feed"] == "ok"
     # --skip-triggers (re-render only) also skips the validation gate.
@@ -368,6 +380,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -392,6 +405,7 @@ def test_skip_validation_removes_only_stage3(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
     ]
@@ -528,6 +542,7 @@ def test_skip_news_removes_only_stage0(
         PREFLIGHT_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
@@ -568,6 +583,7 @@ def test_news_failure_does_not_stop_triggers(
         NEWS_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        FUNDAMENTALS_SCRIPT,
         TRIGGERS_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,

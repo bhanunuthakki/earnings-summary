@@ -124,7 +124,7 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     """Registering the news purposes must not flip any other prompt's model.
     Spot-check one purpose per tier plus the manual KPI seeder (deliberately
     unregistered -> Sonnet)."""
-    from llm import cli
+    from llm import cli, gemini_backend
 
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
     # Sonnet (default) analytical writing — unchanged.
@@ -136,9 +136,11 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     assert resolve("valuation_basis") == "claude-opus-4-7"
     assert resolve("saydo_importance") == "claude-opus-4-7"
     assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"
-    # Haiku fast-classifier pins — unchanged.
-    assert resolve("intake_classifier") == cli.FAST_CLASSIFIER_MODEL
-    assert resolve("transcript_metadata") == cli.FAST_CLASSIFIER_MODEL
+    # Gemini Flash promotions (#538): these two classifier purposes moved off
+    # Haiku to Gemini Flash; the id tracks gemini_backend.GEMINI_BACKEND_FAST_MODEL
+    # (bumped to gemini-3-flash-preview in #541).
+    assert resolve("intake_classifier") == gemini_backend.GEMINI_BACKEND_FAST_MODEL
+    assert resolve("transcript_metadata") == gemini_backend.GEMINI_BACKEND_FAST_MODEL
     # The manual KPI-proposal purpose stays unregistered -> Sonnet.
     assert "kpi_registry_proposal" not in cli.LLM_MODELS
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
