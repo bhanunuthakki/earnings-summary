@@ -108,6 +108,11 @@ _FUNDAMENTALS_TIMEOUT_S = 60
 # next-dollar "ret" factor don't run on a stale price leg. ~90 names, yfinance
 # self-healing to the FMP cache — 5 min covers a slow/throttled morning.
 _REPRICE_TIMEOUT_S = 300
+# Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
+# engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
+# deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
+# plus the judge — 15 min covers a morning where several names trip at once.
+_STANDUP_TIMEOUT_S = 900
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -118,6 +123,7 @@ STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_TRIGGERS = "stage_1_triggers"
+STAGE_STANDUP = "stage_1b_standup"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
 _ALL_STAGE_KEYS = (
@@ -128,6 +134,7 @@ _ALL_STAGE_KEYS = (
     STAGE_FUNDAMENTALS,
     STAGE_REPRICE,
     STAGE_TRIGGERS,
+    STAGE_STANDUP,
     STAGE_FEED,
     STAGE_VALIDATE,
 )
@@ -325,6 +332,26 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
             )
         )
 
+        # Stage 1b -- proactive analyst standup (L9), AFTER triggers so the
+        # decision-condition sensor's fresh state is in the DB. Watches the four
+        # open loops (falsifiable conditions, stale journal items, DCF staleness,
+        # position drift) and composes a grounded, eval-gated, rate-limited brief
+        # into the persistent standup thread. Paid (Ask engine + eval judge), so
+        # it sits on the trigger path and is skippable on its own. Forwards
+        # --user-id + --db-path; it owns its rate-limit / eval-bar defaults.
+        if not args.skip_standup:
+            standup_args: list[str] = ["--user-id", args.user_id]
+            if args.db_path is not None:
+                standup_args += ["--db-path", str(args.db_path)]
+            stages.append(
+                _Stage(
+                    key=STAGE_STANDUP,
+                    label="Stage 1b - proactive standup (run_standup.py)",
+                    argv=[py, str(exec_dir / "run_standup.py"), *standup_args],
+                    timeout_s=_STANDUP_TIMEOUT_S,
+                )
+            )
+
     stages.append(
         _Stage(
             key=STAGE_FEED,
@@ -507,6 +534,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Skip stage 0 (news fetch) only — triggers still run over whatever "
         "news rows already exist.",
+    )
+    parser.add_argument(
+        "--skip-standup",
+        action="store_true",
+        help="Skip stage 1b (the proactive analyst standup). The standup composes "
+        "an eval-gated, rate-limited advisory brief per surviving trip through the "
+        "Ask engine — skip it to run the trigger sweep without the paid standup leg.",
     )
     parser.add_argument(
         "--skip-validation",
