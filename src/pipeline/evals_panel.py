@@ -49,10 +49,17 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "ask_evidence_followup",
     "ask_claim_grounding",
     "injection_canaries",
+    "provenance_caution",
     "peer_selection",
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",
+    # Pre-existing omissions vs run_llm_evals.PURPOSES — the CLI runner gained
+    # these audit purposes but the run bar wasn't updated (test_llm_evals_ask_loop
+    # ::test_runner_purpose_lists_stay_in_sync was already red on main); folded in
+    # here so the registries match.
+    "earnings_themes_split",
+    "qa_topics",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

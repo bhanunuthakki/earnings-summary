@@ -203,6 +203,13 @@ class _ParsedIssue:
     raw: str = ""  # original raw_value — feeds the popover display strings
 
 
+# The grouped unresolved-issues map that ``load_unresolved_issues`` returns and
+# ``display_issues_for_fact``/``issues_for_fact`` consume. Public so callers
+# (e.g. ``ask.grounding``, which threads it into the answer prompt) can annotate
+# it without reaching into the private ``_ParsedIssue`` element type.
+IssuesByTicker = dict[str, list[_ParsedIssue]]
+
+
 def _parse_issue(rule: str, severity: str, raw_value: str) -> _ParsedIssue | None:
     raw = raw_value.strip()
     if " @ " in raw:  # source_disagreement
