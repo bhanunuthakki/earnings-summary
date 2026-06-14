@@ -2081,7 +2081,7 @@ def create_app(
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return ({"error": "JSON body required"}, 400)
-        raw = body.get("inputs")
+        raw = cast("dict[str, object]", body).get("inputs")
         if not isinstance(raw, dict):
             return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
         try:
@@ -2092,6 +2092,58 @@ def create_app(
             return _dcf_recompute_payload(inp)
         except dcf_redesign.RedesignError as e:
             return ({"error": str(e)}, 422)
+
+    @app.route("/api/dcf/save", methods=["POST", "OPTIONS"])
+    def dcf_save():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Durably save edited DCF assumptions to the model — the explicit in-app
+        commit (Push-to-Sheets stays the publish-to-Google-Sheet commit).
+
+        Body: ``{"ticker": T, "inputs": {<edited RedesignInputs.to_dict()>}}``.
+        Writes the edited cell-backed levers onto ``dcf/<T>.xlsx``, reconciles the
+        S11 override ledger against the IMMUTABLE Opus baseline (the edit is
+        recorded; the baseline is never overwritten), mirrors the edits to the
+        from-scratch default, and re-persists ``dcf_runs``. Returns the recomputed
+        card payload (canonical saved inputs — WACC re-derived from the saved CAPM
+        drivers) plus the save outcome. 400 on a malformed input set, 409 when
+        there is no redesigned workbook to edit, 422 on a degenerate one."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return ({"error": "JSON body required"}, 400)
+        data = cast("dict[str, object]", body)
+        ticker = data.get("ticker")
+        if not isinstance(ticker, str) or not ticker.strip():
+            return ({"error": "body.ticker required"}, 400)
+        raw = data.get("inputs")
+        if not isinstance(raw, dict):
+            return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
+        try:
+            inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
+        except dcf_redesign.RedesignError as e:
+            return ({"error": f"invalid inputs: {e}"}, 400)
+        # Reject a degenerate set up front (same 422 contract as recompute) so a
+        # save never writes an un-valuable model to the workbook.
+        try:
+            _dcf_recompute_payload(inp)
+        except dcf_redesign.RedesignError as e:
+            return ({"error": str(e)}, 422)
+
+        import refresh_dcf  # heavy CLI module — imported only on the save path
+
+        t = ticker.upper()
+        result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
+        if result.get("status") != "ok":
+            reason = str(result.get("reason", "save failed"))
+            code = 409 if "no redesigned workbook" in reason else 500
+            return ({"error": reason, "result": result}, code)
+        # Reflect exactly what was persisted: recompute from the canonical saved
+        # inputs (re-read from the workbook, WACC re-derived from saved drivers).
+        saved_inp = dcf_redesign.read_inputs(repo_root / "dcf" / f"{t}.xlsx")
+        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
+        if saved_inp is not None:
+            payload["inputs"] = saved_inp.to_dict()
+        return {**payload, "saved": True, "result": result}
 
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 

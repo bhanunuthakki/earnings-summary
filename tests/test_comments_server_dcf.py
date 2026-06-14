@@ -121,3 +121,25 @@ def test_recompute_options_preflight(client: FlaskClient) -> None:
 
 def test_inputs_404_when_no_workbook(client: FlaskClient) -> None:
     assert client.get("/api/dcf/inputs/NU").status_code == 404
+
+
+def test_save_requires_ticker_and_inputs(client: FlaskClient) -> None:
+    assert client.post("/api/dcf/save", json={"inputs": _BASE.to_dict()}).status_code == 400
+    assert client.post("/api/dcf/save", json={"ticker": "NU"}).status_code == 400
+
+
+def test_save_409_when_no_workbook(client: FlaskClient) -> None:
+    """A well-formed save with no redesigned workbook to edit is a 409, not a
+    500 — the durable-save end-to-end path is covered in test_dcf_redesign."""
+    resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": _BASE.to_dict()})
+    assert resp.status_code == 409
+    assert "no redesigned workbook" in resp.get_json()["error"]
+
+
+def test_save_rejects_degenerate_inputs(client: FlaskClient) -> None:
+    degenerate = _BASE.to_dict()
+    degenerate["terminal_method"] = "Perpetuity"
+    degenerate["wacc"] = 0.025
+    degenerate["terminal_growth_g"] = 0.03
+    resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": degenerate})
+    assert resp.status_code == 422
