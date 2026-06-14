@@ -162,18 +162,27 @@ def gemini_allowed_purposes() -> frozenset[str]:
 def gemini_model_for(purpose: str | None) -> str:
     """Resolve a purpose to a Gemini model id.
 
-    Order: explicit GEMINI_MODELS pin → tier derivation from the Claude
-    model table (purposes that run on the fast classifier under Claude get
-    Flash; everything else gets Pro) → Pro for unknown/None purposes. The
-    derivation means one table (LLM_MODELS) keeps both backends' latency
-    tiers in sync without a parallel registry to maintain.
+    Order:
+    1. Explicit GEMINI_MODELS pin (operator override, ships empty).
+    2. If LLM_MODELS already pins the purpose to a Gemini model ID, return it
+       directly — promoted purposes land here (Chip 2 PR D+).
+    3. Tier derivation: Haiku-class purposes in LLM_MODELS mirror to Flash;
+       everything else gets Pro.  Kept for purposes still on Claude tiers so
+       `call_gemini` can be invoked without an explicit model.
+    4. Pro for unknown/None purposes.
     """
     if purpose is not None:
         pinned = GEMINI_MODELS.get(purpose)
         if pinned is not None:
             return pinned
-        if llm_cli.LLM_MODELS.get(purpose) == llm_cli.FAST_CLASSIFIER_MODEL:
-            return GEMINI_BACKEND_FAST_MODEL
+        llm_model = llm_cli.LLM_MODELS.get(purpose)
+        if llm_model is not None:
+            from llm.model_ladder import GEMINI as _GEMINI, family_of
+
+            if family_of(llm_model) == _GEMINI:
+                return llm_model  # already a Gemini id — return verbatim
+            if llm_model == llm_cli.FAST_CLASSIFIER_MODEL:
+                return GEMINI_BACKEND_FAST_MODEL
     return GEMINI_BACKEND_DEFAULT_MODEL
 
 

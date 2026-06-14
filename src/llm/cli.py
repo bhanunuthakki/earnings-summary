@@ -219,9 +219,10 @@ LLM_MODELS: dict[str, str] = {
     # evidence and commits to a scoreable stance — Opus judgment tier.
     "advisor_socratic_questions": DEFAULT_MODEL,
     "advisor_socratic_memo": "claude-opus-4-7",
-    # Short, structured, batch — Haiku for latency
-    "intake_classifier": FAST_CLASSIFIER_MODEL,
-    "transcript_metadata": FAST_CLASSIFIER_MODEL,
+    # Short, structured, batch — Gemini Flash at parity with Haiku, lower cost
+    # (Chip 2 PR D first promotions; model-eval cron watches for regression).
+    "intake_classifier": "gemini-2.5-flash",
+    "transcript_metadata": "gemini-2.5-flash",
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
     # Decision extraction (src/decision_extractor.py): per-paragraph
@@ -234,26 +235,25 @@ LLM_MODELS: dict[str, str] = {
     # "What would change my mind" memo section into structured
     # {metric, op, threshold, unit, for_periods} conditions against a supplied
     # metric vocabulary — a narrow copy-the-token JSON task over ~1-2KB of
-    # prose, run once per new decision. Haiku: latency/cost dominate, the
-    # schema is closed, and the golden set
-    # (evals/golden/decision_conditions_extract.json) guards quality; escalate
-    # only on eval regression.
-    "decision_conditions_extract": FAST_CLASSIFIER_MODEL,
+    # prose, run once per new decision. Gemini Flash (Chip 2 PR D): same
+    # closed-schema pick-from-list shape Flash excels at; golden set at
+    # evals/golden/decision_conditions_extract.json guards quality.
+    "decision_conditions_extract": "gemini-2.5-flash",
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
-    # interactive (the owner is waiting at the input) — latency dominates and
-    # Haiku is reliable on copy-the-token tasks. Validation + one repair
-    # retry live in viewspec.nl_compile; failures degrade to the builder UI.
-    "viewspec_compile": FAST_CLASSIFIER_MODEL,
+    # interactive (the owner is waiting at the input) — latency dominates.
+    # Gemini Flash (Chip 2 PR D): copy-the-token task, golden set at
+    # evals/golden/viewspec_compile.json guards quality; repair retry in
+    # viewspec.nl_compile covers the degraded case.
+    "viewspec_compile": "gemini-2.5-flash",
     # Ask pack router (src/ask/router.py, fund-grade build S4): selects which
     # portfolio evidence packs (holdings / conviction / dcf / decisions /
     # journal / performance) a narrative ask turn needs. Closed-enum JSON
-    # selection on the interactive ask path — latency dominates, Haiku is
-    # reliable on pick-from-a-list tasks, and mis-selection fails closed to
-    # document-only evidence. Scored by the golden set in
-    # evals/golden/ask_pack_router.json; budget row seeded by alembic 0089
-    # (skip mode — a blown cap disables packs, the turn still answers).
-    "ask_pack_router": FAST_CLASSIFIER_MODEL,
+    # selection on the interactive ask path — latency dominates.
+    # Gemini Flash (Chip 2 PR D): pick-from-a-list task, mis-selection fails
+    # closed to document-only evidence. Scored by evals/golden/ask_pack_router.json;
+    # budget row seeded by alembic 0089 (skip mode).
+    "ask_pack_router": "gemini-2.5-flash",
     # Ask claim-grounding audit (src/ask/claims.py, fund-grade build S8):
     # after a grounded narrative answer streams, one short call re-reads the
     # answer against its numbered evidence and emits the claims→cites map
