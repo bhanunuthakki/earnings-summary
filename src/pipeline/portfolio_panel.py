@@ -66,6 +66,11 @@ from portfolio_risk import (
     compute_drawdown,
     factor_exposure_rollup,
 )
+from portfolio_risk_snapshot_store import (
+    RiskSnapshot,
+    read_latest_snapshot,
+    write_snapshot,
+)
 from ui.controls import ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
@@ -149,7 +154,17 @@ def render_portfolio_panel(
         from attribution import attributions_for_book
 
         attributions = attributions_for_book(db_path=db_path, alpha=analytics.position_alpha)
-    return compose_portfolio_page(analytics, live, window=window, attributions=attributions)
+    # Keep the risk snapshot fresh on a successful read; fall back to it (stamped)
+    # when the analytics are down so the page still carries a risk read (L5 PR2).
+    snapshot: RiskSnapshot | None = None
+    if db_path is not None:
+        if analytics.available:
+            _persist_risk_snapshot(analytics, db_path)
+        else:
+            snapshot = read_latest_snapshot(db_path=db_path)
+    return compose_portfolio_page(
+        analytics, live, window=window, attributions=attributions, snapshot=snapshot
+    )
 
 
 def compose_portfolio_page(
@@ -157,6 +172,7 @@ def compose_portfolio_page(
     live: LivePortfolio,
     window: WindowSelection | None = None,
     attributions: list[PositionAttribution] | None = None,
+    snapshot: RiskSnapshot | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -166,19 +182,23 @@ def compose_portfolio_page(
     per-section offline panels). Tracker up but ALL analytics endpoints failing
     (e.g. an older tracker build) → one quiet note instead of five dead
     sections. ``attributions`` (S15) renders the per-position narrative block
-    after the analytics sections; None/empty hides it.
+    after the analytics sections; None/empty hides it. ``snapshot`` (L5 PR2)
+    renders the last-known cached risk read when the analytics are unavailable.
     """
     w = window or _DEFAULT_WINDOW
     parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
     if analytics.available:
         parts.append(render_portfolio_analytics_sections(analytics))
-    elif live.available:
-        first_error = next(iter(analytics.errors.values()), "no analytics payloads")
-        parts.append(
-            '<section class="panel"><h2>Portfolio analytics</h2>'
-            '<p class="muted">The tracker is reachable but its analytics endpoints aren\'t — '
-            f"{escape(first_error)}.</p></section>"
-        )
+    else:
+        if snapshot is not None:
+            parts.append(_cached_risk_section(snapshot))
+        if live.available:
+            first_error = next(iter(analytics.errors.values()), "no analytics payloads")
+            parts.append(
+                '<section class="panel"><h2>Portfolio analytics</h2>'
+                '<p class="muted">The tracker is reachable but its analytics endpoints aren\'t — '
+                f"{escape(first_error)}.</p></section>"
+            )
     if attributions:
         from pipeline.attribution_panel import render_book_attribution_section
 
@@ -1253,8 +1273,21 @@ def render_portfolio_risk_panel(
         factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
+    # On a successful read, refresh the last-known snapshot; when the tracker is
+    # down, fall back to it so the surface degrades to stamped cached values.
+    snapshot: RiskSnapshot | None = None
+    if db_path is not None:
+        if analytics.available:
+            _persist_risk_snapshot(analytics, db_path, drawdown=drawdown, factor=factor)
+        else:
+            snapshot = read_latest_snapshot(db_path=db_path)
     return compose_risk_page(
-        analytics, drawdown=drawdown, factor=factor, scenarios=scenarios, digest=digest
+        analytics,
+        drawdown=drawdown,
+        factor=factor,
+        scenarios=scenarios,
+        digest=digest,
+        snapshot=snapshot,
     )
 
 
@@ -1265,10 +1298,12 @@ def compose_risk_page(
     factor: FactorRollup | None,
     scenarios: list[tuple[str, str]],
     digest: str,
+    snapshot: RiskSnapshot | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
-    after a digest regenerates."""
+    after a digest regenerates. When the tracker is offline, ``snapshot`` (the
+    last-known cached read) renders stamped values instead of a bare note."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1276,11 +1311,126 @@ def compose_risk_page(
         parts.append(_drawdown_section(drawdown))
         if factor is not None:
             parts.append(_factor_exposure_section(factor))
+    elif snapshot is not None:
+        parts.append(_cached_risk_section(snapshot))
     else:
         parts.append(_risk_offline_note(analytics))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
+
+
+def _build_risk_snapshot(
+    analytics: PortfolioAnalytics,
+    drawdown: DrawdownStats | None,
+    factor: FactorRollup | None,
+) -> RiskSnapshot:
+    """Flatten the live analytics + derived drawdown/factor into the cache row."""
+    snap = RiskSnapshot()
+    b = analytics.beta
+    if b is not None:
+        snap.window_start = b.start_date
+        snap.window_end = b.end_date
+        snap.benchmark = b.benchmark
+        snap.beta = b.beta
+        snap.alpha_annualized_pct = b.alpha_annualized_pct
+        snap.sharpe = b.sharpe
+        snap.sortino = b.sortino
+        snap.information_ratio = b.information_ratio
+        snap.tracking_error_annualized = b.tracking_error_annualized
+        snap.portfolio_volatility_annualized = b.portfolio_volatility_annualized
+        snap.r_squared = b.r_squared
+    pos = analytics.positioning
+    if pos is not None:
+        snap.weighted_avg_correlation_spy = pos.weighted_avg_correlation_spy
+        c = pos.concentration
+        if c is not None:
+            snap.num_positions = c.num_positions
+            snap.top1_weight_pct = c.top1_weight_pct
+            snap.top5_weight_pct = c.top5_weight_pct
+            snap.top10_weight_pct = c.top10_weight_pct
+            snap.hhi = c.hhi
+            snap.effective_holdings = c.effective_holdings
+    if drawdown is not None:
+        snap.max_drawdown_pct = drawdown.max_drawdown_pct
+        snap.current_drawdown_pct = drawdown.current_drawdown_pct
+        snap.drawdown_recovered = 1 if drawdown.recovered else 0
+        snap.days_to_recovery = drawdown.days_to_recovery
+    if factor is not None:
+        snap.spy_beta = factor.spy_beta
+        snap.qqq_beta = factor.qqq_beta
+        snap.growth_tilt = factor.growth_tilt
+        snap.avg_correlation_spy = factor.avg_correlation_spy
+        snap.rate_beta_10y = factor.rate_beta_10y
+        snap.names_priced = factor.names_priced
+        snap.names_total = factor.names_total
+    return snap
+
+
+def _persist_risk_snapshot(
+    analytics: PortfolioAnalytics,
+    db_path: Path,
+    *,
+    drawdown: DrawdownStats | None = None,
+    factor: FactorRollup | None = None,
+) -> None:
+    """Refresh the last-known risk snapshot after a successful tracker fetch.
+
+    No-op when the tracker is unavailable. ``drawdown`` / ``factor`` are passed
+    through from the Risk panel (which already computed them, with the rate leg);
+    the Performance panel leaves them None and this derives them inline — without
+    the per-name macro DB read, so its hot render path stays cheap (the rate leg
+    then rides whatever the Risk panel last wrote)."""
+    if not analytics.available:
+        return
+    if drawdown is None and analytics.performance is not None:
+        drawdown = compute_drawdown(analytics.performance.points)
+    if factor is None and analytics.positioning is not None:
+        factor = factor_exposure_rollup(analytics.positioning.correlations)
+    write_snapshot(_build_risk_snapshot(analytics, drawdown, factor), db_path=db_path)
+
+
+def _cached_risk_section(snap: RiskSnapshot) -> str:
+    """The Risk panel's offline fallback: the last-known benchmark-risk, drawdown,
+    and factor cards, every value clearly stamped as cached and dated."""
+    stamp = (
+        stamp_html(snap.captured_at, mode="date", prefix="as of ")
+        if snap.captured_at
+        else "last-known"
+    )
+    cards: list[str] = []
+    if snap.beta is not None:
+        cards.append(_kpi_card(f"Beta vs {snap.benchmark or 'SPY'}", _ratio(snap.beta)))
+    if snap.sharpe is not None:
+        cards.append(_kpi_card("Sharpe", _ratio(snap.sharpe)))
+    if snap.portfolio_volatility_annualized is not None:
+        cards.append(
+            _kpi_card("Portfolio vol", _pct_frac(snap.portfolio_volatility_annualized), sub="ann.")
+        )
+    if snap.max_drawdown_pct is not None:
+        cards.append(
+            _kpi_card(
+                "Max drawdown",
+                _pct(snap.max_drawdown_pct, signed=True),
+                tone=_tone(snap.max_drawdown_pct),
+            )
+        )
+    if snap.spy_beta is not None:
+        cards.append(_kpi_card("Market β (SPY)", _ratio(snap.spy_beta), sub="value-weighted"))
+    if snap.qqq_beta is not None:
+        cards.append(_kpi_card("Growth β (QQQ)", _ratio(snap.qqq_beta), sub="value-weighted"))
+    if snap.rate_beta_10y is not None:
+        cards.append(_kpi_card("Rate β (10Y)", _ratio(snap.rate_beta_10y), sub="vs 10Y yield"))
+    if snap.top5_weight_pct is not None:
+        cards.append(_kpi_card("Top 5", _pct(snap.top5_weight_pct), sub="of book"))
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
+    return (
+        '<section class="panel"><h2>Risk &amp; drawdown</h2>'
+        '<p class="sub">Live risk analytics are unavailable right now — showing the last-known '
+        f"snapshot ({stamp}). These are cached values, not live; reconnect the tracker for live "
+        "drawdown, factor, and benchmark-risk reads.</p>"
+        f"{strip}</section>"
+    )
 
 
 def _rate_betas(rows: list[PositionCorrelationRow], db_path: Path | None) -> dict[str, float]:
