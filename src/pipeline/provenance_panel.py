@@ -65,6 +65,7 @@ def render_provenance_panel(
     section is wrapped in ``<div id="prov-<id>">`` so the anchor-nav chips jump
     to it. Lazy-imported builders keep the shell's import graph light.
     """
+    from pipeline.credibility_panel import render_credibility_panel
     from pipeline.cron_health_panel import render_cron_health_panel
     from pipeline.dcf_coverage_panel import render_dcf_coverage_panel
     from pipeline.evals_panel import render_evals_panel
@@ -89,6 +90,10 @@ def render_provenance_panel(
         ("cron_health", "Cron Health", lambda: render_cron_health_panel(db_path)),
         ("dcf_coverage", "DCF Coverage", lambda: render_dcf_coverage_panel(db_path, repo_root)),
         ("restatements", "Restatements", lambda: render_restatements_panel(db_path)),
+        # Credibility scores the confidence prior against the restatement +
+        # disagreement ground truth — it follows Restatements, which is that
+        # ground truth surfaced.
+        ("credibility", "Credibility", lambda: render_credibility_panel(db_path, user_id=user_id)),
     ]
 
     # Anchor-nav band (one operating band, design_language §6.1): jump-to chips

@@ -19,6 +19,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.kpis import ReportingCadence, ThesisTier
@@ -260,7 +261,7 @@ def _insert_kpi_fact(
     the tier+id-aware loader picks the restated value while the original
     survives for time-travel queries.
     """
-    new_id, _ = insert_kpi_with_restatement_detection(
+    new_id, superseded_id = insert_kpi_with_restatement_detection(
         conn,
         ticker=ticker,
         period_end=period_end,
@@ -274,6 +275,11 @@ def _insert_kpi_fact(
         locator=locator,
         source_excerpt=source_excerpt,
     )
+    # L10: capture the restatement instead of discarding superseded_id.
+    if superseded_id is not None:
+        _ = record_restatement_observation(
+            conn, fact_table=KPI_FACTS, superseded_id=superseded_id, new_value=value
+        )
     return new_id is not None
 
 
