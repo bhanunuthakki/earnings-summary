@@ -40,8 +40,7 @@ from pathlib import Path
 
 import numpy as np
 
-from allocation.covariance import ledoit_wolf, marginal_risk
-from allocation.price_history import build_aligned_returns, daily_log_returns, load_daily_closes
+from allocation.book_risk import build_book_risk
 from dcf.scenario_reward import scenario_reward
 from macro_store import Sensitivity, fetch_sensitivities, fetch_series
 
@@ -57,13 +56,10 @@ FACTOR_LABELS: dict[str, str] = {
 }
 
 SOFTMAX_TEMPERATURE = 1.0  # z-scale scores; ~e^3 spread between best and worst
-COV_LOOKBACK_OBS = 252  # ~1 trading year of daily returns in the covariance
-MIN_OVERLAP_OBS = 120  # min common trading days for a name to enter the matrix
 MACRO_BETA_LOOKBACK = 252  # preferred macro_sensitivities lookback_window_days
 MACRO_MOMENTUM_CAL_DAYS = 90  # macro momentum = log change over this window
 MACRO_STALE_DAYS = 45  # ignore a macro series whose latest point is older
 RET_CLAMP = 1.0  # winsorize DCF upside at ±100% before z-scoring
-ANNUALIZE = math.sqrt(252.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,56 +299,31 @@ def _diversification(
 ) -> _DivResult:
     """−(marginal annualized vol) per holding off the shrunk covariance.
 
-    Weights are renormalized over the names that made it into the matrix (a
-    dropped name's weight is small or zero in practice; the note says who
-    fell out and why)."""
-    returns_by_ticker: dict[str, dict[date, float]] = {}
-    for t in tickers:
-        rets = daily_log_returns(load_daily_closes(t, repo_root))
-        if rets:
-            returns_by_ticker[t] = rets
-    no_file = [t for t in tickers if t not in returns_by_ticker]
-    if len(returns_by_ticker) < 2:
-        return _DivResult(hidden_reason="fewer than two holdings with price history on file")
-    aligned = build_aligned_returns(
-        returns_by_ticker, lookback_obs=COV_LOOKBACK_OBS, min_overlap_obs=MIN_OVERLAP_OBS
-    )
-    if aligned is None:
-        return _DivResult(
-            hidden_reason=(
-                f"holdings share fewer than {MIN_OVERLAP_OBS} common trading days of history"
-            )
-        )
-    cov = ledoit_wolf(aligned.matrix)
-    w_arr = np.array([weights.get(t, 0.0) for t in aligned.tickers], dtype=np.float64)
-    w_sum = float(w_arr.sum())
-    if w_sum > 0.0:
-        w_arr = w_arr / w_sum
-    else:
-        w_arr = np.full(len(aligned.tickers), 1.0 / len(aligned.tickers), dtype=np.float64)
-    risk = marginal_risk(cov.sigma, w_arr)
-    if risk is None:
-        return _DivResult(hidden_reason="degenerate covariance (zero portfolio variance)")
+    A thin view over ``allocation.book_risk.build_book_risk`` (the one place the
+    book covariance is assembled — also the L7 risk-budget allocator's risk
+    leg): the diversification factor is the *negative* marginal vol, so a name
+    that lowers book vol at the margin scores high. Weights are renormalized over
+    the names that made it into the matrix; the note says who fell out and why."""
+    br = build_book_risk(repo_root, tickers, weights)
+    if br.hidden_reason is not None:
+        return _DivResult(hidden_reason=br.hidden_reason)
     result = _DivResult(
-        prices_through=aligned.dates[-1],
-        cov_obs=cov.n_obs,
-        shrinkage=cov.shrinkage,
-        portfolio_vol_ann=risk.portfolio_vol * ANNUALIZE,
+        prices_through=br.prices_through,
+        cov_obs=br.cov_obs,
+        shrinkage=br.shrinkage,
+        portfolio_vol_ann=br.portfolio_vol_ann,
     )
-    for i, t in enumerate(aligned.tickers):
-        mvol_ann = float(risk.marginal_vol[i]) * ANNUALIZE
-        corr = float(risk.corr_to_book[i])
+    for t in br.tickers:
+        mvol_ann = br.marginal_vol_ann[t]
+        corr = br.corr_to_book[t]
         result.readings[t] = (
             -mvol_ann,
             f"corr to book {corr:+.2f} · marginal vol {mvol_ann * 100.0:+.1f}%/yr",
         )
-    skipped = dict(aligned.dropped)
-    for t in no_file:
-        skipped[t] = "no daily price history on file"
-    if skipped:
+    if br.dropped:
         result.notes.append(
             "outside the covariance: "
-            + "; ".join(f"{t} ({reason})" for t, reason in sorted(skipped.items()))
+            + "; ".join(f"{t} ({reason})" for t, reason in sorted(br.dropped.items()))
         )
     return result
 
