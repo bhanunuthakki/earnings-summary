@@ -366,6 +366,22 @@ pipeline the same way weights now are, OR add a covering index / narrow the `_ev
 scan. High confidence (the 1.2s floor is deterministic and reproduces across runs). This is
 out of S12b's named scope (inbox offenders only) and is handed off, not built.
 
+**Hand-off COMPLETED (#539, 2026-06-13).** The recommended fix shipped: `_eval_fundamentals`
+now precomputes per-ticker `rev_yoy`/`fcf_margin` to `data/cockpit_fundamentals.json` once
+per morning-pipeline run (new Stage 0d, mirroring the `portfolio_weights.json` pattern); the
+render reads the cache with a graceful live-DB fallback when absent. Result: **cockpit
+1528→122ms p50, boot `GET /` 1847→340ms p50 — sub-500ms, the program target is met.** Every
+pillar of the Instrument-Paradigm program is delivered and the boot-latency goal is achieved
+WITHOUT the signals spine. **Program COMPLETE.**
+
+**Remaining optional threads (owner-go only, none auto-spawned):** (1) buy-side ratings +
+estimate-revision diet feeds — blocked on paid FMP-Ultimate access (decision: buy vs leave
+scaffolded); (2) back-button/history dismissal for overlays — cut from S4 v1, small
+follow-up; (3) peer *generator* — LLM business-model comparables (spec `peer_selection_llm.md`);
+a sibling chip already shipped the generator (#530) + consumer (#523), so verify before
+respawning; (4) the full signals spine stays available if a FUTURE profiled hot path (not
+today's) genuinely needs cross-surface stream consolidation.
+
 ---
 
 ## 8. Highest-leverage first moves (the critic's ranking)
