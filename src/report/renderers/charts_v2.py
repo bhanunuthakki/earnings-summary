@@ -836,6 +836,7 @@ CSS = """
 .cv2-band-label { font-size: 10px; font-family: var(--sans, 'Inter', sans-serif); font-weight: 500; }
 .cv2-empty-text { font-size: 12px; fill: #67737d; }
 .cv2-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+@media (max-width: 900px) { .cv2-pair { grid-template-columns: 1fr; } }
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
 .cv2-matrix { border-collapse: collapse; font-size: 11px; font-family: var(--mono, 'JetBrains Mono', monospace); width: 100%; }

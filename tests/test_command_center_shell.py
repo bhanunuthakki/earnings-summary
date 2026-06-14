@@ -458,7 +458,7 @@ def test_state_store_loads_before_every_other_script() -> None:
 
 
 def test_tablist_roving_tabindex_contract(
-    generated_at: "datetime | None" = None,
+    generated_at: datetime | None = None,
 ) -> None:
     """L13: every role="tab" button ships with tabindex="-1" so JS can manage
     the roving tabindex (one tab focusable at a time); activate() sets the
@@ -501,6 +501,30 @@ def test_offline_banner_and_retry_button_contract() -> None:
     # Retry button in error states: class + onclick closure.
     assert "cc-retry-btn" in SHELL_JS
     assert ".cc-retry-btn" in SHELL_CSS
+
+
+def test_theme_toggle_contract() -> None:
+    """L13 PR2: a theme-toggle button exists in the shell chrome; SHELL_CSS
+    uses palette_css("paper") so both light and dark tokens are defined
+    (light :root default + [data-theme="dark"] override); SHELL_JS reads
+    CCState on boot and toggles between 'dark' and 'paper'."""
+    from datetime import UTC, datetime
+
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    # Toggle button present in the topbar chrome.
+    assert 'id="cc-theme-toggle"' in html
+    assert ".cc-theme-toggle" in SHELL_CSS
+    # CSS ships light :root + dark override (enables actual theme switching).
+    assert ':root[data-theme="dark"]' in SHELL_CSS
+    # The light tokens are also present (not just dark-only :root).
+    assert "color-scheme: light" in SHELL_CSS
+    # JS reads stored theme on boot and persists on click.
+    assert "CCState.get('theme')" in SHELL_JS
+    assert "CCState.set('theme'" in SHELL_JS
+    assert "applyTheme" in SHELL_JS
+    # Toggle cycles between dark and paper only.
+    assert "THEMES_CYCLE" in SHELL_JS
+    assert "'dark'" in SHELL_JS and "'paper'" in SHELL_JS
 
 
 def test_shell_routes_state_through_the_store() -> None:

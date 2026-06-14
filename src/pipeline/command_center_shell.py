@@ -296,6 +296,8 @@ def render_shell(
             f'<button class="cc-notes-btn" id="cc-notes-toggle" type="button" '
             f'aria-label="Quick notes" '
             f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
+            f'<button class="cc-theme-toggle" id="cc-theme-toggle" type="button" '
+            f'aria-label="Toggle light/dark theme" title="Toggle light / dark theme">◑</button>'
             f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
             f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
             f"{stamp}</div>",
@@ -598,8 +600,12 @@ def _render_panels(
 # enforced by tests/test_ui_controls.py). The inlined VIEWER/INBOX/UPCOMING CSS
 # below carries no aliases either.
 SHELL_CSS = (
-    palette_css("dark")
-    + controls_css("dark")
+    # "paper" mode: light :root default + [data-theme="dark"] override so the
+    # toggle (L13 PR2) can switch between the two. The document ships
+    # data-theme="dark" so the override wins on first paint; CCState persists
+    # the user's choice across reloads.
+    palette_css("paper")
+    + controls_css("paper")
     # CCOverlay (S4) close motion — paired with the kit's .k-scrim/.k-overlay
     # open motion so every overlay dismissal animates out instead of snapping.
     + CC_OVERLAY_CSS
@@ -1164,11 +1170,24 @@ td.ticker a:hover { color: var(--accent); }
    Responsive + touch-aware overrides (S16 PR1)
    ============================================================ */
 
-/* Narrow topbar at ≤900: stamp + links go; nav already overflow-x auto. */
+/* Narrow topbar at ≤900: stamp + links go; nav already overflow-x auto.
+   The embedded report iframe gets a shorter fixed height so it scrolls
+   comfortably when the rail stacks beneath it (L13 PR2). */
 @media (max-width: 900px) {
   .cc-stamp, .cc-links { display: none; }
   .cc-topbar { padding: 8px 16px; }
+  .cc-report-frame { height: min(80vh, 600px); height: min(80dvh, 600px); }
 }
+
+/* Theme toggle button (L13 PR2). */
+.cc-theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 14px;
+  transition: var(--transition);
+}
+.cc-theme-toggle:hover { border-color: var(--border-2); color: var(--fg); }
 
 /* Tablet portrait + phone: compress panels, full-width drawers, safe-area. */
 @media (max-width: 768px) {
@@ -1281,6 +1300,25 @@ SHELL_JS = r"""
   window.addEventListener('online', syncOnlineState);
   window.addEventListener('offline', syncOnlineState);
   syncOnlineState();
+
+  // ----- Theme toggle (L13 PR2) -----
+  // The shell boots dark (HTML attr); toggling swaps to 'paper' (light) and
+  // persists via CCState so the choice survives a reload.
+  var THEMES_CYCLE = ['dark', 'paper'];
+  function applyTheme(name) {
+    document.documentElement.setAttribute('data-theme', name);
+  }
+  var storedTheme = window.CCState.get('theme');
+  if (storedTheme && THEMES_CYCLE.indexOf(storedTheme) !== -1) applyTheme(storedTheme);
+  var themeToggleBtn = document.getElementById('cc-theme-toggle');
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+      var next = cur === 'dark' ? 'paper' : 'dark';
+      applyTheme(next);
+      window.CCState.set('theme', next);
+    });
+  }
 
   // ----- WAI-ARIA roving-tabindex helper (L13) -----
   // Sets up arrow-key navigation inside a role="tablist" element.

@@ -1673,12 +1673,22 @@ ul.flag-list li.flag-positive {
 }
 
 /* ============================================================
-   Responsive overrides (S16 PR1)
+   Responsive overrides (S16 PR1 + L13 PR2)
    ============================================================ */
 
 /* Horizontal table scroll at small-laptop/tablet widths. */
 @media (max-width: 1024px) {
   .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Narrow/tablet: KPI strip drops from 4 to 2 columns; multi-column grids
+   collapse; identity cluster wraps. */
+@media (max-width: 900px) {
+  .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+  .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom {
+    grid-template-columns: 1fr;
+  }
+  .identity-right { flex-wrap: wrap; }
 }
 
 /* Tablet portrait: compress lateral padding and section tab strip. */
