@@ -23,10 +23,15 @@ from calibration_coach import (
     ClosedLesson,
     CoachInputs,
     NamedBias,
+    Premortem,
     build_scorecard,
+    compose_premortem,
+    gate_premortem,
     gate_scorecard,
     load_latest_scorecard,
+    premortem_block,
     propose_experiment,
+    render_premortem_prose,
     render_scorecard_prose,
     save_scorecard,
     scorecard_from_dict,
@@ -34,6 +39,7 @@ from calibration_coach import (
     synthesize_biases,
 )
 from decision_calibration import CalibrationStats, CohortPeriod, ConvictionBucket
+from decision_conditions import DecisionCondition
 from llm.cli import LLMBudgetExceeded
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -252,6 +258,149 @@ def test_propose_experiment_malformed_condition_degrades(monkeypatch: pytest.Mon
     assert exp is not None
     assert exp.hypothesis == "do the thing"
     assert exp.condition is None  # invalid condition → hypothesis survives, no gradeable test
+
+
+# ---------------------------------------------------------------------------
+# pre-mortem at the decision moment (L8 item d)
+# ---------------------------------------------------------------------------
+
+
+def _premortem_json(*, resemblances: int = 2, conditions: int = 1) -> str:
+    return json.dumps(
+        {
+            "resemblances": [
+                f"like RBRK, you are sizing this up on conviction before the thesis prints ({i})"
+                for i in range(resemblances)
+            ],
+            "conditions": [
+                {
+                    "metric": "NPL",
+                    "metric_source": "kpi",
+                    "op": "gt",
+                    "threshold": 7.0,
+                    "unit": "percent",
+                    "for_periods": 2,
+                    "note": "NPL above 7% for two straight quarters",
+                }
+                for _ in range(conditions)
+            ],
+        }
+    )
+
+
+def test_compose_premortem_thin_skips_llm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("must not call the LLM below the floor")
+
+    monkeypatch.setattr(cc, "call_llm_structured", _boom)
+    assert compose_premortem(tmp_path, "NU", inputs=_inputs(graded=5)) is None
+
+
+def test_compose_premortem_happy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cc, "call_llm_structured", lambda *_a, **_k: json.loads(_premortem_json()))
+    pm = compose_premortem(tmp_path, "nu", stance="add", inputs=_inputs())
+    assert pm is not None
+    assert pm.ticker == "NU" and pm.stance == "add"
+    assert len(pm.resemblances) == 2
+    assert len(pm.drafted_conditions) == 1
+    assert pm.drafted_conditions[0].metric == "NPL"
+
+
+def test_compose_premortem_no_resemblance_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = {"resemblances": [], "conditions": []}
+    monkeypatch.setattr(cc, "call_llm_structured", lambda *_a, **_k: payload)
+    # A pre-mortem with no grounded parallel is rejected (the failure mode we guard).
+    assert compose_premortem(tmp_path, "NU", inputs=_inputs()) is None
+
+
+def test_compose_premortem_keeps_resemblances_drops_bad_conditions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = {"resemblances": ["a grounded parallel to RBRK"], "conditions": [{"garbage": 1}]}
+    monkeypatch.setattr(cc, "call_llm_structured", lambda *_a, **_k: payload)
+    pm = compose_premortem(tmp_path, "NU", inputs=_inputs())
+    assert pm is not None
+    assert pm.resemblances == ["a grounded parallel to RBRK"]
+    assert pm.drafted_conditions == []  # malformed condition dropped, resemblance survives
+
+
+def test_compose_premortem_hard_stop_propagates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _raise(*_a: object, **_k: object) -> object:
+        raise LLMBudgetExceeded("cap")
+
+    monkeypatch.setattr(cc, "call_llm_structured", _raise)
+    with pytest.raises(LLMBudgetExceeded):
+        compose_premortem(tmp_path, "NU", inputs=_inputs())
+
+
+def test_render_premortem_prose() -> None:
+    pm = Premortem(
+        ticker="NU",
+        stance="add",
+        resemblances=["like RBRK, sizing up before the print"],
+        drafted_conditions=[
+            DecisionCondition("NPL", "kpi", "gt", 7.0, "percent", 2, "NPL above 7% for 2Q")
+        ],
+    )
+    prose = render_premortem_prose(pm)
+    assert "Pre-mortem" in prose and "NU" in prose
+    assert "like RBRK" in prose
+    assert "NPL above 7% for 2Q" in prose
+
+
+def _premortem() -> Premortem:
+    return Premortem("NU", "add", ["a grounded parallel"], [])
+
+
+def test_gate_premortem_pass_and_fail() -> None:
+    ok, score = gate_premortem(
+        _premortem(), code_root=PROJECT_ROOT, judge_caller=lambda *_a, **_k: _verdict(1.0)
+    )
+    assert ok is True and score == pytest.approx(1.0)
+    bad_ok, bad_score = gate_premortem(
+        _premortem(), code_root=PROJECT_ROOT, judge_caller=lambda *_a, **_k: _verdict(0.0)
+    )
+    assert bad_ok is False and bad_score == pytest.approx(0.0)
+
+
+def test_premortem_block_composed_and_gated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cc, "compose_premortem", lambda *_a, **_k: _premortem())
+    monkeypatch.setattr(cc, "gate_premortem", lambda *_a, **_k: (True, 0.9))
+    block = premortem_block(tmp_path, "NU", stance="add", code_root=tmp_path)
+    assert "Pre-mortem" in block and "a grounded parallel" in block
+    assert "ADD to NU" in block
+
+
+def test_premortem_block_empty_when_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cc, "compose_premortem", lambda *_a, **_k: None)
+    assert premortem_block(tmp_path, "NU") == ""
+
+
+def test_premortem_block_suppressed_on_gate_fail(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cc, "compose_premortem", lambda *_a, **_k: _premortem())
+    monkeypatch.setattr(cc, "gate_premortem", lambda *_a, **_k: (False, 0.3))
+    assert premortem_block(tmp_path, "NU", code_root=tmp_path) == ""
+
+
+def test_premortem_block_ungated_when_no_code_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(cc, "compose_premortem", lambda *_a, **_k: _premortem())
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("no code_root → no gate call")
+
+    monkeypatch.setattr(cc, "gate_premortem", _boom)
+    block = premortem_block(tmp_path, "NU")  # no code_root → composed, not gated
+    assert "a grounded parallel" in block
 
 
 # ---------------------------------------------------------------------------

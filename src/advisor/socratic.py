@@ -68,6 +68,8 @@ decision memo, so the questions must surface what only the owner knows.
 
 {anchors}
 
+{premortem}
+
 Ask exactly {min_q}-{max_q} questions, numbered "1." through "{max_q}.", one per
 line. Required coverage:
 - their CURRENT read on the name (what do they believe the market is
@@ -79,6 +81,11 @@ When the context includes a "documented calibration" block, make at least one
 question challenge this conviction against the analyst's own track record — if
 this name sits in a conviction cohort that has graded poorly, ask directly what
 makes THIS call different from the ones that missed.
+
+When a "Pre-mortem" block is present, make at least one question force the owner
+to confront the STRONGEST parallel it draws to a bet he got wrong — ask directly
+why THIS name escapes the failure that parallel names, and whether he will commit
+to the drafted early-warning condition.
 
 Make every question pointed and grounded in a number or fact from the
 context above (cite it in the question). Never ask anything the data
@@ -225,15 +232,37 @@ def generate_questions(
     t = ticker.upper()
     context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
     ctx_block = _ticker_context_block(context, t)
+    premortem = _premortem_block(repo_root, t, api_url=api_url)
     prompt = _QUESTIONS_PROMPT.format(
         ticker=t,
         context=ctx_block,
         anchors=_anchors_block(repo_root, t) or "(no anchors cached for this name)",
+        premortem=premortem or "(no pre-mortem — too thin a track record, or nothing grounded)",
         min_q=MIN_QUESTIONS,
         max_q=MAX_QUESTIONS,
     )
     raw = call_llm(prompt, purpose=QUESTIONS_PURPOSE, ticker=t)
     return SocraticPrelude(ticker=t, questions=parse_questions(raw), context_block=ctx_block)
+
+
+def _premortem_block(repo_root: Path, ticker: str, *, api_url: str | None) -> str:
+    """The L8 decision-moment pre-mortem (calibration_coach.premortem_block) —
+    the L1 calibration injection point EXTENDED with "the ways this resembles
+    bets you got wrong" + drafted early-warning conditions, composed + eval-gated
+    off the same Opus purpose. Best-effort: it must never block the flow the
+    owner is sitting in front of, so any non-hard-stop failure degrades to "" and
+    the questions ride on the calibration block alone. Hard stops propagate
+    (budget/setup), matching the questions call's own posture."""
+    try:
+        from calibration_coach import premortem_block
+
+        # code_root = repo_root: the served checkout carries evals/rubrics for the gate.
+        return premortem_block(repo_root, ticker, code_root=repo_root, api_url=api_url)
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise
+        log.debug({"event": "socratic_premortem_failed", "ticker": ticker, "error": str(exc)})
+        return ""
 
 
 def generate_decision_memo(
