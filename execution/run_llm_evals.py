@@ -55,6 +55,7 @@ GOLDEN_PURPOSES = (
     "ask_evidence_followup",
     "ask_claim_grounding",
     "injection_canaries",
+    "provenance_caution",
 )
 AUDIT_PURPOSES = (
     "bear_case",
@@ -252,6 +253,20 @@ def main() -> int:
                 args.golden or (PROJECT_ROOT / CANARY_DIR / "injection_canaries.json")
             ).resolve()
             summary = run_canary_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+            )
+        elif args.purpose == "provenance_caution":
+            # Provenance invariant graded by code (the answer must flag/discount
+            # a contested figure, not assert it) — no judge, --no-judge no-op.
+            from evals.provenance_caution import GOLDEN_DIR as CAUTION_DIR
+            from evals.provenance_caution import run_caution_eval
+
+            golden_path = (
+                args.golden or (PROJECT_ROOT / CAUTION_DIR / "provenance_caution.json")
+            ).resolve()
+            summary = run_caution_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,

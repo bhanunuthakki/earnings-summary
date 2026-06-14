@@ -392,3 +392,102 @@ def test_nl_matched_facts_carry_no_fact_ref(repo: Path) -> None:
     assert facts
     assert all(i.fact_ref is None for i in facts)
     assert all(i.chip_payload()["fact_ref"] is None for i in facts)
+
+
+# ----------------------------------------------------------------------------
+# Provenance into the prompt (L2, Close-the-Loops): the scored confidence and
+# any cross-source ⚠ disagreement reach the MODEL-read text, not only the chip.
+
+
+def _enable_confidence_and_issues(db: Path) -> None:
+    """Add the S2 confidence columns + a validation_issues table to the
+    fixture, then plant a sub-par revenue fact disagreeing with SEC."""
+    conn = sqlite3.connect(str(db))
+    conn.execute("ALTER TABLE financial_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+    conn.execute("ALTER TABLE kpi_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+    # The displayed cell is FMP (doc 1) → the disagreement quotes the OTHER side.
+    conn.execute("ALTER TABLE documents ADD COLUMN source_quality_tier TEXT")
+    conn.execute("UPDATE documents SET source_quality_tier = 'fmp_normalized' WHERE id = 1")
+    # One unresolved cross-source disagreement on the newest revenue row drops
+    # its score below the 0.8 affordance threshold.
+    conn.execute("UPDATE financial_facts SET confidence = 0.79 WHERE period_end LIKE '2025-09-30%'")
+    conn.execute(
+        "CREATE TABLE validation_issues ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, ticker TEXT, severity TEXT,"
+        " rule TEXT, raw_value TEXT, raised_at TIMESTAMP, resolved_at TIMESTAMP)"
+    )
+    conn.execute(
+        "INSERT INTO validation_issues (run_id, ticker, severity, rule, raw_value, raised_at)"
+        " VALUES ('r', 'TST', 'warn', 'source_disagreement',"
+        " 'revenue @ 2025-09-30: fmp=149000000 vs sec_xbrl=150000000 (0.67%)', '2026-06-01')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_low_confidence_and_disagreement_reach_the_model_text(repo: Path) -> None:
+    """The newest revenue row is contested (conf 0.79, SEC disagrees). Both the
+    score and the disagreement now ride in the text the model reads — verbatim
+    from display_issues_for_fact, read from the FMP cell's perspective."""
+    _enable_confidence_and_issues(repo / "data" / "portfolio.db")
+    items = _gather(repo, "TST revenue trend")
+    fin = next(i for i in items if i.label == "TST · Revenue")
+    assert "[conf 79%; ⚠ SEC says $150M, 0.67% delta]" in fin.text
+    # The series values still lead the text — enrichment is appended, not a swap.
+    assert "150.0M" in fin.text
+    assert fin.text.index("150.0M") < fin.text.index("[conf 79%")
+    # The chip's structured confidence is unchanged (the % popover still works).
+    assert fin.confidence == 0.79
+
+
+def test_clean_high_confidence_fact_carries_no_caution_tag(repo: Path) -> None:
+    """A fact at/above the threshold with no unresolved issue stays
+    un-annotated — no prompt noise on solid facts. The KPI here is conf 1.0."""
+    _enable_confidence_and_issues(repo / "data" / "portfolio.db")
+    items = _gather(repo, "TST total customers and revenue trend")
+    kpi = next(i for i in items if "Customers" in i.label)
+    assert kpi.confidence == 1.0
+    assert "conf" not in kpi.text
+    assert "⚠" not in kpi.text
+
+
+def test_evidence_block_instructs_the_model_to_discount_contested_figures(repo: Path) -> None:
+    """build_evidence_block carries the rule that turns the annotation into
+    behavior: don't assert a tagged figure as settled fact."""
+    items = _gather(repo, "TST revenue trend")
+    block = build_evidence_block(items)
+    assert "WEIGH THE PROVENANCE" in block
+    assert "settled fact" in block
+
+
+def test_disagreement_without_displayed_tier_names_both_sides(repo: Path) -> None:
+    """A legacy DB lacking source_quality_tier still surfaces the conflict —
+    _doc_meta falls back to the 2-column query (tier None), so the model reads
+    both sides rather than losing the warning entirely."""
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("ALTER TABLE financial_facts ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+    conn.execute("UPDATE financial_facts SET confidence = 0.79 WHERE period_end LIKE '2025-09-30%'")
+    conn.execute(
+        "CREATE TABLE validation_issues ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, ticker TEXT, severity TEXT,"
+        " rule TEXT, raw_value TEXT, raised_at TIMESTAMP, resolved_at TIMESTAMP)"
+    )
+    conn.execute(
+        "INSERT INTO validation_issues (run_id, ticker, severity, rule, raw_value, raised_at)"
+        " VALUES ('r', 'TST', 'warn', 'source_disagreement',"
+        " 'revenue @ 2025-09-30: fmp=149000000 vs sec_xbrl=150000000 (0.67%)', '2026-06-01')"
+    )
+    conn.commit()
+    conn.close()
+    fin = next(i for i in _gather(repo, "TST revenue trend") if i.label == "TST · Revenue")
+    assert "FMP $149M vs SEC $150M (0.67% delta)" in fin.text
+
+
+def test_enrichment_is_inert_without_a_validation_issues_table(repo: Path) -> None:
+    """The fixture DDL predates validation_issues — load_unresolved_issues
+    returns {} and the fact text is exactly the un-enriched series (no tag)."""
+    items = _gather(repo, "TST revenue trend")
+    fin = next(i for i in items if i.label == "TST · Revenue")
+    assert "[" not in fin.text  # no bracketed caution tag at all
+    assert "⚠" not in fin.text

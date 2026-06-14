@@ -11,7 +11,16 @@ passages most relevant to the question from the citeable stores:
   facts       — kpi_facts + financial_facts series whose metric the
                 question names (matched against kpi_definitions names and
                 financial_facts line items), with the latest fact's
-                source_doc_id as provenance
+                source_doc_id as provenance. The model-read text of a fact
+                also carries a caution tag (``_fact_item`` →
+                ``_provenance_annotation``) when the newest row is shaky — a
+                sub-par scored confidence and/or a cross-source ⚠ disagreement
+                (S2's ``pipeline.confidence``), e.g.
+                ``[conf 79%; ⚠ SEC says $101M, 0.99% delta]`` — so the answer
+                can discount it rather than cite a contested figure as fact.
+                The ⚠ strings are ``display_issues_for_fact``'s verbatim, the
+                ONE enriched-fact-text format the credibility engine (L10) and
+                static-prose citations (L12) extend.
   filings     — the parsed 10-K/10-Q section JSONs
                 (data/historical/fmp/<T>_form_10k_<YEAR>.json), sections
                 scored by keyword overlap, doc_id resolved through the
@@ -52,8 +61,21 @@ from typing import cast
 
 from ask.packs import PACK_KEYS, load_packs
 from ask.router import route_packs
+from pipeline.confidence import (
+    IssuesByTicker,
+    display_issues_for_fact,
+    load_unresolved_issues,
+)
 
 log = logging.getLogger(__name__)
+
+# Below this scored confidence a grounded fact carries a "conf NN%" caution in
+# the text the MODEL reads (not just the UI popover): it mirrors the UI's
+# low-confidence affordance (``ui.source_chip.LOW_CONFIDENCE_THRESHOLD`` = 0.8,
+# the point one unresolved cross-source disagreement drops an FMP fact below).
+# Duplicated as a plain constant so the ask layer does not import the ui/report
+# layer; at or above it a clean fact stays un-annotated (no prompt noise).
+_LOW_CONFIDENCE_THRESHOLD = 0.8
 
 # Caps keep the evidence block interactive-sized: the model reads it on
 # every narrative turn, so it must stay a few KB, not a filing.
@@ -326,20 +348,27 @@ def _connect(db_path: Path) -> sqlite3.Connection | None:
         return None
 
 
-def _doc_meta(conn: sqlite3.Connection, doc_id: int) -> tuple[str | None, str | None]:
-    """(doc_type, source_url) for one documents row — best-effort."""
-    try:
-        row = conn.execute(
-            "SELECT doc_type, source_url FROM documents WHERE id = ?", (doc_id,)
-        ).fetchone()
-    except sqlite3.Error:
-        return (None, None)
-    if row is None:
-        return (None, None)
-    return (
-        str(row[0]) if row[0] is not None else None,
-        str(row[1]) if row[1] is not None else None,
-    )
+def _doc_meta(conn: sqlite3.Connection, doc_id: int) -> tuple[str | None, str | None, str | None]:
+    """(doc_type, source_url, source_quality_tier) for one documents row.
+
+    The tier picks which side of a cross-source disagreement is "the other
+    source" when annotating the fact (``display_issues_for_fact``). Best-effort
+    and column-tolerant: a legacy/fixture DB without ``source_quality_tier``
+    falls back to the two-column query so the doc_type label never goes missing
+    just because the tier column is absent."""
+    for cols in ("doc_type, source_url, source_quality_tier", "doc_type, source_url"):
+        try:
+            row = conn.execute(f"SELECT {cols} FROM documents WHERE id = ?", (doc_id,)).fetchone()
+        except sqlite3.Error:
+            continue
+        if row is None:
+            return (None, None, None)
+        return (
+            str(row[0]) if row[0] is not None else None,
+            str(row[1]) if row[1] is not None else None,
+            str(row[2]) if len(row) > 2 and row[2] is not None else None,
+        )
+    return (None, None, None)
 
 
 def _period_label(period_end: object, fiscal_period_type: object) -> str:
@@ -422,7 +451,10 @@ def _dedupe_series(
 
 
 def _fact_ref_kpi_item(
-    conn: sqlite3.Connection, ticker: str, def_id: int
+    conn: sqlite3.Connection,
+    ticker: str,
+    def_id: int,
+    issues_by_ticker: IssuesByTicker | None = None,
 ) -> dict[str, object] | None:
     """Resolve a ``kpi:{ticker}:{def_id}`` handle to its series by PK."""
     try:
@@ -447,13 +479,25 @@ def _fact_ref_kpi_item(
     )
     if not rows:
         return None
-    item = _fact_item(ticker, name, unit or str(rows[0][3] or ""), rows, conn)
+    item = _fact_item(
+        ticker,
+        name,
+        unit or str(rows[0][3] or ""),
+        rows,
+        conn,
+        item=name,
+        issues_by_ticker=issues_by_ticker,
+    )
     item["fact_ref"] = f"kpi:{ticker}:{def_id}"
     return item
 
 
 def _fact_ref_fin_item(
-    conn: sqlite3.Connection, ticker: str, line_item: str, fpt: str
+    conn: sqlite3.Connection,
+    ticker: str,
+    line_item: str,
+    fpt: str,
+    issues_by_ticker: IssuesByTicker | None = None,
 ) -> dict[str, object] | None:
     """Resolve a ``fin:{ticker}:{line_item}:{fpt}`` handle to its series."""
     clauses = "ticker = ? AND line_item = ?"
@@ -472,12 +516,25 @@ def _fact_ref_fin_item(
     if not rows:
         return None
     label = line_item.replace("_", " ").title()
-    item = _fact_item(ticker, label, str(rows[0][3] or ""), rows, conn)
+    # ``item`` is the raw line_item (issues match on it), not the title-cased label.
+    item = _fact_item(
+        ticker,
+        label,
+        str(rows[0][3] or ""),
+        rows,
+        conn,
+        item=line_item,
+        issues_by_ticker=issues_by_ticker,
+    )
     item["fact_ref"] = f"fin:{ticker}:{line_item}:{fpt}"
     return item
 
 
-def _fact_ref_evidence(conn: sqlite3.Connection, question: str) -> list[dict[str, object]]:
+def _fact_ref_evidence(
+    conn: sqlite3.Connection,
+    question: str,
+    issues_by_ticker: IssuesByTicker | None = None,
+) -> list[dict[str, object]]:
     """The PK fast-path: every fact_ref token in ``question`` resolves its exact
     series directly, bypassing NL name-matching. The token names its own ticker
     (the authoritative handle), so this is independent of the scope/named-ticker
@@ -490,7 +547,7 @@ def _fact_ref_evidence(conn: sqlite3.Connection, question: str) -> list[dict[str
         if def_id in seen_kpi:
             continue
         seen_kpi.add(def_id)
-        item = _fact_ref_kpi_item(conn, m.group(1).upper(), def_id)
+        item = _fact_ref_kpi_item(conn, m.group(1).upper(), def_id, issues_by_ticker)
         if item is not None:
             out.append(item)
         if len(out) >= _MAX_FACT_ITEMS:
@@ -501,7 +558,7 @@ def _fact_ref_evidence(conn: sqlite3.Connection, question: str) -> list[dict[str
         if key in seen_fin:
             continue
         seen_fin.add(key)
-        item = _fact_ref_fin_item(conn, key[0], key[1], key[2])
+        item = _fact_ref_fin_item(conn, key[0], key[1], key[2], issues_by_ticker)
         if item is not None:
             out.append(item)
         if len(out) >= _MAX_FACT_ITEMS:
@@ -510,7 +567,10 @@ def _fact_ref_evidence(conn: sqlite3.Connection, question: str) -> list[dict[str
 
 
 def _fact_evidence(
-    conn: sqlite3.Connection, question_squashed: str, tickers: list[str]
+    conn: sqlite3.Connection,
+    question_squashed: str,
+    tickers: list[str],
+    issues_by_ticker: IssuesByTicker | None = None,
 ) -> list[dict[str, object]]:
     """Metric series the question names, newest first, with provenance."""
     found: list[dict[str, object]] = []
@@ -544,7 +604,17 @@ def _fact_evidence(
             )
             if not rows:
                 continue
-            found.append(_fact_item(ticker, name, unit or str(rows[0][3] or ""), rows, conn))
+            found.append(
+                _fact_item(
+                    ticker,
+                    name,
+                    unit or str(rows[0][3] or ""),
+                    rows,
+                    conn,
+                    item=name,
+                    issues_by_ticker=issues_by_ticker,
+                )
+            )
             per_ticker += 1
 
         # Financial line items: snake_case keys matched the same way.
@@ -576,12 +646,51 @@ def _fact_evidence(
             if not rows:
                 continue
             label = line_item.replace("_", " ").title()
-            found.append(_fact_item(ticker, label, str(rows[0][3] or ""), rows, conn))
+            found.append(
+                _fact_item(
+                    ticker,
+                    label,
+                    str(rows[0][3] or ""),
+                    rows,
+                    conn,
+                    item=line_item,
+                    issues_by_ticker=issues_by_ticker,
+                )
+            )
             per_ticker += 1
 
         if len(found) >= _MAX_FACT_ITEMS:
             break
     return found[:_MAX_FACT_ITEMS]
+
+
+def _row_value(value: object) -> float:
+    """The newest row's value as a float for issue matching — 0.0 when the
+    stored TEXT value won't parse (value-anchored issues then simply miss,
+    matching ``report.sections.financials``'s convention)."""
+    try:
+        return float(cast("float", value))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _provenance_annotation(confidence: float | None, issue_strings: list[str]) -> str:
+    """The bracketed caution tag appended to a fact's MODEL-read text, e.g.
+    `` [conf 79%; ⚠ SEC says $101M, 0.99% delta]``.
+
+    Empty for a clean, high-confidence fact (the common case) so the prompt
+    stays noise-free. A "conf NN%" leads only when the score is below
+    ``_LOW_CONFIDENCE_THRESHOLD`` or the fact carries an unresolved issue;
+    ``issue_strings`` are ``pipeline.confidence.display_issues_for_fact``'s
+    pre-formatted (⚠-prefixed) popover strings, kept VERBATIM so this remains
+    the one enriched-text format the credibility engine (L10) and static-prose
+    citations (L12) extend.
+    """
+    parts: list[str] = []
+    if confidence is not None and (confidence < _LOW_CONFIDENCE_THRESHOLD or issue_strings):
+        parts.append(f"conf {round(max(0.0, min(1.0, confidence)) * 100)}%")
+    parts.extend(issue_strings)
+    return f" [{'; '.join(parts)}]" if parts else ""
 
 
 def _fact_item(
@@ -590,24 +699,55 @@ def _fact_item(
     unit: str,
     rows: list[tuple[object, ...]],
     conn: sqlite3.Connection,
+    *,
+    item: str | None = None,
+    issues_by_ticker: IssuesByTicker | None = None,
 ) -> dict[str, object]:
+    """One fact-series evidence item. ``item`` is the raw matching name
+    (financial_facts.line_item / kpi_definitions.name) used to look up the
+    newest row's unresolved validation issues — it differs from the title-cased
+    display ``label`` for financial line items, so it must be passed explicitly
+    for issue matching; it falls back to ``label`` for KPIs (whose name IS the
+    label). ``issues_by_ticker`` is loaded once by the caller and shared."""
     points = "; ".join(f"{_period_label(r[0], r[1])} {_fmt_value(r[2])}" for r in rows)
-    doc_id_raw = rows[0][4]
+    # Bind the newest row's fields before the len()-based confidence check —
+    # that check narrows the tuple's arity for the type checker, so any later
+    # subscript would read as possibly-out-of-range.
+    newest = rows[0]
+    period_end_raw, value_raw, doc_id_raw = newest[0], newest[2], newest[4]
+    conf_raw = newest[5] if len(newest) > 5 else None
     doc_id = int(cast("int", doc_id_raw)) if doc_id_raw is not None else None
-    doc_type, source_url = _doc_meta(conn, doc_id) if doc_id is not None else (None, None)
+    doc_type, source_url, tier = (
+        _doc_meta(conn, doc_id) if doc_id is not None else (None, None, None)
+    )
     # Scored confidence (S2) of the newest fact row — the one the chip cites.
     confidence: float | None = None
-    if len(rows[0]) > 5 and rows[0][5] is not None:
+    if conf_raw is not None:
         try:
-            confidence = float(cast("float", rows[0][5]))
+            confidence = float(cast("float", conf_raw))
         except (TypeError, ValueError):
             confidence = None
+    # Cross-source ⚠ disagreement (and any other unresolved validation issue)
+    # on that newest row — pulled from the SAME source the UI popover reads
+    # (display_issues_for_fact), so the answer-writing model sees the conflict
+    # ("SEC says $101M") instead of citing a contested figure as settled fact.
+    issue_strings: list[str] = []
+    if issues_by_ticker:
+        issue_strings = display_issues_for_fact(
+            issues_by_ticker,
+            ticker=ticker,
+            item=item or label,
+            period_end=str(period_end_raw),
+            value=_row_value(value_raw),
+            displayed_tier=tier,
+        )
     unit_part = f", {unit}" if unit and unit != "actual" else ""
     src_part = f" — source: {doc_type}" if doc_type else ""
+    annotation = _provenance_annotation(confidence, issue_strings)
     return {
         "kind": "fact",
         "label": f"{ticker} · {label}",
-        "text": f"{ticker} {label} (newest first{unit_part}): {points}{src_part}",
+        "text": f"{ticker} {label} (newest first{unit_part}): {points}{src_part}{annotation}",
         "doc_id": doc_id,
         "href": f"/source/{doc_id}" if doc_id is not None else None,
         "source_url": source_url,
@@ -918,15 +1058,20 @@ def gather_evidence(
         conn = _connect(db_path)
         try:
             if conn is not None:
+                # Unresolved validation issues for the whole DB, parsed once
+                # (best-effort: {} when the table is absent) and shared across
+                # every fact item so a cross-source ⚠ disagreement reaches the
+                # model's text, not only the UI popover.
+                issues_by_ticker = load_unresolved_issues(conn)
                 # PK fast-path first: fact_ref tokens resolve the EXACT series
                 # and lead the fact channel; the NL name-match then fills the
                 # rest, deduped by label so a token doesn't double its metric.
-                ref_facts = _fact_ref_evidence(conn, q)
+                ref_facts = _fact_ref_evidence(conn, q, issues_by_ticker)
                 raw.extend(ref_facts)
                 pinned = {str(it["label"]) for it in ref_facts}
                 raw.extend(
                     it
-                    for it in _fact_evidence(conn, question_squashed, tickers)
+                    for it in _fact_evidence(conn, question_squashed, tickers, issues_by_ticker)
                     if str(it["label"]) not in pinned
                 )
             raw.extend(_filing_evidence(conn, repo_root, terms, tickers))
@@ -1002,6 +1147,9 @@ def gather_requested_evidence(
 
         conn = _connect(db_path)
         try:
+            # Parsed once, shared across this round's fact needs (see
+            # gather_evidence); {} when conn/table is absent.
+            issues_by_ticker = load_unresolved_issues(conn) if conn is not None else {}
             for need in needs:
                 if need.kind not in NEED_DOC_KINDS:
                     continue
@@ -1014,7 +1162,7 @@ def gather_requested_evidence(
                     query_squashed = (
                         _squash(need.query) if need.query.strip() else _squash(question)
                     )
-                    raw.extend(_fact_evidence(conn, query_squashed, tickers))
+                    raw.extend(_fact_evidence(conn, query_squashed, tickers, issues_by_ticker))
                 elif need.kind == "filing":
                     for ticker in tickers:
                         paths = (
@@ -1095,7 +1243,14 @@ markers at the end of a paragraph, where a reader can't tell which sentence
 they back. A figure the evidence doesn't cover must either come from a file
 you actually opened with the Read tool — name that file inline — or be
 flagged as unverified. Never invent numbers, and never attach [n] to a
-claim the numbered evidence doesn't support."""
+claim the numbered evidence doesn't support.
+
+WEIGH THE PROVENANCE: a fact may carry a bracketed caution tag — a scored
+confidence below par and/or a cross-source disagreement, e.g.
+"[conf 79%; ⚠ SEC says $101M, 0.99% delta]". When it does, do NOT state that
+figure as settled fact: surface the uncertainty (give the range or name the
+disagreeing source), discount it in your reasoning, and lean on the
+higher-confidence evidence. A clean fact carries no tag — treat it as solid."""
 
 
 _MARKER_RX = re.compile(r"\[(\d{1,2})\]")

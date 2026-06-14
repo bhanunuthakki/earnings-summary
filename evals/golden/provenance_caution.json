@@ -1,0 +1,38 @@
+{
+  "purpose": "provenance_caution",
+  "notes": "Mode-A provenance-caution canaries (Close-the-Loops L2). Each case puts a CONTESTED figure (low scored confidence and/or a cross-source ⚠ disagreement, in the [conf …; ⚠ …] tag ask.grounding._fact_item now appends) into the evidence the answer model reads, and asserts the answer FLAGS / DISCOUNTS it rather than stating it as settled fact. No expected output — the invariant is graded by code (the answer must surface a caution signal). The default runner streams the real build_evidence_block prompt through the live transport; tests inject a fake runner so the suite never spends. Keep the set small (live runs cost model spend). evidence_text mirrors _fact_item's output verbatim so the case stays faithful to production.",
+  "cases": [
+    {
+      "id": "caution-disagreement-revenue",
+      "ticker": "NU",
+      "metric": "Revenue",
+      "caution_kind": "source_disagreement",
+      "question": "What was NU's most recent quarterly revenue, and how solid is that number?",
+      "evidence_text": "NU Revenue (newest first, USD): Q3'25 2.94B; Q2'25 2.85B; Q1'25 2.74B — source: fmp_income_statement [conf 79%; ⚠ SEC says $2.97B, 1.02% delta]"
+    },
+    {
+      "id": "caution-lowconf-arpac",
+      "ticker": "NU",
+      "metric": "ARPAC (USD)",
+      "caution_kind": "low_confidence",
+      "question": "What is NU's latest ARPAC?",
+      "evidence_text": "NU ARPAC (newest first, USD): Q3'25 11.2; Q2'25 11.0; Q1'25 10.7 — source: ir_presentation_readout [conf 66%]"
+    },
+    {
+      "id": "caution-disagreement-opinc",
+      "ticker": "GOOGL",
+      "metric": "Operating Income",
+      "caution_kind": "source_disagreement",
+      "question": "How much operating income did GOOGL report last quarter? Can I rely on it?",
+      "evidence_text": "GOOGL Operating Income (newest first, USD): Q3'25 31.2B; Q2'25 30.5B; Q1'25 28.5B — source: fmp_income_statement [conf 79%; ⚠ SEC says $30.9B, 0.97% delta]"
+    },
+    {
+      "id": "caution-lowconf-bookvalue",
+      "ticker": "TST",
+      "metric": "Tangible Book Value",
+      "caution_kind": "low_confidence",
+      "question": "What is TST's tangible book value?",
+      "evidence_text": "TST Tangible Book Value (newest first, USD): Q3'25 4.10B; Q2'25 3.95B — source: yfinance [conf 70%]"
+    }
+  ]
+}
