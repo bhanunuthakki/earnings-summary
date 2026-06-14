@@ -533,6 +533,17 @@ def create_app(
 
             return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
 
+        if name == "portfolio_risk":
+            # Portfolio → Risk (L5): the whole-book risk cockpit — book drawdown
+            # (max DD + underwater curve + recovery) computed from the tracker's
+            # daily TWR, factor/style exposure rolled up from the per-ticker
+            # correlation/beta rows, and the macro-stress lens with a scenario
+            # picker (POST /actions/run-scenario). Tracker-fed sections degrade
+            # to an offline note; macro stress reads the local cache regardless.
+            from pipeline.portfolio_panel import render_portfolio_risk_panel
+
+            return Response(render_portfolio_risk_panel(db_path=db_path), mimetype="text/html")
+
         if name == "ir_coverage":
             # Per-name IR auto-fetch coverage: which portfolio/eval names have
             # auto-fetched IR docs vs. which need a manual pull (+ why).
@@ -2172,6 +2183,47 @@ def create_app(
                 argv=argv,
                 cwd=str(tracker_root),
             )
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/run-scenario", methods=["POST", "OPTIONS"])
+    def start_run_scenario():
+        """Run the whole-book macro-stress lens for a named scenario (L5) —
+        execution/run_scenario.py --scenario <id> --portfolio. The Portfolio →
+        Risk tab's scenario picker POSTs here; the LLM digest streams over the
+        standard /actions/stream channel and the panel re-fetches the cached
+        result on done. 400 for an unknown scenario id; 409 when a scenario job
+        is already running."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from macro_scenarios import all_scenario_ids
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        scenario = str(body.get("scenario", "")).strip()
+        if scenario not in all_scenario_ids():
+            return ({"error": f"unknown scenario: {scenario or '(none)'}"}, 400)
+        script = repo_root / "execution" / "run_scenario.py"
+        argv = [
+            sys.executable,
+            str(script),
+            "--scenario",
+            scenario,
+            "--portfolio",
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker="_REPO", kind="run-scenario", argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
         return (

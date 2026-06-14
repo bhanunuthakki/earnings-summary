@@ -436,3 +436,75 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
     resp = client.get("/api/panel/portfolio?start_date=garbage&end_date=2026-06-10")
     assert resp.status_code == 200
     assert captured == {"start": None, "end": "2026-06-10", "backfill": False}
+
+
+# ----- L5: Portfolio → Risk panel + the run-scenario SSE route -----
+
+
+def test_panel_fragment_portfolio_risk_offline(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Risk panel (L5): tracker offline → the drawdown / factor sections
+    degrade to one note, but the macro-stress picker + scenario options still
+    render (they read the local cache, not the tracker)."""
+    monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:59999")  # nothing listening
+    resp = client.get("/api/panel/portfolio_risk")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "<!doctype" not in body.lower()  # head/foot-less fragment
+    assert "Whole-book macro stress" in body
+    assert 'id="pfr-scenario"' in body and 'value="fed_cuts_50bps"' in body
+    assert "/actions/run-scenario" in body  # the picker's SSE wiring
+    assert "live portfolio tracker" in body  # the tracker-fed offline note
+
+
+class _StubJob:
+    def __init__(self, ticker: str, kind: str, argv: list[str]) -> None:
+        self.job_id = "job_test"
+        self.ticker = ticker
+        self.kind = kind
+        self.argv = argv
+        self.started_at = datetime(2026, 6, 13, tzinfo=UTC)
+
+
+class _StubRegistry:
+    def __init__(self) -> None:
+        self.calls: list[_StubJob] = []
+
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+    ) -> _StubJob:
+        job = _StubJob(ticker, kind, argv)
+        self.calls.append(job)
+        return job
+
+
+def test_run_scenario_route_rejects_unknown_scenario(client: FlaskClient) -> None:
+    resp = client.post("/actions/run-scenario", json={"scenario": "not_a_scenario"})
+    assert resp.status_code == 400
+    assert "unknown scenario" in resp.get_json()["error"]
+    # No scenario at all is rejected too (not silently dispatched).
+    assert client.post("/actions/run-scenario", json={}).status_code == 400
+
+
+def test_run_scenario_route_dispatches_valid_scenario(tmp_path: Path) -> None:
+    import comments_server
+
+    (tmp_path / "data").mkdir()
+    stub = _StubRegistry()
+    app = comments_server.create_app(tmp_path, registry=stub)  # type: ignore[arg-type]
+    resp = app.test_client().post("/actions/run-scenario", json={"scenario": "fed_cuts_50bps"})
+    assert resp.status_code == 201
+    assert resp.get_json()["stream_url"] == "/actions/stream/job_test"
+    assert len(stub.calls) == 1
+    job = stub.calls[0]
+    assert job.kind == "run-scenario"
+    assert "run_scenario.py" in job.argv[1]
+    assert "--scenario" in job.argv and "fed_cuts_50bps" in job.argv
+    assert "--portfolio" in job.argv

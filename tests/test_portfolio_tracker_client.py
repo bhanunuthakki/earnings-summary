@@ -22,7 +22,9 @@ from integrations import portfolio_tracker_client as ptc
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
     LivePosition,
+    PerformancePoint,
     PortfolioAnalytics,
+    PositionCorrelationRow,
     TaxLot,
     fetch_live_portfolio,
     fetch_portfolio_analytics,
@@ -31,11 +33,14 @@ from integrations.portfolio_tracker_client import (
 from pipeline.portfolio_panel import (
     WindowSelection,
     compose_portfolio_page,
+    compose_risk_page,
     compose_synthesis_page,
     render_live_portfolio_section,
     render_portfolio_analytics_sections,
+    render_portfolio_risk_panel,
     validated_window,
 )
+from portfolio_risk import compute_drawdown, factor_exposure_rollup
 
 # Recorded payloads (Decimal-as-strings, mirroring the real FastAPI responses).
 _HOLDINGS = [
@@ -507,6 +512,16 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     assert pos.by_account_type[0].weight_pct == pytest.approx(60.0)
     assert pos.by_asset_type[0].count == 12
     assert pos.weighted_avg_correlation_spy == pytest.approx(0.72)
+    # L5: the per-ticker correlation/beta rows are no longer discarded.
+    assert pos.has_policy is True
+    assert len(pos.correlations) == 1
+    corr = pos.correlations[0]
+    assert corr.ticker == "NU"
+    assert corr.beta_spy == pytest.approx(1.4)
+    assert corr.beta_qqq == pytest.approx(1.2)
+    assert corr.correlation_spy == pytest.approx(0.61)
+    assert corr.weight_pct == pytest.approx(12.5)
+    assert corr.sample_size == 250
 
     pol = a.policy
     assert pol is not None
@@ -958,3 +973,92 @@ def test_synthesis_page_layout_order(tmp_path: Path) -> None:
     nd = html.index("Where the next dollar goes")
     assert grid < nd < html.index("synthesis-panel")
     assert '</div><section class="panel"><h2>Where the next dollar goes</h2>' in html
+
+
+# ----- Portfolio → Risk tab (L5): drawdown · factor exposure · macro stress -----
+
+
+def test_render_risk_panel_populated(mock_tracker: None) -> None:
+    """Live tracker → the benchmark-risk recap, drawdown, factor/style exposure
+    (rolled up from the now-kept correlation rows), and the macro-stress picker."""
+    html = render_portfolio_risk_panel(api_url="http://tracker.test", db_path=None)
+    assert 'id="pfr-root"' in html
+    # Benchmark-risk recap (reuses the Performance tab's risk strip).
+    assert "Risk &amp; efficiency" in html and "Beta vs SPY" in html
+    # Drawdown — the mock TWR series climbs monotonically, so no drawdown.
+    assert "Drawdown" in html
+    assert "no drawdown in window" in html and "none needed" in html
+    # Factor exposure rolled up from the per-ticker rows (NU β_spy 1.4, single name).
+    assert "Factor &amp; style exposure" in html
+    assert "Market β (SPY)" in html and "1.40" in html
+    assert "Growth β (QQQ)" in html and "Growth tilt" in html
+    assert "Crowding" in html
+    assert "names priced" in html
+    assert "Value / size / momentum" in html  # honest coverage note
+    assert "Most market-sensitive" in html
+    # Macro-stress picker + the SSE wiring + every scenario option.
+    assert "Whole-book macro stress" in html
+    assert 'id="pfr-scenario"' in html and 'id="pfr-run-scenario"' in html
+    assert "/actions/run-scenario" in html and "/api/panel/portfolio_risk" in html
+    for sid in ("fed_cuts_50bps", "recession_2026", "oil_to_50"):
+        assert f'value="{sid}"' in html
+    # No digest cached (db_path=None) → the run-it hint, not a stale digest.
+    assert "No stress digest cached yet" in html
+    assert "<!doctype" not in html.lower()
+
+
+def test_compose_risk_page_offline_keeps_macro_stress() -> None:
+    """Tracker down → the tracker-fed sections degrade to one offline note, but
+    the macro-stress section (local cache + picker) still renders."""
+    analytics = PortfolioAnalytics(
+        available=False,
+        api_url="http://localhost:8000",
+        errors={"performance": "ConnectionError: refused"},
+    )
+    html = compose_risk_page(
+        analytics,
+        drawdown=None,
+        factor=None,
+        scenarios=[("fed_cuts_50bps", "Fed cuts 50bps in one move")],
+        digest="",
+    )
+    assert "Risk &amp; drawdown" in html  # the offline note
+    assert "live portfolio tracker" in html
+    assert "Drawdown</h2>" not in html  # no live drawdown section
+    # Macro stress survives the tracker outage.
+    assert "Whole-book macro stress" in html
+    assert 'value="fed_cuts_50bps"' in html
+
+
+def test_compose_risk_page_renders_drawdown_and_cached_digest() -> None:
+    """A real drawdown: KPI cards (recovery), the underwater SVG, and a passed-in
+    cached digest block render together."""
+    points = [
+        PerformancePoint("2026-01-01", 0.0, None, None, None),
+        PerformancePoint("2026-02-01", 10.0, None, None, None),
+        PerformancePoint("2026-03-01", -2.0, None, None, None),  # 0.98/1.10-1 underwater
+        PerformancePoint("2026-04-01", 12.0, None, None, None),  # new high → recovered
+    ]
+    dd = compute_drawdown(points)
+    factor = factor_exposure_rollup(
+        [
+            PositionCorrelationRow(
+                None, "NU", "Nu", 100.0, 100.0, 250, 0.6, 1.4, 0.7, 1.2, None, None
+            )
+        ]
+    )
+    analytics = PortfolioAnalytics(available=True, api_url="http://x")
+    html = compose_risk_page(
+        analytics,
+        drawdown=dd,
+        factor=factor,
+        scenarios=[("oil_to_50", "Brent crashes to ~$50/bbl")],
+        digest='<h3 class="panel-h3">Stress digest</h3><p>DIGEST-BODY</p>',
+    )
+    assert "Max drawdown" in html and "-10.9%" in html
+    assert "Time to recovery" in html
+    assert 'class="pfr-uw"' in html  # the underwater curve SVG
+    assert "Factor &amp; style exposure" in html and "1.40" in html
+    # The cached digest is spliced into the macro-stress section verbatim.
+    assert "DIGEST-BODY" in html
+    assert "No stress digest cached yet" not in html
