@@ -237,8 +237,9 @@ def _no_evidence(
     repo_root: object,
     db_path: object,
     scope_tickers: object,
+    cache_key: object = None,
 ) -> list[object]:
-    del question, repo_root, db_path, scope_tickers
+    del question, repo_root, db_path, scope_tickers, cache_key
     return []
 
 

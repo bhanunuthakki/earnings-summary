@@ -73,6 +73,21 @@ def _no_real_chat_llm_transport(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _clear_ask_turn_caches() -> Iterator[None]:
+    """Reset the L14 ask turn caches (corpus / route / gather) before AND after
+    every test. Process-local module state would otherwise leak between tests —
+    most importantly the route cache, which is keyed on the normalized question
+    and could hand one test another test's monkeypatched router decision (several
+    router tests reuse the same question string). Clearing makes the caches
+    invisible to every test that doesn't explicitly exercise them."""
+    from ask import turn_cache
+
+    turn_cache.clear_all()
+    yield
+    turn_cache.clear_all()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_pack_router_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same never-spend rule for the ask pack router (S4): ``ask.grounding``
     consults it on every narrative turn, so any test with tracked companies

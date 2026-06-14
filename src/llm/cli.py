@@ -606,7 +606,23 @@ def _call_claude(
     t0 = time.monotonic()
     try:
         result = subprocess.run(
-            [llm_client._claude_cli_path, "-p", "--model", model, "--output-format", "json"],
+            # --no-session-persistence: every call is a fresh `-p` subprocess and
+            # NOTHING in this repo ever --resume/--continue-s, so writing a session
+            # transcript to ~/.claude per call is pure waste — disabling it drops
+            # that disk write (and stops the session files accumulating) with zero
+            # behavioral change. (L14 latency: native prompt caching is unreachable
+            # via `-p`, so transport hygiene like this is the only CLI-side lever
+            # that's safe under subscription billing — `--bare` would force
+            # ANTHROPIC_API_KEY billing and was rejected.)
+            [
+                llm_client._claude_cli_path,
+                "-p",
+                "--model",
+                model,
+                "--output-format",
+                "json",
+                "--no-session-persistence",
+            ],
             input=prompt,
             capture_output=True,
             text=True,
@@ -873,6 +889,8 @@ def call_llm_with_web(
         resolved_model,
         "--output-format",
         "json",
+        # See _call_claude: nothing resumes, so persisting the session is waste.
+        "--no-session-persistence",
         "--allowedTools",
         *CLAUDE_WEB_TOOLS.split(),
         # Hard cost ceiling so the web path (the only agentic, multi-tool call)

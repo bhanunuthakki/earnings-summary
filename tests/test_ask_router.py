@@ -124,3 +124,56 @@ def test_malformed_packs_field_fails_closed(db: Path, monkeypatch: pytest.Monkey
     route = route_packs("trim NU?", db_path=db)
     assert route.status == "error"
     assert route.packs == ()
+
+
+def test_route_cache_skips_repeat_classifier_call(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L14: a repeated question reuses the prior decision and skips the
+    interactive fast-model round-trip. The autouse cache-clear fixture
+    guarantees a cold start, so the first call spends and the second does not."""
+    prompts = _classifier(monkeypatch, {"packs": ["holdings", "dcf"]})
+    r1 = route_packs("should I trim MELI?", db_path=db)
+    r2 = route_packs("Should I   trim   MELI?", db_path=db)  # identical after normalization
+    assert r1.packs == ("holdings", "dcf") == r2.packs
+    assert r1.status == "ok"
+    assert r2.status == "ok"
+    assert r2.note == "cached"
+    assert len(prompts) == 1  # the classifier ran exactly once
+    # A genuinely different question is NOT a hit — it routes afresh.
+    route_packs("how am I doing versus the index?", db_path=db)
+    assert len(prompts) == 2
+
+
+def test_error_and_skip_routes_are_not_cached(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the ``ok`` path caches — a transient failure must be retried, never
+    frozen as a (cached) document-only degrade."""
+    calls: list[int] = []
+
+    def _boom(*_a: object, **_k: object) -> object:
+        calls.append(1)
+        raise RuntimeError("CLI exploded")
+
+    monkeypatch.setattr(router, "call_llm_structured", _boom)
+    assert route_packs("trim NU?", db_path=db).status == "error"
+    assert route_packs("trim NU?", db_path=db).status == "error"
+    assert len(calls) == 2  # error was never cached
+
+
+def test_cached_route_still_respects_budget_skip(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The budget gate runs BEFORE the route cache is consulted, so a hard cap
+    still degrades to no packs even for a question that routed successfully
+    earlier (the cache never overrides the spend contract)."""
+    from dataclasses import dataclass
+
+    _classifier(monkeypatch, {"packs": ["holdings"]})
+    assert route_packs("trim MELI?", db_path=db).packs == ("holdings",)  # cached now
+
+    @dataclass
+    class _Check:
+        cap: float = 5.0
+
+    monkeypatch.setattr(router, "should_skip_for_budget", lambda *_a, **_k: _Check())
+    skipped = route_packs("trim MELI?", db_path=db)
+    assert skipped.status == "skipped"
+    assert skipped.packs == ()

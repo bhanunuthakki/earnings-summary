@@ -497,6 +497,20 @@ def _repair_ticker_thread(
         log.warning({"event": "ask_followup_thread_repair_failed", "ticker": ticker}, exc_info=True)
 
 
+def _turn_cache_key(turn: AskTurn, pack: ContextPack) -> str | None:
+    """A stable per-thread identity for the retrieval memo (L14,
+    ``ask.grounding.gather_evidence``). A server-side session id (the Ask tab) or
+    ``ticker:report_date`` (the report drawer) scopes the memo to ONE
+    conversation so two threads never share retrieved evidence; ``None`` (a
+    first-turn portfolio call with no session yet) disables it — the memo is
+    opt-in and the turn behaves exactly as before."""
+    if turn.session_id:
+        return f"sid:{turn.session_id}"
+    if pack.scope == "ticker" and pack.ticker and pack.report_date is not None:
+        return f"rep:{pack.ticker}:{pack.report_date.isoformat()}"
+    return None
+
+
 def _narrative_events(
     text: str,
     turn: AskTurn,
@@ -536,7 +550,11 @@ def _narrative_events(
         else ([t.strip().upper() for t in turn.tickers if t.strip()] or list(pack.default_tickers))
     )
     evidence = gather_evidence(
-        text, repo_root=repo_root, db_path=db_path, scope_tickers=scope_tickers
+        text,
+        repo_root=repo_root,
+        db_path=db_path,
+        scope_tickers=scope_tickers,
+        cache_key=_turn_cache_key(turn, pack),
     )
     evidence_block = build_evidence_block(evidence)
     armed = followup_armed(db_path)

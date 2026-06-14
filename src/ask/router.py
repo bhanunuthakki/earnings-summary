@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from ask import turn_cache
 from ask.packs import PACK_KEYS, PACKS
 from llm.structured import call_llm_structured
 from llm_budget import should_skip_for_budget
@@ -64,6 +65,15 @@ def route_packs(question: str, *, db_path: Path) -> PackRoute:
     skip = should_skip_for_budget(PURPOSE, db_path=db_path)
     if skip is not None:
         return PackRoute((), "skipped", f"over its ${float(skip.cap):g}/mo budget")
+    # In-thread route reuse (L14): the router maps a question to packs
+    # deterministically enough that reusing a recent decision is correct and
+    # FREE — it skips the interactive fast-model round-trip on a repeated
+    # question. Checked AFTER the structural + budget gates so their
+    # state-dependent contract is unchanged; only the spent-call path is cached.
+    norm = turn_cache.normalize_question(q)
+    cached = turn_cache.get_route(norm)
+    if cached is not None:
+        return PackRoute(cached, "ok", "cached")
     try:
         payload = call_llm_structured(
             _build_prompt(q),
@@ -83,7 +93,9 @@ def route_packs(question: str, *, db_path: Path) -> PackRoute:
     chosen = {str(x) for x in cast("list[object]", raw)}
     # Canonical PACKS order; unknown keys are dropped (an advisory selector
     # inventing a key shouldn't void its valid picks).
-    return PackRoute(tuple(k for k in PACK_KEYS if k in chosen), "ok")
+    packs = tuple(k for k in PACK_KEYS if k in chosen)
+    turn_cache.put_route(norm, packs)
+    return PackRoute(packs, "ok")
 
 
 def _has_tracked_companies(db_path: Path) -> bool:
