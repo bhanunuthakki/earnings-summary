@@ -23,6 +23,7 @@ Public surface (consumed by execution/comments_server.py):
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,8 @@ from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, Field
+
+log = logging.getLogger(__name__)
 
 # We intentionally import the renderer + builder lazily inside functions to
 # avoid pulling the entire report graph at module-import time (the renderer
@@ -343,13 +346,55 @@ extract_diff = _extract_diff
 build_system_prompt = _system_prompt
 
 
-def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
+def stream_llm_text(
+    full_prompt: str, *, purpose: str = "ask_answer"
+) -> Iterator[dict[str, object]]:
     """Low-level transport: stream one assembled prompt through the claude
     CLI. Yields {type: "delta", text} per chunk, then exactly one of
     {type: "final", text: "<full>"} or {type: "error", error: "..."}.
     No thread storage, no diff extraction — callers own session semantics
     (this module's `stream_response` for the per-report thread; the ask
-    engine's portfolio scope composes its own prompt over it)."""
+    engine's portfolio scope composes its own prompt over it).
+
+    The conversational answer is the most expensive LLM call in the repo, so —
+    unlike before — it no longer rides the bare CLI default. It resolves its
+    model through the model-downgrade / Gemini-promotion loop (``purpose``
+    defaults to ``ask_answer``: ``_model_for`` consults ``model_pin_overrides``
+    -> ``LLM_MODELS`` -> ``DEFAULT_MODEL``), enforces the per-purpose monthly
+    budget (seeded soft/warn — an interactive answer is never hard-blocked
+    mid-conversation), and records a best-effort ``llm_calls`` ledger row so it
+    shows in Call Health like every other purpose. A purpose promoted to a
+    Gemini model (which the CLI can't stream) degrades to a single buffered
+    ``call_llm`` answer."""
+    from llm.cli import (
+        LLMBudgetExceeded,
+        _enforce_budget_pre_call,  # pyright: ignore[reportPrivateUsage]
+        _model_for,  # pyright: ignore[reportPrivateUsage]
+    )
+    from llm.model_ladder import GEMINI as _GEMINI_FAMILY
+    from llm.model_ladder import family_of
+
+    model = _model_for(purpose)
+
+    # Per-purpose budget: ask_answer is seeded soft (warn), so this only raises
+    # if an operator later hard-blocks it — then degrade with an explicit error
+    # frame rather than a crashed stream.
+    try:
+        _enforce_budget_pre_call(purpose, force_budget_bypass=False)
+    except LLMBudgetExceeded:
+        yield {
+            "type": "error",
+            "error": "Ask monthly budget reached — raise the cap or wait for the reset.",
+        }
+        return
+
+    # A Gemini-promoted purpose can't stream through `claude -p`; buffer one
+    # answer through the canonical client (which owns the Gemini backend, its
+    # operational fallback to Claude, and its own ledger row).
+    if family_of(model) == _GEMINI_FAMILY:
+        yield from _buffered_llm_answer(full_prompt, purpose=purpose)
+        return
+
     claude_bin = shutil.which("claude")
     if claude_bin is None:
         yield {"type": "error", "error": "claude CLI not found in PATH"}
@@ -357,16 +402,20 @@ def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
 
     # Filesystem read scope is enforced by --allowedTools Read; the LLM can
     # only read, not write. (Comments + chat writes go through Flask endpoints
-    # we control, not through the CLI's Edit tool.)
+    # we control, not through the CLI's Edit tool.) --model pins the resolved
+    # downgrade-loop choice instead of the CLI's ambient default.
     cmd = [
         claude_bin,
         "-p",
+        "--model",
+        model,
         "--output-format",
         "stream-json",
         "--allowedTools",
         "Read",
         "--verbose",
     ]
+    started_at = datetime.now(UTC)
     try:
         proc = subprocess.Popen(
             cmd,
@@ -387,6 +436,7 @@ def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
     proc.stdin.close()
 
     full_text_parts: list[str] = []
+    result_meta: dict[str, object] | None = None
     try:
         for line in proc.stdout:
             line = line.strip()
@@ -396,9 +446,11 @@ def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            etype = event.get("type")
             # The CLI emits a stream of `{type: ..., ...}` envelopes. We
-            # extract assistant text deltas.
-            if event.get("type") == "assistant":
+            # extract assistant text deltas and capture the final `result`
+            # envelope (token usage + cost) for the ledger row.
+            if etype == "assistant":
                 msg = event.get("message") or {}
                 content = msg.get("content") or []
                 for block in content if isinstance(content, list) else []:
@@ -407,16 +459,92 @@ def stream_llm_text(full_prompt: str) -> Iterator[dict[str, object]]:
                         if chunk:
                             full_text_parts.append(chunk)
                             yield {"type": "delta", "text": chunk}
+            elif etype == "result" and isinstance(event, dict):
+                result_meta = cast("dict[str, object]", event)
     finally:
         proc.wait()
 
     full_text = "".join(full_text_parts).strip()
     if not full_text:
         stderr_text = (proc.stderr.read() if proc.stderr else "").strip()[:300]
+        _record_stream_call(
+            purpose, model, full_prompt, "", started_at, error=f"empty: {stderr_text[:160]}"
+        )
         yield {"type": "error", "error": f"empty response (stderr: {stderr_text})"}
         return
 
+    _record_stream_call(purpose, model, full_prompt, full_text, started_at, meta=result_meta)
     yield {"type": "final", "text": full_text}
+
+
+def _buffered_llm_answer(full_prompt: str, *, purpose: str) -> Iterator[dict[str, object]]:
+    """Non-streaming answer for a Gemini-promoted ask purpose: one ``call_llm``
+    round-trip (its own backend selection + operational fallback + ledger row),
+    surfaced as a single delta + final so streaming clients still render it."""
+    from llm.cli import call_llm
+
+    try:
+        text = call_llm(full_prompt, purpose=purpose, scope="ask").strip()
+    except Exception as exc:
+        yield {"type": "error", "error": f"answer failed: {type(exc).__name__}"}
+        return
+    if not text:
+        yield {"type": "error", "error": "empty response"}
+        return
+    yield {"type": "delta", "text": text}
+    yield {"type": "final", "text": text}
+
+
+def _record_stream_call(
+    purpose: str,
+    model: str,
+    prompt: str,
+    response: str,
+    started_at: datetime,
+    *,
+    error: str | None = None,
+    meta: dict[str, object] | None = None,
+) -> None:
+    """Best-effort ``llm_calls`` ledger row for the streamed conversational
+    answer. The streaming transport bypasses ``call_llm``, so it records its
+    own row (token usage + cost lifted from the CLI's final ``result``
+    envelope when present). Never raises — a ledger miss must not break the
+    answer that already streamed."""
+    try:
+        from llm_call_ledger import (
+            LlmCallRecord,
+            record_call,
+            sha256_text,
+            usage_from_json_meta,
+        )
+
+        usage: dict[str, int | float | None] = (
+            usage_from_json_meta(meta) if isinstance(meta, dict) else {}
+        )
+        elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
+        record_call(
+            LlmCallRecord(
+                called_at=started_at,
+                model=model,
+                prompt_sha256=sha256_text(prompt),
+                prompt_chars=len(prompt),
+                elapsed_ms=elapsed_ms,
+                purpose=purpose,
+                scope="ask",
+                response_sha256=sha256_text(response) if response else None,
+                response_chars=len(response) if response else None,
+                error=error,
+                input_tokens=cast("int | None", usage.get("input_tokens")),
+                cache_creation_input_tokens=cast(
+                    "int | None", usage.get("cache_creation_input_tokens")
+                ),
+                cache_read_input_tokens=cast("int | None", usage.get("cache_read_input_tokens")),
+                output_tokens=cast("int | None", usage.get("output_tokens")),
+                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
+            )
+        )
+    except Exception as exc:
+        log.debug({"event": "ask_stream_ledger_skipped", "error": f"{type(exc).__name__}: {exc}"})
 
 
 def stream_response(

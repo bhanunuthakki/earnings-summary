@@ -264,14 +264,29 @@ LLM_MODELS: dict[str, str] = {
     # fails closed to answer-level citations (the pre-S8 behavior); budget
     # row seeded by alembic 0090 (skip mode).
     "ask_claim_grounding": FAST_CLASSIFIER_MODEL,
+    # Ask conversational answer (close_the_loops L3): the PRIMARY pass-1
+    # narrative answer of the ask path — both the report-drawer chat and the
+    # Ask tab's portfolio scope stream through chat_session.stream_llm_text.
+    # It is the most expensive + highest-stakes LLM call in the repo, yet it
+    # historically rode the bare `claude -p` CLI default: no purpose, no
+    # budget, no ledger row, invisible to the model-downgrade loop. Pinned here
+    # so it resolves through _model_for like every other purpose — eligible for
+    # the eval-gated downgrade / Gemini-promotion loop, attributed in the
+    # ledger + Call Health, and bounded by a budget row (alembic 0104, soft /
+    # warn: an interactive answer must NEVER be hard-blocked mid-conversation).
+    # Stays on the Sonnet chat tier by default for the same reason
+    # ask_evidence_followup does (a downgraded conversational answer is visibly
+    # worse); the ask_advisory_answer mode-B eval is the quality gate before
+    # any cheaper model is promoted in.
+    "ask_answer": DEFAULT_MODEL,
     # Ask evidence follow-up (src/ask/followup.py, fund-grade build S7): when
     # a narrative ask turn's first pass replies with a structured evidence
     # request instead of an answer, the engine retrieves the requested items
     # and makes this call (≤2 per turn) over the augmented evidence. It IS
-    # the user-facing narrative answer, so it stays on the Sonnet chat tier —
-    # downgrading it would make looped answers visibly worse than one-shot
-    # ones. Budget row seeded by alembic 0091 (skip mode — a blown cap
-    # disables the loop, turns fall back to one-shot retrieval).
+    # the user-facing narrative answer (pass 2 of ask_answer), so it stays on
+    # the Sonnet chat tier — downgrading it would make looped answers visibly
+    # worse than one-shot ones. Budget row seeded by alembic 0091 (skip mode —
+    # a blown cap disables the loop, turns fall back to one-shot retrieval).
     "ask_evidence_followup": DEFAULT_MODEL,
     # Pairwise backend judge (src/llm/backend_judge.py): grades Claude-vs-Gemini
     # paired outputs to decide whether a purpose may join the eval-gated Gemini
