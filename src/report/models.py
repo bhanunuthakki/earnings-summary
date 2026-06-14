@@ -1020,6 +1020,12 @@ class SynthesisLensRow(BaseModel):
     generated_at: datetime | None = None
     is_dirty: bool = False
     is_stale: bool = False  # informational only; renderer can warn
+    # L12: when the lens authored its prose with inline ``[n]`` evidence
+    # markers (numbered from its ordered ``source_doc_ids``), this carries the
+    # ``ui.cite_marks`` chip payloads the renderer linkifies them against — so
+    # the paragraphs interpreting the facts are as traceable as the fact cells.
+    # None / empty for lenses that don't cite (the prose renders unchanged).
+    citations: tuple[dict[str, object], ...] = ()
 
 
 class SynthesisSection(BaseModel):

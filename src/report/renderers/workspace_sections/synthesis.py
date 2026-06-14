@@ -93,16 +93,19 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
             f'<span class="panel-sub">{_esc(sub)}{age_str}{model_str}</span>'
         )
         lens_cls = f"panel lens-panel lens-{_esc(lens.name)}"
+        # L12: a lens that authored inline [n] markers carries the chip payloads
+        # to resolve them (else .citations is empty → render_prose unchanged).
+        prose = _render_markdown(lens.content_md, citations=lens.citations)
         if is_first:
             body.write(
                 f'<div class="{lens_cls}"><div class="panel-head">{head_inner}</div>'
-                f'<div class="prose-pad lens-body">{_render_markdown(lens.content_md)}</div>'
+                f'<div class="prose-pad lens-body">{prose}</div>'
                 "</div>"
             )
         else:
             body.write(
                 f'<details class="{lens_cls}"><summary class="panel-head">{head_inner}</summary>'
-                f'<div class="prose-pad lens-body">{_render_markdown(lens.content_md)}</div>'
+                f'<div class="prose-pad lens-body">{prose}</div>'
                 "</details>"
             )
 
