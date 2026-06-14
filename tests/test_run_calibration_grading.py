@@ -1,6 +1,6 @@
 """Tests for execution/run_calibration_grading.py — the calibration-grader orchestrator.
 
-It runs six rungs (predictions -> decisions -> bear_cases -> three eval-audit
+It runs seven rungs (predictions -> decisions -> bear_cases -> four eval-audit
 rungs, llm_evals_plan PR 3) as subprocesses. Its load-bearing contract mirrors
 run_morning_pipeline: attempt every non-skipped rung even when an earlier one
 fails or times out, and report the count of failed rungs as the exit code.
@@ -26,8 +26,8 @@ DECISIONS = "grade_decisions.py"
 BEAR = "grade_bear_cases.py"
 EVALS = "run_llm_evals.py"
 
-# The full run order: outcome graders, then the three eval-audit rungs.
-ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS]
+# The full run order: outcome graders, then the four eval-audit rungs.
+ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS, EVALS]
 
 
 class _FakeCompleted:
@@ -143,7 +143,7 @@ def test_skip_omits_a_grader(
 
     rc = run_calibration_grading.main(["--skip", "bear_cases"])
     assert rc == 0
-    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS]
+    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS, EVALS]
     assert BEAR not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -163,9 +163,10 @@ def test_all_fail_exit_code_counts_all(
 def test_eval_audit_rungs_scope_to_fresh_artifacts(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The three eval-audit rungs (llm_evals_plan PR 3) call run_llm_evals.py
-    one purpose each, scoped by --since-days so the weekly cron only judges
-    the week's fresh artifacts; their statuses land in the summary JSON."""
+    """The four eval-audit rungs (llm_evals_plan PR 3 + close_the_loops L3)
+    call run_llm_evals.py one purpose each, scoped by --since-days so the weekly
+    cron only judges the week's fresh artifacts; their statuses land in the
+    summary JSON."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
 
@@ -176,12 +177,18 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
     for argv in eval_calls:
         assert "--since-days" in argv
         purposes.append(argv[argv.index("--purpose") + 1])
-    assert purposes == ["bear_case", "transcript_summary", "advisor_next_dollar"]
+    assert purposes == [
+        "bear_case",
+        "transcript_summary",
+        "advisor_next_dollar",
+        "ask_advisory_answer",
+    ]
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["eval_bear_case"] == "ok"
     assert summary["eval_transcript_summary"] == "ok"
     assert summary["eval_advisor_next_dollar"] == "ok"
+    assert summary["eval_ask_advisory_answer"] == "ok"
 
 
 def test_skip_an_eval_rung(
@@ -193,6 +200,6 @@ def test_skip_an_eval_rung(
     rc = run_calibration_grading.main(["--skip", "eval_transcript_summary"])
     assert rc == 0
     eval_purposes = [c[c.index("--purpose") + 1] for c in fake.calls if _script_of(c) == EVALS]
-    assert eval_purposes == ["bear_case", "advisor_next_dollar"]
+    assert eval_purposes == ["bear_case", "advisor_next_dollar", "ask_advisory_answer"]
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["eval_transcript_summary"] == "skipped"
