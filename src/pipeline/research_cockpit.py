@@ -451,6 +451,33 @@ def latest_dcf_runs(
     return out
 
 
+def latest_dcf_scenarios(
+    conn: sqlite3.Connection,
+) -> dict[str, tuple[float | None, float | None]]:
+    """ticker -> (bull_fv_per_share, bear_fv_per_share) from the latest run's
+    bull/base/bear scenario block (``assumption_snapshot_json``), or both None
+    when the run has no range. Pairs with ``latest_dcf_runs`` so the sizing audit
+    can read the *asymmetry* of the range, not just the base point estimate —
+    parsed via the single producer ``dcf.scenario_reward.parse_scenario_fair_values``
+    so the card, the next-dollar model and the audit can't diverge. A missing
+    ``assumption_snapshot_json`` column (old data dirs) degrades to no scenarios."""
+    from dcf.scenario_reward import parse_scenario_fair_values
+
+    rows = _safe_rows(
+        conn,
+        "SELECT ticker, assumption_snapshot_json FROM dcf_runs "
+        "ORDER BY ticker, created_at DESC, id DESC",
+    )
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for r in rows:
+        t = str(r["ticker"])
+        if t in out:
+            continue
+        fair_values = parse_scenario_fair_values(r["assumption_snapshot_json"])
+        out[t] = (fair_values.get("bull"), fair_values.get("bear"))
+    return out
+
+
 def _new_doc_counts(conn: sqlite3.Connection) -> dict[str, int]:
     """Documents fetched after the ticker's last report build. ``julianday``
     bridges the two timestamp spellings in play ('T' vs space separator)."""

@@ -138,6 +138,58 @@ def testscore_row_rich_at_size_and_cheap_small_conviction() -> None:
     assert any("-40% vs DCF FV with conviction 4/5" in r for r in cheap_reasons)
 
 
+def testscore_row_scenario_range_defaults_are_inert() -> None:
+    # No bull/bear gaps → identical to the base-only score (no asymmetry chips).
+    base_pts, base_reasons = score_row(
+        verdict="ok",
+        conviction=None,
+        target_weight_pct=None,
+        weight_pct=10.0,
+        fv_gap_pct=10.0,
+        alpha_usd=None,
+        alpha_frac=None,
+        median_weight=5.0,
+    )
+    assert base_pts == 0.0 and base_reasons == []
+
+
+def testscore_row_above_bull_case_at_size() -> None:
+    # Price above even the bull fair value, held at size → an extra tension chip.
+    pts, reasons = score_row(
+        verdict="ok",
+        conviction=None,
+        target_weight_pct=None,
+        weight_pct=10.0,
+        fv_gap_pct=40.0,
+        alpha_usd=None,
+        alpha_frac=None,
+        median_weight=5.0,
+        bull_gap_pct=15.0,
+        bear_gap_pct=80.0,
+    )
+    assert pts > 0
+    assert any("vs the bull case (no upside even if it works)" in r for r in reasons)
+
+
+def testscore_row_below_bear_case_underweight_high_conviction() -> None:
+    # Price below even the bear fair value (downside-protected) but sized below
+    # the median despite high conviction → an extra tension chip.
+    pts, reasons = score_row(
+        verdict="ok",
+        conviction=5.0,
+        target_weight_pct=None,
+        weight_pct=3.0,
+        fv_gap_pct=-30.0,
+        alpha_usd=None,
+        alpha_frac=None,
+        median_weight=6.0,
+        bull_gap_pct=-60.0,
+        bear_gap_pct=-10.0,
+    )
+    assert pts > 0
+    assert any("vs the bear case (downside-protected)" in r for r in reasons)
+
+
 def testscore_row_alpha_drag_needs_size_and_magnitude() -> None:
     pts, reasons = score_row(
         verdict="ok",
@@ -286,6 +338,25 @@ def test_build_sizing_audit_ranks_and_joins(tmp_path: Path) -> None:
     # Mismatches ranked first, aligned row last.
     assert rows[-1].ticker == "WIX"
     assert rows[0].mismatch_score >= rows[1].mismatch_score
+
+
+def test_build_sizing_audit_threads_scenario_range(tmp_path: Path) -> None:
+    db = _intent_db(tmp_path)
+    intents = list_intents(user_id="bhanu", db_path=db)
+    holdings: list[tuple[str, str | None]] = [("NU", None)]
+    verdicts: dict[str, str] = {"NU": "ok"}
+    # Rich at size: price 14.0 above the base FV 9.8 AND above the bull FV 12.0.
+    dcf_gaps: dict[str, tuple[float | None, float | None, float | None, str | None]] = {
+        "NU": (42.86, 9.8, 14.0, "2026-06-01")
+    }
+    dcf_scenarios: dict[str, tuple[float | None, float | None]] = {"NU": (12.0, 7.0)}
+    live = _live([_pos("NU", 10.0, 10000.0)])
+    rows = build_sizing_audit_rows(holdings, verdicts, dcf_gaps, intents, live, None, dcf_scenarios)
+    (nu,) = rows
+    # price/bull - 1 = 14/12 - 1 = +16.7%; price/bear - 1 = 14/7 - 1 = +100%.
+    assert nu.bull_gap_pct == pytest.approx(16.667, abs=0.01)
+    assert nu.bear_gap_pct == pytest.approx(100.0, abs=0.01)
+    assert any("vs the bull case" in c for c in nu.mismatch_reasons)
 
 
 def test_build_sizing_audit_tracker_offline(tmp_path: Path) -> None:

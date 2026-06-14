@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from allocation.model import (
+    _dcf_upside,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     _zscore,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     build_next_dollar_model,
 )
@@ -315,3 +316,57 @@ def test_zscore_clamps_outliers_but_keeps_raw_visible(repo_root: Path) -> None:
 def test_zscore_degenerate_cross_section_scores_zero() -> None:
     out = _zscore({"A": (0.3, ""), "B": (0.3, ""), "C": (0.3, "")})
     assert out == {"A": 0.0, "B": 0.0, "C": 0.0}
+
+
+def _seed_dcf_with_scenarios(db: Path) -> None:
+    """A dcf_runs schema carrying assumption_snapshot_json (the production shape),
+    so the ret factor reads the bull/base/bear range, not just the base point."""
+    conn = sqlite3.connect(db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE dcf_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                valuation_date TEXT,
+                npv_per_share NUMERIC,
+                live_price FLOAT,
+                assumption_snapshot_json TEXT,
+                created_at DATETIME
+            );
+            """
+        )
+        snap = json.dumps(
+            {
+                "format": "redesign",
+                "scenarios": {
+                    "bull": {"fair_value_per_share_usd": 130.0},
+                    "base": {"fair_value_per_share_usd": 110.0},
+                    "bear": {"fair_value_per_share_usd": 40.0},
+                },
+            }
+        )
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price,"
+            " assumption_snapshot_json, created_at) VALUES"
+            " ('SKEW', '2026-06-08', 110.0, 100.0, ?, '2026-06-08 00:00:00'),"
+            " ('FLAT', '2026-06-08', 120.0, 100.0, NULL, '2026-06-08 00:00:00')",
+            (snap,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_dcf_upside_uses_scenario_asymmetry(tmp_path: Path) -> None:
+    db = tmp_path / "portfolio.db"
+    _seed_dcf_with_scenarios(db)
+    out = _dcf_upside(db, ["SKEW", "FLAT"])
+    # SKEW: downside-skewed range pulls the reward below the +10% base point.
+    skew_raw, skew_detail = out["SKEW"]
+    assert skew_raw == pytest.approx(-0.025)  # 0.25*0.30 + 0.5*0.10 + 0.25*(-0.60)
+    assert "exp -2%" in skew_detail and "(2026-06-08)" in skew_detail
+    # FLAT: no scenarios → the legacy base point estimate, detail unchanged.
+    flat_raw, flat_detail = out["FLAT"]
+    assert flat_raw == pytest.approx(0.20)
+    assert flat_detail == "fair $120.00 vs $100.00 (2026-06-08)"
