@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
 
+from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier
 from models.facts import Currency, FactLocator, FinancialFact, FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
@@ -126,7 +127,7 @@ def insert_financial_facts(
     inserted = 0
     for f in facts:
         confidence = scored if (scored is not None and f.confidence == 1.0) else f.confidence
-        new_id, _ = insert_with_restatement_detection(
+        new_id, superseded_id = insert_with_restatement_detection(
             conn,
             ticker=f.ticker,
             period_end=f.period_end,
@@ -142,6 +143,12 @@ def insert_financial_facts(
         )
         if new_id is not None:
             inserted += 1
+        # L10: the supersede grades the OLD fact's confidence — capture it
+        # (best-effort, never raises) instead of discarding superseded_id.
+        if superseded_id is not None:
+            _ = record_restatement_observation(
+                conn, fact_table=FINANCIAL_FACTS, superseded_id=superseded_id, new_value=f.value
+            )
     return inserted
 
 

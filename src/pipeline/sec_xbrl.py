@@ -31,6 +31,7 @@ from pathlib import Path
 
 import requests
 
+from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import (
     DocType,
     FetchStatus,
@@ -383,13 +384,14 @@ def insert_facts_from_companyfacts(
                     locator = FactLocator(
                         json_path=(f"facts.{namespace}.{tag_name}.units.{unit_code}[{entry_idx}]")
                     )
-                    new_id, _ = insert_with_restatement_detection(
+                    restated_value = Decimal(str(val))
+                    new_id, superseded_id = insert_with_restatement_detection(
                         conn,
                         ticker=ticker,
                         period_end=period_end,
                         fiscal_period_type=fpt.value,
                         line_item=line_item,
-                        value=Decimal(str(val)),
+                        value=restated_value,
                         currency=currency,
                         unit=Unit.ACTUAL.value,
                         source_doc_id=accession_to_doc_id[accn],
@@ -402,6 +404,15 @@ def insert_facts_from_companyfacts(
                     )
                     if new_id is not None:
                         inserted += 1
+                    # L10: a SEC restatement of an earlier filing grades the old
+                    # fact's confidence — capture it (best-effort), don't discard.
+                    if superseded_id is not None:
+                        _ = record_restatement_observation(
+                            conn,
+                            fact_table=FINANCIAL_FACTS,
+                            superseded_id=superseded_id,
+                            new_value=restated_value,
+                        )
     conn.commit()
     return inserted
 

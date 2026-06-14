@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import cast
 
 from compute.kpi_resolver import resolve_kpi_definition_name
+from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier, SourceType
 from models.facts import FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
@@ -1055,7 +1056,7 @@ def persist_derived_kpis(
             unit=row.unit,
             primary_source=SourceType.FMP,
         )
-        new_id, _ = insert_kpi_with_restatement_detection(
+        new_id, superseded_id = insert_kpi_with_restatement_detection(
             conn,
             ticker=ticker,
             period_end=row.period_end,
@@ -1070,6 +1071,11 @@ def persist_derived_kpis(
         )
         if new_id is not None:
             inserted += 1
+        # L10: capture the restatement instead of discarding superseded_id.
+        if superseded_id is not None:
+            _ = record_restatement_observation(
+                conn, fact_table=KPI_FACTS, superseded_id=superseded_id, new_value=row.value
+            )
     conn.commit()
     return inserted
 

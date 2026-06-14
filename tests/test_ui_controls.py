@@ -343,6 +343,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/attribution_panel.py",
         "pipeline/cc_overlay.py",
         "pipeline/command_center_shell.py",
+        "pipeline/credibility_panel.py",
         "pipeline/cron_health_panel.py",
         "pipeline/dashboard_html.py",
         "pipeline/dcf_coverage_panel.py",
