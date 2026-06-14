@@ -151,7 +151,9 @@ _NULL_CONTEXT_FILENAME = "ES_GEMINI_BACKEND_NULL_CONTEXT.md"
 _gemini_setup_verified: bool = False
 _gemini_cli_path: str | None = None
 _gemini_neutral_cwd_cache: str | None = None
-_effective_fast_model: str | None = None  # None = GEMINI_BACKEND_FAST_MODEL; set by _anneal_fast_model
+_effective_fast_model: str | None = (
+    None  # None = GEMINI_BACKEND_FAST_MODEL; set by _anneal_fast_model
+)
 
 
 def gemini_allowed_purposes() -> frozenset[str]:
@@ -184,17 +186,27 @@ def gemini_model_for(purpose: str | None) -> str:
             return pinned
         llm_model = llm_cli.LLM_MODELS.get(purpose)
         if llm_model is not None:
-            from llm.model_ladder import GEMINI as _GEMINI, family_of
+            from llm.model_ladder import GEMINI as _GEMINI
+            from llm.model_ladder import family_of
 
-            if family_of(llm_model) == _GEMINI:
-                return llm_model  # already a Gemini id — return verbatim
+            # A purpose pinned to a Gemini id (Chip 2 PR D+) is returned
+            # verbatim. The prefix check also covers preview aliases like
+            # GEMINI_BACKEND_FAST_MODEL ("gemini-3-flash-preview") that the
+            # cost ladder deliberately omits (it ranks only CLI-verified stable
+            # ids; call_gemini self-anneals the alias at runtime).
+            if family_of(llm_model) == _GEMINI or llm_model.startswith("gemini-"):
+                return llm_model
             if llm_model == llm_cli.FAST_CLASSIFIER_MODEL:
                 return _effective_fast_model or GEMINI_BACKEND_FAST_MODEL
     return GEMINI_BACKEND_DEFAULT_MODEL
 
 
 def _is_model_not_found(exc: subprocess.CalledProcessError) -> bool:
-    combined = (exc.stdout if isinstance(exc.stdout, str) else "") + "\n" + (exc.stderr if isinstance(exc.stderr, str) else "")
+    combined = (
+        (exc.stdout if isinstance(exc.stdout, str) else "")
+        + "\n"
+        + (exc.stderr if isinstance(exc.stderr, str) else "")
+    )
     return "ModelNotFoundError" in combined
 
 
@@ -220,13 +232,17 @@ def _discover_cli_flash_model() -> str | None:
     if not flash_ids:
         log.warning({"event": "gemini_anneal_no_flash_models_in_docs"})
         return None
+
     # Rank by generation number (3 > 2.5 > 2 …); longer id breaks ties (more
     # specific preview alias preferred over bare stable when both are listed).
     def _rank(mid: str) -> tuple[float, int]:
         m = re.match(r"gemini-([\d.]+)-flash", mid)
         return (float(m.group(1)) if m else 0.0, len(mid))
+
     best = max(set(flash_ids), key=_rank)
-    log.info({"event": "gemini_anneal_discovered_model", "model": best, "all": sorted(set(flash_ids))})
+    log.info(
+        {"event": "gemini_anneal_discovered_model", "model": best, "all": sorted(set(flash_ids))}
+    )
     return best
 
 
@@ -540,9 +556,8 @@ def call_gemini(
                 run_id=run_id,
                 error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
             )
-            if (
-                isinstance(gemini_error, subprocess.CalledProcessError)
-                and _is_model_not_found(gemini_error)
+            if isinstance(gemini_error, subprocess.CalledProcessError) and _is_model_not_found(
+                gemini_error
             ):
                 if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:
                     # First ModelNotFoundError: web-discover the current CLI model

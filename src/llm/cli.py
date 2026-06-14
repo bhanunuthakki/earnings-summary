@@ -221,8 +221,8 @@ LLM_MODELS: dict[str, str] = {
     "advisor_socratic_memo": "claude-opus-4-7",
     # Short, structured, batch — Gemini Flash at parity with Haiku, lower cost
     # (Chip 2 PR D first promotions; model-eval cron watches for regression).
-    "intake_classifier": "gemini-2.5-flash",
-    "transcript_metadata": "gemini-2.5-flash",
+    "intake_classifier": "gemini-3-flash-preview",
+    "transcript_metadata": "gemini-3-flash-preview",
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
     # Decision extraction (src/decision_extractor.py): per-paragraph
@@ -238,14 +238,14 @@ LLM_MODELS: dict[str, str] = {
     # prose, run once per new decision. Gemini Flash (Chip 2 PR D): same
     # closed-schema pick-from-list shape Flash excels at; golden set at
     # evals/golden/decision_conditions_extract.json guards quality.
-    "decision_conditions_extract": "gemini-2.5-flash",
+    "decision_conditions_extract": "gemini-3-flash-preview",
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates.
     # Gemini Flash (Chip 2 PR D): copy-the-token task, golden set at
     # evals/golden/viewspec_compile.json guards quality; repair retry in
     # viewspec.nl_compile covers the degraded case.
-    "viewspec_compile": "gemini-2.5-flash",
+    "viewspec_compile": "gemini-3-flash-preview",
     # Ask pack router (src/ask/router.py, fund-grade build S4): selects which
     # portfolio evidence packs (holdings / conviction / dcf / decisions /
     # journal / performance) a narrative ask turn needs. Closed-enum JSON
@@ -253,7 +253,7 @@ LLM_MODELS: dict[str, str] = {
     # Gemini Flash (Chip 2 PR D): pick-from-a-list task, mis-selection fails
     # closed to document-only evidence. Scored by evals/golden/ask_pack_router.json;
     # budget row seeded by alembic 0089 (skip mode).
-    "ask_pack_router": "gemini-2.5-flash",
+    "ask_pack_router": "gemini-3-flash-preview",
     # Ask claim-grounding audit (src/ask/claims.py, fund-grade build S8):
     # after a grounded narrative answer streams, one short call re-reads the
     # answer against its numbered evidence and emits the claims→cites map
@@ -726,7 +726,8 @@ def call_llm(
     if backend not in (None, "claude", "gemini"):
         raise ValueError(f"Unknown LLM backend {backend!r}: expected 'claude' or 'gemini'.")
 
-    from llm.model_ladder import GEMINI as _GEMINI_FAMILY, family_of  # late — avoids import cycle
+    from llm.model_ladder import GEMINI as _GEMINI_FAMILY  # late — avoids import cycle
+    from llm.model_ladder import family_of
 
     # Model-first: resolve the intended model (DB pin → LLM_MODELS → DEFAULT).
     if model is None:
