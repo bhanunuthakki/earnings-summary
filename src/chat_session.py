@@ -411,6 +411,10 @@ def stream_llm_text(
         model,
         "--output-format",
         "stream-json",
+        # The conversational turn never --resume-s (the whole thread is
+        # re-encoded into the prompt each turn), so persisting a CLI session
+        # transcript is pure waste — skip the per-turn disk write. (L14.)
+        "--no-session-persistence",
         "--allowedTools",
         "Read",
         "--verbose",

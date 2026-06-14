@@ -515,9 +515,14 @@ def _evidence(n: int) -> EvidenceItem:
 
 def _stub_gather(*items: EvidenceItem):
     def fake(
-        question: str, *, repo_root: Path, db_path: Path, scope_tickers: list[str]
+        question: str,
+        *,
+        repo_root: Path,
+        db_path: Path,
+        scope_tickers: list[str],
+        cache_key: str | None = None,
     ) -> list[EvidenceItem]:
-        del question, repo_root, db_path, scope_tickers
+        del question, repo_root, db_path, scope_tickers, cache_key
         return list(items)
 
     return fake

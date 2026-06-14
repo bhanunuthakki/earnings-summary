@@ -59,6 +59,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from ask import turn_cache
 from ask.packs import PACK_KEYS, load_packs
 from ask.router import route_packs
 from pipeline.confidence import (
@@ -825,6 +826,40 @@ def _filing_paths_for_year(repo_root: Path, ticker: str, year: int) -> list[tupl
     return out
 
 
+def _parse_filing_sections(path: Path) -> list[tuple[str, str, str, str]] | None:
+    """Read + flatten + squash one filing JSON into the question-INDEPENDENT
+    fields scoring needs: ``(section, snippet, squashed_full, squashed_section)``.
+
+    This is the heavy half of filing retrieval (a multi-hundred-KB JSON parse +
+    a regex squash of every section), and it does NOT depend on the question —
+    so ``turn_cache.cached_file_parse`` memoizes it by (file, mtime), and only
+    the cheap keyword scoring below re-runs per turn. Returns ``None`` when the
+    file can't be read/parsed (the caller skips it, exactly as before)."""
+    try:
+        raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(raw_payload, dict):
+        return None
+    payload = cast("dict[str, object]", raw_payload)
+    out: list[tuple[str, str, str, str]] = []
+    for section, value in payload.items():
+        if section in _FILING_META_KEYS:
+            continue
+        text = _flatten_section(value)
+        if not text:
+            continue
+        out.append(
+            (
+                section,
+                " ".join(text.split())[:_FILING_SNIPPET_CHARS],
+                _squash(section + " " + text[:8000]),
+                _squash(section),
+            )
+        )
+    return out
+
+
 def _scored_filing_sections(
     conn: sqlite3.Connection | None,
     repo_root: Path,
@@ -832,30 +867,21 @@ def _scored_filing_sections(
     ticker: str,
     paths: list[tuple[str, int, Path]],
 ) -> list[tuple[int, dict[str, object]]]:
-    """Keyword-score every section across the given filing files."""
+    """Keyword-score every section across the given filing files. The per-file
+    read+flatten+squash is memoized (``turn_cache``); only the scoring re-runs
+    per question."""
     scored: list[tuple[int, dict[str, object]]] = []
     for form, year, path in paths:
-        try:
-            raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        parsed = turn_cache.cached_file_parse(path, _parse_filing_sections)
+        if not parsed:
             continue
-        if not isinstance(raw_payload, dict):
-            continue
-        payload = cast("dict[str, object]", raw_payload)
         doc_id = _filing_doc_id(conn, repo_root, path)
-        for section, value in payload.items():
-            if section in _FILING_META_KEYS:
-                continue
-            text = _flatten_section(value)
-            if not text:
-                continue
-            squashed = _squash(section + " " + text[:8000])
-            score = sum(1 for t in terms if f" {t} " in f" {squashed} ")
-            score += 2 * sum(1 for t in terms if f" {t} " in f" {_squash(section)} ")
+        form_label = "10-K" if form == "10k" else "10-Q"
+        for section, snippet, squashed_full, squashed_section in parsed:
+            score = sum(1 for t in terms if f" {t} " in f" {squashed_full} ")
+            score += 2 * sum(1 for t in terms if f" {t} " in f" {squashed_section} ")
             if score <= 0:
                 continue
-            form_label = "10-K" if form == "10k" else "10-Q"
-            snippet = " ".join(text.split())[:_FILING_SNIPPET_CHARS]
             href = (
                 f"/source/{doc_id}?section={urllib.parse.quote(section)}"
                 if doc_id is not None
@@ -933,30 +959,48 @@ def _transcript_docs(
     return [(int(r[0]), str(r[1]), str(r[2] or ""), str(r[3] or "")) for r in rows]
 
 
+def _parse_transcript_lines(path: Path) -> list[tuple[int, str, str]] | None:
+    """Read + squash one transcript file into ``(line_no, snippet, squashed)``
+    for the substantive lines (>= 40 chars).
+
+    The read + per-line squash is the heavy half of transcript retrieval and is
+    question-INDEPENDENT, so ``turn_cache.cached_file_parse`` memoizes it by
+    (file, mtime) and only the keyword scoring below re-runs per turn. Returns
+    ``None`` when the file can't be read (the caller skips it, as before)."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    out: list[tuple[int, str, str]] = []
+    for line_no, line in enumerate(lines, start=1):
+        flat = " ".join(line.split())
+        if len(flat) < 40:  # skip headers/blank/speaker-only lines
+            continue
+        out.append((line_no, flat[:_TRANSCRIPT_SNIPPET_CHARS], _squash(flat)))
+    return out
+
+
 def _scored_transcript_lines(
     repo_root: Path,
     terms: list[str],
     ticker: str,
     docs: list[tuple[int, str, str, str]],
 ) -> list[tuple[int, dict[str, object]]]:
-    """Keyword-score every substantive line across the given transcript docs."""
+    """Keyword-score every substantive line across the given transcript docs.
+    The per-file read+squash is memoized (``turn_cache``); only the scoring
+    re-runs per question."""
     scored: list[tuple[int, dict[str, object]]] = []
     for doc_id, file_path, fpt, period_end in docs:
         path = repo_root / file_path
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+        parsed = turn_cache.cached_file_parse(path, _parse_transcript_lines)
+        if not parsed:
             continue
         call_label = _period_label(period_end, fpt)
-        for line_no, line in enumerate(lines, start=1):
-            flat = " ".join(line.split())
-            if len(flat) < 40:  # skip headers/blank/speaker-only lines
-                continue
-            squashed = f" {_squash(flat)} "
+        for line_no, snippet, squashed_line in parsed:
+            squashed = f" {squashed_line} "
             score = sum(1 for t in terms if f" {t} " in squashed)
             if score <= 0:
                 continue
-            snippet = flat[:_TRANSCRIPT_SNIPPET_CHARS]
             scored.append(
                 (
                     score,
@@ -1022,6 +1066,7 @@ def gather_evidence(
     repo_root: Path,
     db_path: Path,
     scope_tickers: list[str],
+    cache_key: str | None = None,
 ) -> list[EvidenceItem]:
     """Retrieve numbered evidence for one narrative question.
 
@@ -1029,10 +1074,29 @@ def gather_evidence(
     or the portfolio); tickers literally named in the question win over it.
     Returns [] whenever there is nothing relevant — the caller then asks the
     ungrounded question exactly as before.
+
+    ``cache_key`` opts this call into the per-thread retrieval memo (L14): when
+    set (a session id, or ``ticker:report_date``) and an identical retrieval —
+    same thread, scope, normalized question, and DB mtime — recurs within the
+    short memo TTL, the whole body is skipped, so the pack-router round-trip and
+    every DB/file scan are avoided. ``None`` (the default) disables the memo, so
+    existing callers and tests behave exactly as before.
     """
     q = question.strip()
     if not q:
         return []
+    memo_key: tuple[object, ...] | None = None
+    if cache_key:
+        memo_key = turn_cache.gather_key(
+            cache_key=cache_key,
+            repo_root=repo_root,
+            scope_tickers=scope_tickers,
+            norm_question=turn_cache.normalize_question(q),
+            db_token=turn_cache.db_mtime_token(db_path),
+        )
+        cached = turn_cache.get_gather(memo_key)
+        if cached is not None:
+            return cast("list[EvidenceItem]", cached)
     try:
         named = _named_tracked_tickers(q, db_path)
         scope = [t.strip().upper() for t in scope_tickers if t.strip()]
@@ -1096,6 +1160,8 @@ def gather_evidence(
                     fact_ref=cast("str | None", item.get("fact_ref")),
                 )
             )
+        if memo_key is not None:
+            turn_cache.put_gather(memo_key, cast("list[object]", items))
         return items
     except Exception:
         # Retrieval must never break the answer path.
