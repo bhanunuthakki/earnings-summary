@@ -1,5 +1,7 @@
 # Directive: cheapest-at-parity model routing (unified, incl. Gemini)
 
+**Status: SHIPPED 2026-06-13** — Chip 2 (PRs #533/#536/#537/#538) + fast-model hardening (#541/#542). This is the LIVE cost-aware routing design and the most-active theme. PR D promoted the FIRST 5 classifier purposes; further promotions remain eval-gated/open.
+
 **Goal:** route every LLM purpose to the cheapest model that holds parity with
 the incumbent — across ALL model tiers and BOTH backends (Claude and Gemini).
 Gemini is a first-class candidate, not a special-cased second backend: a Gemini
@@ -117,12 +119,18 @@ Update `src/llm/model_ladder.py`:
 | `claude-sonnet-4-6` | Claude Sonnet 4.6 | $3.00 | $15.00 |
 | `claude-opus-4-7` | Claude Opus 4.7 | $15.00 | $75.00 |
 | `claude-opus-4-8` | Claude Opus 4.8 | $15.00 | $75.00 |
-| `gemini-3.5-flash` | Gemini 2.5 Flash | $0.30 | $2.50 |
+| `gemini-2.5-flash` | Gemini 2.5 Flash | $0.30 | $2.50 |
 | `gemini-3.1-pro-preview` | Gemini 2.5 Pro | $1.25 | $10.00 |
 
 **Verify these before merging.** The model IDs used by the Gemini CLI may differ
 from the REST API IDs — check `gemini --help` or the CLI changelog for the
 canonical mapping.
+
+**FAST tier is `gemini-3-flash-preview` (not hand-pinned in `LLM_MODELS`).** The
+backend's fast tier resolves to `gemini-3-flash-preview` with a self-annealing
+discovery on `ModelNotFoundError` (falls back to `gemini-2.5-flash`, #541/#542).
+Callers should NOT pin a Flash id in `LLM_MODELS` — let the backend resolve and
+anneal it; the `gemini-2.5-flash` id above is the price-table/fallback anchor.
 
 The `blended_usd_per_mtok` property remains unchanged (6:1 input:output weight);
 `estimated_call_usd` likewise unchanged. The only edit is the price values and
@@ -278,11 +286,11 @@ Haiku cluster → Flash: ~$2.2 × 0.85 = ~$1.87 per 19d (~$36/yr, smaller but fr
 
 | Purpose | Incumbent | Gemini target | Eval |
 |---|---|---|---|
-| `viewspec_compile` | Haiku | gemini-3.5-flash | golden set (valid ViewSpec JSON) |
-| `transcript_metadata` | Haiku | gemini-3.5-flash | golden set (ticker_Q_YYYY) |
-| `intake_classifier` | Haiku | gemini-3.5-flash | golden set (doc-type enum) |
-| `decision_conditions_extract` | Haiku | gemini-3.5-flash | golden set (JSON schema) |
-| `ask_pack_router` | Haiku | gemini-3.5-flash | golden set (closed enum) |
+| `viewspec_compile` | Haiku | gemini-2.5-flash | golden set (valid ViewSpec JSON) |
+| `transcript_metadata` | Haiku | gemini-2.5-flash | golden set (ticker_Q_YYYY) |
+| `intake_classifier` | Haiku | gemini-2.5-flash | golden set (doc-type enum) |
+| `decision_conditions_extract` | Haiku | gemini-2.5-flash | golden set (JSON schema) |
+| `ask_pack_router` | Haiku | gemini-2.5-flash | golden set (closed enum) |
 | `peer_selection` | Sonnet | gemini-3.1-pro-preview | golden set; sibling chip running |
 | `podcast_takeaway_summary` | Sonnet | gemini-3.1-pro-preview | golden set |
 | `news_structuring` | Opus | gemini-3.1-pro-preview | golden file exists (wire into GOLDEN_PURPOSES) |
@@ -319,7 +327,7 @@ both Claude-tier downgrades AND Gemini candidates in one pass:
 
 ```
 purpose → _model_for(P) → incumbent model (e.g. claude-sonnet-4-6)
-cheaper_candidates(incumbent) → [gemini-3.5-flash, claude-haiku-4-5, gemini-3.1-pro-preview]
+cheaper_candidates(incumbent) → [gemini-2.5-flash, claude-haiku-4-5, gemini-3.1-pro-preview]
 for each candidate:
     run_model(candidate) → response + output_tokens
     judge(incumbent_response vs candidate_response) → quality verdict
@@ -373,7 +381,7 @@ Tests: `test_candidate_verdict_includes_token_efficiency` (new).
 
 After the golden-set cert run shows ≥95% pass rate for the five Haiku purposes
 and `peer_selection`/`podcast_takeaway_summary` on the Gemini backend:
-`src/llm/cli.py LLM_MODELS`: update those purposes to `gemini-3.5-flash` or
+`src/llm/cli.py LLM_MODELS`: update those purposes to `gemini-2.5-flash` or
   `gemini-3.1-pro-preview`. That's the only change needed — no allowlist, no
   separate table.
 

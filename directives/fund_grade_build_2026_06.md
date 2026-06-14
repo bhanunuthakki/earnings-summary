@@ -1,5 +1,7 @@
 # Directive: Fund-Grade Build (2026-06-12 review)
 
+**Status: COMPLETE** — all 17 sessions / 3 waves shipped (S1-S17); S17 backlog burn-down #488/#493/#495. Record-of-decisions only; new work gets a new directive.
+
 Canonical plan from the 2026-06-12 comprehensive codebase review. Goal restated:
 a daily-driver where the operator runs his personal portfolio like a hedge-fund
 manager — **(1)** slick front end, **(2)** extremely robust provenance/citation/

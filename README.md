@@ -48,7 +48,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 **Three trigger modes** drive when work happens:
 
-- **Cron** — 6 daily + 2 weekly + 1 monthly + hourly catch-up. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
+- **Cron** — ~26 registered tasks (see `cron/*.task.xml` for the authoritative set): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, several weekly jobs, a monthly refresh, and a quarterly 13F miner. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
 - **Comment-driven** — when the analyst applies a comment with `--apply`, the comment processor edits holdings JSON, re-runs the affected stages synchronously, and rebuilds the brief inline.
 - **Manual CLI** — every step has a direct invocation. `.bat` launchers wrap the most common ones for cmd.exe.
 
@@ -77,7 +77,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | Path | Purpose |
 |---|---|
 | `src/db.py`, `src/parser.py`, `src/intake.py`, `src/ir_uploads.py`, `src/comments.py`, `src/chat_session.py` | Core utilities — DB session, document parsing, _inbox intake, IR upload registry, comments/chat persistence |
-| `src/llm/` | LLM wiring: `cli.py` (Claude CLI subprocess wrapper), `anchors.py` (reusable thesis + bear-case context blocks), `fallback.py` (Gemini fallback when Claude fails), `ledger.py` (call accounting) |
+| `src/llm/` | LLM wiring: `cli.py` (backend dispatch — model-first: the resolved model id picks the backend — over the Claude CLI subprocess wrapper), `anchors.py` (reusable thesis + bear-case context blocks), `gemini_backend.py` (consumer-subscription Gemini CLI — a second backend, model-first family dispatch), `model_ladder.py` (real-API-price cost ranking — the total order behind "cheaper"), `model_eval.py` + `model_overrides.py` (the cheapest-at-parity eval loop + DB-backed pin overrides), `fallback.py` (API-billed emergency path when a Claude call fails), `ledger.py` (call accounting). Gemini is now a **primary** backend for selected cheap-at-parity purposes — not merely a failure fallback. |
 | `src/report/` | Report generator. `builder.py` produces a typed `ReportSpec`; `models.py` defines the section schemas; `sections/` builds each section; `renderers/` emits HTML/Markdown/JSON/Excel + the workspace tabbed renderer + the chat/comments overlay |
 | `src/report/renderers/workspace_*.py` | The analyst workspace renderer — splits into `workspace_html.py` (tab layout), `workspace_styles.py`, `workspace_script.py`, `workspace_data.py` (data hand-off to JS), `workspace_charts.py`, `workspace_comments.py`, `workspace_chat.py` |
 | `src/report/sections/` | One file per report section: `snapshot`, `thesis`, `financials`, `segments`, `earnings`, `recent_developments`, `valuation`, `bear_case`, `qa_roster`, `saydo`, `ir_docs`, `filing_intelligence`, `portfolio_position`, `exec_compensation`, `evaluation_snapshot`, `etf_holdings`, `provenance`, `appendix`, `synthesis` |
@@ -100,8 +100,8 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/sec/` | SEC XBRL cache |
 | `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
 | `data/surprise/`, `data/report_comments/`, `data/report_chats/` | Surprise ledger + per-report comment/chat stores |
-| `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (head: `0057_drop_segment_facts`) |
-| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the 9 scheduled tasks |
+| `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
+| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the scheduled tasks (~26 `*.task.xml` — the authoritative set) |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
 | `transcripts/raw/`, `transcripts/processed/` | Earnings transcript flow (gitignored) |
 | `ir_documents/` | IR PDFs filed by ticker × period (gitignored) |
@@ -119,7 +119,7 @@ Requires Python ≥3.11.
 ```bash
 pip install -r requirements.txt
 pip install -e ".[dev]"      # adds pytest, alembic, ruff, pyright, basedpyright
-alembic upgrade head         # initialize data/portfolio.db (head: 0057_drop_segment_facts)
+alembic upgrade head         # initialize data/portfolio.db (run `alembic heads` for the current revision)
 ```
 
 Create `.env` with whichever providers you need:
@@ -128,7 +128,7 @@ Create `.env` with whichever providers you need:
 ANTHROPIC_API_KEY=...        # Claude CLI (metered API billing — the default for this project)
 GEMINI_API_KEY=...           # automatic fallback when the Claude CLI fails
 FMP_API_KEY=...              # fundamentals, statements, calendar, transcripts
-FMP_TIER=premium|starter|basic    # rate limits — defaults to "basic" (250/day) if unset
+FMP_TIER=premium|starter|basic|free  # rate limits — defaults to "basic" (250/day) if unset; free = /stable-only (the v3/v4 fallback rungs are dropped — they 403 globally on free)
 ```
 
 Claude calls go through the `claude` CLI as a subprocess (see [src/llm/cli.py](src/llm/cli.py)). The CLI honors whichever auth is configured — set `ANTHROPIC_API_KEY` for metered billing, or `claude auth login` for Pro/Max subscription. For this repo, **API key is the documented default** — don't unset it.
@@ -173,16 +173,18 @@ Open `output/research/<TICKER>/<YYYY-MM-DD>_workspace.html` in any browser (doub
 
 Start it with `start_comments_server.bat` (or `python execution/comments_server.py`). Endpoints under `localhost:7421`:
 
-- `GET /` — **Dashboard**: read-only portfolio status table. Columns per ticker: last FMP pull (relative), last transcript quarter (with Q&A marker), last build mtime, open comment count, breach state badge (intact/watch/broken/pending), Open↗ link to the latest workspace report. Two tables (Portfolio + Evaluation; watchlist hidden). Sources: `tracked_companies`, `fmp_endpoint_status`, `transcripts`, `output/research/` mtime, `report_comments`, `thesis_evaluations`.
+- `GET /` — **Command center** (unified 3-theme tabbed shell). The **Overview** tab — the Research cockpit (one attention-ranked row per holding: thesis health · valuation · events) + a tier-coverage strip + the inbox stream + an upcoming-earnings strip — is server-inlined for instant first paint; every other tab lazy-loads via `GET /api/panel/<name>` on first activation. `/analytical` and `/ticker/<T>` remain as standalone deep-link targets. Sources: `tracked_companies`, `fmp_endpoint_status`, `transcripts`, `output/research/` mtime, `report_comments`, `thesis_evaluations`, plus inbox + expected-earnings tables.
 - `GET /reports/<ticker>` — Serves the latest `<DATE>_workspace.html` for the ticker.
 - `POST /comments` — Create a new comment with `(ticker, report_date, anchor, text, selected_text, intent)`.
 - `GET /comments?ticker=&report_date=` — List comments.
 - `PATCH /comments/<id>` — Update status / resolution / intent.
 - `DELETE /comments/<id>` — Hard delete.
-- `POST /chat/<ticker>` — Streaming chat (SSE) with Claude Sonnet 4.6 loaded with thesis + bear case + valuation + company description context, plus read-only filesystem access to `data/`, `micro_thesis/`, `.tmp/`, `transcripts/`.
+- `POST /chat/<ticker>` — Streaming chat (SSE): a Claude chat session backed by the unified ask engine (model chosen by the engine; Sonnet by default), loaded with thesis + bear case + valuation + company description context, plus read-only filesystem access to `data/`, `micro_thesis/`, `.tmp/`, `transcripts/`.
 - `POST /chat/<ticker>/apply` — Apply a chatbot-proposed diff to disk.
 - `POST /actions/refresh` — Trigger an on-demand per-ticker refresh dispatcher (`stale` or `full` mode; SSE-streamed line-by-line).
 - `GET /healthz` — Health check.
+
+This is the comment + chat subset; the server also hosts the dashboard, Ask, discovery, viewspec, peek, and per-ticker/source/DCF pages — see the `@app.route` decorators in [execution/comments_server.py](execution/comments_server.py) (or [HOW_TO_USE_REPORTS.md §What's where](HOW_TO_USE_REPORTS.md)) for the full surface.
 
 Comments persist to `data/report_comments/<T>/<YYYY-MM-DD>.json`; chat threads to `data/report_chats/<T>/<YYYY-MM-DD>.json`. Posting / chat needs the server running; viewing existing comments + highlights works offline.
 
@@ -233,7 +235,7 @@ Every step is also a direct Python entrypoint. See [HOW_TO_USE_REPORTS.md §Full
 
 ## Cron jobs and automation
 
-Nine scheduled tasks. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
+~26 scheduled tasks — see `cron/*.task.xml` for the authoritative set; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
 
 ### Daily chain (03:00 → 06:30)
 
@@ -241,11 +243,19 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 
 | Task | Cadence | Script | What it does |
 |---|---|---|---|
-| `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`basic`=250/day, `starter`=unlimited @ 5/sec, `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
+| `refresh_cache` | Daily 03:00 | `execution/refresh_cache.py run` | **Tier-aware FMP refresh queue.** Reads `FMP_TIER` from `.env` (`free`=250/day & /stable-only — propagates `FMP_TIER=free` so the fetcher drops the v3/v4 fallback rungs that 403 globally on free; `basic`=250/day; `starter`=unlimited @ 5/sec; `premium`=unlimited @ 12/sec). Drains highest-priority stale endpoints up to the daily cap. Failed endpoints (403 / Legacy) get a 30-day retry window — a downgrade builds a backlog automatically; an upgrade catches up over following days. Force-stale hints from `schedule_pre_earnings_refresh` override cadence for tickers reporting in the next 7 days |
 | `backfill_transcripts` | Daily 04:30 | `execution/backfill_transcripts.py` | For every active ticker, fetches the last 6 fiscal quarters of Q&A from the free aggregator chain (roic.ai → stockanalysis.com → tickertrends.io), ingests, extracts forward-looking commitments. Idempotent — file-exists check + sha256 dedup |
 | `fetch_fmp_earnings_calendar` | Daily 05:45 | `execution/fetch_fmp_earnings_calendar.py --all` then `execution/refresh_expected_earnings.py` | Step 1 refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker (on free/basic tier FMP refuses — 402 since 2026-06-10 — and the cache stays at its last good state). Step 2 materializes the **canonical `expected_earnings` table** through the `next_earnings_date` stack in [src/sources/earnings_calendar.py](src/sources/earnings_calendar.py) (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, cockpit, and portfolio-tracker bridge all read that table |
 | `backfill_earnings_surprises` | Daily 06:15 | `execution/backfill_earnings_surprises.py` + `ingest_earnings_surprises.py` | Two-stage: merges `<TICKER>_earnings_calendar.json` (FMP primary, EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Stage-2 gate prevents partial ingestion if stage-1 fails |
 | `daily_fetch_and_brief` | Daily 06:30 | `execution/daily_fetch_and_brief.py --enable-llm` | **The drainer.** Picks up every ticker with `brief_dirty=1`, applies three gates (see §[When the report auto-updates](#when-the-report-auto-updates)), runs `thesis_evaluator → match_commitments → refresh_dcf → build_artifacts` for un-skipped tickers, clears the flag |
+
+### Daily standalones (not in the 03:00→06:30 chain)
+
+| Task | Cadence | Script | What it does |
+|---|---|---|---|
+| `backup_db` | Daily 02:45 | `cron/backup_db.py` | Consistent, sync-safe snapshot of `data/portfolio.db` via the SQLite online-backup API (safe while the DB is live) — Drive no longer backs the scratch tree |
+| `run_morning_pipeline` | Daily 04:00 | `execution/run_morning_pipeline.py --max-cost-usd 10` | Chains the morning alert pipeline that was previously unchained: `fetch_news` (per-ticker news) → `run_triggers` (fan registered triggers, persist alerts) → `build_alert_feed` (rebuild the chronological feed HTML) → `run_validation_engine --gate` (population-level data checks) |
+| `fetch_macro_series` | Daily 05:35 | `execution/fetch_macro_series.py` then `compute_macro_sensitivities.py --portfolio` | Upserts the 12-series macro registry into `macro_series` (provider-candidate fallback, idempotent), then recomputes per-portfolio macro sensitivities |
 
 ### Hourly catch-up
 
@@ -253,13 +263,16 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 |---|---|---|---|
 | `onboard_pending` | Hourly at :17 | `execution/onboard_pending_tickers.py` | Idempotent belt-and-suspenders for tickers that bypassed `db.track_company`'s auto-onboard hook (raw SQL / external API inserts). Detects 5 pending reasons (no instrument_type, no financial_facts, no dcf_run, etc.) and runs the appropriate fetch chain. No-op when nothing is pending |
 
-### Weekly + monthly
+### Weekly + monthly + quarterly
 
 | Task | Cadence | Script | What it does |
 |---|---|---|---|
 | `weekly_p2_lens_refresh` | Sunday 02:00 | `execution/run_due_lenses.py --cadence weekly` | Regenerates P2-tier (watchlist + evaluation) lens artifacts drifted past their cadence. Idempotent via `artifact_store` cached-inputs hash — stable tickers cost nothing |
+| `model_eval_sweep` | Sunday 02:00 | `execution/run_weekly_model_eval.py` | **Cheapest-at-parity sweep + reversible auto-switch.** Harvests a rotating sample of real prompts, evaluates each cheaper candidate per active purpose against the incumbent (brand-blind pairwise judge), then writes a `model_pin_override` after a SWITCH_DOWN streak (reverts on a KEEP streak) — a conservative, fully-audited model downgrade loop |
 | `weekly_synthesis` | Sunday 23:00 | 5-step pipeline | (1) `refresh_dirty_artifacts.py --manifest-only` to drain dirty LLM artifacts; (2) per-portfolio `run_lens.py --all`; (3) `cross_portfolio_synthesis` Opus lens; (4) `build_analytical_dashboard.py`; (5) `grade_bear_cases.py --all-portfolio` for predictions whose target_period has passed |
 | `monthly_p3_refresh` | 1st of month, 03:00 | `execution/run_due_lenses.py --cadence monthly` | P3-tier (index constituents / ETFs / no-tier) lens refresh. P3 lens set is minimal (`five_min_reread` only) so runtime stays bounded even with 2k+ index constituents |
+| `verify_cron` | Thursday 07:00 | `execution/verify_cron_registration.py` | Weekly drift check that every expected task is still registered under `\earnings-summary\` in Task Scheduler |
+| `fetch_13f` | Quarterly (16th of Feb/May/Aug/Nov) | `execution/fetch_13f.py` then `recalibrate_investor_weights.py` then `run_discovery.py` | **EDGAR 13F-HR miner.** After each quarter's filings land: polls 13F holdings for rostered investors, recalibrates per-investor discovery weights from hit-rate history, then re-scores the discovery candidate set |
 
 ### Supplementary / not on a cron
 
@@ -272,12 +285,15 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 ### Cron chain map
 
 ```
+02:45  backup_db ───────────► consistent data/portfolio.db snapshot (standalone)
 03:00  refresh_cache ───────► FMP cache files + financial_facts/* writes
          │                    └─► (SQL trigger 0026) brief_dirty=1
          ▼
+04:00  run_morning_pipeline ──► fetch_news → run_triggers → build_alert_feed → validate --gate (standalone)
 04:30  backfill_transcripts ──► transcripts/processed/* + transcripts + management_commitments
          │
          ▼
+05:35  fetch_macro_series ──► macro_series + compute_macro_sensitivities (standalone)
 05:45  fetch_fmp_earnings_calendar ──► data/historical/fmp/<T>_earnings_calendar.json
          │                             └─► refresh_expected_earnings ──► expected_earnings table
          │                                 (canonical calendar: home strip, cockpit, portfolio-tracker)
@@ -290,9 +306,14 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 
 [hourly :17]   onboard_pending  (idempotent catch-up)
 [Sun 02:00]    weekly_p2_lens_refresh
+[Sun 02:00]    model_eval_sweep (cheapest-at-parity sweep → reversible auto-switch)
 [Sun 23:00]    weekly_synthesis (drain dirty → per-ticker lenses → portfolio synthesis → dashboard → grading)
+[Thu 07:00]    verify_cron (registration drift check)
 [1st 03:00]    monthly_p3_refresh
+[quarterly]    fetch_13f (16th Feb/May/Aug/Nov: 13F miner → recalibrate weights → run_discovery)
 ```
+
+(Several more registered tasks — IR-doc discovery, podcast RSS, advisor memos, calibration grading, SayDo batch, stance scoring — are omitted from this map; `cron/*.task.xml` is the authoritative set.)
 
 ---
 

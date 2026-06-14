@@ -126,14 +126,14 @@ Or just **double-click** `start_comments_server.bat` in Explorer.
 
 ### 2a. (Optional) Open the dashboard
 
-Once the server is running, visit `http://localhost:7421/` for a
-read-only status view across portfolio + evaluation tickers — last FMP
-date, last transcript quarter (with Q&A marker), last build mtime, open
-comment count, and current breach state per ticker. Click **Open↗** on
-any row to load that ticker's latest workspace report.
-
-Per-ticker refresh / per-step / comments-processing / bulk actions land
-in later PRs; right now the dashboard is read-only.
+Once the server is running, visit `http://localhost:7421/` for the live
+command center across portfolio + evaluation tickers — status (last FMP
+date, last transcript quarter with Q&A marker, last build mtime, open
+comment count, current breach state) **plus** per-ticker refresh,
+per-step runs, comments-processing, and thesis editing. Click **Open↗**
+on any row to load that ticker's latest workspace report. See
+[Command center (start here)](#command-center-start-here) for the full
+action surface.
 
 ### 3. Open the report in your browser
 
@@ -164,6 +164,8 @@ click **Post**.
 | `ask_question` | Asks Opus your question with the thesis + bear-case as context; reply appears in the comment's follow-up thread |
 | `fix_data` | Logs a TODO line in `directives/data_fixes.md` for manual fixing |
 | `rewrite_section` | Emits cache-invalidation instructions for the targeted section |
+| `platform_change` | Files a tagged entry in `directives/platform_backlog.md` (cross-workspace bug/feature, not a single-ticker edit) |
+| `curate_peers` | Steers the comparable-company set for the ticker |
 | (blank) | Haiku classifies into one of the above automatically |
 
 ### Slash-keyword shortcuts (fastest path — skip the dropdown)
@@ -181,6 +183,8 @@ stripped from the stored comment text.
 | `/ask` | `ask_question` | Ask Claude a question with full thesis + bear-case context |
 | `/fix` | `fix_data` | Flag a data error for manual fixing |
 | `/rewrite` | `rewrite_section` | Bigger rewrite of the artifact this comment is on |
+| `/platform`, `/feature`, `/bug` | `platform_change` | Cross-workspace bug or feature — lands as a tagged entry in `directives/platform_backlog.md`, NOT a single-ticker brief edit |
+| `/peers`, `/curate` | `curate_peers` | Steer the comparable-company (peer) set |
 
 Rules:
 - Keyword must be at the start of the comment, no leading whitespace
@@ -205,7 +209,9 @@ Comment status colors on the report:
 ### 5. Chat with Claude about the report
 
 Click the **Chat** button in the bottom-right corner. The drawer opens
-with a Claude Sonnet 4.6 session that has the full report context loaded:
+with a Claude chat session backed by the unified ask engine (model
+chosen by the engine; Sonnet by default) that has the full report
+context loaded:
 
 - Your thesis, tier-1 KPIs, business-model rules
 - Bear-case failure modes + most-underweighted callout
@@ -575,6 +581,9 @@ forward-looking commitment extractor — matching what
 index (e.g., bulk-imported from another source), reset its `processed`
 flag and re-run the summarizer. See [examples in execution/intake_documents.py](../blob/main/execution/intake_documents.py).
 
+Either path, finish with a rebuild so the new document flows into the
+report: `build_report.bat <T> --enable-llm`.
+
 ### When to refresh vs rebuild
 
 | Situation | Right command |
@@ -639,14 +648,5 @@ Run the KPI extractor first:
 python C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary\execution\extract_kpis_from_summaries.py --ticker NU --source earnings --repo-root C:\Users\Bhanu\.gemini\antigravity\scratch\earnings-summary
 ```
 
----
-
-## Adding a new IR document for a ticker
-
-1. Drop the PDF into `_inbox/` (or wherever you keep them)
-2. Run `python execution/intake_documents.py --process` (classifies +
-   files into `ir_documents/<T>/<period>/` + registers in
-   `document_index.json` + chains into the LLM summarizer; if the drop
-   includes a transcript, also bridges into the `transcripts` table and
-   runs Say-Do commitment extraction)
-3. Rebuild the report: `build_report.bat <T> --enable-llm`
+The single canonical procedure lives under
+[Adding an IR document](#adding-an-ir-document-investor-day-off-cycle-press-release-etc) in the Analyst tips section.

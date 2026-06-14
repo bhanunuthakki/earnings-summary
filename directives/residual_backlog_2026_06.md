@@ -27,6 +27,13 @@ workstream is hiding. Model rule per `GEMINI.md` → Session & Agent Model Selec
 - **News 13F leg (`news_sources_plan.md`)** — partly absorbed by IP-S6's live EDGAR 13F-HR
   miner (#516). Remaining news follow-up is the free yfinance `Ticker.news` rung (Cat E).
 
+**Chip-numbering collision (read before quoting "Chip N"):** the §2 table below and the
+de-facto post-program chip stream use DIFFERENT numbering. `cheapest_model_routing.md`
+shipped as a chip (#533/#536/#537/#538) that the wider work-stream calls "Chip 2" — it is
+a *different* Chip 2 from this table's "Chip 2 = Conformance endgame", which is **STILL OPEN**
+(~11 quarantined surfaces, see Cat C). Treat the two schemes as independent; this table's
+chip numbers are local to this directive. Cross-link: `directives/cheapest_model_routing.md`.
+
 ---
 
 ## 1. Categories (relevance verdicts)
@@ -53,12 +60,14 @@ workstream is hiding. Model rule per `GEMINI.md` → Session & Agent Model Selec
 
 ### C — Token-conformance endgame (finish the keystone)
 - `test_ui_controls.py::test_full_conformance_is_red` is a `strict=True` xfail that flips to
-  a hard CI failure the moment `QUARANTINE` empties. Still **12 surfaces** quarantined, two
-  clusters: (a) 7 provenance/coverage panels (cron_health, dcf_coverage, evals, ir_coverage,
-  restatements, source_calls, source_viewers) — mostly off-scale `radius`, evals also
-  color+font-size; (b) 5 report-iframe surfaces (workspace_charts/chat/comments/styles,
-  cite_marks) blocked on ONE coupled change — unforking the legacy-alias `:root` in
-  `workspace_styles.py`. Until empty, the conformance guarantee isn't enforced.
+  a hard CI failure the moment `QUARANTINE` empties. Still **11 surfaces** quarantined (live
+  count of the `QUARANTINE` dict), two clusters: (a) **6 provenance/coverage panels**
+  (cron_health, dcf_coverage, ir_coverage, restatements, source_calls, source_viewers) — all
+  off-scale `radius` only (evals_panel + validation_issues_panel have since graduated in the
+  S10 drawer/resolve passes); (b) **5 report-iframe surfaces** (workspace_charts/chat/comments/
+  styles, cite_marks) blocked on ONE coupled change — unforking the legacy-alias `:root` in
+  `workspace_styles.py` (these carry `alias`/`font-family`/`font-size` dims, not just radius).
+  Until empty, the conformance guarantee isn't enforced.
 
 ### D — Spec'd-but-unbuilt capability tracks (older directives, still valid)
 - **Document deep tables** (`document_tables_design.md`): Phase 2 MVP = `lease_commitments`
@@ -100,7 +109,7 @@ per standing authorization. Chips 1–3 are the high-value core; 4–7 optional 
 | # | Chip | Model | Contents | Rank rationale |
 |---|---|---|---|---|
 | 1 | Peer selection | Sonnet | Cat A — build to `peer_selection_llm.md`, eval-gated | Only open tracker item; direct owner complaint; fully spec'd |
-| 2 | Conformance endgame | Haiku→Sonnet | Cat C — PR(a) radii/color sweep on 7 panels; PR(b) `workspace_styles` `:root` unfork → flip the xfail green | Finishes the keystone; makes the guard enforced not advisory |
+| 2 | Conformance endgame (this table's Chip 2 — NOT the cheapest-routing chip) | Haiku→Sonnet | Cat C — PR(a) radii sweep on the 6 coverage panels; PR(b) `workspace_styles` `:root` unfork (the 5 iframe surfaces) → flip the xfail green | Finishes the keystone; makes the guard enforced not advisory |
 | 3 | UI doorways tail | Sonnet | Cat B: IP-S8 + IP-S9 + IP-S12 `fact_ref` half (all bind S1; all "datum=doorway / title-ownership") | Answers owner feedback; S9 captures the latency baseline for the S12 decision |
 | 4 | Schema burn-down | Sonnet | Cat D2 (annual-KPI cadence) + D3 (cross-asset Phase B) + E2 (dead-rule disposition) | Small correctness wins, batched |
 | 5 | Diet second leg (free) | Opus | Cat B IP-S11 free legs: investor-day + podcast takeaway summarization, `model_revision`, triage panel | The diet-curation the owner asked for; summarization needs judgment |

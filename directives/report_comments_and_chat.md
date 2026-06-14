@@ -1,5 +1,7 @@
 # Report Comments + In-Report Chatbot — design scope
 
+**Status: SHIPPED** — comments + in-report chat landed (`workspace_chat.py` / `workspace_comments.py`; S4 iframe work). The closed-under-no-fit classifier rule carries forward in interaction_paradigm S5 / design_language §10.
+
 Two new features that turn the workspace report from a one-shot artifact into a
 **conversation surface** the analyst can interrogate and steer.
 
