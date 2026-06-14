@@ -17,6 +17,12 @@ the directive names, all from plain aggregation:
   time-to-outcome          — days from ``made_at`` to ``outcome_at`` per
       recommendation kind (mean + median): how long a call stays open
       before it can be judged.
+  cohort curve (L8)        — the same hit rate GROUPED BY ``made_at`` quarter
+      (or year), so "am I getting better?" is answered as a trend, not a
+      single all-time number. Each period also carries its conviction-
+      calibration gap (did high-conviction calls grade above the rest that
+      period?) and reversal-cost count. Periods bucket on the CALL date, not
+      the grade date, so the curve tracks when judgement improved.
 
 ``build_calibration`` returns None when the DB or decisions table is absent
 (the panel hides the section) — the decision_extractor best-effort posture.
@@ -25,7 +31,7 @@ the directive names, all from plain aggregation:
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from statistics import median
@@ -33,6 +39,10 @@ from statistics import median
 CONVICTION_ORDER: tuple[str, ...] = ("high", "medium", "low", "unstated")
 GRADED_LABELS: frozenset[str] = frozenset({"correct", "wrong", "mixed"})
 ACTION_KINDS: tuple[str, ...] = ("followed", "ignored", "partial", "reversed")
+
+# Cohort granularity for the period-over-period "am I getting better?" curve.
+COHORT_GRANULARITIES: frozenset[str] = frozenset({"quarter", "year"})
+DEFAULT_COHORT_GRANULARITY = "quarter"
 
 
 def bucket_for_conviction(value: object) -> str:
@@ -58,6 +68,55 @@ def bucket_for_conviction(value: object) -> str:
     if n >= 1.0:
         return "low"
     return "unstated"
+
+
+def period_key(made_at: object, granularity: str) -> tuple[str, str] | None:
+    """``(sort_key, label)`` for a decision's ``made_at`` under ``granularity``
+    ('quarter' → ('2026Q1', '2026-Q1'); 'year' → ('2026', '2026')). None when
+    the stamp is unparseable — that row is left out of the cohort curve but
+    still counted in the flat stats. Reads the year/month off the ISO prefix
+    (the ledger's made_at is 'YYYY-MM-DD...' in every era), so it never depends
+    on the naive/aware mix the duration math has to reconcile."""
+    s = str(made_at or "")
+    if len(s) < 7 or s[4] != "-":
+        return None
+    try:
+        year = int(s[0:4])
+        month = int(s[5:7])
+    except ValueError:
+        return None
+    if not (1 <= month <= 12):
+        return None
+    if granularity == "year":
+        return f"{year:04d}", f"{year:04d}"
+    quarter = (month - 1) // 3 + 1
+    return f"{year:04d}Q{quarter}", f"{year:04d}-Q{quarter}"
+
+
+@dataclass(frozen=True, slots=True)
+class CohortPeriod:
+    """One period's slice of the ledger — the unit of the "am I getting better?"
+    curve. Periods GROUP BY ``made_at`` (the call date, not the grade date), so
+    the trend tracks when the analyst's JUDGEMENT improved, not when grades
+    happened to land. ``hit_rate`` is None for a period with nothing graded yet
+    (recent calls still open) — a gap in the curve, never a fabricated zero."""
+
+    period: str  # display label, e.g. "2026-Q1"
+    sort_key: str  # chronological sort key, e.g. "2026Q1"
+    total: int  # all decisions MADE in the period
+    graded: int  # the graded subset
+    correct: int
+    hit_rate: float | None  # correct / graded; None when nothing graded
+    # Conviction-calibration gap: the high-conviction hit-rate minus the rest's
+    # within the SAME period. Positive = high-conviction calls earned their
+    # label (graded above the rest); negative = overconfident on the highs. None
+    # when either side has no graded call in the period (no gap to measure).
+    high_graded: int
+    high_hit_rate: float | None
+    rest_hit_rate: float | None
+    conviction_gap: float | None
+    reversals: int  # calls reversed that were MADE in the period
+    reversals_cost: int  # of those, how many the reversal cost (call graded correct)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +169,15 @@ class CalibrationStats:
     reversals_vindicated: int
     reversals_cost: int
     time_to_outcome: list[KindTiming]  # by kind, descending n
+    # Period-over-period cohorts (L8): the trend the flat stats can't show.
+    # Defaulted so the pre-L8 hand-constructed call shape (advisor/socratic
+    # fixtures) still builds — build_calibration always supplies them.
+    cohorts: list[CohortPeriod] = field(default_factory=list[CohortPeriod])
+    cohort_granularity: str = DEFAULT_COHORT_GRANULARITY  # 'quarter' | 'year'
+    # Latest graded period's hit-rate minus the prior graded period's — the
+    # curve's direction. None when fewer than two periods have a graded call.
+    hit_rate_delta: float | None = None
+    improving: bool | None = None  # hit_rate_delta > 0 ("am I getting better?")
 
 
 def _open(db_path: Path | str) -> sqlite3.Connection | None:
@@ -143,10 +211,110 @@ def _days_between(made_at: object, outcome_at: object) -> float | None:
     return (graded.replace(tzinfo=None) - made.replace(tzinfo=None)).total_seconds() / 86_400.0
 
 
-def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
-    """One pass over the decisions table → the three lenses. None when the
-    substrate is absent; a present-but-empty ledger returns zeroed stats
-    (the panel renders the how-to-populate hint instead of hiding)."""
+@dataclass(slots=True)
+class _PeriodAcc:
+    """Mutable per-period tally — the cohort curve's working state. Typed (not
+    a dict[str, object]) so the rate derivations stay strict-clean."""
+
+    label: str
+    total: int = 0
+    graded: int = 0
+    correct: int = 0
+    high_graded: int = 0
+    high_correct: int = 0
+    rest_graded: int = 0
+    rest_correct: int = 0
+    reversals: int = 0
+    reversals_cost: int = 0
+
+
+def _accumulate_period(
+    periods: dict[str, _PeriodAcc],
+    keyed: tuple[str, str],
+    *,
+    is_graded: bool,
+    is_correct: bool,
+    is_high: bool,
+    reversed_cost: bool,
+    reversed_any: bool,
+) -> None:
+    """Fold one decision into its period bucket. The bucket carries the raw
+    tallies the cohort curve needs; rates are derived once at build time."""
+    sort_key, label = keyed
+    acc = periods.get(sort_key)
+    if acc is None:
+        acc = _PeriodAcc(label=label)
+        periods[sort_key] = acc
+    acc.total += 1
+    if is_graded:
+        acc.graded += 1
+        if is_high:
+            acc.high_graded += 1
+            acc.high_correct += 1 if is_correct else 0
+        else:
+            acc.rest_graded += 1
+            acc.rest_correct += 1 if is_correct else 0
+        acc.correct += 1 if is_correct else 0
+    if reversed_any:
+        acc.reversals += 1
+        if reversed_cost:
+            acc.reversals_cost += 1
+
+
+def _rate(correct: int, graded: int) -> float | None:
+    return (correct / graded) if graded else None
+
+
+def _build_cohorts(
+    periods: dict[str, _PeriodAcc],
+) -> tuple[list[CohortPeriod], float | None, bool | None]:
+    """Sorted cohort list + the latest-vs-prior graded hit-rate delta. The
+    delta walks the periods that actually have a graded call (a fully-pending
+    recent quarter is a gap in the curve, not a break in the trend)."""
+    cohorts: list[CohortPeriod] = []
+    for sort_key in sorted(periods):
+        acc = periods[sort_key]
+        high_hr = _rate(acc.high_correct, acc.high_graded)
+        rest_hr = _rate(acc.rest_correct, acc.rest_graded)
+        gap = (high_hr - rest_hr) if (high_hr is not None and rest_hr is not None) else None
+        cohorts.append(
+            CohortPeriod(
+                period=acc.label,
+                sort_key=sort_key,
+                total=acc.total,
+                graded=acc.graded,
+                correct=acc.correct,
+                hit_rate=_rate(acc.correct, acc.graded),
+                high_graded=acc.high_graded,
+                high_hit_rate=high_hr,
+                rest_hit_rate=rest_hr,
+                conviction_gap=gap,
+                reversals=acc.reversals,
+                reversals_cost=acc.reversals_cost,
+            )
+        )
+    graded_rates = [c.hit_rate for c in cohorts if c.hit_rate is not None]
+    delta: float | None = None
+    improving: bool | None = None
+    if len(graded_rates) >= 2:
+        delta = graded_rates[-1] - graded_rates[-2]
+        improving = delta > 0
+    return cohorts, delta, improving
+
+
+def build_calibration(
+    *, db_path: Path | str, cohort_granularity: str = DEFAULT_COHORT_GRANULARITY
+) -> CalibrationStats | None:
+    """One pass over the decisions table → the three flat lenses PLUS the
+    period-over-period cohort curve. None when the substrate is absent; a
+    present-but-empty ledger returns zeroed stats (the panel renders the
+    how-to-populate hint instead of hiding).
+
+    ``cohort_granularity`` ('quarter' | 'year') buckets the curve; an
+    unrecognised value falls back to the quarter default rather than raising —
+    a thin coaching surface must never crash on a bad arg."""
+    if cohort_granularity not in COHORT_GRANULARITIES:
+        cohort_granularity = DEFAULT_COHORT_GRANULARITY
     conn = _open(db_path)
     if conn is None:
         return None
@@ -164,11 +332,13 @@ def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
     action_mix: dict[str, int] = {k: 0 for k in (*ACTION_KINDS, "unacted")}
     reversals: list[ReversalRecord] = []
     durations: dict[str, list[float]] = {}
+    periods: dict[str, _PeriodAcc] = {}
     graded_total = correct_total = 0
 
     for row in rows:
         label = str(row["outcome_label"] or "pending")
         is_graded = label in GRADED_LABELS
+        is_correct = label == "correct"
 
         conviction = str(row["conviction"] or "").lower()
         if conviction not in CONVICTION_ORDER:
@@ -177,14 +347,15 @@ def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
         if is_graded:
             bucket[label] += 1
             graded_total += 1
-            if label == "correct":
+            if is_correct:
                 correct_total += 1
         else:
             bucket["ungraded"] += 1
 
         action = str(row["user_action_kind"] or "").lower()
+        is_reversed = action == "reversed"
         action_mix[action if action in ACTION_KINDS else "unacted"] += 1
-        if action == "reversed":
+        if is_reversed:
             vindicated: bool | None = None
             if label == "wrong":
                 vindicated = True
@@ -205,6 +376,18 @@ def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
             days = _days_between(row["made_at"], row["outcome_at"])
             if days is not None and days >= 0:
                 durations.setdefault(str(row["recommendation_kind"]), []).append(days)
+
+        keyed = period_key(row["made_at"], cohort_granularity)
+        if keyed is not None:
+            _accumulate_period(
+                periods,
+                keyed,
+                is_graded=is_graded,
+                is_correct=is_correct,
+                is_high=conviction == "high",
+                reversed_cost=is_reversed and label == "correct",
+                reversed_any=is_reversed,
+            )
 
     by_conviction = [
         ConvictionBucket(
@@ -232,6 +415,7 @@ def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
         ),
         key=lambda t: -t.n,
     )
+    cohorts, hit_rate_delta, improving = _build_cohorts(periods)
     return CalibrationStats(
         total=len(rows),
         graded=graded_total,
@@ -242,4 +426,8 @@ def build_calibration(*, db_path: Path | str) -> CalibrationStats | None:
         reversals_vindicated=sum(1 for r in reversals if r.vindicated is True),
         reversals_cost=sum(1 for r in reversals if r.vindicated is False),
         time_to_outcome=timing,
+        cohorts=cohorts,
+        cohort_granularity=cohort_granularity,
+        hit_rate_delta=hit_rate_delta,
+        improving=improving,
     )

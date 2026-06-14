@@ -21,6 +21,7 @@ from attribution import (
     attributions_for_book,
     build_position_attribution,
     compose_narrative,
+    decompose_alpha,
     gather_window_events,
 )
 from integrations.portfolio_tracker_client import (
@@ -302,6 +303,142 @@ def test_render_attribution_section_tracker_offline(
     html = render_attribution_section(db, "NU")
     assert "No tracker alpha for this window" in html
     assert "Held since 2026-01-15" in html  # entry context still narrated
+
+
+# ---------------------------------------------------------------------------
+# Shared skill-decomposition engine (L8 §6)
+# ---------------------------------------------------------------------------
+
+
+def _row(
+    ticker: str,
+    *,
+    value_start: float | None,
+    alpha: float | None,
+    bought: float = 0.0,
+    sold: float = 0.0,
+    value_end: float | None = None,
+) -> PositionAlphaRow:
+    return PositionAlphaRow(
+        ticker=ticker,
+        name=None,
+        value_at_start=value_start,
+        bought_in_window=bought,
+        sold_in_window=sold,
+        value_at_end=value_end if value_end is not None else value_start,
+        actual_pl=None,
+        spy_counterfactual_pl=None,
+        alpha=alpha,
+        alpha_vs_qqq=None,
+        alpha_vs_policy=None,
+        incomplete=False,
+    )
+
+
+def _alpha(
+    rows: list[PositionAlphaRow], *, start: str = "2026-01-01", end: str = "2026-03-31"
+) -> PositionAlpha:
+    return PositionAlpha(
+        start_date=start, end_date=end, has_policy=False,
+        total_actual_pl=None, total_spy_pl=None, total_alpha=None,
+        total_alpha_vs_qqq=None, total_alpha_vs_policy=None, rows=rows,
+    )  # fmt: skip
+
+
+def test_decompose_selection_sizing_additive_identity() -> None:
+    # A: $100 -> +$20 (rate 0.2). B: $300 -> +$15 (rate 0.05). W=400, N=2.
+    # selection = (W/N)*sum(r) = 200*0.25 = 50; sizing = total - selection = 35 - 50 = -15
+    # (you put more capital in the lower-rate name -- weighting diluted selection).
+    d = decompose_alpha(_alpha([_row("A", value_start=100, alpha=20),
+                                _row("B", value_start=300, alpha=15)]))  # fmt: skip
+    assert d is not None
+    assert d.n_names == 2
+    assert d.selection_usd is not None and d.sizing_usd is not None
+    assert d.total_alpha_usd == pytest.approx(35.0)
+    assert d.selection_usd == pytest.approx(50.0)
+    assert d.sizing_usd == pytest.approx(-15.0)
+    # exact additive split
+    assert d.selection_usd + d.sizing_usd == pytest.approx(d.total_alpha_usd)
+    assert d.window_start == "2026-01-01" and d.window_end == "2026-03-31"
+
+
+def test_decompose_equal_rates_zero_sizing() -> None:
+    # Same alpha rate in both names → weighting can't add or subtract → sizing 0.
+    d = decompose_alpha(_alpha([_row("A", value_start=100, alpha=10),
+                                _row("B", value_start=300, alpha=30)]))  # fmt: skip
+    assert d is not None
+    assert d.sizing_usd == pytest.approx(0.0)
+    assert d.selection_usd == pytest.approx(40.0)
+
+
+def test_decompose_timing_flow_lean() -> None:
+    # A: net buyer (+50) into a winner (+20) → good timing (+20).
+    # B: net seller (-100) out of a winner (+15) → trimmed a winner → bad (-15).
+    d = decompose_alpha(_alpha([
+        _row("A", value_start=100, alpha=20, bought=50),
+        _row("B", value_start=300, alpha=15, sold=100),
+    ]))  # fmt: skip
+    assert d is not None
+    assert d.n_timed == 2
+    assert d.timing_usd == pytest.approx(5.0)  # +20 - 15
+
+
+def test_decompose_no_flows_timing_none() -> None:
+    d = decompose_alpha(_alpha([_row("A", value_start=100, alpha=20)]))
+    assert d is not None
+    assert d.n_timed == 0
+    assert d.timing_usd is None
+
+
+def test_decompose_conviction_join() -> None:
+    d = decompose_alpha(
+        _alpha([_row("NU", value_start=100, alpha=20), _row("MELI", value_start=100, alpha=-10)]),
+        conviction_by_ticker={"NU": 5.0, "MELI": 2.0},
+    )
+    assert d is not None
+    by = {c.conviction: c for c in d.by_conviction}
+    assert by["high"].n == 1 and by["high"].alpha_usd == pytest.approx(20.0)
+    assert by["high"].mean_conviction == pytest.approx(5.0)
+    assert by["low"].alpha_usd == pytest.approx(-10.0)
+
+
+def test_decompose_offline_returns_none() -> None:
+    assert decompose_alpha(None) is None
+
+
+def test_decompose_excludes_unpriced_names() -> None:
+    # One name has no usable value (start and end both 0) → out of the split,
+    # counted, noted; the priced name still decomposes.
+    d = decompose_alpha(_alpha([
+        _row("A", value_start=100, alpha=20),
+        _row("B", value_start=0, alpha=99, value_end=0),
+    ]))  # fmt: skip
+    assert d is not None
+    assert d.n_names == 1
+    assert d.excluded_no_value == 1
+    assert any("no usable window value" in n for n in d.notes)
+
+
+def test_decompose_value_at_end_fallback_for_new_position() -> None:
+    # Opened inside the window (start 0) → end value is the capital-at-risk proxy.
+    d = decompose_alpha(_alpha([
+        _row("A", value_start=0, alpha=20, value_end=200),
+        _row("B", value_start=200, alpha=10),
+    ]))  # fmt: skip
+    assert d is not None
+    assert d.n_names == 2  # neither excluded
+
+
+def test_decompose_min_n_guard_hedges_thin_book() -> None:
+    d = decompose_alpha(_alpha([_row("A", value_start=100, alpha=20)]))
+    assert d is not None
+    assert d.confident is False  # n=1 < the shared floor
+    assert any("low confidence" in n for n in d.notes)
+
+
+def test_decompose_empty_when_no_priced_names() -> None:
+    assert decompose_alpha(_alpha([_row("A", value_start=0, alpha=5, value_end=0)])) is None
+    assert decompose_alpha(_alpha([])) is None
 
 
 def test_book_section_and_portfolio_mount(db: Path) -> None:

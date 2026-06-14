@@ -24,6 +24,27 @@ Benchmark math is never rebuilt here (the P2.1 architecture rule): alpha
 numbers come from the tracker's PositionAlphaRow verbatim; this module only
 joins and phrases. Every DB read is best-effort (missing tables → zero
 events), matching the panel posture.
+
+THE SHARED SKILL-DECOMPOSITION ENGINE (Close-the-Loops L8, §6)
+--------------------------------------------------------------
+``decompose_alpha`` is the ONE place realized book alpha is split into the
+owner's repeatable decisions — WHICH names (selection), HOW MUCH (sizing),
+WHEN (timing) — so the coach can name his edge vs his leak, and so the future
+Brinson allocation-vs-selection view consumes the SAME decomposition rather
+than a second divergent one. It is deliberately separate from the per-position
+narrative above: the narrative tells one name's story; the decomposition reads
+the whole book's tracker rows at once. Same P2.1 discipline — it only
+arithmetises the tracker's per-name dollar alpha + start/end value + window
+flows; it never recomputes a return or a benchmark.
+
+The split is Brinson-shaped and honest about its limits:
+  * selection + sizing is an EXACT additive split of the decomposed dollar
+    alpha (over the names with a usable start value);
+  * timing is a flow-lean DIAGNOSTIC over the same names — the tracker's alpha
+    already nets benchmark-matched flows, so it measures whether within-window
+    adds/trims pointed at alpha, not a separable fourth return bucket;
+  * the shared minimum-n guard frames a thin book ("n=3, low confidence")
+    rather than asserting a skill verdict from noise.
 """
 
 from __future__ import annotations
@@ -33,6 +54,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from calibration_guard import confidence_note, is_confident
+from decision_calibration import bucket_for_conviction
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlpha, PositionAlphaRow
 from position_lifecycle import PositionEntry, list_entries
@@ -333,3 +356,225 @@ def attributions_for_book(
     ]
     out.sort(key=lambda a: (a.alpha_usd is None, -abs(a.alpha_usd or 0.0), a.ticker))
     return out
+
+
+# ===========================================================================
+# Shared skill-decomposition engine (L8, §6) — selection / sizing / timing
+# ===========================================================================
+
+# Top-contributor list cap on the by-name breakdown (the biggest stories only).
+_MAX_CONTRIBUTORS = 6
+
+
+@dataclass(frozen=True, slots=True)
+class ConvictionAlphaRow:
+    """Realized alpha grouped by stated-conviction bucket — the conviction →
+    outcome join: did the names the owner believed in actually deliver, and did
+    his weighting back them? ``sizing_usd`` is the bucket's share of the
+    weight-tilt term, so a positive ``alpha_usd`` with a negative ``sizing_usd``
+    reads as "your winners delivered, but you under-sized them"."""
+
+    conviction: str  # high | medium | low | unstated (bucket_for_conviction)
+    n: int
+    alpha_usd: float
+    sizing_usd: float
+    mean_conviction: float | None  # average 1-5 rating in the bucket, when stated
+
+
+@dataclass(frozen=True, slots=True)
+class NameContribution:
+    """One name's share of each leg — the audit trail behind the rollups."""
+
+    ticker: str
+    alpha_usd: float
+    selection_usd: float
+    sizing_usd: float
+    conviction: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class SkillDecomposition:
+    """Book alpha decomposed into the owner's repeatable decisions.
+
+    ``selection_usd + sizing_usd == total_alpha_usd`` exactly (over ``n_names``
+    — the names carrying a usable start value). ``timing_usd`` is the flow-lean
+    diagnostic over the same names (None when nothing was traded in the window).
+    ``confident`` gates whether the coach may state a skill verdict or must
+    hedge — the shared minimum-n guard over ``n_names``."""
+
+    window_start: str | None
+    window_end: str | None
+    n_names: int
+    total_alpha_usd: float | None
+    selection_usd: float | None
+    sizing_usd: float | None
+    timing_usd: float | None
+    n_timed: int
+    by_conviction: list[ConvictionAlphaRow]
+    top_contributors: list[NameContribution]
+    excluded_no_value: int
+    confident: bool
+    notes: list[str]
+
+
+def _usable_value(row: PositionAlphaRow) -> float | None:
+    """The capital-at-risk proxy for the alpha rate: the window's START value,
+    falling back to END value for a name opened inside the window (start 0).
+    None when neither is positive — that name can't carry a weight, so it is
+    excluded from the selection/sizing split (counted, noted)."""
+    for candidate in (row.value_at_start, row.value_at_end):
+        if candidate is not None and candidate > 0:
+            return float(candidate)
+    return None
+
+
+def _net_flow(row: PositionAlphaRow) -> float:
+    """Net within-window dollar flow: bought − sold. Positive = net buyer
+    (added), negative = net seller (trimmed). Missing legs read as 0."""
+    return float(row.bought_in_window or 0.0) - float(row.sold_in_window or 0.0)
+
+
+def decompose_alpha(
+    alpha: PositionAlpha | None,
+    *,
+    conviction_by_ticker: dict[str, float] | None = None,
+) -> SkillDecomposition | None:
+    """Split realized book alpha into selection / sizing / timing.
+
+    Reads the tracker's ``PositionAlpha`` rows verbatim (per-name dollar alpha,
+    start/end value, window flows) plus an optional ``ticker → conviction``
+    (1-5) map for the conviction join — supplied by the caller (the sizing
+    audit) so this engine never imports the panel. Pure; returns None when the
+    tracker is offline (``alpha is None``) or no name carries a usable value
+    (nothing to decompose) — the surface then hides rather than asserting.
+
+    Math (W = total usable value, wᵢ = valueᵢ/W, w̄ = 1/N, rᵢ = alphaᵢ/valueᵢ):
+      selection = W · w̄ · Σrᵢ   (the alpha if capital were equal-weighted —
+                                  pure pick skill, size-neutral)
+      sizing    = Σ alphaᵢ − selection = W · Σ(wᵢ − w̄)·rᵢ   (the weight tilt:
+                                  did dollar-weighting amplify selection?)
+      timing    = Σ sign(net_flowᵢ)·alphaᵢ over traded names   (did adds/trims
+                                  lean into subsequent alpha? — diagnostic)
+    """
+    if alpha is None:
+        return None
+    conv_map = {k.upper(): v for k, v in (conviction_by_ticker or {}).items()}
+
+    priced: list[tuple[str, float, float, float | None]] = []  # ticker, alpha, value, conviction
+    excluded_no_value = 0
+    timing_usd = 0.0
+    n_timed = 0
+    for row in alpha.rows:
+        if row.ticker is None or row.alpha is None:
+            continue
+        ticker = row.ticker.upper()
+        a = float(row.alpha)
+        flow = _net_flow(row)
+        if flow != 0.0:
+            timing_usd += (1.0 if flow > 0 else -1.0) * a
+            n_timed += 1
+        value = _usable_value(row)
+        if value is None:
+            excluded_no_value += 1
+            continue
+        priced.append((ticker, a, value, conv_map.get(ticker)))
+
+    n_names = len(priced)
+    if n_names == 0:
+        return None
+
+    total_w = sum(value for _, _, value, _ in priced)
+    if total_w <= 0:  # pragma: no cover - _usable_value already guarantees > 0
+        return None
+
+    # selection = (W/N)·Σrᵢ ; each name's selection share = (W/N)·rᵢ = alphaᵢ/(N·wᵢ).
+    mean_w = total_w / n_names
+    contributions: list[NameContribution] = []
+    selection_usd = 0.0
+    for ticker, a, value, conviction in priced:
+        rate = a / value
+        sel_i = mean_w * rate
+        siz_i = a - sel_i
+        selection_usd += sel_i
+        contributions.append(
+            NameContribution(
+                ticker=ticker,
+                alpha_usd=a,
+                selection_usd=sel_i,
+                sizing_usd=siz_i,
+                conviction=conviction,
+            )
+        )
+    total_alpha_usd = sum(c.alpha_usd for c in contributions)
+    sizing_usd = total_alpha_usd - selection_usd
+
+    by_conviction = _roll_up_by_conviction(contributions)
+    top = sorted(contributions, key=lambda c: -abs(c.alpha_usd))[:_MAX_CONTRIBUTORS]
+
+    confident = is_confident(n_names)
+    notes: list[str] = [
+        f"Selection vs sizing split over {confidence_note(n_names)} priced name"
+        f"{'s' if n_names != 1 else ''}."
+    ]
+    if not confident:
+        notes.append("Thin book — read the split as directional, not a settled skill verdict.")
+    if excluded_no_value:
+        notes.append(
+            f"{excluded_no_value} name(s) had no usable window value and are out of the "
+            "selection/sizing split (still in raw alpha upstream)."
+        )
+    notes.append(
+        "Timing is a flow-lean diagnostic: the tracker's alpha already nets "
+        "benchmark-matched flows, so it scores trade DIRECTION, not a separable bucket."
+    )
+
+    return SkillDecomposition(
+        window_start=alpha.start_date,
+        window_end=alpha.end_date,
+        n_names=n_names,
+        total_alpha_usd=total_alpha_usd,
+        selection_usd=selection_usd,
+        sizing_usd=sizing_usd,
+        timing_usd=timing_usd if n_timed else None,
+        n_timed=n_timed,
+        by_conviction=by_conviction,
+        top_contributors=top,
+        excluded_no_value=excluded_no_value,
+        confident=confident,
+        notes=notes,
+    )
+
+
+def _roll_up_by_conviction(contributions: list[NameContribution]) -> list[ConvictionAlphaRow]:
+    """Group the per-name contributions by conviction bucket — the conviction →
+    realized-outcome join. Ordered high → unstated (CONVICTION_ORDER), empty
+    buckets dropped."""
+    from decision_calibration import CONVICTION_ORDER
+
+    acc: dict[str, dict[str, float]] = {}
+    for c in contributions:
+        bucket = bucket_for_conviction(c.conviction)
+        slot = acc.setdefault(bucket, {"n": 0.0, "alpha": 0.0, "sizing": 0.0, "conv_sum": 0.0,
+                                       "conv_n": 0.0})  # fmt: skip
+        slot["n"] += 1
+        slot["alpha"] += c.alpha_usd
+        slot["sizing"] += c.sizing_usd
+        if c.conviction is not None:
+            slot["conv_sum"] += c.conviction
+            slot["conv_n"] += 1
+    rows: list[ConvictionAlphaRow] = []
+    for bucket in CONVICTION_ORDER:
+        slot = acc.get(bucket)
+        if slot is None:
+            continue
+        conv_n = slot["conv_n"]
+        rows.append(
+            ConvictionAlphaRow(
+                conviction=bucket,
+                n=int(slot["n"]),
+                alpha_usd=slot["alpha"],
+                sizing_usd=slot["sizing"],
+                mean_conviction=(slot["conv_sum"] / conv_n) if conv_n else None,
+            )
+        )
+    return rows

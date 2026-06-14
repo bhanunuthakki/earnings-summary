@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from attribution import decompose_alpha
 from decision_calibration import build_calibration
-from integrations.portfolio_tracker_client import LivePortfolio
+from integrations.portfolio_tracker_client import LivePortfolio, PositionAlpha, PositionAlphaRow
 from pipeline.allocation_decisions_panel import compose_decisions_page
 
 _SCHEMA = """
@@ -158,6 +159,91 @@ def test_time_to_outcome(db: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Period-over-period cohorts (L8)
+# ---------------------------------------------------------------------------
+
+
+def test_cohorts_quarter_trend_and_delta(db: Path) -> None:
+    # Q1 2026: 1 correct, 1 wrong → 50%. Q2 2026: 2 correct → 100%.
+    _insert(db, outcome_label="correct", made_at="2026-02-01T00:00:00",
+            outcome_at="2026-03-01T00:00:00")  # fmt: skip
+    _insert(db, outcome_label="wrong", made_at="2026-02-15T00:00:00",
+            outcome_at="2026-03-01T00:00:00")  # fmt: skip
+    _insert(db, outcome_label="correct", made_at="2026-05-01T00:00:00",
+            outcome_at="2026-06-01T00:00:00")  # fmt: skip
+    _insert(db, outcome_label="correct", made_at="2026-05-20T00:00:00",
+            outcome_at="2026-06-01T00:00:00")  # fmt: skip
+    # A pending Q2 call counts in `total` but never in graded/hit_rate.
+    _insert(db, outcome_label="pending", made_at="2026-06-10T00:00:00")
+
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    assert stats.cohort_granularity == "quarter"
+    assert [c.period for c in stats.cohorts] == ["2026-Q1", "2026-Q2"]
+    q1, q2 = stats.cohorts
+    assert (q1.graded, q1.correct, q1.total) == (2, 1, 2)
+    assert q1.hit_rate == pytest.approx(0.5)
+    assert (q2.graded, q2.correct, q2.total) == (2, 2, 3)  # 2 graded + 1 pending
+    assert q2.hit_rate == pytest.approx(1.0)
+    assert stats.hit_rate_delta == pytest.approx(0.5)
+    assert stats.improving is True
+
+
+def test_cohort_conviction_gap(db: Path) -> None:
+    # One quarter: a high-conviction correct + a low-conviction wrong.
+    _insert(db, conviction="high", outcome_label="correct", made_at="2026-02-01T00:00:00")
+    _insert(db, conviction="low", outcome_label="wrong", made_at="2026-02-10T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    (cohort,) = stats.cohorts
+    assert cohort.high_hit_rate == pytest.approx(1.0)
+    assert cohort.rest_hit_rate == pytest.approx(0.0)  # low conviction is "rest"
+    assert cohort.conviction_gap == pytest.approx(1.0)  # high earned its label
+
+
+def test_cohort_gap_none_when_one_side_empty(db: Path) -> None:
+    # Only high-conviction graded calls → no "rest" to compare → gap None.
+    _insert(db, conviction="high", outcome_label="correct", made_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    (cohort,) = stats.cohorts
+    assert cohort.high_hit_rate == pytest.approx(1.0)
+    assert cohort.rest_hit_rate is None
+    assert cohort.conviction_gap is None
+
+
+def test_cohort_single_graded_period_no_trend(db: Path) -> None:
+    _insert(db, outcome_label="correct", made_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    assert len(stats.cohorts) == 1
+    assert stats.hit_rate_delta is None  # need two graded periods for a direction
+    assert stats.improving is None
+
+
+def test_cohort_year_granularity_and_bad_value_fallback(db: Path) -> None:
+    _insert(db, outcome_label="correct", made_at="2025-06-01T00:00:00")
+    _insert(db, outcome_label="wrong", made_at="2026-06-01T00:00:00")
+    yearly = build_calibration(db_path=db, cohort_granularity="year")
+    assert yearly is not None
+    assert [c.period for c in yearly.cohorts] == ["2025", "2026"]
+    # An unrecognised granularity falls back to quarter rather than raising.
+    bad = build_calibration(db_path=db, cohort_granularity="weekly")
+    assert bad is not None
+    assert bad.cohort_granularity == "quarter"
+
+
+def test_cohort_unparseable_made_at_excluded_from_curve(db: Path) -> None:
+    _insert(db, outcome_label="correct", made_at="not-a-date")
+    _insert(db, outcome_label="correct", made_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    # The garbage stamp drops out of the curve but stays in the flat totals.
+    assert [c.period for c in stats.cohorts] == ["2026-Q1"]
+    assert stats.total == 2 and stats.graded == 2
+
+
+# ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
 
@@ -179,6 +265,28 @@ def test_panel_renders_calibration_section(db: Path) -> None:
     assert 'class="adc-kpis"' in html
 
 
+def test_panel_renders_trend_curve(db: Path) -> None:
+    # Two graded quarters → the "am I getting better?" sparkline + table appear.
+    _insert(db, outcome_label="wrong", made_at="2026-02-01T00:00:00")
+    _insert(db, outcome_label="correct", made_at="2026-05-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    html = compose_decisions_page([], [], _offline(), None, calibration=stats)
+    assert "Am I getting better?" in html
+    assert '<svg class="adc-spark"' in html  # the rendered sparkline (not just the CSS rule)
+    assert "improving" in html  # 0% → 100% across the two quarters
+    assert "<polyline" in html
+
+
+def test_panel_no_trend_with_single_period(db: Path) -> None:
+    _insert(db, outcome_label="correct", made_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    html = compose_decisions_page([], [], _offline(), None, calibration=stats)
+    assert "Am I getting better?" not in html  # need ≥2 graded periods
+    assert '<svg class="adc-spark"' not in html
+
+
 def test_panel_empty_state_and_backward_call_shape(db: Path) -> None:
     stats = build_calibration(db_path=db)
     assert stats is not None
@@ -187,3 +295,36 @@ def test_panel_empty_state_and_backward_call_shape(db: Path) -> None:
     # Pre-S15 call shape (no calibration arg) still renders, without the section.
     legacy = compose_decisions_page([], [], _offline(), None)
     assert "<h2>Decision calibration</h2>" not in legacy
+    # And without the new attribution arg → no skill section (byte-shape preserved).
+    assert "<h2>Skill decomposition</h2>" not in legacy
+
+
+def _two_name_alpha() -> PositionAlpha:
+    def row(t: str, value: float, a: float) -> PositionAlphaRow:
+        return PositionAlphaRow(
+            ticker=t, name=None, value_at_start=value, bought_in_window=0.0,
+            sold_in_window=0.0, value_at_end=value, actual_pl=None,
+            spy_counterfactual_pl=None, alpha=a, alpha_vs_qqq=None,
+            alpha_vs_policy=None, incomplete=False,
+        )  # fmt: skip
+
+    return PositionAlpha(
+        start_date="2026-01-01", end_date="2026-03-31", has_policy=False,
+        total_actual_pl=None, total_spy_pl=None, total_alpha=None,
+        total_alpha_vs_qqq=None, total_alpha_vs_policy=None,
+        rows=[row("A", 100, 20), row("B", 300, 15)],
+    )  # fmt: skip
+
+
+def test_panel_renders_skill_decomposition(db: Path) -> None:
+    stats = build_calibration(db_path=db)
+    attribution = decompose_alpha(_two_name_alpha(), conviction_by_ticker={"A": 5.0})
+    assert attribution is not None
+    html = compose_decisions_page(
+        [], [], _offline(), None, calibration=stats, attribution=attribution
+    )
+    assert "<h2>Skill decomposition</h2>" in html
+    assert "selection" in html and "sizing" in html and "timing" in html
+    assert "Conviction &rarr; outcome" in html
+    # Thin book (n=2) → the read is hedged as directional, not a verdict.
+    assert "Directional only (thin book)" in html
