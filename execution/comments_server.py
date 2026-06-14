@@ -275,6 +275,44 @@ def _candidate_to_json(cand: object) -> dict[str, object]:
 # the queue can't hand-wave a name into "built".
 _DISCOVERY_OWNER_STATUSES: frozenset[str] = frozenset({"new", "queued", "dismissed"})
 
+
+def _payload_text(value: object) -> str | None:
+    """A trimmed non-empty string from a JSON payload field, else None."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _record_dismiss_pass(
+    *,
+    ticker: str,
+    reason: str,
+    revisit_text: str | None,
+    source_dismissal_id: int | None,
+    db_path: Path,
+) -> dict[str, object] | None:
+    """Record a pass/avoid decision (L11), JSON-shaped for the response. None
+    when the ledger is unavailable — the dismiss/queue move still succeeded, the
+    optional decision capture just didn't land."""
+    from pass_decisions import (
+        LENS_DISCOVERY_DISMISSAL,
+        LENS_MANUAL_PASS,
+        record_pass_decision,
+    )
+
+    result = record_pass_decision(
+        ticker=ticker,
+        reason=reason,
+        revisit_text=revisit_text,
+        source_dismissal_id=source_dismissal_id,
+        source_lens=(
+            LENS_DISCOVERY_DISMISSAL if source_dismissal_id is not None else LENS_MANUAL_PASS
+        ),
+        db_path=db_path,
+    )
+    if result is None:
+        return None
+    return {"decision_id": result.decision_id, "created": result.created, "ticker": ticker}
+
+
 # The deterministic /discovery chat commands moved to ask.commands (the
 # unified ask engine intercepts them from BOTH chat surfaces); the REST
 # build routes share its buildable-status set via discovery.store.
@@ -1631,7 +1669,13 @@ def create_app(
     def discovery_status_api(cand_id: int):
         """Owner lifecycle moves (P5.4): queued / dismissed / new (re-open).
         ``building``/``built`` belong to the build pathway and are rejected
-        here — the queue can't hand-wave a name into built."""
+        here — the queue can't hand-wave a name into built.
+
+        On a dismiss the owner may attach a ``reason`` (why pass) and optional
+        ``revisit_if`` text — when present, the dismiss becomes a first-class,
+        gradeable ``avoid`` decision (L11) so a passed name that later triples
+        leaves a trace. Absent a reason the dismiss is queue-state only, as
+        before."""
         from discovery.store import set_status
 
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
@@ -1647,7 +1691,47 @@ def create_app(
             return ({"error": "discovery_candidates table missing (run alembic upgrade)"}, 500)
         if row is None:
             return ({"error": f"candidate {cand_id} not found"}, 404)
-        return {"candidate": _candidate_to_json(row)}
+
+        recorded: dict[str, object] | None = None
+        if status == "dismissed":
+            reason = _payload_text(payload.get("reason"))
+            if reason is not None:
+                recorded = _record_dismiss_pass(
+                    ticker=row.ticker,
+                    reason=reason,
+                    revisit_text=_payload_text(payload.get("revisit_if")),
+                    source_dismissal_id=cand_id,
+                    db_path=db_path,
+                )
+        out: dict[str, object] = {"candidate": _candidate_to_json(row)}
+        if recorded is not None:
+            out["pass_decision"] = recorded
+        return out
+
+    @app.route("/api/decisions/pass", methods=["POST"])
+    def record_pass_api():
+        """Manual entry path for an error-of-omission (L11): record "I passed on
+        TICKER because ... / I'd revisit if ..." as a first-class ``avoid``
+        decision for ANY ticker, queue or not. ``reason`` is required; the
+        optional ``revisit_if`` text is extracted into falsifiable numeric +
+        qualitative conditions by the morning-pipeline attach rungs."""
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = _payload_text(payload.get("ticker"))
+        reason = _payload_text(payload.get("reason"))
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        if not reason:
+            return ({"error": "reason required (the why behind the pass)"}, 400)
+        recorded = _record_dismiss_pass(
+            ticker=ticker.upper(),
+            reason=reason,
+            revisit_text=_payload_text(payload.get("revisit_if")),
+            source_dismissal_id=None,
+            db_path=db_path,
+        )
+        if recorded is None:
+            return ({"error": "decisions ledger unavailable (run alembic upgrade)"}, 500)
+        return {"pass_decision": recorded}
 
     @app.route("/api/discovery/sources", methods=["GET"])
     def discovery_sources_api():

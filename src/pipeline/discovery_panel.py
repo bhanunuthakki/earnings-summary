@@ -188,9 +188,25 @@ _PANEL_JS = """
     if (act === 'build') { buildTickers([holder.getAttribute('data-cand-ticker')]); return; }
     var status = {queue: 'queued', dismiss: 'dismissed', reopen: 'new'}[act];
     if (!status) return;
+    var body = {status: status};
+    // Dismiss optionally becomes a first-class, gradeable AVOID decision: note
+    // WHY you passed (+ what would make you revisit). Blank = queue-state only.
+    if (act === 'dismiss') {
+      var tk = holder.getAttribute('data-cand-ticker') || 'this name';
+      var reason = window.prompt('Passing on ' + tk + '? Optionally note WHY — records a '
+        + 'gradeable avoid so a passed name that later triples leaves a trace. '
+        + '(blank = just dismiss)', '');
+      if (reason && reason.trim()) {
+        body.reason = reason.trim();
+        var revisit = window.prompt('What would make you revisit ' + tk + '? (optional — e.g. '
+          + '"a credible competitor stumbles", "valuation halves below $90", '
+          + '"NPLs above 7% for 2 quarters")', '');
+        if (revisit && revisit.trim()) body.revisit_if = revisit.trim();
+      }
+    }
     fetch('/api/discovery/candidates/' + id + '/status', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({status: status})
+      body: JSON.stringify(body)
     }).then(function (r) { if (r.ok) refresh(); });
   });
   el('dq-min-score').addEventListener('change', refresh);

@@ -18,7 +18,7 @@ from dispatch_registry import Registry, RegistryConflict
 _HELP_TEXT = (
     "Commands handled instantly (no LLM):\n"
     "- /discovery list — top live new-name candidates with why-surfaced\n"
-    "- /discovery queue <TICKER> | /discovery dismiss <TICKER>\n"
+    "- /discovery queue <TICKER> | /discovery dismiss <TICKER> [why...]\n"
     "- /discovery build <TICKER> — start the eval build (~25 min + LLM spend)\n"
     "- /view <question> — force a live data view (compile + run, no prose)\n"
     "- /help — this list\n"
@@ -45,10 +45,11 @@ def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str |
 def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
     """Deterministic ``/discovery`` chat commands (P5.4).
 
-    /discovery list           — top live candidates with why-surfaced
-    /discovery queue <T>      — mark a candidate queued
-    /discovery dismiss <T>    — dismiss (stays dismissed across re-runs)
-    /discovery build <T>      — start the eval build job (the approval)
+    /discovery list             — top live candidates with why-surfaced
+    /discovery queue <T>        — mark a candidate queued
+    /discovery dismiss <T> [why] — dismiss (stays dismissed across re-runs); a
+                                  trailing reason records it as a gradeable avoid
+    /discovery build <T>        — start the eval build job (the approval)
     """
     from discovery.store import BUILDABLE_STATUSES, list_candidates, set_status
 
@@ -89,6 +90,24 @@ def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
             return f"{arg} isn't in the live discovery queue. " + usage
         new_status = "queued" if verb == "queue" else "dismissed"
         set_status(cand.id, new_status, db_path=db_path)
+        # `/discovery dismiss T <reason...>` records the pass as a first-class,
+        # gradeable AVOID decision (L11) so a name you passed leaves a trace.
+        reason = " ".join(parts[3:]).strip() if verb == "dismiss" and len(parts) > 3 else ""
+        if reason:
+            from pass_decisions import LENS_DISCOVERY_DISMISSAL, record_pass_decision
+
+            result = record_pass_decision(
+                ticker=arg,
+                reason=reason,
+                source_dismissal_id=cand.id,
+                source_lens=LENS_DISCOVERY_DISMISSAL,
+                db_path=db_path,
+            )
+            if result is not None:
+                return (
+                    f"{arg} -> dismissed, and recorded as an avoid decision "
+                    f"(#{result.decision_id}) — it will be graded against what it does next."
+                )
         return f"{arg} -> {new_status}."
 
     if verb == "build":
