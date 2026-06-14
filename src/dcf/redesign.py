@@ -1107,6 +1107,51 @@ def write_computed_outputs(workbook_path: Path, inp: RedesignInputs) -> Scenario
 # --------------------------------------------------------------------------- #
 # Edit-preservation — capture the user-owned Dashboard, re-inject after rebuild
 # --------------------------------------------------------------------------- #
+# Dashboard row -> the RedesignInputs scalar attribute it carries. The inverse of
+# the read in ``read_inputs`` — used by ``capture_from_inputs`` to round-trip an
+# edited input set back onto the yellow cells via ``inject_dashboard``. WACC is
+# absent on purpose: it has no input cell (the WACC tab derives it from the CAPM
+# drivers below), so an in-app WACC change persists only through beta/rf/ERP/Kd.
+_SCALAR_ROW_ATTR: tuple[tuple[int, str], ...] = (
+    (_DB_MARGIN_NEAR, "near_op_margin"),
+    (_DB_MARGIN_TERM, "terminal_op_margin"),
+    (_DB_TAX, "tax_rate"),
+    (_DB_CAPEX26, "capex_2026_m"),
+    (_DB_TERM_CAPEX_DA, "terminal_capex_da"),
+    (_DB_RF, "risk_free_rate"),
+    (_DB_ERP, "equity_risk_premium"),
+    (_DB_BETA, "beta"),
+    (_DB_KD, "cost_of_debt"),
+    (_DB_MULT, "exit_multiple"),
+    (_DB_TG, "terminal_growth_g"),
+)
+
+
+def capture_from_inputs(inp: RedesignInputs) -> CapturedDashboard:
+    """A :class:`CapturedDashboard` built from an in-memory ``RedesignInputs``.
+
+    The bridge from the JSON recompute path back to the workbook: an in-app save
+    feeds this to :func:`inject_dashboard` to write the edited yellow cells onto
+    the live ``dcf/<T>.xlsx`` (so the edits survive a from-scratch rebuild and
+    Push-to-Sheets publishes them). Only the editable input cells are written —
+    segment near/terminal growth, the scalar levers (margins, tax, capex, the
+    CAPM drivers, exit multiple, terminal g), and the terminal method/basis;
+    ``scenario_deltas`` is left empty so the workbook keeps its own Bull/Bear
+    offset cells. Current price is a market datum, not captured here.
+    """
+    segment_growth = {
+        s: (inp.near_growth_by_segment[s], inp.terminal_growth_by_segment[s]) for s in inp.segments
+    }
+    scalars = {row: float(getattr(inp, attr)) for row, attr in _SCALAR_ROW_ATTR}
+    return CapturedDashboard(
+        segment_growth=segment_growth,
+        scalars=scalars,
+        terminal_method=inp.terminal_method,
+        terminal_basis=inp.terminal_basis,
+        scenario_deltas={},
+    )
+
+
 def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
     """Snapshot the user-owned Dashboard inputs (yellow cells) for preservation.
 

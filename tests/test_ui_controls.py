@@ -369,6 +369,7 @@ REGISTERED: frozenset[str] = frozenset(
         "report/renderers/workspace_charts.py",
         "report/renderers/workspace_chat.py",
         "report/renderers/workspace_comments.py",
+        "report/renderers/workspace_dcf.py",
         "report/renderers/workspace_sections/chrome.py",
         "report/renderers/workspace_sections/thesis_risk.py",
         "report/renderers/workspace_styles.py",

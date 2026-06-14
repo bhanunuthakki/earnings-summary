@@ -27,6 +27,7 @@ from report.models import (
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_data import format_ledger_value, kpi_is_stale, kpi_trend_delta
+from report.renderers.workspace_dcf import render_dcf_editor
 from report.renderers.workspace_sections._shared import (
     _empty_panel,
     _esc,
@@ -89,6 +90,12 @@ def _thesis_tab(
     _valuation_summary_panel(body, snap)
     _break_rules_panel(body, thesis)
     body.write("</div>")
+
+    # In-app DCF modify→recompute loop (L4): editable assumptions under the
+    # valuation card that live-recompute the scenarios + sensitivity heatmap and
+    # save through the override ledger. Static shell here; the JS hydrates it from
+    # /api/dcf/inputs (degrades to a collapsed launcher when the server is off).
+    render_dcf_editor(body, snap.ticker)
 
     # Decision history sidebar — only when the audit ledger has rows for this
     # ticker. Reads `snap.recent_decisions` (last 3 LLM recommendations).

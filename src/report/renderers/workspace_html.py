@@ -34,6 +34,8 @@ from report.renderers.workspace_chat import JS as CHAT_JS
 from report.renderers.workspace_comments import CSS as COMMENTS_CSS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
 from report.renderers.workspace_data import WorkspaceP3Panels, load_workspace_p3_panels
+from report.renderers.workspace_dcf import CSS as DCF_CSS
+from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_script import JS
 
 # Section renderers + shared helpers: moved to workspace_sections/ in the
@@ -366,6 +368,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <style>{CHARTS_V2_CSS}</style>
 <style>{COMMENTS_CSS}</style>
 <style>{CHAT_CSS}</style>
+<style>{DCF_CSS}</style>
 </head>
 <body>
 {body}
@@ -379,6 +382,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <script>{SOURCE_CHIP_JS}</script>
 <script>{COMMENTS_JS}</script>
 <script>{CHAT_JS}</script>
+<script>{DCF_JS}</script>
 </body>
 </html>
 """

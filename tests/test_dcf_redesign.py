@@ -1138,6 +1138,68 @@ def test_builder_reads_scenario_override_from_block(
     ) == pytest.approx(redesign.BULL_SEED.exit_multiple)
 
 
+def test_apply_edits_persists_without_rebuild_and_records_override(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """apply_edits (the in-app save) writes edited assumptions onto the LIVE
+    workbook, recomputes + re-persists dcf_runs, and records the change in the
+    override ledger WITHOUT overwriting the Opus baseline — no FMP rebuild, the
+    market quote carried forward from the prior run."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    # Seed the workbook + dcf_runs + assumptions JSON via a normal refresh.
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    m0 = base_inp.exit_multiple
+    conn = sqlite3.connect(str(db))
+    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    conn.close()
+
+    payload = base_inp.to_dict()
+    payload["exit_multiple"] = m0 + 3.0  # a clean ledger-tracked scalar
+    res = refresh_dcf.apply_edits(
+        "TESTCO", refresh_repo, db, redesign.RedesignInputs.from_dict(payload)
+    )
+    assert res["status"] == "ok", res
+
+    # The edit landed on the live workbook (no rebuild) and lifts the value.
+    edited = redesign.read_inputs(dest)
+    assert edited is not None and edited.exit_multiple == pytest.approx(m0 + 3.0)
+    assert res["fair_value_per_share"] > float(npv0)
+
+    # dcf_runs re-persisted; the prior market quote was carried forward.
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[1] == pytest.approx(50.0)
+    assert res["fair_value_per_share"] == pytest.approx(float(row[0]))
+
+    # The override ledger records the edit; the Opus baseline is NOT overwritten.
+    adata = json.loads(
+        (refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json").read_text(encoding="utf-8")
+    )
+    assert adata["opus_baseline"]["values"]["exit_multiple"] == pytest.approx(m0)
+    assert adata["assumption_overrides"]["exit_multiple"]["opus_value"] == pytest.approx(m0)
+    assert adata["redesign"]["exit_multiple"] == pytest.approx(m0 + 3.0)
+
+
+def test_apply_edits_no_workbook_fails_soft(refresh_repo: Path) -> None:
+    """No redesigned workbook to edit → a soft failure, not a crash (the route
+    maps this to 409)."""
+    db = refresh_repo / "data" / "portfolio.db"
+    res = refresh_dcf.apply_edits(
+        "TESTCO", refresh_repo, db, redesign.RedesignInputs.from_dict(_BASE.to_dict())
+    )
+    assert res["status"] == "failed"
+    assert "no redesigned workbook" in str(res["reason"])
+
+
 def test_refresh_skips_dcf_not_applicable(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

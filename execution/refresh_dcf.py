@@ -716,6 +716,137 @@ def _refresh_redesign(
     }
 
 
+def _prior_live_price(db_path: Path, ticker: str) -> tuple[float | None, datetime | None]:
+    """The prior dcf_runs row's ``(live_price, live_price_at)`` for a ticker, or
+    ``(None, None)``. An in-app edit changes the model, not the market quote —
+    ``apply_edits`` carries the last-fetched price forward rather than faking a
+    fresh one (price-leg freshness is a separate concern)."""
+    if not db_path.exists():
+        return None, None
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT live_price, live_price_at FROM dcf_runs WHERE ticker = ?", (ticker,)
+            ).fetchone()
+    except sqlite3.Error:
+        return None, None
+    if row is None:
+        return None, None
+    price = float(row["live_price"]) if row["live_price"] is not None else None
+    at_raw = row["live_price_at"]
+    at: datetime | None = None
+    if isinstance(at_raw, datetime):
+        at = at_raw
+    elif isinstance(at_raw, str) and at_raw:
+        with contextlib.suppress(ValueError):
+            at = datetime.fromisoformat(at_raw)
+    return price, at
+
+
+def apply_edits(
+    ticker: str,
+    repo_root: Path,
+    db_path: Path,
+    inp_edited: redesign_mod.RedesignInputs,
+) -> dict[str, object]:
+    """Persist in-app DCF assumption edits WITHOUT an FMP rebuild.
+
+    The non-rebuild sibling of :func:`_refresh_redesign` — the in-app
+    modify→save loop behind ``POST /api/dcf/save``. It writes the edited yellow
+    Dashboard cells onto the live workbook, re-reads (so WACC is re-derived from
+    the saved CAPM drivers — the inputs of record), recomputes the
+    value-of-record + scenarios + sensitivity, reconciles the override ledger
+    against the IMMUTABLE Opus baseline (``write_provenance`` never overwrites
+    it), mirrors the edits into the from-scratch default, and upserts
+    ``dcf_runs``. The market quote is preserved from the prior run. Returns a
+    result dict shaped like ``_refresh_redesign``'s.
+    """
+    ticker = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
+    if not redesign_mod.is_redesign_format(dest):
+        return {"ticker": ticker, "status": "failed", "reason": "no redesigned workbook to edit"}
+
+    # Write the edited input cells onto the live workbook (no FMP rebuild, no
+    # price change), then re-read: WACC re-derives from the saved CAPM drivers.
+    redesign_mod.inject_dashboard(
+        dest, redesign_mod.capture_from_inputs(inp_edited), current_price=None
+    )
+    try:
+        inp = redesign_mod.read_inputs(dest)
+        rv = redesign_mod.value(inp) if inp is not None else None
+    except redesign_mod.RedesignError as e:
+        return {"ticker": ticker, "status": "failed", "reason": str(e)}
+    if inp is None or rv is None:
+        return {"ticker": ticker, "status": "failed", "reason": "workbook not redesign after edit"}
+
+    scenarios = redesign_mod.write_computed_outputs(dest, inp)
+
+    assumptions_path = repo_root / "data" / "dcf_assumptions" / f"{ticker}.json"
+    provenance: dict[str, object]
+    try:
+        provenance = {
+            "status": "ok",
+            "sources": assumptions_doc.write_provenance(
+                dest, inp, assumptions_path, ticker=ticker, update_ledger=True
+            ),
+        }
+    except assumptions_doc.ProvenanceError as e:
+        provenance = {"status": "error", "detail": str(e)}
+        sys.stderr.write(f"WARNING: assumption provenance for {ticker} failed: {e}\n")
+
+    sync = sync_assumptions_json(repo_root, ticker, inp)
+    if sync.status == "failed":
+        sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
+
+    holdings = _load_holdings(repo_root, ticker)
+    mos_bar = holdings.get("mos_bar") if holdings else None
+    mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
+
+    prior_price, prior_price_at = _prior_live_price(db_path, ticker)
+    live_price = prior_price if prior_price is not None else inp.current_price
+    fair_value = rv.value_per_share_usd
+    over_under = persist_mod.derive_over_under(live_price, fair_value)
+
+    row = persist_mod.DcfRunRow(
+        ticker=ticker,
+        valuation_date=date.today(),
+        horizon_years=redesign_mod.N_FC,
+        wacc=rv.wacc,
+        npv=rv.operating_value_usd_m,
+        npv_per_share=fair_value,
+        shares_outstanding=rv.diluted_shares_m * 1_000_000.0,
+        currency=CURRENCY_DEFAULT,
+        live_price=live_price,
+        live_price_at=prior_price_at,
+        mos_bar_used=mos_bar_f,
+        assumption_snapshot_json=_redesign_snapshot(rv, str(dest), scenarios=scenarios, inp=inp),
+        notes=f"workbook={dest.name} (redesigned; in-app edit)",
+        assumptions_sync_status=sync.as_status_text(),
+        assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+    )
+    with sqlite3.connect(str(db_path)) as conn:
+        persist_mod.upsert(conn, row)
+
+    return {
+        "ticker": ticker,
+        "status": "ok",
+        "workbook": str(dest),
+        "format": "redesign",
+        "assumptions_sync": dataclasses.asdict(sync),
+        "assumption_provenance": provenance,
+        "fair_value_per_share": fair_value,
+        "fair_value_bull": scenarios.bull,
+        "fair_value_bear": scenarios.bear,
+        "enterprise_value_M": rv.operating_value_usd_m,
+        "live_price": live_price,
+        "over_under_pct": over_under,
+        "mos_bar": mos_bar_f,
+        "wacc": rv.wacc,
+        "terminal_method": rv.terminal_method,
+    }
+
+
 def _load_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
     path = repo_root / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
     if not path.exists():
