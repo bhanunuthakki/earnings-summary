@@ -358,6 +358,117 @@ def test_decisions_ledger_lines(db: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert load_packs(["decisions"], db_path=db, focus_tickers=["TSM"]) == []
 
 
+# ---------------------------------------------------------------------------
+# calibration — the analyst's own track record (decision_calibration)
+# ---------------------------------------------------------------------------
+
+
+def _calibration_db(tmp_path: Path, *, decisions: list[tuple[object, ...]]) -> Path:
+    """A minimal DB carrying only the decisions a calibration test needs."""
+    path = tmp_path / "calib.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_DDL)
+    conn.executemany(
+        "INSERT INTO decisions (ticker, recommendation_kind, conviction, made_at, "
+        "user_action_kind, outcome_label, outcome_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        decisions,
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_calibration_overall_by_conviction_and_focus_cohort(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _one(db, "calibration", ["NU"], monkeypatch)
+    assert item is not None
+    text = str(item["text"])
+    # Fixture: 2 decisions, 1 graded (MELI add medium → correct). The sole
+    # graded call is n=1, so every rate is honestly hedged, never asserted bare.
+    assert "overall 100% correct" in text
+    assert "low confidence" in text  # n=1 < the min-n floor
+    assert "medium-conviction 100% correct" in text
+    # NU's pending high-conviction trim is the live call; high has no graded
+    # history, so the cohort line says so honestly instead of inventing a rate.
+    assert "NU carries a pending high-conviction trim call" in text
+    assert "no graded high-conviction calls yet" in text
+    assert item["kind"] == "calibration"
+    assert item["href"] == "/#decisions_record"
+
+
+def test_calibration_focus_cohort_reports_graded_hit_rate(tmp_path: Path) -> None:
+    db = _calibration_db(
+        tmp_path,
+        decisions=[
+            # 10 graded high-conviction calls: 4 correct → 40% (n=10, at the floor).
+            *[
+                (
+                    "AAA",
+                    "add",
+                    "high",
+                    "2025-01-01T00:00:00",
+                    "followed",
+                    "correct" if k < 4 else "wrong",
+                    "2025-06-01T00:00:00",
+                )
+                for k in range(10)
+            ],
+            # A live (pending) high-conviction call on NU to confront.
+            ("NU", "trim", "high", "2026-05-01T00:00:00", None, None, None),
+        ],
+    )
+    items = load_packs(["calibration"], db_path=db, focus_tickers=["NU"])
+    assert len(items) == 1
+    text = str(items[0]["text"])
+    assert "high-conviction 40% correct (n=10)" in text  # at the floor → no hedge
+    assert "low confidence" not in text
+    # The keystone callout: the live call weighed against its own cohort.
+    assert "NU carries a pending high-conviction trim call" in text
+    assert "your high-conviction calls 40% correct (n=10)" in text
+    assert "median days to outcome" in text  # outcome_at present → timing computed
+
+
+def test_calibration_focus_uses_stated_conviction_when_no_pending_decision(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "calib2.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_DDL)
+    # One graded call so the ledger isn't empty (the pack materializes).
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, conviction, made_at, "
+        "outcome_label, outcome_at) VALUES ('XYZ', 'add', 'medium', "
+        "'2025-01-01T00:00:00', 'correct', '2025-06-01T00:00:00')"
+    )
+    # ZZZ has a stated 5/5 conviction but no decision row — the fallback path.
+    conn.execute(
+        "INSERT INTO position_sizing_intent (user_id, ticker, intent_kind, intent_value, "
+        "created_at, updated_at) VALUES (?, 'ZZZ', 'conviction', 5.0, "
+        "'2026-05-01T00:00:00', '2026-05-01T00:00:00')",
+        (DEFAULT_USER_ID,),
+    )
+    conn.commit()
+    conn.close()
+    items = load_packs(["calibration"], db_path=path, focus_tickers=["ZZZ"])
+    assert len(items) == 1
+    text = str(items[0]["text"])
+    # 5/5 maps to the high cohort; no graded high calls → honest n=0, no invented rate.
+    assert "ZZZ carries a stated conviction of 5/5 (high)" in text
+    assert "no graded high-conviction calls yet" in text
+
+
+def test_calibration_empty_ledger_contributes_nothing(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.db"
+    conn = sqlite3.connect(str(empty))
+    conn.executescript(_DDL)
+    conn.commit()
+    conn.close()
+    assert load_packs(["calibration"], db_path=empty, focus_tickers=["NU"]) == []
+    # Missing DB entirely → same answer, no raise.
+    assert load_packs(["calibration"], db_path=tmp_path / "nope.db", focus_tickers=[]) == []
+
+
 def test_journal_open_only_with_portfolio_level_notes(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

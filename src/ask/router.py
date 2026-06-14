@@ -124,6 +124,11 @@ Rules:
   need "performance", usually with "holdings".
 - Memory questions ("what did I decide/say/worry about", open items) need
   "journal" and/or "decisions".
+- Self-assessment / track-record questions ("am I getting better", "how
+  accurate are my calls", "what's my hit rate", "can I trust my own
+  high-conviction read") need "calibration". Add it to a conviction-driven
+  sizing question ("should I trim this high-conviction name") so the answer
+  can weigh the move against how that conviction cohort has actually graded.
 
 Question: {question}
 JSON:"""

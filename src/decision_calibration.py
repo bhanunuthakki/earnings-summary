@@ -35,6 +35,31 @@ GRADED_LABELS: frozenset[str] = frozenset({"correct", "wrong", "mixed"})
 ACTION_KINDS: tuple[str, ...] = ("followed", "ignored", "partial", "reversed")
 
 
+def bucket_for_conviction(value: object) -> str:
+    """Map a stated conviction to a calibration cohort bucket — the one place
+    the two conviction vocabularies are reconciled. ``decisions.conviction`` is
+    already a high|medium|low string; ``position_sizing_intent`` states it
+    numerically as n/5. Both land in CONVICTION_ORDER so the focus-cohort
+    lookup (L1) and the advisor's per-name calibration (L1/L8) compare like
+    with like. Anything unrecognised → 'unstated'."""
+    if value is None:
+        return "unstated"
+    if isinstance(value, str):
+        v = value.strip().lower()
+        return v if v in CONVICTION_ORDER else "unstated"
+    try:
+        n = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "unstated"
+    if n >= 4.0:
+        return "high"
+    if n >= 3.0:
+        return "medium"
+    if n >= 1.0:
+        return "low"
+    return "unstated"
+
+
 @dataclass(frozen=True, slots=True)
 class ConvictionBucket:
     """Outcome distribution of one stated-conviction level."""
