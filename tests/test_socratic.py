@@ -331,6 +331,48 @@ def test_socratic_prompts_carry_the_calibration_challenge(
     assert "documented calibration" in prompts[0]
 
 
+def test_questions_prompt_carries_the_premortem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L8 item d: the decision-moment pre-mortem (calibration_coach) rides into
+    the questions prompt next to the calibration challenge — the L1 injection
+    point extended."""
+    import calibration_coach
+
+    prompts: list[str] = []
+
+    def fake_llm(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return "1. read?\n2. horizon?\n3. wrong?"
+
+    monkeypatch.setattr(socratic_mod, "call_llm", fake_llm)
+    monkeypatch.setattr(
+        calibration_coach,
+        "premortem_block",
+        lambda *_a, **_k: "**Pre-mortem:**\n1. like RBRK, you size up before the print",
+    )
+    generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
+    assert "like RBRK, you size up before the print" in prompts[0]
+    assert "Pre-mortem" in prompts[0] and "strongest parallel" in prompts[0].lower()
+
+
+def test_questions_prompt_degrades_without_premortem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A thin/absent pre-mortem must not break the flow — the slot fills with the
+    honest placeholder and the questions still generate."""
+    import calibration_coach
+
+    prompts: list[str] = []
+    monkeypatch.setattr(
+        socratic_mod, "call_llm", lambda p, **_k: prompts.append(p) or "1. a?\n2. b?\n3. c?"
+    )
+    monkeypatch.setattr(calibration_coach, "premortem_block", lambda *_a, **_k: "")
+    prelude = generate_questions(tmp_path, "NU", ctx=_ctx(tmp_path))
+    assert len(prelude.questions) == 3
+    assert "no pre-mortem" in prompts[0]
+
+
 # --------------------------------------------------------------------------- #
 # Server seams + panel
 # --------------------------------------------------------------------------- #

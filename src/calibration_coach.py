@@ -146,13 +146,22 @@ def gather_coach_inputs(
 
     Best-effort throughout (the established posture): a missing decisions table
     yields ``calibration=None`` and ``n_graded=0`` (can_coach False); an offline
-    tracker yields ``skill=None`` (the coach reasons on calibration alone)."""
+    tracker yields ``skill=None`` (the coach reasons on calibration alone).
+
+    The realized-skill decomposition needs a tracker round-trip, so it is only
+    fetched when the graded ledger is thick enough to coach — a thin ledger
+    produces no coaching either way, and the decision-moment pre-mortem must not
+    pay a network hit on every call just to be gated out a line later."""
     root = Path(repo_root)
     db_path = root / "data" / "portfolio.db"
     calibration = build_calibration(db_path=db_path)
-    skill = _skill_decomposition(db_path, api_url=api_url)
-    closed = _closed_lessons(db_path, user_id=user_id)
     n_graded = calibration.graded if calibration is not None else 0
+    closed = _closed_lessons(db_path, user_id=user_id)
+    skill = (
+        _skill_decomposition(db_path, api_url=api_url)
+        if is_confident(n_graded, min_n=MIN_COACH_GRADED)
+        else None
+    )
     return CoachInputs(
         calibration=calibration,
         skill=skill,
@@ -473,6 +482,242 @@ def propose_experiment(inputs: CoachInputs, biases: list[NamedBias]) -> Behavior
         ),
         condition=condition,
     )
+
+
+# ===========================================================================
+# Pre-mortem from your own history (L8 item d) — at the decision moment
+# ===========================================================================
+
+_MAX_RESEMBLANCES = 3
+_MAX_DRAFT_CONDITIONS = 3
+# Closed-position outcomes that count as a loss/miss worth resembling against.
+_LOSS_OUTCOMES: frozenset[str] = frozenset({"broke", "mixed"})
+
+
+@dataclass(frozen=True, slots=True)
+class Premortem:
+    """The decision-moment pre-mortem for one name: the ways this stance most
+    resembles bets the owner got wrong, plus candidate falsifiable conditions
+    calibrated to his documented blind spots. Grounded ONLY in his own losses +
+    calibration — never a generic risk list."""
+
+    ticker: str
+    stance: str | None  # the call being weighed (add | initiate | trim | ...)
+    resemblances: list[str]  # "the N ways this resembles bets you got wrong"
+    drafted_conditions: list[DecisionCondition]  # candidate conditions to commit to
+
+
+_PREMORTEM_PROMPT = """You are the owner's calibration coach, called at the DECISION MOMENT: he is
+about to {stance_phrase} {ticker}. Before he commits, run a pre-mortem grounded
+ONLY in his OWN documented losses and calibration below — name the ways THIS bet
+most resembles ones he got wrong, and draft the falsifiable conditions that would
+catch the failure early.
+
+HIS TRACK RECORD AND PAST LOSSES:
+{grounding}
+
+THIS DECISION: {stance_phrase} {ticker}{conviction_phrase}.
+
+Produce:
+- "resemblances": the {min_r}-{max_r} most important ways this {ticker} decision
+  resembles a bet he got wrong. Each MUST reference a specific documented loss or
+  calibration fact above and draw the parallel to THIS name. Generic market risks
+  ("the market could fall") are forbidden — only patterns HIS history shows.
+- "conditions": 1-{max_c} candidate falsifiable decision-conditions calibrated to
+  the blind spot each resemblance exposes — the early-warning he should commit to
+  now. Each is a numeric test future data can satisfy or not.
+
+Return ONLY a JSON object, no fences:
+{{"resemblances": ["<grounded parallel>", ...],
+  "conditions": [{{"metric": "<short name>", "metric_source": "kpi"|"financial"|null,
+    "op": "lt"|"le"|"gt"|"ge", "threshold": <number>,
+    "unit": "actual"|"percent"|"ratio"|"count"|"bps"|"millions"|"billions",
+    "for_periods": <int >= 1>, "note": "<the test in plain words>"}}]}}"""
+
+
+def _stance_phrase(stance: str | None) -> str:
+    return {
+        "add": "ADD to",
+        "buy": "ADD to",
+        "initiate": "INITIATE",
+        "trim": "TRIM",
+        "sell": "SELL",
+        "hold": "HOLD",
+        "pass": "PASS on",
+        "avoid": "AVOID",
+    }.get((stance or "").lower(), "act on")
+
+
+def _premortem_grounding(inputs: CoachInputs) -> str:
+    """The pre-mortem's evidence: the owner's conviction calibration + realized
+    skill leak + his CLOSED LOSSES (broke/mixed, with his own lessons). Losses
+    lead — a pre-mortem is built out of what actually went wrong before."""
+    losses = [c for c in inputs.closed_lessons if (c.outcome_vs_thesis or "") in _LOSS_OUTCOMES]
+    lines: list[str] = []
+    if losses:
+        lines.append("DOCUMENTED LOSSES (your own grading):")
+        for c in losses:
+            bits = [c.ticker]
+            if c.entry_conviction:
+                bits.append(f"entered {c.entry_conviction} conviction")
+            bits.append(f"thesis {c.outcome_vs_thesis}")
+            tail = " ".join(p for p in (c.exit_reason, c.lessons) if p).strip()
+            lines.append(f"  - {' · '.join(bits)}" + (f" — {tail}" if tail else ""))
+    # Reuse the calibration/skill half of the standard grounding for the rest.
+    base = grounding_block(inputs)
+    return ("\n".join(lines) + "\n" + base) if lines else base
+
+
+def compose_premortem(
+    repo_root: Path | str,
+    ticker: str,
+    *,
+    stance: str | None = None,
+    user_id: str = DEFAULT_USER_ID,
+    api_url: str | None = None,
+    inputs: CoachInputs | None = None,
+) -> Premortem | None:
+    """Compose the decision-moment pre-mortem for ``ticker``. None when the
+    ledger is too thin to coach (the shared min-n gate — a pre-mortem from a
+    sparse record is just anxiety), when no resemblance comes back grounded, or
+    on transient LLM/parse failure; hard stops propagate. ``inputs`` injects an
+    already-gathered grounding (the caller batches it); None gathers.
+
+    Deliberately NOT gated here — generation and the eval gate (gate_premortem)
+    are separable so the caller decides whether to judge before surfacing, the
+    same split as build_scorecard / gate_scorecard."""
+    t = ticker.upper()
+    ctx = inputs or gather_coach_inputs(repo_root, user_id=user_id, api_url=api_url)
+    if not ctx.can_coach:
+        return None
+    conviction = _conviction_map(Path(repo_root) / "data" / "portfolio.db").get(t)
+    conviction_phrase = f" (you rate it {conviction:g}/5)" if conviction is not None else ""
+    prompt = _PREMORTEM_PROMPT.format(
+        ticker=t,
+        stance_phrase=_stance_phrase(stance),
+        grounding=_premortem_grounding(ctx),
+        conviction_phrase=conviction_phrase,
+        min_r=2,
+        max_r=_MAX_RESEMBLANCES,
+        max_c=_MAX_DRAFT_CONDITIONS,
+    )
+    try:
+        payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, ticker=t, expect="object")
+    except StructuredParseError as exc:
+        log.warning({"event": "premortem_parse_failed", "ticker": t, "error": str(exc)})
+        return None
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise
+        log.warning({"event": "premortem_llm_failed", "ticker": t, "error": str(exc)})
+        return None
+    if not isinstance(payload, dict):
+        return None
+    obj = cast("dict[str, object]", payload)
+    resemblances_raw = obj.get("resemblances")
+    resemblances = (
+        [
+            " ".join(str(r).split())[:400]
+            for r in cast("list[object]", resemblances_raw)
+            if str(r).strip()
+        ][:_MAX_RESEMBLANCES]
+        if isinstance(resemblances_raw, list)
+        else []
+    )
+    if not resemblances:  # a pre-mortem with no grounded parallel is exactly what we reject
+        return None
+    conditions_raw = obj.get("conditions")
+    drafted: list[DecisionCondition] = []
+    if isinstance(conditions_raw, list):
+        for entry in cast("list[object]", conditions_raw):
+            cond = parse_condition(entry)
+            if cond is not None:
+                drafted.append(cond)
+            if len(drafted) >= _MAX_DRAFT_CONDITIONS:
+                break
+    return Premortem(ticker=t, stance=stance, resemblances=resemblances, drafted_conditions=drafted)
+
+
+def render_premortem_prose(pm: Premortem) -> str:
+    """The pre-mortem as plain prose — what the eval gate judges and what the
+    Socratic block embeds."""
+    lines = [
+        f"Pre-mortem — the ways {_stance_phrase(pm.stance)} {pm.ticker} resembles bets "
+        "you got wrong:"
+    ]
+    lines.extend(f"{i}. {r}" for i, r in enumerate(pm.resemblances, 1))
+    if pm.drafted_conditions:
+        lines.append("Candidate conditions to commit to now (calibrated to your blind spots):")
+        for c in pm.drafted_conditions:
+            lines.append(f"- {c.note or c.metric} [{c.metric} {c.op} {c.threshold:g} {c.unit}]")
+    return "\n".join(lines)
+
+
+def gate_premortem(
+    pm: Premortem,
+    *,
+    code_root: Path | str,
+    judge_caller: Callable[..., str] | None = None,
+) -> tuple[bool, float]:
+    """Eval-gate the pre-mortem against the calibration_coach rubric before it
+    reaches the owner (the directive's "eval-gated advisor composes"). Returns
+    ``(passed, score)``. Hard stops on the judge propagate (config, not
+    quality); the caller suppresses on a fail."""
+    from evals.corpora import AuditItem
+    from evals.rubric_judge import AUDIT_SPECS, judge_item, load_rubric
+
+    spec = AUDIT_SPECS[COACH_PURPOSE]
+    rubric = load_rubric(Path(code_root) / spec.rubric_relpath, purpose=COACH_PURPOSE)
+    item = AuditItem(
+        item_id=f"premortem:{pm.ticker}",
+        label=f"calibration_coach/premortem/{pm.ticker}",
+        ticker=pm.ticker,
+        content=render_premortem_prose(pm),
+    )
+    caller = judge_caller if judge_caller is not None else call_llm
+    result = judge_item(rubric, item, run_id=f"premortem-{pm.ticker}", caller=caller)
+    return result.passed, result.score
+
+
+def premortem_block(
+    repo_root: Path | str,
+    ticker: str,
+    *,
+    stance: str | None = None,
+    code_root: Path | str | None = None,
+    user_id: str = DEFAULT_USER_ID,
+    api_url: str | None = None,
+    inputs: CoachInputs | None = None,
+) -> str:
+    """The decision-moment pre-mortem as a prompt-ready block for the advisor —
+    composed, EVAL-GATED, and rendered, or "" when unavailable (thin ledger,
+    nothing grounded, the gate failed, or any transient error). Best-effort: a
+    pre-mortem must never break the flow it rides on, so every failure degrades
+    to the empty string and the advisor proceeds on the calibration block alone.
+
+    This is the L1 calibration-pack injection point EXTENDED — the Socratic
+    flow appends it next to ``advisor.context.calibration_block``."""
+    try:
+        pm = compose_premortem(
+            repo_root, ticker, stance=stance, user_id=user_id, api_url=api_url, inputs=inputs
+        )
+        if pm is None:
+            return ""
+        if code_root is not None:
+            passed, score = gate_premortem(pm, code_root=code_root)
+            if not passed:
+                log.info({"event": "premortem_gate_suppressed", "ticker": ticker, "score": score})
+                return ""
+        return (
+            f"**Pre-mortem (challenge this {_stance_phrase(stance)} {ticker.upper()} against "
+            "your OWN documented losses — if a parallel holds, the burden is to say why THIS "
+            f"one is different):**\n{render_premortem_prose(pm)}"
+        )
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise
+        log.warning({"event": "premortem_block_failed", "ticker": ticker, "error": str(exc)})
+        return ""
 
 
 # ===========================================================================
@@ -860,12 +1105,17 @@ __all__ = [
     "ClosedLesson",
     "CoachInputs",
     "NamedBias",
+    "Premortem",
     "build_scorecard",
+    "compose_premortem",
+    "gate_premortem",
     "gate_scorecard",
     "gather_coach_inputs",
     "grounding_block",
     "load_latest_scorecard",
+    "premortem_block",
     "propose_experiment",
+    "render_premortem_prose",
     "render_scorecard_prose",
     "save_scorecard",
     "scorecard_from_dict",
