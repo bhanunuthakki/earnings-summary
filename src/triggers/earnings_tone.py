@@ -49,6 +49,11 @@ from typing import ClassVar, cast
 import jinja2
 
 from alerts.store import compute_signature_sha
+from decision_conditions import (
+    load_open_qualitative_conditions,
+    overlay_payloads,
+    render_qualitative_overlay,
+)
 from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
@@ -714,17 +719,26 @@ class EarningsToneTrigger:
 
         fiscal_period = period_end_raw[:4]  # calendar year of period end
         key = f"{ticker}:{fiscal_period_type_raw}:{fiscal_period}"
+        evidence: dict[str, object] = {
+            "transcript_id": transcript_id_raw,
+            "fiscal_period": fiscal_period,
+            "fiscal_period_type": fiscal_period_type_raw,
+            "published_at": fetched_at_raw,
+            "period_end": period_end_raw,
+        }
+        # L9 PR2 — qualitative-condition bridge: a new transcript is where an
+        # 'earnings'-watched non-numeric condition ("management tone turns
+        # defensive on margins") could surface. Attach any open ones so the tone
+        # alert reminds the analyst to check; the human judges the match. Keyed
+        # on transcript_id, so this never changes the dedup signature.
+        overlay = load_open_qualitative_conditions(db, ticker, surface="earnings")
+        if overlay:
+            evidence["thesis_conditions"] = overlay_payloads(overlay)
         candidate = TriggerCandidate(
             ticker=ticker,
             kind=self.kind,
             key=key,
-            evidence={
-                "transcript_id": transcript_id_raw,
-                "fiscal_period": fiscal_period,
-                "fiscal_period_type": fiscal_period_type_raw,
-                "published_at": fetched_at_raw,
-                "period_end": period_end_raw,
-            },
+            evidence=evidence,
             computed_at=now,
         )
         return [candidate]
@@ -841,11 +855,23 @@ class EarningsToneTrigger:
             "transcript_id": current_transcript_id,
             "prior_transcript_ids": prior_transcript_ids,
         }
+        memo_text = cast("str", parsed["summary"])
+        # L9 PR2 — carry + annotate any qualitative-condition overlay scan
+        # attached, so the tone shift flags a non-numeric condition it may bear on.
+        raw_overlay = evidence.get("thesis_conditions")
+        if isinstance(raw_overlay, list) and raw_overlay:
+            overlay = [
+                cast("dict[str, object]", p)
+                for p in cast("list[object]", raw_overlay)
+                if isinstance(p, dict)
+            ]
+            if overlay:
+                evidence_obj["thesis_conditions"] = overlay
+                memo_text += render_qualitative_overlay(overlay)
         evidence_json = json.dumps(evidence_obj, sort_keys=True, ensure_ascii=False, default=str)
         signature_sha = compute_signature_sha(
             self.kind, ticker, self.signature_key_evidence(candidate)
         )
-        memo_text = cast("str", parsed["summary"])
 
         return AlertDraft(
             trigger_kind=self.kind,

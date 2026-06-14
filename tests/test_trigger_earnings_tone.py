@@ -22,7 +22,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -314,6 +314,41 @@ def test_should_fire_true_after_flag_flip(
         registered_kpis=[], sizing_intents=[], recent_dismissed_signatures=set()
     )
     assert EarningsToneTrigger().should_fire(candidates[0], state) is True
+
+
+def test_scan_attaches_earnings_qualitative_condition(fixture_db: sqlite3.Connection) -> None:
+    """L9 PR2 — a new transcript is where an 'earnings'-watched qualitative
+    condition surfaces. scan attaches it (and a 'both'), but NOT a 'news'-only
+    one — that routes to material_news. The fixture has no decisions table; we
+    create it here so the other scan tests stay byte-identical."""
+    _ = _seed_five_quarters(fixture_db)
+    fixture_db.execute(
+        "CREATE TABLE decisions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, recommendation_kind TEXT, "
+        "recommendation_value FLOAT, made_at TEXT, source_lens TEXT, outcome_at TEXT, "
+        "qualitative_conditions TEXT)"
+    )
+    fixture_db.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, made_at, qualitative_conditions) "
+        "VALUES ('MELI', 'add', '2026-05-01', ?)",
+        (
+            json.dumps(
+                [
+                    {"phrase": "tone turns defensive", "watch_for": "earnings", "note": None},
+                    {"phrase": "lawsuit filed", "watch_for": "both", "note": None},
+                    {"phrase": "CEO departs", "watch_for": "news", "note": None},
+                ]
+            ),
+        ),
+    )
+    fixture_db.commit()
+
+    candidates = EarningsToneTrigger().scan("MELI", fixture_db)
+    assert len(candidates) == 1
+    overlay = candidates[0].evidence["thesis_conditions"]
+    assert isinstance(overlay, list)
+    phrases = [str(cast("dict[str, object]", p)["phrase"]) for p in cast("list[object]", overlay)]
+    assert sorted(phrases) == ["lawsuit filed", "tone turns defensive"]
 
 
 def test_build_alert_round_trip_with_mocked_llm(

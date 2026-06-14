@@ -45,6 +45,18 @@ Two write rungs, both idempotent:
       content_md or memo body_md), extracts, stamps. "Extracted, prose had no
       falsifiable conditions" is a stamped '[]', distinct from NULL.
 
+The numeric pass deliberately skips QUALITATIVE triggers that carry no number
+("the CEO departs", "a credible competitor enters") — a falsifiable condition
+no reported figure can evaluate, which therefore never fired (it waited on
+next quarter's XBRL, which for a qualitative event never comes). The L9-PR2
+qualitative twin (``attach_qualitative_conditions`` → ``qualitative_conditions``
+column, alembic 0108, own ``qualitative_conditions_extract`` purpose) extracts
+those into ``QualitativeCondition`` (phrase + news/earnings ``watch_for`` tag) so
+``load_open_qualitative_conditions`` can surface them on the existing
+material_news / earnings_tone trigger alerts — firing them on NEWS, not a
+number. Kept entirely apart from the numeric path: separate column, separate
+stamp, separate prompt + golden, so the two never collide.
+
 Both follow decision_extractor's best-effort posture against a missing DB /
 table; LLM hard stops (budget/setup) propagate per the repo-wide policy.
 """
@@ -67,6 +79,18 @@ log = logging.getLogger(__name__)
 
 PURPOSE = "decision_conditions_extract"
 
+# The companion qualitative pass (L9 PR2): non-numeric "what would change my
+# mind" triggers the numeric extractor is told to skip. Routed to the
+# material_news / earnings_tone triggers so they fire on NEWS, not next
+# quarter's XBRL. Its own purpose so the numeric path and golden set are
+# untouched.
+QUALITATIVE_PURPOSE = "qualitative_conditions_extract"
+
+# Which event surface a qualitative condition is watched on — the trigger that
+# should surface it. 'both' surfaces on either. 'news' → material_news,
+# 'earnings' → earnings_tone.
+QUALITATIVE_WATCH_SURFACES: frozenset[str] = frozenset({"news", "earnings", "both"})
+
 # Direction vocabulary — the four directional members of
 # compute.thesis_evaluator.Comparator. EQ is excluded on purpose: a
 # falsifiable "what would change my mind" threshold is directional.
@@ -75,6 +99,7 @@ METRIC_SOURCES: frozenset[str] = frozenset({"kpi", "financial"})
 _UNIT_VALUES: frozenset[str] = frozenset(u.value for u in Unit)
 
 _MAX_CONDITIONS_PER_DECISION = 8
+_MAX_QUALITATIVE_PER_DECISION = 6
 _MAX_VOCAB_ENTRIES = 80
 
 # Matches "## What would change my mind" in both source shapes: the
@@ -126,6 +151,24 @@ class DecisionCondition:
             "for_periods": self.for_periods,
             "note": self.note,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class QualitativeCondition:
+    """One non-numeric falsifiable condition — a phrase no reported number can
+    evaluate, watched on a news/earnings surface instead.
+
+    ``watch_for`` selects which trigger surfaces it ('news' | 'earnings' |
+    'both'); ``phrase`` is the short canonical event ("the CEO departs"); ``note``
+    quotes the source prose.
+    """
+
+    phrase: str
+    watch_for: str
+    note: str | None
+
+    def as_json_obj(self) -> dict[str, object]:
+        return {"phrase": self.phrase, "watch_for": self.watch_for, "note": self.note}
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +295,56 @@ def conditions_from_json(raw: str | None) -> tuple[DecisionCondition, ...]:
     return tuple(out)
 
 
+def parse_qualitative_condition(raw: object) -> QualitativeCondition | None:
+    """Validate one extracted qualitative condition. None (logged) when unusable
+    — the caller drops it and keeps the rest. ``watch_for`` defaults to 'both'
+    when missing/invalid (surface on either trigger rather than dropping a real
+    condition over a routing nit)."""
+    if not isinstance(raw, dict):
+        log.warning({"event": "qualitative_condition_invalid", "reason": "not an object"})
+        return None
+    obj = cast("dict[str, object]", raw)
+
+    phrase = obj.get("phrase")
+    if not isinstance(phrase, str) or not phrase.strip():
+        log.warning({"event": "qualitative_condition_invalid", "reason": "missing phrase"})
+        return None
+    phrase = phrase.strip()
+
+    watch_raw = obj.get("watch_for")
+    watch_for = (
+        watch_raw
+        if isinstance(watch_raw, str) and watch_raw in QUALITATIVE_WATCH_SURFACES
+        else "both"
+    )
+
+    note_raw = obj.get("note")
+    note = note_raw.strip()[:300] if isinstance(note_raw, str) and note_raw.strip() else None
+
+    return QualitativeCondition(phrase=phrase[:200], watch_for=watch_for, note=note)
+
+
+def qualitative_conditions_from_json(raw: str | None) -> tuple[QualitativeCondition, ...]:
+    """Decode a stored qualitative_conditions column back into typed conditions.
+    Tolerant: a corrupt column yields () with a log line, never a crash."""
+    if not raw:
+        return ()
+    try:
+        decoded: object = json.loads(raw)
+    except (ValueError, TypeError):
+        log.warning({"event": "qualitative_conditions_column_corrupt", "head": str(raw)[:120]})
+        return ()
+    if not isinstance(decoded, list):
+        log.warning({"event": "qualitative_conditions_column_corrupt", "head": str(raw)[:120]})
+        return ()
+    out: list[QualitativeCondition] = []
+    for entry in cast("list[object]", decoded):
+        cond = parse_qualitative_condition(entry)
+        if cond is not None:
+            out.append(cond)
+    return tuple(out)
+
+
 # ===========================================================================
 # LLM extraction
 # ===========================================================================
@@ -363,6 +456,63 @@ def extract_conditions(
         if cond is not None:
             out.append(cond)
         if len(out) >= _MAX_CONDITIONS_PER_DECISION:
+            break
+    return out
+
+
+_QUALITATIVE_PROMPT = """You are a strict JSON extractor for QUALITATIVE investment conditions.
+
+The markdown below is the "What would change my mind" section of an analyst
+memo for {ticker}. Extract the FALSIFIABLE NON-NUMERIC conditions — events or
+state changes that future NEWS or an earnings call could confirm, that carry NO
+number a financial statement could measure. These are exactly the triggers a
+numeric extractor would skip: "the CEO departs", "a credible competitor enters
+the market", "the FDA rejects the filing", "management's tone on margins turns
+defensive", "they lose the anchor customer".
+
+Do NOT extract numeric thresholds (e.g. "NPLs above 7%", "growth below 25%") —
+those are handled separately. If a condition has both a qualitative event AND a
+number, only extract it here if the EVENT is the falsifiable part.
+
+For each condition decide where it would surface:
+- "news"     — a discrete event that breaks as a news story (exec change,
+               competitor/product launch, regulatory action, lawsuit, M&A).
+- "earnings" — something only an earnings call / transcript would reveal
+               (management tone, guidance language, qualitative commentary).
+- "both"     — when either could surface it, or you are unsure.
+
+Return ONLY a JSON array — no markdown fences, no commentary. Each element:
+
+{{
+  "phrase": "<short canonical event, <=120 chars>",
+  "watch_for": "news" | "earnings" | "both",
+  "note": "<short quote of the source phrase>"
+}}
+
+If the section contains no qualitative conditions, return [].
+
+Section:
+{section}
+"""
+
+
+def extract_qualitative_conditions(section: str, *, ticker: str) -> list[QualitativeCondition]:
+    """One LLM pass extracting the NON-numeric falsifiable conditions.
+
+    Raises whatever ``call_llm_structured`` raises (hard stops propagate;
+    ``StructuredParseError`` after the built-in retry) — the batch rung decides
+    how to degrade. Individually invalid entries are dropped with a log line.
+    """
+    prompt = _QUALITATIVE_PROMPT.format(ticker=ticker.upper(), section=section[:4000])
+    payload = call_llm_structured(
+        prompt, purpose=QUALITATIVE_PURPOSE, ticker=ticker.upper(), expect="array"
+    )
+    out: list[QualitativeCondition] = []
+    for entry in cast("list[object]", payload):
+        cond = parse_qualitative_condition(entry)
+        if cond is not None:
+            out.append(cond)
+        if len(out) >= _MAX_QUALITATIVE_PER_DECISION:
             break
     return out
 
@@ -565,6 +715,104 @@ def _stamp(conn: sqlite3.Connection, decision_id: int, conditions: list[Decision
     )
 
 
+def _has_qualitative_column(conn: sqlite3.Connection) -> bool:
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+    except sqlite3.Error:
+        return False
+    return "qualitative_conditions" in cols
+
+
+def attach_qualitative_conditions(
+    *,
+    db_path: Path | str,
+    limit: int = 50,
+) -> dict[str, int]:
+    """Extract + attach QUALITATIVE conditions for decisions not yet processed.
+
+    The non-numeric twin of ``attach_conditions``: walks
+    ``qualitative_conditions_extracted_at IS NULL`` rows oldest-first over the
+    SAME "What would change my mind" prose, runs the qualitative pass, stamps the
+    separate column. Independent of the numeric stamp, so the two passes never
+    block each other. Same degradation contract (missing source / no section →
+    stamped '[]'; ``StructuredParseError`` → unstamped, retried; LLM hard stops
+    propagate). No-op on a pre-0108 DB (the column is absent).
+    """
+    tally = {
+        "extracted": 0,
+        "no_conditions": 0,
+        "no_section": 0,
+        "parse_failed": 0,
+        "db_unavailable": 0,
+    }
+    conn = _open(db_path)
+    if conn is None or not _has_qualitative_column(conn):
+        tally["db_unavailable"] = 1
+        if conn is not None:
+            conn.close()
+        return tally
+    try:
+        rows = conn.execute(
+            """
+            SELECT d.id, d.ticker, d.source_artifact_id, d.source_memo_id,
+                   a.content_md AS artifact_md, m.body_md AS memo_md
+            FROM decisions d
+            LEFT JOIN llm_artifacts a ON a.id = d.source_artifact_id
+            LEFT JOIN advisor_memos m ON m.id = d.source_memo_id
+            WHERE d.qualitative_conditions_extracted_at IS NULL
+            ORDER BY d.made_at ASC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+
+        for row in rows:
+            decision_id = int(row["id"])
+            ticker = str(row["ticker"]).upper()
+            prose = row["artifact_md"] if row["artifact_md"] is not None else row["memo_md"]
+            section = extract_section(prose if isinstance(prose, str) else None)
+            if section is None:
+                _stamp_qualitative(conn, decision_id, [])
+                tally["no_section"] += 1
+                continue
+            try:
+                conditions = extract_qualitative_conditions(section, ticker=ticker)
+            except StructuredParseError as exc:
+                log.error(
+                    {
+                        "event": "qualitative_conditions_extract_failed",
+                        "decision_id": decision_id,
+                        "ticker": ticker,
+                        "error": str(exc),
+                    }
+                )
+                tally["parse_failed"] += 1
+                continue
+            _stamp_qualitative(conn, decision_id, conditions)
+            if conditions:
+                tally["extracted"] += 1
+            else:
+                tally["no_conditions"] += 1
+        conn.commit()
+        return tally
+    finally:
+        conn.close()
+
+
+def _stamp_qualitative(
+    conn: sqlite3.Connection, decision_id: int, conditions: list[QualitativeCondition]
+) -> None:
+    conn.execute(
+        "UPDATE decisions SET qualitative_conditions = ?, "
+        "qualitative_conditions_extracted_at = ? WHERE id = ?",
+        (
+            json.dumps([c.as_json_obj() for c in conditions], ensure_ascii=False),
+            _now_iso(),
+            decision_id,
+        ),
+    )
+
+
 def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecision]:
     """Not-yet-graded decisions carrying at least one condition — the
     evaluator rung's scan input. Tolerant of the pre-0086 schema (returns [])."""
@@ -600,3 +848,103 @@ def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecis
             )
         )
     return out
+
+
+# ===========================================================================
+# Qualitative read side — the news/earnings-tone trigger bridge
+# ===========================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class OpenQualitativeCondition:
+    """A qualitative condition on an open decision, the shape the material_news /
+    earnings_tone triggers surface as an alert annotation."""
+
+    decision_id: int
+    decision_summary: str
+    phrase: str
+    watch_for: str
+    note: str | None
+
+    def as_payload(self) -> dict[str, object]:
+        """The serializable form for an alert's evidence_json."""
+        return {
+            "decision_id": self.decision_id,
+            "decision_summary": self.decision_summary,
+            "phrase": self.phrase,
+            "note": self.note,
+        }
+
+
+def _decision_summary(made_at: object, kind: object, value: object, source_lens: object) -> str:
+    made_on = str(made_at or "")[:10]
+    kind_label = str(kind or "").upper()
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        kind_label += f" {value:g}%"
+    source = str(source_lens) if source_lens else "memo"
+    return f"the {made_on} {kind_label} decision ({source})"
+
+
+def load_open_qualitative_conditions(
+    conn: sqlite3.Connection, ticker: str, *, surface: str
+) -> list[OpenQualitativeCondition]:
+    """Open (ungraded) decisions' qualitative conditions for ``ticker`` whose
+    ``watch_for`` matches the firing ``surface`` ('news' or 'earnings'; 'both'
+    always matches). Tolerant of the pre-0108 schema (returns [])."""
+    matches = {surface, "both"}
+    conn.row_factory = sqlite3.Row  # the trigger's connection may not have set it
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, recommendation_kind, recommendation_value, made_at, source_lens,
+                   qualitative_conditions
+            FROM decisions
+            WHERE ticker = ? AND outcome_at IS NULL
+              AND qualitative_conditions IS NOT NULL AND qualitative_conditions != '[]'
+            ORDER BY made_at DESC
+            """,
+            (ticker.upper(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    out: list[OpenQualitativeCondition] = []
+    for row in rows:
+        summary = _decision_summary(
+            row["made_at"],
+            row["recommendation_kind"],
+            row["recommendation_value"],
+            row["source_lens"],
+        )
+        for cond in qualitative_conditions_from_json(row["qualitative_conditions"]):
+            if cond.watch_for not in matches:
+                continue
+            out.append(
+                OpenQualitativeCondition(
+                    decision_id=int(row["id"]),
+                    decision_summary=summary,
+                    phrase=cond.phrase,
+                    watch_for=cond.watch_for,
+                    note=cond.note,
+                )
+            )
+    return out
+
+
+def overlay_payloads(conds: list[OpenQualitativeCondition]) -> list[dict[str, object]]:
+    """The serializable overlay a trigger stores in a candidate's evidence."""
+    return [c.as_payload() for c in conds]
+
+
+def render_qualitative_overlay(payloads: list[dict[str, object]]) -> str:
+    """The one-line annotation a trigger appends to its memo when a held name's
+    qualitative conditions may bear on the firing event — rendered from the
+    evidence payloads ``build_alert`` already carries. Empty when none."""
+    phrases = [str(p.get("phrase")) for p in payloads if p.get("phrase")]
+    if not phrases:
+        return ""
+    shown = "; ".join(f'"{p}"' for p in phrases[:3])
+    more = f" (+{len(phrases) - 3} more)" if len(phrases) > 3 else ""
+    return (
+        f" ⚠ May bear on a 'what would change my mind' condition you set: {shown}{more} "
+        "— review whether this development satisfies it."
+    )

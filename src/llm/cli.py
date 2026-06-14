@@ -239,6 +239,12 @@ LLM_MODELS: dict[str, str] = {
     # closed-schema pick-from-list shape Flash excels at; golden set at
     # evals/golden/decision_conditions_extract.json guards quality.
     "decision_conditions_extract": "gemini-3-flash-preview",
+    # Qualitative "what would change my mind" extraction (L9 PR2): the
+    # non-numeric twin of the above — pull event-shaped conditions ("CEO
+    # departs", "competitor enters") + a news/earnings routing tag from the same
+    # prose. Same narrow, closed-vocab JSON shape, run once per new decision →
+    # the same cheap Gemini Flash pick.
+    "qualitative_conditions_extract": "gemini-3-flash-preview",
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates.
