@@ -26,7 +26,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -317,6 +317,64 @@ def test_scan_emits_candidates_only_for_material_stories(
         assert isinstance(cand.evidence["why_material"], str)
         assert cand.evidence["why_material"]
         assert cand.evidence["url"].startswith("https://")
+
+
+def _create_decisions_with_qualitative(
+    conn: sqlite3.Connection, *, ticker: str, conds: object
+) -> None:
+    """A minimal decisions table + one open row carrying qualitative conditions
+    (L9 PR2 bridge). The fixture has no decisions table; create it here so the
+    other scan tests stay byte-identical (no qualitative overlay when absent)."""
+    conn.execute(
+        "CREATE TABLE decisions ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, recommendation_kind TEXT, "
+        "recommendation_value FLOAT, made_at TEXT, source_lens TEXT, outcome_at TEXT, "
+        "qualitative_conditions TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, made_at, qualitative_conditions) "
+        "VALUES (?, 'add', '2026-05-01', ?)",
+        (ticker, json.dumps(conds)),
+    )
+    conn.commit()
+
+
+def test_scan_attaches_qualitative_conditions_to_top_story(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L9 PR2 — a held name with an open NEWS-watched qualitative condition: the
+    overlay rides the single most-material story, so the news alert flags the
+    condition the news may have tripped. Fires on NEWS, not next quarter's XBRL."""
+    ids = _seed_three_recent(fixture_db)
+    _create_decisions_with_qualitative(
+        fixture_db,
+        ticker="BN",
+        conds=[
+            {"phrase": "a credible competitor enters", "watch_for": "news", "note": None},
+            {"phrase": "tone turns defensive", "watch_for": "earnings", "note": None},
+        ],
+    )
+    payload = _classification_payload(
+        [(0, 0.90, "Major M&A"), (1, 0.20, "immaterial"), (2, 0.75, "antitrust probe")]
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    # Only the highest-relevance candidate (story 0, 0.90) carries the overlay,
+    # and only the NEWS-watched condition (the earnings one is routed elsewhere).
+    top = next(c for c in candidates if c.key == f"BN:news:{ids[0]}")
+    other = next(c for c in candidates if c.key == f"BN:news:{ids[2]}")
+    overlay = top.evidence["thesis_conditions"]
+    assert isinstance(overlay, list)
+    phrases = [cast("dict[str, object]", p)["phrase"] for p in cast("list[object]", overlay)]
+    assert phrases == ["a credible competitor enters"]
+    assert "thesis_conditions" not in other.evidence
+
+    # ...and it renders into the alert the analyst sees.
+    alert = MaterialNewsTrigger().build_alert(top, None)
+    assert alert.memo_text is not None and "a credible competitor enters" in alert.memo_text
 
 
 def test_scan_no_recent_news_returns_empty(fixture_db: sqlite3.Connection) -> None:

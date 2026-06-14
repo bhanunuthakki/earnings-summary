@@ -62,6 +62,11 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from alerts.store import compute_signature_sha
+from decision_conditions import (
+    load_open_qualitative_conditions,
+    overlay_payloads,
+    render_qualitative_overlay,
+)
 from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
@@ -558,6 +563,19 @@ class MaterialNewsTrigger:
                     computed_at=now,
                 )
             )
+
+        # L9 PR2 — qualitative-condition bridge: when this held name has open
+        # NON-numeric "what would change my mind" conditions, attach them to the
+        # single most-material story so the alert reminds the analyst the news
+        # may have tripped one. Surfaced (not auto-satisfied): the human judges
+        # the match. Mutating the candidate's evidence dict is safe — the dict is
+        # mutable even though TriggerCandidate is frozen — and never touches the
+        # signature (keyed on news_id alone).
+        if candidates:
+            overlay = load_open_qualitative_conditions(db, ticker, surface="news")
+            if overlay:
+                top = max(candidates, key=lambda c: _as_float(c.evidence.get("relevance_score")))
+                top.evidence["thesis_conditions"] = overlay_payloads(overlay)
         return candidates
 
     def should_fire(self, candidate: TriggerCandidate, user_state: UserStateContext) -> bool:
@@ -613,6 +631,19 @@ class MaterialNewsTrigger:
             "relevance_score": relevance,
             "why_material": why_material,
         }
+        # L9 PR2 — carry any qualitative-condition overlay scan attached, and
+        # annotate the memo so the analyst sees the news may have tripped a
+        # non-numeric condition they set.
+        raw_overlay = evidence.get("thesis_conditions")
+        if isinstance(raw_overlay, list) and raw_overlay:
+            overlay = [
+                cast("dict[str, object]", p)
+                for p in cast("list[object]", raw_overlay)
+                if isinstance(p, dict)
+            ]
+            if overlay:
+                evidence_obj["thesis_conditions"] = overlay
+                memo_text += render_qualitative_overlay(overlay)
         evidence_json = json.dumps(evidence_obj, sort_keys=True, ensure_ascii=False, default=str)
         signature_sha = compute_signature_sha(
             self.kind, ticker, self.signature_key_evidence(candidate)

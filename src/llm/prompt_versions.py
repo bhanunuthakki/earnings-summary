@@ -121,6 +121,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
     # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
     "decision_conditions_extract": "v1",
+    # Qualitative-condition extraction (src/decision_conditions.py, L9 PR2 — the
+    # non-numeric news/earnings-tone bridge). Bump when _QUALITATIVE_PROMPT is
+    # materially rewritten.
+    "qualitative_conditions_extract": "v1",
     # LLM peer selection (src/compute/peer_selection.py, mode-A overlap golden
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose peer_selection --min-score ...`.

@@ -46,7 +46,11 @@ def _sync_db_path(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
-from decision_conditions import attach_conditions, record_socratic_decisions  # noqa: E402
+from decision_conditions import (  # noqa: E402
+    attach_conditions,
+    attach_qualitative_conditions,
+    record_socratic_decisions,
+)
 from decision_extractor import record_decisions_from_artifacts  # noqa: E402
 
 log = logging.getLogger("record_decisions")
@@ -138,9 +142,24 @@ def main() -> int:
         f"parse_failed={conditions['parse_failed']} · "
         f"db_unavailable={conditions['db_unavailable']}"
     )
+
+    # The qualitative twin (L9 PR2): the non-numeric "what would change my mind"
+    # conditions the numeric pass skips, routed to the news/earnings-tone
+    # triggers. Separate stamp + own LLM purpose, so it neither blocks nor is
+    # blocked by the numeric pass.
+    qualitative = attach_qualitative_conditions(db_path=db_path)
+    log.info({"event": "attach_qualitative_conditions_done", **qualitative})
+    print(
+        "Qualitative-condition extraction complete · "
+        f"extracted={qualitative['extracted']} · "
+        f"no_conditions={qualitative['no_conditions']} · "
+        f"no_section={qualitative['no_section']} · "
+        f"parse_failed={qualitative['parse_failed']} · "
+        f"db_unavailable={qualitative['db_unavailable']}"
+    )
     # parse_failed rows stay unstamped and retry next run; surface in the exit
     # code so the morning pipeline's stage status reflects the partial failure.
-    return 1 if conditions["parse_failed"] else 0
+    return 1 if (conditions["parse_failed"] or qualitative["parse_failed"]) else 0
 
 
 if __name__ == "__main__":
