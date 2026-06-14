@@ -162,6 +162,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.
     "earnings_themes_split": "v1",
     "qa_topics": "v1",
+    # Calibration coach (close_the_loops L8): the monthly scorecard's named
+    # biases + behavioural experiment. Registered here so it counts as a known
+    # audit purpose (the rubric-wiring test gates AUDIT_SPECS ⊆ registered).
+    "calibration_coach": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

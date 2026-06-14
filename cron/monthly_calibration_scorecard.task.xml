@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Monthly calibration scorecard (close_the_loops L8): the compounding loop's personal readout — period-over-period hit-rate trend + realized selection/sizing/timing skill split, plus eval-gated coach prose (named recurring biases evidenced from the owner's own ledger + one falsifiable behavioural experiment). Grounded only in his graded history; below the min-n floor it renders the substrate with an honest "too thin to coach yet" note. The synthesised prose is judged against the calibration_coach rubric before saving (a coach that misreads history is worse than silence). Persists to data/calibration_scorecard/&lt;period&gt;.json and renders under Portfolio - Decisions. Runs the 2nd of each month (after the 1st's advisor-memo run, so the ledgers are fresh).</Description>
+    <URI>\earnings-summary\monthly_calibration_scorecard</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-07-02T07:30:00</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByMonth>
+        <DaysOfMonth>
+          <Day>2</Day>
+        </DaysOfMonth>
+        <Months>
+          <January /><February /><March /><April />
+          <May /><June /><July /><August />
+          <September /><October /><November /><December />
+        </Months>
+      </ScheduleByMonth>
+    </CalendarTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT1H</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT30M</Interval>
+      <Count>1</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\run_monthly_calibration_scorecard.bat</Command>
+    </Exec>
+  </Actions>
+</Task>

@@ -370,6 +370,48 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_calibration_coach_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every persisted monthly calibration scorecard that carries synthesised
+    coach prose, newest period first (close_the_loops L8).
+
+    Reads ``data/calibration_scorecard/<period>.json`` written by
+    ``calibration_coach.save_scorecard``. The graded text is the denormalised
+    ``prose`` field (named biases + the period's behavioural experiment with
+    their deterministic grounding). Scorecards too thin to coach (no biases, no
+    experiment) carry nothing to judge and are skipped — distinct from a grading
+    failure. Missing directory ⇒ empty corpus (no scorecard generated yet)."""
+    out: list[AuditItem] = []
+    base = Path(repo_root) / "data" / "calibration_scorecard"
+    if not base.is_dir():
+        return out
+    for path in sorted(base.glob("*.json")):
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        card = cast("dict[str, object]", raw)
+        biases = card.get("biases")
+        experiment = card.get("experiment")
+        has_coach = (isinstance(biases, list) and biases) or isinstance(experiment, dict)
+        prose = card.get("prose")
+        if not has_coach or not isinstance(prose, str) or not prose.strip():
+            continue
+        period = str(card.get("period") or path.stem)
+        out.append(
+            AuditItem(
+                item_id=f"calibration_coach:{period}",
+                label=f"calibration_coach/{period}",
+                ticker=None,
+                content=_clip(prose),
+                produced_at=_mtime_naive_utc(path),
+            )
+        )
+    out.sort(key=lambda i: i.produced_at or datetime.min, reverse=True)
+    return out
+
+
 def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
     """Every cached peer selection artifact, newest first.
 
@@ -508,6 +550,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
     "ask_advisory_answer": load_ask_advisory_answer_corpus,
+    "calibration_coach": load_calibration_coach_corpus,
     "peer_selection": load_peer_selection_corpus,
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,

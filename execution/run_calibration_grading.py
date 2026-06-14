@@ -109,6 +109,15 @@ _GRADERS: tuple[_Grader, ...] = (
         _BEAR_TIMEOUT_S,
         ("--purpose", "ask_advisory_answer", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
+    # Calibration coach scorecards (close_the_loops L8): audits the freshly
+    # generated monthly scorecard prose. A week with no new scorecard exits 0
+    # without writing a run (the scorecard is monthly; most weeks are no-ops).
+    _Grader(
+        "eval_calibration_coach",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "calibration_coach", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
 )
 _GRADER_KEYS = tuple(g.key for g in _GRADERS)
 

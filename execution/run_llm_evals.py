@@ -62,6 +62,7 @@ AUDIT_PURPOSES = (
     "transcript_summary",
     "advisor_next_dollar",
     "ask_advisory_answer",
+    "calibration_coach",
     "peer_selection",
     "earnings_themes_split",
     "qa_topics",

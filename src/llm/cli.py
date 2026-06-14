@@ -219,6 +219,14 @@ LLM_MODELS: dict[str, str] = {
     # evidence and commits to a scoreable stance — Opus judgment tier.
     "advisor_socratic_questions": DEFAULT_MODEL,
     "advisor_socratic_memo": "claude-opus-4-7",
+    # Calibration coach (close_the_loops L8): names the owner's recurring biases
+    # and proposes a behavioural experiment from his OWN graded track record —
+    # the highest-judgement, lowest-volume call in the repo (monthly + on a
+    # decision, off the hot path). Same Opus tier as the advisor memos it sits
+    # beside; its output is eval-gated by the calibration_coach mode-B rubric
+    # before it ever reaches the owner, so a cheaper model can only be promoted
+    # in once that gate confirms parity.
+    "calibration_coach": "claude-opus-4-7",
     # Short, structured, batch — Gemini Flash at parity with Haiku, lower cost
     # (Chip 2 PR D first promotions; model-eval cron watches for regression).
     "intake_classifier": "gemini-3-flash-preview",
