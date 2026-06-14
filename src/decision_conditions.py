@@ -205,6 +205,34 @@ def extract_section(content_md: str | None) -> str | None:
     return body
 
 
+def resolve_extraction_section(
+    artifact_md: object, memo_md: object, owner_prose: object
+) -> str | None:
+    """The "what would change my mind" text for a decision, whatever its source.
+
+    Artifact / Socratic-memo decisions carry a full memo, so the section is
+    pulled by header (:func:`extract_section`). An owner-authored pass/avoid
+    (L11, schema 0110) has no memo — its ``source_prose`` IS the falsifiability
+    text, taken whole and capped to the extractors' budget. Precedence mirrors a
+    decision's single source: a row has at most one of the three populated."""
+    if isinstance(artifact_md, str) and artifact_md.strip():
+        return extract_section(artifact_md)
+    if isinstance(memo_md, str) and memo_md.strip():
+        return extract_section(memo_md)
+    if isinstance(owner_prose, str) and owner_prose.strip():
+        return owner_prose.strip()[:4000]
+    return None
+
+
+def _decision_columns(conn: sqlite3.Connection) -> set[str]:
+    """The ``decisions`` column set — lets the attach rungs select the
+    L11 ``source_prose`` column only when the 0110 migration has landed."""
+    try:
+        return {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+    except sqlite3.Error:
+        return set()
+
+
 def parse_condition(raw: object) -> DecisionCondition | None:
     """Validate one extracted condition object. None (with a logged reason)
     when the entry is unusable — the caller drops it and keeps the rest."""
@@ -653,10 +681,15 @@ def attach_conditions(
         tally["db_unavailable"] = 1
         return tally
     try:
+        prose_col = (
+            "d.source_prose AS owner_prose"
+            if "source_prose" in _decision_columns(conn)
+            else "NULL AS owner_prose"
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT d.id, d.ticker, d.source_artifact_id, d.source_memo_id,
-                   a.content_md AS artifact_md, m.body_md AS memo_md
+                   a.content_md AS artifact_md, m.body_md AS memo_md, {prose_col}
             FROM decisions d
             LEFT JOIN llm_artifacts a ON a.id = d.source_artifact_id
             LEFT JOIN advisor_memos m ON m.id = d.source_memo_id
@@ -670,8 +703,9 @@ def attach_conditions(
         for row in rows:
             decision_id = int(row["id"])
             ticker = str(row["ticker"]).upper()
-            prose = row["artifact_md"] if row["artifact_md"] is not None else row["memo_md"]
-            section = extract_section(prose if isinstance(prose, str) else None)
+            section = resolve_extraction_section(
+                row["artifact_md"], row["memo_md"], row["owner_prose"]
+            )
             if section is None:
                 _stamp(conn, decision_id, [])
                 tally["no_section"] += 1
@@ -752,10 +786,15 @@ def attach_qualitative_conditions(
             conn.close()
         return tally
     try:
+        prose_col = (
+            "d.source_prose AS owner_prose"
+            if "source_prose" in _decision_columns(conn)
+            else "NULL AS owner_prose"
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT d.id, d.ticker, d.source_artifact_id, d.source_memo_id,
-                   a.content_md AS artifact_md, m.body_md AS memo_md
+                   a.content_md AS artifact_md, m.body_md AS memo_md, {prose_col}
             FROM decisions d
             LEFT JOIN llm_artifacts a ON a.id = d.source_artifact_id
             LEFT JOIN advisor_memos m ON m.id = d.source_memo_id
@@ -769,8 +808,9 @@ def attach_qualitative_conditions(
         for row in rows:
             decision_id = int(row["id"])
             ticker = str(row["ticker"]).upper()
-            prose = row["artifact_md"] if row["artifact_md"] is not None else row["memo_md"]
-            section = extract_section(prose if isinstance(prose, str) else None)
+            section = resolve_extraction_section(
+                row["artifact_md"], row["memo_md"], row["owner_prose"]
+            )
             if section is None:
                 _stamp_qualitative(conn, decision_id, [])
                 tally["no_section"] += 1
