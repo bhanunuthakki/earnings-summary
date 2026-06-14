@@ -109,7 +109,9 @@ class Decision:
     recommendation_kind: str
     recommendation_value: float | None
     conviction: str | None
-    source_artifact_id: int
+    # NULL for memo-sourced (0086) and pass/avoid (0110) rows — anchored by
+    # source_memo_id / source_dismissal_id instead.
+    source_artifact_id: int | None
     source_lens: str | None
     rationale_excerpt: str | None
     made_at: datetime
@@ -589,7 +591,9 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
             float(row["recommendation_value"]) if row["recommendation_value"] is not None else None
         ),
         conviction=row["conviction"],
-        source_artifact_id=int(row["source_artifact_id"]),
+        source_artifact_id=(
+            int(row["source_artifact_id"]) if row["source_artifact_id"] is not None else None
+        ),
         source_lens=row["source_lens"],
         rationale_excerpt=row["rationale_excerpt"],
         made_at=_parse_dt(row["made_at"]) or datetime.now(UTC),

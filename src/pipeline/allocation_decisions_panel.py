@@ -54,7 +54,7 @@ from pathlib import Path
 from statistics import median
 
 from attribution import SkillDecomposition, decompose_alpha
-from calibration_guard import is_confident
+from calibration_guard import confidence_note, is_confident
 from decision_calibration import CalibrationStats, CohortPeriod, build_calibration
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
@@ -910,10 +910,45 @@ def _calibration_section(stats: CalibrationStats) -> str:
     )
 
     trend_block = _cohort_trend_block(stats)
+    omission_block = _omission_block(stats)
     return (
         f"{head}{kpis}{trend_block}{conviction_table}{mix_line}{timing_line}"
-        f"{reversal_table}</section>"
+        f"{omission_block}{reversal_table}</section>"
     )
+
+
+def _omission_block(stats: CalibrationStats) -> str:
+    """The errors-of-omission ledger (L11): how the names the owner PASSED on
+    graded — a pass that ran away is the miss. Min-n framed; hidden until at
+    least one pass has been graded. Kit classes only (S1-conformant)."""
+    om = stats.omissions
+    if om is None or not om.graded:
+        return ""
+    miss = f"{om.miss_rate * 100.0:.0f}%" if om.miss_rate is not None else "—"
+    head = (
+        '<h3 class="adc-sub">Errors of omission</h3>'
+        f'<p class="adc-line">Of <b>{om.graded}</b> passed names graded, '
+        f'<span class="neg">{om.missed}</span> ran away (missed), '
+        f'<span class="pos">{om.dodged}</span> correctly dodged, {om.mixed} mixed — '
+        f"miss rate {miss} ({escape(confidence_note(om.graded))}).</p>"
+    )
+    if not om.worst_misses:
+        return head
+    rows = "".join(
+        "<tr>"
+        f'<td class="when">{escape(m.made_at)}</td>'
+        f'<td class="tk">{escape(m.ticker)}</td>'
+        '<td class="num"><span class="neg">'
+        f"{f'+{m.outcome_pct * 100.0:.0f}%' if m.outcome_pct is not None else 'ran'}</span></td>"
+        "</tr>"
+        for m in om.worst_misses
+    )
+    table = (
+        '<table class="ad-timeline adc-table"><thead><tr>'
+        '<th>Passed</th><th>Ticker</th><th class="num">Move since</th>'
+        f"</tr></thead><tbody>{rows}</tbody></table>"
+    )
+    return head + table
 
 
 def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str:

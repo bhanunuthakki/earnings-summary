@@ -7,9 +7,15 @@ latest available bar, compute the % change, and write an outcome.
 Grading heuristic (price-only, no fundamentals):
   ADD / INITIATE:  +5%   = correct, -5%  = wrong, in between = mixed
   TRIM / SELL:     -5%   = correct, +5%  = wrong, in between = mixed
-  HOLD / AVOID:    ±5% (no big move) = correct, big move either way = mixed
-                   (HOLD is wrong if the stock falls >15% — the system told
-                   the user not to trim and they got hurt)
+  HOLD:            ±5% (no big move) = correct; a >15% drawdown = wrong; a big
+                   rally = mixed (could have added more)
+  AVOID / pass:    the INVERSE of a hold — judged by what was MISSED. A name you
+                   passed on that ran +15% = wrong (the error of omission); a
+                   decline or flat band = correct (the pass was vindicated); a
+                   modest +5..15% = mixed. Passes grade on a LONGER horizon
+                   (--avoid-after-days, default 180): an omission needs time to
+                   reveal itself, and the longer window keeps the pass's
+                   falsifiable conditions open to resurface on news/XBRL.
 
 This is a coarse first pass — a richer grader (DCF rebuild, fundamental
 delta) is a future-work iteration. The point here is to close the loop:
@@ -144,12 +150,9 @@ def _verdict(*, kind: str, pct_change: float, threshold_pct: float) -> tuple[str
             f"price moved {pct_change * 100:.1f}% — flat band, neither vindicated nor refuted",
         )
 
-    if kind == "hold" or kind == "avoid":
+    if kind == "hold":
         if not big_move:
-            return (
-                "correct",
-                f"price moved {pct_change * 100:.1f}% — HOLD/AVOID was right to not act",
-            )
+            return ("correct", f"price moved {pct_change * 100:.1f}% — HOLD was right to not act")
         # Holding through a big drawdown is wrong; holding through a big rally is mixed
         # (could have added more)
         if pct_change <= -threshold_pct * 3:  # 15% drawdown threshold for HOLD-wrong
@@ -160,6 +163,26 @@ def _verdict(*, kind: str, pct_change: float, threshold_pct: float) -> tuple[str
         return (
             "mixed",
             f"price moved {direction} {abs(pct_change * 100):.1f}% — HOLD missed an action signal",
+        )
+
+    if kind == "avoid":
+        # A pass is the INVERSE of a hold: judged by what was MISSED. A name you
+        # avoided that ran away is the error of omission (opportunity cost); a
+        # decline or a flat band vindicates the pass. This is the omission side
+        # the calibration loop (L1/L8) was blind to until passes became gradeable.
+        if pct_change >= threshold_pct * 3:  # +15%: a meaningful rally you sat out
+            return (
+                "wrong",
+                f"price moved +{pct_change * 100:.1f}% — AVOID missed a meaningful rally (omission)",
+            )
+        if pct_change > threshold_pct:
+            return (
+                "mixed",
+                f"price moved +{pct_change * 100:.1f}% — AVOID gave up a modest move",
+            )
+        return (
+            "correct",
+            f"price moved {pct_change * 100:.1f}% — AVOID dodged the name (no upside missed)",
         )
 
     return ("unfalsifiable", f"unknown kind={kind}")
@@ -185,6 +208,15 @@ def main() -> int:
         default=PROJECT_ROOT,
         help="Repo root containing data/portfolio.db.",
     )
+    parser.add_argument(
+        "--avoid-after-days",
+        type=int,
+        default=180,
+        help="Grade pass/avoid decisions only once they are this old — an "
+        "omission needs a longer horizon to reveal itself than an add/trim, and "
+        "the wider window keeps the pass's falsifiable conditions open to "
+        "resurface in the meantime.",
+    )
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -209,10 +241,19 @@ def main() -> int:
         "mixed": 0,
         "unfalsifiable": 0,
         "skipped_no_price": 0,
+        "skipped_young_avoid": 0,
     }
     today_iso = datetime.now(UTC).date().isoformat()
+    now_naive = datetime.now(UTC).replace(tzinfo=None)
 
     for dec in pending:
+        # A pass needs a longer horizon than an add/trim before its outcome means
+        # anything; leave young avoids open (and watchable) until they ripen.
+        if dec.recommendation_kind == "avoid":
+            age_days = (now_naive - dec.made_at.replace(tzinfo=None)).days
+            if age_days < args.avoid_after_days:
+                tally["skipped_young_avoid"] += 1
+                continue
         series = _load_price_series(args.repo_root, dec.ticker)
         if series is None:
             tally["skipped_no_price"] += 1
@@ -274,7 +315,8 @@ def main() -> int:
         "Decision grading complete · "
         f"pending={len(pending)} · graded={tally['graded']} · "
         f"correct={tally['correct']} · wrong={tally['wrong']} · "
-        f"mixed={tally['mixed']} · skipped_no_price={tally['skipped_no_price']}"
+        f"mixed={tally['mixed']} · skipped_no_price={tally['skipped_no_price']} · "
+        f"skipped_young_avoid={tally['skipped_young_avoid']}"
     )
     if len(pending) == 0:
         # Most likely cause: artifacts younger than --since-days. Show the
