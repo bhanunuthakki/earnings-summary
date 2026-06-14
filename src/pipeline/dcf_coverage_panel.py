@@ -7,9 +7,13 @@ pipeline runs ``refresh_dcf`` per name, plus legacy wacc-seeded holdings),
 `dcf/*.xlsx` workbooks, `dcf_runs` rows, and `data/dcf_assumptions/*.json`
 files — so every artifact is accounted for, including orphans (a workbook
 whose name no refresh maintains) and runs whose workbook has vanished. Per
-name: valuation model + how it resolved, workbook existence/mtime, last
-`dcf_runs` valuation date with a staleness tone, the assumptions-JSON state
-(Opus pass vs sync-created vs missing), and the workbook→JSON sync outcome
+name: valuation model + how it resolved, workbook existence/mtime, and the two
+DCF freshness legs toned independently — the fair-value leg (`valuation_date`,
+moves only on a fundamentals refresh) and the price leg (`live_price_at`,
+re-priced daily by `reprice_dcf`); a fresh fair value next to a stale price is
+the honest tell that `over_under_pct` (and the trim/sell ladder + next-dollar
+"ret" factor it feeds) is running on an old price. Plus the assumptions-JSON
+state (Opus pass vs sync-created vs missing) and the workbook→JSON sync outcome
 persisted by migration 0091.
 
 Render-path discipline: file *stats* and small-JSON reads only — never opens
@@ -68,7 +72,8 @@ class CoverageRow:
     model_source: str  # "holdings" | "opus" | "default"
     workbook_exists: bool
     workbook_mtime: date | None
-    last_valued: date | None
+    last_valued: date | None  # dcf_runs.valuation_date — the fair-value leg
+    last_priced: date | None  # dcf_runs.live_price_at — the price leg (re-priced daily)
     run_format: str | None  # from dcf_runs notes/snapshot ("redesigned", "holdco_sotp", ...)
     sync_status: str | None
     synced_at: date | None
@@ -109,8 +114,10 @@ def _parse_date(raw: object) -> date | None:
 
 
 def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
-    """dcf_runs keyed by ticker: valuation_date, notes, snapshot format, sync
-    columns (when the DB has them — pre-0091 DBs simply lack the keys)."""
+    """dcf_runs keyed by ticker: valuation_date (the fair-value leg),
+    live_price_at (the price leg — re-priced daily by reprice_dcf), notes,
+    snapshot format, sync columns (when the DB has them — pre-0091 DBs simply
+    lack the keys)."""
     out: dict[str, dict[str, object]] = {}
     if not db_path.exists():
         return out
@@ -129,7 +136,7 @@ def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
             else ""
         )
         rows = conn.execute(
-            "SELECT ticker, valuation_date, notes, assumption_snapshot_json"
+            "SELECT ticker, valuation_date, live_price_at, notes, assumption_snapshot_json"
             f"{sync_sel} FROM dcf_runs"
         ).fetchall()
     except sqlite3.Error:
@@ -139,6 +146,7 @@ def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
     for r in rows:
         d: dict[str, object] = {
             "valuation_date": r["valuation_date"],
+            "live_price_at": r["live_price_at"],
             "notes": r["notes"],
             "snapshot": r["assumption_snapshot_json"],
         }
@@ -315,6 +323,7 @@ def collect_rows(db_path: Path, repo_root: Path) -> tuple[list[CoverageRow], lis
                 workbook_exists=t in workbooks,
                 workbook_mtime=workbooks.get(t),
                 last_valued=_parse_date(run.get("valuation_date")) if run else None,
+                last_priced=_parse_date(run.get("live_price_at")) if run else None,
                 run_format=_run_format(run),
                 sync_status=str(sync_status) if isinstance(sync_status, str) else None,
                 synced_at=synced_at,
@@ -335,6 +344,21 @@ def _age_cell(d: date | None, today: date) -> str:
     age = (today - d).days
     tone = "dcv-ok" if age <= FRESH_DAYS else ("dcv-warn" if age <= STALE_DAYS else "dcv-bad")
     return f'<span class="{tone}" title="{d.isoformat()}">{d.isoformat()} ({age}d)</span>'
+
+
+def _priced_cell(d: date | None, today: date) -> str:
+    """The price leg's own freshness, separate from the fair-value leg.
+
+    over_under_pct = (live_price - fair) / fair: the fair value moves only on a
+    fundamentals refresh, but the price leg should be current every day
+    (reprice_dcf re-divides it daily). A fresh fair value (green "Last valued")
+    next to a stale price reading here is the honest signal that the trim/sell
+    ladder / next-dollar "ret" factor are running on an old price — what a
+    single valuation-date tone used to hide. ``None`` = the run never carried a
+    live price (over/under is NULL → the ladder reads 'unknown')."""
+    if d is None:
+        return '<span class="dcv-muted" title="no live price on the DCF run">never priced</span>'
+    return _age_cell(d, today)
 
 
 def _sync_cell(r: CoverageRow) -> str:
@@ -381,7 +405,7 @@ def _kpi_strip(rows: list[CoverageRow], today: date) -> str:
         + card(
             "Fresh",
             len(fresh),
-            f"valued within {FRESH_DAYS}d",
+            f"fair value valued within {FRESH_DAYS}d",
             "tone-good" if len(fresh) >= len(expected) and expected else "",
         )
         + card(
@@ -428,6 +452,7 @@ def _row_html(r: CoverageRow, today: date) -> str:
         f"<td>{model}</td>"
         f"<td>{_workbook_cell(r)}</td>"
         f"<td>{_age_cell(r.last_valued, today)}</td>"
+        f"<td>{_priced_cell(r.last_priced, today)}</td>"
         f'<td><span class="{state_cls}">{escape(r.assumptions_state)}</span></td>'
         f"<td>{_sync_cell(r)}</td>"
         f'<td class="dcv-muted">{escape(r.note)}</td>'
@@ -474,7 +499,10 @@ def render_dcf_coverage_panel(db_path: Path, repo_root: Path) -> str:
             _kpi_strip(rows, today),
             '<table class="p-table"><thead><tr>'
             "<th>Ticker</th><th>List</th><th>Model</th><th>Workbook</th>"
-            "<th>Last valued</th><th>Assumptions</th><th>JSON sync</th><th>Note</th>"
+            '<th title="Fair-value leg: dcf_runs.valuation_date">Last valued</th>'
+            '<th title="Price leg: dcf_runs.live_price_at — re-priced daily by '
+            'reprice_dcf, independent of the fair-value date">Priced</th>'
+            "<th>Assumptions</th><th>JSON sync</th><th>Note</th>"
             "</tr></thead><tbody>",
             table_rows,
             "</tbody></table>",

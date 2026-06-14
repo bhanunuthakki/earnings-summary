@@ -290,14 +290,15 @@ def _coverage_repo(tmp_path: Path) -> tuple[Path, Path]:
     )
     today = date.today()
     conn.execute(
-        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, wacc,"
-        " terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
+        "INSERT INTO dcf_runs (ticker, valuation_date, live_price_at, horizon_years,"
+        " wacc, terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
         " notes, assumption_snapshot_json, assumptions_sync_status,"
-        " assumptions_synced_at) VALUES (?, ?, 10, 0.09, 0, 1, 100.0, 1e9,"
+        " assumptions_synced_at) VALUES (?, ?, ?, 10, 0.09, 0, 1, 100.0, 1e9,"
         " 'USD', 'workbook=LIVE.xlsx (redesigned)', ?, 'synced', ?)",
         (
             "LIVE",
             today.isoformat(),
+            today.isoformat() + "T08:00:00",  # price leg re-priced today (fresh)
             json.dumps({"format": "redesign"}),
             today.isoformat() + "T08:00:00",
         ),
@@ -358,6 +359,12 @@ def test_collect_rows_classifies_states(tmp_path: Path) -> None:
     assert live.sync_status == "synced"
     assert live.assumptions_state == "opus (seeded)"
     assert live.run_format == "redesign"
+    # Both freshness legs read independently: LIVE was valued and re-priced today.
+    assert live.last_valued == date.today()
+    assert live.last_priced == date.today()
+    # ORPH's run carried no live price -> the price leg is None ("never priced"),
+    # distinct from its (stale) valuation_date.
+    assert by["ORPH"].last_valued is not None and by["ORPH"].last_priced is None
 
     skip = by["SKIPME"]
     assert skip.model == "bank_excess_return" and skip.model_source == "opus"
@@ -401,3 +408,46 @@ def test_panel_empty_repo_degrades(tmp_path: Path) -> None:
     (repo / "data").mkdir(parents=True)
     out = render_dcf_coverage_panel(repo / "data" / "portfolio.db", repo)
     assert "No DCF artifacts" in out
+
+
+def test_price_leg_freshness_is_independent_of_valuation(tmp_path: Path) -> None:
+    """The L6 honesty fix: a name valued TODAY but whose price leg is weeks old
+    must NOT read as fully fresh. collect_rows exposes the two legs separately
+    and the panel tones the stale price loud even beside a fresh fair value —
+    the single valuation-date tone used to hide exactly this (over_under_pct
+    frozen on an old price between opt-in refresh_dcf runs)."""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        _SYNCED_DCF_RUNS
+        + "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, name TEXT);"
+        " INSERT INTO tracked_companies VALUES ('STALEPX', 'portfolio', 'Stale Price Co');"
+    )
+    today = date.today()
+    stale_price_day = (today - timedelta(days=25)).isoformat() + "T08:00:00"
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, live_price_at, horizon_years,"
+        " wacc, terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
+        " live_price, over_under_pct, notes, assumption_snapshot_json) VALUES"
+        " ('STALEPX', ?, ?, 10, 0.09, 0, 1, 100.0, 1e9, 'USD', 90.0, -0.1,"
+        " 'workbook=STALEPX.xlsx (redesigned)', '{}')",
+        (today.isoformat(), stale_price_day),
+    )
+    conn.commit()
+    conn.close()
+
+    rows, _ = collect_rows(db, repo)
+    row = next(r for r in rows if r.ticker == "STALEPX")
+    # Fresh fair value, stale price — the two legs are genuinely different dates.
+    assert row.last_valued == today
+    assert row.last_priced == (today - timedelta(days=25))
+    assert row.last_valued != row.last_priced
+
+    html_out = render_dcf_coverage_panel(db, repo)
+    assert "Priced" in html_out  # the price-leg column header exists
+    # The fair-value cell is fresh (green/ok); the price cell is stale (warn) —
+    # both tone classes present in the same row, so a reader sees the split.
+    assert "dcv-ok" in html_out
+    assert "dcv-warn" in html_out
