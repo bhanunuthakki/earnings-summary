@@ -71,6 +71,7 @@ from portfolio_risk_snapshot_store import (
     read_latest_snapshot,
     write_snapshot,
 )
+from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from ui.controls import ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
@@ -1170,17 +1171,21 @@ def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) 
 
 
 # ---------------------------------------------------------------------------
-# Portfolio → Risk tab (L5 — the whole-book risk cockpit). Three of the
+# Portfolio → Risk tab (L5 — the whole-book risk cockpit). The
 # performance/risk pillar's high-severity gaps in one panel:
 #   * book DRAWDOWN (max DD + underwater curve + time-to-recovery) computed
 #     client-side from the tracker's daily TWR series (no drawdown endpoint),
 #   * FACTOR/STYLE exposure rolled up from the per-ticker correlation/beta rows
 #     the client used to discard (+ a 10Y rate leg from macro_sensitivities),
+#   * RISK vs REWARD vs CONVICTION (L7 — the risk-budget allocator): each name's
+#     share of book risk (marginal contribution off the shrunk covariance) set
+#     against its share of the book's asymmetry-aware expected DCF reward and its
+#     recorded conviction, flagging the parity gaps,
 #   * the whole-book MACRO STRESS lens (CLI-only before) surfaced with a
 #     scenario picker that fires execution/run_scenario.py over an SSE job.
 # Macro stress reads the local cache, so it renders even with the tracker down;
-# drawdown + factor degrade to an offline note (the cached-snapshot path lands
-# alongside, L5 PR2).
+# drawdown + factor + the risk/reward gap degrade to an offline note (the
+# cached-snapshot path lands alongside, L5 PR2).
 # ---------------------------------------------------------------------------
 
 _RISK_CSS = """<style>
@@ -1190,6 +1195,10 @@ _RISK_CSS = """<style>
 .pfr-run { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
 .pfr-run select { font-size: var(--fs-body); }
 .pfr-log { display: none; max-height: 160px; overflow: auto; margin: 0 0 12px; }
+.rrg-table { margin-top: 4px; }
+.rrg-mismatch { max-width: 460px; }
+.rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
+.rrg-score { margin-right: 8px; }
 </style>"""
 
 # Fires the portfolio macro-stress lens (execution/run_scenario.py --portfolio)
@@ -1268,9 +1277,12 @@ def render_portfolio_risk_panel(
         else None
     )
     factor: FactorRollup | None = None
+    gap: RiskRewardGap | None = None
     if analytics.positioning is not None:
         rate_betas = _rate_betas(analytics.positioning.correlations, db_path)
         factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
+        if db_path is not None:
+            gap = _build_risk_reward_gap(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1285,10 +1297,25 @@ def render_portfolio_risk_panel(
         analytics,
         drawdown=drawdown,
         factor=factor,
+        gap=gap,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
     )
+
+
+def _build_risk_reward_gap(pos: Positioning, db_path: Path) -> RiskRewardGap | None:
+    """Assemble the risk-parity-gap table from the live book weights (the
+    positioning endpoint's per-name weight_pct) — None when there are no
+    weighted names to model. repo_root is the price cache's parent of the DB."""
+    weights = {
+        r.ticker.upper(): (r.weight_pct or 0.0) / 100.0
+        for r in pos.correlations
+        if r.ticker and r.weight_pct is not None
+    }
+    if not weights:
+        return None
+    return build_risk_reward_gap(db_path, db_path.parent.parent, weights, weights_source="tracker")
 
 
 def compose_risk_page(
@@ -1299,11 +1326,14 @@ def compose_risk_page(
     scenarios: list[tuple[str, str]],
     digest: str,
     snapshot: RiskSnapshot | None = None,
+    gap: RiskRewardGap | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
     after a digest regenerates. When the tracker is offline, ``snapshot`` (the
-    last-known cached read) renders stamped values instead of a bare note."""
+    last-known cached read) renders stamped values instead of a bare note.
+    ``gap`` (L7) is the risk-budget allocator's risk-vs-reward-vs-conviction
+    ranking; None hides the section (tracker offline / no weighted book)."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1311,6 +1341,8 @@ def compose_risk_page(
         parts.append(_drawdown_section(drawdown))
         if factor is not None:
             parts.append(_factor_exposure_section(factor))
+        if gap is not None:
+            parts.append(_risk_reward_gap_section(gap))
     elif snapshot is not None:
         parts.append(_cached_risk_section(snapshot))
     else:
@@ -1670,6 +1702,106 @@ def _factor_top_line(label: str, names: list[CrowdedName]) -> str:
         for c in names
     )
     return f'<p class="pfr-top"><strong>{escape(label)}:</strong> {chips}</p>'
+
+
+def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
+    """L7 risk-budget allocator: the risk-vs-reward-vs-conviction parity table.
+    Uses the S1 control kit (.p-table / .k-chip / .k-pill) — no raw hex."""
+    head = (
+        '<section class="panel"><h2>Risk vs reward vs conviction</h2>'
+        '<p class="sub">Each position\'s share of total book risk (marginal contribution off the '
+        "Ledoit-Wolf covariance) set against its share of the book's expected reward "
+        "(probability-weighted bull/base/bear DCF on the live price) and your recorded "
+        "conviction. A positive gap means a name eats more of the book's risk than the "
+        "reward it supplies; where the DCF is stale or missing the reward leg is marked "
+        "low-confidence and shown but not scored.</p>"
+    )
+    if gap.hidden_reason is not None:
+        return (
+            f'{head}<p class="muted">Risk-parity gap unavailable — '
+            f"{escape(gap.hidden_reason)}.</p></section>"
+        )
+    if not gap.rows:
+        return (
+            f'{head}<p class="muted">No positions with the daily price history needed to model '
+            "risk contribution.</p></section>"
+        )
+    bits = [f"{gap.weights_source}-weighted"]
+    if gap.portfolio_vol_ann is not None:
+        bits.append(f"book vol {gap.portfolio_vol_ann * 100.0:.0f}%/yr")
+    if gap.cov_obs:
+        bits.append(f"{gap.cov_obs}d window")
+    if gap.shrinkage is not None:
+        bits.append(f"LW shrink {gap.shrinkage:.2f}")
+    if gap.prices_through is not None:
+        bits.append(f"prices through {gap.prices_through.isoformat()}")
+    bits.append(f"{gap.valued_names}/{len(gap.rows)} priced by a current DCF")
+    sub = f'<p class="sub">{escape(" · ".join(bits))}.</p>'
+    rows_html = "".join(_rrg_row(r) for r in gap.rows)
+    notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in gap.notes)
+    table = (
+        '<table class="p-table rrg-table"><thead><tr>'
+        "<th>Ticker</th>"
+        '<th class="num">Weight</th><th class="num">Risk share</th>'
+        '<th class="num">Reward share</th><th class="num">Gap</th>'
+        '<th class="num">Exp. return</th><th class="num">Conviction</th>'
+        "<th>Mismatch</th>"
+        f"</tr></thead><tbody>{rows_html}</tbody></table>"
+    )
+    return f"{head}{sub}{table}{notes}</section>"
+
+
+def _rrg_row(r: RiskRewardGapRow) -> str:
+    ticker = ticker_label(r.ticker, href=f"../research/{escape(r.ticker)}/")
+    if r.gap_pct is not None:
+        gap_tone = "neg" if r.gap_pct > 0 else "pos"
+        gap_cell = f'<span class="{gap_tone}">{r.gap_pct:+.0f}pp</span>'
+    else:
+        gap_cell = '<span class="muted">&mdash;</span>'
+    if r.expected_return_pct is not None:
+        e_tone = "pos" if r.expected_return_pct >= 0 else "neg"
+        warn = (
+            f' <span class="muted" title="{escape(r.confidence_reason)}">&#9888;</span>'
+            if r.low_confidence and r.confidence_reason
+            else ""
+        )
+        exp_cell = f'<span class="{e_tone}">{r.expected_return_pct:+.0f}%</span>{warn}'
+    else:
+        exp_cell = '<span class="muted">&mdash;</span>'
+    reward_cell = (
+        f"{r.reward_share_pct:.0f}%"
+        if r.reward_share_pct is not None
+        else '<span class="muted">&mdash;</span>'
+    )
+    conv = (
+        f"{r.conviction:g}/5" if r.conviction is not None else '<span class="muted">&mdash;</span>'
+    )
+    chips = "".join(
+        f'<span class="k-chip k-chip-mono">{escape(c)}</span>' for c in r.mismatch_reasons
+    )
+    if r.mismatch_score > 0:
+        mismatch = (
+            f'<span class="k-pill k-pill-warn rrg-score">{r.mismatch_score:g}</span>'
+            f'<span class="rrg-chips">{chips}</span>'
+        )
+    elif chips:
+        mismatch = f'<span class="rrg-chips">{chips}</span>'
+    elif r.low_confidence:
+        mismatch = '<span class="muted">low-confidence</span>'
+    else:
+        mismatch = '<span class="muted">aligned</span>'
+    return (
+        "<tr>"
+        f"<td>{ticker}</td>"
+        f'<td class="num">{r.weight_pct:.1f}%</td>'
+        f'<td class="num">{r.risk_share_pct:.0f}%</td>'
+        f'<td class="num">{reward_cell}</td>'
+        f'<td class="num">{gap_cell}</td>'
+        f'<td class="num">{exp_cell}</td>'
+        f'<td class="num">{conv}</td>'
+        f'<td class="rrg-mismatch">{mismatch}</td>'
+        "</tr>"
+    )
 
 
 def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
