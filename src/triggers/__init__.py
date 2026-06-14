@@ -33,6 +33,7 @@ from triggers.earnings_tone import EarningsToneTrigger
 from triggers.kpi_inflection import KpiInflectionTrigger
 from triggers.material_news import MaterialNewsTrigger
 from triggers.registry import ALL_TRIGGERS, ENABLED_TRIGGERS
+from triggers.restatement import RestatementTrigger
 from triggers.saydo_due import SayDoDueTrigger
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "KpiInflectionTrigger",
     "MaterialNewsTrigger",
     "QueuedActionDraft",
+    "RestatementTrigger",
     "SayDoDueTrigger",
     "ThesisAnchor",
     "Trigger",

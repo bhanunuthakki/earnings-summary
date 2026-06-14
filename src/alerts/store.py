@@ -60,8 +60,9 @@ ACTION_STATUSES: frozenset[str] = frozenset(
 # the five live sensor `kind` classvars plus 'thesis_drift', which was folded
 # into the kpi_inflection sensor rather than shipped on its own but is still a
 # recognized alert kind the feed/drawer render. 'decision_condition' is the
-# falsifiable-conditions evaluator (0086). Keep in lockstep with the
-# ck_alerts_trigger_kind CHECK (0068, widened in 0086).
+# falsifiable-conditions evaluator (0086); 'restatement' fires when a held-name
+# fact is materially superseded (L10, 0108). Keep in lockstep with the
+# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108).
 TRIGGER_KINDS: frozenset[str] = frozenset(
     {
         "kpi_inflection",
@@ -70,6 +71,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "thesis_drift",
         "material_news",
         "decision_condition",
+        "restatement",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).

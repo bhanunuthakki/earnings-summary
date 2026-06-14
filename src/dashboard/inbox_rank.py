@@ -104,6 +104,9 @@ _TRIGGER_CATEGORIES: dict[str, str] = {
     # A falsifiable "what would change my mind" condition being met is a
     # thesis-relevant event — the decision it resurfaces was thesis-driven.
     "decision_condition": CATEGORY_THESIS,
+    # A held-name figure being restated is thesis-relevant: the numbers the
+    # thesis rests on changed under it (L10).
+    "restatement": CATEGORY_THESIS,
 }
 
 _KIND_CATEGORIES: dict[str, str] = {

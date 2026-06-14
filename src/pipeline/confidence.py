@@ -59,9 +59,12 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from models.documents import SourceQualityTier
+
+if TYPE_CHECKING:
+    from credibility.priors import MeasuredPriors
 
 log = logging.getLogger(__name__)
 
@@ -151,12 +154,24 @@ def score_confidence(
     extracted_by: str | None,
     issues: tuple[IssueSignal, ...] | list[IssueSignal] = (),
     self_reported: float | None = None,
+    tier_base_override: float | None = None,
 ) -> float:
     """The documented formula. Pure; rounds to 4 decimals; clamps to
     [MIN_CONFIDENCE, 1.0]. See the module docstring for the worked examples
-    (which the tests pin verbatim)."""
+    (which the tests pin verbatim).
+
+    ``tier_base_override`` (Close-the-Loops L10) replaces the hand-set
+    ``TIER_BASE`` lookup with a MEASURED base for this fact's
+    (tier × ticker × line-item) cell — supplied by the caller only when the
+    credibility ledger has enough graded observations to earn it (see
+    ``credibility.priors``). Default None keeps the constant, so every existing
+    call site is unchanged."""
     tier_key = tier.value if isinstance(tier, SourceQualityTier) else tier
-    base = TIER_BASE.get(tier_key or "", UNKNOWN_TIER_BASE)
+    base = (
+        tier_base_override
+        if tier_base_override is not None
+        else TIER_BASE.get(tier_key or "", UNKNOWN_TIER_BASE)
+    )
     delta = METHOD_DELTA[classify_extraction_method(extracted_by)]
 
     penalty = 0.0
@@ -428,6 +443,7 @@ def apply_confidence_scores(
     table: Literal["financial_facts", "kpi_facts"],
     ticker: str | None = None,
     apply: bool = True,
+    priors: MeasuredPriors | None = None,
 ) -> RescoreOutcome:
     """Recompute the formula for every row of one fact table; UPDATE rows
     whose stored confidence differs. Idempotent — rerunning over an unchanged
@@ -436,6 +452,14 @@ def apply_confidence_scores(
     LLM-method rows with a non-default stored confidence are self-scored
     extractions (see the module docstring) and are preserved, tallied in
     ``preserved_self_scored``.
+
+    ``priors`` (Close-the-Loops L10) is the MEASURED prior built from the
+    credibility ledger. When supplied, each non-LLM row's tier base is replaced
+    by the measured base for its (tier × ticker × line-item) cell — but only
+    where that cell has cleared the minimum-n gate; everywhere else
+    ``priors.tier_base`` returns the constant, so the score is unchanged. This is
+    the one consumer wired to the measured prior as proof; default None keeps the
+    pure constant-only behavior.
     """
     sql = _FACT_SQL if table == "financial_facts" else _KPI_SQL
     params: tuple[str, ...] = ()
@@ -463,12 +487,20 @@ def apply_confidence_scores(
         if method == "llm" and current != 1.0:
             preserved += 1
             continue
+        tier_str = str(tier) if tier is not None else None
+        base_override: float | None = None
+        if priors is not None and tier_str is not None:
+            fallback = TIER_BASE.get(tier_str, UNKNOWN_TIER_BASE)
+            base_override = priors.tier_base(
+                tier_str, fallback=fallback, ticker=tkr, line_item=item
+            )
         new = score_confidence(
-            tier=str(tier) if tier is not None else None,
+            tier=tier_str,
             extracted_by=str(extracted_by) if extracted_by is not None else None,
             issues=issues_for_fact(
                 issues, ticker=tkr, item=item, period_end=period_end, value=value
             ),
+            tier_base_override=base_override,
         )
         if abs(new - current) > 1e-9:
             updates.append((new, row_id))
