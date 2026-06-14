@@ -457,6 +457,52 @@ def test_state_store_loads_before_every_other_script() -> None:
     assert store_at < html.index(SHELL_JS[:40])
 
 
+def test_tablist_roving_tabindex_contract(
+    generated_at: "datetime | None" = None,
+) -> None:
+    """L13: every role="tab" button ships with tabindex="-1" so JS can manage
+    the roving tabindex (one tab focusable at a time); activate() sets the
+    active button to 0 + arrow-key handlers drive focus. The JS helper names
+    and their wiring must be present."""
+    from datetime import UTC, datetime
+
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    # All tab buttons in the tablist navs must start with tabindex="-1".
+    # (The active one is flipped to 0 by activate() on first paint.)
+    import re
+
+    tab_buttons = re.findall(r'<button[^>]+role="tab"[^>]*>', html)
+    assert tab_buttons, "no role=tab buttons found"
+    for btn in tab_buttons:
+        assert 'tabindex="-1"' in btn, f"missing tabindex=-1 on: {btn!r}"
+    # JS wiring: helper defined, called for both nav containers.
+    assert "setupTablistNav" in SHELL_JS
+    assert "ArrowRight" in SHELL_JS and "ArrowLeft" in SHELL_JS
+    assert "Home" in SHELL_JS and "End" in SHELL_JS
+    # activate() updates tabindex as well as aria-selected.
+    assert "tabindex" in SHELL_JS
+
+
+def test_offline_banner_and_retry_button_contract() -> None:
+    """L13: an offline banner element exists in the shell and JS wires
+    navigator.onLine + online/offline events; every fetch error state
+    emits a Retry button that re-invokes the loader."""
+    from datetime import UTC, datetime
+
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    # Offline banner element present and starts hidden.
+    assert 'id="cc-offline-banner"' in html
+    assert "hidden" in html.split('id="cc-offline-banner"')[1].split(">")[0]
+    # CSS ships the banner style.
+    assert ".cc-offline-banner" in SHELL_CSS
+    # JS wires the online/offline events and syncs the banner.
+    assert "navigator.onLine" in SHELL_JS
+    assert "'online'" in SHELL_JS and "'offline'" in SHELL_JS
+    # Retry button in error states: class + onclick closure.
+    assert "cc-retry-btn" in SHELL_JS
+    assert ".cc-retry-btn" in SHELL_CSS
+
+
 def test_shell_routes_state_through_the_store() -> None:
     """S14 PR2: the shell's own state writes go through CCState — palette
     handoffs, section/tab/ticker tracking — and no raw storage calls remain
