@@ -28,6 +28,7 @@ from evals.corpora import (
     AuditItem,
     filter_since,
     load_advisor_next_dollar_corpus,
+    load_ask_advisory_answer_corpus,
     load_bear_case_corpus,
     load_transcript_summary_corpus,
 )
@@ -340,6 +341,87 @@ def test_advisor_corpus_tolerates_missing_table_and_db(tmp_path: Path) -> None:
     data.mkdir()
     sqlite3.connect(data / "portfolio.db").close()  # DB, no table
     assert load_advisor_next_dollar_corpus(tmp_path) == []
+
+
+def _seed_ask_turns(repo: Path) -> None:
+    data = repo / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(data / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE ask_sessions (
+            id TEXT PRIMARY KEY, scope TEXT, title TEXT,
+            created_at TEXT, updated_at TEXT
+        );
+        CREATE TABLE ask_turns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT, role TEXT, text TEXT, citations_json TEXT,
+            model TEXT, created_at TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO ask_sessions (id, scope, title, created_at, updated_at)"
+        " VALUES ('s1', 'portfolio', 'desk', '2026-06-01T09:00:00', '2026-06-01T09:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO ask_sessions (id, scope, title, created_at, updated_at)"
+        " VALUES ('s2', 'ticker', 'NU', '2026-06-02T09:00:00', '2026-06-02T09:00:00')"
+    )
+    long_answer = "The case for trimming NU rests on " + ("x " * 40)
+    cites = json.dumps([{"n": 1, "kind": "fact", "label": "NU NPL ratio", "confidence": 0.79}])
+    rows = [
+        ("s1", "user", "should I trim NU?", None, "2026-06-01T09:00:00"),
+        ("s1", "assistant", long_answer, cites, "2026-06-01T09:00:05"),
+        # data-view confirmation — must be excluded
+        (
+            "s1",
+            "assistant",
+            "3 series · yoy · quarterly (rendered as a live data view)",
+            None,
+            "2026-06-01T09:01:00",
+        ),
+        # too-short ack — must be excluded
+        ("s1", "user", "thanks", None, "2026-06-01T09:02:00"),
+        ("s1", "assistant", "ok", None, "2026-06-01T09:02:05"),
+        # newest advisory answer, different (ticker) session
+        ("s2", "user", "why did margins fall?", None, "2026-06-02T09:00:00"),
+        ("s2", "assistant", "Margins fell because " + ("y " * 40), None, "2026-06-02T09:00:05"),
+    ]
+    conn.executemany(
+        "INSERT INTO ask_turns (session_id, role, text, citations_json, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_ask_advisory_answer_corpus_filters_and_orders(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    _seed_ask_turns(repo)
+
+    items = load_ask_advisory_answer_corpus(repo)
+    # Only the two genuine advisory answers — the data-view turn and the "ok"
+    # ack are excluded — newest (the s2 margins answer) first.
+    assert [i.item_id for i in items] == ["ask_turn:7", "ask_turn:2"]
+    margins, nu = items
+    assert margins.produced_at is not None and margins.produced_at.day == 2
+    # The content delimits the answer and carries the conversation context +
+    # the cited evidence the grounding facet checks against.
+    assert "ANSWER UNDER AUDIT" in nu.content
+    assert "should I trim NU?" in nu.content  # prior user turn as context
+    assert "NU NPL ratio" in nu.content and "conf 79%" in nu.content  # rendered citation
+    assert "(no sources cited)" in margins.content  # answer with no citations
+    assert "(portfolio)" in nu.label and nu.ticker is None
+
+
+def test_ask_advisory_answer_corpus_tolerates_missing_table_and_db(tmp_path: Path) -> None:
+    assert load_ask_advisory_answer_corpus(tmp_path) == []  # no DB at all
+    data = tmp_path / "data"
+    data.mkdir()
+    sqlite3.connect(data / "portfolio.db").close()  # DB, no ask_turns table
+    assert load_ask_advisory_answer_corpus(tmp_path) == []
 
 
 def test_filter_since_excludes_old_and_undated() -> None:

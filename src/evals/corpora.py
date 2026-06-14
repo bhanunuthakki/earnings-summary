@@ -218,6 +218,158 @@ def load_advisor_next_dollar_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+# A portfolio-scope data turn is recorded as an assistant turn whose body is the
+# view's one-line confirmation (src/ask/engine.py::_data_events) — it is NOT an
+# advisory prose answer, so the answer-quality rubric must not grade it.
+_DATA_VIEW_MARKER = "(rendered as a live data view)"
+# Floor on a gradeable advisory answer: shorter assistant turns are command
+# acks / error lines / one-word replies, not advice worth a 4-facet audit.
+_MIN_ASK_ANSWER_CHARS = 80
+# How many preceding turns to show the judge as conversation context. Enough to
+# anchor "is the answer responsive / does it advance the open thread" without
+# ballooning the prompt (each is clipped by the engine's history cap on write).
+_ASK_CONTEXT_TURNS = 4
+
+
+def _is_data_view_turn(text: str) -> bool:
+    return text.rstrip().endswith(_DATA_VIEW_MARKER)
+
+
+def _format_ask_citations(citations_json: object) -> str:
+    """Render the answer's attached citations (ask_turns.citations_json — a list
+    of chip payloads, see ask.grounding.chip_payload) as the numbered ground
+    truth the grounding facet checks against. Tolerant of any/empty/garbage
+    payload: returns "(no sources cited)" rather than raising."""
+    if not isinstance(citations_json, str) or not citations_json.strip():
+        return "(no sources cited)"
+    try:
+        parsed: object = json.loads(citations_json)
+    except (ValueError, TypeError):
+        return "(no sources cited)"
+    if not isinstance(parsed, list) or not parsed:
+        return "(no sources cited)"
+    lines: list[str] = []
+    for raw in cast("list[object]", parsed):
+        if not isinstance(raw, dict):
+            continue
+        item = cast("dict[str, object]", raw)
+        n = item.get("n")
+        label = str(item.get("label") or item.get("kind") or "source")
+        conf = item.get("confidence")
+        marker = f"[{n}]" if isinstance(n, int) else "-"
+        conf_str = (
+            f" (conf {round(float(conf) * 100)}%)"
+            if isinstance(conf, (int, float)) and not isinstance(conf, bool)
+            else ""
+        )
+        lines.append(f"{marker} {label}{conf_str}")
+    return "\n".join(lines) if lines else "(no sources cited)"
+
+
+def _format_ask_item_content(
+    prior: list[sqlite3.Row], answer: sqlite3.Row, scope: str | None
+) -> str:
+    """Assemble the audited content: conversation context, the answer under
+    audit, and the cited evidence — each delimited so the judge grades the
+    answer alone (the rubric pins this contract)."""
+    context_lines = [
+        f"[{str(t['role']).upper()}] {str(t['text']).strip()}"
+        for t in prior
+        if str(t["text"]).strip()
+    ]
+    context_block = "\n\n".join(context_lines) if context_lines else "(no prior turns)"
+    cites_block = _format_ask_citations(answer["citations_json"])
+    scope_line = f"Conversation scope: {scope}\n\n" if scope else ""
+    return (
+        f"{scope_line}"
+        "=== CONVERSATION SO FAR (context only — do NOT grade) ===\n"
+        f"{context_block}\n\n"
+        "=== ANSWER UNDER AUDIT (grade THIS) ===\n"
+        f"{str(answer['text']).strip()}\n\n"
+        "=== EVIDENCE THE ANSWER CITED (the only ground truth available) ===\n"
+        f"{cites_block}"
+    )
+
+
+def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every real production advisory answer in ``ask_turns``, newest first.
+
+    The corpus is the assistant turns of the conversational ask path
+    (``src/ask/engine.py`` portfolio + ticker narrative scopes), each paired
+    with the preceding turns for context and the evidence it cited. Data-view
+    confirmation turns and trivially-short acks are excluded — only genuine
+    advisory prose is graded.
+
+    Missing DB / missing ``ask_turns`` table ⇒ empty corpus (the ask path
+    hasn't run yet), logged at info — the weekly cron must not fail on a repo
+    with no conversation history. Newest answer first so ``--limit N`` grades
+    the freshest and ``--since-days`` scopes the weekly fresh-only run.
+    """
+    out: list[AuditItem] = []
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn.row_factory = sqlite3.Row
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
+        return out
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ask_turns'"
+        ).fetchone()
+        if present is None:
+            log.info({"event": "eval_corpus_no_ask_turns_table"})
+            return out
+        rows = conn.execute(
+            "SELECT id, session_id, role, text, citations_json, created_at"
+            " FROM ask_turns ORDER BY session_id, id ASC"
+        ).fetchall()
+        scopes = {
+            str(r["id"]): r["scope"]
+            for r in conn.execute("SELECT id, scope FROM ask_sessions").fetchall()
+        }
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_ask_turns_read_failed", "error": str(exc)})
+        return out
+    finally:
+        conn.close()
+
+    by_session: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        by_session.setdefault(str(r["session_id"]), []).append(r)
+
+    for sid, turns in by_session.items():
+        for idx, turn in enumerate(turns):
+            if str(turn["role"]) != "assistant":
+                continue
+            text = str(turn["text"]).strip()
+            if len(text) < _MIN_ASK_ANSWER_CHARS or _is_data_view_turn(text):
+                continue
+            prior = turns[max(0, idx - _ASK_CONTEXT_TURNS) : idx]
+            produced_at: datetime | None = None
+            created = turn["created_at"]
+            if isinstance(created, str):
+                try:
+                    produced_at = datetime.fromisoformat(created)
+                except ValueError:
+                    produced_at = None
+            scope = scopes.get(sid)
+            out.append(
+                AuditItem(
+                    item_id=f"ask_turn:{turn['id']}",
+                    label=f"ask_advisory_answer/turn:{turn['id']}"
+                    + (f" ({scope})" if scope else ""),
+                    ticker=None,
+                    content=_clip(_format_ask_item_content(prior, turn, scope)),
+                    produced_at=produced_at,
+                )
+            )
+    out.sort(key=lambda i: i.produced_at or datetime.min, reverse=True)
+    return out
+
+
 def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
     """Every cached peer selection artifact, newest first.
 
@@ -332,9 +484,7 @@ def load_qa_topics_corpus(repo_root: Path) -> list[AuditItem]:
         by_key = raw_dict.get("by_key")
         if not isinstance(by_key, dict):
             continue
-        for i, (_cache_key, topics) in enumerate(
-            cast("dict[str, object]", by_key).items()
-        ):
+        for i, (_cache_key, topics) in enumerate(cast("dict[str, object]", by_key).items()):
             if not isinstance(topics, list):
                 continue
             content = json.dumps(topics, indent=2, ensure_ascii=False)
@@ -357,6 +507,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "bear_case": load_bear_case_corpus,
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
+    "ask_advisory_answer": load_ask_advisory_answer_corpus,
     "peer_selection": load_peer_selection_corpus,
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,

@@ -11,11 +11,12 @@ dimension. Three OUTCOME graders over matured outputs vs realized data:
   * ``grade_decisions.py``   -- decision-audit outcomes vs realized price moves.
   * ``grade_bear_cases.py``  -- bear-hypothesis materialization.
 
-Plus three QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
+Plus four QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
 rubric audits over the week's fresh artifacts (``--since-days``):
-``bear_case``, ``transcript_summary``, ``advisor_next_dollar``. Each also
-writes an ``eval_runs`` row with per-case judge evidence; a week with no
-fresh artifacts is a clean no-op.
+``bear_case``, ``transcript_summary``, ``advisor_next_dollar``, and
+``ask_advisory_answer`` (the conversational ask path's prose answers from
+``ask_turns`` — close_the_loops L3). Each also writes an ``eval_runs`` row with
+per-case judge evidence; a week with no fresh artifacts is a clean no-op.
 
 These were manual CLIs that nothing ran, so ``prompt_calibration_scores`` stayed
 empty even though the machinery was correct (v6 re-grade, LLM pass-through: "the
@@ -101,6 +102,12 @@ _GRADERS: tuple[_Grader, ...] = (
         "run_llm_evals.py",
         _BEAR_TIMEOUT_S,
         ("--purpose", "advisor_next_dollar", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
+    ),
+    _Grader(
+        "eval_ask_advisory_answer",
+        "run_llm_evals.py",
+        _BEAR_TIMEOUT_S,
+        ("--purpose", "ask_advisory_answer", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
 )
 _GRADER_KEYS = tuple(g.key for g in _GRADERS)

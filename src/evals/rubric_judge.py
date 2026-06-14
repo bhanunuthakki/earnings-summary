@@ -78,6 +78,13 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "bear_case": AuditSpec("bear_case", RUBRICS_DIR / "bear_case.md"),
     "transcript_summary": AuditSpec("transcript_summary", RUBRICS_DIR / "transcript_summary.md"),
     "advisor_next_dollar": AuditSpec("advisor_next_dollar", RUBRICS_DIR / "advisor_next_dollar.md"),
+    # Ask advisory answer (directives/close_the_loops_2026_06.md L3): the
+    # conversational ask path's prose answers (ask_turns), graded on
+    # grounding-correctness, risk/reward balance, calibration-vs-evidence, and
+    # follow-up usefulness — the first eval that judges whether the advice is
+    # GOOD, not just whether its citations are hygienic. Corpus = the assistant
+    # turns of the ask_turns table (evals.corpora.load_ask_advisory_answer_corpus).
+    "ask_advisory_answer": AuditSpec("ask_advisory_answer", RUBRICS_DIR / "ask_advisory_answer.md"),
     # Peer selection (directives/peer_selection_llm.md): graded on
     # business-model match, why-string specificity, cross-boundary range, and
     # peer-count coverage. Corpus = data/peer_selection/<T>.json files written

@@ -61,6 +61,7 @@ AUDIT_PURPOSES = (
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",
+    "ask_advisory_answer",
     "peer_selection",
     "earnings_themes_split",
     "qa_topics",
