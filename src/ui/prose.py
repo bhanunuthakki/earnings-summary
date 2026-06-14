@@ -36,6 +36,8 @@ from __future__ import annotations
 import html
 import re
 
+from ui.cite_marks import CitationsPayload, linkify
+
 __all__ = ["render_prose"]
 
 
@@ -58,7 +60,13 @@ def _inline(text: str) -> str:
     return _INLINE_CODE_RX.sub(r"<code>\1</code>", text)
 
 
-def render_prose(md: str, *, inline: bool = False) -> str:
+def render_prose(
+    md: str,
+    *,
+    inline: bool = False,
+    citations: CitationsPayload | None = None,
+    cite_href_base: str = "",
+) -> str:
     """Render stored markdown prose to HTML — THE one prose render boundary.
 
     Handles headings, paragraphs, bullet lists, bold, italic, inline code,
@@ -71,11 +79,23 @@ def render_prose(md: str, *, inline: bool = False) -> str:
     tags) for ``<td>``/``<p>`` containers that must stay valid inline HTML;
     block markers (``##``, ``-``) are left as literal text rather than break the
     cell's structure.
+
+    ``citations`` (default ``None`` → behaviour unchanged) makes the static
+    LLM-prose path traceable like the Ask surfaces: when an evidence payload is
+    passed, ``[n]`` markers in the prose are linkified into ``ui.cite_marks``
+    chips resolving to the same evidence the fact cells cite — the SAME chip
+    anatomy the Ask citations event renders client-side, so the shared
+    ``CITE_MARKS_CSS`` styles both. Pass the bare item list or the full
+    citations-event dict (``{"items": …}``). ``cite_href_base`` prefixes
+    relative ``/source/<doc_id>`` hrefs (a file://-opened report resolves them
+    against the research server). Linkify runs last — over the finished HTML in
+    both inline and block modes — so a ``[n]`` in any text node, cell, or
+    heading becomes a chip; an unmatched marker stays literal.
     """
     if not md:
         return ""
     if inline:
-        return _inline(md)
+        return linkify(_inline(md), citations, href_base=cite_href_base)
 
     lines = md.replace("\r\n", "\n").split("\n")
     out: list[str] = []
@@ -144,4 +164,4 @@ def render_prose(md: str, *, inline: bool = False) -> str:
     close_ul()
     if in_table:
         flush_table()
-    return "".join(out)
+    return linkify("".join(out), citations, href_base=cite_href_base)

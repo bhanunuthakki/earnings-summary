@@ -37,6 +37,11 @@ the report vocabulary (--panel/--ink/--hairline/--link).
 
 from __future__ import annotations
 
+import html
+import re
+from collections.abc import Mapping, Sequence
+from typing import cast
+
 CITE_MARKS_CSS = """
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap .cite-mark {
@@ -125,4 +130,122 @@ CITE_MARKS_JS = r"""
 # The drop-in fragment for surfaces that assemble HTML strings.
 CITE_MARKS_SNIPPET = f"<style>{CITE_MARKS_CSS}</style>\n<script>{CITE_MARKS_JS}</script>"
 
-__all__ = ["CITE_MARKS_CSS", "CITE_MARKS_JS", "CITE_MARKS_SNIPPET"]
+
+# ---------------------------------------------------------------------------
+# Server-side linkify — the exact mirror of ``window.ccCiteMarks.linkify``.
+#
+# The Ask surfaces stream tokens and run the JS ``linkify`` client-side at
+# stream close (see the streaming contract above). The STATIC LLM prose — a
+# thesis memo, a bear case, a synthesis lens — is server-rendered once through
+# ``ui.prose.render_prose`` with no stream and no JS pass, so it needs a
+# Python ``linkify`` that produces byte-identical chip anatomy
+# (``.cite-wrap`` / ``.cite-mark`` / ``.cite-pop``) keyed off the same
+# ``CITE_MARKS_CSS``. The popover is CSS-only (``:hover`` / ``:focus-within``),
+# so a server-rendered chip needs the stylesheet but NOT ``CITE_MARKS_JS``.
+#
+# Items are the same chip payloads ``ask.grounding.EvidenceItem.chip_payload``
+# emits — ``{n, label, kind, confidence, href, source_url}`` — so a static
+# renderer can hand ``render_prose`` exactly what the Ask citations event
+# carries. A ``citations`` payload dict (the ``ask.claims.build_citations_payload``
+# shape, ``{"items": [...], ...}``) is accepted too: its ``items`` are used.
+# ---------------------------------------------------------------------------
+
+# Mirrors the JS ``/\[(\d{1,2})\]/g`` marker form exactly — 1-2 digit ``[n]``.
+_MARK_RX = re.compile(r"\[(\d{1,2})\]")
+_ABS_URL_RX = re.compile(r"^https?:", re.IGNORECASE)
+
+# A single citation chip payload (EvidenceItem.chip_payload's shape) and the
+# two forms ``linkify`` / ``render_prose`` accept: a bare list of items, or the
+# full citations-event dict that carries them under ``items``.
+CitationItem = Mapping[str, object]
+CitationsPayload = Mapping[str, object] | Sequence[CitationItem]
+
+
+def _esc(value: object) -> str:
+    """HTML-escape a chip field (mirror of the JS ``esc``)."""
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def citation_items(payload: CitationsPayload | None) -> list[CitationItem]:
+    """Normalize either accepted payload form to the bare list of item dicts.
+
+    Accepts the full citations-event dict (``{"items": [...], "claims": ...}``)
+    or a bare list of chip payloads; returns ``[]`` for anything unusable so
+    callers never have to branch on the shape.
+    """
+    if payload is None:
+        return []
+    raw: object = payload.get("items") if isinstance(payload, Mapping) else payload
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Sequence):
+        return []
+    seq = cast("Sequence[object]", raw)
+    return [cast("CitationItem", c) for c in seq if isinstance(c, Mapping)]
+
+
+def _cite_pop_html(item: CitationItem) -> str:
+    """The hover/focus popover for one chip — mirror of the JS ``popHtml``."""
+    out = f'<span class="cite-pop-label">{_esc(item.get("label") or "source")}</span>'
+    meta: list[str] = []
+    kind = item.get("kind")
+    if kind:
+        meta.append(_esc(kind))
+    conf = item.get("confidence")
+    if isinstance(conf, (int, float)) and not isinstance(conf, bool):
+        meta.append(f"confidence {round(conf * 100)}%")
+    if meta:
+        out += f'<span class="cite-pop-meta">{" &middot; ".join(meta)}</span>'
+    return f'<span class="cite-pop" role="tooltip">{out}</span>'
+
+
+def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "") -> str:
+    """Replace each ``[n]`` marker in already-rendered HTML with a cite chip.
+
+    The byte-for-byte server mirror of ``window.ccCiteMarks.linkify``: a marker
+    whose ``n`` matches an item becomes a ``.cite-wrap`` superscript whose
+    popover shows the evidence label / kind / confidence; an unmatched marker
+    is left as the literal ``[n]`` text. ``href_base`` prefixes a relative href
+    (so a file://-opened report's ``/source/<doc_id>`` links resolve against the
+    research server, exactly like the JS ``opts.hrefBase``); an absolute
+    ``http(s)`` href is used as-is.
+
+    Single left-to-right pass: ``re.sub`` never rescans the chip HTML it just
+    emitted, so a ``[n]`` literal inside a generated chip is never re-matched.
+    """
+    items = citation_items(payload)
+    if not items:
+        return text
+    by_n: dict[str, CitationItem] = {}
+    for c in items:
+        n = c.get("n")
+        if n is not None:
+            by_n[str(n)] = c
+    if not by_n:
+        return text
+
+    def _repl(m: re.Match[str]) -> str:
+        n = m.group(1)
+        c = by_n.get(n)
+        if c is None:
+            return m.group(0)
+        href = str(c.get("href") or c.get("source_url") or "")
+        if href and not _ABS_URL_RX.match(href):
+            href = href_base + href
+        mark = (
+            f'<a class="cite-mark" href="{_esc(href)}" target="_blank" rel="noopener">[{n}]</a>'
+            if href
+            else f'<span class="cite-mark">[{n}]</span>'
+        )
+        return f'<span class="cite-wrap" tabindex="0">{mark}{_cite_pop_html(c)}</span>'
+
+    return _MARK_RX.sub(_repl, text)
+
+
+__all__ = [
+    "CITE_MARKS_CSS",
+    "CITE_MARKS_JS",
+    "CITE_MARKS_SNIPPET",
+    "CitationItem",
+    "CitationsPayload",
+    "citation_items",
+    "linkify",
+]
