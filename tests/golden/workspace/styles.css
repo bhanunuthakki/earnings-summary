@@ -1967,12 +1967,22 @@ ul.flag-list li.flag-positive {
 }
 
 /* ============================================================
-   Responsive overrides (S16 PR1)
+   Responsive overrides (S16 PR1 + L13 PR2)
    ============================================================ */
 
 /* Horizontal table scroll at small-laptop/tablet widths. */
 @media (max-width: 1024px) {
   .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Narrow/tablet: KPI strip drops from 4 to 2 columns; multi-column grids
+   collapse; identity cluster wraps. */
+@media (max-width: 900px) {
+  .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+  .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom {
+    grid-template-columns: 1fr;
+  }
+  .identity-right { flex-wrap: wrap; }
 }
 
 /* Tablet portrait: compress lateral padding and section tab strip. */
@@ -1993,6 +2003,7 @@ ul.flag-list li.flag-positive {
 .cv2-band-label { font-size: 10px; font-family: var(--sans, 'Inter', sans-serif); font-weight: 500; }
 .cv2-empty-text { font-size: 12px; fill: #67737d; }
 .cv2-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
+@media (max-width: 900px) { .cv2-pair { grid-template-columns: 1fr; } }
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
 .cv2-matrix { border-collapse: collapse; font-size: 11px; font-family: var(--mono, 'JetBrains Mono', monospace); width: 100%; }
