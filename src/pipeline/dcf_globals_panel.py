@@ -96,6 +96,34 @@ _SCRIPT = """<script>
       }).catch(function () { msg.textContent = 'network error'; });
     });
   });
+
+  var rb = document.getElementById('dcfg-rebuild');
+  if (rb) rb.addEventListener('click', function () {
+    var msg = document.getElementById('dcfg-rebuild-msg');
+    var log = document.getElementById('dcfg-rebuild-log');
+    if (!window.confirm('Rebuild every DCF-maintained name? This re-runs ~all DCF '
+        + 'models and can take several minutes.')) return;
+    rb.disabled = true; msg.textContent = 'starting\\u2026';
+    log.style.display = 'block'; log.textContent = '';
+    fetch('/actions/rebuild-dcfs', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+    }).then(function (r) {
+      return r.json().then(function (j) { return {ok: r.ok, j: j}; });
+    }).then(function (res) {
+      if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); rb.disabled = false; return; }
+      msg.textContent = 'running (' + res.j.job_id + ')\\u2026';
+      var es = new EventSource(res.j.stream_url);
+      es.onmessage = function (ev) {
+        var f = {}; try { f = JSON.parse(ev.data); } catch (e) { return; }
+        if (f.event === 'log') { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
+        if (f.event === 'done') {
+          log.textContent += '=== done (exit ' + f.exit_code + ') ===\\n';
+          msg.textContent = 'done'; rb.disabled = false; es.close();
+        }
+      };
+      es.onerror = function () { es.close(); rb.disabled = false; msg.textContent = 'stream ended'; };
+    }).catch(function () { msg.textContent = 'network error'; rb.disabled = false; });
+  });
 })();
 </script>"""
 
@@ -152,7 +180,14 @@ def render_dcf_globals_panel(db_path: Path) -> str:
         "Reach: risk-free &amp; ERP drive the discount rate for the FCFF and bank (CAPM) models, "
         "and tax drives NOPAT there and in the NU platform model. The fintech SOTP and NU platform "
         "models use an explicit cost of equity, so risk-free/ERP reach them only via their opt-in "
-        "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it. "
-        "Use 'Rebuild affected models' (Maintenance) to re-run the DCFs after a change.</p>"
+        "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it.</p>"
+        '<div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
+        '<button type="button" id="dcfg-rebuild" class="tcc-refresh" '
+        'title="Re-run every DCF model so a global change propagates into the workbooks and dcf_runs">'
+        "Rebuild affected models</button>"
+        '<span id="dcfg-rebuild-msg" class="muted" style="font-size:var(--fs-caption);"></span>'
+        "</div>"
+        '<pre id="dcfg-rebuild-log" style="display:none; max-height:240px; overflow:auto; '
+        'white-space:pre-wrap; font-size:var(--fs-caption); margin-top:8px;"></pre>'
         "</section>" + _SCRIPT
     )
