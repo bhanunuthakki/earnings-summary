@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import cast
 
 from table_extractors import customer_concentration as cc_module
+from table_extractors import generic_xbrl_capture as gxc_module
 from table_extractors import lease_commitments as lc_module
 from table_extractors.base import ExtractionOutcome
 
@@ -53,6 +54,16 @@ _REGISTRY: dict[str, _ExtractorEntry] = {
     "lease_commitments": _ExtractorEntry(
         table_kind="lease_commitments_ladder",
         extract_fn=lc_module.extract,
+        needs_fmp=True,
+        needs_sec_text=False,
+    ),
+    # Capture-every-number Stage A: walk ALL (Details) note tables and route
+    # every monetary cell into kpi_facts (origin=CAPTURE). Unlike the two narrow
+    # extractors above (bespoke tables), this one lands in the universal
+    # kpi_facts substrate, so its output is immediately ask/DIY/DCF-visible.
+    "xbrl_capture_all": _ExtractorEntry(
+        table_kind=gxc_module.TABLE_KIND,
+        extract_fn=gxc_module.extract,
         needs_fmp=True,
         needs_sec_text=False,
     ),
