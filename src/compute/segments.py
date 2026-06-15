@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -58,6 +59,28 @@ _DOC_TYPE_TO_DIM_TYPE: dict[str, SegmentDimType] = {
 # absorbs FX/rounding noise while still catching the 1.4x+ contamination
 # pattern. sum < revenue is always accepted (missing-bucket case).
 RECONCILE_TOLERANCE_OVER: float = 0.10
+
+
+def segment_sum_exceeds_revenue(
+    values: Iterable[object],
+    revenue: Decimal,
+    *,
+    tolerance: float = RECONCILE_TOLERANCE_OVER,
+) -> tuple[bool, Decimal]:
+    """Pure reconciliation predicate: does the segment sum exceed reported revenue?
+
+    Shared by the DB-ingest gate (`_passes_reconciliation`) and the offline cache
+    sanity scanner (execution/check_segment_cache_sanity.py) so both apply the
+    identical rule and the same `RECONCILE_TOLERANCE_OVER` threshold. Returns
+    ``(exceeds, seg_sum)`` where ``exceeds`` is True iff the sum of non-null
+    segment values is more than ``revenue * (1 + tolerance)`` — the signature of
+    FMP's recurring "Q4/FY record carries a per-segment additive contamination
+    from the prior FY's annual figure" bug. ``sum < revenue`` is never flagged
+    (the common, legitimate missing-"Other"-bucket case).
+    """
+    seg_sum = sum((Decimal(str(v)) for v in values if v is not None), start=Decimal("0"))
+    cap = revenue * Decimal(str(1 + tolerance))
+    return (seg_sum > cap, seg_sum)
 
 
 def _lookup_period_revenue(
@@ -104,12 +127,8 @@ def _passes_reconciliation(
     )
     if revenue is None or revenue == 0:
         return True
-    seg_total = sum(
-        (Decimal(str(v)) for v in record.data.values() if v is not None),
-        start=Decimal("0"),
-    )
-    cap = revenue * Decimal(str(1 + RECONCILE_TOLERANCE_OVER))
-    if seg_total <= cap:
+    exceeds, seg_total = segment_sum_exceeds_revenue(record.data.values(), revenue)
+    if not exceeds:
         return True
     sys.stderr.write(
         json.dumps(
