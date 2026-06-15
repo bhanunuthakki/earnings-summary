@@ -661,12 +661,28 @@ def create_app(
             # Research → Explore (P5.1): the ViewSpec builder. ``?fragment=
             # views`` returns just the saved-view chip strip — the panel JS
             # refreshes it after every save/delete.
-            from pipeline.explore_panel import render_explore_panel, render_saved_views_list
+            from pipeline.explore_panel import (
+                render_explore_panel,
+                render_keymetrics_fragment,
+                render_saved_views_list,
+            )
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
-            if request.args.get("fragment") == "views":
+            fragment = request.args.get("fragment")
+            if fragment == "views":
                 return Response(
                     render_saved_views_list(db_path, user_id=user_id), mimetype="text/html"
+                )
+            if fragment == "keymetrics":
+                # The key-metrics preselect bubble row for a (changed) ticker set
+                # — tier-graded baseline + cached LLM picks (key_metrics_picker.md).
+                km_tickers = [
+                    t.strip().upper()
+                    for t in (request.args.get("tickers") or "").split(",")
+                    if t.strip()
+                ]
+                return Response(
+                    render_keymetrics_fragment(db_path, km_tickers), mimetype="text/html"
                 )
             return Response(render_explore_panel(db_path, user_id=user_id), mimetype="text/html")
 

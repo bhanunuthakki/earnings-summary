@@ -205,6 +205,30 @@ def test_explore_panel_route_and_views_fragment(client: FlaskClient) -> None:
     assert b"No saved views yet" in frag.data
 
 
+def test_explore_panel_carries_keymetrics_bubble_row(db_path: Path) -> None:
+    """The key-metrics preselect bubble row + its inline JS (the new feature):
+    the container the JS targets, the prefix-routing toggle, and the refresh-on-
+    ticker-change fetch (directives/key_metrics_picker.md)."""
+    html_out = render_explore_panel(db_path)
+    assert 'id="vx-keymetrics"' in html_out
+    # The chip handler routes a token to the right <select> by domain prefix
+    # and the row re-fetches itself on a ticker change.
+    assert "function kmToggleToken" in html_out
+    assert "function refreshKeyMetrics" in html_out
+    assert "fragment: 'keymetrics'" in html_out
+    assert "data-km-token" in html_out  # the delegated click reads the token
+
+
+def test_keymetrics_fragment_route(client: FlaskClient) -> None:
+    """``?fragment=keymetrics`` is a 200 HTML fragment. TST has no tier-graded
+    KPIs or LLM cache, so the row is empty (the container collapses) — the merge
+    logic itself is covered in test_key_metrics.py."""
+    res = client.get("/api/panel/explore?fragment=keymetrics&tickers=TST")
+    assert res.status_code == 200
+    assert res.mimetype == "text/html"
+    assert res.data == b""
+
+
 def test_shell_carries_explore_tab() -> None:
     html_out = render_shell(overview_html="<div>x</div>")
     assert 'data-tab-target="explore"' in html_out
