@@ -261,7 +261,7 @@ _INSIGHTS_CSS = """<style>
 .pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0 18px; align-items: start; }
 .pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.pf-th-chip { font-family: var(--mono, monospace); font-size: var(--fs-caption); text-decoration: none;
+.pf-th-chip { font-family: var(--sans); font-size: var(--fs-caption); text-decoration: none;
   border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 9px; }
 .pf-th-warn { color: var(--warn); border-color: var(--warn); }
 .pf-th-bad { color: var(--bad); border-color: var(--bad); }
@@ -283,7 +283,7 @@ _INSIGHTS_CSS = """<style>
 .pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
 .pf-nd-wf { display: none; gap: 6px; flex-wrap: wrap; padding: 1px 0 6px; }
 .pf-nd-item:hover .pf-nd-wf, .pf-nd-item:focus-within .pf-nd-wf { display: flex; }
-.pf-nd-chip { font-family: var(--mono, monospace); font-size: var(--fs-caption); border: 1px solid var(--border);
+.pf-nd-chip { font-family: var(--sans); font-size: var(--fs-caption); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 2px 7px; cursor: help; color: var(--muted); }
 .pf-nd-chip.pos { color: var(--ok); border-color: var(--ok); }
 .pf-nd-chip.neg { color: var(--bad); border-color: var(--bad); }

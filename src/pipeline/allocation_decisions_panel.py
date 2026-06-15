@@ -1102,13 +1102,13 @@ _PANEL_CSS = """<style>
 .ad-badge.b-muted { background: var(--paper); color: var(--muted); }
 .ad-score { color: var(--warn); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .ad-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px;
-  border-radius: var(--radius-full); font-size: var(--fs-caption); font-family: var(--mono);
+  border-radius: var(--radius-full); font-size: var(--fs-caption); font-family: var(--sans);
   background: var(--paper); border: 1px solid var(--border); color: var(--muted); }
 .ad-mismatch { max-width: 420px; }
 .ad-aligned { font-size: var(--fs-caption); }
 .ad-edit-btn { background: transparent; color: var(--muted); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 2px 9px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--mono); }
+  font-family: var(--sans); }
 .ad-edit-btn:hover { color: var(--fg); border-color: var(--border-2); }
 .ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-size: var(--fs-caption); padding: 4px 0; }
