@@ -49,7 +49,7 @@ Closed enum, matches `src/models/documents.py::DocType`:
 |---|---|---|---|---|
 | `IR_PRESS_RELEASE` | `ir_press_release` | `press_release` | `press_release_summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
 | `IR_PRESENTATION` | `ir_presentation` | `presentation` | `presentation_brief.txt` | `ir_documents/<TICKER>/<period_end>/` |
-| `IR_SUPPLEMENT` | `ir_supplement` | `supplement` | _(no LLM handler yet)_ | `ir_documents/<TICKER>/<period_end>/` |
+| `IR_SUPPLEMENT` | `ir_supplement` | `supplement` | _capture-every-number: `extract_kpis_from_ir.py --capture` (PDF) / `refresh_ir_kpis.py` (xlsx)_ | `ir_documents/<TICKER>/<period_end>/` |
 | `IR_INVESTOR_UPDATE` | `ir_investor_update` | `investor_update` | `investor_update_summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
 | `EARNINGS_CALL_TRANSCRIPT` | `ir_transcript` | `transcript` | `summary.txt` | `ir_documents/<TICKER>/<period_end>/` |
 | `IR_EVENT` | `ir_event` | `event` | `event_brief.txt` | `ir_documents/_events/<TICKER>/<event_date>/` |
