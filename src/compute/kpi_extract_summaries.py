@@ -46,6 +46,7 @@ from compute.kpi_resolver import normalize_kpi_name
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
+from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -558,6 +559,210 @@ def _build_manifest(
         canonical_units=canonical_units or {},
         values=values,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage B — capture-every-number enumerate mode (no allowlist).
+#
+# The allowlist path above asks for a FIXED set of tier_1 names and silently
+# drops every other number in the document (the program's G1 blocker — "everything
+# unlisted stays as prose in the brief and is dropped"). This path inverts that:
+# it asks the LLM to enumerate EVERY labeled numeric fact in the document, no
+# allowlist, and lands them via the SAME persist_manifest contract but with
+# origin=CAPTURE — so each raw label is canonicalized (collapsing variants onto an
+# existing definition or minting a clean CAPTURE one) and the long tail becomes
+# askable / DIY-pickable / DCF-resolvable. Idempotent (persist dedups on the
+# source doc; we also skip the LLM call entirely for an already-captured doc) and
+# budget-capped per doc (input chars + max facts).
+#
+# Scope note: this enumerates the on-disk per-quarter brief, which is where the
+# unlisted numbers already sit as prose (G1). Reading the RAW filing/IR text via
+# filing_text_fetcher for numbers the brief ITSELF lost is the natural next
+# increment — deferred until the pilot shows whether the briefs are lossy enough
+# to warrant it (keeps this pass bounded + high-precision).
+# ---------------------------------------------------------------------------
+
+# Per-doc budget for the enumerate pass.
+_CAPTURE_MAX_FACTS = 200
+_CAPTURE_MAX_INPUT_CHARS = 80_000
+
+_CAPTURE_STAGE: dict[str, str] = {
+    "earnings": "stage_b_capture_earnings",
+    "ir": "stage_b_capture_ir",
+}
+
+
+def _llm_extract_enumerate(
+    ticker: str, period_label: str, text: str, *, max_facts: int = _CAPTURE_MAX_FACTS
+) -> list[dict[str, object]]:
+    """Single Haiku call — enumerate EVERY labeled this-period numeric fact (no
+    allowlist). Returns a list of ``{label, value, unit, source_excerpt}`` dicts.
+
+    The unit vocabulary + money convention mirror ``_llm_extract`` exactly, so a
+    captured value reconciles/validates identically to a watchlist one; the only
+    difference is the absence of a name allowlist.
+    """
+    if not text.strip():
+        return []
+    prompt = f"""You are enumerating EVERY reported numeric fact for {ticker} ({period_label}) from the document below.
+
+There is NO list of metrics to look for — capture every labeled number that is a reported ACTUAL for THIS period: revenue and each revenue line, margins, growth rates, customer/subscriber/account counts, ARPU/ARPAC, take rate, GMV, deposits, loans, NPL, efficiency ratio, capex, free cash flow, headcount, and anything else stated.
+
+Return a JSON ARRAY. Each element:
+{{
+  "label": "<the metric's name as a clean noun phrase — e.g. 'Gross merchandise volume', NOT a whole sentence>",
+  "value": <numeric only, no unit symbols>,
+  "unit": EXACTLY ONE of "percent" | "actual" | "count" | "ratio" | "bps",
+  "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>"
+}}
+
+Unit conventions (identical to our standard):
+  - "percent" — rates/margins/growth/retention (NRR 120% -> 120; NIM 17.8% -> 17.8). Drop the % sign; do NOT divide by 100.
+  - "actual"  — ALL monetary amounts, as the FULL figure in the issuer's base currency, NEVER pre-scaled ("$1.2 billion" -> 1200000000; ARPAC "$11.20" -> 11.20).
+  - "count"   — headcount/customers/subscribers/accounts as the full integer ("12.5 million customers" -> 12500000).
+  - "ratio"   — unitless multiples reported with an "x" (coverage 1.8x -> 1.8).
+  - "bps"     — only when the document states the metric in basis points.
+
+Rules:
+  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives.
+  - One row per distinct metric; do not duplicate. Do not invent — if you cannot quote it verbatim, omit it.
+  - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
+
+Document text:
+\"\"\"
+{text}
+\"\"\""""
+    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
+    if raw.startswith("```"):
+        raw = JSON_FENCE_RE.sub("", raw).strip()
+    start = raw.find("[")
+    if start < 0:
+        return []
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(raw[start:])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[dict[str, object]] = []
+    for item in cast("list[object]", parsed):
+        if isinstance(item, dict) and "label" in item and "value" in item:
+            out.append(cast("dict[str, object]", item))
+        if len(out) >= max_facts:
+            break
+    return out
+
+
+def _build_capture_manifest(
+    ticker: str,
+    period_end: datetime,
+    fpt: FiscalPeriodType,
+    doc_id: int,
+    rows: list[dict[str, object]],
+) -> KpiExtractionManifest:
+    """Convert enumerated rows to a CAPTURE manifest. Names are passed verbatim;
+    persist_manifest (origin=CAPTURE) canonicalizes them on write."""
+    values: list[KpiValue] = []
+    for row in rows:
+        name = str(row.get("label") or "").strip()[:200]
+        if not name:
+            continue
+        v = parse_decimal_value(row.get("value"))
+        if v is None:
+            continue
+        try:
+            unit = Unit(str(row.get("unit") or "actual"))
+        except ValueError:
+            unit = Unit.ACTUAL
+        excerpt_raw = row.get("source_excerpt")
+        excerpt = (
+            excerpt_raw.strip()[:1024]
+            if isinstance(excerpt_raw, str) and excerpt_raw.strip()
+            else None
+        )
+        values.append(
+            KpiValue(name=name, value=v, unit=unit, confidence=0.85, source_excerpt=excerpt)
+        )
+    return KpiExtractionManifest(
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=fpt,
+        source_doc_id=doc_id,
+        primary_source=SourceType.LLM_EXTRACTED,
+        model_name=FAST_CLASSIFIER_MODEL,
+        origin=DefinitionOrigin.CAPTURE,
+        values=values,
+    )
+
+
+def _doc_already_captured(conn: sqlite3.Connection, doc_id: int) -> bool:
+    """True iff any kpi_fact already cites this source doc — lets the enumerate
+    pass skip the (costly) LLM call on a doc it has already processed."""
+    row = conn.execute(
+        "SELECT 1 FROM kpi_facts WHERE source_doc_id = ? LIMIT 1", (doc_id,)
+    ).fetchone()
+    return row is not None
+
+
+def capture_for_ticker(
+    ticker: str,
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    *,
+    source_group: str = "ir",
+    refresh: bool = False,
+    max_facts_per_doc: int = _CAPTURE_MAX_FACTS,
+    max_input_chars: int = _CAPTURE_MAX_INPUT_CHARS,
+) -> TickerExtractionLog:
+    """Enumerate-mode (no allowlist) capture for one ticker's on-disk briefs.
+
+    Mirrors :func:`extract_for_ticker`'s source discovery + doc registration but
+    enumerates every numeric fact and persists with origin=CAPTURE. No holdings
+    JSON required (there's no allowlist). Idempotent: an already-captured doc is
+    skipped without an LLM call unless ``refresh``.
+    """
+    ticker = ticker.upper()
+    if source_group not in _SOURCE_GROUPS:
+        raise ValueError(
+            f"unknown source_group {source_group!r}; expected one of {list(_SOURCE_GROUPS)}"
+        )
+    log = TickerExtractionLog(ticker=ticker, stage=_CAPTURE_STAGE[source_group])
+    log.started_at = _now_iso_z()
+    t0 = time.perf_counter()
+
+    sources = _list_sources(repo_root, ticker, _SOURCE_GROUPS[source_group])
+    for quarter, year, source_path, spec in sources:
+        period_end = _period_end(ticker, quarter, year)
+        period_label = f"Q{quarter} {year} [{spec.name}]"
+        log.quarters_attempted.append(period_label)
+        try:
+            doc_id = _ensure_summary_document_row(
+                conn, ticker, period_end, source_path, spec.doc_type
+            )
+            if not refresh and _doc_already_captured(conn, doc_id):
+                log.quarters_skipped_no_missing.append(period_label)
+                continue
+            text = source_path.read_text(encoding="utf-8")[:max_input_chars]
+            rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
+            if not rows:
+                continue
+            manifest = _build_capture_manifest(
+                ticker, period_end, FiscalPeriodType(f"Q{quarter}"), doc_id, rows
+            )
+            run_id = start_run(
+                conn,
+                directive=f"capture_kpis_from_{source_group}",
+                ticker_scope=[ticker],
+            )
+            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            log.kpis_inserted_total += result.inserted
+            log.quarters_extracted.append(period_label)
+        except Exception as e:
+            log.error = f"{period_label}: {type(e).__name__}: {e}"
+            break
+
+    return _close_log(log, t0)
 
 
 def _now_iso_z() -> str:

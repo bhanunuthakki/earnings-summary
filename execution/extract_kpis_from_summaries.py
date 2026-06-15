@@ -11,11 +11,15 @@ KPI name); a value present from any earlier source is not re-extracted.
   ir        Stage 3: IR-pipeline press-release + presentation briefs
             (`{T}_Q{N}_{Y}_press_release_summary.txt`, `..._presentation_brief.txt`)
 
+`--capture` switches to capture-every-number mode: enumerate EVERY numeric fact
+in each brief (no tier_1 allowlist) and persist with origin=CAPTURE.
+
 Usage:
     python execution/extract_kpis_from_summaries.py --ticker NU
     python execution/extract_kpis_from_summaries.py --all
     python execution/extract_kpis_from_summaries.py --all --source ir
     python execution/extract_kpis_from_summaries.py --all --refresh
+    python execution/extract_kpis_from_summaries.py --ticker NU --source ir --capture
 
 Per-run telemetry lands in `data/kpi_extraction_log.json` keyed by ticker → stage.
 """
@@ -33,6 +37,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from compute.kpi_extract_summaries import (  # noqa: E402
+    capture_for_ticker,
     extract_for_ticker,
     write_log,
 )
@@ -57,13 +62,22 @@ def main() -> int:
     summary_lines: list[dict[str, object]] = []
     try:
         for ticker in tickers:
-            log = extract_for_ticker(
-                ticker,
-                repo_root,
-                conn,
-                refresh=args.refresh,
-                source_group=args.source,
-            )
+            if args.capture:
+                log = capture_for_ticker(
+                    ticker,
+                    repo_root,
+                    conn,
+                    source_group=args.source,
+                    refresh=args.refresh,
+                )
+            else:
+                log = extract_for_ticker(
+                    ticker,
+                    repo_root,
+                    conn,
+                    refresh=args.refresh,
+                    source_group=args.source,
+                )
             results.append(log)
             summary_lines.append(
                 {
@@ -99,6 +113,12 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
     p.add_argument(
         "--refresh", action="store_true", help="Re-extract even if all KPIs already present"
+    )
+    p.add_argument(
+        "--capture",
+        action="store_true",
+        help="Capture-every-number mode: enumerate EVERY numeric fact (no tier_1 "
+        "allowlist) and persist with origin=CAPTURE. Default is the allowlist path.",
     )
     p.add_argument(
         "--source",
