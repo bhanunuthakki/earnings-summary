@@ -329,7 +329,8 @@ def test_compact_rail_renders_quick_buttons_in_the_header_row(db_path: Path) -> 
     )
     alert_id = items[0].alert.id  # type: ignore[union-attr]
     assert (
-        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert_id}"' in html
+        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert_id}"'
+        in html
     )
     # Zero extra rows: the buttons sit inside the existing header, BEFORE the
     # relative timestamp (right side), never as a row of their own.
@@ -379,7 +380,10 @@ def test_alert_without_a_drafted_action_still_gets_dismiss_alert(db_path: Path) 
     )
     items = collect_inbox(db_path)
     compact = render_inbox_stream(items, db_path=db_path, compact=True)
-    assert f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert.id}"' in compact
+    assert (
+        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-alert-id="{alert.id}"'
+        in compact
+    )
     assert "ix-act-approve" not in compact
     # Off the rail (feed), the compact quick buttons never render.
     assert 'class="ix-act' not in render_inbox_stream(items, db_path=db_path)
@@ -393,11 +397,16 @@ def test_plain_note_gets_a_dismiss_chip_but_ledger_does_not(db_path: Path) -> No
         user_id=DEFAULT_USER_ID, ticker="NU", kind="watch",
         body="Watch the funding mix next quarter.", db_path=db_path,
     )  # fmt: skip
-    append_entry(ticker="META", entry_kind="thesis_update", body="Equity raise news.", db_path=db_path)
+    append_entry(
+        ticker="META", entry_kind="thesis_update", body="Equity raise news.", db_path=db_path
+    )
     items = collect_inbox(db_path)
     compact = render_inbox_stream(items, db_path=db_path, compact=True)
     # The note carries a dismiss ✕ keyed to the notes-archive endpoint.
-    assert f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-note-id="{note.id}"' in compact
+    assert (
+        f'class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" data-note-id="{note.id}"'
+        in compact
+    )
     # The ledger card stays read-only: no quick-action block on it.
     ledger_card = compact[compact.index('data-kind="ledger"') :]
     head_end = ledger_card.index("</div>", ledger_card.index('class="ix-head"'))
