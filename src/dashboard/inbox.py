@@ -25,12 +25,15 @@ breakdown as the kind-chip's "why ranked here" tooltip (see ``inbox_rank``).
 from __future__ import annotations
 
 import html
+import json
 import re
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
+from typing import cast
 
 from alerts import (
     ACTION_STATUS_PENDING,
@@ -40,7 +43,6 @@ from alerts import (
     list_pending_actions,
     list_queued_actions_for_alerts,
 )
-from dashboard._card import render_alert_card, render_queued_action
 from dashboard.inbox_rank import (
     ADVISOR_MEMO_TITLE,
     CATEGORY_LABELS,
@@ -74,6 +76,20 @@ _DEFAULT_KINDS: tuple[str, ...] = ("alert", "draft", "ledger", "note", "synthesi
 # memo line in the ledger AND the journal), keep the kind that carries the
 # most context on its card.
 _KIND_RICHNESS: dict[str, int] = {"alert": 4, "draft": 3, "synthesis": 2, "ledger": 1, "note": 0}
+
+# Humanized alert trigger labels for the card's kind chip — the raw enum
+# (earnings_tone, material_news, …) never reaches a user-facing label
+# (design_language §8). The raw kind still rides the card's data-trigger attr,
+# so client-side trigger filtering and the tests keep their handle on it.
+_TRIGGER_LABELS: dict[str, str] = {
+    "earnings_tone": "Earnings tone",
+    "material_news": "News",
+    "kpi_inflection": "KPI inflection",
+    "thesis_drift": "Thesis drift",
+    "saydo_due": "Say/do due",
+    "decision_condition": "Condition met",
+    "restatement": "Restatement",
+}
 
 
 @dataclass(frozen=True)
@@ -513,35 +529,34 @@ def _render_item(
     compact: bool,
     show_status: bool,
 ) -> None:
-    if it.kind == "alert" and it.alert is not None and not compact:
-        # Full alert card (evidence drawer collapsed — the stream is a scan
-        # surface; the drawer is one click away).
-        render_alert_card(
-            out,
-            it.alert,
-            actions=list(it.actions),
-            show_status_badge=show_status,
-            brief_provenance=None,
-            drawer_open=False,
-            category=it.category,
-            rank_why=it.score_why,
-        )
-        return
-
+    """One stream card — ONE shape for every kind (alert, draft, ledger, note,
+    synthesis). The heavy alert detail (the evidence drawer, the queued-action
+    history) lives in the in-shell peek + the holding rail, not inline here: the
+    feed is a scan-and-act surface, so each card is the ticker, a humanized kind,
+    the status, the body, and — only when there's something to do or somewhere to
+    go — a compact footer (approve/dismiss, open the article, review)."""
     when_attr = it.when.isoformat(timespec="seconds")
     cat_attr = f' data-cat="{_esc(it.category)}"' if it.category else ""
+    # The raw trigger_kind rides a data-attr (a machine hook, like data-cat /
+    # data-kind) — never a visible label; the chip humanizes it (§8).
+    trig_attr = f' data-trigger="{_esc(it.title)}"' if it.kind == "alert" else ""
     out.write(
-        f'<div class="ix-card" data-kind="{_esc(it.kind)}"{cat_attr} data-when="{when_attr}">'
+        f'<div class="ix-card" data-kind="{_esc(it.kind)}"{cat_attr}{trig_attr} '
+        f'data-when="{when_attr}">'
     )
     out.write('<div class="ix-head">')
     if it.ticker:
-        # data-peek-ticker: hover mini-card in the shell (UX9); inert elsewhere.
+        # The ticker is a doorway, not inert text: it opens that holding's full
+        # context in the shell (where the alert's evidence drawer lives), tying
+        # the feed into the rest of the dashboard. data-peek-ticker still drives
+        # the hover mini-card when this stream is embedded in the shell.
         out.write(
-            f'<span class="ix-ticker" data-peek-ticker="{_esc(it.ticker)}">{_esc(it.ticker)}</span>'
+            f'<a class="ix-ticker" href="/#holding={_esc(it.ticker)}" '
+            f'data-peek-ticker="{_esc(it.ticker)}">{_esc(it.ticker)}</a>'
         )
     why_attr = f' title="ranked: {_esc(it.score_why)}"' if it.score_why else ""
     out.write(
-        f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_title_for(it))}</span>'
+        f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_chip_label(it))}</span>'
     )
     if show_status and it.status and it.status not in ("open",):
         out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
@@ -564,38 +579,77 @@ def _render_item(
     body = _display_body(it)
     if body:
         out.write(f'<div class="ix-body">{_esc(body)}</div>')
-    if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
-        _render_memo_actions(out, it)
-    if not compact and it.kind == "draft" and it.action is not None:
-        out.write('<div class="ix-actions">')
-        render_queued_action(out, it.action)
-        out.write("</div>")
-    elif compact and it.kind in ("alert", "draft") and it.status == "pending":
-        target = f"/feed?ticker={it.ticker}" if it.ticker else "/feed"
-        # In the shell, "review" peeks the full alert card (evidence drawer +
-        # approve/dismiss) in place via data-peek-url (UX9); the /feed href
-        # stays the real destination for middle-click and non-shell surfaces
-        # (no peek runtime there — the attribute is inert).
-        alert_id = (
-            it.alert.id
-            if it.alert is not None
-            else (it.action.alert_id if it.action is not None else None)
-        )
-        peek = (
-            f' data-peek-url="/api/peek/alert/{alert_id}" data-peek-title="Review alert"'
-            if alert_id is not None
-            else ""
-        )
-        out.write(f'<div class="ix-open"><a href="{_esc(target)}"{peek}>review →</a></div>')
+    _render_card_footer(out, it, compact=compact)
     out.write("</div>")
 
 
-def _title_for(it: InboxItem) -> str:
-    # The kind chip's text. Delegates FULLY to the one shared identity-aware
-    # resolver (inbox_rank.inbox_label): advisor memos read as "Advisor memo"
-    # whichever table they echoed through, note kinds humanize, and no raw
-    # enum or source-table string ever reaches the chip.
+def _chip_label(it: InboxItem) -> str:
+    """The kind chip's text. The raw enum never reaches a label (design_language
+    §8; it rides ``data-trigger`` instead):
+
+    * ``material_news`` is the one trigger the categorizer SPLITS — into News /
+      Rating changes / Press releases — so its chip shows that refined category,
+      matching the filter bucket the card lives under (no "News" chip on a card
+      filed under "Rating changes");
+    * every other trigger maps 1:1 to a category, so it humanizes directly;
+    * non-alert kinds keep their identity-resolved ``inbox_label``.
+    """
+    if it.kind == "alert":
+        if it.title == "material_news":
+            return CATEGORY_LABELS.get(it.category, "News")
+        return _TRIGGER_LABELS.get(it.title, it.title.replace("_", " ").capitalize())
     return inbox_label(it)
+
+
+def _render_card_footer(out: StringIO, it: InboxItem, *, compact: bool) -> None:
+    """The card's one action/doorway row — emitted ONLY when the item carries
+    something to do or somewhere to go, so a passive ledger / synthesis card
+    stays a clean two-line entry instead of growing an empty action band.
+    Advisor memos keep their own ``.k-chip`` affordances (open memo / dismiss)."""
+    if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
+        _render_memo_actions(out, it)
+        return
+
+    parts: list[str] = []
+    pending = _pending_action(it)
+
+    if compact:
+        # Rail: the hover ✓/✕ buttons (in the header) already approve in place,
+        # so the footer is just the "review →" peek for a still-pending item.
+        if it.kind in ("alert", "draft") and it.status == "pending":
+            target = f"/feed?ticker={it.ticker}" if it.ticker else "/feed"
+            alert_id = (
+                it.alert.id
+                if it.alert is not None
+                else (it.action.alert_id if it.action is not None else None)
+            )
+            peek = (
+                f' data-peek-url="/api/peek/alert/{alert_id}" data-peek-title="Review alert"'
+                if alert_id is not None
+                else ""
+            )
+            parts.append(f'<a class="ix-foot-link" href="{_esc(target)}"{peek}>review →</a>')
+    elif pending is not None:
+        # Feed: the no-JS approve path (GET /approve), absolute so it resolves
+        # the same on / and /feed. No CLI hint, no inline evidence drawer — that
+        # detail is one ticker-click away in the holding view.
+        parts.append(f'<a class="ix-foot-act" href="/approve?action_id={pending.id}">approve</a>')
+        parts.append(
+            '<a class="ix-foot-act ix-foot-dismiss" '
+            f'href="/approve?action_id={pending.id}&dismiss=1">dismiss</a>'
+        )
+
+    article = _article_url(it)
+    if article:
+        # The feed's tie into the broader news: open the actual story, not a
+        # dead-end card. New tab + noopener (an untrusted external origin).
+        parts.append(
+            f'<a class="ix-foot-link" href="{_esc(article)}" target="_blank" '
+            'rel="noopener noreferrer">article ↗</a>'
+        )
+
+    if parts:
+        out.write('<div class="ix-foot">' + "".join(parts) + "</div>")
 
 
 def _display_body(it: InboxItem) -> str:
@@ -634,17 +688,43 @@ def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
     out.write("</div>")
 
 
-def _quick_action_id(it: InboxItem) -> int | None:
-    """The queued-action id the rail's hover ✓/✕ operate on, or None when the
-    card carries nothing approvable. Drafts act on their own action; alert
-    cards act on their first still-pending queued action (one action per
-    alert is the drafter's norm)."""
+def _pending_action(it: InboxItem) -> QueuedActionRow | None:
+    """The queued action still awaiting the owner on this card, or None. Drafts
+    act on their own action; alert cards act on their first still-pending queued
+    action (one action per alert is the drafter's norm)."""
     if it.kind == "draft" and it.action is not None and it.action.status == ACTION_STATUS_PENDING:
-        return it.action.id
+        return it.action
     if it.kind == "alert":
         for qa in it.actions:
             if qa.status == ACTION_STATUS_PENDING:
-                return qa.id
+                return qa
+    return None
+
+
+def _quick_action_id(it: InboxItem) -> int | None:
+    """The queued-action id the rail's hover ✓/✕ operate on, or None when the
+    card carries nothing approvable."""
+    qa = _pending_action(it)
+    return qa.id if qa is not None else None
+
+
+def _article_url(it: InboxItem) -> str | None:
+    """The source-article URL behind a news / press / rating alert
+    (``material_news`` evidence carries ``url``), so the card can link out to the
+    actual story instead of dead-ending. None for any other kind, malformed
+    evidence, or a non-http payload."""
+    if it.kind != "alert" or it.alert is None or not it.alert.evidence_json:
+        return None
+    try:
+        parsed: object = json.loads(it.alert.evidence_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    evidence = cast("Mapping[str, object]", parsed)
+    url = evidence.get("url")
+    if isinstance(url, str) and url.startswith(("http://", "https://")):
+        return url
     return None
 
 
@@ -666,7 +746,8 @@ INBOX_CSS = """
   background: var(--surface); padding: 9px 12px; }
 .ix-head { display: flex; align-items: baseline; gap: 8px; }
 .ix-ticker { font-family: var(--mono); font-weight: 700; font-size: var(--fs-caption);
-  color: var(--fg); }
+  color: var(--fg); text-decoration: none; }
+.ix-ticker:hover { color: var(--accent); }
 .ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); }
 .ix-status { font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border);
@@ -680,9 +761,18 @@ INBOX_CSS = """
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .ix-compact .ix-body { -webkit-line-clamp: 2; }
 .ix-card:hover .ix-body { -webkit-line-clamp: unset; }
-.ix-actions { margin-top: 6px; }
-.ix-open { margin-top: 4px; font-size: var(--fs-caption); }
-.ix-open a { color: var(--accent); text-decoration: none; }
+/* The card's one action/doorway row (approve · dismiss · article · review) —
+   the SAME footer shape for every kind, replacing the old per-kind .ix-actions
+   block and bespoke .alert-card queued-action panel. */
+.ix-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px;
+  margin-top: 6px; }
+.ix-foot a { font-size: var(--fs-caption); text-decoration: none; }
+.ix-foot-act { color: var(--accent); }
+.ix-foot-act:hover { text-decoration: underline; }
+.ix-foot-dismiss { color: var(--muted); }
+.ix-foot-dismiss:hover { color: var(--bad); text-decoration: none; }
+.ix-foot-link { color: var(--muted); }
+.ix-foot-link:hover { color: var(--accent); }
 /* Advisor-memo affordances — the shared .k-chip kit (controls.py), so the
    memo card carries dismiss + open-memo without a bespoke button system. */
 .ix-memo-acts { display: flex; gap: 6px; margin-top: 7px; }

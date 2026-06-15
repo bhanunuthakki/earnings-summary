@@ -53,14 +53,17 @@ button { transition: color var(--transition), border-color var(--transition),
 
 /* Section */
 .dash-section { margin-bottom: var(--gap-lg); }
-.dash-section-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--hairline); }
-.dash-section-title { font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.01em; }
-.dash-section-count { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); }
 
-/* Filter strip — feed only */
-.dash-filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: var(--gap); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); font-size: var(--fs-body); }
-.dash-filters .filter-label { color: var(--muted); margin-right: 4px; }
-.dash-filters .filter-value { font-family: var(--mono); color: var(--fg); }
+/* Active-filter chips — feed only. Only the constraints actually narrowing the
+   view render here, each a removable pill linking back to the unfiltered feed
+   (no "ALL · ALL" band when nothing is filtered). */
+.dash-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.dash-filters .dash-filter-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); text-decoration: none; transition: border-color var(--transition); }
+.dash-filters .dash-filter-chip:hover { border-color: var(--border-2); }
+.dash-filters .filter-label { color: var(--muted); font-size: var(--fs-caption); }
+.dash-filters .filter-value { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg); }
+.dash-filters .filter-x { color: var(--muted); font-size: var(--fs-micro); }
+.dash-filters .dash-filter-chip:hover .filter-x { color: var(--bad); }
 
 /* Alert cards — elevation (surface on bg), not border boxes. */
 .alert-card {
