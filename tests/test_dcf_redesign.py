@@ -1191,6 +1191,114 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     assert adata["redesign"]["exit_multiple"] == pytest.approx(m0 + 3.0)
 
 
+_KPI_SCHEMA = """
+CREATE TABLE documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL, source_type TEXT NOT NULL, doc_type TEXT NOT NULL,
+    source_url TEXT, file_path TEXT NOT NULL, sha256 TEXT NOT NULL,
+    fetched_at TIMESTAMP NOT NULL, fetch_status TEXT NOT NULL,
+    raw_bytes_size INTEGER NOT NULL,
+    source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
+);
+CREATE TABLE kpi_definitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, name TEXT NOT NULL
+);
+CREATE TABLE kpi_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL,
+    period_end TIMESTAMP NOT NULL, fiscal_period_type TEXT NOT NULL,
+    kpi_definition_id INTEGER NOT NULL, value NUMERIC(24, 6) NOT NULL,
+    unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL
+);
+"""
+
+
+def _seed_kpi_fact(db: Path, ticker: str, name: str, value: float, unit: str) -> None:
+    """Add the kpi/documents tables (the refresh DB only has dcf_runs) and a
+    single latest-quarter KPI fact the inject route can resolve."""
+    conn = sqlite3.connect(str(db))
+    conn.executescript(_KPI_SCHEMA)
+    conn.execute(
+        "INSERT INTO documents (id, ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size) VALUES "
+        "(1, ?, 'fmp', 'fmp_key_metrics', 'x', ?, '2026-01-01 00:00:00', 'ok', 1)",
+        (ticker, "0" * 64),
+    )
+    conn.execute("INSERT INTO kpi_definitions (id, ticker, name) VALUES (1, ?, ?)", (ticker, name))
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
+        "value, unit, source_doc_id) VALUES (?, '2025-09-30 00:00:00', 'Q3', 1, ?, ?, 1)",
+        (ticker, value, unit),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_inject_fact_route_reprices_and_syncs_end_to_end(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The S6 deliverable, end-to-end through the real route: pick a fact →
+    inject as a DCF driver → the model reprices and the xlsx + assumptions JSON
+    stay in sync (clobber-safe), with the converted units written and the fact
+    lineage recorded.
+
+    A 42% operating-margin KPI (stored as percent) must land on the Dashboard's
+    near-margin cell as the decimal ratio 0.42 — the units/scale conversion that
+    is the whole point — and lift the fair value above the builder's seed."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    _seed_kpi_fact(db, "TESTCO", "Operating margin", 42.0, "percent")
+
+    base_inp = redesign.read_inputs(dest)
+    assert base_inp is not None
+    conn = sqlite3.connect(str(db))
+    npv0 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    conn.close()
+
+    import comments_server
+
+    client = comments_server.create_app(refresh_repo).test_client()
+    resp = client.post(
+        "/api/dcf/inject-fact",
+        json={"ticker": "TESTCO", "token": "kpi:Operating margin", "field": "near_op_margin"},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["injected"] is True
+    inj = body["injection"]
+    # The load-bearing conversion: percent 42.0 → ratio 0.42.
+    assert inj["raw_value"] == pytest.approx(42.0)
+    assert inj["raw_unit"] == "percent"
+    assert inj["applied_value"] == pytest.approx(0.42)
+    assert inj["fact_id"] is not None
+
+    # The edit landed on the LIVE workbook's near-margin cell (B29) as 0.42 —
+    # written through apply_edits, not poked into the JSON.
+    assert _dashboard_cell(dest, redesign._DB_MARGIN_NEAR) == pytest.approx(0.42)
+    # ...and re-read from the workbook the engine repriced from.
+    edited = redesign.read_inputs(dest)
+    assert edited is not None and edited.near_op_margin == pytest.approx(0.42)
+
+    # The assumptions JSON mirrored the same value (from-scratch-build default
+    # stays in sync — no clobber) and recorded the fact lineage (S6 #5).
+    adata = json.loads(
+        (refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json").read_text(encoding="utf-8")
+    )
+    assert adata["redesign"]["near_term_op_margin"] == pytest.approx(0.42)
+    prov = adata["redesign"]["driver_provenance"]["near_op_margin"]
+    assert prov["metric"] == "kpi:Operating margin"
+    assert prov["raw_unit"] == "percent"
+
+    # dcf_runs repriced (margin 0.12 → 0.42 lifts value); never wrote over_under
+    # directly — it is re-derived by persist.
+    conn = sqlite3.connect(str(db))
+    npv1 = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()[0]
+    conn.close()
+    assert npv1 > float(npv0)
+    assert body["fair_value_per_share_usd"] == pytest.approx(float(npv1))
+
+
 def test_apply_edits_no_workbook_fails_soft(refresh_repo: Path) -> None:
     """No redesigned workbook to edit → a soft failure, not a crash (the route
     maps this to 409)."""
