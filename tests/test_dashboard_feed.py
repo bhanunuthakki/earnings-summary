@@ -49,11 +49,23 @@ def _evidence(memo: str = "memo") -> str:
 def test_empty_db_renders_empty_list(db_path: Path) -> None:
     html = render_alert_feed(db_path=db_path)
     assert "No items match" in html
-    # The filter strip is still rendered so the analyst sees what they filtered by
-    assert "ticker:" in html
-    assert "trigger:" in html
+    # Nothing is filtered, so the header shows NO filter band (the redesign
+    # drops the old "ALL · ALL · ALL" strip — only ACTIVE filters render).
+    assert 'class="dash-filters"' not in html
     # Complete HTML document
     assert "<!doctype html>" in html
+
+
+def test_active_filters_render_as_removable_chips(db_path: Path) -> None:
+    """A narrowed feed shows each active filter as a chip linking back to the
+    feed with that one constraint dropped — the others preserved."""
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path, ticker="GOOG", status="approved")
+    assert 'class="dash-filters"' in html
+    # The ticker chip drops itself but keeps status; the status chip vice-versa.
+    assert 'href="/feed?status=approved"' in html
+    assert 'href="/feed?ticker=GOOG"' in html
+    assert 'ticker:</span> <span class="filter-value">GOOG' in html
 
 
 # ----------------------------------------------------------------------------

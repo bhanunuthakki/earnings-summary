@@ -1,12 +1,17 @@
 """Persistent inbox feed page.
 
 Renders the full unified-inbox stream (alerts, drafts, ledger entries,
-journal items, fresh synthesis sections — categorized + ranked) with
-visible filter labels showing which constraints were applied. The
-alert-vocabulary filters (status / trigger_kind) narrow the page back to
-the alerts-only view they are defined over. Query filters are emitted as
-a read-only strip — that filtering happens in the store query, not in the
-rendered HTML — while the category chips filter client-side.
+journal items, fresh synthesis sections — categorized + ranked) as ONE dense,
+scannable list of uniform cards (``dashboard.inbox.render_inbox_stream``): every
+kind shares one card shape, and each card is a doorway — the ticker opens that
+holding in the shell, news cards link out to the source article, pending items
+carry inline approve/dismiss. Deep alert detail (the evidence drawer, the
+queued-action history) lives in the in-shell peek + the holding rail, not inline.
+
+Only the filters actually narrowing the view are shown — as removable chips in
+the header (the AND-composed ``status`` / ``trigger_kind`` alert-vocabulary
+filters narrow the page back to the alerts-only view they're defined over). The
+category chips above the stream filter client-side.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import html
 from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from dashboard._styles import CSS
 from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox, render_inbox_stream
@@ -55,20 +61,14 @@ def render_alert_feed(
 
     body = StringIO()
     body.write('<div class="l1-shell">')
-    _render_header(body, total=len(items), limit=limit)
-    _render_filter_strip(
+    _render_header(
         body,
-        ticker=ticker,
-        trigger_kind=trigger_kind,
-        status=status,
-        limit=limit,
-        alerts_only=alerts_only,
+        total=len(items),
+        active=_active_filters(ticker=ticker, trigger_kind=trigger_kind, status=status),
     )
+    # One band only: the category chips (rendered by the stream) head the list —
+    # no separate "Stream / N shown" title band over them (design_language §6.1).
     body.write('<section class="dash-section dash-feed">')
-    body.write('<div class="dash-section-header">')
-    body.write('<div class="dash-section-title">Stream</div>')
-    body.write(f'<div class="dash-section-count">{len(items)} shown</div>')
-    body.write("</div>")
     body.write(
         render_inbox_stream(
             items,
@@ -89,43 +89,52 @@ def render_alert_feed(
 # ----------------------------------------------------------------------------
 
 
-def _render_header(body: StringIO, total: int, limit: int) -> None:
+def _render_header(
+    body: StringIO, total: int, active: list[tuple[str, str, str]]
+) -> None:
     body.write('<header class="l1-header">')
     body.write("<h1>Inbox feed</h1>")
     body.write(
-        f'<div class="l1-subtitle">{total} item(s) returned '
-        f"(limit {limit}). Ranked by severity x recency x position x thesis — "
-        "hover a kind chip for the why. Status badge shows current state."
-        "</div>"
+        f'<div class="l1-subtitle">{total} shown · ranked by what matters now — '
+        "newest and most material first. Filter the stream by category below, or "
+        "hover a card to expand it.</div>"
     )
+    # Only the filters actually narrowing the view are shown — each a removable
+    # chip linking back to the feed without that one constraint. Nothing
+    # filtered → no chrome band at all (no "ALL · ALL · ALL" noise).
+    if active:
+        body.write('<div class="dash-filters">')
+        for label, value, remove_href in active:
+            body.write(
+                f'<a class="dash-filter-chip" href="{_esc(remove_href)}" '
+                'title="Remove this filter">'
+                f'<span class="filter-label">{_esc(label)}:</span> '
+                f'<span class="filter-value">{_esc(value)}</span> '
+                '<span class="filter-x">✕</span></a>'
+            )
+        body.write("</div>")
     body.write("</header>")
 
 
-def _render_filter_strip(
-    body: StringIO,
-    *,
-    ticker: str | None,
-    trigger_kind: str | None,
-    status: str | None,
-    limit: int,
-    alerts_only: bool = False,
-) -> None:
-    body.write('<div class="dash-filters">')
-    body.write(_filter_chip("kinds", "alerts" if alerts_only else "ALL"))
-    body.write(_filter_chip("ticker", ticker or "ALL"))
-    body.write(_filter_chip("trigger", trigger_kind or "ALL"))
-    body.write(_filter_chip("status", status or "ALL"))
-    body.write(_filter_chip("limit", str(limit)))
-    body.write("</div>")
-
-
-def _filter_chip(label: str, value: str) -> str:
-    return (
-        '<div class="dash-filter-chip">'
-        f'<span class="filter-label">{_esc(label)}:</span> '
-        f'<span class="filter-value">{_esc(value)}</span>'
-        "</div>"
-    )
+def _active_filters(
+    *, ticker: str | None, trigger_kind: str | None, status: str | None
+) -> list[tuple[str, str, str]]:
+    """The server-side filters currently narrowing the feed, as
+    ``(label, value, remove_href)`` — each chip links back to the feed with that
+    one constraint dropped (the others preserved). Empty when nothing is
+    filtered, so the header renders no filter band."""
+    active = [
+        ("ticker", "ticker", ticker),
+        ("trigger", "trigger_kind", trigger_kind),
+        ("status", "status", status),
+    ]
+    active = [(label, param, value) for label, param, value in active if value]
+    chips: list[tuple[str, str, str]] = []
+    for label, param, value in active:
+        others = [(p, v) for (_lbl, p, v) in active if p != param]
+        qs = "&".join(f"{p}={quote_plus(str(v))}" for p, v in others if v)
+        chips.append((label, str(value), "/feed" + (f"?{qs}" if qs else "")))
+    return chips
 
 
 def _render_footer(body: StringIO) -> None:
