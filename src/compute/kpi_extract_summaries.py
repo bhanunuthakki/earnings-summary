@@ -37,11 +37,12 @@ import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 
+import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
@@ -408,7 +409,7 @@ def _ensure_summary_document_row(
         period_end,
         str(path).replace("\\", "/"),
         sha,
-        datetime.now(timezone.utc),
+        datetime.now(UTC),
         "ok",
         len(raw),
     )
@@ -661,9 +662,19 @@ def _build_capture_manifest(
     fpt: FiscalPeriodType,
     doc_id: int,
     rows: list[dict[str, object]],
+    *,
+    primary_source: SourceType = SourceType.LLM_EXTRACTED,
 ) -> KpiExtractionManifest:
     """Convert enumerated rows to a CAPTURE manifest. Names are passed verbatim;
-    persist_manifest (origin=CAPTURE) canonicalizes them on write."""
+    persist_manifest (origin=CAPTURE) canonicalizes them on write.
+
+    ``primary_source`` is the tier the captured facts ingest at. The on-disk
+    brief/press path leaves the default ``LLM_EXTRACTED`` (the brief itself is an
+    LLM artifact). The supplement/data-pack PDF path passes ``IR_DOC`` — the PDF
+    is the issuer's own document, so its enumerated values outrank the LLM brief
+    long tail on read (the tier-aware loader prefers IR_DOC over LLM_EXTRACTED for
+    the same definition+period), exactly as the audited IR spreadsheet does.
+    """
     values: list[KpiValue] = []
     for row in rows:
         name = str(row.get("label") or "").strip()[:200]
@@ -690,7 +701,7 @@ def _build_capture_manifest(
         period_end=period_end,
         fiscal_period_type=fpt,
         source_doc_id=doc_id,
-        primary_source=SourceType.LLM_EXTRACTED,
+        primary_source=primary_source,
         model_name=FAST_CLASSIFIER_MODEL,
         origin=DefinitionOrigin.CAPTURE,
         values=values,
@@ -789,8 +800,168 @@ def capture_for_ticker(
     return _close_log(log, t0)
 
 
+# ---------------------------------------------------------------------------
+# Stage B — capture-every-number for IR supplement / data-pack PDFs.
+#
+# Unlike capture_for_ticker (which enumerates the on-disk `.tmp/` briefs), the
+# `ir_supplement` doc kind has NO LLM brief handler — process_ir_documents never
+# summarizes it (directives/intake_documents.md), so the brief-driven capture
+# never sees it and its numbers stay locked in the PDF. This path reads each
+# registered supplement PDF straight from its `documents` row, runs the SAME
+# enumerate prompt + canonicalize-on-write contract, and persists at IR_DOC tier
+# (the PDF is the issuer's own document) — mirroring the audited IR-spreadsheet
+# capture path (ir_pipeline/ingest.py) but for the prose/table PDF shape.
+#
+# Scope: PDF supplements only (the LLM/PDF path). A spreadsheet (.xlsx) supplement
+# is the deterministic ir_pipeline.ingest domain and is left for that path.
+# ---------------------------------------------------------------------------
+
+# IR-doc kinds whose every labeled number we enumerate from the PDF itself.
+_IR_CAPTURE_PDF_DOC_TYPES: tuple[str, ...] = ("ir_supplement",)
+
+
+def _read_pdf_text(path: str) -> str:
+    """Single seam over ``parser.extract_text_from_pdf`` (a `from`-import of the
+    untyped legacy module trips pyright; the module-qualified call is clean and
+    its return is already ``str``). Isolated so tests can stub PDF reads here."""
+    return parser.extract_text_from_pdf(path)
+
+
+def _fiscal_period_type_for(ticker: str, period_end: datetime) -> FiscalPeriodType:
+    """Fiscal quarter for a period-end date, honouring non-calendar fiscal years.
+
+    Most issuers are calendar-FY (Mar-31 = Q1 … Dec-31 = Q4). Tickers in
+    ``_TICKER_QUARTER_PERIOD_END`` (RBRK / VEEV, Jan FYE) report a Jan-31
+    period-end as fiscal Q4, NOT calendar Q1 — so we reverse that override map to
+    recover the fiscal label the analyst series already uses (a naive calendar
+    mapping would fork the supplement's values onto a different fiscal axis).
+    """
+    overrides = _TICKER_QUARTER_PERIOD_END.get(ticker.upper())
+    if overrides:
+        for quarter, (month, day) in overrides.items():
+            if period_end.month == month and period_end.day == day:
+                return FiscalPeriodType(f"Q{quarter}")
+    return FiscalPeriodType(f"Q{(period_end.month - 1) // 3 + 1}")
+
+
+def _coerce_period_end(raw: object) -> datetime | None:
+    """Parse a ``documents.period_end`` cell (datetime or ISO string) → datetime."""
+    if isinstance(raw, datetime):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return datetime.fromisoformat(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _list_ir_capture_pdf_docs(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    ticker: str,
+    doc_types: tuple[str, ...],
+) -> list[tuple[int, Path, datetime]]:
+    """Return ``(doc_id, pdf_path, period_end)`` for this ticker's capture-eligible
+    IR PDF docs, oldest first.
+
+    Drops rows that can't anchor a per-period capture: a non-PDF file (a `.xlsx`
+    supplement is the deterministic spreadsheet path's job) or a NULL/unparseable
+    ``period_end``. Relative ``file_path`` values are resolved against ``repo_root``
+    (IR documents live in the MAIN checkout, not the worktree)."""
+    placeholders = ",".join("?" for _ in doc_types)
+    rows = conn.execute(
+        f"SELECT id, file_path, period_end FROM documents "
+        f"WHERE ticker = ? AND source_type = ? AND doc_type IN ({placeholders}) "
+        f"ORDER BY period_end, id",
+        (ticker.upper(), SourceType.IR_DOC.value, *doc_types),
+    ).fetchall()
+    out: list[tuple[int, Path, datetime]] = []
+    for r in rows:
+        raw_path = str(r["file_path"]) if r["file_path"] else ""
+        if not raw_path.lower().endswith(".pdf"):
+            continue
+        period_end = _coerce_period_end(r["period_end"])
+        if period_end is None:
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = repo_root / path
+        out.append((int(r["id"]), path, period_end))
+    return out
+
+
+def capture_for_ir_pdf_docs(
+    ticker: str,
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    *,
+    doc_types: tuple[str, ...] = _IR_CAPTURE_PDF_DOC_TYPES,
+    refresh: bool = False,
+    max_facts_per_doc: int = _CAPTURE_MAX_FACTS,
+    max_input_chars: int = _CAPTURE_MAX_INPUT_CHARS,
+) -> TickerExtractionLog:
+    """Enumerate-mode (no allowlist) capture for one ticker's IR supplement PDFs.
+
+    For every registered ``ir_supplement`` PDF (the doc kind with no LLM brief
+    handler), reads the PDF text, enumerates every labeled this-period number, and
+    persists with origin=CAPTURE at IR_DOC tier — so each raw label is canonicalized
+    onto an existing series or mints a clean CAPTURE definition, and the long tail
+    becomes askable / DIY-pickable / DCF-resolvable. No holdings JSON required
+    (there's no allowlist). Idempotent: an already-captured doc is skipped without
+    an LLM call unless ``refresh``. Requires ``conn.row_factory = sqlite3.Row``.
+
+    A missing file on disk is skipped (non-fatal): IR PDFs live in the MAIN
+    checkout, so a worktree run may not see them.
+    """
+    ticker = ticker.upper()
+    log = TickerExtractionLog(ticker=ticker, stage="stage_b_capture_ir_supplement")
+    log.started_at = _now_iso_z()
+    t0 = time.perf_counter()
+
+    for doc_id, pdf_path, period_end in _list_ir_capture_pdf_docs(
+        conn, repo_root, ticker, doc_types
+    ):
+        period_label = f"{period_end.date().isoformat()} [ir_supplement]"
+        log.quarters_attempted.append(period_label)
+        try:
+            if not refresh and _doc_already_captured(conn, doc_id):
+                log.quarters_skipped_no_missing.append(period_label)
+                continue
+            if not pdf_path.exists():
+                logger.info(
+                    {"event": "ir_supplement_pdf_missing", "ticker": ticker, "path": str(pdf_path)}
+                )
+                continue
+            text = _read_pdf_text(str(pdf_path))[:max_input_chars]
+            rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
+            if not rows:
+                continue
+            manifest = _build_capture_manifest(
+                ticker,
+                period_end,
+                _fiscal_period_type_for(ticker, period_end),
+                doc_id,
+                rows,
+                primary_source=SourceType.IR_DOC,
+            )
+            run_id = start_run(
+                conn,
+                directive="capture_kpis_from_ir_supplement",
+                ticker_scope=[ticker],
+            )
+            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            log.kpis_inserted_total += result.inserted
+            log.quarters_extracted.append(period_label)
+        except Exception as e:
+            log.error = f"{period_label}: {type(e).__name__}: {e}"
+            break
+
+    return _close_log(log, t0)
+
+
 def _now_iso_z() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _close_log(log: TickerExtractionLog, t0: float) -> TickerExtractionLog:
