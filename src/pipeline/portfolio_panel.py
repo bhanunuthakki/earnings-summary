@@ -18,11 +18,13 @@ Performance):
   with its factor waterfall, the cached ``cross_portfolio_synthesis`` lens
   memo below.
 
-Degrades gracefully: tracker fully offline → Performance shows ONE "tracker
-offline" note (with the start hint); tracker up but an analytics endpoint
-failing → the other sections still render and the failed ones are named in a
-footnote. The Synthesis tab never shows the offline card — its panels fall
-back to equal-weighted readings and say so in their sub-lines.
+Degrades gracefully: tracker fully offline → a single prominent start-tracker
+banner LEADS the page (it auto-starts on open, since the whole page reads from
+the tracker); tracker up but an analytics endpoint failing → the other sections
+still render and the failed ones are named in a footnote. The window controls
+ride in the Performance panel header (the chart they drive), not a standalone
+top bar. The Synthesis tab never shows the offline card — its panels fall back
+to equal-weighted readings and say so in their sub-lines.
 
 Reuses the dark panel/table/kpi-strip CSS vocabulary the shell already defines;
 the fragment-local additions (legend chips, allocation bars, the benchmark
@@ -42,7 +44,6 @@ from html import escape
 from pathlib import Path
 
 from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
-from attribution import PositionAttribution
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -138,10 +139,9 @@ def render_portfolio_panel(
     risk / positioning / alpha) over the requested window, then the live
     positions/taxable view. The window args come from the page's own window bar
     (via ``/api/panel/portfolio`` query params) and pass through to the tracker
-    verbatim after validation. ``db_path`` (S15) joins the per-position
-    attribution narratives onto the alpha numbers — None keeps the page
-    tracker-pure (the pre-S15 shape). The synthesis layer lives on its own
-    sub-tab — ``render_portfolio_synthesis_panel``."""
+    verbatim after validation. ``db_path`` keeps the risk snapshot fresh (and
+    serves the cached read when the tracker is down). The synthesis layer lives
+    on its own sub-tab — ``render_portfolio_synthesis_panel``."""
     window = validated_window(start_date, end_date, include_backfill)
     analytics = fetch_portfolio_analytics(
         api_url=api_url,
@@ -150,11 +150,6 @@ def render_portfolio_panel(
         include_backfill=window.include_backfill,
     )
     live = fetch_live_portfolio(api_url=api_url)
-    attributions: list[PositionAttribution] | None = None
-    if db_path is not None and db_path.exists():
-        from attribution import attributions_for_book
-
-        attributions = attributions_for_book(db_path=db_path, alpha=analytics.position_alpha)
     # Keep the risk snapshot fresh on a successful read; fall back to it (stamped)
     # when the analytics are down so the page still carries a risk read (L5 PR2).
     snapshot: RiskSnapshot | None = None
@@ -163,33 +158,32 @@ def render_portfolio_panel(
             _persist_risk_snapshot(analytics, db_path)
         else:
             snapshot = read_latest_snapshot(db_path=db_path)
-    return compose_portfolio_page(
-        analytics, live, window=window, attributions=attributions, snapshot=snapshot
-    )
+    return compose_portfolio_page(analytics, live, window=window, snapshot=snapshot)
 
 
 def compose_portfolio_page(
     analytics: PortfolioAnalytics,
     live: LivePortfolio,
     window: WindowSelection | None = None,
-    attributions: list[PositionAttribution] | None = None,
     snapshot: RiskSnapshot | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
-    The window bar always leads the page — it doubles as a retry/refresh
-    control when the tracker is down. Tracker fully down → the live section's
-    single offline note carries the start hint for the whole page (no duplicate
-    per-section offline panels). Tracker up but ALL analytics endpoints failing
-    (e.g. an older tracker build) → one quiet note instead of five dead
-    sections. ``attributions`` (S15) renders the per-position narrative block
-    after the analytics sections; None/empty hides it. ``snapshot`` (L5 PR2)
-    renders the last-known cached risk read when the analytics are unavailable.
+    Tracker down → the whole page reads from the tracker, so a single prominent
+    start-tracker banner LEADS the page (it auto-starts on open) rather than a
+    buried bottom card. The window controls live with the chart they drive (the
+    Performance panel header), not as a standalone top bar. Tracker up but ALL
+    analytics endpoints failing (e.g. an older tracker build) → one quiet note
+    instead of five dead sections. ``snapshot`` (L5 PR2) renders the last-known
+    cached risk read when the analytics are unavailable.
     """
     w = window or _DEFAULT_WINDOW
-    parts: list[str] = [_ANALYTICS_CSS, _window_bar(w)]
+    parts: list[str] = [_ANALYTICS_CSS]
+    # Tracker offline → lead with the start banner (it is the page's gate).
+    if not live.available:
+        parts.append(_tracker_offline_banner(live))
     if analytics.available:
-        parts.append(render_portfolio_analytics_sections(analytics))
+        parts.append(render_portfolio_analytics_sections(analytics, w))
     else:
         if snapshot is not None:
             parts.append(_cached_risk_section(snapshot))
@@ -200,11 +194,10 @@ def compose_portfolio_page(
                 '<p class="muted">The tracker is reachable but its analytics endpoints aren\'t — '
                 f"{escape(first_error)}.</p></section>"
             )
-    if attributions:
-        from pipeline.attribution_panel import render_book_attribution_section
-
-        parts.append(render_book_attribution_section(attributions))
-    parts.append(render_live_portfolio_section(live))
+    # Live positions render at the bottom only when the tracker answered (the
+    # offline state is the top banner, not a second panel down here).
+    if live.available:
+        parts.append(render_live_portfolio_section(live))
     return "".join(parts)
 
 
@@ -237,11 +230,18 @@ _ANALYTICS_CSS = """<style>
 .pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
 .pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
 .pf-degraded { font-size: var(--fs-caption); }
-.pf-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  background: var(--surface); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+/* Performance panel header: title (+ hover note) on the left, the window
+   controls on the right — ONE operating band, not a separate top bar
+   (design_language §6.1). The window cluster dropped its card chrome: in-panel
+   it reads as the panel's own control, not a competing surface above it. */
+.pf-perf-head { display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.pf-perf-head h2 { margin: 0; }
+.pf-window { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  font-size: var(--fs-caption); }
+.pf-window-standalone { margin-bottom: 18px; }
 .pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--muted); margin-right: 4px; }
+  letter-spacing: 0.06em; color: var(--muted); margin-right: 2px; }
 .pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
   font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
@@ -251,7 +251,27 @@ _ANALYTICS_CSS = """<style>
 .pf-window input[type="date"] { padding: 3px 6px; font-size: var(--fs-caption);
   font-family: var(--mono); }
 .pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
-  gap: 5px; margin-left: 6px; cursor: help; }
+  gap: 5px; margin-left: 4px; cursor: help; }
+/* Methodology note: a hover affordance on the title, not permanent prose — it
+   is reference detail, surfaced on demand (the heading carries it on hover). */
+.pf-info { position: relative; display: inline-flex; align-items: center;
+  justify-content: center; width: 15px; height: 15px; border-radius: var(--radius-full);
+  border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-micro);
+  font-style: italic; font-weight: 700; cursor: help; margin-left: 7px;
+  vertical-align: middle; transition: color var(--transition), border-color var(--transition); }
+.pf-info:hover, .pf-info:focus { color: var(--fg); border-color: var(--border-2); outline: none; }
+.pf-info-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 300px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-pop); padding: 9px 11px; font-size: var(--fs-caption);
+  font-style: normal; font-weight: 400; line-height: 1.5; color: var(--muted);
+  white-space: normal; display: none; }
+.pf-info:hover .pf-info-pop, .pf-info:focus .pf-info-pop,
+.pf-info:focus-within .pf-info-pop { display: block; }
+/* Tracker-offline banner: the page's data source is down, so this LEADS the
+   page (the start control is prominent), never a buried bottom card. */
+.pf-tracker-banner { border-left: 3px solid var(--warn); }
+.pf-tracker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 12px 0 0; }
 </style>"""
 
 # Styling for the Synthesis fragment: the rollup/exposure insights grid and
@@ -407,33 +427,46 @@ _START_TRACKER_JS = """
       }
     }).catch(function () { setTimeout(function () { pollPanel(tries - 1); }, 3000); });
   }
-  btn.addEventListener('click', function () {
+  function startTracker(auto) {
     btn.disabled = true;
-    msg.textContent = 'starting…';
+    if (!auto) { msg.textContent = 'starting…'; }
     fetch('/actions/start-tracker', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
-    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
+    }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, status: r.status, j: j}; }); })
       .then(function (res) {
-        if (!res.ok) {
+        // 409 = a tracker job is ALREADY starting (e.g. a prior page open
+        // kicked it off) — not an error, just begin polling for :8000.
+        if (!res.ok && res.status !== 409) {
           msg.textContent = 'error: ' + (res.j.error || 'failed');
           btn.disabled = false;
           return;
         }
         msg.textContent = 'starting — waiting for :8000 to answer…';
         log.style.display = 'block';
-        try {
-          var es = new EventSource(res.j.stream_url);
-          es.onmessage = function (ev) {
-            try {
-              var f = JSON.parse(ev.data);
-              if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
-              if (f.event === 'done') { es.close(); }
-            } catch (e) {}
-          };
-        } catch (e) {}
+        if (res.ok && res.j.stream_url) {
+          try {
+            var es = new EventSource(res.j.stream_url);
+            es.onmessage = function (ev) {
+              try {
+                var f = JSON.parse(ev.data);
+                if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
+                if (f.event === 'done') { es.close(); }
+              } catch (e) {}
+            };
+          } catch (e) {}
+        }
         pollPanel(30);
       }).catch(function () { msg.textContent = 'network error'; btn.disabled = false; });
-  });
+  }
+  btn.addEventListener('click', function () { startTracker(false); });
+  // Auto-start when the page opens — the tracker powers the WHOLE portfolio
+  // page, so don't make the user hunt for a button. Guarded to fire once per
+  // page load so re-injecting this banner can't spawn a start loop; a hard
+  // failure leaves the manual button to retry.
+  if (!window.__pfTrackerAutostart) {
+    window.__pfTrackerAutostart = true;
+    startTracker(true);
+  }
 })();
 """
 
@@ -480,14 +513,21 @@ def _window_bar(w: WindowSelection) -> str:
     )
 
 
-def render_portfolio_analytics_sections(a: PortfolioAnalytics) -> str:
+def render_portfolio_analytics_sections(
+    a: PortfolioAnalytics, window: WindowSelection | None = None
+) -> str:
     """Every analytics section that loaded, in page order, plus one footnote
     naming the sections that didn't (instead of five dead panels). The shared
-    ``<style>`` block is emitted by ``compose_portfolio_page`` (the bar needs
-    it even when no section loaded)."""
+    ``<style>`` block is emitted by ``compose_portfolio_page``. The window
+    controls ride in the Performance panel header (the chart they drive); if
+    Performance itself failed but other analytics loaded, a slim standalone bar
+    keeps re-windowing reachable."""
+    w = window or _DEFAULT_WINDOW
     out: list[str] = []
     if a.performance is not None:
-        out.append(_performance_section(a.performance, a.policy))
+        out.append(_performance_section(a.performance, a.policy, w))
+    elif any(x is not None for x in (a.beta, a.positioning, a.position_alpha)):
+        out.append(f'<div class="pf-window-standalone">{_window_bar(w)}</div>')
     if a.beta is not None:
         out.append(_risk_section(a.beta))
     if a.positioning is not None:
@@ -503,13 +543,23 @@ def render_portfolio_analytics_sections(a: PortfolioAnalytics) -> str:
     return "".join(out)
 
 
-def _performance_section(perf: PerformanceSeries, policy: PolicyMix | None) -> str:
-    window = f"{perf.start_date or '?'} → {perf.end_date or '?'}"
+def _performance_section(
+    perf: PerformanceSeries, policy: PolicyMix | None, window: WindowSelection
+) -> str:
+    window_label = f"{perf.start_date or '?'} → {perf.end_date or '?'}"
+    # The methodology note rides a hover affordance on the title, not permanent
+    # prose; the window controls share the title's band (one operating band).
+    note = (
+        "Time-weighted return (Modified Dietz) from the tracker. Each benchmark "
+        "is a synthetic book receiving the same external cashflows; net external "
+        f"inflow {_money(perf.net_external_cashflow_in)} over the window."
+    )
     head = (
-        '<section class="panel"><h2>Performance vs benchmarks</h2>'
-        '<p class="sub">Time-weighted return (Modified Dietz) from the tracker · each '
-        "benchmark is a synthetic book receiving the same external cashflows · net external "
-        f"inflow {_money(perf.net_external_cashflow_in)} over the window.</p>"
+        '<section class="panel"><div class="pf-perf-head">'
+        '<h2>Performance vs benchmarks'
+        f'<span class="pf-info" tabindex="0" role="note" aria-label="{escape(note)}">i'
+        f'<span class="pf-info-pop">{escape(note)}</span></span></h2>'
+        f"{_window_bar(window)}</div>"
     )
     if not perf.points:
         return (
@@ -526,7 +576,7 @@ def _performance_section(perf: PerformanceSeries, policy: PolicyMix | None) -> s
         _kpi_card(
             "Portfolio TWR",
             _pct(finals["Portfolio"], signed=True),
-            sub=window,
+            sub=window_label,
             tone=_tone(finals["Portfolio"]),
         )
     ]
@@ -538,9 +588,10 @@ def _performance_section(perf: PerformanceSeries, policy: PolicyMix | None) -> s
         else None
     )
     cards.append(_kpi_card("vs SPY", _pp(excess), sub="excess return", tone=_tone(excess)))
-    for bench in ("SPY", "QQQ", "Policy"):
-        if finals[bench] is not None:
-            cards.append(_kpi_card(bench, _pct(finals[bench], signed=True), sub="cashflow-matched"))
+    # Per-benchmark endpoints (SPY / QQQ / Policy) are NOT duplicated as hero
+    # cards — they read off the colour-keyed chart legend below, so the strip
+    # carries only the two decision numbers (return + excess), keeping one
+    # dominant type tier instead of five competing display-size stats.
     warn = (
         '<p class="muted">⚠ The window start value looks incomplete (backfill unreliable) — '
         "early benchmark gaps may overstate or understate relative performance.</p>"
@@ -1832,34 +1883,44 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
     )
 
 
+def _tracker_offline_banner(live: LivePortfolio) -> str:
+    """The page's gate: the whole Portfolio page reads from the companion
+    tracker, so when it is down this LEADS the page (prominent, not buried) and
+    auto-starts on open. One-click start runs ``/actions/start-tracker`` (the
+    tracker's own venv, from its checkout) and the panel re-fetches itself until
+    :8000 answers; the raw requests repr stays in the collapsed details."""
+    return (
+        '<section class="panel pf-tracker-banner" id="pf-live-offline">'
+        "<h2>Portfolio tracker</h2>"
+        '<p class="sub">This whole page reads from the companion portfolio-tracker — '
+        "live positions, performance vs benchmarks, risk, and allocation. It isn't "
+        "running yet, so there's nothing to show until it starts.</p>"
+        f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
+        '<div class="pf-tracker-actions">'
+        '<button type="button" class="k-btn k-btn-primary" id="pf-start-tracker">'
+        "Start tracker</button>"
+        '<span class="muted" id="pf-start-msg">starting automatically…</span>'
+        "</div>"
+        '<pre id="pf-start-log" class="cli-hint" '
+        'style="display:none; max-height:180px; overflow:auto"></pre>'
+        '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
+        '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '
+        "uvicorn portfolio_tracker.api.main:app --port 8000</pre>"
+        f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
+        f"{f' — {escape(live.error)}' if live.error else ''}</p>"
+        "</details>"
+        f"<script>{_START_TRACKER_JS}</script>"
+        "</section>"
+    )
+
+
 def render_live_portfolio_section(live: LivePortfolio) -> str:
     """The live-positions panel: total + taxable-bucket KPI strip, a positions
-    table with % of portfolio, and the latest transactions. Renders an offline
-    note (with the start hint) when the tracker is unreachable."""
+    table with % of portfolio, and the latest transactions. When the tracker is
+    unreachable it returns the prominent start-tracker banner (which the page
+    composer also floats to the top)."""
     if not live.available:
-        # Humane offline card (PR1) + one-click start (PR6): the button runs
-        # /actions/start-tracker (the tracker's own venv, from its checkout)
-        # and the panel re-fetches itself until :8000 answers. The raw
-        # requests repr stays in the collapsed details.
-        return (
-            '<section class="panel" id="pf-live-offline"><h2>Live portfolio</h2>'
-            '<p class="sub">The portfolio tracker isn\'t running, so live positions, '
-            "% of book, and the taxable breakdown aren't shown.</p>"
-            f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
-            '<p><button type="button" class="pf-btn pf-btn-apply" id="pf-start-tracker">'
-            "▶ Start tracker</button> "
-            '<span class="muted" id="pf-start-msg"></span></p>'
-            '<pre id="pf-start-log" class="cli-hint" '
-            'style="display:none; max-height:180px; overflow:auto"></pre>'
-            '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
-            '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '
-            "uvicorn portfolio_tracker.api.main:app --port 8000</pre>"
-            f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
-            f"{f' — {escape(live.error)}' if live.error else ''}</p>"
-            "</details>"
-            f"<script>{_START_TRACKER_JS}</script>"
-            "</section>"
-        )
+        return _tracker_offline_banner(live)
     if not live.positions:
         return (
             '<section class="panel"><h2>Live portfolio</h2>'

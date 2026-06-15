@@ -371,7 +371,8 @@ def test_panel_fragment_portfolio_degrades_without_tracker(client, monkeypatch) 
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "<!doctype" not in body.lower()  # head/foot-less fragment
-    assert "Live portfolio" in body  # the live section (offline note)
+    # Tracker down → the prominent start-tracker banner leads the page.
+    assert "Portfolio tracker" in body and "Start tracker" in body
     assert "Portfolio synthesis" not in body  # moved to /api/panel/portfolio_synthesis
 
 
@@ -397,9 +398,13 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
 ) -> None:
     """``?start_date/?end_date/?include_backfill`` on the portfolio panel route
     must reach the analytics fetch (validated) and echo back into the window
-    bar of the rendered fragment."""
+    controls (now embedded in the Performance panel header)."""
     import pipeline.portfolio_panel as pp
-    from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalytics
+    from integrations.portfolio_tracker_client import (
+        LivePortfolio,
+        PerformanceSeries,
+        PortfolioAnalytics,
+    )
 
     captured: dict[str, object] = {}
 
@@ -412,7 +417,21 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
         include_backfill: bool = False,
     ) -> PortfolioAnalytics:
         captured.update(start=start_date, end=end_date, backfill=include_backfill)
-        return PortfolioAnalytics(available=False, api_url="http://x", errors={})
+        # Available (with an empty series) so the Performance panel — and its
+        # embedded window controls — renders and echoes the applied window.
+        return PortfolioAnalytics(
+            available=True,
+            api_url="http://x",
+            errors={},
+            performance=PerformanceSeries(
+                start_date=None,
+                end_date=None,
+                base_value=None,
+                net_external_cashflow_in=None,
+                backfill_start_unreliable=False,
+                points=[],
+            ),
+        )
 
     def _fake_live(
         *,
@@ -420,7 +439,7 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
         timeout: float = 4.0,
         transactions_limit: int = 25,
     ) -> LivePortfolio:
-        return LivePortfolio(available=False, api_url="http://x", error="down")
+        return LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
 
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)

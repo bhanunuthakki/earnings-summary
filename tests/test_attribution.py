@@ -5,8 +5,8 @@ recomputed) + the open lifecycle row (entry date/price/conviction) + the
 thesis/alert/decision events inside the window, phrased as plain sentences.
 Covers the joins, every degradation path (tracker offline, no entry, no
 events), the book-level builder's selection/ordering, and both renderers
-(holding-page section with the tracker fetch monkeypatched; Portfolio-tab
-block + its compose_portfolio_page mount).
+(holding-page section with the tracker fetch monkeypatched; the Portfolio-tab
+block as a standalone renderer — it no longer mounts on the Portfolio page).
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from attribution import (
     gather_window_events,
 )
 from integrations.portfolio_tracker_client import (
-    LivePortfolio,
     PortfolioAnalytics,
     PositionAlpha,
     PositionAlphaRow,
@@ -34,7 +33,6 @@ from pipeline.attribution_panel import (
     render_attribution_section,
     render_book_attribution_section,
 )
-from pipeline.portfolio_panel import compose_portfolio_page
 from position_lifecycle import list_entries
 
 # Hand-rolled minimal substrate: every column the SELECT * decoders touch.
@@ -441,18 +439,13 @@ def test_decompose_empty_when_no_priced_names() -> None:
     assert decompose_alpha(_alpha([])) is None
 
 
-def test_book_section_and_portfolio_mount(db: Path) -> None:
+def test_book_attribution_section_renders_standalone(db: Path) -> None:
+    # The book-level attribution narrative is no longer mounted on the Portfolio
+    # page (it became something the user asks about, not permanent page chrome),
+    # but the renderer itself still works for that ask path.
     _open_position(db)
     attributions = attributions_for_book(db_path=db, alpha=None)
     block = render_book_attribution_section(attributions)
     assert "Attribution narratives" in block
     assert 'href="/ticker/NU"' in block
     assert render_book_attribution_section([]) == ""
-
-    live = LivePortfolio(available=False, api_url="http://t", error="down")
-    analytics = PortfolioAnalytics(available=False, api_url="http://t")
-    page = compose_portfolio_page(analytics, live, attributions=attributions)
-    assert "Attribution narratives" in page
-    # None keeps the pre-S15 page byte-shape (no section).
-    page_without = compose_portfolio_page(analytics, live)
-    assert "Attribution narratives" not in page_without
