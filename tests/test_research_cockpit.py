@@ -31,6 +31,7 @@ import db as dbmod  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
     _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     attractiveness_breakdown,
     attractiveness_tone,
     build_cockpit_rows,
@@ -265,6 +266,31 @@ def test_build_tier1_kpi_deltas(rows: dict[str, list[CockpitRow]]) -> None:
 
 def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) -> None:
     assert _by_ticker(rows["evaluation"])["V"].kpi_deltas == []
+
+
+def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
+    """A forward-dated (guidance/forecast) fact must not masquerade as the latest
+    actual: the ``as_of`` guard drops period_ends in the future so the move is
+    computed from real disclosures only."""
+    arpac_id = int(
+        conn.execute(
+            "SELECT id FROM kpi_definitions WHERE ticker='NU' AND name='Monthly ARPAC (USD)'"
+        ).fetchone()[0]
+    )
+    doc_id = int(conn.execute("SELECT id FROM documents ORDER BY id").fetchone()[0])
+    future = (NOW + timedelta(days=400)).date().isoformat()
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
+        "value, unit, source_doc_id) VALUES ('NU', ?, 'Q1', ?, 88.0, 'usd', ?)",
+        (f"{future} 00:00:00", arpac_id, doc_id),
+    )
+    conn.commit()
+    # No guard → the forward-dated row wins (proves it is present and would skew).
+    ungated = {d.name: d for d in _tier1_kpi_deltas(conn, {"NU"})["NU"]}
+    assert ungated["Monthly ARPAC (USD)"].latest_value == 88.0
+    # With as_of=today → the future row is filtered; latest reverts to the Q1 actual.
+    gated = {d.name: d for d in _tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())["NU"]}
+    assert gated["Monthly ARPAC (USD)"].latest_value == 12.4
 
 
 def test_build_valuation_fields(rows: dict[str, list[CockpitRow]]) -> None:
