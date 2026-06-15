@@ -153,3 +153,20 @@ def test_set_value_returns_false_when_db_missing(tmp_path: Path) -> None:
 def test_load_degrades_to_seed_without_db(tmp_path: Path) -> None:
     g = ga.load(db_path=tmp_path / "missing.db")
     assert g.as_dict() == dict(ga.SEED_DEFAULTS)
+
+
+# --------------------------------------------------------------------------- capm_ke
+
+
+def test_capm_ke_uses_global_rf_erp(tmp_path: Path) -> None:
+    db = _seeded_db(tmp_path)
+    # 0.043 + 2.0 * 0.045 = 0.133 (reproduces the fintech explicit ke default).
+    assert ga.capm_ke(2.0, db_path=db) == pytest.approx(0.133)
+    # with a country-risk premium added on top.
+    assert ga.capm_ke(1.15, country_risk_premium=0.0275, db_path=db) == pytest.approx(
+        0.043 + 1.15 * 0.045 + 0.0275
+    )
+
+
+def test_capm_ke_degrades_to_seed_without_db(tmp_path: Path) -> None:
+    assert ga.capm_ke(2.0, db_path=tmp_path / "nope.db") == pytest.approx(0.133)

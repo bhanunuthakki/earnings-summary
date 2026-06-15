@@ -68,6 +68,29 @@ try:  # persistence is best-effort — the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+try:  # global macro assumptions -- best-effort; recorded for transparency only
+    from dcf import global_assumptions as global_dcf
+except ImportError:  # pragma: no cover
+    global_dcf = None  # type: ignore[assignment]
+
+
+def _global_assumptions_note() -> dict[str, object]:
+    """The editable global macro inputs (risk-free / ERP / tax) in effect at
+    build time, recorded in the snapshot for transparency. This is a NAV / SOTP
+    model — it does not discount a cash-flow stream — so the globals do NOT
+    affect the valuation: ``ke`` here is metadata only and carry tax is a
+    separate realization rate. The dashboard surfaces this as 'not used'."""
+    if global_dcf is None:  # pragma: no cover
+        return {"applies_to_valuation": False, "note": "global module unavailable"}
+    g = global_dcf.load(db_path=REPO / "data" / "portfolio.db")
+    return {
+        "risk_free_rate": g.risk_free_rate,
+        "equity_risk_premium": g.equity_risk_premium,
+        "tax_rate": g.tax_rate,
+        "applies_to_valuation": False,
+        "note": "NAV/SOTP model -- globals recorded for transparency, not used in the valuation",
+    }
+
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 HEAD_FILL = PatternFill("solid", fgColor="1F2937")
@@ -207,6 +230,7 @@ def _run_bn() -> int:
         "invested_capital_b": _ic(s),
         "corporate_b": -_corp(s),
         "marks": {field: getattr(s, field) for field, _row, _label, _fmt in _SOTP_SPEC},
+        "global_assumptions": _global_assumptions_note(),
         "scenarios": {
             "base": {"fair_value_per_share_usd": vps},
             "bull": {"fair_value_per_share_usd": bull},
@@ -756,6 +780,7 @@ def _run_brk() -> int:
         "corporate_b": -s.corp,
         "sotp_equity_b": eq,
         "value_per_share_usd": vps,
+        "global_assumptions": _global_assumptions_note(),
     }
     persisted = persist_dcf_run(eq, vps, s.price, 1.0 / s.op_mult, snap)
     print(

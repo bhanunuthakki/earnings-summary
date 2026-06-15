@@ -57,6 +57,10 @@ try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
+    from dcf import global_assumptions as global_dcf
+except ImportError:  # pragma: no cover
+    global_dcf = None  # type: ignore[assignment]
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -93,6 +97,14 @@ class Sotp:
     corp_years: float = 10.0  # explicit DCF horizon
     corp_terminal_mult: float = 2.0  # terminal corporate residual capitalization (modest)
     ke: float = 0.133  # cost of equity (discounts the corporate stream; high-beta fintech)
+    # Opt-in CAPM: when derive_ke_capm != 0, ke is recomputed from the editable
+    # GLOBAL risk-free + ERP as rf + beta*erp, so a dashboard change to the macro
+    # inputs flows into this model. Off by default (ke stays the explicit scalar
+    # above -> zero drift). beta 2.0 reproduces the default exactly: 0.043 + 2.0*0.045.
+    # (Tax is not a SOTP input -- this is an EV/contribution-profit multiples model --
+    # so the global tax rate intentionally does not apply here.)
+    beta: float = 2.0
+    derive_ke_capm: int = 0
     # (5) net corporate debt ($M; SOFI cash roughly offsets convertible/warehouse debt)
     net_corp_debt: float = 0.0
     # reference drivers (Segments sheet; not in the valuation math)
@@ -155,6 +167,10 @@ def _load(ticker: str) -> Sotp:
             for k, v in cast("dict[str, Any]", ov).items():
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
+    # Opt-in: derive ke from the global risk-free/ERP when the name asks for it
+    # (after JSON overrides so beta / the flag can be tuned per name).
+    if global_dcf is not None and s.derive_ke_capm:
+        s.ke = global_dcf.capm_ke(s.beta, db_path=REPO / "data" / "portfolio.db")
     return s
 
 
