@@ -1,3 +1,5 @@
+# The SEC-override tests exercise internal seams (_classify / _dest_path_for).
+# pyright: reportPrivateUsage=false
 """Tests for the deterministic helpers in src/intake.py.
 
 The LLM-driven classification path is intentionally not tested here — it requires
@@ -99,8 +101,10 @@ def test_sha256_differs_on_byte_change(tmp_path: Path) -> None:
 
 
 def test_doc_type_maps_cover_every_ir_relevant_doctype() -> None:
-    """Every DocType with an `IR_` or `EARNINGS_CALL_TRANSCRIPT` member must have a stem and an index key."""
-    expected = {
+    """Every IR DocType needs a filing stem AND a legacy index key. SEC forms get a
+    stem (so an inbox-dropped 10-K files under sec_*) but NO index key — they have
+    no legacy LLM handler and are registered straight into `documents`."""
+    ir_expected = {
         DocType.IR_PRESS_RELEASE,
         DocType.IR_PRESENTATION,
         DocType.IR_SUPPLEMENT,
@@ -108,8 +112,17 @@ def test_doc_type_maps_cover_every_ir_relevant_doctype() -> None:
         DocType.EARNINGS_CALL_TRANSCRIPT,
         DocType.IR_EVENT,
     }
-    assert set(DOC_TYPE_FILE_STEM.keys()) == expected
-    assert set(DOC_TYPE_INDEX_KEY.keys()) == expected
+    sec_expected = {
+        DocType.SEC_10K,
+        DocType.SEC_10Q,
+        DocType.SEC_20F,
+        DocType.SEC_8K,
+        DocType.SEC_6K,
+    }
+    assert set(DOC_TYPE_INDEX_KEY.keys()) == ir_expected
+    assert set(DOC_TYPE_FILE_STEM.keys()) == ir_expected | sec_expected
+    # The index keys must be a subset of what can be filed.
+    assert set(DOC_TYPE_INDEX_KEY).issubset(DOC_TYPE_FILE_STEM)
 
 
 def test_event_doc_types_routed_separately() -> None:
@@ -182,3 +195,79 @@ def test_intake_classification_accepts_ir_event() -> None:
         }
     )
     assert c.doc_type == DocType.IR_EVENT
+
+
+# ---------------------------------------------------------------------------
+# SEC-form override: the LLM classifier has no SEC doc-types, so a dropped 10-K
+# is forced into an IR bucket; intake vetoes that deterministically.
+# ---------------------------------------------------------------------------
+
+_TENK_COVER = (
+    "UNITED STATES SECURITIES AND EXCHANGE COMMISSION\nWashington, D.C. 20549\n"
+    "FORM 10-K\n(Mark One)\nANNUAL REPORT PURSUANT TO SECTION 13 OR 15(d)\n"
+    "For the fiscal year ended January 31, 2026\nRubrik, Inc.\n"
+)
+
+
+def test_classify_overrides_llm_ir_doctype_when_content_is_sec_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intake
+
+    # The LLM (no SEC types in its enum) calls a numbers-heavy 10-K an ir_supplement.
+    def fake_llm(filename: str, text: str, hint: dict[str, object]) -> dict[str, object]:
+        return {
+            "ticker": "RBRK",
+            "period_end": "2026-01-31",
+            "doc_type": "ir_supplement",
+            "confidence": 0.9,
+            "reasoning": "lots of tables",
+        }
+
+    monkeypatch.setattr(intake, "classify_intake_document", fake_llm)
+    classification, skip = intake._classify(Path("RBRK-FY26-10K.pdf"), _TENK_COVER)
+    assert skip == ""
+    assert classification is not None
+    # doc_type was overridden to the detected SEC form; ticker/period kept.
+    assert classification.doc_type is DocType.SEC_10K
+    assert classification.ticker == "RBRK"
+    assert classification.period_end == date(2026, 1, 31)
+
+
+def test_classify_leaves_genuine_ir_doc_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
+    import intake
+
+    def fake_llm(filename: str, text: str, hint: dict[str, object]) -> dict[str, object]:
+        return {
+            "ticker": "NU",
+            "period_end": "2025-03-31",
+            "doc_type": "ir_press_release",
+            "confidence": 0.95,
+            "reasoning": "earnings release",
+        }
+
+    monkeypatch.setattr(intake, "classify_intake_document", fake_llm)
+    classification, skip = intake._classify(
+        Path("NU-Q1.pdf"), "NU Holdings today reported financial results for the first quarter..."
+    )
+    assert skip == ""
+    assert classification is not None
+    assert classification.doc_type is DocType.IR_PRESS_RELEASE  # no SEC override
+
+
+def test_dest_path_for_sec_form_uses_sec_stem() -> None:
+    import intake
+
+    classification = IntakeClassification.model_validate(
+        {
+            "ticker": "RBRK",
+            "period_end": "2026-01-31",
+            "doc_type": "sec_10k",
+            "confidence": 0.9,
+            "reasoning": "10-K cover",
+        }
+    )
+    dest = intake._dest_path_for(classification, "deadbeefcafef00d", ".pdf")
+    assert dest.name == "sec_10k__deadbeef.pdf"
+    assert dest.parent.name == "2026-01-31"
+    assert dest.parent.parent.name == "RBRK"

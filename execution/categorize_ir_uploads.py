@@ -167,6 +167,12 @@ def _insert_document_row(
 def _move_or_error(src: Path, dest: Path, dry_run: bool) -> None:
     if dry_run:
         return
+    # Source already AT the destination (a file whose name already matches its
+    # canonical doc_type — e.g. a `sec_10k__<sha8>.pdf` re-encountered on reindex).
+    # Without this guard the `dest.exists() and same-sha` branch below would unlink
+    # the file as if it were a duplicate of itself — silent data loss.
+    if src.resolve() == dest.resolve():
+        return
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         # Same sha8 prefix, same bytes → idempotent re-run. Just delete src.

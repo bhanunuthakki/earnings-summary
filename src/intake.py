@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 import index_manager
 from alias_manager import resolve_ticker
+from ir_uploads import detect_sec_form
 from llm_client import classify_intake_document
 from models.documents import DocType
 from parser import extract_text_from_pdf, read_text_file
@@ -63,6 +64,16 @@ DOC_TYPE_FILE_STEM: Final[dict[DocType, str]] = {
     DocType.IR_INVESTOR_UPDATE: "ir_investor_update",
     DocType.EARNINGS_CALL_TRANSCRIPT: "ir_transcript",
     DocType.IR_EVENT: "ir_event",
+    # SEC filings dropped into the inbox: the LLM classifier (no SEC types) would
+    # force a 10-K into the nearest IR bucket, so `_classify` deterministically
+    # overrides doc_type to the detected form. Filed under their own stem at the
+    # canonical path; the reindexer registers them as (sec_*, ir_doc) — the same
+    # shape as the 150+ IR-channel SEC PDFs already in the store.
+    DocType.SEC_10K: "sec_10k",
+    DocType.SEC_10Q: "sec_10q",
+    DocType.SEC_20F: "sec_20f",
+    DocType.SEC_8K: "sec_8k",
+    DocType.SEC_6K: "sec_6k",
 }
 
 # Mapping from DocType to the short keys index_manager.VALID_DOC_TYPES uses.
@@ -220,6 +231,23 @@ def _classify(source: Path, full_text: str) -> tuple[IntakeClassification | None
         )
         return None, "validation_failed"
 
+    # The LLM's doc_type enum has NO SEC forms, so a dropped 10-K/10-Q is forced
+    # into the nearest IR bucket (a numbers-heavy 10-K → "ir_supplement"). Veto that
+    # deterministically: a cover page carrying "FORM 10-K" IS a SEC filing. The
+    # LLM's ticker/period are kept (it's reliable there); only doc_type is overridden
+    # so the file is filed and registered as the correct sec_* type, not an IR doc.
+    sec_doc_type = detect_sec_form(full_text)
+    if sec_doc_type is not None and classification.doc_type is not sec_doc_type:
+        log.info(
+            {
+                "event": "intake_sec_form_override",
+                "file": source.name,
+                "llm_doc_type": classification.doc_type.value,
+                "detected": sec_doc_type.value,
+            }
+        )
+        classification = classification.model_copy(update={"doc_type": sec_doc_type})
+
     if classification.confidence < CONFIDENCE_THRESHOLD:
         return classification, "low_confidence"
 
@@ -244,7 +272,6 @@ def _register_classified(
 ) -> None:
     """Write the index entry. Quarterly docs go via the standard register path;
     events use the event-keyed register since they have no fiscal quarter."""
-    doc_type_key = DOC_TYPE_INDEX_KEY[classification.doc_type]
     if classification.doc_type in EVENT_DOC_TYPES:
         index_manager.register_event_document(
             ticker=classification.ticker,
@@ -254,6 +281,12 @@ def _register_classified(
             confidence=classification.confidence,
             note=classification.reasoning,
         )
+        return
+    doc_type_key = DOC_TYPE_INDEX_KEY.get(classification.doc_type)
+    if doc_type_key is None:
+        # SEC filings (sec_10k/sec_10q/…) have no legacy LLM-index handler; the
+        # canonical documents-table row is created by the reindexer. The file is
+        # filed at the canonical path above — nothing to mirror into the JSON index.
         return
     index_manager.register_user_intake_document(
         ticker=classification.ticker,
