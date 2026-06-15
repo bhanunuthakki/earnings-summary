@@ -174,9 +174,11 @@ def test_strip_renders_compact_rows(db_path: Path) -> None:
     assert "ZZ" not in html
 
 
-def test_strip_rows_carry_prep_notes_in_the_tooltip(db_path: Path) -> None:
-    """P4.4 preserved compactly: each row's title leads with what the date is,
-    then the owner's open watch items / questions for that name."""
+def test_strip_renders_watch_items_inline_as_ask_doorways(db_path: Path) -> None:
+    """P4.4 made actionable: each name's open watch items render INLINE beneath
+    the row as ``data-ask-q`` doorways (the shell's ``goAsk`` opens Ask scoped to
+    the name) — the link from the earnings lane to "things to watch out for" —
+    instead of being buried in a hover tooltip."""
     from user_state.notes import create_note
 
     _seed_calendar(db_path)
@@ -187,4 +189,50 @@ def test_strip_rows_carry_prep_notes_in_the_tooltip(db_path: Path) -> None:
         db_path=db_path,
     )
     html = render_upcoming_strip(db_path, TODAY)
-    assert "est. next earnings — watch: Ask about deposit franchise costs" in html
+    # Inline doorway: a button carrying the watch item as an Ask query scoped to
+    # the ticker, with the body visible (no longer hidden in the row title).
+    assert 'class="up-watch-item"' in html
+    assert 'data-ask-q="Ask about deposit franchise costs on the call. (NU)"' in html
+    assert "Ask about deposit franchise costs on the call." in html
+    assert 'class="up-watch-kind">watch<' in html
+
+
+def test_strip_surfaces_open_questions_too(db_path: Path) -> None:
+    """Open questions (the other lead-kind) surface as doorways alongside watch
+    items — they are equally a "thing to watch out for" heading into the call."""
+    from user_state.notes import create_note
+
+    _seed_calendar(db_path)
+    create_note(
+        ticker="NU",
+        kind="question",
+        body="Did NIM expansion stall this quarter?",
+        db_path=db_path,
+    )
+    html = render_upcoming_strip(db_path, TODAY)
+    assert 'data-ask-q="Did NIM expansion stall this quarter? (NU)"' in html
+    assert 'class="up-watch-kind">question<' in html
+
+
+def test_strip_caps_watch_items_with_overflow_hint(db_path: Path) -> None:
+    """At most ``_PREP_NOTES_PER_TICKER`` doorways render; the rest collapse into
+    a muted, non-interactive "+N more" hint."""
+    from dashboard.upcoming import _PREP_NOTES_PER_TICKER
+    from user_state.notes import create_note
+
+    _seed_calendar(db_path)
+    n = _PREP_NOTES_PER_TICKER + 2
+    for i in range(n):
+        create_note(ticker="NU", kind="watch", body=f"Watch item number {i}.", db_path=db_path)
+    html = render_upcoming_strip(db_path, TODAY)
+    assert html.count('class="up-watch-item"') == _PREP_NOTES_PER_TICKER
+    assert f"+{n - _PREP_NOTES_PER_TICKER} more open item(s)" in html
+
+
+def test_strip_row_without_notes_has_no_watch_block(db_path: Path) -> None:
+    """Hide-don't-stub: a name with no open notes still renders its ticker + date
+    row, but no inline watch block."""
+    _seed_calendar(db_path)  # NU surfaces on the estimate path; no notes seeded
+    html = render_upcoming_strip(db_path, TODAY)
+    assert 'data-peek-ticker="NU"' in html
+    assert 'class="up-watch"' not in html
