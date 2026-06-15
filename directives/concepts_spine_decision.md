@@ -280,6 +280,53 @@ This is the pressure-test result: the prior "defer" was right about the spine bu
 left value on the table. The interim banks ~60% of the cross-ticker upside for
 ~5% of the cost and keeps the heavyweight option in reserve.
 
+### 7a. Hard acceptance criteria (owner-confirmed 2026-06-15)
+
+The owner confirmed two requirements after capture-all (S3/S4) shipped. They are
+**acceptance criteria, not aspirations** — S5 is done only when all hold.
+
+**Ask half — DONE (PR #623, merged 2026-06-15).** A typed metric name must
+resolve a captured KPI regardless of (a) an `(annual)`/`(annualized)`
+parenthetical, or (b) a different company reporting it under a slightly different
+qualified name. `ask.grounding._fact_evidence` now matches the question against
+the full core **OR** the post-last-separator **leaf** core
+(`_label_match_keys`), since capture-all names are `section — axis — leaf` (the
+`_build_name` format in `table_extractors/generic_xbrl_capture.py:471`,
+separator `" — "`). The leaf is used only when it's a distinct ≥2-word phrase so
+a generic single-word leaf (`Total`/`Net`) can't flood. Per-ticker independent
+matching covers the cross-company case. Tests in `tests/test_ask_grounding.py`.
+
+**DIY-picker half — for S5.** Acceptance criteria:
+
+1. **Free-flowing, DB-driven, no FMP preset.** The picker for a selected ticker
+   set must list **everything stored in the fact tables** for those tickers —
+   `financial_facts.line_item`, every `kpi_facts` definition (incl. the S3/S4
+   captured long tail from IR decks / investor days / 10-K / 10-Q), and segment
+   slices. This is **already true** structurally (`metric_catalog` reads the live
+   tables, never an FMP allowlist) — S5 must **not regress** it and must verify
+   the captured `origin='capture'` rows actually surface.
+2. **No silent truncation of the long tail.** Lift `limit_per_domain=300`
+   (`viewspec/engine.py:275`) and the NL caps so a metric-rich ticker (post-
+   capture GOOG ≈ 880 KPI facts) isn't cut off. If any bound remains, `log()` /
+   surface what was dropped — never present a truncated list as complete.
+3. **Cross-ticker + within-ticker de-fragmentation.** Group the KPI domain by a
+   normalized key across tickers so surface variants collapse into ONE comparable
+   token. The normalization must **mirror the ask leaf logic** (peel a
+   `section — axis —` qualifier to its leaf, then `normalize_kpi_name`) so the
+   picker and ask agree on what "the same metric" means. Pick a display
+   representative (most-observations / shortest clean leaf); keep the token
+   per-ticker resolvable via `resolve_kpi_definition_name`.
+4. **Conservative, like S1's write path.** Collapse only unit/casing/whitespace/
+   qualifier-prefix variants. Do **not** unify true synonyms (`NIM` vs `Net
+   interest margin`) — that's the false-merge-risky part reserved for the curated
+   spine (§9). A duplicate token is acceptable; a false merge is not.
+5. **Type-ahead search over the full (uncapped) set**, so the long tail is
+   reachable even when not in the top-N by ticker-count.
+
+These criteria deliberately stop short of the full spine: they give the owner
+"search/pick anything in the DB, and variants don't fragment it" **without** a
+migration, backfill, or curated cross-ticker ontology.
+
 ---
 
 ## 8. Interaction with capture-all (before or after?)
