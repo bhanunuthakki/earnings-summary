@@ -145,6 +145,23 @@ def test_is_detail_section() -> None:
     assert not g._is_detail_section("Insider Trading Arrangements (Details)")  # pyright: ignore[reportPrivateUsage]
 
 
+def test_is_unit_ambiguous_section() -> None:
+    amb = g._is_unit_ambiguous_section  # pyright: ignore[reportPrivateUsage]
+    # Equity / share-rollforward family — FMP mislabels share counts as "$ in
+    # Thousands" (NU's "Equity (Details)" lists billions of *shares*), so defer.
+    assert amb("Equity (Details) - USD ($) $ in Thousands")
+    assert amb("Consolidated Statements of Changes in Equity - USD ($) $ in Thousands")
+    assert amb("Stockholders' Equity - Narrative (Details) - USD ($) $ in Millions")
+    # A declared share-count / per-share scale is unit-mixed too.
+    assert amb("Statement (Details) - USD ($) shares in Millions, $ in Millions")
+    assert amb("Net Income Per Share (Details) - USD ($) $ / shares in Units, $ in Millions")
+    # NOT ambiguous: ordinary $ tables — including "equity method/securities"
+    # (which merely START with 'equity' but are plain monetary tables).
+    assert not amb("Equity Method Investments (Details) - USD ($) $ in Millions")
+    assert not amb("Equity Securities (Details) - USD ($) $ in Millions")
+    assert not amb("Debt - Long-Term Debt (Details) - USD ($) $ in Millions")
+
+
 def test_semantic_section_title_strips_unit_and_details() -> None:
     title = "Goodwill - Changes in Carrying Amount of Goodwill (Details) - USD ($) $ in Millions"
     assert (
@@ -221,7 +238,7 @@ def test_walk_audit_accounts_for_every_skip() -> None:
     # 4 detail sections walked (Debt, Goodwill, Cov, Div); EPS per-share-mixed and
     # the balance sheet (no '(Details)') are not counted as detail.
     assert audit.sections_detail == 4
-    assert audit.skipped.get("section_per_share_mixed") == 1
+    assert audit.skipped.get("section_unit_ambiguous") == 1
     # The Debt section has two period columns, so its rate + count rows skip 2 cells each.
     assert audit.skipped.get("rate_or_percent") == 2
     assert audit.skipped.get("share_or_count") == 2

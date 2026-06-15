@@ -128,15 +128,35 @@ _NONFINANCIAL_SECTION_TOKENS: tuple[str, ...] = (
     "audit information",
 )
 
-# A unit suffix that declares per-share content ("USD ($) $ / shares in Units,
-# $ in Billions") marks a UNIT-MIXED section: it interleaves per-share dollars,
-# share counts, and aggregate dollars under one parse_units scale, and the XBRL
-# axis grouping is too unreliable to disambiguate per-row deterministically (an
-# aggregate "Fair value of vested awards" can sit under a "Grant-Date Fair Value"
-# axis). Capturing it would either mis-scale the per-share rows by 1e9 or
-# under-scale the aggregates — so the whole section is DEFERRED to Stage B, which
-# reads the filing prose and can tell them apart. Detected on the title suffix.
-_PER_SHARE_SECTION_RX = re.compile(r"/\s*shares|per\s+share", re.IGNORECASE)
+# A unit suffix that declares per-share OR share-count content marks a UNIT-MIXED
+# section: it interleaves per-share dollars, share counts, and aggregate dollars
+# under one parse_units scale, and the XBRL axis grouping is too unreliable to
+# disambiguate per-row deterministically (an aggregate "Fair value of vested
+# awards" can sit under a "Grant-Date Fair Value" axis). Capturing it would
+# mis-scale the per-share rows by 1e9 or under-scale the aggregates — DEFER the
+# whole section to Stage B. ``shares in <scale>`` is included because a section
+# that declares a share-count scale carries raw share counts a $-scale would wreck.
+_PER_SHARE_SECTION_RX = re.compile(r"/\s*shares|per\s+share|shares\s+in\b", re.IGNORECASE)
+
+# The statement-of-changes-in-equity / share-rollforward family is unit-ambiguous
+# in the WORST way: FMP routinely labels the SHARE-count rollforward "$ in
+# Thousands" (NU's "Equity (Details)" lists 4,609,988,545 *shares* under a
+# "$ in Thousands" title), so a deterministic $-scale turns a share count into
+# trillions of dollars. There's no reliable per-row signal — the labels are
+# "Total as of December 31, 2021" etc. — so DEFER the whole equity family to
+# Stage B, which reads the prose ("changes in shares issued") and can tell shares
+# from amounts. Matches a bare/qualified "equity" head ("Equity", "Stockholders'
+# Equity - Narrative") but NOT "equity method/securities/investments/..." (those
+# are ordinary $ tables we keep).
+_EQUITY_HEAD_RX = re.compile(
+    r"(?:common stock,?\s+|stockholders'?\s+|shareholders'?\s+)?equity\b(.*)",
+    re.IGNORECASE,
+)
+_CHANGES_IN_EQUITY_TOKENS = (
+    "changes in equity",
+    "changes in stockholders",
+    "changes in shareholders",
+)
 
 # Strip the parse_units suffix (" - USD ($) $ in Millions") and the XBRL
 # "(Details)"/"(Tables)"/"(Parenthetical)" boilerplate from an inner section
@@ -302,6 +322,28 @@ def _emit_coverage(
     )
 
 
+def _is_unit_ambiguous_section(inner_title: str) -> bool:
+    """True for sections whose declared scale can't be trusted per-row: per-share
+    data, share-count columns, or the equity / share-rollforward family. These
+    interleave shares, per-share dollars, and aggregate dollars (often FMP-
+    mislabeled with a single $-scale), so a deterministic scale mis-reads them —
+    they're deferred wholesale to Stage B."""
+    if _PER_SHARE_SECTION_RX.search(inner_title):
+        return True
+    s = _semantic_section_title(inner_title).lower().strip()
+    if any(tok in s for tok in _CHANGES_IN_EQUITY_TOKENS):
+        return True
+    m = _EQUITY_HEAD_RX.match(s)
+    if m is not None:
+        rest = m.group(1).lstrip()
+        # Bare "equity" / "<x> equity" followed by end-of-title or a separator
+        # (dash, en-dash, "(") is the equity note; "equity method|securities|
+        # investments|interest|income" (a word follows) is an ordinary $ table.
+        if rest == "" or not rest[:1].isalnum():
+            return True
+    return False
+
+
 def _iter_sections(payload: dict[str, object]):
     """Yield (outer_key, section_body) for every list-valued top-level section."""
     for key, value in payload.items():
@@ -329,9 +371,9 @@ def _walk_section(
         # No trustworthy magnitude scale → defer the whole section to Stage B.
         audit.skip("section_no_scale_hint")
         return
-    if _PER_SHARE_SECTION_RX.search(inner_title):
-        # Unit-mixed (per-share + counts + aggregates) → defer wholesale.
-        audit.skip("section_per_share_mixed")
+    if _is_unit_ambiguous_section(inner_title):
+        # Per-share / share-count / equity-rollforward → unit-mixed → defer wholesale.
+        audit.skip("section_unit_ambiguous")
         return
 
     audit.sections_detail += 1
@@ -467,7 +509,7 @@ def _detect_fye_monthday(payload: dict[str, object]) -> tuple[int, int] | None:
         if not section:
             continue
         inner = _inner_title(section) or key
-        if not _is_detail_section(inner) or _PER_SHARE_SECTION_RX.search(inner):
+        if not _is_detail_section(inner) or _is_unit_ambiguous_section(inner):
             continue
         if parse_units(inner).scale not in _SCALE_FACTOR:
             continue
