@@ -33,6 +33,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402  (must precede report imports — we override paths below)
 import ticker_settings  # noqa: E402
+from compute.key_metrics import (  # noqa: E402
+    extract_for_ticker as _extract_key_metrics,
+)
 from compute.peer_selection import (  # noqa: E402
     extract_for_ticker as _extract_peer_selection,
 )
@@ -176,6 +179,38 @@ def _ensure_peer_selection(ticker: str, repo_root: Path) -> None:
         )
     except Exception as e:
         _emit("peer_selection_error", {"ticker": ticker, "error": f"{type(e).__name__}: {e}"})
+    finally:
+        conn.close()
+
+
+def _ensure_key_metrics(ticker: str, repo_root: Path) -> None:
+    """Idempotently populate data/key_metrics/<T>.json before render (LLM builds
+    only).
+
+    Keyed on a hash of the LLM inputs (name + business description + the picker
+    catalog vocabulary); a fast no-op when unchanged. On a fresh input it fires
+    one key_metrics call (~Sonnet) ranking the metrics MOST important to the
+    business over its available extract vocabulary. Failures don't abort the
+    build — the DIY picker's preselect row falls back to the deterministic
+    tier-graded baseline for this ticker (directives/key_metrics_picker.md)."""
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        _emit("key_metrics_skipped", {"ticker": ticker, "reason": "no DB"})
+        return
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        result = _extract_key_metrics(ticker, repo_root, conn)
+        _emit(
+            "key_metrics_refreshed",
+            {
+                "ticker": ticker,
+                "metrics": len(result.metrics),
+                "skipped": result.skipped_reason,
+            },
+        )
+    except Exception as e:
+        _emit("key_metrics_error", {"ticker": ticker, "error": f"{type(e).__name__}: {e}"})
     finally:
         conn.close()
 
@@ -408,6 +443,10 @@ def _build_one(
     # the FMP screen when the cache is absent, so this is purely additive.
     if enable_llm:
         _ensure_peer_selection(ticker, repo_root)
+        # LLM key-metrics preselect for the DIY picker (key_metrics_picker.md).
+        # Same discipline: LLM build only, input-sha-keyed no-op when unchanged,
+        # renderer degrades to the tier-graded baseline when the cache is absent.
+        _ensure_key_metrics(ticker, repo_root)
 
     # Persistent per-ticker override: the dashboard's "always ignore caps" toggle
     # (ticker_settings.bypass_budget) ORs with the one-shot --force-budget-bypass.

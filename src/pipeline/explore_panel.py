@@ -66,6 +66,12 @@ _PANEL_STYLE = """<style>
    tail) stays usable. Skinned by the control kit; only layout lives here. */
 .vx-pick-search { width:100%; margin-bottom:4px; }
 .vx-pick-count { color:var(--muted); font-size:var(--fs-caption); margin-top:3px; min-height:1.1em; }
+/* ---- Key-metrics preselect bubbles (key_metrics_picker.md) ---- */
+.vx-keymetrics { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+.vx-keymetrics:empty { display:none; }
+.vx-km-label { color:var(--muted); font-size:var(--fs-caption); text-transform:uppercase;
+  letter-spacing:.06em; white-space:nowrap; }
+.vx-km-chips { display:flex; gap:6px; flex-wrap:wrap; }
 .vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .vx-saved { display:inline-flex; align-items:center; gap:4px; }
 .vx-none { color:var(--muted); font-size:var(--fs-caption); }
@@ -251,9 +257,67 @@ _PANEL_JS = """
         fillPicker('vx-pick-fin', cat.fin, preselect);
         fillPicker('vx-pick-kpi', cat.kpi, preselect);
         fillPicker('vx-pick-seg', cat.seg, preselect);
+        refreshKeyMetrics();
         if (then) then();
       });
   }
+
+  // ---- Key-metrics preselect bubbles (key_metrics_picker.md): a click on a
+  // chip toggles that metric in the right picker (routed by the token's domain
+  // prefix), so the most important metrics are one tap away. Selection rides the
+  // picker's `_selected` token map — the source of truth selectedTokens() reads
+  // (S5) — NOT the live <option> flags, so a chip pick still registers even when
+  // a search filter has scrolled that option out of view. The chip row re-fetches
+  // (?fragment=keymetrics) whenever the ticker set changes and re-marks chips
+  // whose token is already selected. ----
+  function kmSelectId(token) {
+    if (token.indexOf('fin:') === 0) return 'vx-pick-fin';
+    if (token.indexOf('kpi:') === 0) return 'vx-pick-kpi';
+    if (token.indexOf('seg:') === 0) return 'vx-pick-seg';
+    return null;
+  }
+  function kmIsSelected(token) {
+    var id = kmSelectId(token);
+    var sel = id && pickerState(id);
+    return !!(sel && sel._selected && sel._selected[token]);
+  }
+  function kmToggleToken(token) {
+    var id = kmSelectId(token);
+    var sel = id && pickerState(id);
+    if (!sel) return false;
+    // Only honor tokens the picker actually carries (so a stale chip is inert).
+    var known = (sel._entries || []).some(function (e) { return e.token === token; });
+    if (!known) return false;
+    if (sel._selected[token]) delete sel._selected[token];
+    else sel._selected[token] = true;
+    renderPicker(id);  // reflect in the visible <option>s + the picked count
+    return true;
+  }
+  function syncKmChips() {
+    var box = el('vx-keymetrics');
+    if (!box) return;
+    var chips = box.querySelectorAll('.km-chip');
+    for (var i = 0; i < chips.length; i++) {
+      chips[i].classList.toggle('is-on', kmIsSelected(chips[i].getAttribute('data-km-token')));
+    }
+  }
+  function refreshKeyMetrics() {
+    var box = el('vx-keymetrics');
+    if (!box) return;
+    var qs = new URLSearchParams({tickers: tickers().join(','), fragment: 'keymetrics'});
+    fetch('/api/panel/explore?' + qs).then(function (r) { return r.text(); })
+      .then(function (h) { box.innerHTML = h; syncKmChips(); })
+      .catch(function () {});
+  }
+  var kmBox = el('vx-keymetrics');
+  if (kmBox) kmBox.addEventListener('click', function (ev) {
+    var chip = ev.target.closest('.km-chip');
+    if (!chip) return;
+    var tok = chip.getAttribute('data-km-token');
+    if (!tok || !kmToggleToken(tok)) return;
+    chip.classList.toggle('is-on', kmIsSelected(tok));
+  });
+  syncKmChips();
   function runView() {
     var spec = buildSpec();
     if (!spec.tickers.length) { showError('Add at least one ticker.'); return; }
@@ -820,11 +884,34 @@ def _default_tickers(db_path: Path, user_id: str) -> list[str]:
         conn.close()
 
 
+def render_keymetrics_fragment(db_path: Path, tickers: list[str]) -> str:
+    """The ``?fragment=keymetrics`` body: the inner HTML of ``#vx-keymetrics``
+    for ``tickers`` (label + chips), swapped in by the panel JS on a ticker
+    change. Reads the LLM cache directly + the tier-graded baseline (no LLM call,
+    no heavy import); empty string when there are no key-metric hints."""
+    from pipeline.key_metrics import key_metric_bubbles, render_key_metrics_inner
+
+    symbols = [t.strip().upper() for t in tickers if t.strip()]
+    catalog: dict[str, list[dict[str, object]]] = (
+        metric_catalog(db_path, symbols) if symbols else {"fin": [], "kpi": [], "seg": []}
+    )
+    bubbles = key_metric_bubbles(db_path, symbols, catalog)
+    return render_key_metrics_inner(bubbles, symbols)
+
+
 def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The Research → Explore tab fragment: builder + saved views + result."""
     tickers = _default_tickers(db_path, user_id)
     catalog: dict[str, list[dict[str, object]]] = (
         metric_catalog(db_path, tickers) if tickers else {"fin": [], "kpi": [], "seg": []}
+    )
+    # Key-metrics preselect bubbles (key_metrics_picker.md): the tier-graded
+    # baseline + cached LLM picks, merged. Reuses the catalog already loaded
+    # above so the render path stays a single catalog read.
+    from pipeline.key_metrics import key_metric_bubbles, render_key_metrics_inner
+
+    keymetrics_inner = render_key_metrics_inner(
+        key_metric_bubbles(db_path, tickers, catalog), tickers
     )
     transform_opts = "".join(
         f'<option value="{escape(t)}"{" selected" if t == "level" else ""}>{escape(t)}</option>'
@@ -900,6 +987,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <input id="vx-cagr-years" name="cagr_years" type="number" min="1" max="10" value="3">
     <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-run">Run view</button>
   </div>
+  <div class="vx-keymetrics" id="vx-keymetrics">{keymetrics_inner}</div>
   <div class="vx-pickers">
     {_picker_html("vx-pick-fin", "Financial line items", catalog["fin"])}
     {_picker_html("vx-pick-kpi", "KPIs", catalog["kpi"])}

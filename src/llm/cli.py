@@ -144,6 +144,19 @@ LLM_MODELS: dict[str, str] = {
     # decides Sonnet-vs-Opus empirically rather than by belief. One cached call
     # per ticker on the LLM build — cost bounded.
     "peer_selection": DEFAULT_MODEL,
+    # Key-metrics picker preselect (src/compute/key_metrics.py,
+    # directives/key_metrics_picker.md). Ranks the metrics MOST important to a
+    # ticker over its available extract vocabulary (the DIY picker catalog),
+    # business-model aware — surfacing important CAPTURED metrics the tier-1/2
+    # KPI grading hasn't reached yet. A closed pick-from-vocabulary task (every
+    # returned token must be in the supplied catalog), low-stakes (it only
+    # preselects clickable bubbles; the deterministic tier-graded baseline is
+    # always shown regardless). Starts at Sonnet like peer_selection — its
+    # business-model judgment is the same shape — and is eligible for the
+    # eval-gated cheaper-at-parity downgrade once the key_metrics golden set
+    # (evals/golden/key_metrics.json) certifies a cheaper tier. One cached call
+    # per ticker on the --enable-llm build — cost bounded.
+    "key_metrics": DEFAULT_MODEL,
     # DIET-lane podcast takeaway summarizer (S11): replaces short/absent RSS
     # description bodies with a 2-4 sentence investment-relevant briefing.
     # Sonnet: grounded distillation from marketing copy, latency unimportant
