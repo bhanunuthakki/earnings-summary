@@ -124,6 +124,110 @@ def test_markers_in_headings_and_tables_are_linkified() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Enriched popover — the auditable header (ticker · doc-type · period · value).
+# ---------------------------------------------------------------------------
+
+_ENRICHED = [
+    {
+        "n": 1,
+        "kind": "fact",
+        "label": "NVDA · Revenue",
+        "href": "/source/42",
+        "confidence": 0.94,
+        "ticker": "NVDA",
+        "doc_type": "10-K",
+        "period": "FY 2024",
+        "value": "$20.81B",
+    }
+]
+
+
+def test_enriched_fact_chip_renders_structured_header_and_value() -> None:
+    out = render_prose("EBITDA expanded [1].", citations=_ENRICHED)
+    # The auditable header: issuer + doc-type pill + period.
+    assert '<span class="cite-pop-head">' in out
+    assert '<span class="cite-pop-tick">NVDA</span>' in out
+    assert '<span class="cite-pop-kind">10-K</span>' in out
+    assert '<span class="cite-pop-per">FY 2024</span>' in out
+    # The "TICKER · " prefix is stripped so the metric name isn't doubled.
+    assert '<span class="cite-pop-label">Revenue</span>' in out
+    assert "NVDA · Revenue" not in out
+    # The value rides as the "latest reported" figure, flagged so it isn't read
+    # as an exact restatement of the in-sentence number.
+    assert '<span class="cite-pop-value">$20.81B</span>' in out
+    assert "latest reported" in out
+    assert "confidence 94%" in out
+    # kind 'fact' is shown by the pill, never echoed into the meta line.
+    assert "fact &middot;" not in out
+
+
+def test_document_chip_with_empty_label_shows_only_the_header() -> None:
+    # A synthesis document citation: issuer + doc-type pill + period, and no
+    # label/value second line (a whole filing has no single metric or number).
+    items = [
+        {
+            "n": 1,
+            "label": "",
+            "href": "/source/9",
+            "ticker": "NVDA",
+            "doc_type": "10-Q",
+            "period": "2025-09-30",
+        }
+    ]
+    out = render_prose("Guided up [1].", citations=items)
+    assert '<span class="cite-pop-tick">NVDA</span>' in out
+    assert '<span class="cite-pop-kind">10-Q</span>' in out
+    assert "cite-pop-label" not in out  # empty label → no redundant second line
+    assert "cite-pop-value" not in out  # a document cite has no single value
+
+
+def test_no_ticker_keeps_the_legacy_label_first_popover() -> None:
+    # Without the structured ticker field the popover is byte-for-byte the old
+    # label-first layout (kind + confidence in the meta line).
+    out = render_prose("Margins held [1].", citations=_PAYLOAD)
+    assert "cite-pop-head" not in out
+    assert '<span class="cite-pop-label">FY24 10-K · Item 1A</span>' in out
+    assert "10-K &middot; confidence 79%" in out
+
+
+# ---------------------------------------------------------------------------
+# Value-highlight — a [n] right after a financial value washes the value and
+# turns the marker into a round badge; a non-value marker is unchanged.
+# ---------------------------------------------------------------------------
+
+
+def test_value_before_marker_is_washed_with_a_numbered_badge() -> None:
+    out = render_prose("Revenue reached $20,811M [1] this quarter.", citations=_PAYLOAD)
+    assert '<span class="cite-val">$20,811M</span>' in out
+    assert '<a class="cite-mark cite-badge" href="/source/42"' in out
+    assert ">1</a>" in out  # badge is the bare number, no brackets
+    assert "[1]" not in out  # the bracketed superscript form is gone for value chips
+
+
+def test_bold_value_is_washed_tags_and_all() -> None:
+    # render_prose turns **$X** into <strong>$X</strong>; the wash wraps the lot.
+    out = render_prose("EBITDA was **$20,811M** [1].", citations=_PAYLOAD)
+    assert '<span class="cite-val"><strong>$20,811M</strong></span>' in out
+
+
+def test_percent_and_multiple_values_each_get_a_badge() -> None:
+    out = render_prose("Margin hit 25% [1] at a 3.5x [2] multiple.", citations=_PAYLOAD)
+    assert '<span class="cite-val">25%</span>' in out
+    assert '<span class="cite-val">3.5x</span>' in out
+    assert out.count("cite-badge") == 2
+    # [2] has no href → a link-less badge span, not an anchor.
+    assert '<span class="cite-mark cite-badge">2</span>' in out
+
+
+def test_plain_year_is_not_a_value_falls_back_to_superscript() -> None:
+    # A bare number with no currency and no magnitude/percent suffix (a year, a
+    # count) is NOT a financial value — the marker stays the superscript chip.
+    out = render_prose("Guidance set in 2024 [1].", citations=_PAYLOAD)
+    assert "cite-val" not in out
+    assert '<a class="cite-mark" href="/source/42" target="_blank" rel="noopener">[1]</a>' in out
+
+
+# ---------------------------------------------------------------------------
 # Safety — escaping survives linkify; no double-linkify of generated chips.
 # ---------------------------------------------------------------------------
 

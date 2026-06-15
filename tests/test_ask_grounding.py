@@ -297,6 +297,33 @@ def test_fact_items_carry_scored_confidence_when_the_column_exists(repo: Path) -
     assert fin.confidence == 1.0
 
 
+def test_fact_items_carry_structured_popover_fields(repo: Path) -> None:
+    """The newest fact row's issuer / backing-doc form / fiscal period / value
+    ride into the chip payload so the citation popover can render the auditable
+    header (ticker · doc-type pill · period) and the 'latest reported' value."""
+    items = _gather(repo, "TST total customers and revenue trend")
+    kpi = next(i for i in items if "Customers" in i.label)
+    assert kpi.ticker == "TST"
+    assert kpi.period == "Q3'25"  # newest row (2025-09-30, Q3)
+    assert kpi.value == "110 millions"  # scaled value + unit affix
+    assert kpi.doc_type == "fmp_income_statement"  # the backing document's form
+    pay = kpi.chip_payload()
+    assert pay["ticker"] == "TST"
+    assert pay["period"] == "Q3'25"
+    assert pay["value"] == "110 millions"
+    assert pay["doc_type"] == "fmp_income_statement"
+    # Currency line items get the $ affix.
+    fin = next(i for i in items if i.label == "TST · Revenue")
+    assert fin.value == "$150.0M"
+    # A non-fact channel (transcript) carries no value (it's a passage, not a
+    # single number) and no structured ticker header.
+    tr_items = _gather(repo, "what did management say about credit quality and NPL formation?")
+    tr = next(i for i in tr_items if i.kind == "transcript")
+    assert tr.value is None
+    assert tr.ticker is None
+    assert tr.chip_payload()["value"] is None
+
+
 def test_legacy_db_without_confidence_column_still_serves_facts(repo: Path) -> None:
     """The fixture DDL predates the confidence column — the fact channel
     must fall back (None confidence) instead of losing the series."""

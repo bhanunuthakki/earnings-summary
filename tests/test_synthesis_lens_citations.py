@@ -209,14 +209,22 @@ def test_citations_resolver_builds_aligned_chips() -> None:
     )
     conn.execute("INSERT INTO documents VALUES (42, '10-K', '2024-12-31', 'https://sec.gov/x')")
     # doc 99 deliberately absent → a link-less slot that keeps the numbering.
-    items = synth_section._citations_for_source_docs(conn, [42, 99])
+    items = synth_section._citations_for_source_docs(conn, [42, 99], ticker="NVDA")
     assert items[0]["n"] == 1
     assert items[0]["kind"] == "10-K"
-    assert items[0]["label"] == "10-K · 2024-12-31"
+    # Resolved doc: the structured header carries issuer + doc-type + period, so
+    # the label line is empty (no redundant second line under the header).
+    assert items[0]["label"] == ""
+    assert items[0]["ticker"] == "NVDA"
+    assert items[0]["doc_type"] == "10-K"
+    assert items[0]["period"] == "2024-12-31"
     assert items[0]["href"] == "/source/42"
     assert items[0]["source_url"] == "https://sec.gov/x"
     assert items[1]["n"] == 2
     assert items[1]["label"] == "source document"  # missing row → generic label
+    assert items[1]["ticker"] == "NVDA"
+    assert items[1]["doc_type"] is None
+    assert items[1]["period"] is None
     assert items[1]["href"] == "/source/99"
 
 

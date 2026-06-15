@@ -41,7 +41,7 @@ _MARKER_RX = re.compile(r"\[\d{1,2}\]")
 
 
 def _citations_for_source_docs(
-    conn: sqlite3.Connection, source_doc_ids: list[int]
+    conn: sqlite3.Connection, source_doc_ids: list[int], *, ticker: str
 ) -> list[dict[str, object]]:
     """Resolve a lens's ORDERED ``source_doc_ids`` to ``ui.cite_marks`` chip
     payloads — the static-prose mirror of ``EvidenceItem.chip_payload``.
@@ -53,6 +53,13 @@ def _citations_for_source_docs(
     gone still emits a (link-less) chip so the numbering never shifts under the
     prose. Relative ``/source/<doc_id>`` hrefs match the fact-cell source chips
     (``ui.source_chip``) verbatim.
+
+    Each chip carries the structured popover header (``ticker`` · ``doc_type``
+    pill · ``period``) so the static-prose citation reads like the Ask fact
+    chips. A document citation has no single ``value`` (it cites a whole filing,
+    not one number), so the header IS the whole popover — ``label`` is left
+    empty for a resolved doc (the header already says it) and falls back to
+    "source document" only when the row is gone.
     """
     items: list[dict[str, object]] = []
     for i, doc_id in enumerate(source_doc_ids, start=1):
@@ -70,7 +77,10 @@ def _citations_for_source_docs(
             doc_type = str(row[0]) if row[0] is not None else None
             period_end = str(row[1])[:10] if row[1] is not None else None
             source_url = str(row[2]) if row[2] is not None else None
-        label = " · ".join(p for p in (doc_type, period_end) if p) or "source document"
+        # Resolved docs let the header carry everything (empty label → no second
+        # line); a vanished row keeps a generic label so the chip still names
+        # something the header can't supply.
+        label = "" if row is not None else "source document"
         items.append(
             {
                 "n": i,
@@ -79,6 +89,9 @@ def _citations_for_source_docs(
                 "href": f"/source/{doc_id}",
                 "source_url": source_url,
                 "confidence": None,
+                "ticker": ticker,
+                "doc_type": doc_type,
+                "period": period_end,
             }
         )
     return items
@@ -125,7 +138,9 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
                 if cite_conn is None and db_path.exists():
                     cite_conn = sqlite3.connect(str(db_path))
                 if cite_conn is not None:
-                    citations = _citations_for_source_docs(cite_conn, art.source_doc_ids)
+                    citations = _citations_for_source_docs(
+                        cite_conn, art.source_doc_ids, ticker=ticker
+                    )
             rows.append(
                 SynthesisLensRow(
                     name=lens_name,

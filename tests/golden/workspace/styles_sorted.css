@@ -51,9 +51,16 @@
 .chat-toggle-icon { font-family: var(--font-mono); }
 .chat-toggle.open { background: var(--ink-muted); }
 .chat-turn { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius); font-size: var(--fs-body); line-height: 1.55; }
+.cite-pop-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px; }
+.cite-pop-kind { font-size: var(--fs-micro, 10px); color: var(--accent, var(--link)); background: var(--accent-soft, var(--bg-elev, var(--panel))); border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
 .cite-pop-label { display: block; font-weight: 600; color: var(--fg, var(--ink)); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
+.cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
+.cite-pop-tick { font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-value { display: block; font-size: var(--fs-section, 14px); font-weight: 600; color: var(--fg, var(--ink)); margin-top: 3px; }
+.cite-pop-value-cap { display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px; }
 .cite-unverified { display: inline-block; font-size: var(--fs-micro, 10px); color: var(--warn); border: 1px dashed var(--warn); border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default; }
+.cite-wrap .cite-badge { font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle; color: var(--accent-contrast, var(--surface, var(--panel))); background: var(--accent, var(--link)); border-radius: var(--radius-full, 999px); padding: 1px 5px; margin-left: 3px; white-space: nowrap; }
 .cite-wrap .cite-mark { color: var(--link, var(--accent)); text-decoration: none; font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap; }
 .cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface, var(--bg-elev, var(--panel))); border: 1px solid var(--border, var(--hairline)); border-radius: var(--radius, 6px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
 .cite-wrap { position: relative; display: inline; }
@@ -684,6 +691,7 @@
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
+/* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
 /* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
 /* inline action: a small quiet control (resolve/refresh/diagnose) or a /source deep-link, radius-full like a chip. */ .k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer; text-decoration: none; white-space: nowrap; transition: border-color var(--transition), color var(--transition); }
 /* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is decided (prov_severity_tone) — an unknown severity degrades to a muted tick, never the wrong color. */ .k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
