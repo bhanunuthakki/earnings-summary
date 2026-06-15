@@ -80,6 +80,10 @@
       "source": "10-K / 10-Q"
     },
     {
+      "name": "Connected transactions YoY growth",
+      "source": "earnings presentation"
+    },
+    {
       "name": "Capital return pace",
       "source": "10-K / 10-Q"
     }
