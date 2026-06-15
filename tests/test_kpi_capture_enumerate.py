@@ -232,9 +232,21 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
     fact_count = conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0]
     assert fact_count == 3
 
+    # PR3: a Stage-B coverage record was written (3 seen, 3 captured).
+    from pipeline.capture_coverage import load_coverage
+
+    cov = load_coverage(tmp_path)
+    assert len(cov) == 1
+    assert cov[0].stage == "enumerate_capture"
+    assert cov[0].source == "ir"
+    assert cov[0].seen == 3
+    assert cov[0].captured == 3
+
     # Idempotent: a second run skips the doc without another LLM call.
     log2 = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
     assert log2.kpis_inserted_total == 0
     assert len(calls) == 1  # no new model call
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 3
+    # No second coverage record (nothing was seen on the skipped re-run).
+    assert len(load_coverage(tmp_path)) == 1
     conn.close()

@@ -452,3 +452,15 @@ def test_extract_end_to_end(tmp_path: Path) -> None:
     assert debt[0] == Decimal("10883000000")
     assert debt[1] == "capture"  # origin stamped
     assert debt[2] == "77"  # provenance back to the filing doc
+
+    # PR3: a coverage record was written for this Stage-A run.
+    from pipeline.capture_coverage import load_coverage
+
+    cov = load_coverage(tmp_path)
+    assert len(cov) == 1
+    assert cov[0].stage == "xbrl_capture"
+    assert cov[0].ticker == "X"
+    assert cov[0].captured > 0
+    # Nothing silently dropped: captured + cell-level skips == seen.
+    cell_skips = sum(n for k, n in cov[0].skipped.items() if not k.startswith("section_"))
+    assert cov[0].captured + cell_skips == cov[0].seen

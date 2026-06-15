@@ -48,6 +48,7 @@ from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
+from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
@@ -732,6 +733,9 @@ def capture_for_ticker(
     t0 = time.perf_counter()
 
     sources = _list_sources(repo_root, ticker, _SOURCE_GROUPS[source_group])
+    # Coverage accounting (PR3): every enumerated fact is captured, dropped by the
+    # persist guards, or unparseable — surfaced in the capture coverage log.
+    cov_seen = cov_captured = cov_dropped = cov_unparseable = 0
     for quarter, year, source_path, spec in sources:
         period_end = _period_end(ticker, quarter, year)
         period_label = f"Q{quarter} {year} [{spec.name}]"
@@ -758,10 +762,30 @@ def capture_for_ticker(
             result = persist_manifest(conn, run_id=run_id, manifest=manifest)
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
+            cov_seen += len(rows)
+            cov_captured += result.inserted
+            cov_dropped += result.validation_issues
+            # Rows the LLM returned but that didn't survive to a value (bad value
+            # token / blank label) are dropped before persist — count them.
+            cov_unparseable += len(rows) - len(manifest.values)
         except Exception as e:
             log.error = f"{period_label}: {type(e).__name__}: {e}"
             break
 
+    if cov_seen:
+        skipped = {"unparseable_or_blank": cov_unparseable} if cov_unparseable else {}
+        record_coverage(
+            repo_root,
+            CaptureCoverageRecord(
+                stage="enumerate_capture",
+                ticker=ticker,
+                source=source_group,
+                seen=cov_seen,
+                captured=cov_captured,
+                dropped_validation=cov_dropped,
+                skipped=skipped,
+            ),
+        )
     return _close_log(log, t0)
 
 
