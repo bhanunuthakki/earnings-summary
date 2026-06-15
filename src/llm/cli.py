@@ -130,6 +130,13 @@ LLM_MODELS: dict[str, str] = {
     # correct $145B insurance-asset figure where Opus misstated it). Switched
     # down to Sonnet for ~40% lower cost at equal-or-better quality.
     "company_description": DEFAULT_MODEL,
+    # 8-K exhibit segment extraction — copy-the-table-into-JSON from an earnings
+    # press-release exhibit (src/provenance/edgar_8k.py), the front-end that
+    # auto-populates fact_overrides. Deterministic structured extraction (no
+    # judgment), so the cheapest at-parity tier — Haiku — per
+    # directives/cheapest_model_routing.md. The extract_8k_overrides golden set
+    # (evals/golden/extract_8k_overrides.json) gates any cheaper backend.
+    "extract_8k_overrides": FAST_CLASSIFIER_MODEL,
     # Peer selection — the generator behind the §4 peer-comp panel
     # (src/compute/peer_selection.py, directives/peer_selection_llm.md). Proposes
     # the 6-10 best business-model comparables (replacing the FMP sector/cap

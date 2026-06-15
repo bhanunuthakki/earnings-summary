@@ -224,11 +224,16 @@ verification, stopping on failure.
   **Deferred to P5 (surface):** reflecting the override's source in the provenance *chip*
   (the displayed value is correct now; the chip still describes the FMP row), and the
   `qualify` → provenance-v2 ⚠ annotation.
-- **P4 — automated EDGAR 8-K extraction.** `src/provenance/edgar_8k.py`: fetch the press-
-  release exhibit from EDGAR by accession, LLM-extract the metric/segment values
-  (cheapest-at-parity model per `directives/cheapest_model_routing.md`, structured
-  schema-validated output, logged cost/latency, a small eval set), and auto-populate
-  `fact_overrides` citing the accession/exhibit. CLI: `execution/extract_8k_overrides.py`.
+- **P4 — automated EDGAR 8-K extraction. [SHIPPED]** `src/provenance/edgar_8k.py`: resolve
+  CIK → discover the EX-99.1 exhibit → fetch + strip HTML → LLM-extract the segment
+  revenue table into structured JSON (the `extract_8k_overrides` purpose, pinned to the
+  cheapest at-parity model — Haiku — per `directives/cheapest_model_routing.md`; cost/latency
+  logged by the shared `call_llm_structured` path) → build a record-level `segment` override
+  citing accession + exhibit. CLI `execution/extract_8k_overrides.py` (`--apply` records it).
+  Every network/LLM seam is injectable, so the pipeline is fully tested offline (no spend).
+  Eval: `evals/golden/extract_8k_overrides.json` + `execution/run_8k_extraction_eval.py`
+  (real-LLM, run on the weekly cadence — gates promoting to a cheaper backend; a `≥0.95`
+  score required). The owner can now auto-populate the GOOG case rather than hand-seeding.
 - **P5 — surface + docs.** `data_provenance.md` §9; a read-only "Overrides" panel /
   provenance-console row so an override is visible & auditable; update memory notes.
 

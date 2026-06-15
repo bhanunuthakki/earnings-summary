@@ -1,0 +1,21 @@
+[
+  {
+    "id": "goog_q4_2025_product",
+    "ticker": "GOOG",
+    "accession": "0001652044-26-000012",
+    "exhibit": "googexhibit991q42025.htm",
+    "period_end": "2025-12-31",
+    "fiscal_period_type": "Q4",
+    "dim_type": "product",
+    "exhibit_text": "Alphabet Inc. and Google Inc. Q4 2025 Results\n\nRevenues, by source (in millions, unaudited):\n\nGoogle Search & Other: $63,073\nYouTube Advertising Revenue: $11,383\nGoogle Network: $7,828\nSubscriptions, Platforms, and Devices Revenue: $13,578\nGoogle Cloud: $17,664\nOther Bets: $370\nHedging / Other Segments: $(68)\n\nTotal revenues: $113,828\n\nGoogle Cloud revenue grew 48% year over year. The figures above reflect the three months ended December 31, 2025.",
+    "expected": {
+      "Google Search & Other": 63073000000,
+      "YouTube Advertising Revenue": 11383000000,
+      "Google Network": 7828000000,
+      "Subscriptions, Platforms, and Devices Revenue": 13578000000,
+      "Google Cloud": 17664000000,
+      "Other Bets": 370000000,
+      "Other Segments": -68000000
+    }
+  }
+]
