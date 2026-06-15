@@ -52,11 +52,16 @@ PURPOSE = "viewspec_compile"
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$")
 _TICKERISH_RE = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
 
-# Vocabulary caps keep the prompt small enough for an interactive call even
-# when the context tickers carry hundreds of catalog entries.
-_MAX_VOCAB_FIN = 60
-_MAX_VOCAB_KPI = 120
-_MAX_VOCAB_SEG = 80
+# Vocabulary caps bound the grounding prompt so an interactive compile stays
+# fast. Raised well above the old 60/120/80 so the "capture every reported
+# number" long tail (one-off / company-specific facts) lands in the prompt
+# instead of being truncated out — a few hundred short token lines is still a
+# small prompt for the fast compile model. The hard ceiling only guards a
+# pathological catalog; the picker's own (much larger) cap lives in
+# engine._CATALOG_LIMIT_PER_DOMAIN.
+_MAX_VOCAB_FIN = 250
+_MAX_VOCAB_KPI = 500
+_MAX_VOCAB_SEG = 300
 
 
 @dataclass(slots=True)

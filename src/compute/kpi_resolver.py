@@ -66,6 +66,36 @@ def normalize_kpi_name(name: str) -> str:
     return " ".join(s.split()).lower()
 
 
+# The capture-all extractor (table_extractors.generic_xbrl_capture._build_name)
+# qualifies a captured metric as ``section — axis — leaf`` joined by this exact
+# separator; the LEAF after the last one is the metric itself. Mirrors
+# ask.grounding._KPI_QUALIFIER_SEP so the picker (kpi_group_key) and the ask
+# name-match agree on what "the same metric" is.
+_KPI_QUALIFIER_SEP = " — "
+
+
+def kpi_group_key(name: str) -> str:
+    """The de-fragmentation key: surface variants of ONE metric share it.
+
+    Mirrors the ask leaf logic (``ask.grounding._label_match_keys``) then folds
+    with :func:`normalize_kpi_name`. Peel a ``section — axis —`` qualifier to
+    its LEAF when that leaf is a distinct ≥2-word phrase (a generic single-word
+    leaf — "Total" / "Net" — is NOT peeled, so distinct metrics that merely
+    share it can't false-merge), otherwise key on the whole name.
+
+    Conservative by construction (the §7a.4 invariant: a duplicate token is
+    acceptable, a false merge is not): only unit / casing / whitespace /
+    qualifier-prefix variants collapse; true synonyms ("NIM" vs "Net interest
+    margin") never do, because their normalized leaves differ.
+    """
+    full = normalize_kpi_name(name)
+    if _KPI_QUALIFIER_SEP in name:
+        leaf = normalize_kpi_name(name.rsplit(_KPI_QUALIFIER_SEP, 1)[-1])
+        if leaf and leaf != full and len(leaf.split()) >= 2:
+            return leaf
+    return full
+
+
 def resolve_kpi_definition_name(
     conn: sqlite3.Connection,
     ticker: str,
