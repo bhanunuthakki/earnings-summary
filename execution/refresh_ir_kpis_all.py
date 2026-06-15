@@ -3,10 +3,14 @@
 ``execution/refresh_ir_kpis.py`` refreshes ONE ticker from its investor-relations
 historical-data spreadsheet (the issuer's own audited KPI series, ingested at
 IR_DOC tier so they supersede the LLM brief values). This orchestrator runs that
-refresh for EVERY ticker that has a persisted parser config
-(``micro_thesis/ir_config/<T>.json``, enumerated via
-``ir_pipeline.config.configured_tickers``), so those series stay current each
-quarter with no manual step.
+refresh for every ticker that EITHER has a persisted parser config
+(``micro_thesis/ir_config/<T>.json``, via ``ir_pipeline.config.configured_tickers``)
+OR has a downloaded IR spreadsheet on disk (``data/ir_spreadsheets/<T>/*.xlsx``)
+but no config yet. The first set refreshes via ``--discover`` (re-resolve the
+current spreadsheet URL); the second is bootstrapped via ``--file`` so its config
+is auto-built from the file on first run. This lifts the configured-only ceiling
+(historically NU-only): any ticker with a discoverable IR spreadsheet feeds
+kpi_facts, with no manual config step.
 
 It is the scheduled companion to the single-ticker CLI: a weekly Windows
 Task-Scheduler cron (``cron/refresh_ir_kpis.task.xml``) invokes it. Configured
@@ -82,6 +86,20 @@ class TickerStatus(StrEnum):
     FAILED = "failed"
 
 
+@dataclass(slots=True, frozen=True)
+class _TickerJob:
+    """One ticker's refresh plan.
+
+    ``file_path is None`` → refresh via ``--discover`` (a configured ticker
+    re-resolves its current spreadsheet URL). ``file_path`` set → bootstrap an
+    un-configured ticker from that on-disk spreadsheet via ``--file`` (its parser
+    config is auto-built on first run).
+    """
+
+    ticker: str
+    file_path: Path | None
+
+
 @dataclass(slots=True)
 class _TickerResult:
     """Outcome of running one ticker's refresh child.
@@ -100,23 +118,53 @@ class _TickerResult:
     error: str | None = None
 
 
+def _spreadsheet_tickers(repo_root: Path) -> dict[str, Path]:
+    """``{TICKER: newest .xlsx}`` for every ticker with a downloaded IR spreadsheet.
+
+    The fetch pipeline drops files under ``data/ir_spreadsheets/<TICKER>/``. A
+    ticker with a spreadsheet here but no parser config can still be refreshed —
+    its config is auto-built from the file on first run — which is what lifts the
+    configured-only (historically NU-only) ceiling. Excel lock files (``~$``) are
+    ignored; the newest by mtime wins when a folder holds several quarters.
+    """
+    base = repo_root / "data" / "ir_spreadsheets"
+    if not base.is_dir():
+        return {}
+    out: dict[str, Path] = {}
+    for sub in sorted(base.iterdir()):
+        if not sub.is_dir():
+            continue
+        files = [p for p in sub.glob("*.xlsx") if p.is_file() and not p.name.startswith("~$")]
+        if files:
+            out[sub.name.upper()] = max(files, key=lambda p: p.stat().st_mtime)
+    return out
+
+
 def _resolve_tickers(
     *, repo_root: Path, requested: list[str] | None
-) -> tuple[list[str], list[str]]:
-    """Return ``(selected, skipped)``.
+) -> tuple[list[_TickerJob], list[str]]:
+    """Return ``(jobs, skipped)``.
 
-    ``selected`` are the configured tickers to refresh; ``skipped`` are
-    explicitly-requested tickers that have no config (logged, never run). With no
-    ``--tickers`` filter, every configured ticker is selected. The intersection
-    enforces the contract: only tickers with a parser config are refreshed.
+    The refresh universe is every CONFIGURED ticker (refreshed via ``--discover``)
+    plus every ticker with a downloaded IR spreadsheet but no config (bootstrapped
+    via ``--file``); a configured ticker always discovers even if a file is also on
+    disk. ``skipped`` are explicitly-requested tickers in neither set (logged,
+    never run). With no ``--tickers`` filter the whole universe runs.
     """
     configured = set(configured_tickers(repo_root))
+    on_disk = _spreadsheet_tickers(repo_root)
+
+    def _job(ticker: str) -> _TickerJob:
+        # Configured → discover (file_path None); else bootstrap from the on-disk file.
+        return _TickerJob(ticker, None if ticker in configured else on_disk.get(ticker))
+
+    universe = configured | set(on_disk)
     if requested:
         wanted = [t.upper() for t in requested]
-        selected = sorted({t for t in wanted if t in configured})
-        skipped = sorted({t for t in wanted if t not in configured})
-        return selected, skipped
-    return sorted(configured), []
+        selected = sorted({t for t in wanted if t in universe})
+        skipped = sorted({t for t in wanted if t not in universe})
+        return [_job(t) for t in selected], skipped
+    return [_job(t) for t in sorted(universe)], []
 
 
 def _rows_from_stdout(stdout: str) -> int | None:
@@ -159,26 +207,29 @@ def _fail(
     )
 
 
-def _run_one(ticker: str, *, repo_root: Path, quarters: int, timeout_s: int) -> _TickerResult:
+def _run_one(job: _TickerJob, *, repo_root: Path, quarters: int, timeout_s: int) -> _TickerResult:
     """Refresh one ticker as a subprocess-isolated child; echo its output.
 
-    Never raises. ``subprocess.run`` uses ``check=False`` so a non-zero child
-    exit returns a CompletedProcess rather than raising; the only runtime
-    exceptions left are ``TimeoutExpired`` and ``OSError`` (spawn failure), both
-    caught and turned into a failed ``_TickerResult``. This is what guarantees
-    the caller's loop never aborts early.
+    A configured ticker (``job.file_path is None``) refreshes via ``--discover``;
+    an un-configured ticker with an on-disk spreadsheet is bootstrapped via
+    ``--file`` so its config is auto-built. Never raises. ``subprocess.run`` uses
+    ``check=False`` so a non-zero child exit returns a CompletedProcess rather than
+    raising; the only runtime exceptions left are ``TimeoutExpired`` and ``OSError``
+    (spawn failure), both caught and turned into a failed ``_TickerResult``. This is
+    what guarantees the caller's loop never aborts early.
     """
+    ticker = job.ticker
     argv = [
         sys.executable,
         str(PROJECT_ROOT / "execution" / "refresh_ir_kpis.py"),
         "--ticker",
         ticker,
-        "--discover",
-        "--quarters",
-        str(quarters),
-        "--repo-root",
-        str(repo_root),
     ]
+    if job.file_path is not None:
+        argv += ["--file", str(job.file_path)]
+    else:
+        argv += ["--discover"]
+    argv += ["--quarters", str(quarters), "--repo-root", str(repo_root)]
     sys.stdout.write(f"\n{'=' * 72}\n=== IR-spreadsheet refresh - {ticker}\n{'=' * 72}\n")
     sys.stdout.flush()
 
@@ -268,9 +319,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--tickers",
         nargs="*",
-        help="Restrict to these tickers (intersected with the configured set; "
-        "requested tickers without a config are skipped, not run). "
-        "Default: every configured ticker.",
+        help="Restrict to these tickers (intersected with the refresh universe = "
+        "configured tickers + tickers with an on-disk IR spreadsheet; a requested "
+        "ticker in neither is skipped, not run). Default: the whole universe.",
     )
     parser.add_argument(
         "--repo-root",
@@ -290,26 +341,28 @@ def main(argv: list[str] | None = None) -> int:
     requested = cast("list[str] | None", args.tickers)
 
     t0 = time.monotonic()
-    selected, skipped = _resolve_tickers(repo_root=repo_root, requested=requested)
+    jobs, skipped = _resolve_tickers(repo_root=repo_root, requested=requested)
     for t in skipped:
         sys.stdout.write(
-            f"[{t}] SKIPPED - no IR config (micro_thesis/ir_config/{t}.json); "
-            f"run refresh_ir_kpis.py --url/--file to generate one\n"
+            f"[{t}] SKIPPED - no IR config (micro_thesis/ir_config/{t}.json) and no "
+            f"spreadsheet on disk (data/ir_spreadsheets/{t}/); run refresh_ir_kpis.py "
+            "--url/--file to bootstrap one\n"
         )
 
-    if not selected:
+    if not jobs:
         summary = _summarize([], skipped=skipped, elapsed_seconds=round(time.monotonic() - t0, 3))
         sys.stdout.write("\n" + json.dumps(summary, indent=2) + "\n")
-        sys.stdout.write("No configured tickers to refresh.\n")
+        sys.stdout.write("No tickers to refresh.\n")
         return 0
 
-    sys.stdout.write(f"Refreshing IR-spreadsheet KPIs for {len(selected)} ticker(s): {selected}\n")
+    selected = [j.ticker for j in jobs]
+    sys.stdout.write(f"Refreshing IR-spreadsheet KPIs for {len(jobs)} ticker(s): {selected}\n")
 
     # Always-attempt contract: iterate every selected ticker with no early return.
     # _run_one never raises, so a failure / timeout in one ticker cannot stop the
     # next from running.
     results = [
-        _run_one(t, repo_root=repo_root, quarters=quarters, timeout_s=timeout_s) for t in selected
+        _run_one(j, repo_root=repo_root, quarters=quarters, timeout_s=timeout_s) for j in jobs
     ]
 
     summary = _summarize(results, skipped=skipped, elapsed_seconds=round(time.monotonic() - t0, 3))

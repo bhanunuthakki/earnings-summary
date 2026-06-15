@@ -13,6 +13,7 @@ Returns ``{kpi_name: {period_end: value}}`` with `scale` already applied.
 from __future__ import annotations
 
 import datetime as _dt
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +22,20 @@ import openpyxl
 from ir_pipeline.config import IrConfig
 
 _HEADER_SCAN_ROWS = 14
+
+
+@dataclass(frozen=True)
+class SheetDataRow:
+    """One labeled numeric row discovered in an IR spreadsheet.
+
+    The capture-every-number config builder enumerates these to map EVERY data
+    row (not just curated tier KPIs). ``samples`` are the two most-recent numeric
+    cells — enough to infer unit/scale (a 0.095 cell is a decimal percent).
+    """
+
+    sheet: str
+    label: str
+    samples: list[float] = field(default_factory=list[float])
 
 
 def _parse_period(cell: object) -> _dt.datetime | None:
@@ -55,20 +70,41 @@ def _header_row(rows: list[tuple[object, ...]]) -> tuple[int, dict[int, _dt.date
     return best_idx, best_map
 
 
+def _label_matches(cell: object, want: str, *, exact: bool) -> bool:
+    """Whether a label cell matches ``want`` (already lower-cased).
+
+    Substring (``exact=False``) is the forgiving analyst mode — a short hand-picked
+    label finds the full cell. ``exact=True`` (capture rows) requires the trimmed
+    cell to equal ``want`` so an auto-derived bare label ("NII") can't also grab a
+    superstring row ("Risk-adjusted NII").
+    """
+    if not isinstance(cell, str):
+        return False
+    lab = cell.strip().lower()
+    return lab == want if exact else want in lab
+
+
 def _find_data_row(
     rows: list[tuple[object, ...]],
     label_col: int,
     label_substr: str,
     date_cols: list[int],
+    *,
+    exact: bool = False,
 ) -> int | None:
-    """Row index whose label cell matches and that carries the most numeric data."""
-    want = label_substr.lower()
+    """Row index whose label cell matches and that carries the most numeric data.
+
+    ``exact`` switches ``row_label`` from substring to exact-cell matching (capture
+    rows). When several rows share the same exact label (real sheets repeat a label
+    across sub-blocks), the one with the most numeric cells wins — a deterministic
+    "richest representative" pick for a genuinely ambiguous duplicate.
+    """
+    want = label_substr.strip().lower()
     best_idx, best_count = None, 0
     for ri, r in enumerate(rows):
         if label_col >= len(r):
             continue
-        lab = r[label_col]
-        if not (isinstance(lab, str) and want in lab.lower()):
+        if not _label_matches(r[label_col], want, exact=exact):
             continue
         n = sum(1 for c in date_cols if c < len(r) and isinstance(r[c], (int, float)))
         if n > best_count:
@@ -103,7 +139,9 @@ def parse_spreadsheet(
         if not col_map:
             continue
         date_cols = sorted(col_map)
-        ri = _find_data_row(rows, config.label_col, spec.row_label, date_cols)
+        ri = _find_data_row(
+            rows, config.label_col, spec.row_label, date_cols, exact=spec.exact_label
+        )
         if ri is None:
             continue
         row = rows[ri]
@@ -117,3 +155,40 @@ def parse_spreadsheet(
             out[spec.kpi_name] = {p: series[p] for p in recent}
     wb.close()
     return out
+
+
+def enumerate_numeric_rows(path: Path, label_col: int = 1) -> list[SheetDataRow]:
+    """Every labeled numeric data row across the workbook's dated sheets.
+
+    The structured companion to ``config_builder.dump_sheet_structure`` (which
+    renders the same scan as text for the LLM): only sheets with a detectable
+    quarter-date header are walked, and only rows whose label cell is a non-empty
+    string AND that carry numeric data in the date columns are returned. The
+    capture config builder maps each of these to a ``SheetKpi`` — so the row set
+    is deterministic (no LLM gate decides which rows survive). ``samples`` holds
+    up to the two most-recent numeric cells for unit/scale inference.
+    """
+    wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
+    found: list[SheetDataRow] = []
+    for sheet in wb.sheetnames:
+        rows = cast(
+            "list[tuple[object, ...]]",
+            [tuple(r) for r in wb[sheet].iter_rows(values_only=True)],
+        )
+        _, col_map = _header_row(rows)
+        if not col_map:
+            continue
+        recent = sorted(col_map)[-2:]
+        for r in rows:
+            lab = r[label_col] if label_col < len(r) else None
+            if not (isinstance(lab, str) and lab.strip()):
+                continue
+            samples: list[float] = []
+            for c in recent:
+                cell = r[c] if c < len(r) else None
+                if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+                    samples.append(float(cell))
+            if samples:
+                found.append(SheetDataRow(sheet=sheet, label=lab.strip(), samples=samples))
+    wb.close()
+    return found

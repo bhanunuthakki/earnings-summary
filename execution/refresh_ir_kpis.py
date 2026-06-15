@@ -28,7 +28,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from ir_pipeline.config import configured_tickers, get_config  # noqa: E402
+from ir_pipeline.config import configured_tickers, get_config, save_config  # noqa: E402
 from ir_pipeline.download import download_spreadsheet  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
@@ -67,9 +67,13 @@ def main() -> int:
             return 4
         path = download_spreadsheet(url, repo_root, args.ticker)
 
-    # Self-generating per-company parser: if no config exists, the pipeline builds
-    # one from the just-fetched spreadsheet (LLM maps its rows -> the ticker's
-    # holdings tier_1_kpis) and persists it to micro_thesis/ir_config/<T>.json.
+    # Self-generating per-company parser. On a ticker's FIRST refresh the builder
+    # maps EVERY labeled numeric row in the just-fetched spreadsheet — the curated
+    # holdings tier KPIs (LLM-mapped to canonical names) plus a capture layer for
+    # the long tail — and persists it. On a LATER refresh an existing config is
+    # WIDENED: its curated analyst rows are preserved verbatim while the capture
+    # layer is re-derived from the current sheet (so a hand-built NU.json gains the
+    # full audited series without disturbing its four curated KPIs).
     built = False
     if cfg is None:
         from ir_pipeline.config_builder import build_ir_config
@@ -84,11 +88,16 @@ def main() -> int:
         built = True
         if not cfg.spreadsheet_kpis:
             print(
-                f"Generated an empty IR config for {args.ticker} — no holdings "
-                "tier_1_kpis matched the spreadsheet. See micro_thesis/ir_config/.",
+                f"Generated an empty IR config for {args.ticker} — the spreadsheet "
+                "carried no capturable numeric rows. See micro_thesis/ir_config/.",
                 file=sys.stderr,
             )
             return 5
+    else:
+        from ir_pipeline.config_builder import widen_config
+
+        cfg = widen_config(cfg, path)
+        save_config(cfg, repo_root)
 
     parsed = parse_spreadsheet(path, cfg, max_quarters=args.quarters)
     db_path = repo_root / "data" / "portfolio.db"
@@ -99,12 +108,15 @@ def main() -> int:
     finally:
         conn.close()
 
+    n_analyst = sum(1 for s in cfg.spreadsheet_kpis if s.origin != "capture")
+    n_capture = sum(1 for s in cfg.spreadsheet_kpis if s.origin == "capture")
     print(
         json.dumps(
             {
                 "ticker": args.ticker.upper(),
                 "config_generated": built,
-                "config_kpis": [s.kpi_name for s in cfg.spreadsheet_kpis],
+                "config_analyst_kpis": n_analyst,
+                "config_capture_kpis": n_capture,
                 "source_file": str(path),
                 "doc_id": doc_id,
                 "rows_inserted": inserted,
