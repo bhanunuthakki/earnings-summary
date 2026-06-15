@@ -58,9 +58,14 @@ _PANEL_STYLE = """<style>
 .vx-row input[name="view_name"] { width:200px; }
 .vx-pickers { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px;
   margin-bottom:10px; }
+.vx-picker { display:flex; flex-direction:column; }
 .vx-picker label { display:block; color:var(--muted); font-size:var(--fs-caption); margin-bottom:3px;
   text-transform:uppercase; letter-spacing:.06em; }
 .vx-picker select { width:100%; }
+/* Type-ahead filter: a huge per-ticker fact list (capture-every-number long
+   tail) stays usable. Skinned by the control kit; only layout lives here. */
+.vx-pick-search { width:100%; margin-bottom:4px; }
+.vx-pick-count { color:var(--muted); font-size:var(--fs-caption); margin-top:3px; min-height:1.1em; }
 .vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .vx-saved { display:inline-flex; align-items:center; gap:4px; }
 .vx-none { color:var(--muted); font-size:var(--fs-caption); }
@@ -123,12 +128,88 @@ _PANEL_JS = """
       return s.trim().toUpperCase();
     }).filter(Boolean);
   }
+  // ---- Type-ahead pickers: the per-ticker fact list can run to many hundreds
+  // of entries (capture-every-number long tail), so each picker filters as you
+  // type. Selection is tracked in a per-select token map (not the live <option>
+  // .selected flags) so a pick survives being filtered out of view — the map is
+  // the source of truth selectedTokens() reads. ----
+  var PICKERS = ['vx-pick-fin', 'vx-pick-kpi', 'vx-pick-seg'];
+  function pickerState(id) {
+    var sel = el(id);
+    if (!sel) return null;
+    if (!sel._entries) {
+      // Hydrate from the server-rendered options (works before any reload).
+      sel._entries = [];
+      sel._selected = {};
+      for (var i = 0; i < sel.options.length; i++) {
+        var o = sel.options[i];
+        sel._entries.push({
+          token: o.value, label: o.textContent, title: o.title || '',
+          origin: o.getAttribute('data-origin') || '',
+          override: o.getAttribute('data-override') === '1'
+        });
+        if (o.selected) sel._selected[o.value] = true;
+      }
+    }
+    return sel;
+  }
+  function updateCount(id) {
+    var sel = el(id);
+    var cEl = el(id + '-count');
+    if (!sel || !sel._entries || !cEl) return;
+    var qEl = el(id + '-q');
+    var q = ((qEl && qEl.value) || '').trim().toLowerCase();
+    var total = sel._entries.length;
+    var shown = total;
+    if (q) {
+      shown = sel._entries.filter(function (e) {
+        return e.label.toLowerCase().indexOf(q) !== -1 ||
+               e.token.toLowerCase().indexOf(q) !== -1;
+      }).length;
+    }
+    var nsel = Object.keys(sel._selected).length;
+    cEl.textContent = (q ? shown + ' of ' + total : String(total)) +
+      (nsel ? ' \\u00b7 ' + nsel + ' picked' : '');
+  }
+  function renderPicker(id) {
+    var sel = pickerState(id);
+    if (!sel) return;
+    var qEl = el(id + '-q');
+    var q = ((qEl && qEl.value) || '').trim().toLowerCase();
+    sel.innerHTML = '';
+    sel._entries.forEach(function (e) {
+      if (q && e.label.toLowerCase().indexOf(q) === -1 &&
+              e.token.toLowerCase().indexOf(q) === -1) return;
+      var opt = document.createElement('option');
+      opt.value = e.token;
+      opt.textContent = e.label;
+      if (e.title) opt.title = e.title;
+      if (e.origin) opt.setAttribute('data-origin', e.origin);
+      if (e.override) opt.setAttribute('data-override', '1');
+      if (sel._selected[e.token]) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    updateCount(id);
+  }
+  function syncSelection(id) {
+    var sel = el(id);
+    if (!sel || !sel._selected) return;
+    // Only the rendered options reflect this interaction; filtered-out picks
+    // stay in the map untouched (that's the whole point).
+    for (var i = 0; i < sel.options.length; i++) {
+      var o = sel.options[i];
+      if (o.selected) sel._selected[o.value] = true;
+      else delete sel._selected[o.value];
+    }
+  }
   function selectedTokens() {
     var out = [];
-    ['vx-pick-fin', 'vx-pick-kpi', 'vx-pick-seg'].forEach(function (id) {
+    PICKERS.forEach(function (id) {
       var sel = el(id);
-      for (var i = 0; i < sel.options.length; i++) {
-        if (sel.options[i].selected) out.push(sel.options[i].value);
+      if (sel && sel._selected) {
+        for (var tok in sel._selected) {
+          if (Object.prototype.hasOwnProperty.call(sel._selected, tok)) out.push(tok);
+        }
       }
     });
     return out;
@@ -148,15 +229,20 @@ _PANEL_JS = """
   }
   function fillPicker(id, entries, keep) {
     var sel = el(id);
-    sel.innerHTML = '';
-    (entries || []).forEach(function (e) {
-      var opt = document.createElement('option');
-      opt.value = e.token;
-      opt.textContent = e.label + (e.tickers > 1 ? ' (' + e.tickers + ')' : '');
-      if (e.title) opt.title = e.title;
-      if (keep && keep.indexOf(e.token) !== -1) opt.selected = true;
-      sel.appendChild(opt);
+    if (!sel) return;
+    var present = {};
+    sel._entries = (entries || []).map(function (e) {
+      present[e.token] = true;
+      return {
+        token: e.token,
+        label: e.label + (e.tickers > 1 ? ' (' + e.tickers + ')' : ''),
+        title: e.title || '', origin: e.origin || '', override: !!e.override_only
+      };
     });
+    // Reset selection to the requested keep set (only tokens that exist now).
+    sel._selected = {};
+    (keep || []).forEach(function (t) { if (present[t]) sel._selected[t] = true; });
+    renderPicker(id);
   }
   function loadCatalog(preselect, then) {
     var qs = new URLSearchParams({tickers: tickers().join(',')});
@@ -227,6 +313,19 @@ _PANEL_JS = """
   });
   el('vx-load-metrics').addEventListener('click', function () { loadCatalog(); });
   el('vx-run').addEventListener('click', runView);
+
+  // Wire each picker: hydrate from the server-rendered options, filter on
+  // keystroke, and keep the selection map synced when the user (de)selects.
+  PICKERS.forEach(function (id) {
+    pickerState(id);
+    renderPicker(id);
+    var qEl = el(id + '-q');
+    if (qEl) qEl.addEventListener('input', function () { renderPicker(id); });
+    var sel = el(id);
+    if (sel) sel.addEventListener('change', function () {
+      syncSelection(id); updateCount(id);
+    });
+  });
 
   // ---- DIY builder popover (Ask v4): the builder opens on demand from the
   // DIY button / "Open in builder" instead of living as a bottom fold. ----
@@ -659,20 +758,44 @@ def render_saved_views_list(db_path: Path, *, user_id: str = DEFAULT_USER_ID) ->
     return "".join(_saved_chip(v) for v in views)
 
 
+def _picker_option(e: dict[str, object]) -> str:
+    """One <option> for a catalog entry — carries the coverage suffix, a
+    definition tooltip (augmented with the metric's origin), and
+    data-origin / data-override hooks the type-ahead/badge JS reads."""
+    token = escape(str(e.get("token") or ""))
+    text = str(e.get("label") or "")
+    n_raw = e.get("tickers")
+    n = n_raw if isinstance(n_raw, int) else 0
+    suffix = f" ({n})" if n > 1 else ""
+    origin = str(e.get("origin") or "")
+    override_only = bool(e.get("override_only"))
+    title_raw = str(e.get("title") or "")
+    # Origin is surfaced on hover, not in the option text, so the list stays one
+    # clean searchable column (the owner's default) while still distinguishing
+    # analyst-curated from auto-captured / company-doc figures.
+    note = ""
+    if override_only:
+        note = "company-document figure (no FMP base)"
+    elif origin == "capture":
+        note = "auto-captured metric (capture-every-number)"
+    full_title = " — ".join(p for p in (title_raw, note) if p)
+    title_attr = f' title="{escape(full_title)}"' if full_title else ""
+    origin_attr = f' data-origin="{escape(origin)}"' if origin else ""
+    override_attr = ' data-override="1"' if override_only else ""
+    return (
+        f'<option value="{token}"{title_attr}{origin_attr}{override_attr}>'
+        f"{escape(text + suffix)}</option>"
+    )
+
+
 def _picker_html(dom_id: str, label: str, entries: list[dict[str, object]]) -> str:
-    opts: list[str] = []
-    for e in entries:
-        token = escape(str(e.get("token") or ""))
-        text = str(e.get("label") or "")
-        n_raw = e.get("tickers")
-        n = n_raw if isinstance(n_raw, int) else 0
-        suffix = f" ({n})" if n > 1 else ""
-        title_raw = e.get("title")
-        title_attr = f' title="{escape(str(title_raw))}"' if title_raw else ""
-        opts.append(f'<option value="{token}"{title_attr}>{escape(text + suffix)}</option>')
+    opts = "".join(_picker_option(e) for e in entries)
     return (
         f'<div class="vx-picker"><label>{escape(label)}</label>'
-        f'<select id="{dom_id}" multiple size="9">{"".join(opts)}</select></div>'
+        f'<input type="search" id="{dom_id}-q" class="vx-pick-search" '
+        f'placeholder="filter…" autocomplete="off" aria-label="{escape(label)} filter">'
+        f'<select id="{dom_id}" multiple size="9">{opts}</select>'
+        f'<span class="vx-pick-count" id="{dom_id}-count"></span></div>'
     )
 
 

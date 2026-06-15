@@ -1273,6 +1273,194 @@ def load_segment_junction_series(
         conn.close()
 
 
+def _segment_sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
+    """Junction-provenance rows → ascending SourcedObservation list.
+
+    Mirrors :func:`_sourced_rows` but for the segment columns: provenance is
+    period-level (the winning ``segment_periods`` row's source document), so
+    fact-level fields the junction has no analogue for (``fact_id``,
+    ``locator``, ``confidence``, ``extracted_by``, ``computed_from``) are
+    surfaced as None. Last row wins per period_end (the SQL already chose the
+    canonical period via tier/id ordering)."""
+    by_period: dict[datetime, SourcedObservation] = {}
+    for r in rows:
+        pe = _parse_period_end(r["period_end"])
+        if pe is None:
+            continue
+        try:
+            v = float(r["value"])
+        except (TypeError, ValueError):
+            continue
+        src_doc = r["source_doc_id"]
+        prov: dict[str, object] = {
+            "source": str(r["source"]) if r["source"] is not None else "unknown",
+            "fact_id": None,
+            "source_doc_id": int(src_doc) if src_doc is not None else None,
+            "fetched_at": str(r["fetched_at"]) if r["fetched_at"] is not None else None,
+            "source_url": str(r["source_url"]) if r["source_url"] is not None else None,
+            "doc_type": str(r["doc_type"]) if r["doc_type"] is not None else None,
+            "accession_number": (
+                str(r["accession_number"]) if r["accession_number"] is not None else None
+            ),
+            "filing_date": str(r["filing_date"]) if r["filing_date"] is not None else None,
+            "locator": None,
+            "confidence": None,
+            "extracted_by": None,
+            "computed_from": None,
+        }
+        unit_raw = r["unit"]
+        by_period[pe] = SourcedObservation(
+            period_end=pe,
+            value=v,
+            unit=str(unit_raw) if unit_raw is not None else None,
+            provenance=prov,
+        )
+    return [by_period[pe] for pe in sorted(by_period)]
+
+
+def load_segment_junction_series_with_provenance(
+    ticker: str,
+    dims: list[tuple[str, str]],
+    metric: str,
+    repo_root: Path | None = None,
+    *,
+    db_path: Path | None = None,
+    period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+) -> list[SourcedObservation]:
+    """`load_segment_junction_series` + per-period document provenance.
+
+    The segment sibling of the fin/kpi ``_with_provenance`` loaders, so the
+    ViewSpec engine (master build P5.1) can chip segment cells like every
+    other cell. Segment provenance is period-level: the junction joins
+    ``documents`` through ``segment_periods.source_doc_id``, so the chip names
+    the document the winning period was extracted from. Same tier+id period
+    pick as :func:`load_segment_junction_series`.
+
+    Best-effort and never drops values for want of provenance: a missing
+    ``documents`` table yields the same value series with ``source`` =
+    'unknown' rather than []. Returns [] only when the segment tables / DB are
+    missing (matching the value loader)."""
+    if not dims:
+        return []
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        return []
+    conn = _open(resolved)
+    if conn is None:
+        return []
+    period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
+    period_placeholders = ",".join("?" * len(period_list))
+    try:
+        for required in ("segment_periods", "segment_dimensions"):
+            if not _has_table(conn, required):
+                return []
+
+        head_dim_type, head_dim_name = dims[0]
+        extra_dim_joins: list[str] = []
+        extra_dim_params: list[object] = []
+        for idx, (dt, dn) in enumerate(dims[1:], start=2):
+            alias = f"sd{idx}"
+            extra_dim_joins.append(
+                f"JOIN segment_dimensions {alias} "
+                f"ON {alias}.period_id = sp.id "
+                f"AND {alias}.dim_type = ? "
+                f"AND {alias}.dim_name = ? "
+                f"AND {alias}.metric = ?"
+            )
+            extra_dim_params.extend([dt, dn, metric])
+        joins = "\n".join(extra_dim_joins)
+
+        has_docs = _has_table(conn, "documents")
+        has_tier = has_docs and _has_column(conn, "documents", "source_quality_tier")
+        if has_docs:
+            tier_select = (
+                "d.source_quality_tier AS source"
+                if has_tier
+                else "COALESCE(d.source_type, 'unknown') AS source"
+            )
+            accession_select = (
+                "d.accession_number, d.filing_date"
+                if _has_column(conn, "documents", "accession_number")
+                else "NULL AS accession_number, NULL AS filing_date"
+            )
+            prov_cols = f"d.fetched_at, d.source_url, d.doc_type, {accession_select}, {tier_select}"
+            doc_join = "LEFT JOIN documents d ON d.id = sp.source_doc_id"
+        else:
+            prov_cols = (
+                "NULL AS fetched_at, NULL AS source_url, NULL AS doc_type, "
+                "NULL AS accession_number, NULL AS filing_date, 'unknown' AS source"
+            )
+            doc_join = ""
+
+        dim_value_clause = f"""
+            JOIN segment_dimensions sd1
+              ON sd1.period_id = sp.id
+              AND sd1.dim_type = ?
+              AND sd1.dim_name = ?
+              AND sd1.metric = ?
+            {joins}
+            WHERE sd1.id = (
+                SELECT MAX(sd1b.id) FROM segment_dimensions sd1b
+                WHERE sd1b.period_id = sp.id
+                  AND sd1b.dim_type = sd1.dim_type
+                  AND sd1b.dim_name = sd1.dim_name
+                  AND sd1b.metric = sd1.metric
+            )
+        """
+        dim_params: list[object] = [head_dim_type, head_dim_name, metric, *extra_dim_params]
+
+        if has_tier:
+            tier_case = _tier_rank_case_sql("d.source_quality_tier")
+            sql = f"""
+                WITH ranked_periods AS (
+                    SELECT
+                        sp_inner.id AS id,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY sp_inner.ticker, sp_inner.period_end,
+                                         sp_inner.fiscal_period_type
+                            ORDER BY {tier_case} DESC, sp_inner.id DESC
+                        ) AS rn
+                    FROM segment_periods sp_inner
+                    LEFT JOIN documents d ON d.id = sp_inner.source_doc_id
+                    WHERE sp_inner.ticker = ?
+                      AND sp_inner.fiscal_period_type IN ({period_placeholders})
+                )
+                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
+                FROM segment_periods sp
+                JOIN ranked_periods rp ON rp.id = sp.id AND rp.rn = 1
+                {doc_join}
+                {dim_value_clause}
+                ORDER BY sp.period_end ASC
+            """
+            params: list[object] = [ticker.upper(), *period_list, *dim_params]
+        else:
+            sql = f"""
+                SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
+                FROM segment_periods sp
+                {doc_join}
+                {dim_value_clause}
+                  AND sp.ticker = ?
+                  AND sp.fiscal_period_type IN ({period_placeholders})
+                ORDER BY sp.period_end ASC
+            """
+            params = [*dim_params, ticker.upper(), *period_list]
+        rows = conn.execute(sql, params).fetchall()
+        return _segment_sourced_rows(rows)
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_load_segment_junction_prov_failed",
+                "ticker": ticker,
+                "dims": dims,
+                "metric": metric,
+                "error": str(exc),
+            }
+        )
+        return []
+    finally:
+        conn.close()
+
+
 def load_segment_series(
     ticker: str,
     segment_name: str,

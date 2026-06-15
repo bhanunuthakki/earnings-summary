@@ -383,7 +383,12 @@ def test_engine_segments_and_warnings(db: Path) -> None:
     assert [r.label for r in result.rows] == ["TST · Cloud revenue"]
     (row,) = result.rows
     assert [c.value for c in row.cells] == [50, 64]
-    assert all(c.source is None for c in row.cells)  # seg cells unchipped (v1)
+    # seg cells now carry period-level provenance (the winning segment_periods
+    # row's source document — doc 1, fmp_normalized in the fixture).
+    assert all(c.source is not None for c in row.cells)
+    assert row.cells[-1].source is not None
+    assert row.cells[-1].source.source == "fmp_normalized"
+    assert row.cells[-1].source.doc_id == 1
     assert result.warnings == ["TST: no data for kpi:Nope"]
 
 

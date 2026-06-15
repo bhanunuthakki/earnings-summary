@@ -173,6 +173,20 @@ def test_explore_panel_picker_options_carry_definition_titles(db_path: Path) -> 
     assert "opt.title = e.title" in html_out
 
 
+def test_explore_panel_pickers_carry_type_ahead_search(db_path: Path) -> None:
+    """S5: each picker gets a type-ahead filter + a count readout so a huge
+    per-ticker fact list stays usable, and selection is tracked in a token map
+    (not the live <option> flags) so a pick survives being filtered out."""
+    html_out = render_explore_panel(db_path)
+    for dom_id in ("vx-pick-fin", "vx-pick-kpi", "vx-pick-seg"):
+        assert f'id="{dom_id}-q"' in html_out  # search input
+        assert f'id="{dom_id}-count"' in html_out  # count readout
+    assert 'type="search"' in html_out
+    assert "function renderPicker" in html_out
+    assert "function syncSelection" in html_out
+    assert "sel._selected" in html_out  # the map is the source of truth
+
+
 def test_explore_panel_consumes_dock_thread_handoff(db_path: Path) -> None:
     """Ask v4 Home dock: the panel replays a stashed dock thread at wire-up
     (store key askThread via window.CCState, same event as the palette
