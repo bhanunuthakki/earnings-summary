@@ -205,6 +205,51 @@ def _overlay_scalar_series(
     return out
 
 
+def _overlay_sourced_series(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    period_types: Iterable[str],
+    series: list[SourcedObservation],
+) -> list[SourcedObservation]:
+    """The provenance sibling of :func:`_overlay_scalar_series`.
+
+    A ``replace`` substitutes the value (and unit) with the company-published
+    figure AND swaps the cell provenance to the company document
+    (``override_provenance``), so the source chip describes the WINNING row, not
+    the FMP row whose value was superseded — the value/chip divergence these
+    ``_with_provenance`` loaders exist to prevent. A ``drop`` omits the period;
+    ``qualify`` is excluded by ``date_override_map`` (annotation only, no value
+    change). A no-op when there are no overrides (the common case).
+    """
+    date_map = date_override_map(
+        conn, ticker=ticker, fact_kind=fact_kind, fact_key=fact_key, period_types=period_types
+    )
+    if not date_map:
+        return series
+    out: list[SourcedObservation] = []
+    for obs in series:
+        ov = date_map.get(str(obs.period_end)[:10])
+        if ov is None:
+            out.append(obs)
+            continue
+        if ov.action == OverrideAction.DROP.value:
+            continue
+        prov = dict(obs.provenance)
+        prov.update(override_provenance(ov))
+        out.append(
+            SourcedObservation(
+                period_end=obs.period_end,
+                value=float(ov.value) if ov.value is not None else obs.value,
+                unit=ov.unit if ov.unit is not None else obs.unit,
+                provenance=prov,
+            )
+        )
+    return out
+
+
 def _tier_rank_case_sql(column_alias: str) -> str:
     """Build a CASE expression mapping source_quality_tier text -> int rank.
     Used inline in SELECT for tier-aware ordering."""
@@ -814,7 +859,14 @@ def load_financial_series_with_provenance(
             """,
             (ticker.upper(), line_item, *period_list),
         ).fetchall()
-        return _sourced_rows(rows)
+        return _overlay_sourced_series(
+            conn,
+            ticker=ticker,
+            fact_kind=FINANCIAL_FACT,
+            fact_key=line_item,
+            period_types=period_list,
+            series=_sourced_rows(rows),
+        )
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -926,7 +978,14 @@ def load_kpi_series_with_provenance(
             """,
             (ticker.upper(), kpi_name, *period_list),
         ).fetchall()
-        return _sourced_rows(rows)
+        return _overlay_sourced_series(
+            conn,
+            ticker=ticker,
+            fact_kind=KPI,
+            fact_key=kpi_name,
+            period_types=period_list,
+            series=_sourced_rows(rows),
+        )
     except sqlite3.Error as exc:
         log.warning(
             {

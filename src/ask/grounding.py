@@ -67,6 +67,13 @@ from pipeline.confidence import (
     display_issues_for_fact,
     load_unresolved_issues,
 )
+from provenance.overrides import (
+    FINANCIAL_FACT,
+    KPI,
+    FactOverride,
+    OverrideAction,
+    active_scalar_override_map,
+)
 
 log = logging.getLogger(__name__)
 
@@ -358,9 +365,14 @@ def _connect(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        return sqlite3.connect(str(db_path), timeout=5.0)
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
     except sqlite3.Error:
         return None
+    # Row factory so the provenance.overrides read API (which indexes rows by
+    # column name) works on this connection; every existing consumer here uses
+    # integer indexing / unpacking, both of which sqlite3.Row also supports.
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def _doc_meta(conn: sqlite3.Connection, doc_id: int) -> tuple[str | None, str | None, str | None]:
@@ -485,6 +497,47 @@ def _dedupe_series(
     return out
 
 
+def _overlay_fact_rows(
+    conn: sqlite3.Connection,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    rows: list[tuple[object, ...]],
+) -> tuple[list[tuple[object, ...]], dict[tuple[str, str], FactOverride]]:
+    """Apply active company-doc overrides to raw fact-series rows.
+
+    Each row is ``(period_end, fiscal_period_type, value, unit, source_doc_id[,
+    confidence])``. A ``replace`` substitutes value (and unit) with the
+    company-published figure; a ``drop`` omits the period; ``qualify`` is excluded
+    by ``active_scalar_override_map`` (annotation only, no value change). This is
+    how a narrative-cited series wins over the stale FMP number, matching the
+    report/financials surface — see ``directives/provenance_override_2026_06.md``.
+
+    Returns the overlaid rows AND the ``(period_end, fiscal_period_type)`` override
+    map so :func:`_fact_item` can realign the cited chip to the winning row's
+    source. A no-op (returns ``rows`` unchanged) when there are no overrides — the
+    common case.
+    """
+    ov_map = active_scalar_override_map(conn, ticker=ticker, fact_kind=fact_kind, fact_key=fact_key)
+    if not ov_map:
+        return rows, ov_map
+    out: list[tuple[object, ...]] = []
+    for row in rows:
+        ov = ov_map.get((str(row[0])[:10], str(row[1])))
+        if ov is None:
+            out.append(row)
+            continue
+        if ov.action == OverrideAction.DROP.value:
+            continue
+        new_row = list(row)
+        if ov.value is not None:
+            new_row[2] = ov.value
+        if ov.unit is not None:
+            new_row[3] = ov.unit
+        out.append(tuple(new_row))
+    return out, ov_map
+
+
 def _fact_ref_kpi_item(
     conn: sqlite3.Connection,
     ticker: str,
@@ -512,6 +565,7 @@ def _fact_ref_kpi_item(
             (ticker, def_id),
         )
     )
+    rows, ov_map = _overlay_fact_rows(conn, ticker, KPI, name, rows)
     if not rows:
         return None
     item = _fact_item(
@@ -522,6 +576,7 @@ def _fact_ref_kpi_item(
         conn,
         item=name,
         issues_by_ticker=issues_by_ticker,
+        override_map=ov_map,
     )
     item["fact_ref"] = f"kpi:{ticker}:{def_id}"
     return item
@@ -548,6 +603,7 @@ def _fact_ref_fin_item(
         f"FROM financial_facts WHERE {clauses} ORDER BY period_end DESC, id DESC LIMIT 64"
     )
     rows = _dedupe_series(_series_rows_conf(conn, sql, tuple(params)))
+    rows, ov_map = _overlay_fact_rows(conn, ticker, FINANCIAL_FACT, line_item, rows)
     if not rows:
         return None
     label = line_item.replace("_", " ").title()
@@ -560,6 +616,7 @@ def _fact_ref_fin_item(
         conn,
         item=line_item,
         issues_by_ticker=issues_by_ticker,
+        override_map=ov_map,
     )
     item["fact_ref"] = f"fin:{ticker}:{line_item}:{fpt}"
     return item
@@ -637,6 +694,7 @@ def _fact_evidence(
                     (ticker, def_id),
                 )
             )
+            rows, ov_map = _overlay_fact_rows(conn, ticker, KPI, name, rows)
             if not rows:
                 continue
             found.append(
@@ -648,6 +706,7 @@ def _fact_evidence(
                     conn,
                     item=name,
                     issues_by_ticker=issues_by_ticker,
+                    override_map=ov_map,
                 )
             )
             per_ticker += 1
@@ -678,6 +737,7 @@ def _fact_evidence(
                     (ticker, line_item),
                 )
             )
+            rows, ov_map = _overlay_fact_rows(conn, ticker, FINANCIAL_FACT, line_item, rows)
             if not rows:
                 continue
             label = line_item.replace("_", " ").title()
@@ -690,6 +750,7 @@ def _fact_evidence(
                     conn,
                     item=line_item,
                     issues_by_ticker=issues_by_ticker,
+                    override_map=ov_map,
                 )
             )
             per_ticker += 1
@@ -737,13 +798,21 @@ def _fact_item(
     *,
     item: str | None = None,
     issues_by_ticker: IssuesByTicker | None = None,
+    override_map: dict[tuple[str, str], FactOverride] | None = None,
 ) -> dict[str, object]:
     """One fact-series evidence item. ``item`` is the raw matching name
     (financial_facts.line_item / kpi_definitions.name) used to look up the
     newest row's unresolved validation issues — it differs from the title-cased
     display ``label`` for financial line items, so it must be passed explicitly
     for issue matching; it falls back to ``label`` for KPIs (whose name IS the
-    label). ``issues_by_ticker`` is loaded once by the caller and shared."""
+    label). ``issues_by_ticker`` is loaded once by the caller and shared.
+
+    ``override_map`` is :func:`_overlay_fact_rows`'s
+    ``(period_end, fiscal_period_type) -> FactOverride`` map: the series ``rows``
+    already carry the overridden values, so this is used ONLY to realign the
+    cited chip's source to the winning company document when the newest row was
+    ``replace``-overridden — never a chip pointing at the FMP row beside a
+    company-published figure."""
     points = "; ".join(f"{_period_label(r[0], r[1])} {_fmt_value(r[2])}" for r in rows)
     # Bind the newest row's fields before the len()-based confidence check —
     # that check narrows the tuple's arity for the type checker, so any later
@@ -762,6 +831,17 @@ def _fact_item(
             confidence = float(cast("float", conf_raw))
         except (TypeError, ValueError):
             confidence = None
+    # Company-doc override on the newest (cited) row: ``_overlay_fact_rows`` has
+    # already swapped the VALUE; here we swap the chip's SOURCE so the popover
+    # describes the company document, not the superseded FMP row.
+    newest_ov = override_map.get((str(period_end_raw)[:10], str(fpt_raw))) if override_map else None
+    if newest_ov is not None and newest_ov.action == OverrideAction.REPLACE.value:
+        doc_type = newest_ov.source_doc_type or doc_type
+        source_url = newest_ov.source_url or source_url
+        if newest_ov.source_doc_id is not None:
+            doc_id = newest_ov.source_doc_id
+        if newest_ov.confidence is not None:
+            confidence = newest_ov.confidence
     # Cross-source ⚠ disagreement (and any other unresolved validation issue)
     # on that newest row — pulled from the SAME source the UI popover reads
     # (display_issues_for_fact), so the answer-writing model sees the conflict
