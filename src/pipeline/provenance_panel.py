@@ -69,6 +69,7 @@ def render_provenance_panel(
     from pipeline.cron_health_panel import render_cron_health_panel
     from pipeline.dcf_coverage_panel import render_dcf_coverage_panel
     from pipeline.evals_panel import render_evals_panel
+    from pipeline.fact_overrides_panel import render_fact_overrides_panel
     from pipeline.ir_coverage_panel import render_ir_coverage_panel
     from pipeline.restatements_panel import render_restatements_panel
     from pipeline.section_coverage_panel import render_section_coverage_panel
@@ -90,6 +91,10 @@ def render_provenance_panel(
         ("cron_health", "Cron Health", lambda: render_cron_health_panel(db_path)),
         ("dcf_coverage", "DCF Coverage", lambda: render_dcf_coverage_panel(db_path, repo_root)),
         ("restatements", "Restatements", lambda: render_restatements_panel(db_path)),
+        # Overrides — the durable company-doc figures that supersede FMP at read
+        # time (the provenance-override layer). Sits by Restatements: both are
+        # "a more authoritative figure wins", one detected, one asserted.
+        ("overrides", "Overrides", lambda: render_fact_overrides_panel(db_path)),
         # Credibility scores the confidence prior against the restatement +
         # disagreement ground truth — it follows Restatements, which is that
         # ground truth surfaced.
