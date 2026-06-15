@@ -847,6 +847,39 @@ def _detect_doc_type(
     return None, []
 
 
+# SEC regulatory filings. A PDF whose cover page carries one of these form
+# designators is NOT an IR doc, however numbers-heavy it looks — the LLM intake
+# classifier (whose closed enum has no SEC types) otherwise forces a 10-K into the
+# nearest IR bucket ("ir_supplement"). `detect_sec_form` is the deterministic veto.
+_SEC_DOC_TYPES: frozenset[DocType] = frozenset(
+    {DocType.SEC_10K, DocType.SEC_10Q, DocType.SEC_20F, DocType.SEC_8K, DocType.SEC_6K}
+)
+
+
+def detect_sec_form(text: str) -> DocType | None:
+    """Return the SEC form DocType iff `text` (a cover-page fingerprint) is an SEC
+    filing (10-K / 10-Q / 20-F / 8-K / 6-K), else None.
+
+    Reuses the same boundary-anchored cover-page rules as `_detect_doc_type`, but
+    scoped to SEC forms only — the deterministic signal that a PDF is a regulatory
+    filing rather than an IR document. Picks the earliest-position match (mirroring
+    `_detect_doc_type`), so a stray disclaimer mention of "Form 10-K" deep in the
+    body of an IR deck doesn't trip it (the rules anchor to the first ~500 chars).
+    """
+    earliest_pos: int | None = None
+    earliest: DocType | None = None
+    for doc_type, rx, _label in _DOC_TYPE_RULES:
+        if doc_type not in _SEC_DOC_TYPES:
+            continue
+        m = rx.search(text)
+        if m is None:
+            continue
+        if earliest_pos is None or m.start() < earliest_pos:
+            earliest_pos = m.start()
+            earliest = doc_type
+    return earliest
+
+
 def _fiscal_year_quarter_for_date(cal: str, period_end: date) -> tuple[int, int] | None:
     """Reverse of `_period_end_for`: the issuer's (fiscal_year, quarter) whose
     quarter-end equals `period_end` under `cal`.
@@ -1268,7 +1301,10 @@ def canonical_path(
 _CANONICAL_PATH_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)/"
     r"(?P<period>\d{4}-\d{2}-\d{2})/"
-    r"(?P<doc_type>ir_[a-z_]+)__(?P<sha8>[0-9a-f]{8})"
+    # `ir_*` IR docs and `sec_*` filings (10-K/10-Q/20-F — the latter carry digits)
+    # both round-trip the reindexer fast-path; `parse_canonical_path` validates the
+    # token against the DocType enum, so an unknown token still falls through.
+    r"(?P<doc_type>(?:ir|sec)_[a-z0-9_]+)__(?P<sha8>[0-9a-f]{8})"
     r"\.(?P<ext>pdf|xlsx)$"
 )
 
@@ -1380,11 +1416,12 @@ __all__: Sequence[str] = (
     "calendar_id_from_fye",
     "canonical_path",
     "classify_ir_file",
-    "parse_canonical_path",
-    "ticker_hint_from_path",
+    "detect_sec_form",
     "fingerprint",
     "fingerprint_pdf",
     "fingerprint_xlsx",
     "iter_uncategorized_files",
+    "parse_canonical_path",
     "sha256_of",
+    "ticker_hint_from_path",
 )
