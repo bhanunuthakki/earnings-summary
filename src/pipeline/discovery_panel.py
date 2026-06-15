@@ -59,7 +59,15 @@ _STATUS_TONE: dict[str, str] = {
 # Layout only — the kit owns every color/font/shape. (No raw hex, no off-scale
 # font-size, no font-family: this surface is conformant so S7 skips it.)
 _PANEL_STYLE = """<style>
-.dq-count { color: var(--muted); font-size: var(--fs-caption); margin-left: auto; }
+.dq-count { color: var(--muted); font-size: var(--fs-caption); }
+/* The list fragment carries the count as its first node; the panel JS lifts it
+   onto the toolbar band (#dq-count) so it never costs its own row. Hidden inside
+   the list so it never flashes there before the lift. */
+#dq-list .dq-count { display: none; }
+/* A candidate row is click-to-expand: clicking the score / status / "why" cells
+   reveals its evidence (interactive children opt out in the JS handler). */
+#dq-list tr[data-cand-id] { cursor: pointer; }
+#dq-list tr[data-cand-id]:hover > td { background: var(--paper); }
 .dq-why { color: var(--fg-soft); }
 .dq-why-line { display: flex; align-items: baseline; gap: var(--sp-2); }
 .dq-peek { background: none; border: none; color: var(--muted); cursor: pointer;
@@ -96,12 +104,21 @@ _PANEL_JS = """
     var on = root.querySelector('.dq-statusfilter.is-on');
     return on ? on.getAttribute('data-status') : 'live';
   }
+  // Lift the count the list fragment carries onto the toolbar band so it never
+  // costs its own row. Runs on first paint and after every refresh.
+  function relocateCount() {
+    var target = el('dq-count');
+    if (!target) return;
+    var src = root.querySelector('#dq-list .dq-count');
+    target.textContent = src ? src.textContent : '';
+    if (src) src.remove();
+  }
   function refresh() {
     var qs = new URLSearchParams({
       fragment: 'list', status: currentStatus(), min_score: el('dq-min-score').value
     });
     fetch('/api/panel/discovery?' + qs).then(function (r) { return r.text(); })
-      .then(function (h) { el('dq-list').innerHTML = h; });
+      .then(function (h) { el('dq-list').innerHTML = h; relocateCount(); });
   }
   function refreshSources() {
     fetch('/api/panel/discovery?fragment=sources').then(function (r) { return r.text(); })
@@ -179,6 +196,16 @@ _PANEL_JS = """
       });
       return;
     }
+    // Click-to-expand: a click anywhere on a candidate row — the score pill, the
+    // status chip, the "why" text — reveals its evidence, EXCEPT on a link /
+    // button / input / label (the ticker link, action buttons and checkbox keep
+    // their own behavior). The explicit "details" peek stays for keyboard users.
+    var rowTr = ev.target.closest('tr[data-cand-id]');
+    if (rowTr && !ev.target.closest('a, button, input, label')) {
+      var rowDetail = el('dq-detail-' + rowTr.getAttribute('data-cand-id'));
+      if (rowDetail) rowDetail.hidden = !rowDetail.hidden;
+      return;
+    }
     var btn = ev.target.closest('button[data-act]');
     if (!btn) return;
     var holder = btn.closest('[data-cand-id]');
@@ -224,6 +251,7 @@ _PANEL_JS = """
     if (open) { box.removeAttribute('hidden'); refreshSources(); } else { box.setAttribute('hidden', ''); }
     srcToggle.classList.toggle('is-on', open);
   });
+  relocateCount();  // lift the server-rendered count onto the toolbar on first paint
 })();
 """
 
@@ -399,6 +427,7 @@ def render_discovery_panel(
         for s in _STATUS_FILTERS
     )
     filters = (
+        '<span id="dq-count" class="dq-count"></span>'
         f'<div class="dq-statuschips">{chips}</div>'
         '<label class="k-label">min score</label>'
         f'<input id="dq-min-score" type="number" min="0" max="10" step="0.5" '
