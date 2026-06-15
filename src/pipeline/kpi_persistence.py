@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, Unit
-from models.kpis import ReportingCadence, ThesisTier
+from models.kpis import DefinitionOrigin, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
@@ -108,20 +108,48 @@ def _create_kpi_definition(
     unit: Unit,
     primary_source: SourceType,
     threshold_tier: ThesisTier | None = None,
+    origin: DefinitionOrigin = DefinitionOrigin.ANALYST,
 ) -> int:
-    """Register a new kpi_definitions row; returns the new id."""
+    """Register a new kpi_definitions row; returns the new id.
+
+    ``origin`` is stamped ONCE here (default ``ANALYST`` — the curated watchlist).
+    The capture-every-number extractors pass ``CAPTURE`` so the long tail is
+    distinguishable from the analyst registry. Schema-defensive: the
+    ``definition_origin`` column (migration 0113) is only written when present, so
+    persistence stays runnable on a pre-0113 / minimal test DB (the column then
+    backfills to its ``'analyst'`` default on migrate).
+    """
+    cols = [
+        "ticker",
+        "name",
+        "unit",
+        "primary_source",
+        "fallback_source",
+        "ir_url",
+        "threshold_tier",
+        "threshold_low",
+        "threshold_high",
+        "notes",
+    ]
+    vals: list[object | None] = [
+        ticker.upper(),
+        name,
+        unit.value,
+        primary_source.value,
+        None,
+        None,
+        threshold_tier.value if threshold_tier is not None else None,
+        None,
+        None,
+        None,
+    ]
+    if _kpi_definitions_has_column(conn, "definition_origin"):
+        cols.append("definition_origin")
+        vals.append(origin.value)
+    placeholders = ", ".join("?" * len(vals))
     cur = conn.execute(
-        "INSERT INTO kpi_definitions "
-        "(ticker, name, unit, primary_source, fallback_source, ir_url, "
-        " threshold_tier, threshold_low, threshold_high, notes) "
-        "VALUES (?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL)",
-        (
-            ticker.upper(),
-            name,
-            unit.value,
-            primary_source.value,
-            threshold_tier.value if threshold_tier is not None else None,
-        ),
+        f"INSERT INTO kpi_definitions ({', '.join(cols)}) VALUES ({placeholders})",
+        vals,
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
@@ -135,6 +163,7 @@ def find_or_create_kpi_definition(
     primary_source: SourceType,
     authoritative: bool = False,
     reporting_cadence: ReportingCadence | None = None,
+    origin: DefinitionOrigin = DefinitionOrigin.ANALYST,
 ) -> int:
     """Lookup-or-insert kpi_definitions for (ticker, name); returns the id.
 
@@ -151,6 +180,13 @@ def find_or_create_kpi_definition(
     knows a metric is annual-only (a 20-F/10-K capital ratio) stamps ANNUAL so the
     definition is marked cadence-aware whether it already existed or is created
     here. A brand-new row otherwise defaults to QUARTERLY (the column default).
+
+    ``origin`` (default ``ANALYST``) is stamped only on a BRAND-NEW row and never
+    rewrites an existing one — an analyst-authored definition stays ``ANALYST``
+    even when the capture pass later re-encounters it. The capture-every-number
+    extractors pass ``CAPTURE`` (after canonicalizing the name via
+    ``compute.kpi_resolver.canonical_metric_name``) so the long tail is
+    distinguishable from the curated watchlist (migration 0113).
     """
     existing = _find_kpi_definition(conn, ticker, name)
     if existing is not None:
@@ -160,7 +196,7 @@ def find_or_create_kpi_definition(
             _reconcile_definition_cadence(conn, existing, reporting_cadence)
         return existing
     new_id = _create_kpi_definition(
-        conn, ticker=ticker, name=name, unit=unit, primary_source=primary_source
+        conn, ticker=ticker, name=name, unit=unit, primary_source=primary_source, origin=origin
     )
     if reporting_cadence is not None:
         _reconcile_definition_cadence(conn, new_id, reporting_cadence)

@@ -25,9 +25,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.kpi_resolver import (  # noqa: E402
     QUARTERLY_FACT_PERIOD_TYPES,
+    canonical_metric_name,
     normalize_kpi_name,
     resolve_kpi_definition_name,
 )
+from models.facts import Unit  # noqa: E402
 
 _QUARTER_ENDS = [
     "2023-03-31",
@@ -54,7 +56,8 @@ def _make_db() -> sqlite3.Connection:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker VARCHAR NOT NULL,
             name VARCHAR NOT NULL,
-            unit VARCHAR
+            unit VARCHAR,
+            definition_origin VARCHAR NOT NULL DEFAULT 'analyst'
         );
         CREATE TABLE kpi_facts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,10 +74,17 @@ def _make_db() -> sqlite3.Connection:
     return conn
 
 
-def _add_def(conn: sqlite3.Connection, ticker: str, name: str, unit: str = "actual") -> int:
+def _add_def(
+    conn: sqlite3.Connection,
+    ticker: str,
+    name: str,
+    unit: str = "actual",
+    *,
+    origin: str = "analyst",
+) -> int:
     cur = conn.execute(
-        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES (?, ?, ?)",
-        (ticker, name, unit),
+        "INSERT INTO kpi_definitions (ticker, name, unit, definition_origin) VALUES (?, ?, ?, ?)",
+        (ticker, name, unit, origin),
     )
     row_id = cur.lastrowid
     assert row_id is not None
@@ -237,3 +247,154 @@ def test_quarterly_scope_ignores_annual_only_definition() -> None:
     )
     # …but the all-period break-rule scope still finds it.
     assert resolve_kpi_definition_name(conn, "X", "Free Cash Flow") == "Free Cash Flow (annual)"
+
+
+# ---------------------------------------------------------------------------
+# canonical_metric_name — the WRITE-path canonicalizer.
+#
+# Governing invariant: a FALSE MERGE of two distinct metrics is worse than a
+# duplicate. So it collapses only unit/casing/whitespace surface variants, keeps
+# semantic qualifiers, and refuses to merge across incompatible unit families.
+# ---------------------------------------------------------------------------
+
+
+def test_mints_clean_name_when_no_definition_exists() -> None:
+    """An unseen metric mints a whitespace-cleaned name; content is preserved."""
+    conn = _make_db()
+    assert canonical_metric_name(conn, "X", "  Total   bookings  ", Unit.MILLIONS) == (
+        "Total bookings"
+    )
+    # Newlines/tabs from a sloppy extractor collapse too.
+    assert canonical_metric_name(conn, "X", "Net\trevenue\n(GAAP)", Unit.MILLIONS) == (
+        "Net revenue (GAAP)"
+    )
+
+
+def test_synonym_collapse_case_whitespace_and_unit_parenthetical() -> None:
+    """Casing, whitespace, and a UNIT-ONLY trailing parenthetical all collapse
+    onto the one existing definition rather than minting a near-duplicate."""
+    conn = _make_db()
+    _add_def(conn, "NU", "Monthly ARPAC")
+    for variant in (
+        "monthly arpac",
+        "  Monthly   ARPAC ",
+        "Monthly ARPAC (USD)",
+        "Monthly ARPAC (US$)",
+        "Monthly ARPAC (in USD)",
+    ):
+        assert canonical_metric_name(conn, "NU", variant, Unit.ACTUAL) == "Monthly ARPAC"
+
+
+def test_unit_suffix_stripping_bare_and_parenthetical() -> None:
+    """A bare or parenthetical unit suffix is stripped from the match key, so
+    'Gross margin %' / 'Gross margin (%)' reuse the existing 'Gross margin'."""
+    conn = _make_db()
+    _add_def(conn, "X", "Gross margin", unit="percent")
+    for variant in ("Gross margin %", "Gross margin (%)", "gross margin percent"):
+        assert canonical_metric_name(conn, "X", variant, Unit.PERCENT) == "Gross margin"
+    # And in the other direction: the stored name carries the unit suffix, the
+    # short label still resolves to it.
+    conn2 = _make_db()
+    _add_def(conn2, "X", "Net interest margin (bps)", unit="bps")
+    assert canonical_metric_name(conn2, "X", "Net interest margin", Unit.BPS) == (
+        "Net interest margin (bps)"
+    )
+
+
+def test_reuses_factless_definition() -> None:
+    """Unlike the read resolver (which ignores factless definitions), the write
+    path reuses a not-yet-populated definition so capture-all doesn't re-mint it
+    on every encounter."""
+    conn = _make_db()
+    _add_def(conn, "X", "Total bookings", unit="millions")  # no facts
+    assert canonical_metric_name(conn, "X", "total bookings", Unit.MILLIONS) == "Total bookings"
+
+
+def test_consolidates_onto_richest_canonical_even_over_exact_surface() -> None:
+    """When several normalized-equal definitions exist, the value routes to the
+    one carrying the MOST facts — even when a sparse duplicate matches the label
+    exactly — mirroring the read resolver's defragmentation."""
+    conn = _make_db()
+    rich = _add_def(conn, "NU", "Monthly ARPAC (USD)", unit="millions")
+    sparse = _add_def(conn, "NU", "Monthly ARPAC", unit="millions")
+    _add_facts(conn, "NU", rich, _QUARTER_ENDS)  # 12
+    _add_facts(conn, "NU", sparse, _QUARTER_ENDS[:2])  # 2, exact-surface to the label
+    assert canonical_metric_name(conn, "NU", "Monthly ARPAC", Unit.MILLIONS) == (
+        "Monthly ARPAC (USD)"
+    )
+
+
+def test_no_false_merge_distinct_stems() -> None:
+    """A different metric name never borrows an existing series."""
+    conn = _make_db()
+    _add_def(conn, "NU", "NIM", unit="percent")
+    assert canonical_metric_name(conn, "NU", "Risk-adjusted NIM", Unit.PERCENT) == (
+        "Risk-adjusted NIM"
+    )
+
+
+def test_no_false_merge_semantic_qualifier_kept() -> None:
+    """'(gross)' and '(net)' are SEMANTIC qualifiers — kept in the match key — so
+    'Loans (net)' is minted distinct from an existing 'Loans (gross)'."""
+    conn = _make_db()
+    _add_def(conn, "X", "Loans (gross)", unit="millions")
+    assert canonical_metric_name(conn, "X", "Loans (net)", Unit.MILLIONS) == "Loans (net)"
+
+
+def test_no_false_merge_across_unit_families() -> None:
+    """Two labels with the SAME match key but incompatible unit families do NOT
+    merge — a dollar LEVEL never absorbs a percentage RATE that shares a stem."""
+    conn = _make_db()
+    _add_def(conn, "X", "Revenue USD", unit="millions")  # key -> 'revenue'
+    # Incoming 'Revenue %' keys to 'revenue' too, but PERCENT ⟂ MILLIONS family.
+    assert canonical_metric_name(conn, "X", "Revenue %", Unit.PERCENT) == "Revenue %"
+
+
+def test_same_unit_family_does_merge() -> None:
+    """Control for the family guard: a magnitude value joins a magnitude
+    definition with the same key even across different scales."""
+    conn = _make_db()
+    _add_def(conn, "X", "Revenue USD", unit="millions")
+    assert canonical_metric_name(conn, "X", "Revenue $", Unit.BILLIONS) == "Revenue USD"
+
+
+def test_canonicalization_is_ticker_scoped() -> None:
+    conn = _make_db()
+    _add_def(conn, "MELI", "Monthly ARPAC", unit="millions")
+    # NU has no such definition — mint, don't borrow MELI's.
+    assert canonical_metric_name(conn, "NU", "Monthly ARPAC", Unit.MILLIONS) == "Monthly ARPAC"
+
+
+def test_analyst_origin_preferred_over_capture_at_equal_richness() -> None:
+    """At equal fact counts, the curated analyst definition is chosen as canonical
+    over a capture-minted one — even when the capture row matches the label's
+    surface exactly."""
+    conn = _make_db()
+    analyst = _add_def(conn, "NU", "ARPAC", unit="millions", origin="analyst")
+    capture = _add_def(conn, "NU", "ARPAC (USD)", unit="millions", origin="capture")
+    _add_facts(conn, "NU", analyst, _QUARTER_ENDS[:1])
+    _add_facts(conn, "NU", capture, _QUARTER_ENDS[:1])  # same count
+    assert canonical_metric_name(conn, "NU", "ARPAC (USD)", Unit.MILLIONS) == "ARPAC"
+
+
+def test_works_without_origin_column() -> None:
+    """Schema-defensive: a pre-0113 DB (no definition_origin) still canonicalizes;
+    origin-aware tie-breaking is simply skipped."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker VARCHAR NOT NULL, name VARCHAR NOT NULL, unit VARCHAR
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ticker VARCHAR NOT NULL,
+            period_end VARCHAR NOT NULL, value NUMERIC, unit VARCHAR,
+            kpi_definition_id INTEGER NOT NULL, fiscal_period_type VARCHAR NOT NULL,
+            source_doc_id INTEGER NOT NULL DEFAULT 1
+        );
+        """
+    )
+    conn.execute("INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('X', 'GMV', 'millions')")
+    assert canonical_metric_name(conn, "X", "GMV (USD)", Unit.MILLIONS) == "GMV"

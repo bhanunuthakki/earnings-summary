@@ -26,6 +26,10 @@ import re
 import sqlite3
 from collections.abc import Sequence
 
+from models.facts import Unit
+from models.kpis import DefinitionOrigin
+from models.unit_convert import same_family
+
 # kpi_facts.fiscal_period_type values that denote a quarterly observation. The
 # §3 chart cadence is quarterly, so the chart loader measures richness over
 # these buckets only; the break-rule paths query every period type and pass
@@ -162,3 +166,265 @@ def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str)
                 return "annual"
             best = cadence
     return best if found else "quarterly"
+
+
+# ---------------------------------------------------------------------------
+# Write-path canonicalizer — canonical_metric_name
+#
+# `resolve_kpi_definition_name` (above) is the READ side: it unifies already-
+# fragmented duplicates at query time and is deliberately LENIENT (it strips
+# every trailing parenthetical). `canonical_metric_name` is the WRITE side: the
+# "capture every reported number" program (directives/capture_every_number_program.md)
+# routes every freshly-extracted label through it BEFORE persisting, to decide
+# whether the value joins an existing kpi_definitions row or mints a new one.
+#
+# The two paths are intentionally asymmetric — split cautiously on write, unify
+# generously on read — because the governing invariant on the write side is:
+#
+#     A FALSE MERGE of two genuinely distinct metrics is worse than a duplicate.
+#
+# A duplicate is recoverable (the read resolver defragments it; a later pass can
+# consolidate). A false merge silently routes two different metrics' facts into
+# one series and is effectively unrecoverable. So the write-side match key only
+# collapses UNIT / CASING / WHITESPACE surface variants and KEEPS semantic
+# qualifiers, and a normalized match is additionally gated by unit-family
+# compatibility.
+# ---------------------------------------------------------------------------
+
+# Tokens that denote a UNIT rather than the metric itself, used to recognize a
+# "unit-only" trailing parenthetical — "(USD)", "($ in millions)", "(%)" — that is
+# safe to strip from a match key. A parenthetical is unit-only iff EVERY non-filler
+# token in it is here; a single non-unit token ("gross", "annualized", "of total")
+# keeps the whole parenthetical, so distinct metrics that merely share a stem never
+# collapse. Symbols ($/%/# and the major currency glyphs) are tokenized standalone.
+_UNIT_PAREN_TOKENS: frozenset[str] = frozenset(
+    {
+        # currency codes / glyphs (us$, r$ split to 'us'/'r' + '$'; 'us' is filler)
+        "usd",
+        "eur",
+        "gbp",
+        "dkk",
+        "brl",
+        "cad",
+        "inr",
+        "aud",
+        "krw",
+        "jpy",
+        "chf",
+        "$",
+        "€",
+        "£",
+        "¥",
+        "₹",
+        # magnitudes
+        "thousands",
+        "thousand",
+        "millions",
+        "million",
+        "billions",
+        "billion",
+        "mm",
+        "mn",
+        "mln",
+        "bn",
+        "bln",
+        "k",
+        "m",
+        "b",
+        # proportions
+        "percent",
+        "pct",
+        "%",
+        "bps",
+        "bp",
+        "ratio",
+        "x",
+        # counts
+        "count",
+        "number",
+        "#",
+        "units",
+        "unit",
+    }
+)
+# Connective words admitted inside a unit parenthetical without disqualifying it:
+# "(in millions)" / "(per share)" are unit-only, but "(% of revenue)" is NOT
+# (because 'revenue' survives), so the rate-of-X case never merges into the level.
+_UNIT_PAREN_FILLER: frozenset[str] = frozenset({"in", "of", "per", "us", "the", "a"})
+
+# A trailing "( ... )" group, capturing its inner text (no nested parens).
+_PAREN_TAIL_GROUP_RX = re.compile(r"\s*\(([^()]*)\)\s*$")
+# Tokenizer for parenthetical content: alphanumeric runs OR a standalone unit glyph.
+_PAREN_TOKEN_RX = re.compile(r"[a-z0-9]+|[$%#€£¥₹]")
+
+# Bare (non-parenthetical) trailing unit suffixes that are safe to strip from a
+# match key — "Gross margin %" / "NIM bps" / "Revenue USD". DELIBERATELY tiny: the
+# risky single letters (m / b / k / x) are excluded so a real trailing word is
+# never truncated. Word tokens require a preceding space; glyphs may be glued.
+_BARE_SUFFIX_WORDS: tuple[str, ...] = ("percent", "pct", "bps", "usd")
+_BARE_SUFFIX_GLYPHS: tuple[str, ...] = ("%", "$")
+
+
+def _is_unit_only_parenthetical(inner: str) -> bool:
+    """True iff every non-filler token in a parenthetical's content is a unit."""
+    tokens = [t for t in _PAREN_TOKEN_RX.findall(inner.lower()) if t not in _UNIT_PAREN_FILLER]
+    return bool(tokens) and all(t in _UNIT_PAREN_TOKENS for t in tokens)
+
+
+def _canonical_match_key(name: str) -> str:
+    """Normalize ``name`` to the conservative write-path match key.
+
+    Three passes: (1) peel trailing UNIT-ONLY parentheticals while keeping
+    semantic ones; (2) casefold + collapse whitespace; (3) peel a trailing bare
+    unit suffix from a tiny safe set. The result is the key two labels must share
+    EXACTLY (plus unit-family compatibility) to be treated as the same metric on
+    write — no edit-distance / fuzzy similarity is used, because an approximate
+    match is exactly how a false merge happens.
+    """
+    s = name.strip()
+    while True:
+        m = _PAREN_TAIL_GROUP_RX.search(s)
+        if m is None or not _is_unit_only_parenthetical(m.group(1)):
+            break
+        s = s[: m.start()].rstrip()
+    s = " ".join(s.split()).lower()
+    changed = True
+    while changed and s:
+        changed = False
+        for glyph in _BARE_SUFFIX_GLYPHS:
+            if s.endswith(glyph) and len(s) > len(glyph):
+                s = s[: -len(glyph)].rstrip()
+                changed = True
+        for word in _BARE_SUFFIX_WORDS:
+            suffix = " " + word
+            if s.endswith(suffix):
+                s = s[: -len(suffix)].rstrip()
+                changed = True
+    return s
+
+
+def _clean_new_name(raw_label: str) -> str:
+    """The name a never-before-seen metric is minted under: the raw label with
+    whitespace collapsed/trimmed, content otherwise preserved.
+
+    Deliberately minimal — case, parentheticals, and unit tokens are KEPT so the
+    first surface form an extractor emits becomes a readable canonical name and so
+    a minted name can never collide (via over-stripping) with a different existing
+    definition. Later variants collapse onto it through ``_canonical_match_key``,
+    not by mangling this name.
+    """
+    return " ".join(raw_label.split())
+
+
+def _parse_unit(raw: object) -> Unit | None:
+    """Best-effort parse of a stored ``kpi_definitions.unit`` string to ``Unit``;
+    None when absent or out-of-vocabulary (a junk unit must not block a merge)."""
+    if raw is None:
+        return None
+    try:
+        return Unit(str(raw).strip().lower())
+    except ValueError:
+        return None
+
+
+def _units_mergeable(incoming: Unit, stored_raw: object) -> bool:
+    """True iff a value in ``incoming`` may join a definition stored in
+    ``stored_raw``'s unit — i.e. they share a unit family (a dollar LEVEL never
+    absorbs a percentage RATE that shares a stem). An unparseable stored unit is
+    treated as compatible: don't split a series over a garbage unit string."""
+    stored = _parse_unit(stored_raw)
+    if stored is None:
+        return True
+    return same_family(incoming, stored)
+
+
+def _kpi_definitions_has_origin(conn: sqlite3.Connection) -> bool:
+    """True iff kpi_definitions carries ``definition_origin`` (migration 0113).
+    Schema-defensive: a pre-0113 / minimal test DB simply skips origin-aware
+    tie-breaking."""
+    return any(
+        str(r["name"] if hasattr(r, "keys") else r[1]) == "definition_origin"
+        for r in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()
+    )
+
+
+def _definition_fact_counts(conn: sqlite3.Connection, ticker: str) -> dict[int, int]:
+    """``{kpi_definition_id: fact_count}`` for ``ticker`` — INCLUDING factless
+    definitions (LEFT JOIN → 0), unlike the read resolver which counts only
+    definitions that carry facts. The write path must see every existing
+    definition so a not-yet-populated capture row is reused, not re-minted.
+    Tolerates a missing kpi_facts table ({} → all counts treated as 0)."""
+    try:
+        rows = conn.execute(
+            "SELECT kd.id AS id, COUNT(kf.id) AS n "
+            "FROM kpi_definitions kd "
+            "LEFT JOIN kpi_facts kf ON kf.kpi_definition_id = kd.id "
+            "WHERE kd.ticker = ? GROUP BY kd.id",
+            (ticker.upper(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {int(r["id"]): int(r["n"]) for r in rows}
+
+
+def canonical_metric_name(
+    conn: sqlite3.Connection,
+    ticker: str,
+    raw_label: str,
+    unit: Unit,
+) -> str:
+    """Return the ``kpi_definitions.name`` a captured ``(raw_label, unit)`` should
+    be stored under for ``ticker`` — the write-path canonicalizer for the
+    capture-every-number program.
+
+    Resolution:
+
+    1. Compute the conservative match key of ``raw_label`` (``_canonical_match_key``
+       — unit/casing/whitespace folded, semantic qualifiers kept).
+    2. Among this ticker's existing definitions, keep those whose own match key
+       equals it AND whose stored unit is family-compatible with ``unit``
+       (``_units_mergeable``). The unit gate is what stops a dollar *level* from
+       absorbing a *rate* that happens to share a stem.
+    3. If any match, return the canonical one: most facts wins (mirrors the read
+       resolver's most-observations defragmentation so capture reuses the rich
+       series), then analyst-origin over capture-origin, then an exact surface
+       match, then lowest id — a fully deterministic order.
+    4. Otherwise mint a clean new name (``_clean_new_name``).
+
+    The returned name is fed straight to ``find_or_create_kpi_definition``; when
+    no safe normalized match exists but the cleaned label is surface-identical to
+    an existing row, that row is reused there by its ``(ticker, name)`` key (and
+    the ``UNIQUE(ticker, name)`` constraint guarantees a minted name can only ever
+    map to at most one row). Requires ``conn.row_factory = sqlite3.Row``.
+    """
+    cleaned = _clean_new_name(raw_label)
+    if not cleaned:
+        return cleaned
+    want = _canonical_match_key(cleaned)
+    has_origin = _kpi_definitions_has_origin(conn)
+    select_cols = "id, name, unit" + (", definition_origin" if has_origin else "")
+    try:
+        rows = conn.execute(
+            f"SELECT {select_cols} FROM kpi_definitions WHERE ticker = ?",
+            (ticker.upper(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return cleaned
+
+    candidates = [
+        r
+        for r in rows
+        if _canonical_match_key(str(r["name"])) == want and _units_mergeable(unit, r["unit"])
+    ]
+    if not candidates:
+        return cleaned
+
+    counts = _definition_fact_counts(conn, ticker)
+
+    def _rank(r: sqlite3.Row) -> tuple[int, int, int, int]:
+        obs = counts.get(int(r["id"]), 0)
+        analyst = int(has_origin and str(r["definition_origin"]) == DefinitionOrigin.ANALYST.value)
+        exact_surface = int(str(r["name"]) == cleaned)
+        return (obs, analyst, exact_surface, -int(r["id"]))
+
+    return str(max(candidates, key=_rank)["name"])
