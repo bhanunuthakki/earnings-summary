@@ -34,6 +34,13 @@ Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only**
 tickers, numbers, code, timestamps, and locators. Mono is an annotation voice,
 not a theme — a label or button in mono is drift.
 
+In a **data table** this resolves the obvious way: numeric cells are mono, but
+the row labels and column headers are sans — never put `font-family: var(--mono)`
+on the whole table. Every value cell is a `<td>` and every label/header a `<th>`,
+so the entire rule is `.matrix td { font-family: var(--mono); }` and the `<th>`
+inherit the UI sans. A whole-table-mono surface (the old `.vx-matrix` /
+`.cv2-matrix`) reads as a second font beside its sans captions — that is the drift.
+
 Sanctioned escapes — everything else snaps to the scale:
 
 1. The workspace report's **reading ramp** (12.5–14px prose/cells) and
@@ -295,6 +302,19 @@ content — never a title band stacked over a filter band:
   the freed row.
 - Primary pickers are in-section furniture, not floating overlays: a section's
   own search/filter renders in the toolbar band, not a `.k-menu` popover.
+
+### 6.2 Metadata embeds — it never gets its own band
+
+A view's self-description — series count, transform, cadence, coverage / "N of
+M", n/m tallies — is metadata **about** the content, not content. It rides a
+frame the layout already pays for (a chart's title strip, a card's actions row,
+a table caption), never a row reserved above the data. A caption band that
+exists only to restate `transform · cadence` is the drift this kills — and the
+line is stated **once**, not per layer. (The Ask result card carried it three
+times — an assistant-message band, a fragment caption, and the chart title —
+over two contradictory counts. It now shows one reconciled line on the actions
+row, and when the request outran the data that line says so, `4 quarters · ⚠ 8
+missing`, instead of disagreeing with itself.)
 
 ## 7. Do / don't
 
