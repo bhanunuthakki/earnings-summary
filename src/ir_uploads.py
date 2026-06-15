@@ -46,8 +46,8 @@ class FiscalCalendar(str):
 
 
 _CAL_CALENDAR = "calendar"  # FY-end Dec 31 — Q1=Mar-31, Q2=Jun-30, Q3=Sep-30, Q4=Dec-31
-_CAL_VEEV = "veeva"  # FY-end Jan 31
-_CAL_RUBRIK = "rubrik"  # FY-end Apr 30 — per fetch_ir_documents.md quarter table
+_CAL_VEEV = "veeva"  # FY-end Jan 31 (Q1 ends Apr-30, Q4 ends Jan-31). RBRK shares this.
+_CAL_APR30 = "apr30"  # generic FY-end Apr 30 — Q1=Jul-31, Q4=Apr-30. (NOT Rubrik; see below.)
 _CAL_NVO = "nvo"  # Calendar, but H1=Q2, 9M=Q3, FY=Q4
 _CAL_VISA = "visa"  # FY-end Sep 30 — Q1=Dec-31, Q2=Mar-31, Q3=Jun-30, Q4=Sep-30
 _CAL_ORACLE = "oracle"  # FY-end May 31 — Q1=Aug-31, Q2=Nov-30, Q3=Feb-28, Q4=May-31
@@ -55,7 +55,12 @@ _CAL_ORACLE = "oracle"  # FY-end May 31 — Q1=Aug-31, Q2=Nov-30, Q3=Feb-28, Q4=
 ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ("MELI", _CAL_CALENDAR, ("MercadoLibre", "Mercado Libre", "Mercado  Libre")),
     ("NU", _CAL_CALENDAR, ("Nu Holdings", "Nu's Investor", "Nubank")),
-    ("RBRK", _CAL_RUBRIK, ("Rubrik",)),
+    # Rubrik has a January-31 fiscal year-end (FY26 Q1 ended Apr-30-2025) — the
+    # SAME calendar as Veeva. It is NOT an April-30 issuer; the prior `_CAL_RUBRIK`
+    # mapping shifted every RBRK period one quarter forward. See the transcript-
+    # ingest path (`src/compute/transcript_ingest.py::_FYE_OFFSETS`) which also
+    # treats RBRK as Jan-FYE.
+    ("RBRK", _CAL_VEEV, ("Rubrik",)),
     ("NOW", _CAL_CALENDAR, ("ServiceNow",)),
     ("WIX", _CAL_CALENDAR, ("Wix.com", "Wix Ltd", "Wix's", "Wix ", "WIX ")),
     (
@@ -451,8 +456,10 @@ def _period_end_for(ticker_calendar: str, year: int, q: int) -> date:
             date(year - 1, 10, 31),
             date(year, 1, 31),
         ][q - 1]
-    if ticker_calendar == _CAL_RUBRIK:
-        # FY-N Q1 ends Jul 31 (N-1), Q4 ends Apr 30 (N).
+    if ticker_calendar == _CAL_APR30:
+        # Generic April-30 FYE: FY-N Q1 ends Jul 31 (N-1), Q4 ends Apr 30 (N).
+        # No registered ticker uses this (Rubrik is Jan-FYE → _CAL_VEEV); it is
+        # the calendar derived for a genuine April-30 issuer via fiscal_year_end.
         return [
             date(year - 1, 7, 31),
             date(year - 1, 10, 31),
@@ -507,7 +514,7 @@ def _calendar_for(ticker: str) -> str:
 _FYE_TO_CALENDAR: dict[str, str] = {
     "12-31": _CAL_CALENDAR,
     "01-31": _CAL_VEEV,
-    "04-30": _CAL_RUBRIK,
+    "04-30": _CAL_APR30,
     "09-30": _CAL_VISA,
     "05-31": _CAL_ORACLE,
 }
@@ -793,6 +800,49 @@ def _detect_doc_type(
     return None, []
 
 
+def _fiscal_year_quarter_for_date(cal: str, period_end: date) -> tuple[int, int] | None:
+    """Reverse of `_period_end_for`: the issuer's (fiscal_year, quarter) whose
+    quarter-end equals `period_end` under `cal`.
+
+    Returns None when `period_end` is not a recognized quarter-end for that
+    calendar (e.g. a 52/53-week filer's off-month-end date), so the caller can
+    fall back to a coarser heuristic.
+    """
+    q = _quarter_for_period_end(cal, period_end)
+    if q is None:
+        return None
+    for fy in (period_end.year - 1, period_end.year, period_end.year + 1):
+        try:
+            if _period_end_for(cal, fy, q) == period_end:
+                return fy, q
+        except ValueError:
+            continue
+    return None
+
+
+def _sec_cover_year_quarter(cal: str, m: re.Match[str]) -> tuple[int, int]:
+    """(fiscal_year, quarter) for a SEC cover's EXPLICIT period-end date.
+
+    The matched "...ended <Month DD, YYYY>" date IS the period end. Resolve it to
+    the issuer's fiscal (year, quarter) under `cal` so a non-December FYE issuer
+    (RBRK/VEEV Jan-31, V Sep-30, ORCL May-31) is not mis-shifted — the bug that
+    arose from reading the month as a CALENDAR quarter and the literal year as a
+    FISCAL year and re-mapping through `_period_end_for()`. Falls back to the
+    calendar-quarter-of-month for an off-cycle date no calendar maps to a
+    quarter-end (preserves prior behavior for that edge case).
+    """
+    month_num = _MONTH_TO_NUM[m.group("m").lower()]
+    year = int(m.group("y"))
+    try:
+        explicit = date(year, month_num, int(m.group("d")))
+    except ValueError:
+        return year, _MONTH_TO_Q[m.group("m").lower()]
+    yq = _fiscal_year_quarter_for_date(cal, explicit)
+    if yq is not None:
+        return yq
+    return year, _MONTH_TO_Q[m.group("m").lower()]
+
+
 def _detect_period(
     text: str,
     ticker_calendar: str,
@@ -807,14 +857,14 @@ def _detect_period(
     # quarter" prose later in the body; the cover phrase is the source of truth.
     m = _RX_SEC_QUARTERLY_PERIOD_ENDED.search(text)
     if m:
-        q = _MONTH_TO_Q[m.group("m").lower()]
-        y = int(m.group("y"))
-        return (y, q), [f"sec_quarterly_period_ended:{m.group(0)!r}"]
+        return _sec_cover_year_quarter(ticker_calendar, m), [
+            f"sec_quarterly_period_ended:{m.group(0)!r}"
+        ]
     m = _RX_SEC_FISCAL_YEAR_ENDED.search(text)
     if m:
-        q = _MONTH_TO_Q[m.group("m").lower()]
-        y = int(m.group("y"))
-        return (y, q), [f"sec_fiscal_year_ended:{m.group(0)!r}"]
+        return _sec_cover_year_quarter(ticker_calendar, m), [
+            f"sec_fiscal_year_ended:{m.group(0)!r}"
+        ]
 
     if ticker_calendar == _CAL_NVO:
         m = _RX_NVO_PERIOD.search(text)
@@ -1134,7 +1184,7 @@ def classify_ir_file(
 
 def _period_label(cal: str, year: int, q: int) -> str:
     """Render a human-readable label, e.g. 'Q3 2024' or 'FY26 Q1'."""
-    if cal in (_CAL_VEEV, _CAL_RUBRIK, _CAL_VISA, _CAL_ORACLE):
+    if cal in (_CAL_VEEV, _CAL_APR30, _CAL_VISA, _CAL_ORACLE):
         return f"FY{year % 100:02d} Q{q}"
     if cal == _CAL_NVO:
         return ["Q1", "H1", "9M", "FY"][q - 1] + f" {year}"
@@ -1213,7 +1263,7 @@ def _quarter_for_period_end(cal: str, period_end: date) -> int | None:
     """Reverse of `_period_end_for`: derive Q-number from period_end given calendar."""
     if cal == _CAL_VEEV:
         return {4: 1, 7: 2, 10: 3, 1: 4}.get(period_end.month)
-    if cal == _CAL_RUBRIK:
+    if cal == _CAL_APR30:
         return {7: 1, 10: 2, 1: 3, 4: 4}.get(period_end.month)
     if cal == _CAL_VISA:
         return {12: 1, 3: 2, 6: 3, 9: 4}.get(period_end.month)

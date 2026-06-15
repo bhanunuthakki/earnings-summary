@@ -67,7 +67,7 @@ is deliberately out of scope. Re-validate periodically — sites change their pr
 |---|---|---|
 | AMZN / GOOG / META / MELI / NU / NVO / NOW / WIX | Calendar (Dec 31) | Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec |
 | VEEV | January 31 | FY26 Q1=Feb-Apr 2025, FY26 Q2=May-Jul 2025, FY26 Q3=Aug-Oct 2025, FY26 Q4=Nov 2025-Jan 2026 |
-| RBRK | January 31 | FY26 Q1=May-Jul 2025, FY26 Q2=Aug-Oct 2025, FY26 Q3=Nov 2025-Jan 2026, FY26 Q4=Feb-Apr 2026 |
+| RBRK | January 31 | Same as VEEV: FY26 Q1=Feb-Apr 2025 (ends Apr-30-2025), Q2=May-Jul 2025, Q3=Aug-Oct 2025, Q4=Nov 2025-Jan 2026. (Earlier rows had an April-30 mapping that shifted every period +1 quarter.) |
 | BN | Calendar (Dec 31) | Standard |
 | NVO | Calendar (Dec 31) | Publishes Q1, H1, 9M (Q3), FY (Q4) releases |
 
@@ -146,7 +146,7 @@ no fuzzy matching — a name either appears or doesn't.
 |---|---|---|
 | MELI | `MercadoLibre`, `Mercado Libre` | calendar |
 | NU   | `Nu Holdings`, `Nu's Investor`, `Nubank` | calendar |
-| RBRK | `Rubrik` | rubrik (FY-end Apr 30) |
+| RBRK | `Rubrik` | veeva (FY-end Jan 31) |
 | NOW  | `ServiceNow` | calendar |
 | WIX  | `Wix.com`, `Wix Ltd`, `Wix's`, `Wix ` | calendar |
 | NVO  | `Novo Nordisk`, `Amounts in DKK million` | nvo (Q1/H1/9M/FY) |
