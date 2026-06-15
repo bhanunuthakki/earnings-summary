@@ -67,8 +67,6 @@ CSS = (
   --panel-alt: var(--paper);
   --ink: var(--fg);
   --ink-muted: var(--muted);
-  --font-mono: var(--mono);
-  --font-body: var(--sans);
 }
 
 :root[data-density="compact"] {
@@ -1352,20 +1350,20 @@ a.peer:hover { background: var(--paper); }
 }
 .valuation-current { display: flex; flex-direction: column; gap: 2px; }
 .valuation-current-value {
-  font-family: var(--font-mono); font-size: 36px; font-weight: 600;
+  font-family: var(--mono); font-size: 36px; font-weight: 600;
   letter-spacing: -0.02em; color: var(--ink);
 }
 .valuation-current-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-muted); }
 .valuation-band-row { display: flex; gap: 6px; }
-.valuation-band-row .mono { font-family: var(--font-mono); color: var(--ink); }
+.valuation-band-row .mono { font-family: var(--mono); color: var(--ink); }
 .valuation-peg { display: flex; flex-direction: column; gap: 2px; }
 .valuation-peg-value {
-  font-family: var(--font-mono); font-size: 22px; font-weight: 600;
+  font-family: var(--mono); font-size: 22px; font-weight: 600;
   letter-spacing: -0.01em; color: var(--ink);
 }
 .valuation-peg-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-peg-sub { font-size: var(--fs-caption); color: var(--ink-muted); font-family: var(--font-mono); }
+.valuation-peg-sub { font-size: var(--fs-caption); color: var(--ink-muted); font-family: var(--mono); }
 .valuation-verdict {
   margin-left: auto; padding: 6px 10px;
   background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius);
@@ -1395,7 +1393,7 @@ a.peer:hover { background: var(--paper); }
   color: var(--accent, var(--ok)); font-weight: 600; margin-right: 10px;
 }
 .l1-thesis p {
-  margin: 4px 0 0; font-family: var(--font-serif, var(--font-body));
+  margin: 4px 0 0; font-family: var(--serif);
   font-size: 14px; line-height: 1.55; color: var(--ink);
   /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis
      paragraph should span the full available width of the workspace shell

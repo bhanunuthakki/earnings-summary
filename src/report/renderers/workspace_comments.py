@@ -792,7 +792,7 @@ CSS = r"""
   pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px;
-  font-family: var(--font-mono); font-size: var(--fs-micro); font-weight: 600;
+  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--hairline);
   border-radius: 10px;
@@ -829,7 +829,7 @@ CSS = r"""
 .cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
 .cmt-sidebar-sub {
   font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
 }
 .cmt-close {
   background: transparent; border: none; color: var(--ink-muted);
@@ -844,7 +844,7 @@ CSS = r"""
   margin: 2px 8px 0 auto;
   padding: 2px 8px;
   font-size: var(--fs-micro); font-weight: 600;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
   border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
@@ -860,7 +860,7 @@ CSS = r"""
   margin: 2px 6px 0 6px;
   padding: 2px 8px;
   font-size: var(--fs-micro); font-weight: 600;
-  font-family: var(--font-mono);
+  font-family: var(--mono);
   border-radius: var(--radius-full);
   text-transform: uppercase; letter-spacing: 0.04em;
   border: 1px solid var(--hairline);
@@ -912,7 +912,7 @@ CSS = r"""
 .cmt-status-addressed { color: var(--ok); }
 .cmt-status-dismissed { color: var(--muted); }
 .cmt-intent { background: rgba(255, 255, 255, 0.05); padding: 1px 6px; border-radius: 3px; }
-.cmt-time { margin-left: auto; font-family: var(--font-mono); }
+.cmt-time { margin-left: auto; font-family: var(--mono); }
 .cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
 .cmt-resolution {
   margin-top: 8px; padding: 8px 10px;
@@ -921,7 +921,7 @@ CSS = r"""
 }
 .cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
 .cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
-.cmt-thread-role { font-family: var(--font-mono); color: var(--muted); width: 60px; flex-shrink: 0; }
+.cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
 .cmt-thread-text { color: var(--ink); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }

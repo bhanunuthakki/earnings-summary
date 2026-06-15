@@ -346,7 +346,7 @@ CSS = (
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .chat-toggle.open { background: var(--ink-muted); }
-.chat-toggle-icon { font-family: var(--font-mono); }
+.chat-toggle-icon { font-family: var(--mono); }
 /* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat
    slides the document aside instead of floating over it. The floating
    .chat-drawer above keeps only the launcher toggle. Width matches
@@ -373,7 +373,7 @@ CSS = (
   padding: 12px 14px; border-bottom: 1px solid var(--hairline);
 }
 .chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
-.chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--font-mono); }
+.chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .chat-close {
   background: transparent; border: none; color: var(--ink-muted);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px;
@@ -401,13 +401,13 @@ CSS = (
 .chat-text ul { margin: 4px 0 4px 18px; padding: 0; }
 .chat-text li { margin: 2px 0; }
 .chat-text code {
-  font-family: var(--font-mono); font-size: 0.93em;
+  font-family: var(--mono); font-size: 0.93em;
   background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: 3px;
 }
 .chat-text pre.chat-code {
   background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
   border-radius: var(--radius); padding: 8px 10px; overflow-x: auto;
-  font-family: var(--font-mono); font-size: 0.93em; margin: 6px 0;
+  font-family: var(--mono); font-size: 0.93em; margin: 6px 0;
 }
 .chat-fragment {
   margin-top: 8px; overflow-x: auto; max-width: 100%;
@@ -444,7 +444,7 @@ CSS = (
   width: 100%; box-sizing: border-box;
   background: var(--panel-alt); color: var(--ink);
   border: 1px solid var(--hairline); border-radius: var(--radius);
-  padding: 8px 10px; font-size: var(--fs-body); font-family: var(--font-body);
+  padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans);
   resize: vertical;
 }
 .chat-form-row {
