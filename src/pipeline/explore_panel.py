@@ -40,6 +40,7 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+from dcf.fact_drivers import driver_field_options
 from identity import DEFAULT_USER_ID
 from ui.cite_marks import CITE_MARKS_SNIPPET
 from user_state.saved_views import SavedViewRow, list_views
@@ -76,6 +77,11 @@ _PANEL_STYLE = """<style>
 .vx-saved { display:inline-flex; align-items:center; gap:4px; }
 .vx-none { color:var(--muted); font-size:var(--fs-caption); }
 .vx-error { color:var(--bad); font-size:var(--fs-body); margin:6px 0; }
+/* Inject-one-fact → DCF driver (S6): a single picked fact, single ticker. */
+.vx-inject select { min-width:240px; }
+.vx-inject-ok { color:var(--fg); font-size:var(--fs-body); line-height:1.5;
+  border-left:3px solid var(--ok); padding:4px 0 4px 10px; margin:6px 0; }
+.vx-inject-ok strong { color:var(--ok); }
 .vx-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
 .vx-nl { border-bottom:1px solid var(--border); padding-bottom:10px; }
 .vx-nl input[name="nl_query"] { flex:1; min-width:280px; }
@@ -480,6 +486,61 @@ _PANEL_JS = """
     }).then(function (r) {
       if (r.ok) { refreshSaved(); }
       else { r.json().then(function (e) { showError(e.error || 'save failed'); }); }
+    });
+  });
+
+  // ---- Inject one picked fact as a DCF driver (S6). A single fact + single
+  // ticker + a target driver field; the server resolves the latest value
+  // (override-aware), converts units/scale, sanity-bounds, and commits via the
+  // clobber-safe apply_edits path. ----
+  function fmtNum(v) {
+    if (v === null || v === undefined || isNaN(v)) return String(v);
+    var a = Math.abs(v);
+    if (a !== 0 && a < 0.01) return v.toFixed(4);
+    if (a < 1) return v.toFixed(3);
+    if (a < 1000) return (Math.round(v * 100) / 100).toString();
+    return Math.round(v).toLocaleString();
+  }
+  function renderInjection(res) {
+    var inj = res.injection || {};
+    var fv = res.fair_value_per_share_usd;
+    var wacc = res.wacc;
+    var rawUnit = inj.raw_unit ? (' ' + inj.raw_unit) : '';
+    var conv = inj.conversion ? (' \\u00b7 ' + inj.conversion) : '';
+    var html = '<div class="vx-inject-ok"><strong>Injected into ' + askEsc(inj.ticker)
+      + ' DCF.</strong> ' + askEsc(inj.metric_label) + ' = ' + fmtNum(inj.raw_value) + rawUnit
+      + ' \\u2192 ' + askEsc(inj.field_label) + ' = ' + fmtNum(inj.applied_value) + conv + '<br>'
+      + 'Repriced: fair value ' + (fv !== null && fv !== undefined ? '$' + fmtNum(fv) : 'n/a')
+      + (wacc !== null && wacc !== undefined ? ' \\u00b7 WACC ' + (wacc * 100).toFixed(1) + '%' : '')
+      + (inj.fact_id !== null && inj.fact_id !== undefined ? ' \\u00b7 from fact #' + inj.fact_id : '')
+      + (inj.period_end ? ' \\u00b7 as of ' + askEsc(inj.period_end) : '')
+      + '</div>';
+    el('vx-result').innerHTML = html;
+  }
+  var injectBtn = el('vx-inject-dcf');
+  if (injectBtn) injectBtn.addEventListener('click', function () {
+    var ts = tickers();
+    if (ts.length !== 1) {
+      showError('Injecting a DCF driver targets one company — narrow to exactly one ticker.');
+      return;
+    }
+    var toks = selectedTokens();
+    if (toks.length !== 1) { showError('Pick exactly one fact to inject as a DCF driver.'); return; }
+    var fieldSel = el('vx-inject-field');
+    injectBtn.disabled = true;
+    el('vx-result').innerHTML = '<div class="vx-none">Injecting\\u2026</div>';
+    fetch('/api/dcf/inject-fact', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ticker: ts[0], token: toks[0], field: fieldSel ? fieldSel.value : ''})
+    }).then(function (r) {
+      return r.json().then(function (res) { return {ok: r.ok, res: res}; });
+    }).then(function (o) {
+      injectBtn.disabled = false;
+      if (!o.ok) { showError((o.res && o.res.error) || 'injection failed'); return; }
+      renderInjection(o.res);
+    }).catch(function () {
+      injectBtn.disabled = false;
+      showError('network error — try again');
     });
   });
   root.addEventListener('click', function (ev) {
@@ -918,6 +979,10 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
         for t in TRANSFORMS
     )
     cadence_opts = "".join(f'<option value="{escape(c)}">{escape(c)}</option>' for c in CADENCES)
+    inject_field_opts = "".join(
+        f'<option value="{escape(o["key"])}">{escape(o["label"])}</option>'
+        for o in driver_field_options()
+    )
     tickers_val = escape(", ".join(tickers))
     saved = render_saved_views_list(db_path, user_id=user_id)
     first = tickers[0] if tickers else "NU"
@@ -997,6 +1062,12 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <input id="vx-view-name" name="view_name" placeholder="view name">
     <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-save">Save view</button>
     <span class="vx-saved-strip" id="vx-saved-strip">{saved}</span>
+  </div>
+  <div class="vx-row vx-inject">
+    <label>inject one fact &rarr; DCF</label>
+    <select id="vx-inject-field" aria-label="DCF driver field">{inject_field_opts}</select>
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-inject-dcf"
+      title="Set a redesigned-DCF driver from the single picked fact &amp; single ticker — latest value, override-aware, unit-converted, sanity-bounded">Inject as DCF driver</button>
   </div>
 </div>
 <div id="vx-result"><div class="vx-none">Pick tickers + metrics and run. Saved views

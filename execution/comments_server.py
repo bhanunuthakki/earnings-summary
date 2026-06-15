@@ -2360,6 +2360,119 @@ def create_app(
             payload["inputs"] = saved_inp.to_dict()
         return {**payload, "saved": True, "result": result}
 
+    @app.route("/api/dcf/inject-fact", methods=["POST", "OPTIONS"])
+    def dcf_inject_fact():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Inject a picked DIY fact as a DCF driver (capture-every-number S6).
+
+        Body: ``{"ticker": T, "token": "<metric token>", "field": "<driver key>"}``.
+        Resolves the metric's LATEST value through the timeseries loaders (so
+        company-doc ``fact_overrides`` win — S2), converts it into the target
+        driver's units (the load-bearing units/scale step — percent→ratio, $→$M),
+        sanity-bounds it, then commits via ``refresh_dcf.apply_edits`` (the
+        clobber-safe cell + JSON-sync + provenance + dcf_runs path). Returns the
+        recomputed card payload plus the resolved-fact/conversion detail.
+
+        400 on a malformed body / unknown field / unparseable token; 404 when the
+        ticker has no FCFF redesign workbook (archetype models are not editable
+        this way); 422 on a fact that cannot be safely scaled, an out-of-bounds
+        converted value, or a degenerate resulting model."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from dcf import fact_drivers
+        from viewspec.spec import MetricRef, ViewSpecError
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return ({"error": "JSON body required"}, 400)
+        data = cast("dict[str, object]", body)
+        ticker_raw = data.get("ticker")
+        token = data.get("token")
+        field_key = data.get("field")
+        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
+            return ({"error": "body.ticker required"}, 400)
+        if not isinstance(token, str) or not token.strip():
+            return ({"error": "body.token (a picked metric token) required"}, 400)
+        if not isinstance(field_key, str) or not field_key.strip():
+            return ({"error": "body.field (a driver field key) required"}, 400)
+        field = fact_drivers.DRIVER_FIELDS_BY_KEY.get(field_key)
+        if field is None:
+            return ({"error": f"unknown driver field {field_key!r}"}, 400)
+        try:
+            metric = MetricRef.parse_token(token)
+        except ViewSpecError as exc:
+            return ({"error": str(exc)}, 400)
+
+        t = ticker_raw.strip().upper()
+        # FCFF-only guard: archetype models (bank/holdco/fintech/platform) and
+        # un-built names have no redesigned workbook to seed from.
+        live = repo_root / "dcf" / f"{t}.xlsx"
+        try:
+            base_inp = dcf_redesign.read_inputs(live) if live.exists() else None
+        except dcf_redesign.RedesignError as exc:
+            return ({"error": str(exc)}, 422)
+        if base_inp is None:
+            return ({"error": f"{t} has no editable FCFF DCF model"}, 404)
+
+        # Resolve → convert → apply. A FactDriverError is a 422 (well-formed
+        # request, but the fact can't be safely turned into this driver).
+        try:
+            resolved = fact_drivers.resolve_fact_value(
+                metric, ticker=t, repo_root=repo_root, db_path=db_path
+            )
+            converted = fact_drivers.convert_to_driver(resolved.value, resolved.unit, field)
+            edited = fact_drivers.apply_to_inputs(base_inp, field, converted.value)
+        except fact_drivers.FactDriverError as exc:
+            return ({"error": str(exc)}, 422)
+        # Reject a degenerate resulting model up front (same 422 contract as save).
+        try:
+            _dcf_recompute_payload(edited)
+        except dcf_redesign.RedesignError as exc:
+            return ({"error": str(exc)}, 422)
+
+        import refresh_dcf  # heavy CLI module — imported only on the commit path
+
+        result = refresh_dcf.apply_edits(t, repo_root, db_path, edited)
+        if result.get("status") != "ok":
+            reason = str(result.get("reason", "injection failed"))
+            code = 404 if "no redesigned workbook" in reason else 500
+            return ({"error": reason, "result": result}, code)
+
+        injection: dict[str, object] = {
+            "ticker": t,
+            "field_key": field.key,
+            "field_label": field.label,
+            "metric_token": token,
+            "metric_label": metric.label,
+            "raw_value": resolved.value,
+            "raw_unit": resolved.unit,
+            "applied_value": converted.value,
+            "conversion": converted.note,
+            "source": resolved.source,
+            "fact_id": resolved.fact_id,
+            "period_end": resolved.period_end,
+        }
+        # Durable fact lineage on the assumptions JSON (best-effort, additive).
+        with contextlib.suppress(Exception):
+            fact_drivers.record_driver_provenance(
+                repo_root / "data" / "dcf_assumptions" / f"{t}.json",
+                field_key=field.key,
+                payload={
+                    "metric": token,
+                    "fact_id": resolved.fact_id,
+                    "raw_value": resolved.value,
+                    "raw_unit": resolved.unit,
+                    "applied_value": converted.value,
+                    "source": resolved.source,
+                    "period_end": resolved.period_end,
+                },
+            )
+
+        saved_inp = dcf_redesign.read_inputs(live)
+        payload = _dcf_recompute_payload(saved_inp) if saved_inp is not None else {}
+        if saved_inp is not None:
+            payload["inputs"] = saved_inp.to_dict()
+        return {**payload, "injected": True, "injection": injection, "result": result}
+
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
     @app.route("/actions/refresh", methods=["POST", "OPTIONS"])
