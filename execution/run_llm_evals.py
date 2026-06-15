@@ -56,6 +56,7 @@ GOLDEN_PURPOSES = (
     "ask_claim_grounding",
     "injection_canaries",
     "provenance_caution",
+    "key_metrics",
 )
 AUDIT_PURPOSES = (
     "bear_case",
@@ -200,6 +201,18 @@ def main() -> int:
                 code_root=PROJECT_ROOT,  # the sha of the code/prompt under eval, not the data repo
                 limit=args.limit,
                 judge=None if args.no_judge else run_judge,
+            )
+        elif args.purpose == "key_metrics":
+            # Mode-A recall over a hand-picked key-metrics set, no judge —
+            # --no-judge is a no-op like the other deterministic golden purposes.
+            from evals.key_metrics import DEFAULT_GOLDEN_RELPATH as KM_GOLDEN
+            from evals.key_metrics import run_key_metrics_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / KM_GOLDEN)).resolve()
+            summary = run_key_metrics_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
             )
         elif args.purpose == "ask_pack_router":
             # Set-vs-set + contract grading, no judge — --no-judge is a no-op
