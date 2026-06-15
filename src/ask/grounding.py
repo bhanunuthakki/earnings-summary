@@ -329,6 +329,34 @@ def _phrase_in(question_squashed: str, phrase: str) -> bool:
     return len(phrase) >= 3 and f" {phrase} " in f" {question_squashed} "
 
 
+# Captured-KPI names from the capture-all extractor are section-qualified —
+# "Net Interest Income (Details) — Net interest margin" (the separator below).
+# The LEAF after the last separator is the metric itself, so a typed
+# "net interest margin" must match it even though the full qualified core is not
+# a substring of the question. We therefore match against the full core OR the
+# leaf core. The leaf is used ONLY when it is a distinct ≥2-word phrase, so a
+# generic single-word leaf ("Total" / "Net" / "Additions" — the very ambiguity
+# the qualification exists to resolve) can never match on its own and flood Ask.
+_KPI_QUALIFIER_SEP = " — "
+
+
+def _label_match_keys(label: str) -> list[str]:
+    """Matchable cores for a (possibly section-qualified) KPI label: the full
+    parenthetical-stripped core, plus the post-last-separator leaf core when it
+    is a distinct ≥2-word phrase. Lets a typed metric name resolve both a clean
+    curated definition and a capture-all section-qualified one for the same
+    metric (across quarters, qualifiers, and differently-reporting companies)."""
+    keys: list[str] = []
+    full = _label_core(label)
+    if full:
+        keys.append(full)
+    if _KPI_QUALIFIER_SEP in label:
+        leaf = _label_core(label.rsplit(_KPI_QUALIFIER_SEP, 1)[-1])
+        if leaf and leaf != full and len(leaf.split()) >= 2:
+            keys.append(leaf)
+    return keys
+
+
 _PERIOD_FULL_YEAR_RX = re.compile(r"(20\d{2})")
 _PERIOD_SHORT_YEAR_RX = re.compile(r"'(\d{2})")
 # (?!\d) so "1Q25" doesn't read as Q2 — the digits after Q are the year there.
@@ -678,7 +706,7 @@ def _fact_evidence(
         matched_kpis = [
             (int(d[0]), str(d[1]), str(d[2] or ""))
             for d in kpi_defs
-            if _phrase_in(question_squashed, _label_core(str(d[1])))
+            if any(_phrase_in(question_squashed, key) for key in _label_match_keys(str(d[1])))
         ]
         # Longest (most specific) labels first.
         matched_kpis.sort(key=lambda d: len(d[1]), reverse=True)

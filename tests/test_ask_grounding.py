@@ -205,6 +205,49 @@ def test_fact_channel_matches_kpis_and_line_items(repo: Path) -> None:
     assert ", USD" in fin.text
 
 
+def _insert_kpi(repo: Path, def_id: int, name: str, value: float, unit: str = "percent") -> None:
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO kpi_definitions (id, ticker, name, unit) VALUES (?, 'TST', ?, ?)",
+            (def_id, name, unit),
+        )
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type,"
+            " kpi_definition_id, value, unit, source_doc_id)"
+            " VALUES ('TST', '2025-09-30 00:00:00', 'Q3', ?, ?, ?, 1)",
+            (def_id, value, unit),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_fact_channel_resolves_section_qualified_capture_name(repo: Path) -> None:
+    """Capture-all stores section-qualified KPI names (``section — … — leaf``).
+    A typed metric name must resolve via the leaf even when (a) the full qualified
+    core is not a substring of the question and (b) a parenthetical (annual /
+    annualized) qualifier sits on the leaf — the exact case the owner flagged."""
+    _insert_kpi(
+        repo,
+        20,
+        "Net Interest Income (Details) — Net interest margin (annualized)",
+        18.5,
+    )
+    facts = [i for i in _gather(repo, "what is TST net interest margin?") if i.kind == "fact"]
+    assert any("Net interest margin" in i.label for i in facts), [i.label for i in facts]
+
+
+def test_fact_channel_single_word_leaf_does_not_flood(repo: Path) -> None:
+    """A generic single-word leaf ("Total") must NOT match on the leaf alone —
+    only the full qualified core can, so a bare "total" query the full core does
+    not contain finds nothing. Guards the leaf-match broadening against noise."""
+    _insert_kpi(repo, 21, "Schedule of Maturities (Details) — 2027 — Total", 999.0, "actual")
+    facts = [i for i in _gather(repo, "what is the total?") if i.kind == "fact"]
+    assert not any("Maturities" in i.label for i in facts), [i.label for i in facts]
+
+
 def test_filing_channel_scores_sections_and_deep_links(repo: Path) -> None:
     items = _gather(repo, "how bad is competition risk in payments?")
     filings = [i for i in items if i.kind == "filing"]
