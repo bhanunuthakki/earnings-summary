@@ -62,6 +62,7 @@ from typing import cast
 from models.documents import SourceType
 from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.kpis import DefinitionOrigin
+from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import start_run
 from table_extractors.base import (
@@ -241,6 +242,7 @@ def extract(
             _walk_section(section_key, section, per_period, audit, fye_md)
 
         if not per_period:
+            _emit_coverage(repo_root, ticker, fiscal_year, audit)
             return ExtractionOutcome(
                 table_kind=TABLE_KIND,
                 ticker=ticker,
@@ -266,6 +268,7 @@ def extract(
             inserted += result.inserted
             audit.dropped_validation += result.validation_issues
         audit.captured = sum(len(v) for v in per_period.values())
+        _emit_coverage(repo_root, ticker, fiscal_year, audit)
 
         return ExtractionOutcome(
             table_kind=TABLE_KIND,
@@ -278,6 +281,25 @@ def extract(
         )
     finally:
         conn.close()
+
+
+def _emit_coverage(
+    repo_root: Path, ticker: str, fiscal_year: int | None, audit: CaptureAudit
+) -> None:
+    """Append this run's CaptureAudit to the coverage log (best-effort)."""
+    record_coverage(
+        repo_root,
+        CaptureCoverageRecord(
+            stage="xbrl_capture",
+            ticker=ticker.upper(),
+            source="10k",
+            fiscal_year=fiscal_year,
+            seen=audit.cells_seen,
+            captured=audit.captured,
+            dropped_validation=audit.dropped_validation,
+            skipped=dict(audit.skipped),
+        ),
+    )
 
 
 def _iter_sections(payload: dict[str, object]):
