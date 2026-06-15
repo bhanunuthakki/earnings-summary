@@ -44,6 +44,28 @@ class ReportingCadence(StrEnum):
     TTM = "ttm"
 
 
+class DefinitionOrigin(StrEnum):
+    """Who authored a ``kpi_definitions`` row.
+
+    ``ANALYST`` is the curated holdings / tier-N KPI registry an analyst defined
+    (the 0007 seed and every holdings ``tier_*_kpis`` entry) — and the DEFAULT for
+    every pre-existing row. ``CAPTURE`` marks a definition auto-minted by the
+    "capture every reported number" extractors (`directives/capture_every_number_program.md`)
+    for an arbitrary reported figure that isn't on any watchlist.
+
+    The distinction lets a consumer separate the controlled watchlist from the
+    long tail — badge/filter captured metrics in the DIY picker (S5), scope a
+    coverage audit to the long tail — without conflating the two. Set ONCE at row
+    creation (`find_or_create_kpi_definition(..., origin=...)`); a re-encounter of
+    an existing definition never rewrites it. Stored on
+    ``kpi_definitions.definition_origin`` (migration 0113); keep in lockstep with
+    that CHECK vocabulary.
+    """
+
+    ANALYST = "analyst"
+    CAPTURE = "capture"
+
+
 class BreachStatus(StrEnum):
     OK = "ok"
     WARN = "warn"

@@ -2,9 +2,15 @@
 
 Read this first to find the active plan and avoid re-building finished programs.
 
-**CURRENT (top of stack):** `close_the_loops_2026_06.md` — the active program
-(20-agent goal-anchored re-score 2026-06-13; Wave A spawned #544). Targets the two
-weakest pillars: **performance-vs-index / risk** and **the compounding loop**.
+**CURRENT (top of stack):** `capture_every_number_program.md` — the active program
+(8-session program spawned 2026-06-14). Make **every reported number** queryable via
+ask / raw DB / a company-specific DIY metric, and injectable into the DCF. Mostly
+additive — the storage substrate is already universal; the blocker is the three
+fixed-allowlist extractors. Critical path S1→S3→S5→S6→S7.
+
+**Prior program (now in dogfood, do not re-build):** `close_the_loops_2026_06.md` —
+20-agent goal-anchored re-score 2026-06-13; targeted **performance-vs-index / risk**
+and **the compounding loop**. Built + deployed; posture is dogfood, then re-grade.
 
 **Also active:**
 - `cheapest_model_routing.md` — SHIPPED cost-aware routing (Claude + Gemini, eval-gated,
