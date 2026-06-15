@@ -52,6 +52,7 @@ from compute.transcript_ingest import (
 from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
+from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
 from timeseries.signal_writer import compute_and_persist_signals
 
 _FACT_EXTRACTOR_DISPATCH: dict[str, Callable[[sqlite3.Connection, int, Path], int]] = {
@@ -83,6 +84,7 @@ class StageName(StrEnum):
     """Closed enum of refresh stages; order matters and matches the pipeline DAG."""
 
     FETCH_SEC_XBRL = "fetch_sec_xbrl"
+    VALIDATE_SEGMENT_CACHE = "validate_segment_cache"
     EXTRACT_FMP_FACTS = "extract_fmp_facts"
     INGEST_IR_TRANSCRIPTS = "ingest_ir_transcripts"
     DERIVE_FMP_KPIS = "derive_fmp_kpis"
@@ -192,6 +194,52 @@ def _stage_fetch_sec_xbrl(
         status=StageStatus.OK,
         rows_processed=stats.facts_inserted,
         notes=f"{stats.accessions_inserted} accessions; {stats.facts_inserted} new facts",
+    )
+
+
+def _stage_validate_segment_cache(*, ticker: str, project_root: Path) -> StageResult:
+    """Post-fetch gate: flag FMP segment-cache contamination for this ticker.
+
+    Reads the raw product/geo segment caches and flags any quarter whose segment
+    sum exceeds reported revenue beyond tolerance — the SAME predicate the ingest
+    gate uses (compute.segments.segment_sum_exceeds_revenue). The DB is already
+    protected (extract_segment_facts drops such records), but the direct-JSON DCF
+    readers are not, so surfacing contamination here as a FAILED stage (-> non-zero
+    cron exit, see execution/quarterly_refresh.py) catches FMP re-serving bad data
+    on the next fetch. Best-effort: a missing/unreadable cache degrades to SKIPPED
+    rather than failing the DAG. Runs before the extract stage so the report shows
+    the cache state the extractors then act on.
+    """
+    data_dir = str(project_root / "data" / "historical" / "fmp")
+    if not segment_cache_present(data_dir, ticker):
+        return StageResult(
+            name=StageName.VALIDATE_SEGMENT_CACHE,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes="no segment cache files for ticker",
+        )
+    try:
+        flags = audit_ticker_cache(data_dir, ticker)
+    except (OSError, ValueError) as e:
+        return StageResult(
+            name=StageName.VALIDATE_SEGMENT_CACHE,
+            status=StageStatus.SKIPPED,
+            rows_processed=0,
+            notes=f"audit error: {type(e).__name__}: {e}"[:200],
+        )
+    if not flags:
+        return StageResult(
+            name=StageName.VALIDATE_SEGMENT_CACHE,
+            status=StageStatus.OK,
+            rows_processed=0,
+            notes="segment cache reconciles with revenue",
+        )
+    detail = "; ".join(f"{f.file} {f.period_end[:10]} {f.period} {f.ratio:.2f}x" for f in flags)
+    return StageResult(
+        name=StageName.VALIDATE_SEGMENT_CACHE,
+        status=StageStatus.FAILED,
+        rows_processed=len(flags),
+        notes=f"{len(flags)} over-cap record(s) - likely FMP contamination: {detail}"[:500],
     )
 
 
@@ -541,6 +589,7 @@ def refresh_ticker(
     stages: list[StageResult] = []
     if fetch_sec:
         stages.append(_stage_fetch_sec_xbrl(conn, ticker=ticker, project_root=project_root))
+    stages.append(_stage_validate_segment_cache(ticker=ticker, project_root=project_root))
     stages.append(_stage_extract_fmp_facts(conn, ticker=ticker, project_root=project_root))
     stages.append(_stage_ingest_ir_transcripts(conn, ticker=ticker, project_root=project_root))
     stages.append(_stage_derive_kpis(conn, ticker=ticker))

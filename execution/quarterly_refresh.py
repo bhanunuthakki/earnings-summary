@@ -127,6 +127,23 @@ def _print_summary_table(report: RefreshReport) -> None:
             )
             print(f"  {t.ticker:6}  {change_msg}")
 
+    cache_flagged = [
+        t
+        for t in report.tickers
+        if any(
+            s.name.value == "validate_segment_cache" and s.status is RefreshStageStatus.FAILED
+            for s in t.stages
+        )
+    ]
+    if cache_flagged:
+        print()
+        print(
+            "Segment-cache contamination (FMP) - ingest gate drops these; raw cache needs re-fetch/fix:"
+        )
+        for t in cache_flagged:
+            note = next((s.notes for s in t.stages if s.name.value == "validate_segment_cache"), "")
+            print(f"  {t.ticker:6}  {note}")
+
     total_pending = sum(len(t.pending_work) for t in report.tickers)
     if total_pending:
         print()

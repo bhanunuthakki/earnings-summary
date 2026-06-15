@@ -229,14 +229,15 @@ def _write_holdings(tmp_path: Path, ticker: str, threshold: float = 0) -> None:
     (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_refresh_ticker_runs_seven_stages_by_default(
+def test_refresh_ticker_runs_eight_stages_by_default(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """Without --fetch-sec, only the 7 network-free stages execute, in order.
+    """Without --fetch-sec, the 8 network-free stages execute, in order.
 
-    persist_timeseries_signals sits between evaluate_thesis (which needs facts
-    settled) and surface_pending_llm (which surfaces follow-ups that may now
-    include signal-driven items)."""
+    validate_segment_cache leads (a post-fetch gate over the raw cache before the
+    extractors run); persist_timeseries_signals sits between evaluate_thesis
+    (which needs facts settled) and surface_pending_llm (which surfaces follow-ups
+    that may now include signal-driven items)."""
     _seed_thesis_state(conn, "X")
     _seed_quarterly_income(conn, "X")
     _write_holdings(tmp_path, "X", threshold=0)
@@ -250,6 +251,7 @@ def test_refresh_ticker_runs_seven_stages_by_default(
     )
     stage_names = [s.name for s in report.stages]
     assert stage_names == [
+        StageName.VALIDATE_SEGMENT_CACHE,
         StageName.EXTRACT_FMP_FACTS,
         StageName.INGEST_IR_TRANSCRIPTS,
         StageName.DERIVE_FMP_KPIS,
@@ -258,6 +260,86 @@ def test_refresh_ticker_runs_seven_stages_by_default(
         StageName.PERSIST_TIMESERIES_SIGNALS,
         StageName.SURFACE_PENDING_LLM,
     ]
+
+
+def _write_segment_cache(
+    project_root: Path, ticker: str, *, q4_cloud: int, q4_revenue: int
+) -> None:
+    """Write a minimal product-segment + income-statement cache for one Q4 quarter.
+
+    q4_cloud drives the segment sum; q4_revenue is the income-statement total the
+    audit reconciles against. A contaminated record sets q4_cloud high enough that
+    the segment sum exceeds q4_revenue * (1 + tolerance).
+    """
+    fmp = project_root / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True, exist_ok=True)
+    (fmp / f"{ticker}_product_segments_quarterly.json").write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": ticker,
+                    "fiscalYear": 2025,
+                    "period": "Q4",
+                    "reportedCurrency": "USD",
+                    "date": "2025-12-31",
+                    "data": {"Search": 60_000_000_000, "Cloud": q4_cloud},
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (fmp / f"{ticker}_income_statement_quarterly.json").write_text(
+        json.dumps(
+            [{"symbol": ticker, "period": "Q4", "date": "2025-12-31", "revenue": q4_revenue}]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_validate_segment_cache_skipped_when_no_cache(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """No cache files under project_root -> SKIPPED (the common test/bootstrap case)."""
+    _seed_thesis_state(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1"
+    )
+    stage = next(s for s in report.stages if s.name == StageName.VALIDATE_SEGMENT_CACHE)
+    assert stage.status == StageStatus.SKIPPED
+    assert "no segment cache" in stage.notes
+
+
+def test_validate_segment_cache_passes_clean_cache(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A cache whose segment sum reconciles with revenue -> OK."""
+    _seed_thesis_state(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+    # 60B + 17B = 77B vs 77B revenue -> within tolerance.
+    _write_segment_cache(tmp_path, "X", q4_cloud=17_000_000_000, q4_revenue=77_000_000_000)
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1"
+    )
+    stage = next(s for s in report.stages if s.name == StageName.VALIDATE_SEGMENT_CACHE)
+    assert stage.status == StageStatus.OK
+
+
+def test_validate_segment_cache_flags_contamination(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A contaminated record (segment sum >> revenue) -> FAILED with the quarter in notes."""
+    _seed_thesis_state(conn, "X")
+    _write_holdings(tmp_path, "X", threshold=0)
+    # 60B + 60B = 120B vs 77B revenue -> 1.56x, over the 1.10 cap.
+    _write_segment_cache(tmp_path, "X", q4_cloud=60_000_000_000, q4_revenue=77_000_000_000)
+    report = refresh_ticker(
+        conn, ticker="X", project_root=tmp_path, holdings_dir=tmp_path, run_id="r1"
+    )
+    stage = next(s for s in report.stages if s.name == StageName.VALIDATE_SEGMENT_CACHE)
+    assert stage.status == StageStatus.FAILED
+    assert stage.rows_processed == 1
+    assert "2025-12-31" in stage.notes
 
 
 def test_refresh_ticker_includes_sec_stage_when_opt_in(
