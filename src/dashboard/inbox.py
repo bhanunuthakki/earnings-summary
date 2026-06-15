@@ -37,6 +37,7 @@ from typing import cast
 
 from alerts import (
     ACTION_STATUS_PENDING,
+    ALERT_STATUS_PENDING,
     AlertRow,
     QueuedActionRow,
     list_alerts,
@@ -560,20 +561,8 @@ def _render_item(
     )
     if show_status and it.status and it.status not in ("open",):
         out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
-    quick_id = _quick_action_id(it) if compact else None
-    if quick_id is not None:
-        # Zero-height quick actions (Inbox v2): two compact icon buttons in
-        # the EXISTING header row, right side, before the timestamp —
-        # visibility-flipped on card hover so the resting layout is
-        # byte-identical. INBOX_JS posts /approve and updates in place.
-        out.write(
-            '<span class="ix-quick">'
-            f'<button class="ix-act ix-act-approve" type="button" '
-            f'data-action-id="{quick_id}" title="Approve &amp; apply">&#10003;</button>'
-            f'<button class="ix-act ix-act-dismiss" type="button" '
-            f'data-action-id="{quick_id}" data-dismiss="1" title="Dismiss">&#10005;</button>'
-            "</span>"
-        )
+    if compact:
+        _render_quick_actions(out, it)
     out.write(stamp_html(it.when, css="ix-when"))
     out.write("</div>")
     body = _display_body(it)
@@ -708,6 +697,62 @@ def _quick_action_id(it: InboxItem) -> int | None:
     return qa.id if qa is not None else None
 
 
+def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
+    """The compact rail's hover ✓/✕ affordances, written into the EXISTING
+    header row before the timestamp — visibility-flipped on card hover / focus
+    so the resting layout is byte-identical (the zero-height design). What
+    appears is resolved from the card's identity, giving the rail the same
+    actionability the full feed's cards carry (owner ask: chip parity + a
+    dismiss on every actionable card):
+
+      * a pending queued action (a draft, or an alert that drafted one) → a
+        ✓ that approves it (``data-action-id`` → POST /approve);
+      * an alert → a ✕ that dismisses the ALERT itself (``data-alert-id`` →
+        POST /api/alerts/<id>/dismiss), the alert-level counterpart to a
+        draft's action-level dismiss; the route also cancels any pending draft
+        so the dismissed alert can't leave one behind to resurface;
+      * a standalone draft → its ✕ dismisses the ACTION (``data-action-id`` +
+        ``data-dismiss``), unchanged;
+      * a plain analyst note → a ✕ that archives it (``data-note-id`` → POST
+        /api/notes/<id>/archive).
+
+    Informational ledger / synthesis cards carry nothing — they age out on
+    recency decay (owner choice: dismiss is for actionable items only).
+    Advisor-memo notes keep their own always-visible ``.ix-memo-acts`` row
+    (open-memo + dismiss), so they're skipped here to avoid a double affordance.
+    """
+    buttons: list[str] = []
+    action_id = _quick_action_id(it)
+    if action_id is not None:
+        buttons.append(
+            f'<button class="ix-act ix-act-approve" type="button" '
+            f'data-action-id="{action_id}" title="Approve &amp; apply">&#10003;</button>'
+        )
+    if it.kind == "alert" and it.alert is not None and it.alert.status == ALERT_STATUS_PENDING:
+        # The card-level dismiss: clear the whole alert from the inbox (not
+        # just one drafted action). Present whether or not a draft exists, so
+        # an alert that never drafted an action (e.g. earnings_tone) is still
+        # dismissable from the rail.
+        buttons.append(
+            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'data-alert-id="{it.alert.id}" title="Dismiss alert">&#10005;</button>'
+        )
+    elif action_id is not None:
+        # A standalone draft (no parent alert on this card) — dismiss the
+        # action itself, the original behavior.
+        buttons.append(
+            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'data-action-id="{action_id}" data-dismiss="1" title="Dismiss">&#10005;</button>'
+        )
+    elif it.kind == "note" and it.note_id is not None and it.semantic_kind != SEMANTIC_ADVISOR_MEMO:
+        buttons.append(
+            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'data-note-id="{it.note_id}" title="Dismiss">&#10005;</button>'
+        )
+    if buttons:
+        out.write('<span class="ix-quick">' + "".join(buttons) + "</span>")
+
+
 def _article_url(it: InboxItem) -> str | None:
     """The source-article URL behind a news / press / rating alert
     (``material_news`` evidence carries ``url``), so the card can link out to the
@@ -833,13 +878,15 @@ INBOX_CSS = """
 #    The mark advances only once the stream is actually ON SCREEN
 #    (IntersectionObserver — landing on another tab doesn't mark Home seen),
 #    so accents persist while you read and clear on the next visit.
-# 2. QUICK ACTIONS — the rail's hover ✓/✕ POST /approve (the GET links'
-#    fetch sibling: same route + same-site guard, JSON instead of a 303) and
-#    update the card in place. Draft cards own their status chip, so it
-#    swaps (applied/cancelled) and a dismissal fades the card; alert cards
-#    keep their chip — it shows the ALERT's status, which approving a
-#    queued action does not change — and get a small "✓ applied" /
-#    "✕ dismissed" confirmation where the buttons sat.
+# 2. QUICK ACTIONS — the rail's hover ✓/✕, routed by which id the button
+#    carries so the rail can act on the same surface the full feed does:
+#      * data-action-id  → POST /approve  (approve / dismiss a queued action),
+#      * data-alert-id   → POST /api/alerts/<id>/dismiss  (dismiss the alert),
+#      * data-note-id    → POST /api/notes/<id>/archive   (dismiss a note).
+#    Each updates the card in place: an approve swaps a draft's status chip
+#    (applied/cancelled); a dismissal (action / alert / note) fades the card
+#    and leaves a small "✓ applied" / "✕ dismissed" confirmation where the
+#    buttons sat. Alert/note dismissals clear the card from the inbox.
 INBOX_JS = r"""
 (function () {
   if (window.__ixWired) return;
@@ -897,16 +944,33 @@ INBOX_JS = r"""
     var btn = ev.target.closest('.ix-act');
     if (!btn || btn.disabled) return;
     var actionId = btn.getAttribute('data-action-id');
-    var dismiss = btn.getAttribute('data-dismiss') === '1';
+    var alertId = btn.getAttribute('data-alert-id');
+    var noteId = btn.getAttribute('data-note-id');
+    // alert / note ✕ are dismissals by construction; the action ✓/✕ pair keys
+    // off data-dismiss. A dismissal clears the card; an approve swaps a pill.
+    var dismiss = btn.getAttribute('data-dismiss') === '1' || alertId !== null || noteId !== null;
+    var clears = alertId !== null || noteId !== null;
     var card = btn.closest('.ix-card');
     var quick = btn.closest('.ix-quick');
     var btns = quick ? quick.querySelectorAll('.ix-act') : [btn];
     for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
-    fetch('/approve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'action_id=' + encodeURIComponent(actionId) + (dismiss ? '&dismiss=1' : '')
-    }).then(function (resp) {
+    var req;
+    if (alertId !== null) {
+      req = fetch('/api/alerts/' + encodeURIComponent(alertId) + '/dismiss', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+    } else if (noteId !== null) {
+      req = fetch('/api/notes/' + encodeURIComponent(noteId) + '/archive', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+    } else {
+      req = fetch('/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'action_id=' + encodeURIComponent(actionId) + (dismiss ? '&dismiss=1' : '')
+      });
+    }
+    req.then(function (resp) {
       return resp.json().catch(function () { return {}; }).then(function (payload) {
         if (!resp.ok) throw new Error(payload.error || ('HTTP ' + resp.status));
         return payload;
@@ -920,7 +984,12 @@ INBOX_JS = r"""
         done.textContent = dismiss ? '✕ dismissed' : '✓ applied';
         quick.parentNode.replaceChild(done, quick);
       }
-      if (card.getAttribute('data-kind') === 'draft') {
+      if (clears) {
+        // A dismissed alert / archived note leaves the inbox entirely.
+        var open = card.querySelector('.ix-open');
+        if (open) open.remove();
+        card.classList.add('ix-dismissed');
+      } else if (card.getAttribute('data-kind') === 'draft') {
         var chip = card.querySelector('.ix-status');
         if (!chip) {
           chip = document.createElement('span');
@@ -930,8 +999,8 @@ INBOX_JS = r"""
         }
         chip.className = 'ix-status ix-status-' + status;
         chip.textContent = status;
-        var open = card.querySelector('.ix-open');
-        if (open) open.remove();
+        var dOpen = card.querySelector('.ix-open');
+        if (dOpen) dOpen.remove();
         if (dismiss) card.classList.add('ix-dismissed');
       }
     }).catch(function (err) {

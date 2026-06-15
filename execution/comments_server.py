@@ -75,7 +75,11 @@ from refresh_dispatch import STEP_NAMES  # noqa: E402
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
-from alerts import ACTION_STATUS_APPLIED, ACTION_STATUS_CANCELLED  # noqa: E402
+from alerts import (  # noqa: E402
+    ACTION_STATUS_APPLIED,
+    ACTION_STATUS_CANCELLED,
+    ACTION_STATUS_PENDING,
+)
 from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
 from ask.engine import AskTurn, fold_events, respond_turn, sanitize_history  # noqa: E402
 from ask.store import (  # noqa: E402
@@ -1062,6 +1066,47 @@ def create_app(
             status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
             return {"ok": True, "action_id": action_id, "status": status}
         return redirect(back or "/feed", code=303)
+
+    @app.route("/api/alerts/<int:alert_id>/dismiss", methods=["POST", "OPTIONS"])
+    def dismiss_alert_api(alert_id: int):
+        """Dismiss one whole alert from the inbox rail's hover ✕ — the
+        alert-level counterpart to /approve's action-level dismiss. Transitions
+        the alert pending → dismissed AND cancels its still-pending queued
+        actions first, so a dismissed alert can't leave an orphaned draft to
+        resurface as a standalone inbox card (mirrors the approve CLI's
+        --dismiss-alert). JSON in/out; OPTIONS preflight → 204. 404 on an
+        unknown id, 409 if the alert is already terminal (a stale or
+        double-clicked card). State-changing, so a cross-site fetch is rejected
+        — the JSON content-type already blocks a simple cross-site form POST,
+        and Sec-Fetch-Site closes the gap for any preflighted one."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+            return ({"error": "cross-site dismiss rejected"}, 403)
+        from alerts import (
+            cancel_action,
+            dismiss_alert,
+            list_queued_actions_for_alert,
+        )
+
+        try:
+            cancelled = 0
+            for qa in list_queued_actions_for_alert(alert_id, db_path=db_path):
+                if qa.status == ACTION_STATUS_PENDING:
+                    cancel_action(qa.id, db_path=db_path)
+                    cancelled += 1
+            dismissed = dismiss_alert(alert_id, db_path=db_path)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        except (ValueError, KeyError) as exc:
+            # Transition conflict — already dismissed/approved/expired.
+            return ({"error": str(exc)}, 409)
+        return {
+            "ok": True,
+            "alert_id": dismissed.id,
+            "status": dismissed.status,
+            "cancelled_actions": cancelled,
+        }
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
 
