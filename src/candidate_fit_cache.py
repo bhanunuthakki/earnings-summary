@@ -52,6 +52,15 @@ __all__ = [
 # data/candidate_fit.json, repo-root relative (the data/ disk-cache home).
 _CACHE_REL: tuple[str, ...] = ("data", "candidate_fit.json")
 
+# Analytics-fetch read timeout for the book-state assembly. The client's default
+# (_ANALYTICS_TIMEOUT_SECONDS, 6s) is tuned for the render path, where a slow
+# tracker must degrade fast rather than block a page. This assembly runs in the
+# morning pipeline (Stage 0f), off the render path — so we wait longer, because
+# /beta recomputes a year-long regression and can take ~10s on a cold box.
+# Without this, the live fetch times out, Sharpe/rf/sector come back null, and
+# every candidate's Marginal-Sharpe + Sector factors degrade to partial.
+_MORNING_ANALYTICS_TIMEOUT_SECONDS = 15.0
+
 
 def _cache_path(repo_root: Path) -> Path:
     return repo_root.joinpath(*_CACHE_REL)
@@ -79,7 +88,9 @@ def assemble_book_context(
     from portfolio_weights import read_materialized_weights
 
     weights = read_materialized_weights(repo_root)
-    analytics = fetch_portfolio_analytics(api_url=api_url)
+    analytics = fetch_portfolio_analytics(
+        api_url=api_url, timeout=_MORNING_ANALYTICS_TIMEOUT_SECONDS
+    )
     snapshot = read_latest_snapshot(db_path=db_path)
 
     sharpe: float | None = None
