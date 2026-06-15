@@ -6,9 +6,12 @@ rendered as a compact strip the shell mounts ABOVE the Inbox rail. Real
 dates come from the canonical ``expected_earnings`` calendar (0082); names
 the calendar has no future row for fall back to the old estimate — latest
 ``earnings_surprises`` release + one quarter, marked "~"/est. Each row
-carries the owner's open watch items / questions for that name as a hover
-tooltip (P4.4: earnings prep starts from what the owner already said to
-look for).
+surfaces the owner's open watch items / questions for that name INLINE as
+clickable ``data-ask-q`` doorways (P4.4 made actionable: earnings prep
+starts from what the owner already said to look for, and one click opens
+Ask scoped to that watch item). This is the link between the upcoming-
+earnings lane and the "things to watch out for" the owner recorded — derived
+at render time from ``analyst_notes``, with no new data branch of its own.
 """
 
 from __future__ import annotations
@@ -33,10 +36,13 @@ __all__ = ["UPCOMING_CSS", "render_upcoming_strip", "upcoming_earnings"]
 _NEXT_EARNINGS_GAP_DAYS = 91
 _UPCOMING_HORIZON_DAYS = 14
 
-# Lead kinds for the per-ticker prep tooltips (P4.4): the owner's watch items
+# Lead kinds for the per-ticker prep doorways (P4.4): the owner's watch items
 # and unanswered questions come first.
 _OPEN_ITEM_KIND_RANK = {"watch": 0, "question": 1}
 _PREP_NOTES_PER_TICKER = 3
+# Visible-label cap for an inline watch doorway (the Home rail is narrow); the
+# full note text always rides in the button's ``title``.
+_WATCH_LABEL_MAX = 64
 
 
 def _tracked_tickers(conn: sqlite3.Connection) -> set[str]:
@@ -125,18 +131,37 @@ def _open_notes(
     return sorted(rows, key=lambda n: _OPEN_ITEM_KIND_RANK.get(n.kind, 9))
 
 
-def _prep_tooltip(db_path: Path | None, user_id: str, ticker: str, base: str) -> str:
-    """The row's title text: what the date is, then the owner's open prep
-    items for the name (capped) — the compact carrier of the old digest's
-    per-ticker prep-notes lists."""
+def _watch_doorways(db_path: Path | None, user_id: str, ticker: str) -> str:
+    """Inline, clickable "things to watch out for" for one upcoming name.
+
+    The owner's open watch items / questions (lead-kinds first, capped) render
+    as Law-2 doorways: each is a ``data-ask-q`` button the shell's global
+    delegate (``goAsk``) opens in Ask, scoped to the name — so the row goes from
+    "reports soon" to "here's what I said to watch, click to dig in" in one move.
+    Returns "" when the name has no open notes (hide-don't-stub — the row still
+    renders its ticker + date)."""
     notes = _open_notes(db_path, user_id, ticker=ticker)
     if not notes:
-        return base
-    shown = [f"{n.kind}: {n.body}" for n in notes[:_PREP_NOTES_PER_TICKER]]
+        return ""
+    out = StringIO()
+    out.write('<ul class="up-watch">')
+    for n in notes[:_PREP_NOTES_PER_TICKER]:
+        body = n.body.strip()
+        label = body if len(body) <= _WATCH_LABEL_MAX else body[: _WATCH_LABEL_MAX - 1] + "…"
+        ask_q = f"{body} ({ticker})"
+        full = f"{n.kind}: {body}"
+        out.write(
+            '<li><button type="button" class="up-watch-item" '
+            f'data-ask-q="{_esc(ask_q)}" title="{_esc(full)}">'
+            f'<span class="up-watch-kind">{_esc(n.kind)}</span>'
+            f'<span class="up-watch-body">{_esc(label)}</span>'
+            "</button></li>"
+        )
     overflow = len(notes) - _PREP_NOTES_PER_TICKER
     if overflow > 0:
-        shown.append(f"+{overflow} more open item(s)")
-    return base + " — " + " · ".join(shown)
+        out.write(f'<li class="up-watch-more muted">+{overflow} more open item(s)</li>')
+    out.write("</ul>")
+    return out.getvalue()
 
 
 def render_upcoming_strip(
@@ -149,8 +174,9 @@ def render_upcoming_strip(
     """The compact "Upcoming earnings" strip for the Home rail: one row per
     tracked name reporting within the horizon — ticker (shell hover mini-card
     via ``data-peek-ticker``), date (``~``-prefixed + "est." chip on the
-    fallback path), open prep items in the row tooltip. Returns ``""`` when
-    nothing is upcoming (a quiet strip renders as no strip at all)."""
+    fallback path), and the owner's open watch items / questions rendered INLINE
+    beneath as clickable ``data-ask-q`` doorways. Returns ``""`` when nothing is
+    upcoming (a quiet strip renders as no strip at all)."""
     upcoming = upcoming_earnings(db_path, today, horizon_days=horizon_days)
     if not upcoming:
         return ""
@@ -163,15 +189,17 @@ def render_upcoming_strip(
     out.write('<ul class="up-strip-list">')
     for ticker, when, is_estimate in upcoming:
         base = "est. next earnings" if is_estimate else "next earnings"
-        tooltip = _prep_tooltip(db_path, user_id, ticker, base)
         date_txt = f"~{when.isoformat()}" if is_estimate else when.isoformat()
-        out.write(f'<li title="{_esc(tooltip)}">')
+        out.write("<li>")
+        out.write(f'<div class="up-row" title="{_esc(base)}">')
         out.write(
             f'<span class="up-ticker" data-peek-ticker="{_esc(ticker)}">{_esc(ticker)}</span>'
         )
         if is_estimate:
             out.write('<span class="up-est">est.</span>')
         out.write(f'<span class="up-date">{_esc(date_txt)}</span>')
+        out.write("</div>")
+        out.write(_watch_doorways(db_path, user_id, ticker))
         out.write("</li>")
     out.write("</ul></div>")
     return out.getvalue()
@@ -191,12 +219,27 @@ UPCOMING_CSS = """
 .up-strip-sub { font-weight: 400; letter-spacing: 0; text-transform: none;
   font-family: var(--mono, monospace); }
 .up-strip-list { list-style: none; margin: 0; padding: 0; }
-.up-strip-list li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0;
-  font-size: var(--fs-caption); cursor: help; }
+.up-strip-list li { padding: 3px 0; font-size: var(--fs-caption); }
+.up-row { display: flex; align-items: baseline; gap: 8px; }
 .up-ticker { font-family: var(--mono, monospace); font-weight: 700;
   color: var(--fg); }
 .up-est { color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; }
 .up-date { margin-left: auto; font-family: var(--mono, monospace);
   color: var(--muted); white-space: nowrap; }
+/* "Things to watch out for" — the owner's open notes for the name, inline as
+   clickable Ask doorways (the actionable link off the earnings lane). */
+.up-watch { list-style: none; margin: 3px 0 0; padding: 0 0 0 2px;
+  display: flex; flex-direction: column; gap: 1px; }
+.up-watch-item { display: flex; align-items: baseline; gap: 6px; width: 100%;
+  text-align: left; background: transparent; border: 0; padding: 1px 0;
+  cursor: pointer; color: var(--muted); font: inherit; font-size: var(--fs-micro);
+  min-width: 0; }
+.up-watch-item:hover { color: var(--accent); }
+.up-watch-item:hover .up-watch-body { text-decoration: underline; }
+.up-watch-kind { flex: none; color: var(--muted); font-size: var(--fs-micro);
+  text-transform: uppercase; letter-spacing: 0.05em;
+  border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0 3px; }
+.up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.up-watch-more { font-size: var(--fs-micro); color: var(--muted); padding-left: 2px; }
 """.strip()

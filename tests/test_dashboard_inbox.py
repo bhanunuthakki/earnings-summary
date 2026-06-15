@@ -320,10 +320,13 @@ def test_compact_rail_renders_quick_buttons_in_the_header_row(db_path: Path) -> 
     items = collect_inbox(db_path)
     html = render_inbox_stream(items, db_path=db_path, compact=True)
 
+    # The ✓ approves the drafted action; the ✕ dismisses the ALERT itself
+    # (the card-level dismiss, distinct from the action's own lifecycle) so it
+    # leaves the inbox in one click.
     assert f'class="ix-act ix-act-approve" type="button" data-action-id="{action_id}"' in html
+    alert_id = items[0].alert.id  # type: ignore[union-attr]
     assert (
-        f'class="ix-act ix-act-dismiss" type="button" data-action-id="{action_id}" '
-        f'data-dismiss="1"' in html
+        f'class="ix-act ix-act-dismiss" type="button" data-alert-id="{alert_id}"' in html
     )
     # Zero extra rows: the buttons sit inside the existing header, BEFORE the
     # relative timestamp (right side), never as a row of their own.
@@ -348,10 +351,64 @@ def test_quick_buttons_absent_off_the_rail_and_for_settled_actions(db_path: Path
     full = render_inbox_stream(items, db_path=db_path)
     assert 'class="ix-act' not in full
     assert f'href="/approve?action_id={action_id}"' in full
-    # Once the action settles, the rail card has nothing approvable.
+    # Once the action settles there is nothing to APPROVE, but the parent alert
+    # is still pending — so the card keeps its dismiss-alert ✕ (you can still
+    # clear the alert from the rail).
     apply_action(action_id, db_path=db_path)
     compact = render_inbox_stream(collect_inbox(db_path), db_path=db_path, compact=True)
-    assert 'class="ix-act' not in compact
+    assert "ix-act-approve" not in compact
+    assert "ix-act-dismiss" in compact
+    assert "data-alert-id=" in compact
+
+
+def test_alert_without_a_drafted_action_still_gets_dismiss_alert(db_path: Path) -> None:
+    """The gap the owner flagged: an alert that never drafted a queued action
+    (e.g. earnings_tone) had no rail affordance at all. It now carries a
+    dismiss-alert ✕ — no approve (nothing to approve), just the card-level
+    clear."""
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json=json.dumps({"summary": "NIM contracted 100bps QoQ."}),
+        signature_sha="sig-no-action",
+        db_path=db_path,
+    )
+    items = collect_inbox(db_path)
+    compact = render_inbox_stream(items, db_path=db_path, compact=True)
+    assert f'class="ix-act ix-act-dismiss" type="button" data-alert-id="{alert.id}"' in compact
+    assert "ix-act-approve" not in compact
+    # Off the rail (feed), the compact quick buttons never render.
+    assert 'class="ix-act' not in render_inbox_stream(items, db_path=db_path)
+
+
+def test_plain_note_gets_a_dismiss_chip_but_ledger_does_not(db_path: Path) -> None:
+    """Parity for actionable cards only (owner choice): a plain analyst note is
+    dismissable (archive) from the rail, but an informational thesis-ledger
+    entry is not — it ages out on recency decay."""
+    note = create_note(
+        user_id=DEFAULT_USER_ID, ticker="NU", kind="watch",
+        body="Watch the funding mix next quarter.", db_path=db_path,
+    )  # fmt: skip
+    append_entry(ticker="META", entry_kind="thesis_update", body="Equity raise news.", db_path=db_path)
+    items = collect_inbox(db_path)
+    compact = render_inbox_stream(items, db_path=db_path, compact=True)
+    # The note carries a dismiss ✕ keyed to the notes-archive endpoint.
+    assert f'class="ix-act ix-act-dismiss" type="button" data-note-id="{note.id}"' in compact
+    # The ledger card stays read-only: no quick-action block on it.
+    ledger_card = compact[compact.index('data-kind="ledger"') :]
+    head_end = ledger_card.index("</div>", ledger_card.index('class="ix-head"'))
+    assert "ix-quick" not in ledger_card[:head_end]
+
+
+def test_inbox_js_routes_alert_and_note_dismissals(db_path: Path) -> None:
+    """Rendered-markup contract: the .ix-act handler dispatches by id —
+    data-alert-id to the alert-dismiss route, data-note-id to note-archive,
+    data-action-id to /approve."""
+    assert "/api/alerts/" in INBOX_JS
+    assert "/dismiss" in INBOX_JS
+    assert "data-alert-id" in INBOX_JS
+    assert "data-note-id" in INBOX_JS
 
 
 # ----------------------------------------------------------------------------

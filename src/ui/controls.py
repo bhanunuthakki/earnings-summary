@@ -172,7 +172,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
 
 /* ---- field/section caption ---- */
-.k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
+.k-label { font-size: var(--fs-micro); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */

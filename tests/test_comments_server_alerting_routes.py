@@ -25,8 +25,11 @@ from alerts import (
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
     ACTION_STATUS_PENDING,
+    ALERT_STATUS_DISMISSED,
+    ALERT_STATUS_PENDING,
     fire_alert,
     get_action,
+    get_alert,
     queue_action,
 )
 from user_state.ledger import list_entries
@@ -267,6 +270,82 @@ def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path
     assert payload is not None
     assert "cannot transition" in payload["error"]
     assert len(list_entries(ticker="NU", db_path=db_path)) == 1
+
+
+# ----------------------------------------------------------------------------
+# POST /api/alerts/<id>/dismiss — the inbox rail's hover ✕ on an alert card.
+# The alert-level counterpart to /approve's action-level dismiss: it clears
+# the whole alert AND cancels its still-pending drafts so none resurface.
+# ----------------------------------------------------------------------------
+
+
+def test_dismiss_alert_route_clears_alert_and_cancels_pending_actions(
+    client: FlaskClient, db_path: Path
+) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+    resp = client.post(f"/api/alerts/{alert_id}/dismiss")
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "ok": True,
+        "alert_id": alert_id,
+        "status": ALERT_STATUS_DISMISSED,
+        "cancelled_actions": 1,
+    }
+    # The alert is dismissed and its pending draft cancelled — no orphan to
+    # resurface as a standalone inbox card — and no ledger write happened.
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_DISMISSED
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
+    assert list_entries(ticker="NU", db_path=db_path) == []
+
+
+def test_dismiss_alert_route_works_without_a_drafted_action(
+    client: FlaskClient, db_path: Path
+) -> None:
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-no-action",
+        db_path=db_path,
+    )
+    resp = client.post(f"/api/alerts/{alert.id}/dismiss")
+    assert resp.status_code == 200
+    assert resp.get_json()["cancelled_actions"] == 0
+    assert get_alert(alert.id, db_path=db_path).status == ALERT_STATUS_DISMISSED
+
+
+def test_dismiss_alert_route_404_on_unknown(client: FlaskClient) -> None:
+    resp = client.post("/api/alerts/424242/dismiss")
+    assert resp.status_code == 404
+
+
+def test_dismiss_alert_route_409_on_double_click(client: FlaskClient, db_path: Path) -> None:
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-twice",
+        db_path=db_path,
+    )
+    assert client.post(f"/api/alerts/{alert.id}/dismiss").status_code == 200
+    resp = client.post(f"/api/alerts/{alert.id}/dismiss")
+    assert resp.status_code == 409
+
+
+def test_dismiss_alert_route_rejects_cross_site(client: FlaskClient, db_path: Path) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+    resp = client.post(
+        f"/api/alerts/{alert_id}/dismiss",
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert resp.status_code == 403
+    # Nothing mutated — the alert and its draft are both untouched.
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
 
 
 # ----------------------------------------------------------------------------
