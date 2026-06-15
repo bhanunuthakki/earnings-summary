@@ -352,6 +352,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/discovery_panel.py",
         "pipeline/evals_panel.py",
         "pipeline/explore_panel.py",
+        "pipeline/fact_overrides_panel.py",
         "pipeline/ir_coverage_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/peeks.py",

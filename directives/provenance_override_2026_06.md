@@ -234,8 +234,10 @@ verification, stopping on failure.
   Eval: `evals/golden/extract_8k_overrides.json` + `execution/run_8k_extraction_eval.py`
   (real-LLM, run on the weekly cadence — gates promoting to a cheaper backend; a `≥0.95`
   score required). The owner can now auto-populate the GOOG case rather than hand-seeding.
-- **P5 — surface + docs.** `data_provenance.md` §9; a read-only "Overrides" panel /
-  provenance-console row so an override is visible & auditable; update memory notes.
+- **P5 — surface + docs. [SHIPPED]** `data_provenance.md` §10 documents the layer; a
+  read-only **Overrides** sub-panel (`src/pipeline/fact_overrides_panel.py`, wired into
+  System → Provenance next to Restatements) lists every active override with its citing
+  filing, so any override is visible & auditable; memory notes updated.
 
 ---
 

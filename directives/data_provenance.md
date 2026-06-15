@@ -210,3 +210,38 @@ The source chip popover (`src/ui/source_chip.py`) renders, per fact:
 - **unresolved validation issues** as warn rows, formatted by `pipeline.confidence.display_issues_for_fact` — a cross-source disagreement reads from the displayed cell's perspective ("⚠ SEC says $101M, 0.99% delta"); unrecognized rules fall back to `⚠ <rule>: <raw_value>`, which is where a manual-override reason (§3) surfaces;
 - **`extracted_by`** ("via fmp_derived") — the extraction-method audit trail;
 - **derived-from lineage** — `computed_from.display` plus per-input mini-chips.
+
+---
+
+## 10. Company-doc overrides — `fact_overrides` (alembic 0111)
+
+See the dedicated directive `directives/provenance_override_2026_06.md`. FMP is a
+*convenience* tier, not authoritative; when a company-published document (SEC 8-K /
+10-Q / 10-K, earnings press release, IR deck) reports a value, it should
+**systematically supersede** FMP's cached/derived value for the same logical fact.
+The tier ladder (§2) handles `sec_official` > FMP, but the documents the owner most
+wants to win — press-release / IR-deck exhibits — ingest as `IR_DOC` (a *tie* with
+FMP) or `LLM_EXTRACTED` (which *loses*), and some readers bypass the ladder. So the
+durable mechanism is a first-class **override record consulted at read time**.
+
+- **Table:** `fact_overrides` (alembic 0111) — one ACTIVE row per logical key
+  `(user_id, ticker, period_end, fiscal_period_type, fact_kind, fact_key)` enforced by
+  a partial-unique index; superseded overrides retained as `retired`. Lives in the DB,
+  **outside** the FMP cache files, so a `save_fmp_data` re-fetch cannot clobber it.
+- **Resolver:** `src/provenance/overrides.py` — `record_override` / `resolve_scalar` /
+  `apply_segment_overrides` / `active_scalar_override_map` / `date_override_map`.
+  Actions: `replace` (authoritative value), `drop` (spurious record/cell), `qualify`
+  (annotate only).
+- **Read paths honoring it:** the segment ingest gate + audit + the direct-JSON DCF
+  readers (`src/compute/segment_cache.py`); the canonical `timeseries/loaders.py`
+  series loaders; and the `MAX(source_doc_id)` KPI readers
+  (`thesis_evaluator._fetch_kpi_history`, `fmp_derived_kpis._fetch_full_kpi_series`,
+  `report/sections/financials.py`). FMP rows are NOT deleted — the override wins at
+  read, so the provenance/audit trail and disagreement signal survive.
+- **Populating:** by hand (`execution/record_fact_override.py`) or auto-extracted from
+  the filing (`src/provenance/edgar_8k.py` + `execution/extract_8k_overrides.py`).
+- **Surfacing:** System → Provenance → **Overrides** (`pipeline/fact_overrides_panel.py`).
+
+Remaining seam: the per-cell source *chip* (§9) still describes the FMP row for an
+overridden value — the displayed number is correct, but the chip's source attribution
+and a `qualify` → ⚠ annotation are a follow-up.
