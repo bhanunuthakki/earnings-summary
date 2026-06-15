@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import cast
 
 from table_extractors import customer_concentration as cc_module
+from table_extractors import generic_xbrl_capture as gxc_module
 from table_extractors import lease_commitments as lc_module
 from table_extractors.base import ExtractionOutcome
 
@@ -39,6 +40,11 @@ class _ExtractorEntry:
     extract_fn: Callable[..., ExtractionOutcome]
     needs_fmp: bool = True
     needs_sec_text: bool = False
+    # Whether `extract_for_ticker(table_kinds=None)` runs this extractor as part
+    # of the default sweep. The narrow bespoke-table extractors do; the
+    # capture-all walker is opt-in (a deliberate pilot/bulk decision — it can mint
+    # thousands of facts), so it only runs when named explicitly via --table-kind.
+    default: bool = True
 
 
 # Registry of implemented extractors. Stubs from `_stubs.py` are NOT
@@ -55,6 +61,17 @@ _REGISTRY: dict[str, _ExtractorEntry] = {
         extract_fn=lc_module.extract,
         needs_fmp=True,
         needs_sec_text=False,
+    ),
+    # Capture-every-number Stage A: walk ALL (Details) note tables and route
+    # every monetary cell into kpi_facts (origin=CAPTURE). Unlike the two narrow
+    # extractors above (bespoke tables), this one lands in the universal
+    # kpi_facts substrate, so its output is immediately ask/DIY/DCF-visible.
+    "xbrl_capture_all": _ExtractorEntry(
+        table_kind=gxc_module.TABLE_KIND,
+        extract_fn=gxc_module.extract,
+        needs_fmp=True,
+        needs_sec_text=False,
+        default=False,  # opt-in: run via --table-kind xbrl_capture_all only
     ),
 }
 
@@ -88,7 +105,9 @@ def extract_for_ticker(
     db = db_path or (repo_root / "data" / "portfolio.db")
     fmp_dir = repo_root / "data" / "historical" / "fmp"
 
-    requested = list(table_kinds) if table_kinds else list(_REGISTRY.keys())
+    requested = (
+        list(table_kinds) if table_kinds else [k for k, entry in _REGISTRY.items() if entry.default]
+    )
     bad = [tk for tk in requested if tk not in _REGISTRY]
     if bad:
         raise ValueError(f"unknown table_kind(s): {bad}; known={registered_table_kinds()}")

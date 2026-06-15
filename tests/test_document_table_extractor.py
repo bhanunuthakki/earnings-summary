@@ -262,9 +262,23 @@ def test_extract_for_ticker_runs_all_registered_by_default(
         table_kinds=None,
         repo_root=repo_root,
     )
-    # Both registered extractors should have been called.
+    # The default sweep runs the two narrow bespoke extractors. The capture-all
+    # walker is opt-in (it can mint thousands of facts), so it does NOT ride the
+    # default run even though it's registered.
     table_kinds = {o.table_kind for o in outcomes}
     assert table_kinds == {"customer_concentration", "lease_commitments_ladder"}
+
+
+def test_capture_all_is_registered_but_opt_in(repo_root: Path) -> None:
+    """xbrl_capture_all is a valid --table-kind choice but excluded from the
+    default (table_kinds=None) sweep — only runs when named explicitly."""
+    assert "xbrl_capture_all" in dte.registered_table_kinds()
+    assert dte._REGISTRY["xbrl_capture_all"].default is False  # pyright: ignore[reportPrivateUsage]
+    assert all(
+        e.default
+        for k, e in dte._REGISTRY.items()
+        if k != "xbrl_capture_all"  # pyright: ignore[reportPrivateUsage]
+    )
 
 
 def test_extract_for_ticker_rejects_unknown_kind(repo_root: Path) -> None:

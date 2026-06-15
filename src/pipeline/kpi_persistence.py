@@ -19,6 +19,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
+from compute.kpi_resolver import canonical_metric_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, Unit
@@ -70,6 +71,15 @@ class KpiExtractionManifest(BaseModel):
     # 'llm[:model]' tag; deterministic sources (e.g. IR-spreadsheet parsing) set
     # an explicit tag like 'ir_spreadsheet' so audits don't mislabel them as LLM.
     extracted_by: str | None = None
+    # Who authored the kpi_definitions rows these values land in. The default
+    # ANALYST is the curated-watchlist path (tier_*_kpis): names are stored
+    # VERBATIM under their exact watchlist spelling. The capture-every-number
+    # extractors set CAPTURE — which switches persist_manifest into capture mode:
+    # each value's name is routed through ``compute.kpi_resolver.canonical_metric_name``
+    # (collapsing unit/casing/whitespace variants onto an existing definition,
+    # minting a clean name otherwise) and minted definitions are stamped CAPTURE so
+    # the long tail stays distinguishable from the analyst registry (migration 0113).
+    origin: DefinitionOrigin = DefinitionOrigin.ANALYST
     # Authoritative per-KPI unit, keyed by KpiValue.name. Populated by callers
     # that know the canonical unit a metric SHOULD be stored in — the LLM path
     # fills it from each holding's break-rule `unit` (the unit its threshold is
@@ -445,10 +455,21 @@ def persist_manifest(
             issues += 1
             continue
 
+        # Capture mode (origin=CAPTURE): collapse the raw label onto an existing
+        # definition (or mint a clean canonical) BEFORE find_or_create, so the
+        # long tail doesn't explode the registry with unit/casing variants. The
+        # resolve reads live state on this same connection, so a name minted for
+        # an earlier value in this manifest is reused by a later equivalent one
+        # (within-batch dedup). The analyst path stores names verbatim.
+        store_name = (
+            canonical_metric_name(conn, manifest.ticker, kpi.name, unit)
+            if manifest.origin is DefinitionOrigin.CAPTURE
+            else kpi.name
+        )
         kpi_def_id = find_or_create_kpi_definition(
             conn,
             ticker=manifest.ticker,
-            name=kpi.name,
+            name=store_name,
             unit=unit,
             primary_source=manifest.primary_source,
             # A successfully-applied canonical is authoritative for the
@@ -458,6 +479,9 @@ def persist_manifest(
             # Mark the definition's native frequency when the caller declared it
             # (annual-only 20-F/10-K metrics). Absent → cadence left as-is.
             reporting_cadence=manifest.cadences.get(kpi.name),
+            # Stamp who authored a BRAND-NEW definition; never rewrites an
+            # existing row (an analyst def re-seen by capture stays ANALYST).
+            origin=manifest.origin,
         )
         excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
         was_inserted = _insert_kpi_fact(
