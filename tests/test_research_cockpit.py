@@ -31,7 +31,10 @@ import db as dbmod  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
     _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    attractiveness_breakdown,
+    attractiveness_tone,
     build_cockpit_rows,
+    compute_attractiveness,
     eval_attractiveness,
     render_research_cockpit,
 )
@@ -576,6 +579,36 @@ def test_attractiveness_nonpositive_peg_is_missing() -> None:
     assert score == pytest.approx(0.85)
 
 
+def test_attractiveness_breakdown_factors_and_consistency() -> None:
+    """The structured breakdown carries one labeled factor per input — with its
+    band multiplier and the formatted input — and its (score, why, partial)
+    match the flat eval_attractiveness view exactly."""
+    bd = attractiveness_breakdown(
+        dcf_upside_pct=32.0, rev_yoy_pct=24.0, fcf_margin_pct=18.0, peg_ratio=None
+    )
+    by_key = {f.key: f for f in bd.factors}
+    assert [f.key for f in bd.factors] == ["dcf", "growth", "fcf", "peg"]
+    assert by_key["dcf"].label == "DCF upside"
+    assert by_key["dcf"].multiplier == pytest.approx(1.5)
+    assert by_key["dcf"].detail == "+32.0% upside"
+    assert not by_key["dcf"].missing
+    assert by_key["peg"].missing  # None input -> the x0.85 missing factor
+    assert by_key["peg"].detail == "n/a"
+    assert by_key["peg"].multiplier == pytest.approx(0.85)
+    # The flat view is just (score, why, partial) of the same object.
+    score, why, partial = eval_attractiveness(
+        dcf_upside_pct=32.0, rev_yoy_pct=24.0, fcf_margin_pct=18.0, peg_ratio=None
+    )
+    assert (bd.score, bd.why, bd.partial) == (score, why, partial)
+
+
+def test_attractiveness_tone() -> None:
+    """The chip + peek share one tone map: hi >= 1.25, lo <= 0.75, else ''."""
+    assert attractiveness_tone(1.25) == "hi"
+    assert attractiveness_tone(0.75) == "lo"
+    assert attractiveness_tone(1.0) == ""
+
+
 def _seed_eval_name(c: sqlite3.Connection, ticker: str, name: str) -> None:
     c.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type, "
@@ -651,8 +684,31 @@ def test_build_evaluation_sorted_by_attractiveness(
     # The strong name renders a hi-tone chip with the full math in its hover.
     html = render_research_cockpit(built)
     assert "attract-chip attract-hi" in html
-    assert ">3.48</span>" in html
+    assert ">3.48</a>" in html  # the chip is a peek doorway <a>, not a <span>
     assert "x peg 1.20 (0.8) = 3.48" in html
+    # …and the chip is a peek doorway: click opens the breakdown, /ticker is
+    # the real href, the why stays in the hover title.
+    assert "data-peek-url='/api/peek/score?ticker=GOODE'" in html
+    assert "href='/ticker/GOODE'" in html
+
+
+def test_compute_attractiveness_matches_row_and_guards(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """The single-ticker breakdown (the Score-peek producer) reads the SAME
+    inputs as the cockpit row, so its score and why equal the row's; an
+    untracked or empty ticker returns None (the route 404s)."""
+    # V (evaluation): NULL npv_per_share -> no upside, no fundamentals, no PEG
+    # cache -> every factor missing, score 0.85**4 — exactly the row's value.
+    bd = compute_attractiveness(conn, repo_root, "v")  # lowercase -> uppercased
+    assert bd is not None
+    assert bd.score == pytest.approx(0.85**4)
+    assert all(f.missing for f in bd.factors)
+    row = _by_ticker(build_cockpit_rows(conn, repo_root)["evaluation"])["V"]
+    assert bd.score == pytest.approx(row.attractiveness)
+    assert bd.why == row.attractiveness_why
+    assert compute_attractiveness(conn, repo_root, "ZZZQ") is None  # untracked
+    assert compute_attractiveness(conn, repo_root, "") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -705,9 +761,61 @@ def test_render_eval_score_column(rows: dict[str, list[CockpitRow]]) -> None:
     all four n/a factors."""
     html = render_research_cockpit(rows)
     assert html.count(">Score</th>") == 1
+    # The Fit column sits beside Score (thin table only); with no candidate_fit
+    # cache the fixture's V carries no fit, so its cell is the muted em-dash.
+    assert html.count(">Fit</th>") == 1
     assert "attract-chip attract-lo attract-partial" in html
-    assert ">0.52</span>" in html
+    assert ">0.52</a>" in html
     assert "dcf 0.85 (n/a) x growth 0.85 (n/a) x fcf 0.85 (n/a) x peg 0.85 (n/a) = 0.52" in html
+    assert "/api/peek/fit" not in html  # no cache → no fit chip (only the CSS class is present)
+
+
+def test_build_attaches_fit_from_cache(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """An evaluation row picks up its portfolio-fit scalars from the
+    materialized candidate_fit.json; the chip then renders as a peek doorway."""
+    (repo_root / "data" / "candidate_fit.json").write_text(
+        json.dumps(
+            {
+                "computed_at": "2026-06-14T04:00:00",
+                "fits": {
+                    "V": {
+                        "fit": 1.15,
+                        "why": "sharpe 1.12 (...) x divers 1.03 (...) = 1.15",
+                        "partial": False,
+                        "obs": 200,
+                        "factors": [
+                            {
+                                "key": "sharpe",
+                                "label": "Marginal Sharpe",
+                                "multiplier": 1.12,
+                                "detail": "SR ...",
+                                "missing": False,
+                            },
+                            {
+                                "key": "divers",
+                                "label": "Diversification",
+                                "multiplier": 1.03,
+                                "detail": "corr ...",
+                                "missing": False,
+                            },
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    v = _by_ticker(build_cockpit_rows(conn, repo_root)["evaluation"])["V"]
+    assert v.fit == pytest.approx(1.15)
+    assert not v.fit_partial
+    assert "sharpe 1.12" in (v.fit_why or "")
+    # Portfolio rows never carry a fit (the cache is evaluation-only).
+    assert all(r.fit is None for r in build_cockpit_rows(conn, repo_root)["portfolio"])
+    # And it renders the fit chip as a /api/peek/fit doorway.
+    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert "fit-chip fit-hi" in html  # 1.15 >= 1.10
+    assert "data-peek-url='/api/peek/fit?ticker=V'" in html
+    assert ">1.15</a>" in html
 
 
 def test_render_escapes_company_name(rows: dict[str, list[CockpitRow]]) -> None:

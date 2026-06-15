@@ -43,7 +43,14 @@ from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_ale
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
-from pipeline.research_cockpit import latest_dcf_runs, next_earnings, profile_quote
+from pipeline.research_cockpit import (
+    AttractivenessFactor,
+    attractiveness_tone,
+    compute_attractiveness,
+    latest_dcf_runs,
+    next_earnings,
+    profile_quote,
+)
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -51,9 +58,11 @@ from ui.time import stamp_html
 __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
+    "render_fit_peek",
     "render_memo_peek",
     "render_new_docs_peek",
     "render_provenance_peek",
+    "render_score_peek",
     "render_ticker_peek",
 ]
 
@@ -341,6 +350,181 @@ def _pending_alert_count(conn: sqlite3.Connection, ticker: str) -> int:
     except sqlite3.Error:
         return 0
     return int(row[0]) if row else 0
+
+
+# ----------------------------------------------------------------------------
+# Next-dollar score breakdown (cockpit Score chip)
+# ----------------------------------------------------------------------------
+
+# Band multipliers run [0.5, 1.8] (see research_cockpit's _*_BANDS); the bar
+# maps that span to [0, 100]% so a lifting factor reads visibly fuller than a
+# dragging one. Mirrors the constants by value, not by import — these are the
+# render layer's, not the scorer's.
+_BAR_MIN, _BAR_MAX = 0.5, 1.8
+
+
+def render_score_peek(conn: sqlite3.Connection, repo_root: Path, ticker: str) -> str | None:
+    """The next-dollar attractiveness breakdown for an evaluation name — the
+    click-through behind the cockpit's Score chip. One row per factor (DCF
+    upside · Revenue growth · FCF margin · PEG) with the band multiplier and
+    the input it scored, then the product that makes the chip's number, then a
+    legend. Reuses :func:`research_cockpit.compute_attractiveness` so the peek
+    and the cockpit row read the same inputs and can't disagree. None when the
+    ticker isn't a tracked, non-archived name (the route 404s)."""
+    bd = compute_attractiveness(conn, repo_root, ticker)
+    if bd is None:
+        return None
+    t = ticker.strip().upper()
+    tone = attractiveness_tone(bd.score)
+    head = (
+        '<div class="cc-score-head">'
+        '<span class="cc-score-cap">Next-dollar attractiveness</span>'
+        f'<span class="cc-score-big score-{tone or "mid"}">{bd.score:.2f}</span>'
+        "</div>"
+    )
+    rows = "".join(_score_factor_row(f) for f in bd.factors)
+    product = " &times; ".join(f"{f.multiplier:.2f}" for f in bd.factors)
+    formula = f'<div class="cc-score-formula">1.00 &times; {product} = <b>{bd.score:.2f}</b></div>'
+    legend_bits = ["&times;&gt;1 lifts", "&times;&lt;1 drags"]
+    if bd.partial:
+        legend_bits.append("missing input scores &times;0.85")
+    legend = f'<div class="cc-score-legend">{" · ".join(legend_bits)}</div>'
+    foot = (
+        f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
+        "open the evaluation report &rarr;</a></div>"
+    )
+    return (
+        f'<div class="cc-score">{head}'
+        f'<div class="cc-score-rows">{rows}</div>'
+        f"{formula}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+    )
+
+
+def _factor_row_html(
+    label: str, multiplier: float, detail: str, missing: bool, *, bar_min: float, bar_max: float
+) -> str:
+    """One breakdown-peek factor row: label · the input it scored · a multiplier
+    bar · the multiplier. Shared by the Score and Fit peeks (their factors carry
+    the same shape); a missing input shows "no data" and no bar. ``bar_min`` /
+    ``bar_max`` scale the bar to the factor family's multiplier range."""
+    if missing:
+        return (
+            '<div class="cc-score-row cc-score-row-missing">'
+            f'<span class="cc-score-label">{escape(label)}</span>'
+            '<span class="cc-score-detail muted">no data</span>'
+            '<span class="cc-score-bar"></span>'
+            f'<span class="cc-score-mult mult-mid">&times;{multiplier:.2f}</span>'
+            "</div>"
+        )
+    tone = "pos" if multiplier > 1.0 else "neg" if multiplier < 1.0 else "mid"
+    pct = max(0.0, min(100.0, (multiplier - bar_min) / (bar_max - bar_min) * 100.0))
+    bar = (
+        '<span class="cc-score-bar">'
+        f'<span class="cc-score-fill bar-{tone}" style="width:{pct:.0f}%"></span></span>'
+    )
+    return (
+        '<div class="cc-score-row">'
+        f'<span class="cc-score-label">{escape(label)}</span>'
+        f'<span class="cc-score-detail">{escape(detail)}</span>'
+        f"{bar}"
+        f'<span class="cc-score-mult mult-{tone}">&times;{multiplier:.2f}</span>'
+        "</div>"
+    )
+
+
+def _score_factor_row(f: AttractivenessFactor) -> str:
+    return _factor_row_html(
+        f.label, f.multiplier, f.detail, f.missing, bar_min=_BAR_MIN, bar_max=_BAR_MAX
+    )
+
+
+_SCORE_CSS = """
+.cc-score-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.cc-score-cap { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.05em; }
+.cc-score-big { font-family: var(--mono); font-size: var(--fs-display); font-weight: 700; }
+.cc-score-big.score-hi { color: var(--ok); }
+.cc-score-big.score-lo { color: var(--muted); }
+.cc-score-big.score-warn { color: var(--warn); }
+.cc-score-rows { display: flex; flex-direction: column; margin: 10px 0 6px; }
+.cc-score-row { display: grid; grid-template-columns: 104px 1fr 84px 52px; gap: 10px;
+  align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hairline);
+  font-size: var(--fs-body); }
+.cc-score-row:last-child { border-bottom: none; }
+.cc-score-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.05em; }
+.cc-score-detail { font-variant-numeric: tabular-nums; }
+.cc-score-detail.muted { color: var(--muted); }
+.cc-score-bar { display: block; height: 6px; background: var(--paper);
+  border-radius: var(--radius-full); overflow: hidden; }
+.cc-score-fill { display: block; height: 100%; border-radius: var(--radius-full); }
+.cc-score-fill.bar-pos { background: var(--ok); }
+.cc-score-fill.bar-neg { background: var(--bad); }
+.cc-score-fill.bar-mid { background: var(--muted-2); }
+.cc-score-mult { font-family: var(--mono); font-weight: 600; text-align: right; }
+.cc-score-mult.mult-pos { color: var(--ok); }
+.cc-score-mult.mult-neg { color: var(--bad); }
+.cc-score-mult.mult-mid { color: var(--muted); }
+.cc-score-formula { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
+  margin-top: 4px; }
+.cc-score-legend { color: var(--muted); font-size: var(--fs-micro); margin-top: 6px; }
+""".strip()
+
+
+# ----------------------------------------------------------------------------
+# Portfolio-fit breakdown (cockpit Fit chip)
+# ----------------------------------------------------------------------------
+
+# Fit multipliers are centered on 1.0 over a tighter range than the score's
+# (~0.8 to 1.25); the bar maps [0.7, 1.3] to [0, 100]% so a lift reads fuller
+# than a drag. Reuses the cc-score-* layout (the breakdown anatomy is identical).
+_FIT_BAR_MIN, _FIT_BAR_MAX = 0.7, 1.3
+
+
+def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
+    """The portfolio-fit breakdown for an evaluation name — the click-through
+    behind the cockpit's Fit chip. One row per factor (Marginal Sharpe ·
+    Diversification · Factor fit · Sector fit) with the band multiplier and the
+    reading it scored, then the product that makes the chip's number. Read from
+    the materialized ``candidate_fit.json`` (the same cache the chip's number
+    came from — never recomputed on the render path). None when the ticker has no
+    cached fit (the route 404s)."""
+    from allocation.candidate_fit import fit_tone
+    from candidate_fit_cache import read_materialized_candidate_fit
+
+    t = ticker.strip().upper()
+    cf = read_materialized_candidate_fit(repo_root).get(t)
+    if cf is None:
+        return None
+    tone = fit_tone(cf.fit)
+    big_tone = "score-hi" if tone == "hi" else "score-warn" if tone == "lo" else "mid"
+    head = (
+        '<div class="cc-score-head">'
+        '<span class="cc-score-cap">Portfolio fit to the held book</span>'
+        f'<span class="cc-score-big {big_tone}">{cf.fit:.2f}</span>'
+        "</div>"
+    )
+    rows = "".join(
+        _factor_row_html(
+            f.label, f.multiplier, f.detail, f.missing, bar_min=_FIT_BAR_MIN, bar_max=_FIT_BAR_MAX
+        )
+        for f in cf.factors
+    )
+    product = " &times; ".join(f"{f.multiplier:.2f}" for f in cf.factors)
+    formula = f'<div class="cc-score-formula">1.00 &times; {product} = <b>{cf.fit:.2f}</b></div>'
+    legend_bits = ["&times;&gt;1 accretive", "&times;&lt;1 dilutive"]
+    if cf.partial:
+        legend_bits.append("missing factor scores neutral")
+    legend = f'<div class="cc-score-legend">{" · ".join(legend_bits)}</div>'
+    foot = (
+        f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
+        "open the evaluation report &rarr;</a></div>"
+    )
+    return (
+        f'<div class="cc-score">{head}'
+        f'<div class="cc-score-rows">{rows}</div>'
+        f"{formula}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+    )
 
 
 # ----------------------------------------------------------------------------

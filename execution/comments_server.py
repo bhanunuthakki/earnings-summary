@@ -2048,6 +2048,37 @@ def create_app(
             mimetype="text/html",
         )
 
+    @app.route("/api/peek/score", methods=["GET"])
+    def peek_score():
+        """The next-dollar attractiveness breakdown for an evaluation name — the
+        click-through behind the cockpit's Score chip. Factor-by-factor (DCF
+        upside · Rev growth · FCF margin · PEG) with each band multiplier and
+        the input it scored, recomputed from the same readers the cockpit row
+        uses. 404 for an untracked ticker."""
+        from pipeline.peeks import render_score_peek
+
+        conn = _open_db()
+        try:
+            html = render_score_peek(conn, repo_root, request.args.get("ticker") or "")
+        finally:
+            conn.close()
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/fit", methods=["GET"])
+    def peek_fit():
+        """The portfolio-fit breakdown for an evaluation name — the click-through
+        behind the cockpit's Fit chip. Factor-by-factor (marginal Sharpe ·
+        diversification · factor exposure · sector) read from the materialized
+        candidate_fit.json. 404 when the ticker has no cached fit."""
+        from pipeline.peeks import render_fit_peek
+
+        html = render_fit_peek(repo_root, request.args.get("ticker") or "")
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         """Full per-ticker command-center state as JSON: identity/freshness,
