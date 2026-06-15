@@ -32,7 +32,13 @@ IR_URL_OVERRIDES: dict[str, str] = {
     "WIX": "https://investors.wix.com/financials",
     "RBRK": "https://ir.rubrik.com/financial-information/quarterly-results",
     "VEEV": "https://ir.veeva.com/",
-    "BN": "https://bam.brookfield.com/investors",
+    # Brookfield Corporation (BN) — its OWN IR site is bn.brookfield.com.
+    # bam.brookfield.com is Brookfield ASSET MANAGEMENT (ticker BAM), a separate
+    # listed entity spun off in Dec-2022; pointing BN there ingested BAM's
+    # press releases / supplementals / transcripts / 10-Ks under BN. Reports &
+    # filings live under bn.brookfield.com/reports-filings, presentations under
+    # .../BN-IR-Master/Presentations/...
+    "BN": "https://bn.brookfield.com/reports-filings",
     # --- Evaluation list ---
     "LLY": "https://investor.lilly.com/financial-information",
     "V": "https://investor.visa.com/financial-information/quarterly-earnings/default.aspx",
