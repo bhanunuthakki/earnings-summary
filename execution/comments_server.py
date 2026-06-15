@@ -2619,6 +2619,38 @@ def create_app(
             201,
         )
 
+    @app.route("/actions/rebuild-dcfs", methods=["POST", "OPTIONS"])
+    def rebuild_dcfs():
+        """Rebuild every DCF-maintained name so a change to the global DCF
+        assumptions (risk-free / ERP / tax) propagates into the workbooks +
+        dcf_runs. Single-flight job streamed over /actions/stream/<job_id>;
+        ``refresh_dcf --all-named`` prints per-ticker results (fair value +
+        over/under). The 'Rebuild affected models' button in the Global DCF
+        assumptions drawer section calls this."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "refresh_dcf.py"),
+            "--all-named",
+            "--repo-root",
+            str(repo_root),
+        ]
+        try:
+            job = job_registry.start(ticker="_REPO", kind="rebuild-dcfs", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
     @app.route("/actions/maintenance", methods=["POST", "OPTIONS"])
     def start_maintenance():
         """Repo-wide maintenance chores (seed KPI defs · process dropped docs ·
