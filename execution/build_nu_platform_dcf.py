@@ -55,6 +55,10 @@ try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
+    from dcf import global_assumptions as global_dcf
+except ImportError:  # pragma: no cover
+    global_dcf = None  # type: ignore[assignment]
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -102,7 +106,15 @@ class Assum:
     cap_ratio: float = 0.12  # required equity / credit book
     # discounting / terminal
     eq0: float = 11330.0  # book equity Y0 ($11.33B, Q4'25) -- for the RI cross-check
-    ke: float = 0.125  # cost of equity (LatAm)
+    ke: float = 0.125  # cost of equity (LatAm); explicit unless derive_ke_capm is set
+    # Opt-in CAPM: when derive_ke_capm != 0, ke is recomputed from the editable
+    # GLOBAL risk-free + ERP as rf + beta*erp + country_risk_premium, so a dashboard
+    # change to the macro inputs flows into this model's discount rate. Off by
+    # default (ke stays the explicit scalar above -> zero drift). Defaults
+    # approximately reproduce 0.125 (0.043 + 1.15*0.045 + 0.0275 ~ 0.123).
+    beta: float = 1.15
+    country_risk_premium: float = 0.0275  # LatAm (Brazil) blended CRP
+    derive_ke_capm: int = 0
     g_term: float = 0.07
     terminal_roe: float = 0.20  # sustainable ROE on RETAINED capital; terminal reinvestment = g/ROE
     exit_pe: float = 16.0  # exit P/E on terminal NI (cross-check)
@@ -217,6 +229,11 @@ def mirror(s: Assum) -> Mirror:
 def load_assumptions(ticker: str) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_platform.json."""
     s = Assum()
+    # Seed the editable global tax default before the per-ticker JSON below, so
+    # an unpinned platform name tracks the dashboard-set global while a pinned
+    # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
+    if global_dcf is not None:
+        s.tax = global_dcf.load(db_path=REPO / "data" / "portfolio.db").tax_rate
     p = REPO / "data" / "bank_assumptions" / f"{ticker}_platform.json"
     if p.exists():
         try:
@@ -227,6 +244,14 @@ def load_assumptions(ticker: str) -> Assum:
             for k, v in cast("dict[str, Any]", ov).items():
                 if hasattr(s, k) and isinstance(v, (int, float)):
                     setattr(s, k, v)
+    # Opt-in: derive ke from the global risk-free/ERP when the name asks for it.
+    # Runs after the JSON overrides so beta / CRP / the flag can be tuned per name.
+    if global_dcf is not None and s.derive_ke_capm:
+        s.ke = global_dcf.capm_ke(
+            s.beta,
+            country_risk_premium=s.country_risk_premium,
+            db_path=REPO / "data" / "portfolio.db",
+        )
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
         try:

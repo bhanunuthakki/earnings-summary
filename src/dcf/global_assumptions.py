@@ -132,6 +132,24 @@ def load(*, db_path: Path | str | None = None) -> GlobalDcfAssumptions:
     )
 
 
+def capm_ke(
+    beta: float,
+    *,
+    country_risk_premium: float = 0.0,
+    db_path: Path | str | None = None,
+) -> float:
+    """Cost of equity from CAPM on the global risk-free + ERP:
+    ``rf + beta * erp + country_risk_premium``.
+
+    The opt-in path by which the non-CAPM models (fintech SOTP, NU platform)
+    let the editable global risk-free / ERP drive their discount rate. Off by
+    default in those builders, so each model's explicit ``ke`` is unchanged
+    until a ticker asks for the CAPM derivation. Degrades to the seed defaults
+    when the store is absent."""
+    g = load(db_path=db_path)
+    return g.risk_free_rate + float(beta) * g.equity_risk_premium + float(country_risk_premium)
+
+
 def resolve(
     field: str,
     *,
