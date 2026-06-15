@@ -126,7 +126,7 @@
 .cv2-legend { font-size: 10.5px; fill: #1a1f2e; }
 .cv2-line-end { font-size: 10px; font-weight: 600; font-family: var(--mono, 'JetBrains Mono', monospace); }
 .cv2-matrix th, .cv2-matrix td { padding: 4px 6px; border: 1px solid #e3e7eb; text-align: right; white-space: nowrap; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; font-family: var(--mono, 'JetBrains Mono', monospace); width: 100%; }
+.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
 .cv2-matrix-cagr, .cv2-matrix-cagr-cell { border-left: 2px solid #1a1f2e !important; }
 .cv2-matrix-def-mark { cursor: help; opacity: 0.6; }
 .cv2-matrix-def-mark:hover { opacity: 1; }
@@ -655,6 +655,7 @@
 /* ============================================================ Valuation tab ============================================================ */ .valuation-headline { padding: 14px 16px; }
 /* ============================================================ Workspace shell ============================================================ */ .l1-root { flex: 1; min-width: 0; height: 100vh; height: 100dvh; overflow-y: auto; background: var(--bg); color: var(--fg); font-family: var(--sans); display: flex; flex-direction: column; padding-bottom: 32px; }
 /* Break-rules detail row — appears under each main rule row when narrative / detail / observations are present. Quieter background so the parent row reads first. */ .break-detail td { padding: 4px var(--panel-pad-x) 10px !important; border-top: 0 !important; background: var(--paper); color: var(--muted); }
+/* Canonical table rule: numbers mono, labels/headers sans. Every value cell is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are <th>, which inherit the page's sans. */ .cv2-matrix td { font-family: var(--mono, 'JetBrains Mono', monospace); }
 /* Dark-mode override for the charts_v2 YoY matrix — the upstream CSS is light-themed (white/grey backgrounds, dark text). Override the colors to match the workspace dark palette so the matrix doesn't stand out. */ :root[data-theme="dark"] .cv2-matrix-wrap { color: var(--fg-soft); }
 /* Dim a stale row's data but keep the flag itself at full strength. */ .ledger-stale-row td { opacity: 0.55; }
 /* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: 1px dashed transparent; }

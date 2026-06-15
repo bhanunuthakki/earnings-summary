@@ -42,14 +42,15 @@ VIEWSPEC_CSS = (
 .vx-meta { color: var(--muted); font-size: var(--fs-caption); margin: 4px 0 8px; }
 .vx-warn { color: var(--warn); font-size: var(--fs-caption); margin: 2px 0; }
 .vx-wrap { overflow-x: auto; }
-.vx-matrix { border-collapse: collapse; font-size: var(--fs-caption);
-  font-family: var(--mono); }
+.vx-matrix { border-collapse: collapse; font-size: var(--fs-caption); }
 .vx-matrix th, .vx-matrix td { padding: 4px 7px; border: 1px solid var(--border);
   text-align: right; white-space: nowrap; }
 .vx-matrix thead th { color: var(--fg); background: var(--paper, var(--surface)); }
 .vx-matrix .vx-label { text-align: left; font-weight: 600; color: var(--fg);
   background: var(--paper, var(--surface)); position: sticky; left: 0; }
-.vx-matrix td { color: var(--fg-soft, var(--fg)); }
+/* Canonical table rule: numbers mono, labels/headers sans. Data cells are <td>;
+   the row label (.vx-label) and column headers are <th>, inheriting sans. */
+.vx-matrix td { color: var(--fg-soft, var(--fg)); font-family: var(--mono); }
 .vx-matrix td.vx-nm { color: var(--muted); cursor: help; }
 .vx-unit { color: var(--muted); font-weight: 400; }
 .vx-chart { margin-top: var(--sp-3); }
