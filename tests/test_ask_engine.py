@@ -219,7 +219,13 @@ def _patch_data_path(
 
     def fake_execute(spec: ViewSpec, *, db_path: Path) -> SimpleNamespace:
         seen["executed_spec"] = spec
-        return SimpleNamespace(rows=[object()] * n_rows)
+        # A faithful ViewResult shape: the engine summarizes the view via
+        # view_summary(), which reads spec + period_labels + each row's cells.
+        return SimpleNamespace(
+            spec=spec,
+            period_labels=[f"P{i}" for i in range(spec.periods)],
+            rows=[SimpleNamespace(cells=[]) for _ in range(n_rows)],
+        )
 
     def fake_render(view: object, **_kw: object) -> str:
         return "<div>FAKE-FRAGMENT</div>"

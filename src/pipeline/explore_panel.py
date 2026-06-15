@@ -97,7 +97,10 @@ _PANEL_STYLE = """<style>
 .ask-meta { color:var(--muted); font-size:var(--fs-caption); margin-bottom:8px; display:flex; gap:10px;
   align-items:baseline; flex-wrap:wrap; }
 .ask-meta .ask-err { color:var(--bad); }
-.ask-actions { margin-top:8px; display:flex; gap:8px; }
+.ask-actions { margin-top:8px; display:flex; gap:10px; align-items:baseline;
+  justify-content:space-between; flex-wrap:wrap; }
+.ask-actions-sum { color:var(--muted); font-size:var(--fs-caption); }
+.ask-actions-btns { display:flex; gap:8px; }
 .ask-actions button { background:transparent; border:1px solid var(--border); color:var(--muted);
   border-radius:var(--radius); padding:3px 10px; font-size:var(--fs-caption); cursor:pointer;
   transition:color var(--transition), border-color var(--transition); }
@@ -318,7 +321,7 @@ _PANEL_JS = """
       newSpec.tickers = merged;
       fetch('/api/viewspec/run', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({spec: newSpec})
+        body: JSON.stringify({spec: newSpec, summary: false})
       }).then(function (r) {
         if (!r.ok) throw new Error('run failed');
         return r.text();
@@ -326,8 +329,7 @@ _PANEL_JS = """
         lastSpec = newSpec;
         setCtx(true);
         var added = merged.filter(function (t) { return current.indexOf(t) === -1; });
-        card.innerHTML = '<div class="ask-meta">' + askEsc(base + ' + scored peers: ' + added.join(', ')) + '</div>'
-          + h + askActionsHtml();
+        card.innerHTML = h + askActionsHtml(base + ' + scored peers: ' + added.join(', '));
         card.setAttribute('data-ask-spec', JSON.stringify(newSpec));
         askScroll();
       }).catch(function () {
@@ -416,12 +418,14 @@ _PANEL_JS = """
     var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
     return (chips || warn) ? '<div class="ask-cite-row">' + chips + warn + '</div>' : '';
   }
-  function askActionsHtml() {
-    return '<div class="ask-actions">'
+  function askActionsHtml(summary) {
+    var sum = summary ? '<span class="ask-actions-sum">' + askEsc(summary) + '</span>' : '';
+    return '<div class="ask-actions">' + sum
+      + '<span class="ask-actions-btns">'
       + '<button type="button" data-ask-act="builder">Open in builder</button>'
       + '<button type="button" data-ask-act="peers">+ Peers</button>'
       + '<button type="button" data-ask-act="pin">Pin as view</button>'
-      + '</div>';
+      + '</span></div>';
   }
   function askRemember(role, text) {
     askHistory.push({role: role, text: String(text || '').slice(0, 1200)});
@@ -514,9 +518,9 @@ _PANEL_JS = """
         lastSpec = frag.spec || lastSpec;
         setCtx(true);
         var msg = (finalEv && finalEv.text) || 'done';
-        card.innerHTML = '<div class="ask-meta">' + askEsc(msg) + '</div>'
-          + (frag.html || '')
-          + askActionsHtml();
+        // The reconciled summary rides the actions row (no separate caption
+        // band); the fragment was rendered with include_summary=false.
+        card.innerHTML = (frag.html || '') + askActionsHtml(msg);
         card.setAttribute('data-ask-spec', JSON.stringify(frag.spec || {}));
         askRemember('assistant', msg);
       } else if (finalEv) {

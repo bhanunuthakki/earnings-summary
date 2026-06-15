@@ -38,7 +38,7 @@ _NM_LIMITS: dict[str, float] = {"yoy": 500.0, "cagr": 200.0}
 # light-theme fills; the dashboard shell is dark).
 VIEWSPEC_CSS = (
     """
-.vx-result { margin-top: 6px; }
+.vx-result { margin-top: var(--sp-1); }
 .vx-meta { color: var(--muted); font-size: var(--fs-caption); margin: 4px 0 8px; }
 .vx-warn { color: var(--warn); font-size: var(--fs-caption); margin: 2px 0; }
 .vx-wrap { overflow-x: auto; }
@@ -52,7 +52,7 @@ VIEWSPEC_CSS = (
 .vx-matrix td { color: var(--fg-soft, var(--fg)); }
 .vx-matrix td.vx-nm { color: var(--muted); cursor: help; }
 .vx-unit { color: var(--muted); font-weight: 400; }
-.vx-chart { margin-top: 12px; }
+.vx-chart { margin-top: var(--sp-3); }
 .vx-chart .cv2-title { fill: var(--fg); }
 .vx-chart .cv2-axis { fill: var(--muted); }
 .vx-chart .cv2-grid { stroke: var(--border); }
@@ -105,14 +105,37 @@ def _fmt_cell(value: float | None, transform: str, unit: str | None) -> str:
     return fmt_compact(value)
 
 
-def _transform_caption(transform: str, cagr_years: int) -> str:
-    if transform == "yoy":
-        return "YoY % vs the same calendar bucket a year earlier"
-    if transform == "cagr":
-        return f"trailing {cagr_years}y CAGR ending at each bucket"
-    if transform == "margin":
-        return "value / revenue (same ticker &amp; bucket), %"
-    return "levels"
+def _cadence_noun(cadence: str, n: int) -> str:
+    """Human bucket noun for the summary line: quarterly→quarter(s),
+    annual→year(s), anything else→period(s)."""
+    base = {"quarterly": "quarter", "annual": "year"}.get(cadence, "period")
+    return f"{n} {base}{'' if n == 1 else 's'}"
+
+
+def view_summary(result: ViewResult) -> str:
+    """One reconciled status line for a view — the single source of truth shared
+    by the fragment's caption band and the Ask card's actions row.
+
+    States the series count, transform, cadence, and how many buckets actually
+    came back. When the request outran the data (``spec.periods`` > buckets
+    returned) it appends a ``⚠ N missing`` gap clause so the shortfall reads as
+    signal rather than a silent mismatch; n/m suppressions are tallied last.
+    """
+    spec = result.spec
+    n_returned = len(result.period_labels)
+    parts = [
+        f"{len(result.rows)} series",
+        escape(spec.transform),
+        escape(spec.cadence),
+        _cadence_noun(spec.cadence, n_returned),
+    ]
+    missing = spec.periods - n_returned
+    if missing > 0:
+        parts.append(f"⚠ {missing} missing")
+    nm_count = sum(1 for row in result.rows for c in row.cells if _is_nm(c.value, spec.transform))
+    if nm_count:
+        parts.append(f"{nm_count} value{'' if nm_count == 1 else 's'} n/m")
+    return " · ".join(parts)
 
 
 def _row_html(row: ViewRow, transform: str, definition: str | None = None) -> str:
@@ -134,18 +157,20 @@ def _row_html(row: ViewRow, transform: str, definition: str | None = None) -> st
     return f"<tr>{''.join(cells)}</tr>"
 
 
-def render_view_fragment(result: ViewResult, *, include_chart: bool = True) -> str:
-    """The full self-styled fragment: meta line, warnings, matrix, chart."""
+def render_view_fragment(
+    result: ViewResult, *, include_chart: bool = True, include_summary: bool = True
+) -> str:
+    """The full self-styled fragment: optional summary line, warnings, matrix, chart.
+
+    ``include_summary=False`` drops the ``.vx-meta`` status band — the Ask card
+    relocates that line onto its actions row, so the embedded fragment must not
+    print it again. The default keeps standalone embeds (the DIY-builder result,
+    ``GET /api/views/<id>/fragment``) self-describing.
+    """
     spec = result.spec
     parts: list[str] = [f"<style>{VIEWSPEC_CSS}</style>", '<div class="vx-result">']
-    meta = (
-        f"{len(result.rows)} series · {len(result.period_labels)} {spec.cadence} buckets · "
-        f"{escape(spec.transform)} — {_transform_caption(spec.transform, spec.cagr_years)}"
-    )
-    nm_count = sum(1 for row in result.rows for c in row.cells if _is_nm(c.value, spec.transform))
-    if nm_count:
-        meta += f" · {nm_count} value{'s' if nm_count != 1 else ''} n/m"
-    parts.append(f'<div class="vx-meta">{meta}</div>')
+    if include_summary and result.rows:
+        parts.append(f'<div class="vx-meta">{view_summary(result)}</div>')
     for w in result.warnings:
         parts.append(f'<div class="vx-warn">⚠ {escape(w)}</div>')
     if not result.rows:
@@ -187,10 +212,13 @@ def _chart_html(result: ViewResult) -> str:
         for row in rows
     ]
     value_fmt = "pct" if spec.transform in ("yoy", "cagr", "margin") else "compact"
+    # No title: the summary line (caption band or the Ask card's actions row)
+    # already states transform · cadence, and the legend names the series — a
+    # chart title here was the third restatement of the same words.
     svg = multi_line_chart(
         series,
         result.period_labels,
-        title=f"{spec.transform} · {spec.cadence}",
+        title="",
         width=720,
         height=260,
         value_fmt=value_fmt,
