@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from html import escape
 from pathlib import Path
 from typing import cast
@@ -437,7 +437,7 @@ def build_cockpit_rows(
     dcf = latest_dcf_runs(conn)
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
-    kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers)
+    kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers, as_of=ref.date())
     # Fast path: precomputed cache written by the morning pipeline (stage 0d).
     # Falls back to the live DB scan when the cache is absent (fresh install,
     # test env, dev run without the morning pipeline).
@@ -671,13 +671,24 @@ def _latest_evaluations(
     return out
 
 
-def _tier1_kpi_deltas(conn: sqlite3.Connection, tickers: set[str]) -> dict[str, list[KpiDelta]]:
+def _tier1_kpi_deltas(
+    conn: sqlite3.Connection, tickers: set[str], as_of: date | None = None
+) -> dict[str, list[KpiDelta]]:
     """Latest-vs-prior move per tier-1 KPI definition (portfolio names only).
     Superseded facts are excluded; tone is stamped later from the evaluation's
-    rule statuses (the definitions carry no good-direction signal)."""
+    rule statuses (the definitions carry no good-direction signal).
+
+    ``as_of`` (default: no filter) drops facts whose ``period_end`` is in the
+    future relative to that date, so a guidance/forecast row stamped with a
+    forward period (e.g. a next-FY estimate) cannot masquerade as the latest
+    *actual* and skew the move. The render path passes the cockpit's ``now``."""
     if not tickers:
         return {}
     marks = ",".join("?" for _ in tickers)
+    as_of_clause = "  AND date(f.period_end) <= ? " if as_of is not None else ""
+    params: tuple[str, ...] = tuple(sorted(tickers))
+    if as_of is not None:
+        params = (*params, as_of.isoformat())
     rows = _safe_rows(
         conn,
         "SELECT f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
@@ -686,8 +697,9 @@ def _tier1_kpi_deltas(conn: sqlite3.Connection, tickers: set[str]) -> dict[str, 
         "WHERE d.threshold_tier = 'tier_1_break' AND f.ticker IN (" + marks + ") "
         "  AND f.id NOT IN (SELECT supersedes_id FROM kpi_facts "
         "                   WHERE supersedes_id IS NOT NULL) "
-        "ORDER BY f.ticker, d.id, f.period_end DESC",
-        tuple(sorted(tickers)),
+        + as_of_clause
+        + "ORDER BY f.ticker, d.id, f.period_end DESC",
+        params,
     )
     series: dict[tuple[str, int], list[sqlite3.Row]] = {}
     for r in rows:
