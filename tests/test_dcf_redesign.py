@@ -751,11 +751,13 @@ def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> No
     assert rd["terminal_op_margin"] == 0.15
     assert rd["exit_multiple"] == 9.0
     assert rd["terminal_growth_g"] == 0.02
-    # WACC drivers mirrored too (edited + carried from _BASE)
+    # WACC drivers: beta + cost_of_debt mirror per name; risk_free_rate +
+    # equity_risk_premium are GLOBAL now (global_dcf_assumptions, migration 0112)
+    # and deliberately NOT re-pinned into the block (PR6).
     assert rd["beta"] == 1.45
-    assert rd["equity_risk_premium"] == 0.055
-    assert rd["risk_free_rate"] == 0.043
     assert rd["cost_of_debt"] == 0.045
+    assert "risk_free_rate" not in rd
+    assert "equity_risk_premium" not in rd
     # Opus prose + model flags untouched
     assert rd["narrative"] == "REDESIGN NARRATIVE keep"
     assert rd["reasoning"] == "REASONING keep"
