@@ -108,6 +108,11 @@ _FUNDAMENTALS_TIMEOUT_S = 60
 # next-dollar "ret" factor don't run on a stale price leg. ~90 names, yfinance
 # self-healing to the FMP cache — 5 min covers a slow/throttled morning.
 _REPRICE_TIMEOUT_S = 300
+# Stage 0f (candidate fit, L?) scores each evaluation name's fit to the held book
+# off the daily price cache + one tracker analytics fetch. ~30 screen names, a
+# covariance-grade read each plus a loopback HTTP group — 3 min is generous and
+# covers a tracker that is slow to answer.
+_CANDIDATE_FIT_TIMEOUT_S = 180
 # Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
 # engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
 # deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
@@ -122,6 +127,7 @@ STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_REPRICE = "stage_0e_reprice"
+STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
 STAGE_FEED = "stage_2_feed"
@@ -133,6 +139,7 @@ _ALL_STAGE_KEYS = (
     STAGE_LIFECYCLE,
     STAGE_FUNDAMENTALS,
     STAGE_REPRICE,
+    STAGE_CANDIDATE_FIT,
     STAGE_TRIGGERS,
     STAGE_STANDUP,
     STAGE_FEED,
@@ -315,6 +322,27 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *reprice_db_args,
                 ],
                 timeout_s=_REPRICE_TIMEOUT_S,
+            )
+        )
+        # Stage 0f -- candidate fit (the cockpit Fit column): scores each
+        # evaluation name's fit to the held book (Marginal Sharpe · diversification
+        # · factor exposure · sector) and materialises data/candidate_fit.json so
+        # the GET / render reads the cache rather than running covariance-grade
+        # price reads per candidate. Runs after the weights cache (0c) and DCF
+        # re-price (0e) so the held weights + DCF reward it reads are fresh. Only
+        # --db-path is forwarded (the book read is single-user; the tracker URL
+        # comes from the env). Skipped on the re-render-only path (--skip-triggers).
+        candidate_fit_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_CANDIDATE_FIT,
+                label="Stage 0f - candidate fit (refresh_candidate_fit.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "refresh_candidate_fit.py"),
+                    *candidate_fit_db_args,
+                ],
+                timeout_s=_CANDIDATE_FIT_TIMEOUT_S,
             )
         )
 

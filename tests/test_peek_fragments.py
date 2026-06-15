@@ -525,6 +525,119 @@ def test_new_docs_peek_degrades_without_db(tmp_path: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# /api/peek/score (the cockpit Score chip breakdown)
+# ----------------------------------------------------------------------------
+
+
+def _seed_eval_company(db_path: Path, ticker: str = "DLO", name: str = "DLocal") -> None:
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, 'evaluation')",
+            (ticker, name),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_peek_score_renders_breakdown_fragment(client: FlaskClient, db_path: Path) -> None:
+    _seed_eval_company(db_path)
+    resp = client.get("/api/peek/score?ticker=dlo")  # lowercase: uppercased internally
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
+    assert "Next-dollar attractiveness" in body
+    # Every factor is named; with no DCF/fundamentals/PEG seeded each scores the
+    # x0.85 miss, so the product is 0.85**4 = 0.52 and rows read "no data".
+    for label in ("DCF upside", "Revenue growth", "FCF margin", "PEG"):
+        assert label in body
+    assert "no data" in body
+    assert "0.52" in body
+    assert 'href="/ticker/DLO"' in body  # the evaluation-report overflow path
+
+
+def test_peek_score_untracked_and_missing_ticker_404(client: FlaskClient) -> None:
+    assert client.get("/api/peek/score?ticker=ZZZQ").status_code == 404
+    assert client.get("/api/peek/score").status_code == 404
+
+
+# ----------------------------------------------------------------------------
+# /api/peek/fit (the cockpit Fit chip breakdown)
+# ----------------------------------------------------------------------------
+
+
+def _write_fit_cache(repo: Path, ticker: str = "DLO") -> None:
+    (repo / "data" / "candidate_fit.json").write_text(
+        json.dumps(
+            {
+                "computed_at": "2026-06-14T04:00:00",
+                "fits": {
+                    ticker: {
+                        "fit": 1.18,
+                        "why": "sharpe 1.12 (...) x divers 1.05 (...) = 1.18",
+                        "partial": True,
+                        "obs": 200,
+                        "factors": [
+                            {
+                                "key": "sharpe",
+                                "label": "Marginal Sharpe",
+                                "multiplier": 1.12,
+                                "detail": "SR +0.40 ...",
+                                "missing": False,
+                            },
+                            {
+                                "key": "divers",
+                                "label": "Diversification",
+                                "multiplier": 1.05,
+                                "detail": "corr +0.30",
+                                "missing": False,
+                            },
+                            {
+                                "key": "factor",
+                                "label": "Factor fit",
+                                "multiplier": 1.0,
+                                "detail": "n/a",
+                                "missing": True,
+                            },
+                            {
+                                "key": "sector",
+                                "label": "Sector fit",
+                                "multiplier": 1.0,
+                                "detail": "Energy 0% of book",
+                                "missing": False,
+                            },
+                        ],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_peek_fit_renders_breakdown_fragment(client: FlaskClient, repo: Path) -> None:
+    _write_fit_cache(repo)
+    resp = client.get("/api/peek/fit?ticker=dlo")  # lowercase: uppercased internally
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
+    assert "Portfolio fit to the held book" in body
+    for label in ("Marginal Sharpe", "Diversification", "Factor fit", "Sector fit"):
+        assert label in body
+    assert "1.18" in body  # the composite + formula
+    assert "no data" in body  # the missing factor row
+    assert 'href="/ticker/DLO"' in body  # the evaluation-report overflow path
+
+
+def test_peek_fit_no_cache_or_missing_ticker_404(client: FlaskClient, repo: Path) -> None:
+    assert client.get("/api/peek/fit?ticker=DLO").status_code == 404  # no cache file yet
+    _write_fit_cache(repo, ticker="DLO")
+    assert client.get("/api/peek/fit?ticker=ZZZQ").status_code == 404  # not in the cache
+    assert client.get("/api/peek/fit").status_code == 404  # no ticker
+
+
+# ----------------------------------------------------------------------------
 # Markup contracts: peek triggers keep their real hrefs
 # ----------------------------------------------------------------------------
 
@@ -601,6 +714,57 @@ def test_ticker_badge_carries_hover_attr(db_path: Path) -> None:
     out = StringIO()
     render_alert_card(out, alert, actions=[], show_status_badge=True)
     assert 'data-peek-ticker="NU"' in out.getvalue()
+
+
+def test_cockpit_score_chip_peeks_breakdown() -> None:
+    base = DashboardRow(
+        ticker="DLO",
+        list_type="evaluation",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    row = CockpitRow(
+        base=base,
+        attractiveness=4.49,
+        attractiveness_why="dcf 1.80 (+216.0% upside) x growth 1.60 (+65.2% YoY) = 4.49",
+        attractiveness_partial=False,
+    )
+    html = render_research_cockpit({"evaluation": [row]})
+    assert "data-peek-url='/api/peek/score?ticker=DLO'" in html
+    assert "data-peek-title='Why score · DLO'" in html
+    assert "href='/ticker/DLO'" in html  # real destination preserved for middle-click
+    assert ">4.49</a>" in html  # the chip is the doorway <a>
+    assert "attract-chip attract-hi" in html  # 4.49 >= 1.25 -> hi tone
+    assert "title='dcf 1.80 (+216.0% upside)" in html  # the why stays in the hover
+
+
+def test_cockpit_fit_chip_peeks_breakdown() -> None:
+    base = DashboardRow(
+        ticker="DLO",
+        list_type="evaluation",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    row = CockpitRow(
+        base=base,
+        attractiveness=4.49,
+        fit=1.18,
+        fit_why="sharpe 1.12 (...) x divers 1.05 (...) = 1.18",
+        fit_partial=False,
+    )
+    html = render_research_cockpit({"evaluation": [row]})
+    assert "data-peek-url='/api/peek/fit?ticker=DLO'" in html
+    assert "data-peek-title='Portfolio fit · DLO'" in html
+    assert "href='/ticker/DLO'" in html  # real destination preserved for middle-click
+    assert ">1.18</a>" in html  # the fit chip is the doorway <a>
+    assert "fit-chip fit-hi" in html  # 1.18 >= 1.10 -> accretive
+    assert "title='sharpe 1.12 (...) x divers 1.05 (...) = 1.18'" in html  # why in the hover
 
 
 def test_cockpit_staleness_dot_opens_provenance_peek() -> None:

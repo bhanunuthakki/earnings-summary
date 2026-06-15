@@ -2,7 +2,7 @@
 
 The orchestrator runs an unconditional environment preflight, then chains
 the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
-reprice -> triggers -> standup -> feed -> validate). Its load-bearing contract is
+reprice -> candidate_fit -> triggers -> standup -> feed -> validate). Its load-bearing contract is
 resilience: it must attempt every non-skipped stage even when an earlier one
 fails or times out, and report the
 count of failed stages as the exit code only after all stages have run.
@@ -33,6 +33,7 @@ DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
 REPRICE_SCRIPT = "reprice_dcf.py"
+CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 STANDUP_SCRIPT = "run_standup.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -145,6 +146,7 @@ def test_all_stages_succeed(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -158,6 +160,7 @@ def test_all_stages_succeed(
     assert summary["stage_0c_lifecycle"] == "ok"
     assert summary["stage_0d_fundamentals"] == "ok"
     assert summary["stage_0e_reprice"] == "ok"
+    assert summary["stage_0f_candidate_fit"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_1b_standup"] == "ok"
     assert summary["stage_2_feed"] == "ok"
@@ -189,6 +192,7 @@ def test_stage1_failure_still_runs_feed(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -218,6 +222,7 @@ def test_feed_failure_still_runs_validation(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -233,8 +238,8 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all ten still attempted,
-    exit code == 10."""
+    """Every stage failing (preflight included) → all eleven still attempted,
+    exit code == 11."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -243,6 +248,7 @@ def test_all_stages_fail_exit_code_counts_failures(
             LIFECYCLE_SCRIPT: 1,
             FUNDAMENTALS_SCRIPT: 1,
             REPRICE_SCRIPT: 1,
+            CANDIDATE_FIT_SCRIPT: 1,
             TRIGGERS_SCRIPT: 1,
             STANDUP_SCRIPT: 1,
             FEED_SCRIPT: 1,
@@ -253,7 +259,7 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 10
+    assert rc == 11
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
@@ -261,6 +267,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -274,6 +281,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0c_lifecycle"] == "failed"
     assert summary["stage_0d_fundamentals"] == "failed"
     assert summary["stage_0e_reprice"] == "failed"
+    assert summary["stage_0f_candidate_fit"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
     assert summary["stage_1b_standup"] == "failed"
     assert summary["stage_2_feed"] == "failed"
@@ -304,6 +312,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -404,6 +413,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -431,6 +441,7 @@ def test_skip_validation_removes_only_stage3(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -627,6 +638,7 @@ def test_skip_news_removes_only_stage0(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -670,6 +682,7 @@ def test_news_failure_does_not_stop_triggers(
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
+        CANDIDATE_FIT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
