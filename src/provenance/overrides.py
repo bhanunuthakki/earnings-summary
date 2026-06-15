@@ -531,3 +531,78 @@ def date_override_map(
         if ftype in allowed:
             out[period_end] = ov
     return out
+
+
+# ---------------------------------------------------------------------------
+# Provenance-chip surfacing (P6) — make the displayed source honest
+# ---------------------------------------------------------------------------
+
+
+def chip_override_map(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    period_types: Iterable[str],
+    user_id: str = DEFAULT_USER_ID,
+) -> dict[str, FactOverride]:
+    """``period_end -> active replace/qualify override`` for the provenance chip.
+
+    Unlike :func:`date_override_map` this KEEPS ``qualify`` (the chip annotates it
+    with a ⚠ note) and excludes ``drop`` (a dropped period shows no cell). Restricted
+    to ``period_types``.
+    """
+    allowed = set(period_types)
+    out: dict[str, FactOverride] = {}
+    for ov in get_active_overrides(conn, ticker=ticker, fact_kind=fact_kind, user_id=user_id):
+        if ov.fact_key != fact_key or ov.action == OverrideAction.DROP.value:
+            continue
+        if ov.fiscal_period_type in allowed:
+            out[ov.period_end] = ov
+    return out
+
+
+def override_chip_label(ov: FactOverride) -> str:
+    """Compact 'overridden by' label, e.g. ``sec_8k · 0001652044-26-000012 · ex991.htm``."""
+    parts = [ov.source_doc_type]
+    if ov.source_accession:
+        parts.append(ov.source_accession)
+    if ov.source_exhibit:
+        parts.append(ov.source_exhibit)
+    return " · ".join(parts)
+
+
+def override_provenance(ov: FactOverride) -> dict[str, object]:
+    """Cell-provenance fields describing a ``replace`` override's company-doc source.
+
+    Overlay these onto a cell-provenance dict / ``CellSource`` so the chip shows the
+    figure came from the filing (doc type, accession, URL, the asserted confidence
+    and ``created_by`` audit tag), and an ``override`` label row — not the FMP row
+    whose value was superseded. FMP-derivation lineage / fetched_at are cleared since
+    they no longer describe the displayed value.
+    """
+    return {
+        "source": ov.source_doc_type,
+        "doc_type": ov.source_doc_type,
+        "accession_number": ov.source_accession,
+        "source_url": ov.source_url,
+        "filing_date": None,
+        "locator": ov.source_exhibit,
+        "confidence": ov.confidence,
+        "extracted_by": ov.created_by,
+        "computed_from": None,
+        "fetched_at": None,
+        "source_doc_id": ov.source_doc_id,
+        "override": override_chip_label(ov),
+    }
+
+
+def qualify_note(ov: FactOverride) -> str:
+    """⚠ chip note for a ``qualify`` override (keeps FMP's value, flags it)."""
+    note = f"⚠ qualified by {ov.source_doc_type}"
+    if ov.source_accession:
+        note += f" {ov.source_accession}"
+    if ov.source_excerpt:
+        note += f": {ov.source_excerpt}"
+    return note

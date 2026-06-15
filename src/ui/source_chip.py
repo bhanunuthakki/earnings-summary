@@ -157,6 +157,10 @@ def source_chip_html(src: CellSource) -> str:
         pct is not None and src.confidence is not None and src.confidence < LOW_CONFIDENCE_THRESHOLD
     )
     rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
+    if src.override:
+        # Company-doc override (provenance-override P6): the displayed figure comes
+        # from this filing, not FMP. Rendered prominently right under the source.
+        rows.append(f'<div class="src-pop-row"><b>overridden by</b> {_esc(src.override)}</div>')
     if pct is not None:
         flag = " · below threshold" if low_conf else ""
         rows.append(f'<div class="src-pop-row">confidence {pct}%{flag}</div>')

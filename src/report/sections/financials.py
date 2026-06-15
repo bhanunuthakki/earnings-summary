@@ -16,6 +16,7 @@ import json
 import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
+from typing import cast
 
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
@@ -28,7 +29,10 @@ from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import (
     OverrideAction,
     active_scalar_override_map,
+    chip_override_map,
     date_override_map,
+    override_provenance,
+    qualify_note,
 )
 from report.models import (
     AnnualKpiSeries,
@@ -158,7 +162,8 @@ def build(ticker: str, repo_root: Path) -> FinancialsSection:
                     displayed_tier=src.source,
                 )
                 if strings:
-                    src.issues = strings
+                    # Append, not overwrite — preserve any override qualify note (P6).
+                    src.issues = [*src.issues, *strings]
         line_items.append(
             QuarterlyLineItem(
                 line_item=name,
@@ -228,6 +233,10 @@ def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
     source = prov.get("source")
     raw_doc_id = prov.get("source_doc_id")
     raw_confidence = prov.get("confidence")
+    raw_issues = prov.get("issues")
+    issues = (
+        [str(x) for x in cast("list[object]", raw_issues)] if isinstance(raw_issues, list) else []
+    )
     return CellSource(
         source=str(source) if source is not None else "unknown",
         fetched_at=_opt("fetched_at"),
@@ -239,6 +248,8 @@ def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
         doc_id=int(raw_doc_id) if isinstance(raw_doc_id, int) else None,
         confidence=float(raw_confidence) if isinstance(raw_confidence, (int, float)) else None,
         extracted_by=_opt("extracted_by"),
+        override=_opt("override"),
+        issues=issues,
     )
 
 
@@ -401,6 +412,24 @@ def _kpi_cell_sources_for(
             computed_from=str(r["computed_from"]) if r["computed_from"] is not None else None,
             issues=issues,
         )
+    # Provenance-override surfacing (P6): a company-doc `replace` override swaps the
+    # chip's source fields to the filing it cites; a `qualify` adds a ⚠ note. Keeps
+    # the chip honest — the displayed number now comes from the override, not FMP.
+    ov_map = chip_override_map(
+        conn,
+        ticker=ticker,
+        fact_kind=OVERRIDE_KPI,
+        fact_key=resolved_name,
+        period_types=period_types,
+    )
+    for period_iso, ov in ov_map.items():
+        cell = out.get(period_iso)
+        if cell is None:
+            continue
+        if ov.action == OverrideAction.REPLACE.value:
+            out[period_iso] = cell.model_copy(update=override_provenance(ov))
+        elif ov.action == OverrideAction.QUALIFY.value:
+            out[period_iso] = cell.model_copy(update={"issues": [*cell.issues, qualify_note(ov)]})
     return out
 
 
