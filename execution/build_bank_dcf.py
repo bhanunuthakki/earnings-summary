@@ -49,6 +49,10 @@ try:  # persistence is best-effort — the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
     persist_mod = None  # type: ignore[assignment]
+try:  # global macro assumptions — best-effort; degrades to in-code seed defaults
+    from dcf import global_assumptions as global_dcf
+except ImportError:  # pragma: no cover
+    global_dcf = None  # type: ignore[assignment]
 
 # ---- styling (mirrors the redesign Color Code: yellow=input, blue=actual) ----
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
@@ -883,6 +887,15 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
     a nested ``actuals`` block overrides the Y0 statement actuals (see
     ``load_actuals``). Returns ``(Assum, actuals_override)``."""
     s = Assum()
+    # Seed the editable global macro defaults (rf / erp / tax) BEFORE the
+    # per-ticker JSON overrides below, so a bank name without its own pinned
+    # value tracks the dashboard-set global default. The JSON setattr loop still
+    # wins for any field the name pins explicitly (HDB pins all three; NU pins
+    # erp/tax to preserve its pre-global values). Degrades to the Assum literals
+    # when the store is unavailable, so the workbook still builds bare.
+    if global_dcf is not None:
+        _g = global_dcf.load(db_path=REPO / "data" / "portfolio.db")
+        s.rf, s.erp, s.tax = _g.risk_free_rate, _g.equity_risk_premium, _g.tax_rate
     actuals_ov: dict[str, Any] = {}
     p = REPO / "data" / "bank_assumptions" / f"{ticker}.json"
     if p.exists():

@@ -40,10 +40,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
 from dcf import assumptions_doc
+from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
+
+# Global macro DCF assumptions — the editable single default for the inputs that
+# should be the same across every model (risk-free / ERP / tax). Read once here;
+# a per-ticker `_opus` block override still wins at every use site below. Degrades
+# to the in-code seed (= the historical literals) when the DB/table is absent, so
+# the build is identical to pre-global-assumptions behaviour on a bare checkout.
+_g = global_dcf.load(db_path=REPO / "data" / "portfolio.db")
 
 T = os.environ.get("DCF_TICKER", "AMZN")
 _pfd = (
@@ -296,7 +304,7 @@ else:
         for k, v in (d or {}).items():
             if isinstance(v, (int, float)):
                 seg_ann[y][k] += v / 1e6
-TAX, EXIT_MULT, TG = 0.24, 12.0, 0.045
+TAX, EXIT_MULT, TG = _g.tax_rate, 12.0, 0.045
 
 # Default assumptions START AT CONSENSUS (user edits from there). Anchor revenue
 # to consensus revenueAvg and the margin path to consensus net income (FMP's ebit
@@ -407,8 +415,8 @@ _baseline = assumptions_doc.ensure_opus_baseline(cache)
 # closed by refresh_dcf.sync_assumptions_json writing these back to the block).
 _beta_override = _opus.get("beta")
 BETA = float(_beta_override) if _beta_override is not None else (prof.get("beta") or 1.3)
-RF = float(_opus.get("risk_free_rate", 0.043))
-ERP = float(_opus.get("equity_risk_premium", 0.045))
+RF = float(_opus.get("risk_free_rate", _g.risk_free_rate))
+ERP = float(_opus.get("equity_risk_premium", _g.equity_risk_premium))
 KD = float(_opus.get("cost_of_debt", 0.045))
 
 # ----------------------------------------------------------------------------- Monte Carlo
@@ -460,7 +468,7 @@ if _opus.get("segments"):
     gT_def = {s: _sg.get(s, {}).get("terminal_growth", gT_def[s]) for s in PROD}
     margin_near_def = _opus.get("near_term_op_margin", margin_near_def)
     margin_term_def = _opus.get("terminal_op_margin", margin_term_def)
-    TAX = _opus.get("tax_rate", TAX)
+    TAX = _opus.get("tax_rate", _g.tax_rate)
     EXIT_MULT = float(_opus.get("exit_multiple", EXIT_MULT))
     TG = _opus.get("terminal_growth_g", TG)
     OPUS_BASIS = _opus.get("exit_basis", OPUS_BASIS)
