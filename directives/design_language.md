@@ -187,7 +187,8 @@ filter chip in the app.
 Menus/popovers: `.k-menu` (+ `li.sel`) for any floating list (combobox
 results, palettes).
 
-Field captions: `.k-label` (caption size, 600, uppercase, 0.06em).
+Field captions: `.k-label` (micro size — matches `.k-chip` so a caption never
+out-sizes the chips/controls beside it — 600, uppercase, 0.06em).
 
 ### 4.1 Doorways — every datum is a depth (Law 2)
 
