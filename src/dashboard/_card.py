@@ -75,14 +75,15 @@ def render_alert_card(
     # data-peek-ticker: in the shell, hovering the badge shows the ticker
     # mini-card (UX9); inert markup on the standalone feed page.
     body.write(
-        f'<span class="ticker-badge" data-peek-ticker="{_esc(alert.ticker)}">'
+        f'<span class="k-tick-sym" data-peek-ticker="{_esc(alert.ticker)}">'
         f"{_esc(alert.ticker)}</span>"
     )
     why_attr = f' title="ranked: {_esc(rank_why)}"' if rank_why else ""
-    body.write(f'<span class="trigger-badge"{why_attr}>{_esc(alert.trigger_kind)}</span>')
+    body.write(f'<span class="k-chip"{why_attr}>{_esc(alert.trigger_kind)}</span>')
     if show_status_badge:
-        status_class = f"status-{alert.status}"
-        body.write(f'<span class="status-badge {status_class}">{_esc(alert.status)}</span>')
+        tone = {"pending": "warn", "approved": "ok"}.get(alert.status, "")
+        pill_cls = "k-pill" + (f" k-pill-{tone}" if tone else "")
+        body.write(f'<span class="{pill_cls}">{_esc(alert.status)}</span>')
     body.write(stamp_html(alert.fired_at, css="fired-at"))
     body.write("</div>")
 
@@ -115,7 +116,7 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
     kind_label = _ACTION_KIND_LABELS.get(qa.action_kind, qa.action_kind)
     qa_body = _action_body(qa.payload)
     body.write('<div class="queued-action">')
-    body.write(f'<span class="qa-kind">{_esc(kind_label)}</span>')
+    body.write(f'<span class="k-chip">{_esc(kind_label)}</span>')
     body.write(f'<div class="qa-body">{_esc(qa_body)}</div>')
     body.write('<div class="qa-actions">')
     if qa.status == ACTION_STATUS_APPLIED:

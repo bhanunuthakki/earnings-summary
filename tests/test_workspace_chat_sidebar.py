@@ -26,9 +26,11 @@ def test_chat_shell_emits_push_sidebar_plus_launcher() -> None:
     s = body.getvalue()
     # Push-sidebar panel (flex sibling of .l1-root, mirrors .cmt-sidebar).
     assert '<aside class="chat-sidebar" id="chat-sidebar"' in s
-    # Fixed launcher pill, now toggle-only, with a stable id for the JS.
+    # Fixed launcher pill, now toggle-only, with a stable id for the JS. The
+    # button keeps its .chat-toggle JS hook and rides the kit primary alongside.
     assert '<aside class="chat-drawer" id="chat-drawer"' in s
-    assert '<button class="chat-toggle" id="chat-toggle"' in s
+    assert "chat-toggle" in s and 'id="chat-toggle"' in s
+    assert "k-btn k-btn-primary" in s  # composes the control kit
     # Thread + form still live inside the (now push-sidebar) panel.
     assert 'id="chat-thread"' in s and 'id="chat-form"' in s
     # The old floating overlay panel is gone.

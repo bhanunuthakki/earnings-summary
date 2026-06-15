@@ -48,7 +48,7 @@ button { transition: color var(--transition), border-color var(--transition),
 
 /* Header */
 .l1-header { padding-bottom: 18px; border-bottom: 1px solid var(--hairline); margin-bottom: var(--gap-lg); }
-.l1-header h1 { margin: 0 0 4px 0; font-size: var(--fs-display); font-weight: 700; letter-spacing: -0.01em; }
+.l1-header h1 { margin: 0 0 4px 0; font-size: var(--fs-display); font-weight: 600; letter-spacing: -0.01em; }
 .l1-header .l1-subtitle { color: var(--muted); font-size: var(--fs-body); }
 
 /* Section */
@@ -73,40 +73,9 @@ button { transition: color var(--transition), border-color var(--transition),
   margin-bottom: var(--gap);
 }
 .alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 8px; }
-/* Tickers: mono-bold identity, no accent (accent stays interactive-only). */
-.ticker-badge {
-  display: inline-flex; align-items: center;
-  padding: 4px 10px;
-  border: 1px solid var(--border-2);
-  background: var(--paper);
-  color: var(--fg);
-  border-radius: var(--radius);
-  font-family: var(--mono); font-weight: 700; font-size: var(--fs-caption);
-  letter-spacing: 0.05em;
-}
-.trigger-badge {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
-  color: var(--fg-soft);
-  font-size: var(--fs-micro); font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-.status-badge {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px;
-  border-radius: var(--radius);
-  font-size: var(--fs-micro); font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  border: 1px solid var(--border-2);
-}
-.status-pending  { color: var(--warn); border-color: var(--warn); }
-.status-approved { color: var(--ok);   border-color: var(--ok); }
-.status-dismissed { color: var(--muted); border-color: var(--muted); }
-.status-expired  { color: var(--muted-2); border-color: var(--muted-2); }
+/* Alert-card identity marks ride the shared kit (controls.py), emitted by
+   src/dashboard/_card.py: the ticker is a .k-tick-sym (mono 600, no box), the
+   trigger a .k-chip, the status a .k-pill + tone. Only timestamp layout is local. */
 .fired-at { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); margin-left: auto; }
 
 .alert-memo {
@@ -119,7 +88,7 @@ button { transition: color var(--transition), border-color var(--transition),
   font-size: var(--fs-section);
   color: var(--fg-soft);
 }
-.alert-memo-pending { color: var(--muted); font-style: italic; }
+.alert-memo-pending { color: var(--muted); }
 
 /* Queued actions */
 .queued-actions { margin: 10px 0 0 0; }
@@ -130,16 +99,6 @@ button { transition: color var(--transition), border-color var(--transition),
   background: var(--paper);
   border-radius: var(--radius);
   margin-bottom: 6px;
-}
-.qa-kind {
-  display: inline-flex; align-items: center;
-  padding: 2px 6px;
-  border: 1px solid var(--border-2);
-  background: var(--surface);
-  color: var(--fg-soft);
-  border-radius: var(--radius);
-  font-size: var(--fs-micro); font-weight: 600;
-  letter-spacing: 0.05em; text-transform: uppercase;
 }
 .qa-body { flex: 1; min-width: 200px; color: var(--fg-soft); font-size: var(--fs-body); }
 .qa-actions {
@@ -190,12 +149,9 @@ button { transition: color var(--transition), border-color var(--transition),
 /* P4.4 — the owner's open notes attached to the alert's evidence. */
 .evidence-notes-list { list-style: none; margin: 0; padding: 0; }
 .evidence-notes-list li { padding: 3px 0; font-size: var(--fs-body); color: var(--fg-soft); }
-.evidence-note-kind, .oi-kind {
-  display: inline-block; font-size: var(--fs-micro);
-  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
-  color: var(--fg-soft); border: 1px solid var(--border-2);
-  border-radius: var(--radius); padding: 0 5px; margin-right: 6px;
-}
+/* evidence-note-kind → the shared .k-chip (controls.py); emitted by
+   src/dashboard/evidence_drawer.py. The report's .oi-kind is its own (the §2
+   report-category exception) and lives in workspace_styles.py. */
 .evidence-malformed {
   padding: 10px;
   background: rgba(240, 138, 138, 0.08);

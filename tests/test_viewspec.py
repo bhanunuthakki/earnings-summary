@@ -414,7 +414,9 @@ def test_render_fragment_matrix_chips_chart(db: Path) -> None:
 def test_render_yoy_heat_shading(db: Path) -> None:
     result = execute_view(_spec(transform="yoy", periods=4), db_path=db)
     html_out = render_view_fragment(result, include_chart=False)
-    assert "background:rgba(2,158,115" in html_out  # positive growth shaded green
+    # Positive growth shades green — tinted through the --ok status token
+    # (color-mix), not a hardcoded rgba.
+    assert "background:color-mix(in srgb, var(--ok)" in html_out
     assert "+25.0%" in html_out
 
 
@@ -440,8 +442,9 @@ def test_render_nm_policy_yoy() -> None:
     assert '<td class="vx-nm" title="-1748.7% — beyond ±500%, not meaningful">n/m</td>' in html_out
     # Exactly at the threshold still renders (strictly-beyond policy).
     assert "+500.0%" in html_out
-    # The n/m cell is excluded from heat shading: only the 3 sane cells shade.
-    assert html_out.count("background:rgba") == 3
+    # The n/m cell is excluded from heat shading: only the 3 sane cells shade
+    # (each emits a token-tinted color-mix background).
+    assert html_out.count("background:color-mix") == 3
     # Meta line counts the suppressed cells.
     assert "1 value n/m" in html_out
     # Chart y-scale excludes the absurd value: it appears once (tooltip), never

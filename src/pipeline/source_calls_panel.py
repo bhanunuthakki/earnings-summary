@@ -31,7 +31,7 @@ _PANEL_STYLE = """<style>
 .sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
   line-height:1.55; }
-.sc-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
+.sc-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 </style>"""
 
 

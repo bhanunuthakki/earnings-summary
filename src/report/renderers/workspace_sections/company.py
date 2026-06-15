@@ -176,11 +176,11 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
     """§7.5 — buy-side 10-K narrative synthesis rendered in the Company tab.
 
     Layout: header + optional buy-side synthesis panel + 2-col (segment-shifts /
-    exec-comp) grid + optional investment-signals table. Severity pills are
-    explicit: High = pill-bad, Medium = pill-warn, Low = pill-neutral.
+    exec-comp) grid + optional investment-signals table. Severity chips are
+    explicit: High = k-chip-bad, Medium = k-chip-warn, Low = k-chip-mono (no tone).
     """
     fy_label = f"FY {section.fiscal_year}" if section.fiscal_year else "Latest filing"
-    body.write('<div class="row-split" style="margin-top: 30px;"><div>')
+    body.write('<div class="row-split" style="margin-top: var(--sp-6);"><div>')
     body.write('<div class="eyebrow">10-K Narrative Intelligence</div>')
     body.write(f'<h2 class="section-title">{_esc(f"Filing review · {fy_label}")}</h2>')
     body.write("</div></div>")
@@ -203,9 +203,9 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
 
         if seg is not None:
             pill = (
-                '<span class="pill pill-warn">DETECTED SHIFT</span>'
+                '<span class="k-chip k-chip-mono k-chip-warn">DETECTED SHIFT</span>'
                 if seg.has_changes
-                else '<span class="pill pill-ok">NO CHANGE</span>'
+                else '<span class="k-chip k-chip-mono k-chip-ok">NO CHANGE</span>'
             )
             body.write(_panel_head("Reporting & segment boundary changes", sub_html=pill))
             body.write('<div class="prose-pad">')
@@ -224,7 +224,7 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
                 f"<p><strong>Targets:</strong> {_esc(comp.targets_and_thresholds or '—')}</p>"
             )
             body.write(
-                '<p style="margin-top: 10px; font-style: italic;">'
+                '<p style="margin-top: 10px;">'
                 f"<strong>Thesis alignment:</strong> {_esc(comp.alignment_verdict or '—')}</p>"
             )
             body.write("</div></div>")
@@ -234,9 +234,9 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
     metric = section.metric_redefinitions
     if metric is not None and (metric.has_changes or metric.description):
         pill = (
-            '<span class="pill pill-warn">DEFINITION SHIFT</span>'
+            '<span class="k-chip k-chip-mono k-chip-warn">DEFINITION SHIFT</span>'
             if metric.has_changes
-            else '<span class="pill pill-ok">UNCHANGED</span>'
+            else '<span class="k-chip k-chip-mono k-chip-ok">UNCHANGED</span>'
         )
         body.write(_panel_head("Metric redefinitions", sub_html=pill))
         body.write('<div class="prose-pad">')
@@ -255,13 +255,15 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
         body.write('<table class="tbl"><thead><tr>')
         body.write("<th>Signal type</th><th>Severity</th><th>Analytical insight</th>")
         body.write("</tr></thead><tbody>")
-        sev_class = {"High": "bad", "Medium": "warn", "Low": "neutral"}
+        # k-chip-mono is the outline mono micro chip; High/Medium add a tone,
+        # Low/unknown stay tone-less (the report's old pill-neutral/-muted).
+        sev_tone = {"High": " k-chip-bad", "Medium": " k-chip-warn"}
         for sig in section.investment_signals:
-            tone = sev_class.get(sig.severity, "muted")
+            tone = sev_tone.get(sig.severity, "")
             body.write("<tr>")
             body.write(f'<td class="saydo-metric">{_esc(sig.signal_type)}</td>')
             body.write(
-                f'<td><span class="pill pill-{tone}">{_esc(sig.severity.upper())}</span></td>'
+                f'<td><span class="k-chip k-chip-mono{tone}">{_esc(sig.severity.upper())}</span></td>'
             )
             body.write(f'<td class="saydo-guide">{_esc(sig.description)}</td>')
             body.write("</tr>")

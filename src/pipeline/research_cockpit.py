@@ -937,9 +937,9 @@ def _score_cell(row: CockpitRow) -> str:
     if row.attractiveness is None:
         return _muted()
     tone = attractiveness_tone(row.attractiveness)
-    cls = "attract-chip" + (f" attract-{tone}" if tone else "")
+    cls = "k-chip k-chip-mono" + (" k-chip-ok" if tone == "hi" else "")
     if row.attractiveness_partial:
-        cls += " attract-partial"
+        cls += " chip-partial"
     title = f" title='{escape(row.attractiveness_why)}'" if row.attractiveness_why else ""
     t = escape(row.base.ticker)
     return (
@@ -958,9 +958,13 @@ def _fit_cell(row: CockpitRow) -> str:
     if row.fit is None:
         return _muted()
     tone = fit_tone(row.fit)
-    cls = "fit-chip" + (f" fit-{tone}" if tone else "")
+    cls = "k-chip k-chip-mono"
+    if tone == "hi":
+        cls += " k-chip-ok"
+    elif tone == "lo":
+        cls += " k-chip-warn"
     if row.fit_partial:
-        cls += " fit-partial"
+        cls += " chip-partial"
     title = f" title='{escape(row.fit_why)}'" if row.fit_why else ""
     t = escape(row.base.ticker)
     return (
@@ -999,7 +1003,8 @@ def _verdict_badge(row: CockpitRow, now: datetime) -> str:
     if row.evaluated_at:
         bits.append(f"evaluated {fmt_reltime(row.evaluated_at, now=now)}")
     title = f" title='{escape(' — '.join(bits))}'" if bits else ""
-    return f"<span class='cockpit-badge b-{tone}'{title}>{escape(status)}</span>"
+    pill_tone = f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+    return f"<span class='k-pill{pill_tone}'{title}>{escape(status)}</span>"
 
 
 def _kpi_chips(deltas: list[KpiDelta], ticker: str) -> str:
@@ -1021,8 +1026,9 @@ def _kpi_chips(deltas: list[KpiDelta], ticker: str) -> str:
             f"({d.prior_period} → {d.latest_period})"
         )
         ask_q = f"{metric} for {ticker}, last 12 quarters"
+        chip_tone = f" k-chip-{d.tone}" if d.tone in ("bad", "warn", "ok") else ""
         chips.append(
-            f"<button type='button' class='kpi-chip chip-{d.tone}' "
+            f"<button type='button' class='k-chip k-chip-mono kpi-move{chip_tone}' "
             f"data-ask-q='{escape(ask_q, quote=True)}' title='{escape(title)}'>"
             f"{escape(short)} <b>{escape(d.delta_display)}</b></button>"
         )
@@ -1081,7 +1087,7 @@ def _inbox_cell(row: CockpitRow) -> str:
         # /feed href stays the real destination for middle-click / new tab.
         t = escape(row.base.ticker)
         pills.append(
-            f"<a class='pill pill-bad' href='/feed?ticker={t}&status=pending' "
+            f"<a class='k-pill k-pill-bad cockpit-count' href='/feed?ticker={t}&status=pending' "
             f"data-peek-url='/api/peek/alerts?ticker={t}&status=pending' "
             f"data-peek-title='Pending alerts · {t}' "
             f"title='unreviewed alerts'>{row.pending_alerts} alert"
@@ -1094,7 +1100,7 @@ def _inbox_cell(row: CockpitRow) -> str:
         # middle-click / new tab.
         t = escape(row.base.ticker)
         pills.append(
-            f"<a class='pill pill-accent' href='/#holding={t}' "
+            f"<a class='k-pill k-pill-accent cockpit-count' href='/#holding={t}' "
             f"data-peek-url='/api/peek/documents?ticker={t}' "
             f"data-peek-title='New documents · {t}' "
             f"title='documents fetched since the last report build'>"
@@ -1103,10 +1109,10 @@ def _inbox_cell(row: CockpitRow) -> str:
     if row.base.open_comments_count:
         n = row.base.open_comments_count
         pills.append(
-            f"<span class='pill pill-warn' title='open report comments'>"
+            f"<span class='k-pill k-pill-warn' title='open report comments'>"
             f"{n} comment{'s' if n != 1 else ''}</span>"
         )
-    return "".join(pills) if pills else _muted()
+    return f"<span class='cell-pills'>{''.join(pills)}</span>" if pills else _muted()
 
 
 def _staleness_dot(row: CockpitRow, now: datetime) -> str:
@@ -1166,52 +1172,18 @@ _COCKPIT_CSS = """
 /* The Evaluation table is secondary to the Portfolio table — caption-tier
    type + tighter padding marks it as the lower-importance grid. */
 .cockpit-thin td, .cockpit-thin th { padding: 4px 10px; font-size: var(--fs-caption); }
-.cockpit-badge { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full); font-size: var(--fs-micro);
-  text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; cursor: default; }
-.cockpit-badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.cockpit-badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.cockpit-badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
-.cockpit-badge.b-muted { background: var(--border); color: var(--muted); }
-/* A KPI move is a doorway (<button data-ask-q>): explicit font resets the
-   button default, and it gets a real hover affordance. */
-.kpi-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-family: var(--mono); line-height: 1.4; background: var(--paper);
-  border: 1px solid var(--border); color: var(--muted); cursor: pointer;
-  transition: border-color var(--transition); }
-.kpi-chip:hover { border-color: var(--accent); }
-.kpi-chip b { font-weight: 600; color: var(--fg); }
-.kpi-chip.chip-bad { border-color: var(--bad); }
-.kpi-chip.chip-bad b { color: var(--bad); }
-.kpi-chip.chip-warn { border-color: var(--warn); }
-.kpi-chip.chip-warn b { color: var(--warn); }
-.kpi-chip.chip-ok b { color: var(--ok); }
-.attract-chip { display: inline-block; padding: 1px 7px; border-radius: var(--radius-full);
-  font-family: var(--mono); font-size: var(--fs-caption); background: var(--paper);
-  border: 1px solid var(--border); color: var(--fg); cursor: help; }
-/* As a peek doorway the chip is an <a>: kill the link underline, swap the
-   help cursor for a pointer, and give it the same hover affordance as the
-   KPI chips. The class color rules above still win over the global a{} color. */
-a.attract-chip { text-decoration: none; cursor: pointer; transition: border-color var(--transition); }
-a.attract-chip:hover { border-color: var(--accent); }
-.attract-chip.attract-hi { color: var(--ok); border-color: var(--ok); }
-.attract-chip.attract-lo { color: var(--muted); }
-.attract-chip.attract-partial { border-style: dashed; }
-/* Fit chip: the held-book sibling of the score chip, same peek-doorway skin.
-   Centered at 1.0 — accretive reads ok-green, dilutive warns, partial dashes. */
-.fit-chip { display: inline-block; padding: 1px 7px; border-radius: var(--radius-full);
-  font-family: var(--mono); font-size: var(--fs-caption); background: var(--paper);
-  border: 1px solid var(--border); color: var(--fg); cursor: help; }
-a.fit-chip { text-decoration: none; cursor: pointer; transition: border-color var(--transition); }
-a.fit-chip:hover { border-color: var(--accent); }
-.fit-chip.fit-hi { color: var(--ok); border-color: var(--ok); }
-.fit-chip.fit-lo { color: var(--warn); border-color: var(--warn); }
-.fit-chip.fit-partial { border-style: dashed; }
-.pill { display: inline-block; margin-right: 4px; padding: 1px 7px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-weight: 600; text-decoration: none; cursor: default; }
-a.pill { cursor: pointer; }
-.pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
-.pill-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.pill-accent { background: var(--accent-soft); color: var(--accent); }
+/* Five reinvented badge/chip systems collapsed onto the kit (controls.py): the
+   status verdict → .k-pill (filled tone); the KPI-move / attractiveness-score /
+   portfolio-fit doorways → .k-chip-mono (outline mono, + tone); the alert/doc/
+   comment counts → .k-pill. Only LAYOUT survives locally: the score/fit chips
+   are <a> peek-doorways (reset the anchor underline + give the kit hover); the
+   KPI move's inter-chip margin; the count-pill flex row; and the "partial data"
+   dashed border (a semantic the kit chip has no tone for). */
+a.k-chip { text-decoration: none; }
+a.k-chip:hover { color: var(--fg); border-color: var(--border-2); }
+.chip-partial { border-style: dashed; }
+.kpi-move { margin: 1px 4px 1px 0; }
+.cell-pills { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .er-soon { color: var(--warn); font-weight: 600; }
 .stale-dot { font-size: var(--fs-micro); cursor: help; }
 a.stale-dot { text-decoration: none; cursor: pointer; }

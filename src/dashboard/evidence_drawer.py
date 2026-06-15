@@ -251,7 +251,7 @@ def _render_related_notes_section(brief_provenance: Mapping[str, object] | None)
         created = str(n.get("created_at", ""))[:10]
         created_html = f' <span class="muted">({_esc(created)})</span>' if created else ""
         rows.append(
-            f'<li><span class="evidence-note-kind">{_esc(kind)}</span> '
+            f'<li><span class="k-chip">{_esc(kind)}</span> '
             f"{_esc(note_body)}{created_html}</li>"
         )
     rows.append("</ul></div>")

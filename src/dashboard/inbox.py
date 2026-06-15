@@ -508,7 +508,7 @@ def _render_category_chips(out: StringIO, items: list[InboxItem]) -> None:
         return
     out.write('<div class="ix-cats" role="toolbar" aria-label="Filter by category">')
     out.write(
-        '<button type="button" class="ix-cat is-on" data-cat="*">'
+        '<button type="button" class="ix-cat k-chip-btn is-on" data-cat="*">'
         f"All <span>{len(items)}</span></button>"
     )
     for slug in CATEGORY_ORDER:
@@ -516,7 +516,7 @@ def _render_category_chips(out: StringIO, items: list[InboxItem]) -> None:
         if not n:
             continue
         out.write(
-            f'<button type="button" class="ix-cat" data-cat="{_esc(slug)}">'
+            f'<button type="button" class="ix-cat k-chip-btn" data-cat="{_esc(slug)}">'
             f"{_esc(CATEGORY_LABELS[slug])} <span>{n}</span></button>"
         )
     out.write("</div>")
@@ -725,7 +725,7 @@ def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
     action_id = _quick_action_id(it)
     if action_id is not None:
         buttons.append(
-            f'<button class="ix-act ix-act-approve" type="button" '
+            f'<button class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="button" '
             f'data-action-id="{action_id}" title="Approve &amp; apply">&#10003;</button>'
         )
     if it.kind == "alert" and it.alert is not None and it.alert.status == ALERT_STATUS_PENDING:
@@ -734,19 +734,19 @@ def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
         # an alert that never drafted an action (e.g. earnings_tone) is still
         # dismissable from the rail.
         buttons.append(
-            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
             f'data-alert-id="{it.alert.id}" title="Dismiss alert">&#10005;</button>'
         )
     elif action_id is not None:
         # A standalone draft (no parent alert on this card) — dismiss the
         # action itself, the original behavior.
         buttons.append(
-            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
             f'data-action-id="{action_id}" data-dismiss="1" title="Dismiss">&#10005;</button>'
         )
     elif it.kind == "note" and it.note_id is not None and it.semantic_kind != SEMANTIC_ADVISOR_MEMO:
         buttons.append(
-            f'<button class="ix-act ix-act-dismiss" type="button" '
+            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
             f'data-note-id="{it.note_id}" title="Dismiss">&#10005;</button>'
         )
     if buttons:
@@ -790,7 +790,7 @@ INBOX_CSS = """
 .ix-card { border-radius: var(--radius);
   background: var(--surface); padding: 9px 12px; }
 .ix-head { display: flex; align-items: baseline; gap: 8px; }
-.ix-ticker { font-family: var(--mono); font-weight: 700; font-size: var(--fs-caption);
+.ix-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-caption);
   color: var(--fg); text-decoration: none; }
 .ix-ticker:hover { color: var(--accent); }
 .ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
@@ -830,10 +830,9 @@ INBOX_CSS = """
 .ix-quick { margin-left: auto; display: inline-flex; gap: 3px; visibility: hidden; }
 .ix-card:hover .ix-quick, .ix-quick:focus-within { visibility: visible; }
 .ix-quick ~ .ix-when, .ix-acted ~ .ix-when { margin-left: 0; }
-.ix-act { font-size: var(--fs-caption); line-height: 1;
-  font-weight: 600; color: var(--muted); background: transparent;
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 5px;
-  cursor: pointer; transition: color var(--transition), border-color var(--transition); }
+/* Quick approve/dismiss = .k-btn .k-btn-quiet .k-btn-sm (kit); only the
+   semantic hover/fail tones are local — a success/danger affordance the
+   quiet button has no intent for. */
 .ix-act-approve:hover { color: var(--ok); border-color: var(--ok); }
 .ix-act-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-act[disabled] { opacity: 0.5; cursor: default; }
@@ -855,15 +854,12 @@ INBOX_CSS = """
 .ix-badge[hidden] { display: none; }
 /* Category filter chips (Inbox v2) — client-side, scoped per stream. */
 .ix-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-.ix-cat { font-size: var(--fs-micro); font-weight: 600; background: transparent;
-  color: var(--muted); border: 1px solid var(--border);
-  border-radius: var(--radius-full); padding: 2px 9px; cursor: pointer;
-  transition: color var(--transition), border-color var(--transition); }
+/* Category filter chip = .k-chip-btn (kit); .is-on is the kit's active state.
+   Only the count span's de-emphasis is local. */
 .ix-cat span { opacity: 0.7; margin-left: 2px; }
-.ix-cat.is-on { color: var(--accent); border-color: var(--accent); }
 .ix-hide { display: none !important; }
-/* "Why ranked here" — the factor breakdown rides the kind/trigger chip's title. */
-.ix-kind[title], .trigger-badge[title] { cursor: help; }
+/* "Why ranked here" — the factor breakdown rides the kind chip's title. */
+.ix-kind[title] { cursor: help; }
 .ix-kind-synthesis { color: var(--accent); }
 """.strip()
 

@@ -399,18 +399,18 @@ def _validation_panel(body: StringIO, fin: FinancialsSection, seg: SegmentsSecti
     if worst is None:
         return
     if worst <= 0.5:
-        status_cls = "pill-ok"
+        status_cls = "k-chip-ok"
         status_text = f"ties to FMP (max drift {worst:.2f}%)"
     elif worst <= 2.0:
-        status_cls = "pill-warn"
+        status_cls = "k-chip-warn"
         status_text = f"minor drift (max {worst:.2f}%)"
     else:
-        status_cls = "pill-bad"
+        status_cls = "k-chip-bad"
         status_text = f"DRIFT — segments off by up to {worst:.1f}%"
     body.write(
         _panel_head(
             "Validation: segments ↔ consolidated revenue",
-            sub_html=f'<span class="pill {status_cls}">{_esc(status_text)}</span>',
+            sub_html=f'<span class="k-chip k-chip-mono {status_cls}">{_esc(status_text)}</span>',
         )
     )
     # Compact per-quarter detail table — only show drift > 0.1% to keep it scannable.

@@ -177,7 +177,7 @@ def test_peek_alert_serves_full_card_fragment(client: FlaskClient, db_path: Path
     body = resp.data.decode()
     assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
     assert "alert-card" in body
-    assert "ticker-badge" in body
+    assert "k-tick-sym" in body  # the ticker rides the kit label now
     assert "evidence-drawer" in body
     # The live approve/dismiss links ride inside the peek.
     assert f"/approve?action_id={qa.id}" in body
@@ -737,7 +737,7 @@ def test_cockpit_score_chip_peeks_breakdown() -> None:
     assert "data-peek-title='Why score · DLO'" in html
     assert "href='/ticker/DLO'" in html  # real destination preserved for middle-click
     assert ">4.49</a>" in html  # the chip is the doorway <a>
-    assert "attract-chip attract-hi" in html  # 4.49 >= 1.25 -> hi tone
+    assert "k-chip k-chip-mono k-chip-ok" in html  # 4.49 >= 1.25 -> hi tone (kit ok chip)
     assert "title='dcf 1.80 (+216.0% upside)" in html  # the why stays in the hover
 
 
@@ -763,7 +763,7 @@ def test_cockpit_fit_chip_peeks_breakdown() -> None:
     assert "data-peek-title='Portfolio fit · DLO'" in html
     assert "href='/ticker/DLO'" in html  # real destination preserved for middle-click
     assert ">1.18</a>" in html  # the fit chip is the doorway <a>
-    assert "fit-chip fit-hi" in html  # 1.18 >= 1.10 -> accretive
+    assert "k-chip k-chip-mono k-chip-ok" in html  # 1.18 >= 1.10 -> accretive (kit ok chip)
     assert "title='sharpe 1.12 (...) x divers 1.05 (...) = 1.18'" in html  # why in the hover
 
 

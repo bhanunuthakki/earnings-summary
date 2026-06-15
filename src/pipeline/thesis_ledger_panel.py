@@ -32,13 +32,16 @@ _KIND_LABELS: Mapping[str, str] = {
 _PANEL_STYLE = """<style>
 .tl-table td.tk { font-weight:600; white-space:nowrap; font-family:var(--mono); }
 .tl-table td.when { color:var(--muted); white-space:nowrap; }
-.tl-pill { background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent); }
-.tl-pill.bear_append { background:color-mix(in srgb, var(--bad) 16%, transparent);
-  color:var(--bad); }
-.tl-pill.thesis_update { background:color-mix(in srgb, var(--ok) 16%, transparent);
-  color:var(--ok); }
 .tl-body { font-size:var(--fs-body); line-height:1.5; }
 </style>"""
+
+# entry_kind -> filled status-pill tone (kit .k-pill modifier). A bear-case append
+# is a negative/risk note (-bad); a thesis update is a positive confirmation (-ok);
+# anything else (earnings prep, future kinds) stays a bare neutral .k-pill.
+_KIND_PILL_TONE: Mapping[str, str] = {
+    "bear_append": "k-pill-bad",
+    "thesis_update": "k-pill-ok",
+}
 
 
 def render_thesis_ledger_panel(db_path: Path, *, user_id: str) -> str:
@@ -98,13 +101,14 @@ def _ledger_table(entries: list[ThesisLedgerEntryRow]) -> str:
 
 def _row(e: ThesisLedgerEntryRow) -> str:
     label = _KIND_LABELS.get(e.entry_kind, e.entry_kind)
-    pill_cls = escape(e.entry_kind)
+    tone = _KIND_PILL_TONE.get(e.entry_kind, "")
+    pill_cls = f"k-pill {tone}".strip()
     when = escape(e.created_at.date().isoformat())
     return (
         "<tr>"
         f'<td class="when">{when}</td>'
         f'<td class="tk">{escape(e.ticker)}</td>'
-        f'<td><span class="p-pill tl-pill {pill_cls}">{escape(label)}</span></td>'
+        f'<td><span class="{pill_cls}">{escape(label)}</span></td>'
         f'<td class="tl-body">{render_prose(e.body, inline=True)}</td>'
         "</tr>"
     )

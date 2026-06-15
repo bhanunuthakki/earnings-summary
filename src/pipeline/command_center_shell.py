@@ -895,13 +895,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-holding-links a { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .cc-holding-links a:hover { text-decoration: underline; }
 .badges { display: inline-flex; gap: 4px; margin-left: 8px; }
-.badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em;
-  font-weight: 600; background: var(--border); }
-.badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
-.badge.b-muted { background: var(--paper); color: var(--muted); }
+/* identity badges (ticker_command_center fragment) → the kit .k-chip / .k-pill. */
 .fresh-strip { display: flex; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
 .fresh-cell { background: var(--surface); border-radius: var(--radius);
   padding: 8px 14px; flex: 1; min-width: 140px; }
@@ -969,34 +963,20 @@ td.ticker a:hover { color: var(--accent); }
 .alert-card { background: var(--surface); border-radius: var(--radius);
   padding: 10px 12px; margin-bottom: 10px; }
 .alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
-.ticker-badge { display: inline-flex; align-items: center; padding: 2px 7px;
-  border: 1px solid var(--border-2); background: var(--paper); color: var(--fg);
-  border-radius: var(--radius); font-family: var(--mono); font-weight: 700;
-  font-size: var(--fs-caption); letter-spacing: 0.05em; }
-.trigger-badge, .status-badge { display: inline-flex; align-items: center; padding: 1px 6px;
-  border: 1px solid var(--border-2); border-radius: var(--radius); color: var(--fg-soft);
-  font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.05em;
-  text-transform: uppercase; }
-.status-pending { color: var(--warn); border-color: var(--warn); }
-.status-approved { color: var(--ok); border-color: var(--ok); }
-.status-dismissed { color: var(--muted); border-color: var(--muted); }
-.status-expired { color: var(--muted-2); border-color: var(--muted-2); }
+/* Alert-card identity marks ride the shared kit (.k-tick-sym / .k-chip / .k-pill),
+   emitted by src/dashboard/_card.py — no per-surface badge CSS. */
 .fired-at { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro);
   margin-left: auto; }
 .alert-memo { margin: 4px 0 8px; padding: 7px 9px; background: var(--paper);
   border-left: 3px solid var(--border-2); border-radius: 0 var(--radius) var(--radius) 0;
   font-size: var(--fs-body); color: var(--fg-soft); }
-.alert-memo-pending { color: var(--muted); font-style: italic; }
+.alert-memo-pending { color: var(--muted); }
 .queued-actions { margin-top: 8px; }
 .queued-actions h4 { font-size: var(--fs-caption); font-weight: 600; margin: 0 0 5px;
   color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
 .queued-action { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
   padding: 6px 8px; background: var(--paper);
   border-radius: var(--radius); margin-bottom: 5px; }
-.qa-kind { display: inline-flex; align-items: center; padding: 1px 5px;
-  border: 1px solid var(--border-2); background: var(--surface); color: var(--fg-soft);
-  border-radius: var(--radius-full); font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.05em;
-  text-transform: uppercase; }
 .qa-body { flex: 1; min-width: 140px; color: var(--fg-soft); font-size: var(--fs-caption); }
 .qa-actions { display: flex; gap: 6px; align-items: center; font-family: var(--mono);
   font-size: var(--fs-micro); }

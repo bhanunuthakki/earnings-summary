@@ -51,7 +51,7 @@ _SPEAKER_RE = re.compile(r"^([A-Z][\w.\- ',()]{0,70}?):(\s|$)")
 # The command-center shell appends this block to its own stylesheet so a
 # fragment injected into the peek renders identically to the full page.
 VIEWER_CONTENT_CSS = """
-.sv-title { font-size: var(--fs-title); font-weight: 700; }
+.sv-title { font-size: var(--fs-title); font-weight: 600; }
 .sv-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); }
 .sv-lines { list-style: none; margin: 0; padding: 0; counter-reset: ln; }
 .sv-lines li { counter-increment: ln; padding: 1px 8px 1px 0; display: flex; gap: 14px; }
@@ -59,9 +59,9 @@ VIEWER_CONTENT_CSS = """
   flex: none; text-align: right; font-family: var(--mono); font-size: var(--fs-caption);
   padding-top: 2px; user-select: none; }
 .sv-lines li:target { background: color-mix(in srgb, var(--warn) 14%, transparent);
-  outline: 1px solid var(--warn); border-radius: 4px; }
+  outline: 1px solid var(--warn); border-radius: var(--radius); }
 .sv-lines .ln-text { white-space: pre-wrap; word-break: break-word; }
-.sv-lines .ln-speaker { font-weight: 700; color: var(--accent); }
+.sv-lines .ln-speaker { font-weight: 600; color: var(--accent); }
 .sv-secnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
 .sv-secnav a { font-size: var(--fs-caption); padding: 3px 9px; border: 1px solid var(--border);
   border-radius: var(--radius-full); text-decoration: none; color: var(--muted); }

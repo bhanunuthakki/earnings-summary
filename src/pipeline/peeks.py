@@ -293,7 +293,8 @@ def render_ticker_peek(
     badge = ""
     if verdict:
         tone = _STATUS_TONE.get(verdict.lower(), "muted")
-        badge = f'<span class="cockpit-badge b-{tone}">{escape(verdict)}</span>'
+        pill_tone = f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+        badge = f'<span class="k-pill{pill_tone}">{escape(verdict)}</span>'
     head = f'<div class="cc-mini-head"><span class="cc-mini-ticker">{escape(t)}</span>{badge}</div>'
     name_html = f'<div class="cc-mini-name">{escape(name)}</div>' if name else ""
 

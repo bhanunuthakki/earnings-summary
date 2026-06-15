@@ -137,8 +137,8 @@ def test_dashboard_page_returns_shell(client):
     assert "cockpit-section" in body
     assert "NU" in body
     assert "MELI" in body
-    # The seeded thesis verdict renders as a badge.
-    assert "cockpit-badge" in body
+    # The seeded thesis verdict renders as a kit status pill (.k-pill).
+    assert "k-pill" in body
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

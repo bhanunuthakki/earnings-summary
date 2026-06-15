@@ -52,18 +52,12 @@ _PANEL_STYLE = """<style>
 .jr-filters { display:flex; gap:8px; align-items:center; margin:4px 0 14px; flex-wrap:wrap; }
 /* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
 .jr-filters input { width:90px; text-transform:uppercase; }
-.jr-filters button { background:var(--accent-soft); color:var(--accent);
-  border:1px solid var(--accent); border-radius:var(--radius); padding:5px 12px;
-  font-size:var(--fs-body); cursor:pointer; }
 .jr-count { color:var(--muted); font-size:var(--fs-caption); margin-left:auto; }
 .jr-note { border:1px solid var(--border); border-radius:var(--radius);
   background:var(--surface); padding:10px 14px; margin-bottom:10px; }
 .jr-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
-.jr-kind { font-size:var(--fs-micro); font-weight:600;
-  text-transform:uppercase; letter-spacing:.05em; color:var(--accent);
-  border:1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  border-radius:var(--radius-full); padding:0 6px; }
-.jr-ticker { font-family:var(--mono); font-weight:600; }
+/* kind tag → quiet .k-chip (dashboards stay category-quiet, §2); ticker →
+   .k-tick-sym; the linked-object chip → .k-chip-mono. All from the shared kit. */
 .jr-status { font-size:var(--fs-micro); text-transform:uppercase; letter-spacing:.04em; }
 .jr-status-open { color:var(--warn); }
 .jr-status-resolved { color:var(--ok); }
@@ -80,22 +74,14 @@ _PANEL_STYLE = """<style>
 .jr-resolution { margin-top:6px; font-size:var(--fs-caption); color:var(--muted); }
 .jr-anchor { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
 .jr-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
-.jr-actions select { font-size:var(--fs-caption); padding:3px 9px; }
-.jr-actions button { background:transparent; color:var(--muted);
-  border:1px solid var(--border); border-radius:var(--radius); padding:3px 9px;
-  font-size:var(--fs-caption); cursor:pointer; }
-.jr-actions button:hover { border-color:var(--accent); color:var(--accent); }
+.jr-actions select { padding:3px 9px; }
 .jr-note-new { margin:0 0 16px; }
 .jr-note-new textarea { width:100%; box-sizing:border-box; min-height:54px; }
 .jr-note-new .jr-row { display:flex; gap:8px; margin-top:6px; }
 .jr-empty { color:var(--muted); padding:18px 0; }
 .jr-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
-/* S15 links: the linked-object chip on a card + the link controls. */
-.jr-link { display:inline-flex; align-items:center; gap:4px;
-  font-size:var(--fs-micro); font-family:var(--mono); color:var(--muted);
-  border:1px solid var(--border); border-radius:var(--radius-full); padding:0 8px; }
-.jr-link.is-concluded { color:var(--warn);
-  border-color:color-mix(in srgb, var(--warn) 45%, transparent); }
+/* S15 links: the linked-object chip is a .k-chip-mono (+ .k-chip-warn when the
+   linked object has concluded); only the link-control row layout is local. */
 .jr-link-box { display:inline-flex; align-items:center; gap:6px; }
 .jr-link-box select { max-width:300px; }
 .jr-auto { display:inline-flex; align-items:center; gap:4px;
@@ -115,13 +101,8 @@ _PANEL_STYLE = """<style>
 .jr-synthesis > summary { cursor:pointer; display:flex; align-items:baseline; gap:8px;
   padding:4px 0; list-style:none; }
 .jr-synthesis > summary::-webkit-details-marker { display:none; }
-.jr-silo-title { font-size:var(--fs-caption); font-weight:600; color:var(--muted);
-  text-transform:uppercase; letter-spacing:.04em; }
 .jr-synth-note { border:1px dashed var(--border); border-radius:var(--radius);
   background:var(--paper); padding:10px 14px; margin-bottom:8px; }
-.jr-actions a { color:var(--muted); text-decoration:none; border:1px solid var(--border);
-  border-radius:var(--radius); padding:3px 9px; font-size:var(--fs-caption); }
-.jr-actions a:hover { border-color:var(--accent); color:var(--accent); }
 </style>"""
 
 _STATUS_FILTERS = ("open", "resolved", "superseded", "archived", "all")
@@ -139,10 +120,10 @@ def _link_chip(n: AnalystNoteRow, targets: dict[tuple[str, int], LinkTarget]) ->
             continue
         target = targets.get((kind, target_id))
         if target is None:
-            chips.append(f'<span class="jr-link">→ {escape(kind)} #{target_id}</span>')
+            chips.append(f'<span class="k-chip k-chip-mono">→ {escape(kind)} #{target_id}</span>')
             continue
         state = f" — {escape(target.conclusion)}" if target.conclusion else ""
-        cls = "jr-link is-concluded" if target.concluded else "jr-link"
+        cls = "k-chip k-chip-mono k-chip-warn" if target.concluded else "k-chip k-chip-mono"
         auto = " · auto-resolve" if n.link_auto_resolve and not target.concluded else ""
         chips.append(
             f'<span class="{cls}" title="{escape(target.ticker)} {escape(target.label)}">'
@@ -174,9 +155,9 @@ def _note_card(
     link_options: list[LinkTarget],
 ) -> str:
     ticker_html = (
-        f'<span class="jr-ticker">{escape(n.ticker)}</span>'
+        f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
         if n.ticker
-        else '<span class="jr-ticker" style="color:var(--muted)">PORTFOLIO</span>'
+        else '<span class="k-tick-sym" style="color:var(--muted)">PORTFOLIO</span>'
     )
     anchor = ""
     if n.anchor_type:
@@ -195,23 +176,26 @@ def _note_card(
         )
         linked = n.decision_id is not None or n.position_entry_id is not None
         if linked:
-            link_controls = '<button type="button" data-act="unlink">Unlink</button>'
+            link_controls = (
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+                'data-act="unlink">Unlink</button>'
+            )
         elif link_options:
             link_controls = (
                 '<span class="jr-link-box">'
                 f'<select data-role="link-target">{_link_options(link_options)}</select>'
                 '<label class="jr-auto"><input type="checkbox" data-role="link-auto">'
                 "auto-resolve</label>"
-                '<button type="button" data-act="link">Link</button>'
+                '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="link">Link</button>'
                 "</span>"
             )
         else:
             link_controls = ""
         actions = (
             f'<div class="jr-actions" data-note-id="{n.id}">'
-            '<button type="button" data-act="resolve">Resolve</button>'
-            '<button type="button" data-act="supersede">Supersede</button>'
-            '<button type="button" data-act="archive">Archive</button>'
+            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="resolve">Resolve</button>'
+            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="supersede">Supersede</button>'
+            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="archive">Archive</button>'
             f'<select data-act="reclassify" title="Reclassify kind">{kind_opts}</select>'
             f"{link_controls}"
             "</div>"
@@ -219,7 +203,7 @@ def _note_card(
     return (
         f'<div class="jr-note" data-note="{n.id}">'
         '<div class="jr-head">'
-        f'<span class="jr-kind">{escape(n.kind)}</span>'
+        f'<span class="k-chip">{escape(n.kind)}</span>'
         f"{ticker_html}"
         f'<span class="jr-status jr-status-{escape(n.status)}">{escape(n.status)}</span>'
         f'<span class="jr-when">{escape(n.created_at.date().isoformat())}</span>'
@@ -249,21 +233,22 @@ def _synthesis_card(n: AnalystNoteRow) -> str:
     Matches the inbox contract (open-memo → the Memos surface; dismiss →
     /api/notes/<id>/archive)."""
     ticker_html = (
-        f'<span class="jr-ticker">{escape(n.ticker)}</span>'
+        f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
         if n.ticker
-        else '<span class="jr-ticker" style="color:var(--muted)">PORTFOLIO</span>'
+        else '<span class="k-tick-sym" style="color:var(--muted)">PORTFOLIO</span>'
     )
     return (
         f'<div class="jr-synth-note" data-note="{n.id}">'
         '<div class="jr-head">'
-        '<span class="jr-kind">Advisor memo</span>'
+        '<span class="k-chip">Advisor memo</span>'
         f"{ticker_html}"
         f'<span class="jr-when">{escape(n.created_at.date().isoformat())}</span>'
         "</div>"
         f'<div class="jr-body">{render_prose(n.body)}</div>'
         f'<div class="jr-actions" data-note-id="{n.id}">'
-        '<a href="#advisor_memos" title="Open the advisor Memos surface">Open in Memos</a>'
-        '<button type="button" data-act="archive">Archive</button>'
+        '<a class="k-btn k-btn-quiet k-btn-sm" href="#advisor_memos" '
+        'title="Open the advisor Memos surface">Open in Memos</a>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="archive">Archive</button>'
         "</div></div>"
     )
 
@@ -277,7 +262,7 @@ def _synthesis_silo(notes: list[AnalystNoteRow]) -> str:
     plural = "s" if n != 1 else ""
     return (
         '<details class="jr-synthesis">'
-        '<summary><span class="jr-silo-title">Advisor synthesis</span>'
+        '<summary><span class="k-label">Advisor synthesis</span>'
         f'<span class="jr-count">{n} machine-authored memo{plural}</span></summary>'
         f"{cards}</details>"
     )
@@ -378,12 +363,12 @@ def render_reconciliation_list(
 def _reconciliation_card(item: ReconciliationItem) -> str:
     n = item.note
     t = item.target
-    ticker_html = f'<span class="jr-ticker">{escape(n.ticker or "PORTFOLIO")}</span>'
+    ticker_html = f'<span class="k-tick-sym">{escape(n.ticker or "PORTFOLIO")}</span>'
     return (
         f'<div class="jr-rec" data-note-id="{n.id}" '
         f'data-suggest="{escape(item.suggested_resolution, quote=True)}">'
         '<div class="jr-rec-row">'
-        f'<span class="jr-kind">{escape(n.kind)}</span>'
+        f'<span class="k-chip">{escape(n.kind)}</span>'
         f"{ticker_html}"
         f'<span class="jr-when">{escape(n.created_at.date().isoformat())}</span>'
         "</div>"
@@ -391,8 +376,9 @@ def _reconciliation_card(item: ReconciliationItem) -> str:
         f'<div class="jr-rec-concl">{escape(t.kind)} #{t.target_id} · '
         f"{escape(t.label)} — {escape(t.conclusion or 'concluded')}</div>"
         '<div class="jr-actions">'
-        '<button type="button" data-act="rec-resolve">Resolve with conclusion</button>'
-        '<button type="button" data-act="unlink" '
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        'data-act="rec-resolve">Resolve with conclusion</button>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-act="unlink" '
         'title="Keep the note open; detach it from the concluded object">'
         "Keep open (unlink)</button>"
         "</div></div>"
@@ -433,7 +419,7 @@ def render_journal_panel(
   <div class="jr-row">
     <select name="kind">{new_kind_opts}</select>
     <input name="ticker" placeholder="TICKER" title="Blank = portfolio-level note">
-    <button type="submit">Add note</button>
+    <button type="submit" class="k-btn k-btn-primary">Add note</button>
   </div>
 </form>
 <div id="jr-reconcile">{reconcile}</div>
@@ -441,7 +427,7 @@ def render_journal_panel(
   <input name="ticker" placeholder="TICKER" value="{ticker_val}">
   <select name="kind">{kind_opts}</select>
   <select name="status">{status_opts}</select>
-  <button type="submit">Filter</button>
+  <button type="submit" class="k-btn k-btn-quiet">Filter</button>
   <span class="jr-count" id="jr-count"></span>
 </form>
 <div id="jr-list">{note_list}</div>

@@ -40,7 +40,11 @@ from pipeline.research_cockpit import CockpitRow, KpiDelta, render_research_cock
 _ACTION_ATTRS = ("data-ask-q", "data-peek-url", "data-fact-ref")
 # Cockpit stats the paradigm defines as doorways — each must be a non-span
 # doorway with exactly one action attr.
-_DOORWAY_CLASSES = ("kpi-chip", "pill-accent", "pill-bad", "stale-dot")
+# Markers unique to the cockpit's doorway stats: the KPI-move chip (.kpi-move),
+# the alert/new-doc count pills (.cockpit-count — a dedicated marker so a bad-toned
+# VERDICT pill, which is an inert <span> sharing .k-pill-bad, can never be mistaken
+# for the alerts doorway), and the staleness dot.
+_DOORWAY_CLASSES = ("kpi-move", "cockpit-count", "stale-dot")
 
 
 class _DoorwayScan(HTMLParser):
@@ -123,7 +127,7 @@ def test_new_docs_pill_peeks_documents() -> None:
     html = _populated_cockpit()
     assert "data-peek-url='/api/peek/documents?ticker=NU'" in html
     # Specifically NOT the pre-S9 inert span.
-    assert not re.search(r"<span class='pill pill-accent'[^>]*>\s*\d+ new doc", html)
+    assert not re.search(r"<span [^>]*cockpit-count[^>]*>\s*\d+ new doc", html)
 
 
 def test_ticker_cell_is_in_shell_link() -> None:

@@ -112,16 +112,16 @@ def _run_bar(holdings: list[str]) -> str:
     socratic = (
         '<span class="am-sep"></span>'
         f'<select id="am-soc-ticker" aria-label="holding to think through">{options}</select>'
-        '<button type="button" class="am-btn" id="am-soc-start">Think through&hellip;</button>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" id="am-soc-start">Think through&hellip;</button>'
         if holdings
         else ""
     )
     return (
         '<div class="am-runbar" id="am-runbar">'
         '<span class="am-runbar-label">Advisor</span>'
-        '<button type="button" class="am-btn" data-kind="next_dollar">'
+        '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-kind="next_dollar">'
         "Generate next-dollar memo</button>"
-        '<button type="button" class="am-btn" data-kind="swap_checks">'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-kind="swap_checks">'
         "Run swap checks</button>"
         f"{socratic}"
         '<span class="muted am-note">Evidence + framing, never directives. '
@@ -191,8 +191,8 @@ def _screen_section(
 
 def _bar_cell(s: SwapCandidate) -> str:
     if s.cleared:
-        return '<span class="p-pill am-pill-cleared">clears the bar</span>'
-    return '<span class="p-pill am-pill-held">discipline holds</span>'
+        return '<span class="k-pill k-pill-warn">clears the bar</span>'
+    return '<span class="k-pill k-pill-ok">discipline holds</span>'
 
 
 def _memos_section(memos: list[AdvisorMemoRow], scores: dict[int, StanceScoreRow]) -> str:
@@ -311,20 +311,12 @@ _PANEL_CSS = """<style>
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
 .am-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
-.am-btn { background: var(--accent); color: var(--accent-contrast); border: none;
-  border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-caption);
-  font-weight: 600; cursor: pointer; }
-.am-btn[disabled] { opacity: 0.45; cursor: wait; }
 .am-note { font-size: var(--fs-caption); }
 .am-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
   font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 .am-screen td { vertical-align: middle; }
 .am-cleared { color: var(--warn); font-weight: 600; }
-.am-pill-cleared { background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn); }
-.am-pill-held { background: color-mix(in srgb, var(--ok) 16%, transparent);
-  color: var(--ok); }
 .am-card { background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 10px 14px; margin-bottom: 10px; }
 .am-card summary { cursor: pointer; list-style: none; display: flex; align-items: baseline;
@@ -501,7 +493,7 @@ _SOCRATIC_JS = r"""
       '<select class="soc-horizon">' +
       '<option value="30">30d</option><option value="90" selected>90d</option>' +
       '<option value="180">180d</option><option value="365">1y</option></select>' +
-      '<button type="button" class="am-btn soc-submit">Write the decision memo</button>' +
+      '<button type="button" class="k-btn k-btn-primary k-btn-sm soc-submit">Write the decision memo</button>' +
       '<span class="soc-status muted"></span></div></div>';
     body.innerHTML = html;
     body.querySelector('.soc-submit').addEventListener('click', function () {
