@@ -49,6 +49,8 @@ from models.facts import FiscalPeriodType, Unit
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import OverrideAction, active_scalar_override_map
 
 # Canonical KPI names registered with kpi_definitions on first emission.
 KPI_OPERATING_MARGIN_GAAP = "Operating Margin (GAAP)"
@@ -920,6 +922,11 @@ def _fetch_full_kpi_series(
         "ORDER BY kf.period_end ASC",
         (ticker.upper(), resolved),
     )
+    # Company-doc overrides win over the FMP/LLM row before the YoY transform reads
+    # it: a 'replace' substitutes the authoritative value, a 'drop' omits the period.
+    ov_map = active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved
+    )
     points: list[KpiSeriesPoint] = []
     for row in cur.fetchall():
         if base_unit is not None and Unit(row["unit"]) is not base_unit:
@@ -927,11 +934,20 @@ def _fetch_full_kpi_series(
         pe = row["period_end"]
         if isinstance(pe, str):
             pe = datetime.fromisoformat(pe)
+        ftype = str(row["fiscal_period_type"])
+        ov = ov_map.get((str(row["period_end"])[:10], ftype))
+        if ov is not None and ov.action == OverrideAction.DROP.value:
+            continue
+        value = (
+            Decimal(str(ov.value))
+            if (ov is not None and ov.value is not None)
+            else Decimal(str(row["value"]))
+        )
         points.append(
             KpiSeriesPoint(
                 period_end=pe,
                 fiscal_period_type=FiscalPeriodType(row["fiscal_period_type"]),
-                value=Decimal(str(row["value"])),
+                value=value,
                 source_doc_id=int(row["source_doc_id"]),
             )
         )

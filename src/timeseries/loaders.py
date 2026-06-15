@@ -41,6 +41,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from provenance.overrides import (
+    FINANCIAL_FACT,
+    KPI,
+    OverrideAction,
+    date_override_map,
+)
 from timeseries.primitives import Observation
 
 log = logging.getLogger(__name__)
@@ -163,6 +169,39 @@ def _rows_to_series(rows: Iterable[sqlite3.Row]) -> list[Observation]:
     return [Observation(period_end=pe, value=v) for pe, v in sorted(by_period.items())]
 
 
+def _overlay_scalar_series(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    period_types: Iterable[str],
+    series: list[Observation],
+) -> list[Observation]:
+    """Apply active company-doc overrides to a resolved (period_end, value) series.
+
+    A ``replace`` substitutes the value with the company-published figure; a ``drop``
+    omits the period. A no-op when there are no overrides (the common case) so the
+    read path is unaffected. This is how a company-doc figure wins over FMP at the
+    canonical series read paths, durably (survives an FMP re-fetch). See
+    ``directives/provenance_override_2026_06.md``.
+    """
+    date_map = date_override_map(
+        conn, ticker=ticker, fact_kind=fact_kind, fact_key=fact_key, period_types=period_types
+    )
+    if not date_map:
+        return series
+    out: list[Observation] = []
+    for obs in series:
+        ov = date_map.get(str(obs.period_end)[:10])
+        if ov is None:
+            out.append(obs)
+        elif ov.action != OverrideAction.DROP.value:
+            value = float(ov.value) if ov.value is not None else obs.value
+            out.append(Observation(period_end=obs.period_end, value=value))
+    return out
+
+
 def _tier_rank_case_sql(column_alias: str) -> str:
     """Build a CASE expression mapping source_quality_tier text -> int rank.
     Used inline in SELECT for tier-aware ordering."""
@@ -257,7 +296,14 @@ def load_financial_series(
                 """,
                 (ticker.upper(), line_item, *period_list),
             ).fetchall()
-            return _rows_to_series(rows)
+            return _overlay_scalar_series(
+                conn,
+                ticker=ticker,
+                fact_kind=FINANCIAL_FACT,
+                fact_key=line_item,
+                period_types=period_list,
+                series=_rows_to_series(rows),
+            )
 
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
         as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
@@ -297,7 +343,14 @@ def load_financial_series(
                 *as_of_params,
             ),
         ).fetchall()
-        return _rows_to_series(rows)
+        return _overlay_scalar_series(
+            conn,
+            ticker=ticker,
+            fact_kind=FINANCIAL_FACT,
+            fact_key=line_item,
+            period_types=period_list,
+            series=_rows_to_series(rows),
+        )
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -916,7 +969,14 @@ def load_kpi_series(
                 """,
                 (ticker.upper(), kpi_name, *period_list),
             ).fetchall()
-            return _rows_to_series(rows)
+            return _overlay_scalar_series(
+                conn,
+                ticker=ticker,
+                fact_kind=KPI,
+                fact_key=kpi_name,
+                period_types=period_list,
+                series=_rows_to_series(rows),
+            )
 
         has_tier = _has_column(conn, "documents", "source_quality_tier")
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
@@ -954,7 +1014,14 @@ def load_kpi_series(
                 *as_of_params,
             ),
         ).fetchall()
-        return _rows_to_series(rows)
+        return _overlay_scalar_series(
+            conn,
+            ticker=ticker,
+            fact_kind=KPI,
+            fact_key=kpi_name,
+            period_types=period_list,
+            series=_rows_to_series(rows),
+        )
     except sqlite3.Error as exc:
         log.warning(
             {

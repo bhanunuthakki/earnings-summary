@@ -475,3 +475,59 @@ def apply_segment_overrides(
             new_rec["data"] = data
         out.append(new_rec)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Scalar (financial_fact / kpi) series overlay — consumed by the read paths
+# ---------------------------------------------------------------------------
+
+
+def active_scalar_override_map(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    user_id: str = DEFAULT_USER_ID,
+) -> dict[tuple[str, str], FactOverride]:
+    """``(period_end, fiscal_period_type) -> active replace/drop override`` for one
+    logical scalar fact (a ``financial_fact`` line_item or a ``kpi`` definition name).
+
+    ``qualify`` overrides are excluded — they annotate, they do not change a value.
+    Empty when there is no override / no ``fact_overrides`` table. Series readers that
+    carry a per-row ``fiscal_period_type`` look up ``(period_end, type)`` directly;
+    readers that carry only ``period_end`` use :func:`date_override_map`.
+    """
+    out: dict[tuple[str, str], FactOverride] = {}
+    for ov in get_active_overrides(conn, ticker=ticker, fact_kind=fact_kind, user_id=user_id):
+        if ov.fact_key != fact_key or ov.action == OverrideAction.QUALIFY.value:
+            continue
+        out[(ov.period_end, ov.fiscal_period_type)] = ov
+    return out
+
+
+def date_override_map(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fact_kind: str,
+    fact_key: str,
+    period_types: Iterable[str],
+    user_id: str = DEFAULT_USER_ID,
+) -> dict[str, FactOverride]:
+    """``period_end -> active replace/drop override``, restricted to overrides whose
+    ``fiscal_period_type`` is in ``period_types``.
+
+    For series readers that carry only ``period_end`` (the query already scoped the
+    period types). If a date carries overrides for two in-scope period types (rare:
+    e.g. both Q4 and FY in scope) the last wins — readers needing exact type matching
+    use :func:`active_scalar_override_map`.
+    """
+    allowed = set(period_types)
+    out: dict[str, FactOverride] = {}
+    for (period_end, ftype), ov in active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=fact_kind, fact_key=fact_key, user_id=user_id
+    ).items():
+        if ftype in allowed:
+            out[period_end] = ov
+    return out
