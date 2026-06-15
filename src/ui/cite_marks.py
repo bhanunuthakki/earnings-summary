@@ -48,6 +48,19 @@ CITE_MARKS_CSS = """
   color: var(--link, var(--accent)); text-decoration: none;
   font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap;
 }
+/* When a [n] marker sits right after a financial value, the value itself gets
+   the accent-tinted "this is cited" wash and the marker becomes a small round
+   badge. Accent (interactive), NOT green — green = a positive number here. */
+.cite-wrap .cite-val {
+  background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent);
+  border-radius: var(--radius, 6px); padding: 0 3px;
+}
+.cite-wrap .cite-badge {
+  font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle;
+  color: var(--accent-contrast, var(--surface, var(--panel)));
+  background: var(--accent, var(--link)); border-radius: var(--radius-full, 999px);
+  padding: 1px 5px; margin-left: 3px; white-space: nowrap;
+}
 .cite-wrap .cite-pop {
   display: none; position: absolute; z-index: 60;
   bottom: calc(100% + 4px); left: 0;
@@ -62,6 +75,24 @@ CITE_MARKS_CSS = """
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
 .cite-pop-label { display: block; font-weight: 600; color: var(--fg, var(--ink)); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
+.cite-pop-head {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px;
+}
+.cite-pop-tick { font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-kind {
+  font-size: var(--fs-micro, 10px); color: var(--accent, var(--link));
+  background: var(--accent-soft, var(--bg-elev, var(--panel)));
+  border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
+.cite-pop-value {
+  display: block; font-size: var(--fs-section, 14px); font-weight: 600;
+  color: var(--fg, var(--ink)); margin-top: 3px;
+}
+.cite-pop-value-cap {
+  display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px;
+}
 .cite-unverified {
   display: inline-block; font-size: var(--fs-micro, 10px);
   color: var(--warn); border: 1px dashed var(--warn);
@@ -74,14 +105,37 @@ CITE_MARKS_CSS = """
 CITE_MARKS_JS = r"""
 (function () {
   if (window.ccCiteMarks) return;
+  // A [n] marker, optionally preceded by a financial value (currency-led, or a
+  // bare number that carries a %/magnitude suffix — so plain years/counts are
+  // NOT highlighted), where the value may be wrapped in one inline tag. The
+  // Python mirror (ui.cite_marks._CITE_RX) matches the same shape verbatim.
+  var CITE_RX = /(?:((?:<(?:strong|em|code)>)?(?:[$€£]\s?\d[\d,]*(?:\.\d+)?\s?(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand)?|\d[\d,]*(?:\.\d+)?\s?(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand))(?:<\/(?:strong|em|code)>)?)\s*)?\[(\d{1,2})\]/g;
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function popHtml(c) {
-    var html = '<span class="cite-pop-label">' + esc(c.label || 'source') + '</span>';
+    var head = '';
+    var label;
+    if (c.ticker) {
+      head = '<span class="cite-pop-head"><span class="cite-pop-tick">' + esc(c.ticker) + '</span>';
+      if (c.doc_type) head += '<span class="cite-pop-kind">' + esc(c.doc_type) + '</span>';
+      if (c.period) head += '<span class="cite-pop-per">' + esc(c.period) + '</span>';
+      head += '</span>';
+      label = String(c.label || '');
+      var pfx = c.ticker + ' · ';
+      if (label.indexOf(pfx) === 0) label = label.slice(pfx.length);
+    } else {
+      label = String(c.label || 'source');
+    }
+    var html = head;
+    if (label) html += '<span class="cite-pop-label">' + esc(label) + '</span>';
+    if (c.value) {
+      html += '<span class="cite-pop-value">' + esc(c.value) + '</span>'
+        + '<span class="cite-pop-value-cap">latest reported</span>';
+    }
     var meta = [];
-    if (c.kind) meta.push(esc(c.kind));
+    if (c.kind && !c.ticker) meta.push(esc(c.kind));
     if (typeof c.confidence === 'number') {
       meta.push('confidence ' + Math.round(c.confidence * 100) + '%');
     }
@@ -92,15 +146,23 @@ CITE_MARKS_JS = r"""
     var base = (opts && opts.hrefBase) || '';
     var map = {};
     (items || []).forEach(function (c) { if (c && c.n) map[String(c.n)] = c; });
-    return String(html).replace(/\[(\d{1,2})\]/g, function (m, n) {
+    return String(html).replace(CITE_RX, function (m, value, n) {
       var c = map[n];
       if (!c) return m;
       var href = c.href || c.source_url || '';
       if (href && !/^https?:/.test(href)) href = base + href;
+      var pop = popHtml(c);
+      if (value) {
+        var badge = href
+          ? '<a class="cite-mark cite-badge" href="' + esc(href) + '" target="_blank" rel="noopener">' + n + '</a>'
+          : '<span class="cite-mark cite-badge">' + n + '</span>';
+        return '<span class="cite-wrap" tabindex="0"><span class="cite-val">' + value + '</span>'
+          + badge + pop + '</span>';
+      }
       var mark = href
         ? '<a class="cite-mark" href="' + esc(href) + '" target="_blank" rel="noopener">[' + n + ']</a>'
         : '<span class="cite-mark">[' + n + ']</span>';
-      return '<span class="cite-wrap" tabindex="0">' + mark + popHtml(c) + '</span>';
+      return '<span class="cite-wrap" tabindex="0">' + mark + pop + '</span>';
     });
   }
   function unverifiedChipHtml(claims) {
@@ -150,8 +212,21 @@ CITE_MARKS_SNIPPET = f"<style>{CITE_MARKS_CSS}</style>\n<script>{CITE_MARKS_JS}<
 # shape, ``{"items": [...], ...}``) is accepted too: its ``items`` are used.
 # ---------------------------------------------------------------------------
 
-# Mirrors the JS ``/\[(\d{1,2})\]/g`` marker form exactly — 1-2 digit ``[n]``.
-_MARK_RX = re.compile(r"\[(\d{1,2})\]")
+# Mirrors the JS ``CITE_RX`` verbatim: a 1-2 digit ``[n]`` marker, optionally
+# preceded (capture group 1) by a financial value the marker cites — currency-
+# led, or a bare number carrying a %/magnitude suffix, so plain years/counts are
+# left alone — optionally wrapped in one inline tag (``<strong>``/``<em>``/
+# ``<code>``, what ``ui.prose`` emits). When the value is present it is washed
+# with the accent tint and the marker becomes a round badge; otherwise the old
+# superscript ``[n]`` chip renders unchanged.
+_VALUE_CORE = (
+    r"(?:<(?:strong|em|code)>)?"
+    r"(?:[$€£]\s?\d[\d,]*(?:\.\d+)?\s?"
+    r"(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand)?"
+    r"|\d[\d,]*(?:\.\d+)?\s?(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand))"
+    r"(?:</(?:strong|em|code)>)?"
+)
+_CITE_RX = re.compile(r"(?:(" + _VALUE_CORE + r")\s*)?\[(\d{1,2})\]")
 _ABS_URL_RX = re.compile(r"^https?:", re.IGNORECASE)
 
 # A single citation chip payload (EvidenceItem.chip_payload's shape) and the
@@ -183,11 +258,43 @@ def citation_items(payload: CitationsPayload | None) -> list[CitationItem]:
 
 
 def _cite_pop_html(item: CitationItem) -> str:
-    """The hover/focus popover for one chip — mirror of the JS ``popHtml``."""
-    out = f'<span class="cite-pop-label">{_esc(item.get("label") or "source")}</span>'
+    """The hover/focus popover for one chip — mirror of the JS ``popHtml``.
+
+    When the chip carries the structured ``ticker`` field it renders the
+    auditable header (issuer · doc-type pill · period) above the metric label,
+    and — for a fact chip — the newest data point's ``value`` flagged "latest
+    reported". A chip without ``ticker`` (transcripts, packs, legacy payloads)
+    renders the original label-first layout byte-for-byte unchanged."""
+    ticker = item.get("ticker")
+    head = ""
+    if ticker:
+        ticker_s = str(ticker)
+        head = f'<span class="cite-pop-head"><span class="cite-pop-tick">{_esc(ticker_s)}</span>'
+        doc_type = item.get("doc_type")
+        if doc_type:
+            head += f'<span class="cite-pop-kind">{_esc(doc_type)}</span>'
+        period = item.get("period")
+        if period:
+            head += f'<span class="cite-pop-per">{_esc(period)}</span>'
+        head += "</span>"
+        label = str(item.get("label") or "")
+        pfx = f"{ticker_s} · "
+        if label.startswith(pfx):
+            label = label[len(pfx) :]
+    else:
+        label = str(item.get("label") or "source")
+    out = head
+    if label:
+        out += f'<span class="cite-pop-label">{_esc(label)}</span>'
+    value = item.get("value")
+    if value:
+        out += (
+            f'<span class="cite-pop-value">{_esc(value)}</span>'
+            '<span class="cite-pop-value-cap">latest reported</span>'
+        )
     meta: list[str] = []
     kind = item.get("kind")
-    if kind:
+    if kind and not ticker:
         meta.append(_esc(kind))
     conf = item.get("confidence")
     if isinstance(conf, (int, float)) and not isinstance(conf, bool):
@@ -223,21 +330,33 @@ def linkify(text: str, payload: CitationsPayload | None, *, href_base: str = "")
         return text
 
     def _repl(m: re.Match[str]) -> str:
-        n = m.group(1)
+        value = m.group(1)
+        n = m.group(2)
         c = by_n.get(n)
         if c is None:
             return m.group(0)
         href = str(c.get("href") or c.get("source_url") or "")
         if href and not _ABS_URL_RX.match(href):
             href = href_base + href
-        mark = (
-            f'<a class="cite-mark" href="{_esc(href)}" target="_blank" rel="noopener">[{n}]</a>'
-            if href
-            else f'<span class="cite-mark">[{n}]</span>'
-        )
-        return f'<span class="cite-wrap" tabindex="0">{mark}{_cite_pop_html(c)}</span>'
+        pop = _cite_pop_html(c)
+        if value:
+            # value is already-rendered, already-escaped prose HTML — wrap as-is.
+            badge = (
+                f'<a class="cite-mark cite-badge" href="{_esc(href)}" '
+                f'target="_blank" rel="noopener">{n}</a>'
+                if href
+                else f'<span class="cite-mark cite-badge">{n}</span>'
+            )
+            inner = f'<span class="cite-val">{value}</span>{badge}'
+        else:
+            inner = (
+                f'<a class="cite-mark" href="{_esc(href)}" target="_blank" rel="noopener">[{n}]</a>'
+                if href
+                else f'<span class="cite-mark">[{n}]</span>'
+            )
+        return f'<span class="cite-wrap" tabindex="0">{inner}{pop}</span>'
 
-    return _MARK_RX.sub(_repl, text)
+    return _CITE_RX.sub(_repl, text)
 
 
 __all__ = [

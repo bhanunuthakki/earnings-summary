@@ -1145,14 +1145,37 @@
 
 (function () {
   if (window.ccCiteMarks) return;
+  // A [n] marker, optionally preceded by a financial value (currency-led, or a
+  // bare number that carries a %/magnitude suffix — so plain years/counts are
+  // NOT highlighted), where the value may be wrapped in one inline tag. The
+  // Python mirror (ui.cite_marks._CITE_RX) matches the same shape verbatim.
+  var CITE_RX = /(?:((?:<(?:strong|em|code)>)?(?:[$€£]\s?\d[\d,]*(?:\.\d+)?\s?(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand)?|\d[\d,]*(?:\.\d+)?\s?(?:%|bps|pp|x|[BMK]|bn|mn|tn|billion|million|trillion|thousand))(?:<\/(?:strong|em|code)>)?)\s*)?\[(\d{1,2})\]/g;
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function popHtml(c) {
-    var html = '<span class="cite-pop-label">' + esc(c.label || 'source') + '</span>';
+    var head = '';
+    var label;
+    if (c.ticker) {
+      head = '<span class="cite-pop-head"><span class="cite-pop-tick">' + esc(c.ticker) + '</span>';
+      if (c.doc_type) head += '<span class="cite-pop-kind">' + esc(c.doc_type) + '</span>';
+      if (c.period) head += '<span class="cite-pop-per">' + esc(c.period) + '</span>';
+      head += '</span>';
+      label = String(c.label || '');
+      var pfx = c.ticker + ' · ';
+      if (label.indexOf(pfx) === 0) label = label.slice(pfx.length);
+    } else {
+      label = String(c.label || 'source');
+    }
+    var html = head;
+    if (label) html += '<span class="cite-pop-label">' + esc(label) + '</span>';
+    if (c.value) {
+      html += '<span class="cite-pop-value">' + esc(c.value) + '</span>'
+        + '<span class="cite-pop-value-cap">latest reported</span>';
+    }
     var meta = [];
-    if (c.kind) meta.push(esc(c.kind));
+    if (c.kind && !c.ticker) meta.push(esc(c.kind));
     if (typeof c.confidence === 'number') {
       meta.push('confidence ' + Math.round(c.confidence * 100) + '%');
     }
@@ -1163,15 +1186,23 @@
     var base = (opts && opts.hrefBase) || '';
     var map = {};
     (items || []).forEach(function (c) { if (c && c.n) map[String(c.n)] = c; });
-    return String(html).replace(/\[(\d{1,2})\]/g, function (m, n) {
+    return String(html).replace(CITE_RX, function (m, value, n) {
       var c = map[n];
       if (!c) return m;
       var href = c.href || c.source_url || '';
       if (href && !/^https?:/.test(href)) href = base + href;
+      var pop = popHtml(c);
+      if (value) {
+        var badge = href
+          ? '<a class="cite-mark cite-badge" href="' + esc(href) + '" target="_blank" rel="noopener">' + n + '</a>'
+          : '<span class="cite-mark cite-badge">' + n + '</span>';
+        return '<span class="cite-wrap" tabindex="0"><span class="cite-val">' + value + '</span>'
+          + badge + pop + '</span>';
+      }
       var mark = href
         ? '<a class="cite-mark" href="' + esc(href) + '" target="_blank" rel="noopener">[' + n + ']</a>'
         : '<span class="cite-mark">[' + n + ']</span>';
-      return '<span class="cite-wrap" tabindex="0">' + mark + popHtml(c) + '</span>';
+      return '<span class="cite-wrap" tabindex="0">' + mark + pop + '</span>';
     });
   }
   function unverifiedChipHtml(claims) {

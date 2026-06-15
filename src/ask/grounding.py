@@ -239,6 +239,16 @@ class EvidenceItem:
     # None for NL-matched facts and every non-fact channel. Surfaced in the
     # chip payload so a follow-up can re-pin the exact series.
     fact_ref: str | None = None
+    # Structured popover header fields (the auditable "where did this come from"
+    # anatomy): the issuer, the backing document's form (``10-K`` / ``10-Q`` /
+    # ``transcript``), the newest data point's fiscal period (``Q4'25``), and
+    # that point's formatted value (``$20.81B``). Only the fact channel carries
+    # a ``value`` (a passage has no single number); legacy items leave them None
+    # and render the original label-first popover unchanged.
+    ticker: str | None = None
+    doc_type: str | None = None
+    period: str | None = None
+    value: str | None = None
 
     def chip_payload(self) -> dict[str, object]:
         return {
@@ -249,6 +259,10 @@ class EvidenceItem:
             "source_url": self.source_url,
             "confidence": self.confidence,
             "fact_ref": self.fact_ref,
+            "ticker": self.ticker,
+            "doc_type": self.doc_type,
+            "period": self.period,
+            "value": self.value,
         }
 
 
@@ -391,6 +405,26 @@ def _fmt_value(value: object) -> str:
     if ax >= 1e4:
         return f"{x / 1e3:.1f}K"
     return f"{x:g}"
+
+
+_CURRENCY_UNITS = frozenset({"usd", "$", "dollar", "dollars"})
+_PERCENT_UNITS = frozenset({"%", "percent", "pct"})
+
+
+def _value_display(value: object, unit: str) -> str:
+    """Human value for the citation popover: the scaled magnitude with a unit
+    affix — ``$20.81B``, ``25.3%``, ``110 millions``. ``actual``/empty units
+    carry no affix. This is the chip's NEWEST data point, surfaced as the
+    "latest reported" figure (not necessarily the in-sentence number)."""
+    base = _fmt_value(value)
+    u = (unit or "").strip().lower()
+    if u in _PERCENT_UNITS:
+        return f"{base}%"
+    if u in _CURRENCY_UNITS:
+        return f"${base}"
+    if u and u != "actual":
+        return f"{base} {unit.strip()}"
+    return base
 
 
 def _named_tracked_tickers(question: str, db_path: Path) -> list[str]:
@@ -715,7 +749,7 @@ def _fact_item(
     # that check narrows the tuple's arity for the type checker, so any later
     # subscript would read as possibly-out-of-range.
     newest = rows[0]
-    period_end_raw, value_raw, doc_id_raw = newest[0], newest[2], newest[4]
+    period_end_raw, fpt_raw, value_raw, doc_id_raw = newest[0], newest[1], newest[2], newest[4]
     conf_raw = newest[5] if len(newest) > 5 else None
     doc_id = int(cast("int", doc_id_raw)) if doc_id_raw is not None else None
     doc_type, source_url, tier = (
@@ -753,6 +787,11 @@ def _fact_item(
         "href": f"/source/{doc_id}" if doc_id is not None else None,
         "source_url": source_url,
         "confidence": confidence,
+        # Structured popover fields — the newest row this chip cites.
+        "ticker": ticker,
+        "doc_type": doc_type,
+        "period": _period_label(period_end_raw, fpt_raw),
+        "value": _value_display(value_raw, unit),
     }
 
 
@@ -1158,6 +1197,10 @@ def gather_evidence(
                     source_url=cast("str | None", item["source_url"]),
                     confidence=cast("float | None", item.get("confidence")),
                     fact_ref=cast("str | None", item.get("fact_ref")),
+                    ticker=cast("str | None", item.get("ticker")),
+                    doc_type=cast("str | None", item.get("doc_type")),
+                    period=cast("str | None", item.get("period")),
+                    value=cast("str | None", item.get("value")),
                 )
             )
         if memo_key is not None:
@@ -1281,7 +1324,12 @@ def gather_requested_evidence(
                     doc_id=cast("int | None", item["doc_id"]),
                     href=href,
                     source_url=cast("str | None", item["source_url"]),
+                    confidence=cast("float | None", item.get("confidence")),
                     fact_ref=cast("str | None", item.get("fact_ref")),
+                    ticker=cast("str | None", item.get("ticker")),
+                    doc_type=cast("str | None", item.get("doc_type")),
+                    period=cast("str | None", item.get("period")),
+                    value=cast("str | None", item.get("value")),
                 )
             )
             if len(out) >= max_items:
