@@ -86,6 +86,9 @@ class Reclassification:
     )
     # ``portfolio`` names that are correctly held > threshold (no change).
     unchanged_portfolio: list[str] = field(default_factory=list[str])
+    # Safety latch: the tracker showed ZERO holdings (absent / empty / failed
+    # sync). When True the plan is forced empty — see compute_reclassification.
+    holdings_unavailable: bool = False
 
     @property
     def has_changes(self) -> bool:
@@ -227,10 +230,22 @@ def compute_reclassification(
     """Diff the desired state (holdings + pins) against ``tracked_companies``.
 
     Pure read — no writes. Pass the result to :func:`apply_reclassification`.
+
+    **Safety latch:** if the tracker shows *zero* holdings of any kind (absent /
+    empty DB, or a failed sync), the result is forced empty with
+    ``holdings_unavailable=True``. Without this, an empty holdings read would make
+    EVERY unpinned portfolio name look "not held" and demote the entire book —
+    exactly the wrong move on a transient tracker outage. Mirrors
+    ``position_lifecycle``'s None-means-no-op guard. A real all-cash book is
+    indistinguishable from an outage here, and refusing to act is the safe choice
+    either way (demotions never fire on no data).
     """
     pins = pins or set()
-    held = _held_operating_companies(tracker_conn, min_value)
     all_held = _all_held_value(tracker_conn)
+    if not all_held:
+        return Reclassification(holdings_unavailable=True)
+
+    held = _held_operating_companies(tracker_conn, min_value)
     tracked = _active_tracked(es_conn, user_id)
     portfolio = {t for t, lt in tracked.items() if lt == "portfolio"}
 

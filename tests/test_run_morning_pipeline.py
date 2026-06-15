@@ -29,6 +29,7 @@ from execution import run_morning_pipeline
 # Script basenames in canonical run order, used to assert dispatch order.
 PREFLIGHT_SCRIPT = "validate_environment.py"
 NEWS_SCRIPT = "fetch_news.py"
+LIST_TYPE_SCRIPT = "sync_list_type_from_holdings.py"
 DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
@@ -142,6 +143,7 @@ def test_all_stages_succeed(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -156,6 +158,7 @@ def test_all_stages_succeed(
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_preflight"] == "ok"
     assert summary["stage_0_news"] == "ok"
+    assert summary["stage_0a_list_type"] == "ok"
     assert summary["stage_0b_decisions"] == "ok"
     assert summary["stage_0c_lifecycle"] == "ok"
     assert summary["stage_0d_fundamentals"] == "ok"
@@ -188,6 +191,7 @@ def test_stage1_failure_still_runs_feed(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -218,6 +222,7 @@ def test_feed_failure_still_runs_validation(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -238,12 +243,13 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all eleven still attempted,
-    exit code == 11."""
+    """Every stage failing (preflight included) → all twelve still attempted,
+    exit code == 12."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
             NEWS_SCRIPT: 1,
+            LIST_TYPE_SCRIPT: 1,
             DECISIONS_SCRIPT: 1,
             LIFECYCLE_SCRIPT: 1,
             FUNDAMENTALS_SCRIPT: 1,
@@ -259,10 +265,11 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 11
+    assert rc == 12
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -277,6 +284,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_preflight"] == "failed"
     assert summary["stage_0_news"] == "failed"
+    assert summary["stage_0a_list_type"] == "failed"
     assert summary["stage_0b_decisions"] == "failed"
     assert summary["stage_0c_lifecycle"] == "failed"
     assert summary["stage_0d_fundamentals"] == "failed"
@@ -308,6 +316,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -349,6 +358,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     # reconciles tomorrow), and stage 1b standup (it watches what the sweep refreshes).
     assert NEWS_SCRIPT not in fake.scripts
     assert DECISIONS_SCRIPT not in fake.scripts
+    assert LIST_TYPE_SCRIPT not in fake.scripts
     assert LIFECYCLE_SCRIPT not in fake.scripts
     assert FUNDAMENTALS_SCRIPT not in fake.scripts
     assert REPRICE_SCRIPT not in fake.scripts
@@ -356,6 +366,7 @@ def test_skip_triggers_runs_only_the_feed_render(
 
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0_news"] == "skipped"
+    assert summary["stage_0a_list_type"] == "skipped"
     assert summary["stage_0b_decisions"] == "skipped"
     assert summary["stage_0c_lifecycle"] == "skipped"
     assert summary["stage_0d_fundamentals"] == "skipped"
@@ -409,6 +420,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -437,6 +449,7 @@ def test_skip_validation_removes_only_stage3(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -634,6 +647,7 @@ def test_skip_news_removes_only_stage0(
     assert rc == 0
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,
@@ -678,6 +692,7 @@ def test_news_failure_does_not_stop_triggers(
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
+        LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
         FUNDAMENTALS_SCRIPT,

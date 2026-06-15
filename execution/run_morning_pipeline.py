@@ -13,6 +13,11 @@ Six stages run in sequence as subprocess-isolated children:
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
      ``news`` table so the material_news trigger has stories to classify;
      ``--news-source`` selects FMP / WebSearch+Opus / auto).
+  0a. list_type -- ``sync_list_type_from_holdings.py --apply`` (sync
+     tracked_companies.list_type to the tracker's holdings: held > $100 operating
+     company => portfolio, unheld portfolio name => evaluation; runs before every
+     downstream stage that reads the portfolio set; safe no-op on empty/absent
+     holdings so a tracker outage never demotes the book).
   0b. decisions -- ``record_decisions.py`` (record memo verdicts into the
      ``decisions`` ledger + extract falsifiable "what would change my mind"
      conditions, so the decision_condition trigger evaluates fresh rows).
@@ -96,6 +101,11 @@ _VALIDATE_TIMEOUT_S = 600
 # falsifiable conditions for NEW decisions only (one Haiku call each, ≤50 per
 # run). Normal mornings touch 0-2 rows; 15 min covers a backfill day.
 _DECISIONS_TIMEOUT_S = 900
+# Stage 0a (list_type reconcile) syncs tracked_companies.list_type to the
+# tracker's actual holdings — pure SQLite (MAIN DB write + tracker RO read).
+# Sub-second; 2 min is generous. Runs FIRST so 0c lifecycle / 1 triggers /
+# 0f candidate-fit all read the freshly-reconciled portfolio set.
+_LIST_TYPE_TIMEOUT_S = 120
 # Stage 0c (lifecycle) reconciles position_entries against the portfolio list
 # + tracker holdings — pure SQLite + one loopback HTTP group (sub-second
 # connect cap when the tracker is down). 2 min is generous.
@@ -123,6 +133,7 @@ _STANDUP_TIMEOUT_S = 900
 # skipped stage still appears (as "skipped") even though it never ran.
 STAGE_PREFLIGHT = "stage_preflight"
 STAGE_NEWS = "stage_0_news"
+STAGE_LIST_TYPE = "stage_0a_list_type"
 STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
@@ -135,6 +146,7 @@ STAGE_VALIDATE = "stage_3_validate"
 _ALL_STAGE_KEYS = (
     STAGE_PREFLIGHT,
     STAGE_NEWS,
+    STAGE_LIST_TYPE,
     STAGE_DECISIONS,
     STAGE_LIFECYCLE,
     STAGE_FUNDAMENTALS,
@@ -245,6 +257,31 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *db_path_args,
                 ],
                 timeout_s=_NEWS_TIMEOUT_S,
+            )
+        )
+
+    # Stage 0a -- list_type reconcile: sync tracked_companies.list_type to the
+    # tracker's actual holdings (held > $100 operating company = portfolio; an
+    # unheld portfolio name demotes to evaluation, staying fully briefed) BEFORE
+    # every downstream stage that reads the portfolio set (0c lifecycle, 1
+    # triggers, 0f candidate-fit). --apply writes; a missing/empty tracker is a
+    # safe no-op (the reconciler refuses to demote on zero holdings). Skipped on
+    # the re-render-only path. Takes --user-id + --db-path.
+    if not args.skip_triggers:
+        list_type_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_LIST_TYPE,
+                label="Stage 0a - list_type reconcile (sync_list_type_from_holdings.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "sync_list_type_from_holdings.py"),
+                    "--apply",
+                    "--user-id",
+                    args.user_id,
+                    *list_type_db_args,
+                ],
+                timeout_s=_LIST_TYPE_TIMEOUT_S,
             )
         )
 

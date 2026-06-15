@@ -80,6 +80,12 @@ def _print_plan(plan: Reclassification, pins: dict[str, str], applied: bool) -> 
             f"{', '.join(plan.unchanged_portfolio)}"
         )
 
+    if plan.holdings_unavailable:
+        print(
+            "\n  [SKIP] tracker reported zero holdings (outage / empty sync) -- "
+            "refusing to reclassify on no data. No changes."
+        )
+        return
     if not plan.has_changes:
         print("\n  No changes -- list_type already matches holdings.")
 
@@ -122,18 +128,25 @@ def main() -> int:
     )
 
     if not db_path.exists():
+        # The MAIN DB is the world we reconcile — its absence is a real failure
+        # (exit 1 so a scheduled run surfaces it).
         print(
             f"ERROR: portfolio DB not found at {db_path}. Pass --repo-root <MAIN> or --db-path.",
             file=sys.stderr,
         )
         return 1
     if not tracker_db.exists():
+        # No holdings to reconcile against → SOFT no-op (exit 0), never a hard
+        # failure. Reclassifying on absent holdings would demote the whole book;
+        # refusing is the safe move. Mirrors position_lifecycle's tracker-offline
+        # degrade. The compute-side holdings_unavailable latch is the second line
+        # of defence for an empty (but present) tracker DB.
         print(
-            f"ERROR: tracker DB not found at {tracker_db}. Pass --tracker-db. "
-            "Holdings are required to reconcile list_type.",
+            f"WARNING: tracker DB not found at {tracker_db} -- skipping list_type "
+            "reconcile (no holdings to reconcile against; no changes made).",
             file=sys.stderr,
         )
-        return 1
+        return 0
 
     pins = load_pins(repo_root)
     es_conn = sqlite3.connect(str(db_path))

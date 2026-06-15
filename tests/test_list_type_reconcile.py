@@ -157,6 +157,8 @@ def test_threshold_excludes_tiny_positions() -> None:
 
 def test_pinned_name_kept_in_portfolio() -> None:
     es, tk = _es_db(), _tracker_db()
+    _hold(tk, 1, "MELI", "cs", 88000.0)  # a real holding so the safety latch passes
+    _track(es, "MELI", "portfolio")  # held → unchanged
     _track(es, "META", "portfolio")  # not held, but pinned
     plan = compute_reclassification(es_conn=es, tracker_conn=tk, pins={"META"}, user_id=USER)
     assert plan.demotions == []
@@ -184,6 +186,22 @@ def test_archived_rows_ignored() -> None:
     # Archived BKNG isn't "tracked" for promotion → reported as untracked-held.
     assert plan.promotions == []
     assert [u[0] for u in plan.untracked_held] == ["BKNG"]
+
+
+def test_zero_holdings_is_safe_noop_never_mass_demotes() -> None:
+    # The catastrophic case: tracker DB present but EMPTY (outage / failed sync).
+    # A naive reconcile would see every portfolio name as "not held" and demote
+    # the whole book. The safety latch must refuse to act.
+    es, tk = _es_db(), _tracker_db()  # tk has zero holdings_snapshots rows
+    _track(es, "MELI", "portfolio")
+    _track(es, "NU", "portfolio")
+    _track(es, "BKNG", "evaluation")
+
+    plan = compute_reclassification(es_conn=es, tracker_conn=tk, user_id=USER)
+    assert plan.holdings_unavailable is True
+    assert plan.demotions == []  # NOT [MELI, NU] — the whole point
+    assert plan.promotions == []
+    assert not plan.has_changes
 
 
 def test_latest_snapshot_wins() -> None:
