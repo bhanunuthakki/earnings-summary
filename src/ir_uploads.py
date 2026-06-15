@@ -1055,9 +1055,15 @@ def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]
     if m3:
         y = _yy_to_yyyy(int(m3.group("yy")))
         return (y, int(m3.group("q"))), [f"filename_period:{m3.group(0)!r}"]
-    # YYYY-Q[1-4] / YYYYqN style (e.g. "2025-Q1", "2025q1"). Order: after rx
-    # (which catches "1Q25") so the year-first form doesn't shadow it.
-    rx_year_q = re.compile(r"\b(?P<y>20\d{2})[-_]?q(?P<q>[1-4])\b", re.IGNORECASE)
+    # YYYY-Q[1-4] / YYYYqN style (e.g. "2025-Q1", "2025q1", and the auto-fetch
+    # staging token "2025Q4" — which has no \b around it since it sits between
+    # underscores in "BN_press_release_2025Q4__<sha8>.pdf"; \b fails there because
+    # '_' is a word char, so use digit lookarounds instead). Order: after rx
+    # (which catches "1Q25") so the year-first form doesn't shadow it. This is the
+    # fallback that lets metric-led Q4/full-year press releases — whose headline
+    # names no quarter, so content detection yields nothing — still get the period
+    # the discovery crawl already knew (and baked into the staging filename).
+    rx_year_q = re.compile(r"(?<!\d)(?P<y>20\d{2})[-_]?q(?P<q>[1-4])(?!\d)", re.IGNORECASE)
     m_year_q = rx_year_q.search(name)
     if m_year_q:
         return (int(m_year_q.group("y")), int(m_year_q.group("q"))), [

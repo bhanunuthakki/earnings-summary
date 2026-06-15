@@ -139,3 +139,30 @@ def test_classify_detects_calendar_eval_names(tmp_path: Path, issuer: str, ticke
     assert res.ticker == ticker
     assert res.period_end == date(2025, 9, 30)
     assert res.period_label == "Q3 2025"
+
+
+@pytest.mark.parametrize(
+    ("name", "want"),
+    [
+        # Auto-fetch staging token "<YEAR>Q<n>" sits between underscores, so the
+        # period hint must NOT rely on \b boundaries (an underscore is a word
+        # char). This is what lets a metric-led Q4/full-year press release — whose
+        # headline names no quarter, so content detection yields nothing — still
+        # land on the period the discovery crawl baked into the staging filename.
+        ("BN_press_release_2025Q4__deadbeef.pdf", (2025, 4)),
+        ("BN_press_release_2024Q4__abc12345.pdf", (2024, 4)),
+        # Pre-existing year-first / quarter-first forms must keep working.
+        ("foo-2025-Q1-bar.pdf", (2025, 1)),
+        ("2025q3-alphabet-earnings.pdf", (2025, 3)),
+        ("1Q25 Results Presentation.pdf", (2025, 1)),
+        # A bare 4-digit year with no quarter token yields no hint.
+        ("BN_press_release_undated__abc12345.pdf", None),
+    ],
+)
+def test_filename_period_hint_handles_staging_year_quarter_token(
+    name: str, want: tuple[int, int] | None
+) -> None:
+    from ir_uploads import _filename_period_hint
+
+    got, _evidence = _filename_period_hint(name)
+    assert got == want
