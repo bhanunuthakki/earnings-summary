@@ -237,9 +237,9 @@ UPCOMING_CSS = """
   min-width: 0; }
 .up-watch-item:hover { color: var(--accent); }
 .up-watch-item:hover .up-watch-body { text-decoration: underline; }
-.up-watch-kind { flex: none; color: var(--muted); font-size: 9px;
+.up-watch-kind { flex: none; color: var(--muted); font-size: var(--fs-micro);
   text-transform: uppercase; letter-spacing: 0.05em;
-  border: 1px solid var(--hairline); border-radius: 3px; padding: 0 3px; }
+  border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0 3px; }
 .up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-watch-more { font-size: var(--fs-micro); color: var(--muted); padding-left: 2px; }
 """.strip()
