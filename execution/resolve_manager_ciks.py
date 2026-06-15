@@ -145,7 +145,10 @@ def resolve_one(source: SourceRow, *, fetch: Fetch, as_of: date | None = None) -
     as_of = as_of or datetime.now(UTC).date()
     query = _search_query(source.display_name)
     atom = fetch(_SEARCH_URL.format(q=urllib.parse.quote(query)))
-    ciks = re.findall(r"<CIK>(\d+)</CIK>", atom) if atom else []
+    # EDGAR's browse-edgar atom feed tags the CIK in LOWERCASE (<cik>0001697748
+    # </cik>) inside <company-info>; match case-insensitively so the feed is read
+    # (the old <CIK> uppercase regex matched nothing → every manager NOT_FOUND).
+    ciks = re.findall(r"<cik>(\d+)</cik>", atom, re.IGNORECASE) if atom else []
     if not ciks:
         return Resolution(source.source_key, None, "not_found", f"no 13F filer for {query!r}")
 

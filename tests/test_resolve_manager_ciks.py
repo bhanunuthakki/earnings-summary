@@ -51,7 +51,10 @@ def _fetch(*, search_ciks: list[str], subs: dict[str, tuple[str, str | None]]) -
 
     def fetch(url: str) -> str | None:
         if "browse-edgar" in url:
-            return "".join(f"<CIK>{c}</CIK>" for c in search_ciks)
+            # EDGAR's real atom feed tags the CIK in lowercase inside
+            # <company-info> — mirror that here so the fixture pins reality, not
+            # the old uppercase-<CIK> bug that matched nothing.
+            return "".join(f"<company-info><cik>{c}</cik></company-info>" for c in search_ciks)
         if "submissions" in url:
             for cik, (name, latest) in subs.items():
                 if cik in url:
