@@ -210,7 +210,13 @@ def test_chat_data_question_streams_view_fragment(
         return nl_compile.NLCompileResult(status="ok", spec=spec)
 
     def fake_execute(s: ViewSpec, *, db_path: Path) -> SimpleNamespace:
-        return SimpleNamespace(rows=[object()])
+        # Faithful ViewResult shape: respond_turn summarizes via view_summary(),
+        # which reads spec + period_labels + each row's cells.
+        return SimpleNamespace(
+            spec=s,
+            period_labels=[f"P{i}" for i in range(s.periods)],
+            rows=[SimpleNamespace(cells=[])],
+        )
 
     def fake_render(view: object, **_kw: object) -> str:
         return "<div>FRAG</div>"

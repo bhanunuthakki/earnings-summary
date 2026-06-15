@@ -1323,13 +1323,20 @@ def create_app(
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         raw_spec = body.get("spec", body)
         include_chart = bool(body.get("chart", True))
+        # The Ask card's +Peers path passes summary=false (it shows the one
+        # summary on its actions row); the DIY builder omits it and keeps the
+        # self-describing caption band.
+        include_summary = bool(body.get("summary", True))
         try:
             spec = ViewSpec.from_dict(raw_spec)
         except ViewSpecError as exc:
             return ({"error": str(exc)}, 400)
         result = execute_view(spec, db_path=db_path)
         return Response(
-            render_view_fragment(result, include_chart=include_chart), mimetype="text/html"
+            render_view_fragment(
+                result, include_chart=include_chart, include_summary=include_summary
+            ),
+            mimetype="text/html",
         )
 
     @app.route("/api/viewspec/compile", methods=["POST"])

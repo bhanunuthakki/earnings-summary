@@ -67,7 +67,7 @@ from ask.store import append_turn as _store_append_turn
 from ask.store import load_recent_history as _store_load_history
 from dispatch_registry import Registry
 from viewspec.engine import execute_view, metric_catalog
-from viewspec.render import render_view_fragment
+from viewspec.render import render_view_fragment, view_summary
 from viewspec.spec import ViewSpecError
 
 log = logging.getLogger(__name__)
@@ -303,7 +303,10 @@ def _data_events(
     yield {"type": "stage", "stage": "running", "route": ROUTE_DATA}
     try:
         view = execute_view(spec, db_path=db_path)
-        fragment = render_view_fragment(view, include_chart=True)
+        # include_summary=False: the Ask card puts the one reconciled summary on
+        # its actions row (see explore_panel askActionsHtml), so the embedded
+        # fragment must not also print a .vx-meta band.
+        fragment = render_view_fragment(view, include_chart=True, include_summary=False)
     except ViewSpecError as exc:
         if forced:
             yield {"type": "error", "error": str(exc)}
@@ -328,9 +331,7 @@ def _data_events(
             f'Try {other} cadence ("now {other}"), or different metrics/tickers.'
         )
     else:
-        message = (
-            f"{n_rows} series · {spec.transform} · {spec.cadence}, {spec.periods} periods{refined}"
-        )
+        message = view_summary(view) + refined
 
     spec_dict = spec.to_dict()
     # Persist BEFORE yielding: a consumer that stops at the final frame must
