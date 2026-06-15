@@ -26,6 +26,11 @@ ir = [
     # downloader — some issuer hosts (e.g. investor.lilly.com) tarpit any client
     # whose fingerprint isn't a browser's. See fetch_ir_documents._fetch_curl_cffi.
     "curl_cffi>=0.7",
+    # PyMuPDF is the preferred first-page fingerprint extractor in ir_uploads:
+    # markedly faster and far more robust than pypdf on large, graphics-heavy
+    # investor decks (a 200+ page Investor Day deck stalled pypdf for minutes).
+    # Optional — ir_uploads.fingerprint_pdf falls back to pypdf when it's absent.
+    "pymupdf>=1.24",
 ]
 # DCF <-> Google Sheets round-trip (execution/dcf_sheets.py export/import): pushes
 # the DCF workbook to a Google Sheet and pulls the edited Sheet back to recompute.

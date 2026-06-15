@@ -87,7 +87,14 @@ ISSUER_REGISTRY: list[tuple[str, str, tuple[str, ...]]] = [
     ),
     ("AMZN", _CAL_CALENDAR, ("Amazon.com", "AMAZON.COM")),
     ("VEEV", _CAL_VEEV, ("Veeva Systems", "Veeva ")),
-    ("BN", _CAL_CALENDAR, ("Brookfield Corporation", "Brookfield Asset Management")),
+    # BN = Brookfield Corporation ONLY. "Brookfield Asset Management" is the
+    # separate listed entity BAM (its own tracked ticker, synced into the store
+    # registry with that alias) — claiming it here routed BAM's own filings to BN
+    # in the content-fingerprint path, since curated entries win over the store.
+    # (Pre-Dec-2022, BN was *named* "Brookfield Asset Management Inc."; those
+    # historical covers would now route to BAM, but BN's IR docs in scope are all
+    # post-rename and the financials are CIK-keyed via FMP/SEC, so this is safe.)
+    ("BN", _CAL_CALENDAR, ("Brookfield Corporation",)),
     ("LLY", _CAL_CALENDAR, ("Eli Lilly and Company", "Eli Lilly", "Lilly ")),
     (
         "ABNB",
@@ -549,14 +556,54 @@ _PDF_FINGERPRINT_PAGES = 2
 _PDF_FINGERPRINT_CHARS = 6000
 
 
-def fingerprint_pdf(path: Path) -> str:
-    """Return the first ~2 pages of text from a PDF, capped at 6000 chars."""
+def _fingerprint_pdf_pymupdf(path: Path) -> str | None:
+    """First ~2 pages via PyMuPDF (``fitz``), or None if it is unavailable/fails.
+
+    PyMuPDF loads only the pages asked for and is markedly faster and far more
+    robust than pypdf on large, graphics-heavy investor decks — a 200+ page
+    Investor Day deck stalled pypdf for minutes (its xref-recovery rescan is the
+    usual culprit) where fitz reads the first two pages in tens of milliseconds.
+    Optional dep (bundled with the ``ir`` extra); a missing module or any parse
+    error degrades to None so the caller falls back to pypdf — never a crash.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        return None
+    doc = None
+    try:
+        doc = fitz.open(str(path))
+        n = min(_PDF_FINGERPRINT_PAGES, doc.page_count)
+        chunks = [doc.load_page(i).get_text() or "" for i in range(n)]
+    except Exception:  # PyMuPDF's error tree is wide; degrade to the pypdf path
+        return None
+    finally:
+        if doc is not None:
+            doc.close()
+    return "\n".join(chunks)[:_PDF_FINGERPRINT_CHARS]
+
+
+def _fingerprint_pdf_pypdf(path: Path) -> str:
+    """First ~2 pages via pypdf (the always-available fallback extractor)."""
     reader = PdfReader(str(path))
     chunks: list[str] = []
     for i in range(min(_PDF_FINGERPRINT_PAGES, len(reader.pages))):
         chunks.append(reader.pages[i].extract_text() or "")
-    text = "\n".join(chunks)
-    return text[:_PDF_FINGERPRINT_CHARS]
+    return "\n".join(chunks)[:_PDF_FINGERPRINT_CHARS]
+
+
+def fingerprint_pdf(path: Path) -> str:
+    """Return the first ~2 pages of text from a PDF, capped at 6000 chars.
+
+    Prefers PyMuPDF (fast + robust on heavy decks); falls back to pypdf when
+    PyMuPDF is unavailable or errors, so behavior degrades rather than breaking.
+    Both honor the same 2-page / 6000-char cap, so the downstream classifier sees
+    an equivalent fingerprint regardless of which extractor produced it.
+    """
+    via_fitz = _fingerprint_pdf_pymupdf(path)
+    if via_fitz is not None:
+        return via_fitz
+    return _fingerprint_pdf_pypdf(path)
 
 
 def fingerprint_xlsx(path: Path) -> str:
