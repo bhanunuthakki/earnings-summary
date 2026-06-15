@@ -400,6 +400,12 @@ class CellSource(BaseModel):
     # ("⚠ SEC says $101M, 0.99% delta", manual-override reasons, …) — built
     # by pipeline.confidence.display_issues_for_fact; rendered as warn rows.
     issues: list[str] = []
+    # Compact "overridden by" label when a company-doc fact_overrides record
+    # supersedes FMP for this cell (provenance-override P6) — e.g.
+    # "sec_8k · 0001652044-26-000012 · ex991.htm". The other source fields are
+    # swapped to the override's so the chip honestly describes the filing the
+    # displayed number came from. None for non-overridden cells.
+    override: str | None = None
 
 
 class QuarterlyLineItem(BaseModel):

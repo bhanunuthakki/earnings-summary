@@ -45,7 +45,10 @@ from provenance.overrides import (
     FINANCIAL_FACT,
     KPI,
     OverrideAction,
+    chip_override_map,
     date_override_map,
+    override_provenance,
+    qualify_note,
 )
 from timeseries.primitives import Observation
 
@@ -643,6 +646,25 @@ def load_financial_cell_provenance(
                 "extracted_by": str(r["extracted_by"]) if r["extracted_by"] is not None else None,
             }
             out.setdefault(str(r["line_item"]), {})[pe.date().isoformat()] = prov
+        # Provenance-override surfacing (P6): a company-doc `replace` swaps each
+        # overridden cell's source to the filing it cites; a `qualify` adds a ⚠ note
+        # (merged into issues by _to_cell_source). Keeps the chip honest.
+        for line_item, by_period in out.items():
+            ov_map = chip_override_map(
+                conn,
+                ticker=ticker,
+                fact_kind=FINANCIAL_FACT,
+                fact_key=line_item,
+                period_types=period_list,
+            )
+            for period_iso, ov in ov_map.items():
+                cell = by_period.get(period_iso)
+                if cell is None:
+                    continue
+                if ov.action == OverrideAction.REPLACE.value:
+                    cell.update(override_provenance(ov))
+                elif ov.action == OverrideAction.QUALIFY.value:
+                    cell["issues"] = [qualify_note(ov)]
         return out
     except sqlite3.Error as exc:
         log.warning(
