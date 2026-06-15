@@ -27,9 +27,12 @@ import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from compute.segment_cache import apply_overrides  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
@@ -86,13 +89,19 @@ def _segment_names(ticker: str) -> list[str]:
     body = _read_fmp_json(ticker, "product_segments_annual")
     if not isinstance(body, list) or not body:
         return []
-    # FMP segment-product format: list of {date: {segmentName: revenue, ...}}
-    latest = body[0]
-    if isinstance(latest, dict):
-        # Each top-level key is a date; grab segment dict from most recent date
-        for _, segs in sorted(latest.items(), reverse=True):
-            if isinstance(segs, dict):
-                return [name for name in segs.keys() if name][:8]
+    # Honor company-doc overrides (e.g. a spurious segment dropped, or a corrected
+    # record) before reading the names; best-effort (no DB / no override -> raw).
+    records = apply_overrides(
+        cast("list[dict[str, object]]", body),
+        ticker=ticker,
+        dim_type="product",
+        db_path=str(DB_PATH),
+    )
+    if not records:
+        return []
+    data = records[0].get("data")
+    if isinstance(data, dict):
+        return [str(name) for name in cast("dict[str, object]", data) if name][:8]
     return []
 
 

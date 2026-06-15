@@ -21,6 +21,7 @@ from pathlib import Path
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
 sys.path.insert(0, str(REPO / "src"))
+from compute.segment_cache import apply_overrides  # noqa: E402
 from llm.cli import call_llm  # noqa: E402
 
 T = os.environ.get("DCF_TICKER", "AMZN")
@@ -37,7 +38,12 @@ def m(v):
 
 inc = loadj(f"{T}_income_statement_quarterly.json")
 cf = loadj(f"{T}_cash_flow_quarterly.json")
-pseg = loadj(f"{T}_product_segments_quarterly.json")
+pseg = apply_overrides(
+    loadj(f"{T}_product_segments_quarterly.json"),
+    ticker=T,
+    dim_type="product",
+    db_path=str(REPO / "data" / "portfolio.db"),
+)
 est = loadj(f"{T}_analyst_estimates_annual.json")
 prof = loadj(f"{T}_profile.json")
 prof = prof[0] if isinstance(prof, list) and prof else (prof if isinstance(prof, dict) else {})

@@ -209,6 +209,10 @@ def _stage_validate_segment_cache(*, ticker: str, project_root: Path) -> StageRe
     on the next fetch. Best-effort: a missing/unreadable cache degrades to SKIPPED
     rather than failing the DAG. Runs before the extract stage so the report shows
     the cache state the extractors then act on.
+
+    Active ``fact_overrides`` are honored: a quarter whose contamination is
+    corrected by a company-doc override reconciles and is NOT flagged, so a durable
+    override stops the cron from failing on FMP re-serving bad data for it.
     """
     data_dir = str(project_root / "data" / "historical" / "fmp")
     if not segment_cache_present(data_dir, ticker):
@@ -218,8 +222,16 @@ def _stage_validate_segment_cache(*, ticker: str, project_root: Path) -> StageRe
             rows_processed=0,
             notes="no segment cache files for ticker",
         )
+    db_file = project_root / "data" / "portfolio.db"
+    audit_conn: sqlite3.Connection | None = None
+    if db_file.exists():
+        try:
+            audit_conn = sqlite3.connect(str(db_file))
+            audit_conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            audit_conn = None
     try:
-        flags = audit_ticker_cache(data_dir, ticker)
+        flags = audit_ticker_cache(data_dir, ticker, conn=audit_conn)
     except (OSError, ValueError) as e:
         return StageResult(
             name=StageName.VALIDATE_SEGMENT_CACHE,
@@ -227,6 +239,9 @@ def _stage_validate_segment_cache(*, ticker: str, project_root: Path) -> StageRe
             rows_processed=0,
             notes=f"audit error: {type(e).__name__}: {e}"[:200],
         )
+    finally:
+        if audit_conn is not None:
+            audit_conn.close()
     if not flags:
         return StageResult(
             name=StageName.VALIDATE_SEGMENT_CACHE,

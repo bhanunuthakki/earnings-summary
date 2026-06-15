@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import cast
 
+from compute.segment_cache import apply_overrides, dim_type_for_suffix
 from compute.segments import segment_sum_exceeds_revenue
 
 # Quarterly segment caches audited for contamination. Annual rollups are
@@ -89,12 +91,18 @@ def segment_cache_present(data_dir: str, ticker: str) -> bool:
     )
 
 
-def audit_ticker_cache(data_dir: str, ticker: str) -> list[SegmentFlag]:
+def audit_ticker_cache(
+    data_dir: str, ticker: str, *, conn: sqlite3.Connection | None = None
+) -> list[SegmentFlag]:
     """Return one flag per over-cap segment record in the ticker's cache files.
 
     A quarter is flagged only when the income-statement cache carries a non-zero
     revenue for the same period_end to reconcile against — mirroring the ingest
     gate's "can't disprove without revenue, so accept" None branch.
+
+    When ``conn`` is provided, active ``fact_overrides`` are applied to the cached
+    records first, so a quarter corrected by a company-doc override reconciles and
+    is NOT flagged — only genuinely-uncovered contamination remains a flag.
     """
     ticker = ticker.upper()
     revenue_by_date = _revenue_by_period_end(data_dir, ticker)
@@ -103,6 +111,10 @@ def audit_ticker_cache(data_dir: str, ticker: str) -> list[SegmentFlag]:
         recs = _load_json(os.path.join(data_dir, f"{ticker}_{suffix}.json"))
         if not recs:
             continue
+        if conn is not None:
+            dim = dim_type_for_suffix(suffix)
+            if dim is not None:
+                recs = apply_overrides(recs, ticker=ticker, dim_type=dim, conn=conn)
         for rec in recs:
             date = str(rec.get("date") or "")
             data = rec.get("data")
