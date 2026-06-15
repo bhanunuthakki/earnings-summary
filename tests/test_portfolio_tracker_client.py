@@ -740,7 +740,35 @@ def test_validated_window_sanitizes() -> None:
     assert validated_window(None, None, False) == WindowSelection()
 
 
-def test_compose_page_renders_window_bar_with_echoed_values() -> None:
+def test_compose_page_embeds_window_bar_with_echoed_values(mock_tracker: None) -> None:
+    # The window controls now ride in the Performance panel header (embedded
+    # with the chart they drive), echoing the applied window into the inputs.
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    live = LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
+    window = WindowSelection(start_date="2026-01-01", end_date="2026-06-10", include_backfill=True)
+    html = compose_portfolio_page(analytics, live, window=window)
+    assert 'class="pf-perf-head"' in html  # embedded in the panel header, not a top bar
+    assert 'id="pf-window-bar"' in html
+    assert 'value="2026-01-01"' in html and 'value="2026-06-10"' in html
+    assert 'id="pf-backfill" checked' in html
+    assert 'data-preset="ytd"' in html and 'data-preset="default"' in html
+    assert "/api/panel/portfolio" in html  # the refetch script targets this panel
+    # The book attribution narrative is no longer mounted on the page.
+    assert "Attribution narratives" not in html
+
+
+def test_compose_page_default_window_bar_is_unset(mock_tracker: None) -> None:
+    analytics = fetch_portfolio_analytics(api_url="http://tracker.test")
+    live = LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
+    html = compose_portfolio_page(analytics, live)
+    assert 'id="pf-window-bar"' in html
+    assert 'id="pf-start" value=""' in html and 'id="pf-end" value=""' in html
+    assert 'id="pf-backfill">' in html  # unchecked
+
+
+def test_compose_page_offline_leads_with_start_banner() -> None:
+    # Tracker down → the whole page is gated, so the start-tracker banner LEADS
+    # the page (and auto-starts on open); there is no window bar without a chart.
     analytics = PortfolioAnalytics(
         available=False,
         api_url="http://localhost:8000",
@@ -752,26 +780,11 @@ def test_compose_page_renders_window_bar_with_echoed_values() -> None:
     live = LivePortfolio(
         available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
     )
-    window = WindowSelection(start_date="2026-01-01", end_date="2026-06-10", include_backfill=True)
-    html = compose_portfolio_page(analytics, live, window=window)
-    # The bar renders even with the tracker down (it doubles as a retry
-    # control), echoing the applied window into the inputs.
-    assert 'id="pf-window-bar"' in html
-    assert 'value="2026-01-01"' in html and 'value="2026-06-10"' in html
-    assert 'id="pf-backfill" checked' in html
-    assert 'data-preset="ytd"' in html and 'data-preset="default"' in html
-    assert "/api/panel/portfolio" in html  # the refetch script targets this panel
-    # Still exactly ONE offline note alongside the bar.
-    assert html.count("offline-tech") == 1
-
-
-def test_compose_page_default_window_bar_is_unset() -> None:
-    analytics = PortfolioAnalytics(available=False, api_url="http://x", errors={})
-    live = LivePortfolio(available=False, api_url="http://x", error="down")
     html = compose_portfolio_page(analytics, live)
-    assert 'id="pf-window-bar"' in html
-    assert 'id="pf-start" value=""' in html and 'id="pf-end" value=""' in html
-    assert 'id="pf-backfill">' in html  # unchecked
+    assert 'id="pf-live-offline"' in html and "Start tracker" in html
+    assert "__pfTrackerAutostart" in html  # auto-starts when the page opens
+    assert 'id="pf-window-bar"' not in html  # no chart, so no window controls
+    assert html.count("<section") == 1  # just the banner — nothing buried below it
 
 
 # ----- Portfolio → Synthesis tab: rollup / exposure / next-dollar / memo -----
