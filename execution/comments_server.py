@@ -616,6 +616,13 @@ def create_app(
 
             return Response(render_dcf_coverage_panel(db_path, repo_root), mimetype="text/html")
 
+        if name == "dcf_globals":
+            # Settings drawer: the editable global macro DCF inputs (risk-free /
+            # ERP / tax, migration 0112) + each field's per-ticker overrides.
+            from pipeline.dcf_globals_panel import render_dcf_globals_panel
+
+            return Response(render_dcf_globals_panel(db_path), mimetype="text/html")
+
         if name == "validation":
             # Whole-book data-quality state over validation_issues (P3.4) —
             # range violations, magnitude jumps, source disagreement, unit
@@ -1161,6 +1168,31 @@ def create_app(
         if not applied:
             return ({"error": f"no budget row for purpose {purpose!r}"}, 404)
         return {"purpose": purpose, "ok": True}
+
+    @app.route("/api/dcf-globals", methods=["GET", "POST", "OPTIONS"])
+    def dcf_globals_api():
+        """Global DCF macro assumptions (migration 0112). GET returns the
+        effective field->value map (seed defaults overlaid with stored). POST
+        {"field": <str>, "value": <number>} upserts one field. 400 on an unknown
+        field or an out-of-range value; 500 when the DB can't be written."""
+        from dcf import global_assumptions as ga
+
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.method == "GET":
+            return {"globals": ga.get_all(db_path=db_path)}
+        body = request.get_json(silent=True) or {}
+        field = body.get("field")
+        value = body.get("value")
+        if not isinstance(field, str) or value is None:
+            return ({"error": "provide field (str) and value (number)"}, 400)
+        try:
+            ok = ga.set_value(field, value, db_path=db_path)
+        except ValueError as e:
+            return ({"error": str(e)}, 400)
+        if not ok:
+            return ({"error": "could not persist global DCF assumption (no DB?)"}, 500)
+        return {"field": field, "value": ga.get(field, db_path=db_path), "ok": True}
 
     @app.route("/api/ticker-settings/<ticker>", methods=["GET", "POST", "OPTIONS"])
     def ticker_settings_api(ticker: str):

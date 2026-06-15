@@ -352,6 +352,9 @@ _SETTINGS_DRAWER_HTML = (
     '<details class="cc-drawer-sec" data-endpoint="/api/panel/ticker_settings" data-loaded="0">'
     "<summary>Ticker settings</summary>"
     '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
+    '<details class="cc-drawer-sec" data-endpoint="/api/panel/dcf_globals" data-loaded="0">'
+    "<summary>Global DCF assumptions</summary>"
+    '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
     '<details class="cc-drawer-sec" data-endpoint="/api/panel/actions" data-loaded="0">'
     "<summary>Maintenance actions &amp; job streams</summary>"
     '<div class="cc-drawer-sec-body"><div class="cc-loading">Loading…</div></div></details>'
