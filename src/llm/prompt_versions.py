@@ -129,6 +129,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose peer_selection --min-score ...`.
     "peer_selection": "v1",
+    # LLM key-metrics preselect (src/compute/key_metrics.py, mode-A recall golden
+    # set). Bump when _build_prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose key_metrics --min-score ...`.
+    "key_metrics": "v1",
     # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
     # templates). Bump when either judge prompt is materially reworded so
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay

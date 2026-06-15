@@ -1,0 +1,133 @@
+{
+  "purpose": "key_metrics",
+  "version": 1,
+  "_readme": "Mode-A recall eval for the LLM key-metrics preselect (directives/key_metrics_picker.md). Score = RECALL of `expected_metrics` (the must-have key metrics a fundamental analyst would put on the dashboard); a case passes at recall >= 0.5. Each case carries its own `vocabulary` (the closed token set the production call picks from) so the eval exercises the real closed-vocabulary discipline; every expected/also_valid token must be IN the vocabulary. `also_valid` are correct-but-not-required picks counted only in precision. business_description is answer-neutral (describes the business model, never names a metric) so it can't leak the expected set. The vocabulary deliberately mixes the load-bearing operating KPIs with generic accounting-line distractors (total assets, COGS, SG&A) the generator should rank below them. Re-run: python execution/run_llm_evals.py --purpose key_metrics --min-score 0.6",
+  "cases": [
+    {
+      "id": "km-nu-digital-bank",
+      "ticker": "NU",
+      "name": "Nu Holdings",
+      "business_description": "A branchless, app-only digital financial-services platform serving retail consumers across Latin America. Acquires customers at near-zero marginal cost through a mobile app, monetizes via interchange, a fast-growing unsecured-lending book, and net interest income on low-cost deposits. The thesis is consumer-banking disruption: cheap funding, expanding monetization per customer, and credit underwriting that stays disciplined as the loan book scales.",
+      "vocabulary": [
+        {"token": "kpi:Net interest margin", "label": "Net interest margin"},
+        {"token": "kpi:NPL 90+ ratio", "label": "NPL 90+ ratio"},
+        {"token": "kpi:Total deposits", "label": "Total deposits"},
+        {"token": "kpi:Monthly ARPAC", "label": "Monthly ARPAC"},
+        {"token": "kpi:Total customers", "label": "Total customers"},
+        {"token": "kpi:Efficiency ratio", "label": "Efficiency ratio"},
+        {"token": "kpi:Cost of risk", "label": "Cost of risk"},
+        {"token": "kpi:Activity rate", "label": "Activity rate"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:total assets", "label": "total assets"},
+        {"token": "fin:cost of goods sold", "label": "cost of goods sold"},
+        {"token": "fin:property plant and equipment", "label": "property plant and equipment"}
+      ],
+      "expected_metrics": ["kpi:Net interest margin", "kpi:NPL 90+ ratio", "kpi:Total deposits", "kpi:Monthly ARPAC"],
+      "also_valid": ["kpi:Total customers", "kpi:Efficiency ratio", "kpi:Cost of risk", "kpi:Activity rate", "fin:revenue"]
+    },
+    {
+      "id": "km-now-enterprise-saas",
+      "ticker": "NOW",
+      "name": "ServiceNow",
+      "business_description": "An enterprise software-as-a-service company selling a cloud workflow and automation suite to large organizations on a recurring subscription basis. Lands with IT service management and expands across the enterprise; growth is seat- and module-expansion driven with strong operating leverage. The thesis rides durable recurring revenue, customers spending more over time, and a large contracted backlog converting to revenue.",
+      "vocabulary": [
+        {"token": "kpi:Subscription revenue", "label": "Subscription revenue"},
+        {"token": "kpi:Net revenue retention", "label": "Net revenue retention"},
+        {"token": "kpi:Current remaining performance obligations", "label": "Current remaining performance obligations"},
+        {"token": "kpi:Customers with ACV > $1M", "label": "Customers with ACV > $1M"},
+        {"token": "kpi:Free cash flow margin", "label": "Free cash flow margin"},
+        {"token": "kpi:Subscription gross margin", "label": "Subscription gross margin"},
+        {"token": "kpi:Renewal rate", "label": "Renewal rate"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:cost of revenue", "label": "cost of revenue"},
+        {"token": "fin:inventory", "label": "inventory"},
+        {"token": "fin:accounts payable", "label": "accounts payable"}
+      ],
+      "expected_metrics": ["kpi:Subscription revenue", "kpi:Net revenue retention", "kpi:Current remaining performance obligations"],
+      "also_valid": ["kpi:Customers with ACV > $1M", "kpi:Free cash flow margin", "kpi:Subscription gross margin", "kpi:Renewal rate"]
+    },
+    {
+      "id": "km-meli-ecom-fintech",
+      "ticker": "MELI",
+      "name": "MercadoLibre",
+      "business_description": "A Latin American online marketplace bundled with a payments and digital-financial-services arm. Monetizes through marketplace take rate, advertising, logistics, and payment processing plus a growing consumer-credit book. The thesis is an e-commerce-plus-fintech flywheel in emerging markets: more buyers and sellers drive more transactions, which feed the payments and credit business.",
+      "vocabulary": [
+        {"token": "kpi:Gross merchandise volume", "label": "Gross merchandise volume"},
+        {"token": "kpi:Total payment volume", "label": "Total payment volume"},
+        {"token": "kpi:Unique active buyers", "label": "Unique active buyers"},
+        {"token": "kpi:Marketplace take rate", "label": "Marketplace take rate"},
+        {"token": "kpi:Items sold", "label": "Items sold"},
+        {"token": "kpi:Credit portfolio", "label": "Credit portfolio"},
+        {"token": "kpi:Fintech monthly active users", "label": "Fintech monthly active users"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:cost of goods sold", "label": "cost of goods sold"},
+        {"token": "fin:goodwill", "label": "goodwill"},
+        {"token": "fin:total liabilities", "label": "total liabilities"}
+      ],
+      "expected_metrics": ["kpi:Gross merchandise volume", "kpi:Total payment volume", "kpi:Unique active buyers"],
+      "also_valid": ["kpi:Marketplace take rate", "kpi:Items sold", "kpi:Credit portfolio", "kpi:Fintech monthly active users"]
+    },
+    {
+      "id": "km-uber-mobility-marketplace",
+      "ticker": "UBER",
+      "name": "Uber Technologies",
+      "business_description": "A global on-demand marketplace matching consumers with drivers and couriers for ride-hailing and delivery, plus a freight brokerage. Monetizes by taking a percentage of each transaction it facilitates. The thesis is network-effect liquidity: more active platform users drive more bookings, improving take economics and pushing the platform to sustained cash generation.",
+      "vocabulary": [
+        {"token": "kpi:Gross bookings", "label": "Gross bookings"},
+        {"token": "kpi:Monthly active platform consumers", "label": "Monthly active platform consumers"},
+        {"token": "kpi:Trips", "label": "Trips"},
+        {"token": "kpi:Take rate", "label": "Take rate"},
+        {"token": "kpi:Adjusted EBITDA", "label": "Adjusted EBITDA"},
+        {"token": "kpi:Free cash flow", "label": "Free cash flow"},
+        {"token": "kpi:Driver earnings", "label": "Driver earnings"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:cost of revenue", "label": "cost of revenue"},
+        {"token": "fin:depreciation and amortization", "label": "depreciation and amortization"},
+        {"token": "fin:total stockholders equity", "label": "total stockholders equity"}
+      ],
+      "expected_metrics": ["kpi:Gross bookings", "kpi:Monthly active platform consumers", "kpi:Trips"],
+      "also_valid": ["kpi:Take rate", "kpi:Adjusted EBITDA", "kpi:Free cash flow"]
+    },
+    {
+      "id": "km-meta-ad-platform",
+      "ticker": "META",
+      "name": "Meta Platforms",
+      "business_description": "A social-media and messaging company whose family of apps reaches billions of people, monetized almost entirely through digital advertising sold against user attention. The thesis is engagement times monetization: keep people active across the apps and raise the value extracted from each one, while managing the cost of the content-recommendation and AI infrastructure.",
+      "vocabulary": [
+        {"token": "kpi:Daily active people", "label": "Daily active people"},
+        {"token": "kpi:Average revenue per person", "label": "Average revenue per person"},
+        {"token": "kpi:Ad impressions delivered", "label": "Ad impressions delivered"},
+        {"token": "kpi:Average price per ad", "label": "Average price per ad"},
+        {"token": "kpi:Monthly active users", "label": "Monthly active users"},
+        {"token": "kpi:Operating margin", "label": "Operating margin"},
+        {"token": "kpi:Reality Labs operating loss", "label": "Reality Labs operating loss"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:research and development expense", "label": "research and development expense"},
+        {"token": "fin:cash and cash equivalents", "label": "cash and cash equivalents"},
+        {"token": "fin:accounts receivable", "label": "accounts receivable"}
+      ],
+      "expected_metrics": ["kpi:Daily active people", "kpi:Average revenue per person", "kpi:Ad impressions delivered"],
+      "also_valid": ["kpi:Average price per ad", "kpi:Monthly active users", "kpi:Operating margin", "kpi:Reality Labs operating loss"]
+    },
+    {
+      "id": "km-veev-vertical-saas",
+      "ticker": "VEEV",
+      "name": "Veeva Systems",
+      "business_description": "A vertical software-as-a-service provider of cloud applications and data products built specifically for the life-sciences industry. Sells recurring subscriptions to pharma and biotech for commercial and R&D workflows, expanding from a CRM beachhead into a broad product suite. The thesis is durable recurring revenue, land-and-expand within a sticky regulated customer base, and high software margins.",
+      "vocabulary": [
+        {"token": "kpi:Subscription services revenue", "label": "Subscription services revenue"},
+        {"token": "kpi:Net revenue retention", "label": "Net revenue retention"},
+        {"token": "kpi:Remaining performance obligations", "label": "Remaining performance obligations"},
+        {"token": "kpi:Total customers", "label": "Total customers"},
+        {"token": "kpi:Non-GAAP operating margin", "label": "Non-GAAP operating margin"},
+        {"token": "kpi:Subscription gross margin", "label": "Subscription gross margin"},
+        {"token": "fin:revenue", "label": "revenue"},
+        {"token": "fin:cost of revenue", "label": "cost of revenue"},
+        {"token": "fin:inventory", "label": "inventory"},
+        {"token": "fin:long-term debt", "label": "long-term debt"}
+      ],
+      "expected_metrics": ["kpi:Subscription services revenue", "kpi:Net revenue retention", "kpi:Remaining performance obligations"],
+      "also_valid": ["kpi:Total customers", "kpi:Non-GAAP operating margin", "kpi:Subscription gross margin"]
+    }
+  ]
+}
