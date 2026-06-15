@@ -26,8 +26,7 @@ from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlphaRow, fetch_portfolio_analytics
 
 _ATTRIB_STYLE = """<style>
-.atr-card { border:1px solid var(--border); border-radius:var(--radius);
-  background:var(--surface); padding:9px 12px; margin-bottom:8px; }
+.atr-card { padding:9px 12px; margin-bottom:8px; }
 .atr-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
 .atr-ticker { font-family:var(--mono); font-weight:600; }
 .atr-alpha { font-family:var(--mono); font-variant-numeric:tabular-nums;
@@ -59,7 +58,7 @@ def _card(a: PositionAttribution, *, show_ticker: bool) -> str:
         else ""
     )
     return (
-        '<div class="atr-card">'
+        '<div class="k-well atr-card">'
         f'<div class="atr-head">{ticker}{_alpha_chip(a)}{window}</div>'
         f'<p class="atr-narrative">{escape(a.narrative)}</p>'
         "</div>"

@@ -64,19 +64,21 @@ _PANEL_STYLE = """<style>
 .tri-text:hover { color: var(--accent); text-decoration: underline; }
 .tri-acts { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .tri-acts select { font-size: var(--fs-caption); }
-.tri-empty { color: var(--muted); font-style: italic; padding: var(--sp-4) 0; }
+.tri-empty { color: var(--muted); padding: var(--sp-4) 0; }
 /* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). */
 #triage-drawer { top: var(--sp-3); right: var(--sp-3); bottom: var(--sp-3);
   width: min(460px, 92vw); display: flex; flex-direction: column;
   padding: var(--sp-4); overflow: auto; gap: var(--sp-3); }
 .tri-d-bar { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tri-d-bar h3 { font-size: var(--fs-section); font-weight: 600; margin: 0; margin-right: auto; }
+/* Drawer close glyph — the §3 convention: top type step, muted → fg, no border
+   (CCOverlay owns the dismissal wiring). */
 .tri-d-close { background: none; border: none; cursor: pointer; color: var(--muted);
-  font-size: var(--fs-section); line-height: 1; padding: 0 var(--sp-1); }
+  font-size: var(--fs-display); line-height: 1; padding: 0 var(--sp-1); }
 .tri-d-close:hover { color: var(--fg); }
 .tri-d-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono);
   line-height: 1.6; }
-.tri-d-sel { font-style: italic; color: var(--fg-soft); border-left: 2px solid var(--border);
+.tri-d-sel { color: var(--fg-soft); border-left: 2px solid var(--border);
   padding-left: var(--sp-3); }
 .tri-d-body { font-size: var(--fs-body); line-height: 1.6; color: var(--fg); white-space: pre-wrap; }
 </style>"""

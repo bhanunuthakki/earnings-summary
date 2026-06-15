@@ -67,15 +67,16 @@ VIEWSPEC_CSS = (
 
 
 def _heat_style(pct: float | None) -> str:
-    """charts_v2's YoY heat shading, inline: alpha scales with |pct| capped
-    at 30 — readable on light and dark surfaces alike."""
+    """charts_v2's YoY heat shading, inline: opacity scales with |pct| capped
+    at 30 — readable on light and dark surfaces alike. Tinted through the
+    status tokens (positive=--ok, negative=--bad) via color-mix, so the shading
+    tracks the palette instead of a hardcoded green/red rgba."""
     if pct is None:
         return ""
     mag = min(abs(pct), 30) / 30
-    alpha = 0.08 + 0.28 * mag
-    if pct >= 0:
-        return f"background:rgba(2,158,115,{alpha:.2f})"
-    return f"background:rgba(203,77,77,{alpha:.2f})"
+    pen = 8 + 28 * mag  # 8%..36% token mix, mirrors the old 0.08..0.36 alpha
+    token = "var(--ok)" if pct >= 0 else "var(--bad)"
+    return f"background:color-mix(in srgb, {token} {pen:.0f}%, transparent)"
 
 
 def _is_nm(value: float | None, transform: str) -> bool:

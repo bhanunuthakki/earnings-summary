@@ -374,6 +374,7 @@ REGISTERED: frozenset[str] = frozenset(
         "report/renderers/workspace_comments.py",
         "report/renderers/workspace_dcf.py",
         "report/renderers/workspace_sections/chrome.py",
+        "report/renderers/workspace_sections/company.py",
         "report/renderers/workspace_sections/thesis_risk.py",
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
@@ -413,12 +414,11 @@ QUARANTINE: dict[str, frozenset[str]] = {
     #     upcoming, analytical_dashboard_html, ask_dock, dashboard_html,
     #     explore_panel, portfolio_panel, research_cockpit, ticker_command_center,
     #     workspace_sections/chrome) — those came off this map. ---
-    "pipeline/cron_health_panel.py": frozenset({"radius"}),
-    "pipeline/dcf_coverage_panel.py": frozenset({"radius"}),
-    "pipeline/ir_coverage_panel.py": frozenset({"radius"}),
-    "pipeline/restatements_panel.py": frozenset({"radius"}),
-    "pipeline/source_calls_panel.py": frozenset({"radius"}),
-    "pipeline/source_viewers.py": frozenset({"radius"}),
+    # --- cron_health / dcf_coverage / ir_coverage / restatements / source_calls /
+    #     source_viewers graduated in the design-language conformance sweep
+    #     (2026-06-14): their off-scale 2/3/4/9px corners were snapped to
+    #     var(--radius) (boxes/inline code) or var(--radius-full) (dots / pill
+    #     badges), so the 'radius' dimension is now clean on each. ---
     # validation_issues_panel graduated in the S10 resolve-wiring pass: its lone
     # off-scale 4px (.vi-note code) moved to var(--radius) when the detail rows
     # were rebuilt onto prov_row. Now fully token-clean.
@@ -442,7 +442,9 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # a real token). Their `alias` dimension stays quarantined — those modules
     # still consume the non-font aliases (--ink/--panel/--link/…) the same :root
     # defines — as do their font-size / radius dimensions, untouched here.
-    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size", "radius"}),
+    # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
+    # the 2026-06-14 sweep; alias/font-size stay quarantined (report unfork).
+    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size"}),
     "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius"}),
     "report/renderers/workspace_styles.py": frozenset({"alias", "radius"}),
     "ui/cite_marks.py": frozenset({"alias", "radius"}),

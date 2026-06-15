@@ -135,6 +135,10 @@ def test_badge_is_injected_and_updated() -> None:
 
 
 def test_badge_css_exists() -> None:
-    # Amber pill, not error red — pending recovery, not failure.
-    assert ".cmt-outbox-badge {" in COMMENTS_CSS
-    assert "rgba(255, 196, 0" in COMMENTS_CSS
+    # Amber pill, not error red — pending recovery, not failure. The warn tone
+    # rides the --warn token (color-mix), not a hardcoded amber rgba.
+    badge_rule = COMMENTS_CSS.split(".cmt-outbox-badge {", 1)
+    assert len(badge_rule) == 2
+    rule = badge_rule[1].split("}", 1)[0]
+    assert "color: var(--warn)" in rule
+    assert "color-mix(in srgb, var(--warn)" in rule

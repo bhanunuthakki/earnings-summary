@@ -441,8 +441,8 @@ JS = r"""
     var actions = '';
     if (c.status === 'open') {
       actions = '<div class="cmt-actions">'
-        + '<button data-cmt-id="' + c.id + '" data-cmt-action="dismissed">Dismiss</button>'
-        + '<button data-cmt-id="' + c.id + '" data-cmt-action="addressed">Mark addressed</button>'
+        + '<button class="k-btn k-btn-quiet k-btn-sm" data-cmt-id="' + c.id + '" data-cmt-action="dismissed">Dismiss</button>'
+        + '<button class="k-btn k-btn-quiet k-btn-sm" data-cmt-id="' + c.id + '" data-cmt-action="addressed">Mark addressed</button>'
         + '</div>';
     }
     return '<div class="cmt-card">' + head + body + resolution + thread + actions + '</div>';
@@ -564,7 +564,7 @@ JS = r"""
     floater = document.createElement('div');
     floater.className = 'cmt-floater';
     floater.style.display = 'none';
-    floater.innerHTML = '<button type="button" class="cmt-floater-btn">+ Comment</button>';
+    floater.innerHTML = '<button type="button" class="cmt-floater-btn k-btn k-btn-primary k-btn-sm">+ Comment</button>';
     document.body.appendChild(floater);
     floater.querySelector('button').addEventListener('mousedown', function(ev) {
       ev.preventDefault();
@@ -924,51 +924,45 @@ CSS = r"""
 .cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
 .cmt-thread-text { color: var(--ink); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
+/* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm,
+   added in the JS markup); this layout-only rule keeps the row spacing. */
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
-.cmt-actions button {
-  background: transparent; border: 1px solid var(--hairline);
-  color: var(--ink-muted); padding: 4px 10px; font-size: var(--fs-caption);
-  border-radius: var(--radius); cursor: pointer;
-}
-.cmt-actions button:hover { background: var(--panel); color: var(--ink); }
 
 .cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */
 .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 .cmt-form select { flex: 1; font-size: var(--fs-caption); }
-.cmt-form button[type="submit"] {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; padding: 6px 14px; border-radius: var(--radius);
-  font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
-}
+/* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet
+   (added in the boot.py markup) — no freehand button skin here. */
 .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 
-/* Floating "+ Comment" button on text selection (Google-Docs style) */
+/* Floating "+ Comment" button on text selection (Google-Docs style). The
+   button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm,
+   added in the JS markup); only the floater's drop shadow + pill radius are
+   surface-specific. */
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 .cmt-floater-btn {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; border-radius: var(--radius-full);
-  padding: 6px 12px; font-size: var(--fs-caption); font-weight: 600;
-  cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
+  border-radius: var(--radius-full);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
 }
-.cmt-floater-btn:hover { filter: brightness(1.08); }
 
-/* Free-text highlight (the underlined excerpt the user commented on) */
+/* Free-text highlight (the underlined excerpt the user commented on). Open =
+   warn-tinted, addressed = ok-tinted, both routed through the status tokens
+   via color-mix (no raw rgba). */
 mark.cmt-highlight {
-  background: rgba(255, 196, 0, 0.18);
-  border-bottom: 2px solid rgba(255, 196, 0, 0.7);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border-bottom: 2px solid var(--warn);
   color: inherit;
   cursor: pointer;
   padding: 0 1px;
   border-radius: 1px;
   transition: background 0.12s;
 }
-mark.cmt-highlight:hover { background: rgba(255, 196, 0, 0.32); }
+mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
 mark.cmt-highlight.addressed {
-  background: rgba(60, 200, 120, 0.14);
-  border-bottom-color: rgba(60, 200, 120, 0.6);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  border-bottom-color: var(--ok);
 }
-mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
+mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
 """

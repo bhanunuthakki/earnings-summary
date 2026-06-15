@@ -16,15 +16,11 @@
 .chat-cite:hover { border-color: var(--link); }
 .chat-close { background: transparent; border: none; color: var(--ink-muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px; }
 .chat-diff { margin-top: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); border-radius: var(--radius); font-size: var(--fs-caption); }
-.chat-diff-actions button { background: transparent; border: 1px solid var(--hairline); color: var(--ink-muted); padding: 4px 10px; border-radius: var(--radius); font-size: var(--fs-caption); cursor: pointer; }
-.chat-diff-actions button:hover { filter: brightness(1.2); }
 .chat-diff-actions button[data-action="apply"] { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
-.chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
 .chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
 .chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.chat-form button[type="submit"] { background: var(--accent); color: var(--accent-contrast); border: none; padding: 6px 14px; border-radius: var(--radius); font-weight: 600; font-size: var(--fs-caption); cursor: pointer; }
 .chat-form textarea { width: 100%; box-sizing: border-box; background: var(--panel-alt); color: var(--ink); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans); resize: vertical; }
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
 .chat-form-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
@@ -40,14 +36,13 @@
 .chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
 .chat-sidebar.open { width: 460px; border-left-width: 1px; transition: width 0.2s ease, border-left-width 0s; box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35); }
 .chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
-.chat-text code { font-family: var(--mono); font-size: 0.93em; background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: 3px; }
+.chat-text code { font-family: var(--mono); font-size: 0.93em; background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius); }
 .chat-text li { margin: 2px 0; }
 .chat-text p { margin: 0 0 6px; }
 .chat-text pre.chat-code { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; overflow-x: auto; font-family: var(--mono); font-size: 0.93em; margin: 6px 0; }
 .chat-text ul { margin: 4px 0 4px 18px; padding: 0; }
 .chat-thread { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
 .chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
-.chat-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; background: var(--accent); color: var(--accent-contrast); border: none; border-radius: var(--radius-full); cursor: pointer; font-weight: 600; font-size: var(--fs-body); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
 .chat-toggle-icon { font-family: var(--mono); }
 .chat-toggle.open { background: var(--ink-muted); }
 .chat-turn { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius); font-size: var(--fs-body); line-height: 1.55; }
@@ -65,21 +60,15 @@
 .cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface, var(--bg-elev, var(--panel))); border: 1px solid var(--border, var(--hairline)); border-radius: var(--radius, 6px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
-.cmt-actions button { background: transparent; border: 1px solid var(--hairline); color: var(--ink-muted); padding: 4px 10px; font-size: var(--fs-caption); border-radius: var(--radius); cursor: pointer; }
-.cmt-actions button:hover { background: var(--panel); color: var(--ink); }
-.cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
 .cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
 .cmt-card { background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; font-size: var(--fs-body); }
 .cmt-card-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-micro); color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
 .cmt-close { background: transparent; border: none; color: var(--ink-muted); font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer; }
 .cmt-close:hover { color: var(--ink); }
 .cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
-.cmt-floater-btn { background: var(--accent); color: var(--accent-contrast); border: none; border-radius: var(--radius-full); padding: 6px 12px; font-size: var(--fs-caption); font-weight: 600; cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35); white-space: nowrap; }
-.cmt-floater-btn:hover { filter: brightness(1.08); }
-.cmt-form button[type="submit"] { background: var(--accent); color: var(--accent-contrast); border: none; padding: 6px 14px; border-radius: var(--radius); font-weight: 600; font-size: var(--fs-caption); cursor: pointer; }
+.cmt-floater-btn { border-radius: var(--radius-full); box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35); }
 .cmt-form select { flex: 1; font-size: var(--fs-caption); }
 .cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
-.cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 .cmt-health-pill.cmt-health-offline { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .cmt-health-pill.cmt-health-online { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
@@ -138,7 +127,6 @@
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 8px 0; }
 .cv2-title { font-size: 12px; font-weight: 600; fill: #1a1f2e; }
-.dcf-edit { margin-top: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3); background: var(--surface); }
 .dcf-edit-body { margin-top: var(--sp-3); }
 .dcf-edit-cols { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
 .dcf-edit-field input, .dcf-edit-field select { font-size: var(--fs-caption); padding: 3px 6px; font-variant-numeric: tabular-nums; }
@@ -397,11 +385,6 @@
 .peer.active .peer-name { color: var(--muted-2); }
 .peer.active { background: var(--fg); color: var(--bg); }
 .peer:hover { background: var(--paper); }
-.pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-full); font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500; letter-spacing: 0.04em; border: 1px solid var(--border-2); white-space: nowrap; }
-.pill-bad { color: var(--bad); border-color: var(--bad); background: color-mix(in srgb, var(--bad) 10%, transparent); }
-.pill-muted { color: var(--muted-2); border-color: var(--border); }
-.pill-neutral { color: var(--fg); border-color: var(--fg); }
-.pill-warn { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
 .pos { color: var(--pos); }
 .position-stat { background: var(--surface); padding: 16px 18px; }
 .position-stat-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
@@ -654,6 +637,7 @@
 /* ============================================================ Tweaks panel ============================================================ */ .twk-toggle-btn { appearance: none; border: 1px solid var(--border); background: var(--surface); width: 30px; height: 30px; border-radius: var(--radius); cursor: pointer; color: var(--fg-soft); font-size: 14px; }
 /* ============================================================ Valuation tab ============================================================ */ .valuation-headline { padding: 14px 16px; }
 /* ============================================================ Workspace shell ============================================================ */ .l1-root { flex: 1; min-width: 0; height: 100vh; height: 100dvh; overflow-y: auto; background: var(--bg); color: var(--fg); font-family: var(--sans); display: flex; flex-direction: column; padding-bottom: 32px; }
+/* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this layout-only rule keeps the row spacing. */ .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
 /* Break-rules detail row — appears under each main rule row when narrative / detail / observations are present. Quieter background so the parent row reads first. */ .break-detail td { padding: 4px var(--panel-pad-x) 10px !important; border-top: 0 !important; background: var(--paper); color: var(--muted); }
 /* Canonical table rule: numbers mono, labels/headers sans. Every value cell is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are <th>, which inherit the page's sans. */ .cv2-matrix td { font-family: var(--mono, 'JetBrains Mono', monospace); }
 /* Dark-mode override for the charts_v2 YoY matrix — the upstream CSS is light-themed (white/grey backgrounds, dark text). Override the colors to match the workspace dark palette so the matrix doesn't stand out. */ :root[data-theme="dark"] .cv2-matrix-wrap { color: var(--fg-soft); }
@@ -661,8 +645,8 @@
 /* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: 1px dashed transparent; }
 /* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness flag, and the "tracked, no data yet" footnote. */ .kpi-ledger-table td:first-child { white-space: normal; max-width: 300px; }
 /* Financials */ .chart-panel { padding-bottom: var(--panel-pad-y); }
-/* Floating "+ Comment" button on text selection (Google-Docs style) */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
-/* Free-text highlight (the underlined excerpt the user commented on) */ mark.cmt-highlight { background: rgba(255, 196, 0, 0.18); border-bottom: 2px solid rgba(255, 196, 0, 0.7); color: inherit; cursor: pointer; padding: 0 1px; border-radius: 1px; transition: background 0.12s; }
+/* Floating "+ Comment" button on text selection (Google-Docs style). The button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm, added in the JS markup); only the floater's drop shadow + pill radius are surface-specific. */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
+/* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: 2px solid var(--warn); color: inherit; cursor: pointer; padding: 0 1px; border-radius: 1px; transition: background 0.12s; }
 /* Health pill — server reachability indicator in the sidebar header. Green when /healthz responds, red when it doesn't, muted while the first poll is still in flight. */ .cmt-health-pill { display: inline-block; margin: 2px 6px 0 6px; padding: 2px 8px; font-size: var(--fs-micro); font-weight: 600; font-family: var(--mono); border-radius: var(--radius-full); text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--hairline); background: rgba(255, 255, 255, 0.04); color: var(--ink-muted); }
 /* Hero quote (Earnings tab) */ .hero-quote { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: 28px 32px 26px; border-radius: var(--radius); display: flex; gap: 22px; position: relative; }
 /* Misc tiny helpers used by the higher-density panels. */ .xsmall { font-size: var(--fs-micro); line-height: 1.4; }
@@ -671,7 +655,6 @@
 /* Offline banner inside the form — telegraphs the failure mode BEFORE the user submits, instead of after the click. */ .cmt-offline-banner { margin-bottom: 8px; padding: 6px 10px; font-size: var(--fs-caption); color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-radius: var(--radius); line-height: 1.4; }
 /* Outbox status badge — shown in the sidebar header when the local queue is non-empty. Amber to signal "pending recovery", not error. */ .cmt-outbox-badge { display: inline-block; margin: 2px 8px 0 auto; padding: 2px 8px; font-size: var(--fs-micro); font-weight: 600; font-family: var(--mono); background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); border-radius: var(--radius-full); text-transform: uppercase; letter-spacing: 0.04em; }
 /* Outcomes are STATUS: green=good (the accent "validated" predated the green unification), soft color-mix fills per the chip convention. */ .decision-outcome.validated { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
-/* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny tier-colored <summary class="src-chip"> badge; the open panel is an absolutely-positioned popover with the document identity + source link. */ .src-pop { display: inline-block; position: relative; vertical-align: baseline; }
 /* P4.1 canonical collapse idiom: <details class="panel"> with <summary class="panel-head">. The ▸/▾ affordance rides on .panel-title. (The financials line-item drill-down stays a JS row toggle — <tr> can't nest inside <details>.) */ details.panel > summary { cursor: pointer; user-select: none; list-style: none; }
 /* P4.1 canonical header anatomy: title (left) · as-of · source chip · sub (right edge, grouped in .panel-meta). Built by workspace_html._panel_head — hand-rolled heads should not exist outside that helper. */ .panel-meta { display: flex; align-items: baseline; gap: 10px; min-width: 0; text-align: right; }
 /* P4.1 canonical table — the ONE data-table class. Variants are modifier classes alongside it (.tbl-nowrap for dense numeric grids; semantic modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep only their table-specific rules below). */ .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -681,15 +664,19 @@
 /* Peer-row tile variants by list type — quiet borders that hint at portfolio / watchlist / evaluation membership without shouting. */ .peer-portfolio { border-left: 3px solid var(--accent); }
 /* Pillbox warn variant — used by the Validation panel chip. */ .pill-warn-cell { color: var(--warn); }
 /* Position tab — decision brief link + outcome notes block. */ .decision-brief-link { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; font-family: var(--mono); padding: 1px 6px; border: 1px solid var(--accent); border-radius: var(--radius-full); }
+/* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this rule keeps only the row layout + the Apply button's ok-tint affordance (a positive-action hint, token-routed). */ .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
 /* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat slides the document aside instead of floating over it. The floating .chat-drawer above keeps only the launcher toggle. Width matches CHAT_WIDTH in the JS so the toggle rides the sidebar's left edge. */ .chat-sidebar { flex-shrink: 0; width: 0; height: 100vh; overflow: hidden; background: var(--bg-elev, var(--panel)); border-left: 0 solid var(--hairline); transition: width 0.2s ease, border-left-width 0s 0.2s; display: flex; flex-direction: column; position: sticky; top: 0; }
 /* Q&A rows: <details class="qa-row"> per question (P4.1 — the canonical <details> collapse idiom; the +/- chevron is CSS-driven). */ .qa-list { display: flex; flex-direction: column; }
 /* S2 PR3: unresolved validation issues + derived-from input rows. */ .src-pop-warn { color: var(--warn); }
 /* S6 — Bear · Base · Bull scenario range on the valuation card */ .scenario-range { display: flex; border-bottom: 1px solid var(--hairline); }
 /* Say-Do */ .saydo-meta { display: flex; flex-direction: column; gap: 10px; align-items: flex-end; padding-top: 4px; }
 /* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell affordance — warn-tinted dashed border, overriding the tier color. */ .src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
-/* Status pills: green=good / red=bad from the semantic tokens (the accent-blue "ok" predated the P0.1 green unification), soft color-mix fills per the design-language chip convention. */ .pill-ok { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
 /* Tablet portrait: compress lateral padding and section tab strip. */ @media (max-width: 768px) { :root { --pad-x: 12px; } .tabs, .subtabs { overflow-x: auto; } }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+/* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet (added in the boot.py markup) — no freehand button skin here. */ .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
+/* The Send submit button is the kit's .k-btn.k-btn-primary (added in the boot.py markup) — no freehand button skin here. */ .dcf-edit { margin-top: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3); background: var(--surface); }
+/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the boot.py markup); only the pill radius, larger launcher padding, and the floating drop shadow are surface-specific. */ .chat-toggle { padding: 8px 14px; border-radius: var(--radius-full); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+/* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge system was removed (2026-06-14): an outline mono micro chip that duplicated the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/ -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a separate table-cell text color, not part of that system, and stays.) */ /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny tier-colored <summary class="src-chip"> badge; the open panel is an absolutely-positioned popover with the document identity + source link. */ .src-pop { display: inline-block; position: relative; vertical-align: baseline; }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
 /* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
@@ -732,9 +719,9 @@ details.panel:not([open]) > summary.panel-head { border-bottom: 0; }
 details.panel[open] > summary .panel-title::before { content: '\25BE '; }
 html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); height: 100%; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
-mark.cmt-highlight.addressed { background: rgba(60, 200, 120, 0.14); border-bottom-color: rgba(60, 200, 120, 0.6); }
-mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
-mark.cmt-highlight:hover { background: rgba(255, 196, 0, 0.32); }
+mark.cmt-highlight.addressed { background: color-mix(in srgb, var(--ok) 14%, transparent); border-bottom-color: var(--ok); }
+mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
+mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
 select:focus-visible, textarea:focus-visible, input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 select:not([multiple]) { appearance: none; -webkit-appearance: none; cursor: pointer; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; padding-right: 28px; }
 select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }

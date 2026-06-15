@@ -106,7 +106,7 @@ SCORECARD_CSS = """
 .cs-gate-ok { color: var(--ok); }
 .cs-gate-bad { color: var(--bad); }
 .cs-biases { display: flex; flex-direction: column; gap: 10px; }
-.cs-bias { border-left: 3px solid var(--accent); padding: 2px 0 2px 12px; }
+.cs-bias { border-left: 3px solid var(--border); padding: 2px 0 2px 12px; }
 .cs-bias-name { font-size: var(--fs-body); font-weight: 600; margin: 0 0 2px;
   text-transform: none; letter-spacing: 0; }
 .cs-bias-pattern { font-size: var(--fs-body); margin: 0 0 4px; }

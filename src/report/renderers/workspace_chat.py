@@ -248,8 +248,8 @@ JS = (
         + '<div class="chat-diff-summary"><strong>Proposed edit:</strong> ' + escapeHtml(diff.summary || '—') + '</div>'
         + '<div class="chat-diff-path"><code>' + escapeHtml(diff.target_file || '') + ' · ' + escapeHtml(diff.target_path || '') + '</code></div>'
         + '<div class="chat-diff-actions">'
-        + '  <button type="button" data-action="preview">Preview</button>'
-        + '  <button type="button" data-action="apply">Apply</button>'
+        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="preview">Preview</button>'
+        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="apply">Apply</button>'
         + '</div>';
       turnEl.appendChild(wrap);
       wrap.querySelectorAll('button').forEach(function(btn) {
@@ -354,12 +354,12 @@ CSS = (
   z-index: 95;
   transition: right 0.2s ease;
 }
+/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the
+   boot.py markup); only the pill radius, larger launcher padding, and the
+   floating drop shadow are surface-specific. */
 .chat-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px;
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; border-radius: var(--radius-full); cursor: pointer;
-  font-weight: 600; font-size: var(--fs-body);
+  border-radius: var(--radius-full);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .chat-toggle.open { background: var(--ink-muted); }
@@ -419,7 +419,7 @@ CSS = (
 .chat-text li { margin: 2px 0; }
 .chat-text code {
   font-family: var(--mono); font-size: 0.93em;
-  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius);
 }
 .chat-text pre.chat-code {
   background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
@@ -444,16 +444,13 @@ CSS = (
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
 .chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
+/* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm,
+   added in the JS markup); this rule keeps only the row layout + the Apply
+   button's ok-tint affordance (a positive-action hint, token-routed). */
 .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
-.chat-diff-actions button {
-  background: transparent; border: 1px solid var(--hairline);
-  color: var(--ink-muted); padding: 4px 10px; border-radius: var(--radius);
-  font-size: var(--fs-caption); cursor: pointer;
-}
 .chat-diff-actions button[data-action="apply"] {
   background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
 }
-.chat-diff-actions button:hover { filter: brightness(1.2); }
 .chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
 
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
@@ -469,10 +466,7 @@ CSS = (
   margin-top: 6px;
 }
 .chat-hint { font-size: var(--fs-caption); color: var(--muted); }
-.chat-form button[type="submit"] {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; padding: 6px 14px; border-radius: var(--radius);
-  font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
-}
+/* The Send submit button is the kit's .k-btn.k-btn-primary (added in the
+   boot.py markup) — no freehand button skin here. */
 """
 )

@@ -616,10 +616,15 @@ def _audit_section(
     )
 
 
+def _pill_tone(tone: str) -> str:
+    """Map an ok/warn/bad/muted tone word to the kit .k-pill suffix (muted → bare)."""
+    return f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+
+
 def _audit_row(r: SizingAuditRow) -> str:
     name_attr = f' title="{escape(r.name)}"' if r.name else ""
     verdict = (
-        f'<span class="ad-badge b-{_VERDICT_TONE.get(r.verdict, "muted")}">{escape(r.verdict)}'
+        f'<span class="k-pill{_pill_tone(_VERDICT_TONE.get(r.verdict, "muted"))}">{escape(r.verdict)}'
         "</span>"
         if r.verdict
         else '<span class="muted">&mdash;</span>'
@@ -673,7 +678,8 @@ def _audit_row(r: SizingAuditRow) -> str:
         f'<td class="num">{gap}</td>'
         f'<td class="num">{alpha}</td>'
         f'<td class="ad-mismatch">{mismatch}</td>'
-        f'<td><button type="button" class="ad-edit-btn" data-ticker="{escape(r.ticker)}">'
+        f'<td><button type="button" class="k-btn k-btn-quiet k-btn-sm ad-edit-btn" '
+        f'data-ticker="{escape(r.ticker)}">'
         "record</button></td>"
         "</tr>"
     )
@@ -694,7 +700,8 @@ def _audit_row(r: SizingAuditRow) -> str:
         f'value="{escape(target_val)}">'
         f"<span>Why</span>"
         f'<input type="text" class="ad-note-input" placeholder="optional — one line on why">'
-        f'<button type="button" class="ad-save-btn" data-ticker="{escape(r.ticker)}">'
+        f'<button type="button" class="k-btn k-btn-primary k-btn-sm ad-save-btn" '
+        f'data-ticker="{escape(r.ticker)}">'
         "Save intent</button>"
         f'<span class="ad-status muted"></span>'
         "</div></td></tr>"
@@ -955,7 +962,7 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     if outcome_label is None:
         return '<span class="muted">unresolved</span>'
     tone = _OUTCOME_TONE.get(outcome_label, "muted")
-    badge = f'<span class="ad-badge b-{tone}">{escape(outcome_label)}</span>'
+    badge = f'<span class="k-pill{_pill_tone(tone)}">{escape(outcome_label)}</span>'
     if vindicated is True:
         return f'{badge} <span class="pos">reversal vindicated</span>'
     if vindicated is False:
@@ -1092,24 +1099,13 @@ def _money(v: float | None, *, signed: bool = False) -> str:
 _PANEL_CSS = """<style>
 .ad-table td, .ad-timeline td { vertical-align: middle; }
 .ad-note { font-size: var(--fs-caption); margin: 0 0 10px; }
-.ad-badge { display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.4px;
-  font-weight: 600; }
-.ad-badge.b-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.ad-badge.b-warn { background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn); }
-.ad-badge.b-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
-.ad-badge.b-muted { background: var(--paper); color: var(--muted); }
+/* verdict / outcome badges → the kit filled status pill (.k-pill + tone). */
 .ad-score { color: var(--warn); font-variant-numeric: tabular-nums; margin-right: 8px; }
 .ad-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px;
   border-radius: var(--radius-full); font-size: var(--fs-caption); font-family: var(--sans);
   background: var(--paper); border: 1px solid var(--border); color: var(--muted); }
 .ad-mismatch { max-width: 420px; }
 .ad-aligned { font-size: var(--fs-caption); }
-.ad-edit-btn { background: transparent; color: var(--muted); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 2px 9px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--sans); }
-.ad-edit-btn:hover { color: var(--fg); border-color: var(--border-2); }
 .ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-size: var(--fs-caption); padding: 4px 0; }
 .ad-editor span { color: var(--muted); }
@@ -1118,9 +1114,6 @@ _PANEL_CSS = """<style>
 .ad-editor select { padding-right: 26px; }
 .ad-editor input.ad-target { width: 70px; }
 .ad-editor input.ad-note-input { flex: 1; min-width: 180px; }
-.ad-save-btn { background: var(--accent); color: var(--accent-contrast); border: none;
-  border-radius: var(--radius); padding: 4px 12px; font-size: var(--fs-caption);
-  font-weight: 600; cursor: pointer; }
 .ad-timeline td.tk { font-weight: 600; white-space: nowrap; font-family: var(--mono); }
 .ad-timeline td.when { color: var(--muted); white-space: nowrap; }
 /* Decision calibration (S15): KPI strip + compact aggregate tables. */

@@ -805,8 +805,8 @@
     var actions = '';
     if (c.status === 'open') {
       actions = '<div class="cmt-actions">'
-        + '<button data-cmt-id="' + c.id + '" data-cmt-action="dismissed">Dismiss</button>'
-        + '<button data-cmt-id="' + c.id + '" data-cmt-action="addressed">Mark addressed</button>'
+        + '<button class="k-btn k-btn-quiet k-btn-sm" data-cmt-id="' + c.id + '" data-cmt-action="dismissed">Dismiss</button>'
+        + '<button class="k-btn k-btn-quiet k-btn-sm" data-cmt-id="' + c.id + '" data-cmt-action="addressed">Mark addressed</button>'
         + '</div>';
     }
     return '<div class="cmt-card">' + head + body + resolution + thread + actions + '</div>';
@@ -928,7 +928,7 @@
     floater = document.createElement('div');
     floater.className = 'cmt-floater';
     floater.style.display = 'none';
-    floater.innerHTML = '<button type="button" class="cmt-floater-btn">+ Comment</button>';
+    floater.innerHTML = '<button type="button" class="cmt-floater-btn k-btn k-btn-primary k-btn-sm">+ Comment</button>';
     document.body.appendChild(floater);
     floater.querySelector('button').addEventListener('mousedown', function(ev) {
       ev.preventDefault();
@@ -1455,8 +1455,8 @@
         + '<div class="chat-diff-summary"><strong>Proposed edit:</strong> ' + escapeHtml(diff.summary || '—') + '</div>'
         + '<div class="chat-diff-path"><code>' + escapeHtml(diff.target_file || '') + ' · ' + escapeHtml(diff.target_path || '') + '</code></div>'
         + '<div class="chat-diff-actions">'
-        + '  <button type="button" data-action="preview">Preview</button>'
-        + '  <button type="button" data-action="apply">Apply</button>'
+        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="preview">Preview</button>'
+        + '  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-action="apply">Apply</button>'
         + '</div>';
       turnEl.appendChild(wrap);
       wrap.querySelectorAll('button').forEach(function(btn) {

@@ -111,11 +111,8 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   border-radius:var(--radius-full); padding:1px 7px; text-decoration:none; }
 .ask-dock-cite:hover { border-color:var(--accent); }
 .ask-dock-form { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--border); }
-/* Input skinned by the shared control kit (ui/controls.py). */
+/* Input + submit button skinned by the shared control kit (ui/controls.py). */
 .ask-dock-form input { flex:1; padding:7px 10px; font-size:var(--fs-caption); }
-.ask-dock-form button { background:var(--accent-soft); color:var(--accent);
-  border:1px solid var(--accent); border-radius:var(--radius); padding:7px 12px;
-  font-size:var(--fs-caption); cursor:pointer; }
 /* Thread list overlay — covers the .ask-dock-body while open. */
 .ask-dock-threads { position:absolute; inset:0; background:var(--surface);
   display:flex; flex-direction:column; z-index:1; }
@@ -701,7 +698,7 @@ def render_ask_dock() -> str:
     </div>
     <form class="ask-dock-form" id="ask-dock-form">
       <input id="ask-dock-q" placeholder="Ask&hellip;" autocomplete="off">
-      <button type="submit">Ask</button>
+      <button type="submit" class="k-btn k-btn-primary k-btn-sm">Ask</button>
     </form>
   </div>
 </div>

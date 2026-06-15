@@ -56,24 +56,13 @@ _PANEL_STYLE = """<style>
 .vx-row input[name="tickers"] { width:260px; text-transform:uppercase; }
 .vx-row input[name="periods"], .vx-row input[name="cagr_years"] { width:54px; }
 .vx-row input[name="view_name"] { width:200px; }
-.vx-row button { background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent);
-  border-radius:var(--radius); padding:5px 12px; font-size:var(--fs-body); cursor:pointer;
-  transition:filter var(--transition); }
-.vx-row button:hover { filter:brightness(1.15); }
 .vx-pickers { display:grid; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap:10px;
   margin-bottom:10px; }
 .vx-picker label { display:block; color:var(--muted); font-size:var(--fs-caption); margin-bottom:3px;
   text-transform:uppercase; letter-spacing:.06em; }
-.vx-picker select { width:100%; font-size:var(--fs-caption); }
+.vx-picker select { width:100%; }
 .vx-saved-strip { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
-.vx-saved { display:inline-flex; align-items:center; border:1px solid var(--border);
-  border-radius:var(--radius); background:var(--paper); overflow:hidden; }
-.vx-saved button { background:transparent; border:none; color:var(--fg-soft);
-  font-size:var(--fs-caption); padding:4px 8px; cursor:pointer; transition:color var(--transition); }
-.vx-saved button[data-act="load"]:hover { color:var(--accent); }
-.vx-saved button[data-act="del"] { color:var(--muted); border-left:1px solid var(--border);
-  padding:4px 7px; }
-.vx-saved button[data-act="del"]:hover { color:var(--bad); }
+.vx-saved { display:inline-flex; align-items:center; gap:4px; }
 .vx-none { color:var(--muted); font-size:var(--fs-caption); }
 .vx-error { color:var(--bad); font-size:var(--fs-body); margin:6px 0; }
 .vx-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
@@ -86,10 +75,6 @@ _PANEL_STYLE = """<style>
 .ask-hello { color:var(--muted); font-size:var(--fs-body); line-height:1.5; border:1px dashed var(--border);
   border-radius:var(--radius); padding:14px 16px; }
 .ask-chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-.ask-chip { background:var(--paper); border:1px solid var(--border); color:var(--fg-soft);
-  border-radius:var(--radius-full); padding:5px 12px; font-size:var(--fs-caption); cursor:pointer;
-  transition:color var(--transition), border-color var(--transition); }
-.ask-chip:hover { border-color:var(--accent); color:var(--accent); }
 .ask-turn-user { align-self:flex-end; max-width:70%; background:var(--accent-soft); border:1px solid var(--accent);
   color:var(--fg); border-radius:var(--radius); padding:8px 14px; font-size:var(--fs-body); }
 .ask-turn-assistant { align-self:stretch; border:1px solid var(--border); background:var(--surface);
@@ -101,27 +86,10 @@ _PANEL_STYLE = """<style>
   justify-content:space-between; flex-wrap:wrap; }
 .ask-actions-sum { color:var(--muted); font-size:var(--fs-caption); }
 .ask-actions-btns { display:flex; gap:8px; }
-.ask-actions button { background:transparent; border:1px solid var(--border); color:var(--muted);
-  border-radius:var(--radius); padding:3px 10px; font-size:var(--fs-caption); cursor:pointer;
-  transition:color var(--transition), border-color var(--transition); }
-.ask-actions button:hover { border-color:var(--accent); color:var(--accent); }
 .ask-busy { color:var(--muted); font-size:var(--fs-body); }
 .ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
 .ask-cite-row { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
-.ask-cite { font-size:var(--fs-caption); color:var(--accent); border:1px solid var(--border);
-  border-radius:var(--radius-full); padding:2px 9px; text-decoration:none;
-  background:var(--paper); transition:border-color var(--transition); }
-.ask-cite:hover { border-color:var(--accent); }
 @keyframes askdots { 0% { content:''; } 25% { content:'.'; } 50% { content:'..'; } 75% { content:'...'; } }
-.ask-prose { font-size:var(--fs-body); line-height:1.55; color:var(--fg); }
-.ask-prose p { margin:0 0 8px; }
-.ask-prose ul { margin:4px 0 8px 18px; padding:0; }
-.ask-prose li { margin:2px 0; }
-.ask-prose code { font-family:var(--mono); font-size:0.93em;
-  background:rgba(255,255,255,0.05); padding:1px 4px; border-radius:var(--radius); }
-.ask-prose pre.ask-code { background:rgba(0,0,0,0.3); border:1px solid var(--border);
-  border-radius:var(--radius); padding:8px 10px; overflow-x:auto; font-size:var(--fs-caption);
-  font-family:var(--mono); margin:6px 0; }
 .ask-cmd { font-family:var(--mono); font-size:var(--fs-caption); white-space:pre-wrap;
   color:var(--fg); margin:0; }
 .ask-inputrow { display:flex; gap:8px; align-items:center; margin-bottom:10px; }
@@ -412,7 +380,7 @@ _PANEL_JS = """
     var chips = (items || []).map(function (c) {
       var href = askCiteHref(c);
       if (!href) return '';
-      return '<a class="ask-cite" href="' + askEsc(href) + '" target="_blank">['
+      return '<a class="k-chip k-chip-accent" href="' + askEsc(href) + '" target="_blank">['
         + askEsc(String(c.n)) + '] ' + askEsc(c.label || c.kind || 'source') + '</a>';
     }).join('');
     var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';
@@ -422,9 +390,9 @@ _PANEL_JS = """
     var sum = summary ? '<span class="ask-actions-sum">' + askEsc(summary) + '</span>' : '';
     return '<div class="ask-actions">' + sum
       + '<span class="ask-actions-btns">'
-      + '<button type="button" data-ask-act="builder">Open in builder</button>'
-      + '<button type="button" data-ask-act="peers">+ Peers</button>'
-      + '<button type="button" data-ask-act="pin">Pin as view</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="builder">Open in builder</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="peers">+ Peers</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-ask-act="pin">Pin as view</button>'
       + '</span></div>';
   }
   function askRemember(role, text) {
@@ -483,7 +451,7 @@ _PANEL_JS = """
       var busy = card.querySelector('.ask-busy');
       if (busy) busy.remove();
       prose = document.createElement('div');
-      prose.className = 'ask-prose';
+      prose.className = 'prose';
       card.appendChild(prose);
     }
     function handleEvent(ev) {
@@ -530,7 +498,7 @@ _PANEL_JS = """
         } else {
           var noteHtml = note ? '<div class="ask-meta">' + askEsc(note) + '</div>' : '';
           card.innerHTML = noteHtml
-            + '<div class="ask-prose">' + askLinkifyCites(askMd(text), citations) + '</div>'
+            + '<div class="prose">' + askLinkifyCites(askMd(text), citations) + '</div>'
             + askCiteRowHtml(citations, claims);
         }
         askRemember('assistant', text);
@@ -579,7 +547,7 @@ _PANEL_JS = """
   if (ctxClear) ctxClear.addEventListener('click', function () { setCtx(false); });
 
   if (askThread) askThread.addEventListener('click', function (ev) {
-    var chip = ev.target.closest('.ask-chip');
+    var chip = ev.target.closest('.k-chip');
     if (chip) { submitAsk(chip.getAttribute('data-ask-q') || chip.textContent); return; }
     var act = ev.target.closest('button[data-ask-act]');
     if (!act) return;
@@ -622,7 +590,7 @@ _PANEL_JS = """
         div.textContent = t.text;
       } else {
         div.className = 'ask-turn-assistant';
-        div.innerHTML = '<div class="ask-prose">' + askMd(t.text) + '</div>';
+        div.innerHTML = '<div class="prose">' + askMd(t.text) + '</div>';
       }
       askThread.appendChild(div);
     });
@@ -672,8 +640,10 @@ def _saved_chip(view: SavedViewRow) -> str:
     return (
         f'<span class="vx-saved" data-view-id="{view.id}" '
         f'data-view-name="{escape(view.name)}" data-spec="{spec_attr}">'
-        f'<button type="button" data-act="load" title="load + run">{escape(view.name)}</button>'
-        '<button type="button" data-act="del" title="delete">&times;</button>'
+        f'<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="load" '
+        f'title="load + run">{escape(view.name)}</button>'
+        '<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="del" '
+        'title="delete">&times;</button>'
         "</span>"
     )
 
@@ -758,12 +728,12 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
  &ldquo;same but as margins&rdquo;). <code>/view</code> forces a data view; <code>/help</code>
  lists commands.
     <div class="ask-chips">
-      <button type="button" class="ask-chip"
+      <button type="button" class="k-chip"
         data-ask-q="{escape(first)} vs {escape(second)} revenue growth, last 8 quarters">
         {escape(first)} vs {escape(second)} revenue growth</button>
-      <button type="button" class="ask-chip"
+      <button type="button" class="k-chip"
         data-ask-q="{escape(first)} margins, last 12 quarters">{escape(first)} margins</button>
-      <button type="button" class="ask-chip"
+      <button type="button" class="k-chip"
         data-ask-q="revenue 3-year CAGR for {escape(first)}, {escape(second)}, annual">
         3y revenue CAGR</button>
     </div>
@@ -785,7 +755,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <label>ask</label>
     <input id="vx-nl-q" name="nl_query"
       placeholder="e.g. NU vs MELI revenue growth, last 8 quarters">
-    <button type="button" id="vx-nl-go">Compile</button>
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-nl-go">Compile</button>
     <span class="vx-nl-msg" id="vx-nl-msg">compiles into the builder below &mdash; never raw
  SQL; falls back to the pickers when it can&#x27;t parse</span>
   </div>
@@ -793,9 +763,9 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <label>tickers</label>
     <input id="vx-tickers" name="tickers" value="{tickers_val}"
       placeholder="NU, MELI, &hellip;">
-    <button type="button" id="vx-load-metrics"
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-load-metrics"
       title="Refresh the metric pickers for these tickers">Load metrics</button>
-    <button type="button" id="vx-peers"
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-peers"
       title="Append the first ticker&#x27;s scored peer set (named rivals, same industry, tracked names)">+ Peers</button>
     <label>transform</label>
     <select id="vx-transform">{transform_opts}</select>
@@ -805,7 +775,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <input id="vx-periods" name="periods" type="number" min="1" max="40" value="12">
     <label>CAGR yrs</label>
     <input id="vx-cagr-years" name="cagr_years" type="number" min="1" max="10" value="3">
-    <button type="button" id="vx-run">Run view</button>
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-run">Run view</button>
   </div>
   <div class="vx-pickers">
     {_picker_html("vx-pick-fin", "Financial line items", catalog["fin"])}
@@ -814,7 +784,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
   </div>
   <div class="vx-row">
     <input id="vx-view-name" name="view_name" placeholder="view name">
-    <button type="button" id="vx-save">Save view</button>
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-save">Save view</button>
     <span class="vx-saved-strip" id="vx-saved-strip">{saved}</span>
   </div>
 </div>

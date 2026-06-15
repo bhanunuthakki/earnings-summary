@@ -40,7 +40,7 @@ _ACTIONS_BLOCK = """
       <input type="number" id="ir-quarters" name="quarters" class="ir-quarters"
              value="8" min="1" max="40">
     </label>
-    <button type="submit" id="ir-submit">Refresh IR KPIs</button>
+    <button type="submit" id="ir-submit" class="k-btn k-btn-primary">Refresh IR KPIs</button>
     <span id="ir-status" class="actions-status" role="status" aria-live="polite"></span>
   </form>
   <pre id="ir-output" class="actions-output" hidden></pre>
@@ -59,10 +59,8 @@ input.ir-ticker { width: 170px; text-transform: uppercase; font-family: var(--mo
 .ir-quarters-label { font-size: var(--fs-caption); color: var(--muted); display: inline-flex;
   align-items: center; gap: 6px; }
 .ir-quarters { width: 60px; }
-#ir-submit { padding: 7px 14px; font-size: var(--fs-body); font-weight: 600;
-  color: var(--accent-contrast); background: var(--accent); border: none;
-  border-radius: var(--radius); cursor: pointer; }
-#ir-submit:disabled { opacity: 0.5; cursor: progress; }
+/* #ir-submit (primary) + the maintenance buttons (quiet) ride the shared kit
+   (.k-btn, controls.py); the shell composes controls_css for this fragment. */
 .actions-status { font-size: var(--fs-caption); font-weight: 500; }
 .actions-status.running { color: var(--warn); }
 .actions-status.ok { color: var(--ok); }
@@ -179,27 +177,23 @@ _MAINTENANCE_BLOCK = """
     Repo-wide chores, streamed live — the same CLIs the crons run.
   </p>
   <div class="actions-form">
-    <button type="button" class="maint-btn" data-action="seed_kpis"
+    <button type="button" class="maint-btn k-btn k-btn-quiet" data-action="seed_kpis"
       title="Re-seed kpi_definitions from the per-ticker holdings JSONs. Idempotent - safe to re-run.">Seed KPI defs</button>
-    <button type="button" class="maint-btn" data-action="process_inbox"
+    <button type="button" class="maint-btn k-btn k-btn-quiet" data-action="process_inbox"
       title="Register documents dropped into the inbox folder (categorize + attach to their tickers).">Process dropped docs</button>
-    <button type="button" class="maint-btn" data-action="sweep_history"
+    <button type="button" class="maint-btn k-btn k-btn-quiet" data-action="sweep_history"
       title="Archive superseded report builds out of output/ - keeps the newest per ticker.">Sweep output history</button>
-    <button type="button" class="maint-btn" data-action="onboard_pending"
+    <button type="button" class="maint-btn k-btn k-btn-quiet" data-action="onboard_pending"
       title="Run the full onboarding pipeline for every ticker queued as pending.">Onboard pending</button>
     <span class="maint-sep">|</span>
     <input type="text" id="maint-onboard-ticker" class="ir-ticker" placeholder="Ticker" aria-label="Ticker to onboard">
-    <button type="button" class="maint-btn" data-action="onboard" data-needs-ticker="1"
+    <button type="button" class="maint-btn k-btn k-btn-quiet" data-action="onboard" data-needs-ticker="1"
       title="FMP onboard + first report build for ONE new ticker. Takes minutes and spends FMP quota.">Onboard ticker</button>
     <span id="maint-status" class="actions-status" role="status" aria-live="polite"></span>
   </div>
   <pre id="maint-output" class="actions-output" hidden></pre>
 </section>
 <style>
-.maint-btn { padding: 6px 11px; font-size: var(--fs-caption); font-weight: 600;
-  color: var(--accent-contrast); background: var(--accent); border: none;
-  border-radius: var(--radius); cursor: pointer; }
-.maint-btn:disabled { opacity: 0.5; cursor: progress; }
 .maint-sep { color: var(--muted); margin: 0 4px; }
 </style>
 <script>

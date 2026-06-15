@@ -89,7 +89,7 @@ def _comment_sidebar_shell(body: StringIO) -> None:
         '<option value="fix_data">Flag data issue</option>'
         '<option value="rewrite_section">Rewrite this section</option>'
         "</select>"
-        '<button type="submit">Post</button>'
+        '<button type="submit" class="k-btn k-btn-primary">Post</button>'
         "</div>"
         # P4.5 "add note" capture: saves the text above straight into the
         # analyst journal (analyst_notes), anchored to this section — no
@@ -102,7 +102,7 @@ def _comment_sidebar_shell(body: StringIO) -> None:
         '<option value="assumption">Assumption</option>'
         '<option value="decision">Decision</option>'
         "</select>"
-        '<button type="button" id="cmt-save-note" '
+        '<button type="button" id="cmt-save-note" class="k-btn k-btn-quiet k-btn-sm" '
         'title="Save the text above as a durable journal note">Save to journal</button>'
         "</div>"
         '<div class="cmt-form-hint" id="cmt-form-hint"></div>'
@@ -142,12 +142,12 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         'look up a quote in the transcript&hellip;"></textarea>'
         '<div class="chat-form-row">'
         '<span class="chat-hint" id="chat-hint">Cmd+Enter to send</span>'
-        '<button type="submit">Send</button>'
+        '<button type="submit" class="k-btn k-btn-primary">Send</button>'
         "</div>"
         "</form>"
         "</aside>"
         '<aside class="chat-drawer" id="chat-drawer">'
-        '<button class="chat-toggle" id="chat-toggle" type="button" aria-label="Open chat">'
+        '<button class="chat-toggle k-btn k-btn-primary" id="chat-toggle" type="button" aria-label="Open chat">'
         '<span class="chat-toggle-icon">&#8984;</span>'
         '<span class="chat-toggle-label">Chat</span>'
         "</button>"

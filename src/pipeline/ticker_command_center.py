@@ -1201,17 +1201,20 @@ def _alerts_rail_section(
 def _identity_badges(ident: TickerIdentity) -> str:
     bits: list[str] = []
     if ident.list_type:
-        bits.append(f'<span class="badge">{escape(ident.list_type)}</span>')
+        # list_type is a category label → the quiet outline kit chip (§2).
+        bits.append(f'<span class="k-chip">{escape(ident.list_type)}</span>')
     breach = ident.breach_status
     if breach:
+        # breach status → the kit filled status pill + tone.
         tone = {
-            "intact": "b-ok",
-            "ok": "b-ok",
-            "watch": "b-warn",
-            "broken": "b-bad",
-            "breach": "b-bad",
-        }.get(breach, "b-muted")
-        bits.append(f'<span class="badge {tone}">{escape(breach)}</span>')
+            "intact": "k-pill-ok",
+            "ok": "k-pill-ok",
+            "watch": "k-pill-warn",
+            "broken": "k-pill-bad",
+            "breach": "k-pill-bad",
+        }.get(breach, "")
+        cls = f"k-pill {tone}".strip()
+        bits.append(f'<span class="{cls}">{escape(breach)}</span>')
     return f'<div class="badges">{"".join(bits)}</div>'
 
 
@@ -1458,10 +1461,7 @@ _PAGE_HEAD = (
   .top-nav a {{ color: var(--accent); text-decoration: none; }}
   .top-nav a:hover {{ text-decoration: underline; }}
   .badges {{ text-align: right; }}
-  .badge {{ display: inline-block; padding: 2px 8px; border-radius: var(--radius-full); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; background: var(--border); margin-left: 4px; }}
-  .badge.b-ok {{ background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }}
-  .badge.b-warn {{ background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }}
-  .badge.b-bad {{ background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }}
+  /* identity badges → the kit (.k-chip list_type + .k-pill breach status). */
   .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
   .panel-h3 {{ font-size: var(--fs-body); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}

@@ -24,7 +24,7 @@ _PANEL_STYLE = """<style>
 .rs-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
   line-height:1.55; }
-.rs-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
+.rs-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 .rs-doc { font-size:var(--fs-caption); font-family:var(--mono); }
 </style>"""
 

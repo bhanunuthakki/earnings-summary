@@ -109,25 +109,11 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 }
 .badge .dot { width: 6px; height: 6px; border-radius: 50%; }
 
-.pill {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: var(--radius-full);
-  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500;
-  letter-spacing: 0.04em;
-  border: 1px solid var(--border-2);
-  white-space: nowrap;
-}
-/* Status pills: green=good / red=bad from the semantic tokens (the accent-blue
-   "ok" predated the P0.1 green unification), soft color-mix fills per the
-   design-language chip convention. */
-.pill-ok { color: var(--ok); border-color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 10%, transparent); }
-.pill-neutral { color: var(--fg); border-color: var(--fg); }
-.pill-warn { color: var(--warn); border-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, transparent); }
-.pill-bad { color: var(--bad); border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 10%, transparent); }
-.pill-muted { color: var(--muted-2); border-color: var(--border); }
+/* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge
+   system was removed (2026-06-14): an outline mono micro chip that duplicated
+   the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/
+   -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a
+   separate table-cell text color, not part of that system, and stays.) */
 
 /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny
    tier-colored <summary class="src-chip"> badge; the open panel is an

@@ -28,7 +28,7 @@ tr.ir-gap-row td { background:color-mix(in srgb, var(--bad) 7%, transparent); }
 .ir-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
   line-height:1.55; }
-.ir-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
+.ir-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 </style>"""
 
 

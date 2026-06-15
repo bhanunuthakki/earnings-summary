@@ -54,9 +54,9 @@ _PANEL_STYLE = """<style>
 .dcv-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius);
   font-size:var(--fs-body); line-height:1.55; }
-.dcv-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
-.dcv-badge { display:inline-block; padding:0 6px; border-radius:9px;
-  border:1px solid var(--border); font-size:var(--fs-small);
+.dcv-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
+.dcv-badge { display:inline-block; padding:0 6px; border-radius:var(--radius-full);
+  border:1px solid var(--border); font-size:var(--fs-caption);
   color:var(--muted); white-space:nowrap; }
 </style>"""
 

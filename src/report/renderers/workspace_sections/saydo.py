@@ -250,6 +250,11 @@ def _saydo_print_vs_guide(
     body.write("</tbody></table></div>")
 
 
+# Only ok/warn/bad carry a kit chip tone; neutral/muted ride the tone-less
+# k-chip-mono (the report's old pill-neutral/-muted had no status color).
+_CHIP_TONE = {"ok": " k-chip-ok", "warn": " k-chip-warn", "bad": " k-chip-bad"}
+
+
 def _rating_pill(rating: str) -> str:
     mapping = {
         "EXCEEDED": "ok",
@@ -259,8 +264,8 @@ def _rating_pill(rating: str) -> str:
         "REVISED UP": "warn",
         "unknown": "muted",
     }
-    tone = mapping.get(rating, "muted")
-    return f'<span class="pill pill-{tone}">{_esc(rating)}</span>'
+    tone = _CHIP_TONE.get(mapping.get(rating, "muted"), "")
+    return f'<span class="k-chip k-chip-mono{tone}">{_esc(rating)}</span>'
 
 
 def _outcome_pill(outcome: str) -> str:
@@ -270,8 +275,9 @@ def _outcome_pill(outcome: str) -> str:
         "miss": ("bad", "MISS"),
         "no_data": ("muted", "NO DATA"),
     }
-    tone, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
-    return f'<span class="pill pill-{tone}">{_esc(label)}</span>'
+    tone_name, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
+    tone = _CHIP_TONE.get(tone_name, "")
+    return f'<span class="k-chip k-chip-mono{tone}">{_esc(label)}</span>'
 
 
 def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric]) -> None:

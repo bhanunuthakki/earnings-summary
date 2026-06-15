@@ -25,9 +25,7 @@ from credibility.priors import MeasuredPriors, build_measured_priors
 from pipeline.confidence import TIER_BASE, UNKNOWN_TIER_BASE
 
 _PANEL_STYLE = """<style>
-.cred-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; }
+.cred-note { margin-top:14px; }
 .cred-over { color:var(--bad); }
 .cred-under { color:var(--ok); }
 .cred-spark { font-weight:600; }
@@ -50,7 +48,7 @@ def render_credibility_panel(db_path: Path, *, user_id: str = "bhanu") -> str:
             _PANEL_STYLE + '<section class="panel"><h2>Credibility</h2>'
             '<p class="sub">Is the stored confidence number calibrated? This scores it '
             "against what later happened to each fact.</p>"
-            '<div class="cred-note">No graded observations yet. The ledger fills as later '
+            '<div class="cred-note k-well">No graded observations yet. The ledger fills as later '
             "filings restate already-reported numbers and cross-source disagreements get "
             "resolved.</div></section>"
         )
@@ -191,7 +189,7 @@ def _footnote(t: ReliabilityTable) -> str:
         "still the hand-set constant, by design."
     )
     return (
-        '<div class="cred-note">Conditional denominator: an outcome is only observable for a '
+        '<div class="cred-note k-well">Conditional denominator: an outcome is only observable for a '
         "fact a later filing revisited (a restatement chain) or that a logged cross-source "
         "disagreement contested — so <em>observed held</em> is the hold-rate among checked "
         f"facts, not unconditional accuracy. {escape(gate)}</div>"

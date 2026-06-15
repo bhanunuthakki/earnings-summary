@@ -23,7 +23,7 @@ from pathlib import Path
 _PANEL_STYLE = """<style>
 .ch-dir { font-weight:600; white-space:nowrap; }
 .ch-dots { white-space:nowrap; }
-.ch-dot { display:inline-block; width:11px; height:11px; border-radius:2px;
+.ch-dot { display:inline-block; width:11px; height:11px; border-radius:var(--radius-full);
   margin:0 1px; vertical-align:middle; }
 .ch-dot-ok   { background:var(--ok); }
 .ch-dot-fail { background:var(--bad); }
@@ -35,7 +35,7 @@ _PANEL_STYLE = """<style>
 .ch-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius);
   font-size:var(--fs-body); line-height:1.55; }
-.ch-note code { background:var(--surface); padding:1px 5px; border-radius:4px; }
+.ch-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 </style>"""
 
 # Directives shown first, in criticality order, with friendly display names.

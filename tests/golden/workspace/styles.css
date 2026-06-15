@@ -403,25 +403,11 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 }
 .badge .dot { width: 6px; height: 6px; border-radius: 50%; }
 
-.pill {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: var(--radius-full);
-  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 500;
-  letter-spacing: 0.04em;
-  border: 1px solid var(--border-2);
-  white-space: nowrap;
-}
-/* Status pills: green=good / red=bad from the semantic tokens (the accent-blue
-   "ok" predated the P0.1 green unification), soft color-mix fills per the
-   design-language chip convention. */
-.pill-ok { color: var(--ok); border-color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 10%, transparent); }
-.pill-neutral { color: var(--fg); border-color: var(--fg); }
-.pill-warn { color: var(--warn); border-color: var(--warn);
-  background: color-mix(in srgb, var(--warn) 10%, transparent); }
-.pill-bad { color: var(--bad); border-color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 10%, transparent); }
-.pill-muted { color: var(--muted-2); border-color: var(--border); }
+/* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge
+   system was removed (2026-06-14): an outline mono micro chip that duplicated
+   the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/
+   -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a
+   separate table-cell text color, not part of that system, and stays.) */
 
 /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny
    tier-colored <summary class="src-chip"> badge; the open panel is an
@@ -2166,53 +2152,47 @@ ul.flag-list li.flag-positive {
 .cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
 .cmt-thread-text { color: var(--ink); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
+/* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm,
+   added in the JS markup); this layout-only rule keeps the row spacing. */
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
-.cmt-actions button {
-  background: transparent; border: 1px solid var(--hairline);
-  color: var(--ink-muted); padding: 4px 10px; font-size: var(--fs-caption);
-  border-radius: var(--radius); cursor: pointer;
-}
-.cmt-actions button:hover { background: var(--panel); color: var(--ink); }
 
 .cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */
 .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 .cmt-form select { flex: 1; font-size: var(--fs-caption); }
-.cmt-form button[type="submit"] {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; padding: 6px 14px; border-radius: var(--radius);
-  font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
-}
+/* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet
+   (added in the boot.py markup) — no freehand button skin here. */
 .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 
-/* Floating "+ Comment" button on text selection (Google-Docs style) */
+/* Floating "+ Comment" button on text selection (Google-Docs style). The
+   button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm,
+   added in the JS markup); only the floater's drop shadow + pill radius are
+   surface-specific. */
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 .cmt-floater-btn {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; border-radius: var(--radius-full);
-  padding: 6px 12px; font-size: var(--fs-caption); font-weight: 600;
-  cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
+  border-radius: var(--radius-full);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
 }
-.cmt-floater-btn:hover { filter: brightness(1.08); }
 
-/* Free-text highlight (the underlined excerpt the user commented on) */
+/* Free-text highlight (the underlined excerpt the user commented on). Open =
+   warn-tinted, addressed = ok-tinted, both routed through the status tokens
+   via color-mix (no raw rgba). */
 mark.cmt-highlight {
-  background: rgba(255, 196, 0, 0.18);
-  border-bottom: 2px solid rgba(255, 196, 0, 0.7);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border-bottom: 2px solid var(--warn);
   color: inherit;
   cursor: pointer;
   padding: 0 1px;
   border-radius: 1px;
   transition: background 0.12s;
 }
-mark.cmt-highlight:hover { background: rgba(255, 196, 0, 0.32); }
+mark.cmt-highlight:hover { background: color-mix(in srgb, var(--warn) 32%, transparent); }
 mark.cmt-highlight.addressed {
-  background: rgba(60, 200, 120, 0.14);
-  border-bottom-color: rgba(60, 200, 120, 0.6);
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  border-bottom-color: var(--ok);
 }
-mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
+mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24%, transparent); }
 
 
 .cite-wrap { position: relative; display: inline; }
@@ -2280,12 +2260,12 @@ mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
   z-index: 95;
   transition: right 0.2s ease;
 }
+/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the
+   boot.py markup); only the pill radius, larger launcher padding, and the
+   floating drop shadow are surface-specific. */
 .chat-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
   padding: 8px 14px;
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; border-radius: var(--radius-full); cursor: pointer;
-  font-weight: 600; font-size: var(--fs-body);
+  border-radius: var(--radius-full);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .chat-toggle.open { background: var(--ink-muted); }
@@ -2345,7 +2325,7 @@ mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
 .chat-text li { margin: 2px 0; }
 .chat-text code {
   font-family: var(--mono); font-size: 0.93em;
-  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: 3px;
+  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius);
 }
 .chat-text pre.chat-code {
   background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
@@ -2370,16 +2350,13 @@ mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
 .chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
+/* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm,
+   added in the JS markup); this rule keeps only the row layout + the Apply
+   button's ok-tint affordance (a positive-action hint, token-routed). */
 .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
-.chat-diff-actions button {
-  background: transparent; border: 1px solid var(--hairline);
-  color: var(--ink-muted); padding: 4px 10px; border-radius: var(--radius);
-  font-size: var(--fs-caption); cursor: pointer;
-}
 .chat-diff-actions button[data-action="apply"] {
   background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
 }
-.chat-diff-actions button:hover { filter: brightness(1.2); }
 .chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
 
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
@@ -2395,11 +2372,8 @@ mark.cmt-highlight.addressed:hover { background: rgba(60, 200, 120, 0.24); }
   margin-top: 6px;
 }
 .chat-hint { font-size: var(--fs-caption); color: var(--muted); }
-.chat-form button[type="submit"] {
-  background: var(--accent); color: var(--accent-contrast);
-  border: none; padding: 6px 14px; border-radius: var(--radius);
-  font-weight: 600; font-size: var(--fs-caption); cursor: pointer;
-}
+/* The Send submit button is the kit's .k-btn.k-btn-primary (added in the
+   boot.py markup) — no freehand button skin here. */
 
 
 .dcf-edit { margin-top: var(--sp-3); border: 1px solid var(--border);

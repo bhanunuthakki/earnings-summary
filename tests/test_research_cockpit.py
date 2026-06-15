@@ -707,9 +707,10 @@ def test_build_evaluation_sorted_by_attractiveness(
     # Portfolio: attention order (NU warn > AAA ok), scores never computed.
     assert [r.base.ticker for r in built["portfolio"]] == ["NU", "AAA"]
     assert all(r.attractiveness is None for r in built["portfolio"])
-    # The strong name renders a hi-tone chip with the full math in its hover.
+    # The strong name renders a hi-tone chip with the full math in its hover
+    # (the kit outline-mono chip + ok tone).
     html = render_research_cockpit(built)
-    assert "attract-chip attract-hi" in html
+    assert "k-chip k-chip-mono k-chip-ok" in html
     assert ">3.48</a>" in html  # the chip is a peek doorway <a>, not a <span>
     assert "x peg 1.20 (0.8) = 3.48" in html
     # …and the chip is a peek doorway: click opens the breakdown, /ticker is
@@ -744,13 +745,13 @@ def test_compute_attractiveness_matches_row_and_guards(
 
 def test_render_badges_chips_and_pills(rows: dict[str, list[CockpitRow]]) -> None:
     html = render_research_cockpit(rows)
-    # Verdict badge with tone + rule summary in the hover.
-    assert "cockpit-badge b-warn" in html
+    # Verdict badge with tone + rule summary in the hover (the kit status pill).
+    assert "k-pill k-pill-warn" in html
     assert "warn: Monthly ARPAC (USD)" in html
-    # KPI chips with tone + the pp/relative split.
+    # KPI chips with tone + the pp/relative split (the kit outline-mono chip).
     assert "+10.7%" in html
     assert "-1.5pp" in html
-    assert "chip-warn" in html
+    assert "k-chip-warn" in html
     # Inbox pills: pending alerts deep-link into the feed; new docs counted.
     assert "/feed?ticker=NU&amp;status=pending" in html or "/feed?ticker=NU&status=pending" in html
     assert "2 alerts" in html
@@ -790,7 +791,7 @@ def test_render_eval_score_column(rows: dict[str, list[CockpitRow]]) -> None:
     # The Fit column sits beside Score (thin table only); with no candidate_fit
     # cache the fixture's V carries no fit, so its cell is the muted em-dash.
     assert html.count(">Fit</th>") == 1
-    assert "attract-chip attract-lo attract-partial" in html
+    assert "k-chip k-chip-mono chip-partial" in html
     assert ">0.52</a>" in html
     assert "dcf 0.85 (n/a) x growth 0.85 (n/a) x fcf 0.85 (n/a) x peg 0.85 (n/a) = 0.52" in html
     assert "/api/peek/fit" not in html  # no cache → no fit chip (only the CSS class is present)
@@ -837,9 +838,9 @@ def test_build_attaches_fit_from_cache(conn: sqlite3.Connection, repo_root: Path
     assert "sharpe 1.12" in (v.fit_why or "")
     # Portfolio rows never carry a fit (the cache is evaluation-only).
     assert all(r.fit is None for r in build_cockpit_rows(conn, repo_root)["portfolio"])
-    # And it renders the fit chip as a /api/peek/fit doorway.
+    # And it renders the fit chip as a /api/peek/fit doorway (the kit ok chip).
     html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert "fit-chip fit-hi" in html  # 1.15 >= 1.10
+    assert "k-chip k-chip-mono k-chip-ok" in html  # 1.15 >= 1.10
     assert "data-peek-url='/api/peek/fit?ticker=V'" in html
     assert ">1.15</a>" in html
 

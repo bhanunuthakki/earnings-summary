@@ -80,7 +80,7 @@ def _sources_tab(
         body.write(
             _panel_head(
                 "Open validation issues",
-                sub_html=f'<span class="pill pill-warn">{prov.open_validation_issues} open</span>',
+                sub_html=f'<span class="k-chip k-chip-mono k-chip-warn">{prov.open_validation_issues} open</span>',
             )
             + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
             "<th>Severity</th><th>Rule</th><th>Raw value</th><th>Expected</th><th>Raised</th>"
