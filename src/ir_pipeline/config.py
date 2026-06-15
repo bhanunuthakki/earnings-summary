@@ -30,17 +30,34 @@ _CONFIG_SUBDIR = Path("micro_thesis") / "ir_config"
 class SheetKpi:
     """Where one KPI lives in an IR historical-data spreadsheet.
 
-    `kpi_name` MUST be the canonical `kpi_definitions.name` (the long
-    `tier_1_kpis` form, e.g. "Monthly ARPAC (USD)") so the value lands on the
-    same definition the report charts read — never a short alias, which would
-    fragment into a duplicate definition.
+    Two flavours, distinguished by ``origin`` (the capture-every-number program,
+    `directives/capture_every_number_program.md`):
+
+    * ``origin="analyst"`` (default) — a curated tier/holdings KPI. ``kpi_name``
+      is the canonical ``kpi_definitions.name`` (the long ``tier_1_kpis`` form,
+      e.g. "Monthly ARPAC (USD)") and is used VERBATIM so the value lands on the
+      same definition the report charts read.
+    * ``origin="capture"`` — an auto-mapped long-tail row. ``kpi_name`` is the
+      raw spreadsheet label (cleaned); it is routed through
+      ``compute.kpi_resolver.canonical_metric_name`` at INGEST time (where a live
+      DB connection exists) so it joins an existing series or mints a clean new
+      ``origin='capture'`` definition. Canonicalizing on write — not here — keeps
+      this config conn-free and lets a capture row converge onto a series another
+      extractor (S3's LLM pass) populated under the same canonical name.
+
+    ``exact_label`` controls how ``row_label`` matches the sheet: analyst rows use
+    a forgiving case-insensitive SUBSTRING match (a short hand-picked label finds
+    the full cell); capture rows set ``exact_label=True`` so an auto-derived label
+    matches only its own row — a bare "NII" must not also grab "Risk-adjusted NII".
     """
 
     kpi_name: str
     sheet: str  # worksheet title (exact)
-    row_label: str  # case-insensitive substring match on the row's label cell
+    row_label: str  # match on the row's label cell (substring, or exact if exact_label)
     unit: str  # "percent" | "actual" | "usd" | "ratio" | "count"
     scale: float = 1.0  # multiply the raw cell (e.g. 100 for a decimal-percent row)
+    origin: str = "analyst"  # "analyst" (curated) | "capture" (auto-mapped long tail)
+    exact_label: bool = False  # match row_label exactly (capture rows) vs substring
 
 
 @dataclass(frozen=True)
@@ -106,6 +123,8 @@ def _to_dict(cfg: IrConfig) -> dict[str, object]:
                 "row_label": s.row_label,
                 "unit": s.unit,
                 "scale": s.scale,
+                "origin": s.origin,
+                "exact_label": s.exact_label,
             }
             for s in cfg.spreadsheet_kpis
         ],
@@ -127,6 +146,11 @@ def _from_dict(d: dict[str, object]) -> IrConfig:
                     row_label=str(k["row_label"]),
                     unit=str(k.get("unit", "actual")),
                     scale=float(cast("float", k.get("scale", 1.0))),
+                    # Back-compat: a pre-capture config (e.g. the hand-built NU.json)
+                    # has neither field — default to a curated analyst row matched by
+                    # substring, preserving its original behavior exactly.
+                    origin=str(k.get("origin", "analyst")),
+                    exact_label=bool(k.get("exact_label", False)),
                 )
             )
     return IrConfig(

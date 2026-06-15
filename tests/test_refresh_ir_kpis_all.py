@@ -151,13 +151,28 @@ def _summary(out: str) -> dict[str, object]:
     return objs[-1]
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun, configured: list[str]) -> None:
+def _mode_of(argv: list[str]) -> str:
+    """'file' if the child was told to bootstrap from a local spreadsheet, else
+    'discover'."""
+    return "file" if "--file" in argv else "discover"
+
+
+def _install(
+    monkeypatch: pytest.MonkeyPatch,
+    fake: _RecordingRun,
+    configured: list[str],
+    on_disk: dict[str, Path] | None = None,
+) -> None:
     monkeypatch.setattr("execution.refresh_ir_kpis_all.subprocess.run", fake)
 
     def _fake_configured(_repo_root: Path) -> list[str]:
         return list(configured)
 
+    def _fake_on_disk(_repo_root: Path) -> dict[str, Path]:
+        return dict(on_disk or {})
+
     monkeypatch.setattr("execution.refresh_ir_kpis_all.configured_tickers", _fake_configured)
+    monkeypatch.setattr("execution.refresh_ir_kpis_all._spreadsheet_tickers", _fake_on_disk)
 
 
 # ---------------------------------------------------------------------------
@@ -346,3 +361,110 @@ def test_exit_zero_with_unparseable_stdout_is_ok_with_null_rows(
     nu = cast("dict[str, object]", cast("list[object]", summary["tickers"])[0])
     assert nu["status"] == "ok"
     assert nu["rows_inserted"] is None
+
+
+# ---------------------------------------------------------------------------
+# Lifting the configured-only (NU-only) ceiling: tickers with an on-disk IR
+# spreadsheet but no config are bootstrapped via --file
+# ---------------------------------------------------------------------------
+
+
+def test_spreadsheet_only_ticker_runs_via_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ticker with a downloaded spreadsheet but NO config still runs — via
+    --file (not --discover), so its config is auto-built from the file."""
+    fake = _RecordingRun()
+    path = Path("/data/ir_spreadsheets/FOO/FOO_1Q26.xlsx")
+    _install(monkeypatch, fake, configured=[], on_disk={"FOO": path})
+
+    rc = refresh_ir_kpis_all.main([])
+
+    assert rc == 0
+    assert fake.tickers == ["FOO"]
+    argv = fake.calls[0]
+    assert _mode_of(argv) == "file"
+    assert _flag_value(argv, "--file") == str(path)
+    assert "--discover" not in argv
+
+
+def test_configured_ticker_discovers_even_when_file_on_disk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured ticker always re-discovers its current spreadsheet, even if a
+    stale file also sits on disk."""
+    fake = _RecordingRun()
+    _install(
+        monkeypatch,
+        fake,
+        configured=["NU"],
+        on_disk={"NU": Path("/data/ir_spreadsheets/NU/old.xlsx")},
+    )
+
+    rc = refresh_ir_kpis_all.main([])
+
+    assert rc == 0
+    assert fake.tickers == ["NU"]
+    assert _mode_of(fake.calls[0]) == "discover"
+
+
+def test_universe_is_union_of_configured_and_on_disk_sorted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no filter, the universe = configured (discover) ∪ on-disk (file),
+    sorted; each ticker uses the right mode."""
+    fake = _RecordingRun()
+    _install(
+        monkeypatch,
+        fake,
+        configured=["NU"],
+        on_disk={"MELI": Path("/d/MELI/x.xlsx"), "WIX": Path("/d/WIX/y.xlsx")},
+    )
+
+    rc = refresh_ir_kpis_all.main([])
+
+    assert rc == 0
+    assert fake.tickers == ["MELI", "NU", "WIX"]
+    modes = {_ticker_of(c): _mode_of(c) for c in fake.calls}
+    assert modes == {"MELI": "file", "NU": "discover", "WIX": "file"}
+
+
+def test_requested_ticker_in_neither_set_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--tickers intersects the WHOLE universe; a request with neither a config
+    nor an on-disk file is skipped, while an on-disk-only ticker still runs."""
+    fake = _RecordingRun()
+    _install(
+        monkeypatch,
+        fake,
+        configured=["NU"],
+        on_disk={"FOO": Path("/d/FOO/x.xlsx")},
+    )
+
+    rc = refresh_ir_kpis_all.main(["--tickers", "NU", "FOO", "BAR"])
+
+    assert rc == 0
+    assert fake.tickers == ["FOO", "NU"]  # BAR skipped; sorted
+    summary = _summary(capsys.readouterr().out)
+    assert summary["skipped_no_config"] == ["BAR"]
+
+
+def test_spreadsheet_tickers_scans_disk(tmp_path: Path) -> None:
+    """`_spreadsheet_tickers` returns the newest .xlsx per ticker folder and
+    ignores lock files / non-dirs."""
+    base = tmp_path / "data" / "ir_spreadsheets"
+    (base / "NU").mkdir(parents=True)
+    (base / "MELI").mkdir(parents=True)
+    old = base / "NU" / "NU_4Q25.xlsx"
+    new = base / "NU" / "NU_1Q26.xlsx"
+    old.write_bytes(b"old")
+    new.write_bytes(b"new")
+    import os
+
+    os.utime(old, (1, 1))  # force `new` to be the most-recent
+    (base / "NU" / "~$lock.xlsx").write_bytes(b"lock")  # ignored
+    (base / "MELI" / "MELI_1Q26.xlsx").write_bytes(b"x")
+    (base / "stray_file.txt").write_bytes(b"x")  # non-dir ignored
+
+    found = refresh_ir_kpis_all._spreadsheet_tickers(tmp_path)
+    assert set(found) == {"NU", "MELI"}
+    assert found["NU"].name == "NU_1Q26.xlsx"

@@ -7,6 +7,16 @@ the brief incumbent via `supersedes_id` (the spreadsheet doc is fetched later),
 so the report loaders prefer the spreadsheet figure while the brief value
 survives for time-travel.
 
+The config carries two layers of ``SheetKpi`` (capture-every-number program):
+curated ``analyst`` rows keep their canonical ``kpi_name`` verbatim, while
+auto-mapped ``capture`` rows carry a RAW spreadsheet label that is routed through
+``compute.kpi_resolver.canonical_metric_name`` HERE (the write path, where a live
+DB connection exists) — so a captured row joins an existing series or mints a
+clean ``origin='capture'`` definition. Canonicalizing on write is also what lets
+an audited spreadsheet value cleanly supersede S3's broad LLM value for the SAME
+metric: both resolve to one definition, then `_supersede_llm_incumbents` drops the
+lower-tier LLM row.
+
 Routes through `persist_manifest` (the single kpi_facts write interface) with an
 `ir_spreadsheet` extractor tag rather than inserting directly.
 """
@@ -19,9 +29,11 @@ import sqlite3
 from decimal import Decimal
 from pathlib import Path
 
-from ir_pipeline.config import IrConfig
+from compute.kpi_resolver import canonical_metric_name
+from ir_pipeline.config import IrConfig, SheetKpi
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
+from models.kpis import DefinitionOrigin
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
@@ -75,6 +87,59 @@ def _ensure_spreadsheet_document(conn: sqlite3.Connection, ticker: str, path: Pa
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
+def _resolve_definition(
+    conn: sqlite3.Connection, ticker: str, spec: SheetKpi
+) -> tuple[str, Unit, DefinitionOrigin]:
+    """Resolve one ``SheetKpi`` to its (canonical name, unit, origin) for write.
+
+    A curated ``analyst`` row keeps its ``kpi_name`` verbatim (it already IS the
+    canonical name the report charts read) at ANALYST origin. A ``capture`` row's
+    raw label is canonicalized via ``canonical_metric_name`` — reusing an existing
+    series when one safely matches, else minting a clean CAPTURE name. Requires
+    ``conn.row_factory = sqlite3.Row`` (canonical_metric_name reads rows by key).
+    """
+    unit = _unit(spec.unit)
+    if spec.origin == "capture":
+        name = canonical_metric_name(conn, ticker, spec.kpi_name, unit)
+        return name, unit, DefinitionOrigin.CAPTURE
+    return spec.kpi_name, unit, DefinitionOrigin.ANALYST
+
+
+def _canonicalize_parsed(
+    conn: sqlite3.Connection,
+    ticker: str,
+    config: IrConfig,
+    parsed: dict[str, dict[_dt.datetime, float]],
+) -> tuple[
+    dict[str, dict[_dt.datetime, float]],
+    dict[str, Unit],
+    dict[str, DefinitionOrigin],
+]:
+    """Re-key ``parsed`` (keyed by ``SheetKpi.kpi_name``) by CANONICAL name.
+
+    Returns ``(series_by_name, unit_by_name, origins)`` all keyed by the resolved
+    ``kpi_definitions.name``. Two source rows that canonicalize together merge
+    (later periods overwrite); an analyst origin always wins over capture for a
+    shared name so a curated series is never demoted to the long tail.
+    """
+    resolved = {
+        spec.kpi_name: _resolve_definition(conn, ticker, spec) for spec in config.spreadsheet_kpis
+    }
+    series_by_name: dict[str, dict[_dt.datetime, float]] = {}
+    unit_by_name: dict[str, Unit] = {}
+    origins: dict[str, DefinitionOrigin] = {}
+    for raw_name, series in parsed.items():
+        res = resolved.get(raw_name)
+        if res is None:
+            continue
+        name, unit, origin = res
+        series_by_name.setdefault(name, {}).update(series)
+        unit_by_name[name] = unit
+        if origin is DefinitionOrigin.ANALYST or name not in origins:
+            origins[name] = origin
+    return series_by_name, unit_by_name, origins
+
+
 def ingest_spreadsheet_kpis(
     conn: sqlite3.Connection,
     ticker: str,
@@ -82,13 +147,18 @@ def ingest_spreadsheet_kpis(
     parsed: dict[str, dict[_dt.datetime, float]],
     source_path: Path,
 ) -> tuple[int, int]:
-    """Persist `parsed` ({kpi: {period_end: value}}). Returns (rows_inserted, doc_id)."""
+    """Persist `parsed` ({kpi: {period_end: value}}). Returns (rows_inserted, doc_id).
+
+    Capture-row labels are canonicalized (and tagged ``origin='capture'``) before
+    persisting; analyst rows are untouched. ``conn.row_factory`` must be
+    ``sqlite3.Row``.
+    """
     doc_id = _ensure_spreadsheet_document(conn, ticker, source_path)
-    unit_by_kpi = {s.kpi_name: s.unit for s in config.spreadsheet_kpis}
+    series_by_name, unit_by_name, origins = _canonicalize_parsed(conn, ticker, config, parsed)
 
     # Regroup to one manifest per period_end (each manifest = a period's KPIs).
     by_period: dict[_dt.datetime, dict[str, float]] = {}
-    for kpi, series in parsed.items():
+    for kpi, series in series_by_name.items():
         for period, val in series.items():
             by_period.setdefault(period, {})[kpi] = val
 
@@ -99,7 +169,7 @@ def ingest_spreadsheet_kpis(
             KpiValue(
                 name=name,
                 value=Decimal(str(val)),
-                unit=_unit(unit_by_kpi.get(name, "actual")),
+                unit=unit_by_name.get(name, Unit.ACTUAL),
                 confidence=1.0,
             )
             for name, val in kpis.items()
@@ -112,12 +182,13 @@ def ingest_spreadsheet_kpis(
             primary_source=SourceType.IR_DOC,
             model_name=None,
             extracted_by="ir_spreadsheet",
+            origins=origins,
             values=values,
         )
         result = persist_manifest(conn, run_id=run_id, manifest=manifest)
         inserted += result.inserted
 
-    _supersede_llm_incumbents(conn, ticker, doc_id, parsed)
+    _supersede_llm_incumbents(conn, ticker, doc_id, series_by_name)
     return inserted, doc_id
 
 

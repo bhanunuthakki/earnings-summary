@@ -97,6 +97,16 @@ class KpiExtractionManifest(BaseModel):
     # When a value IS annual, the caller must also set `fiscal_period_type=FY`
     # (with a fiscal-year-end `period_end`) so the fact lands on the annual axis.
     cadences: dict[str, ReportingCadence] = Field(default_factory=dict)
+    # PER-NAME definition origin, keyed by KpiValue.name — for a MIXED manifest
+    # that carries both curated and long-tail rows in one batch (S4's IR-spreadsheet
+    # ingest: a few analyst tier KPIs + the captured long tail). It OVERRIDES the
+    # manifest-level `origin` for the names it lists; a name absent here falls back
+    # to `origin`. Like `origin`, it is honoured ONLY when a row is first created —
+    # a re-encounter never rewrites an existing definition's origin. A caller using
+    # this path canonicalizes names ITSELF before persisting (it leaves the
+    # manifest-level `origin` at ANALYST, so persist_manifest's capture-mode
+    # name-collapse is a no-op and the already-canonical names are stored verbatim).
+    origins: dict[str, DefinitionOrigin] = Field(default_factory=dict)
     values: list[KpiValue]
 
 
@@ -479,9 +489,12 @@ def persist_manifest(
             # Mark the definition's native frequency when the caller declared it
             # (annual-only 20-F/10-K metrics). Absent → cadence left as-is.
             reporting_cadence=manifest.cadences.get(kpi.name),
-            # Stamp who authored a BRAND-NEW definition; never rewrites an
-            # existing row (an analyst def re-seen by capture stays ANALYST).
-            origin=manifest.origin,
+            # Stamp who authored a BRAND-NEW definition; never rewrites an existing
+            # row (an analyst def re-seen by capture stays ANALYST). A per-name
+            # `origins` entry (S4's mixed analyst+capture spreadsheet manifests)
+            # wins; otherwise the manifest-level `origin` (S3's single-origin
+            # manifests), which defaults to ANALYST.
+            origin=manifest.origins.get(kpi.name, manifest.origin),
         )
         excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
         was_inserted = _insert_kpi_fact(
