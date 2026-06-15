@@ -511,8 +511,13 @@ def _apply_inputs_to_block(rd: dict[str, object], inp: redesign_mod.RedesignInpu
     rd["terminal_growth_g"] = inp.terminal_growth_g
     rd["terminal_capex_da"] = inp.terminal_capex_da
     rd["beta"] = inp.beta
-    rd["risk_free_rate"] = inp.risk_free_rate
-    rd["equity_risk_premium"] = inp.equity_risk_premium
+    # risk_free_rate + equity_risk_premium are GLOBAL now (global_dcf_assumptions,
+    # migration 0112) — edited once in the dashboard's Global DCF assumptions panel,
+    # not per name. Deliberately NOT mirrored back into the per-name block, so the
+    # global governs every FCFF name and a from-scratch build reads it from the
+    # store (build_redesigned_dcf: `_opus.get("risk_free_rate", _g.risk_free_rate)`).
+    # A name can still pin its own value by hand; the sync just won't re-add it.
+    # cost_of_debt + tax_rate stay per-name (company-specific).
     rd["cost_of_debt"] = inp.cost_of_debt
     # Scenario offsets mirror too, so a from-scratch build (which seeds the
     # Bull/Bear columns from this block) reproduces edited scenarios.
