@@ -435,13 +435,15 @@ QUARANTINE: dict[str, frozenset[str]] = {
     #     cite_marks consume is defined in workspace_styles; unforking it is one
     #     coupled change in that chain, not an independent S7 file-sweep. ---
     "report/renderers/workspace_charts.py": frozenset({"radius"}),
-    "report/renderers/workspace_chat.py": frozenset(
-        {"alias", "font-family", "font-size", "radius"}
-    ),
-    "report/renderers/workspace_comments.py": frozenset(
-        {"alias", "font-family", "font-size", "radius"}
-    ),
-    "report/renderers/workspace_styles.py": frozenset({"alias", "font-family", "radius"}),
+    # workspace_chat / workspace_comments / workspace_styles graduated their
+    # font-family dimension when the legacy --font-* alias layer was unforked onto
+    # the canonical --sans/--serif/--mono tokens (every font-family decl now reads
+    # a real token). Their `alias` dimension stays quarantined — those modules
+    # still consume the non-font aliases (--ink/--panel/--link/…) the same :root
+    # defines — as do their font-size / radius dimensions, untouched here.
+    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size", "radius"}),
+    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius"}),
+    "report/renderers/workspace_styles.py": frozenset({"alias", "radius"}),
     "ui/cite_marks.py": frozenset({"alias", "radius"}),
 }
 
