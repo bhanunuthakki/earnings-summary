@@ -763,7 +763,7 @@ tr.tone-trim { background: rgba(251, 191, 36, 0.04); }
 tr.tone-init { background: rgba(74, 222, 128, 0.06); }
 tr.tx-buy { background: rgba(74, 222, 128, 0.04); }
 tr.tx-sell { background: rgba(248, 113, 113, 0.02); }
-td.trigger-cell { font-family: var(--mono); font-size: var(--fs-caption);
+td.trigger-cell { font-family: var(--sans); font-size: var(--fs-caption);
   text-transform: uppercase; }
 tr.tone-sell .trigger-cell { color: var(--bad); }
 tr.tone-trim .trigger-cell { color: var(--warn); }
@@ -822,7 +822,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
   text-transform: uppercase; }
 .kpi-value { font-size: var(--fs-display); font-weight: 700; margin: 2px 0; color: var(--fg);
   font-variant-numeric: tabular-nums; }
-.kpi-sub { font-size: var(--fs-micro); color: var(--muted); font-family: var(--mono); }
+.kpi-sub { font-size: var(--fs-micro); color: var(--muted); font-family: var(--sans); }
 .calib-strip { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }
 .calib-row { display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }
 .calib-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -855,7 +855,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
   align-items: center; flex-wrap: wrap; gap: var(--sp-1); }
 .tier-strip-label { color: var(--muted); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }
-.tier-chip { font-family: var(--mono); font-size: var(--fs-caption); padding: 2px 6px;
+.tier-chip { font-family: var(--sans); font-size: var(--fs-caption); padding: 2px 6px;
   border-radius: var(--radius-full); cursor: help; }
 a.tier-chip { text-decoration: none; cursor: pointer; }
 .tier-ok { color: var(--ok); }

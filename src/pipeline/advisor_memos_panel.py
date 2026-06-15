@@ -309,7 +309,7 @@ _PANEL_CSS = """<style>
 .am-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.am-runbar-label { font-family: var(--mono); font-size: var(--fs-caption);
+.am-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .am-btn { background: var(--accent); color: var(--accent-contrast); border: none;
   border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-caption);

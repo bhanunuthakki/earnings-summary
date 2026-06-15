@@ -461,11 +461,11 @@ _PANEL_CSS = """<style>
 .ev-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.ev-runbar-label { font-family: var(--mono); font-size: var(--fs-caption);
+.ev-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .ev-btn { background: var(--accent); color: var(--accent-contrast); border: none;
   border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-body);
-  font-weight: 600; cursor: pointer; font-family: var(--mono); }
+  font-weight: 600; cursor: pointer; font-family: var(--sans); }
 .ev-btn[disabled] { opacity: 0.45; cursor: wait; }
 .ev-note { font-size: var(--fs-caption); }
 .ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
