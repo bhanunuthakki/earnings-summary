@@ -38,6 +38,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 # (which points at the DATA repo).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from compute.segment_cache import apply_overrides
 from dcf import assumptions_doc
 from dcf import redesign as redesign_mod
 
@@ -126,8 +127,22 @@ def _loadjson(name):
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
 
 
-prod_seg = _loadjson(f"{T}_product_segments_quarterly.json")
-geo_seg = _loadjson(f"{T}_geo_segments_quarterly.json")
+# Apply company-doc overrides (e.g. GOOG Q4'25 8-K product segmentation) so a
+# re-fetched contaminated FMP record can't reach the DCF model. Best-effort: no
+# override / no DB -> raw FMP data, exactly as before.
+_OVR_DB = str(REPO / "data" / "portfolio.db")
+prod_seg = apply_overrides(
+    _loadjson(f"{T}_product_segments_quarterly.json"),
+    ticker=T,
+    dim_type="product",
+    db_path=_OVR_DB,
+)
+geo_seg = apply_overrides(
+    _loadjson(f"{T}_geo_segments_quarterly.json"),
+    ticker=T,
+    dim_type="geography",
+    db_path=_OVR_DB,
+)
 est = _loadjson(f"{T}_analyst_estimates_annual.json")
 prof = _loadjson(f"{T}_profile.json")
 prof = prof[0] if isinstance(prof, list) else prof

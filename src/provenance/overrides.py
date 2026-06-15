@@ -401,12 +401,18 @@ def apply_segment_overrides(
 
     ``records`` are raw FMP segment-cache records — each a dict with a ``date``
     (period_end), ``period``, and ``data`` (``{segment_name: value}``). For each
-    record matching an override's period_end:
+    record matching an override's ``(period_end, fiscal_period_type)``:
 
     * a record-level ``replace`` (``fact_key == dim_type``) swaps the whole ``data``
       dict for the override's ``value_json`` (the robust path for the GOOG case);
     * cell-level overrides (``fact_key == "dim_type|dim_name|metric"``) ``replace``
       one segment value or ``drop`` one segment from ``data``.
+
+    Records are matched on BOTH ``date`` (period_end) and ``period``
+    (fiscal_period_type), so a Q4 override never bleeds into the same-dated FY
+    annual rollup (both carry ``date`` 2025-12-31 but ``period`` Q4 vs FY). A record
+    with no ``period`` field falls back to a date-only match, applied only when a
+    single override unambiguously covers that date.
 
     Never mutates the input records. ``qualify`` overrides are read-through (no
     value change). Returns a new list of shallow-copied records.
@@ -420,25 +426,38 @@ def apply_segment_overrides(
     if not overrides:
         return [dict(rec) for rec in records]
 
-    record_level: dict[str, FactOverride] = {}
-    cell_level: dict[str, list[FactOverride]] = {}
+    record_level: dict[tuple[str, str], FactOverride] = {}
+    cell_level: dict[tuple[str, str], list[FactOverride]] = {}
+    record_by_date: dict[str, list[FactOverride]] = {}
+    cell_by_date: dict[str, list[FactOverride]] = {}
     for ov in overrides:
+        key = (ov.period_end, ov.fiscal_period_type)
         if ov.fact_key == dim:
-            record_level[ov.period_end] = ov
+            record_level[key] = ov
+            record_by_date.setdefault(ov.period_end, []).append(ov)
         else:
-            cell_level.setdefault(ov.period_end, []).append(ov)
+            cell_level.setdefault(key, []).append(ov)
+            cell_by_date.setdefault(ov.period_end, []).append(ov)
 
     out: list[dict[str, object]] = []
     for rec in records:
         new_rec = dict(rec)
-        period = str(new_rec.get("date") or "")[:10]
-        rec_ov = record_level.get(period)
+        date = str(new_rec.get("date") or "")[:10]
+        period_val = new_rec.get("period")
+        if period_val is not None:
+            key = (date, str(period_val))
+            rec_ov = record_level.get(key)
+            cells = cell_level.get(key)
+        else:
+            # No period field — match by date only, and only when unambiguous.
+            rl = record_by_date.get(date)
+            rec_ov = rl[0] if rl is not None and len(rl) == 1 else None
+            cells = cell_by_date.get(date)
         if rec_ov is not None and rec_ov.action == OverrideAction.REPLACE.value:
             if rec_ov.value_json is not None:
                 new_rec["data"] = dict(rec_ov.value_json)
             out.append(new_rec)
             continue
-        cells = cell_level.get(period)
         if cells:
             raw_data = new_rec.get("data")
             data: dict[str, object] = {}

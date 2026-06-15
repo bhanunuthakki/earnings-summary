@@ -32,6 +32,7 @@ from compute._common import (
     parse_currency,
     read_records_json,
 )
+from compute.segment_cache import apply_overrides
 from models.facts import (
     FiscalPeriodType,
     SegmentDimension,
@@ -209,6 +210,11 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
     metric = _DOC_TYPE_TO_METRIC[doc_type]
     dim_type = _DOC_TYPE_TO_DIM_TYPE[doc_type]
     records = read_records_json(project_root / file_path_str)
+    # Company-doc overrides win over FMP at the ingest gate too: a record-level
+    # replace (e.g. the GOOG Q4'25 8-K product segmentation) is applied here so a
+    # re-fetched contaminated record is corrected BEFORE the reconciliation gate —
+    # it then reconciles and lands the 8-K figures instead of being dropped.
+    records = apply_overrides(records, ticker=_ticker, dim_type=dim_type.value, conn=conn)
 
     inserted = 0
     for rec_data in records:
