@@ -123,7 +123,7 @@
 .cv2-empty-text { font-size: 12px; fill: #67737d; }
 .cv2-grid { stroke: #e3e7eb; stroke-width: 1; }
 .cv2-grid-zero { stroke: #67737d; stroke-width: 1; stroke-dasharray: 2 2; }
-.cv2-legend { font-size: 10.5px; fill: #1a1f2e; }
+.cv2-legend { font-size: 10.5px; fill: #1a1f2e; font-family: var(--sans, 'Inter', sans-serif); }
 .cv2-line-end { font-size: 10px; font-weight: 600; font-family: var(--mono, 'JetBrains Mono', monospace); }
 .cv2-matrix th, .cv2-matrix td { padding: 4px 6px; border: 1px solid #e3e7eb; text-align: right; white-space: nowrap; }
 .cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
