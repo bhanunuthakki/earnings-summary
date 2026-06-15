@@ -41,6 +41,23 @@ JS = (
     var sidebar = document.getElementById('chat-sidebar');
     var toggle = document.getElementById('chat-toggle');
     if (!sidebar || !toggle) return;
+
+    // De-duplicate the launcher when embedded. The command center embeds this
+    // report in a `/reports/<t>` iframe (see render_holding_fragment), and the
+    // shell already shows its own persistent "Ask" dock — the canonical Ask v5
+    // chat surface. Two launchers would then stack in the bottom-right corner.
+    // When we detect we're framed, hide THIS report's floating "⌘ Chat" pill so
+    // the shell's dock is the single entry point. The chat sidebar stays fully
+    // wired, so fact-doorway clicks (a KPI cell -> the exact series, below) still
+    // open the in-report thread. A standalone report (file:// or a top-level
+    // /reports/<t> tab) is not framed, so it keeps its launcher.
+    var embedded;
+    try { embedded = window.self !== window.top; } catch (_) { embedded = true; }
+    if (embedded) {
+      var launcher = document.getElementById('chat-drawer');
+      if (launcher) launcher.style.display = 'none';
+    }
+
     var threadEl = document.getElementById('chat-thread');
     var form = document.getElementById('chat-form');
     var hintEl = document.getElementById('chat-hint');
