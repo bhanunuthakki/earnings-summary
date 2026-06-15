@@ -37,6 +37,8 @@ from compute.soft_rule_evaluator import (
 from models.facts import Unit
 from models.kpis import BreachStatus
 from models.unit_convert import convert_unit
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import OverrideAction, active_scalar_override_map
 
 
 class Comparator(StrEnum):
@@ -257,7 +259,7 @@ def _fetch_kpi_history(
         params.extend(ANNUAL_FACT_PERIOD_TYPES)
     params.append(n_periods)
     cur = conn.execute(
-        "SELECT kf.period_end, kf.value, kf.unit "
+        "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit "
         "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
         "WHERE kf.ticker = ? AND kd.name = ?" + period_filter + " "
         "  AND kf.source_doc_id = ("
@@ -269,18 +271,28 @@ def _fetch_kpi_history(
         "ORDER BY kf.period_end DESC LIMIT ?",
         params,
     )
+    # Company-doc overrides win over the FMP/LLM row for this (period, type):
+    # a 'replace' substitutes the authoritative value, a 'drop' omits the period.
+    ov_map = active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
+    )
     out: list[KpiObservation] = []
     for row in cur.fetchall():
+        pe_str = str(row["period_end"])[:10]
+        ftype = str(row["fiscal_period_type"])
+        ov = ov_map.get((pe_str, ftype))
+        if ov is not None and ov.action == OverrideAction.DROP.value:
+            continue
         period = row["period_end"]
         if isinstance(period, str):
             period = datetime.fromisoformat(period)
-        out.append(
-            KpiObservation(
-                period_end=period,
-                value=Decimal(str(row["value"])),
-                unit=Unit(row["unit"]),
-            )
-        )
+        if ov is not None and ov.value is not None:
+            value = Decimal(str(ov.value))
+            unit = Unit(ov.unit) if ov.unit else Unit(row["unit"])
+        else:
+            value = Decimal(str(row["value"]))
+            unit = Unit(row["unit"])
+        out.append(KpiObservation(period_end=period, value=value, unit=unit))
     return out
 
 

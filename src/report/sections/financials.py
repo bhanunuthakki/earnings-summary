@@ -24,6 +24,12 @@ from compute.kpi_resolver import (
     resolve_kpi_definition_name,
 )
 from pipeline.confidence import display_issues_for_fact, load_unresolved_issues
+from provenance.overrides import KPI as OVERRIDE_KPI
+from provenance.overrides import (
+    OverrideAction,
+    active_scalar_override_map,
+    date_override_map,
+)
 from report.models import (
     AnnualKpiSeries,
     AnnualLineItem,
@@ -458,15 +464,29 @@ def _annual_kpi_raw_for(
     rows = cur.fetchall()
     if not rows:
         return None
+    ov_dmap = date_override_map(
+        conn,
+        ticker=ticker,
+        fact_kind=OVERRIDE_KPI,
+        fact_key=resolved_name,
+        period_types=ANNUAL_FACT_PERIOD_TYPES,
+    )
     by_year: dict[int, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
     for r in rows:
         canonical_name = str(r["name"])
         canonical_unit = str(r["unit"] or "")
+        period_end = str(r["period_end"])[:10]
+        ov = ov_dmap.get(period_end)
+        if ov is not None and ov.action == OverrideAction.DROP.value:
+            continue
         try:
-            year = int(str(r["period_end"])[:4])
-            by_year[year] = float(str(r["value"]))
+            year = int(period_end[:4])
+            if ov is not None and ov.value is not None:
+                by_year[year] = float(ov.value)
+            else:
+                by_year[year] = float(str(r["value"]))
         except ValueError:
             continue
     if not by_year:
@@ -558,6 +578,10 @@ def _kpi_series_for(
     rows = cur.fetchall()
     if not rows:
         return None
+    # Company-doc overrides win over the displayed FMP/LLM row for a (period, Qn).
+    ov_map = active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
+    )
     by_label: dict[str, float] = {}
     canonical_name = kpi_name
     canonical_unit = ""
@@ -573,6 +597,12 @@ def _kpi_series_for(
             continue
         quarter = (month - 1) // 3 + 1
         label = f"{year} Q{quarter}"
+        ov = ov_map.get((period_end, f"Q{quarter}"))
+        if ov is not None and ov.action == OverrideAction.DROP.value:
+            continue
+        if ov is not None and ov.value is not None:
+            by_label[label] = float(ov.value)
+            continue
         try:
             by_label[label] = float(str(r["value"]))
         except ValueError:

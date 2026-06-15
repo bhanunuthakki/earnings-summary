@@ -210,11 +210,20 @@ verification, stopping on failure.
   route ingest gate, audit/stage, and the 3 direct-JSON DCF readers through it; seed the
   GOOG Q4'25 product-segment record override from the 8-K; end-to-end test proving a
   simulated FMP re-fetch (bad data) still resolves to the 8-K figures.
-- **P3 — financial_facts + kpi resolve (every reader).** Resolver overlay in the canonical
-  `timeseries/loaders.py` series loaders **and** the `MAX(source_doc_id)` readers — the
-  Financials `metrics` VIEW path, `thesis_evaluator._fetch_kpi_history`, and
-  `fmp_derived_kpis`; generalized company-doc supersession in `record_override`; guard tests
-  per reader. Wire a `qualify` → provenance-v2 ⚠ annotation.
+- **P3 — financial_facts + kpi resolve (every reader). [SHIPPED]** A read-time overlay
+  (`overrides.active_scalar_override_map` / `date_override_map`) applied at every
+  value-determining reader: the canonical tier-aware `timeseries/loaders.py`
+  `load_financial_series` + `load_kpi_series`, AND the `MAX(source_doc_id)` readers —
+  `thesis_evaluator._fetch_kpi_history`, `fmp_derived_kpis._fetch_full_kpi_series`, and the
+  Financials `_kpi_series_for` / `_annual_kpi_raw_for` panels. A `replace` substitutes the
+  value; a `drop` omits the period; both match on `(period_end, fiscal_period_type)`.
+  **Design choice:** the override is *consulted at read time* — FMP rows are deliberately
+  NOT deleted, so the provenance/audit trail and cross-source disagreement signal survive,
+  and the override wins regardless of row ids (durable across a re-fetch). The earlier
+  "generalized supersession-delete" idea is intentionally dropped as destructive.
+  **Deferred to P5 (surface):** reflecting the override's source in the provenance *chip*
+  (the displayed value is correct now; the chip still describes the FMP row), and the
+  `qualify` → provenance-v2 ⚠ annotation.
 - **P4 — automated EDGAR 8-K extraction.** `src/provenance/edgar_8k.py`: fetch the press-
   release exhibit from EDGAR by accession, LLM-extract the metric/segment values
   (cheapest-at-parity model per `directives/cheapest_model_routing.md`, structured
