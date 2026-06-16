@@ -550,7 +550,11 @@
   function renderHealthPill() {
     var pill = document.getElementById('cmt-health-pill');
     if (!pill) return;
-    pill.className = 'cmt-health-pill cmt-health-' + healthState;
+    // Filled status pill = the control kit's .k-pill (+ tone by meaning);
+    // unknown -> neutral bare. cmt-health-* kept as the state hook.
+    var tone = healthState === 'online' ? ' k-pill-ok'
+             : healthState === 'offline' ? ' k-pill-bad' : '';
+    pill.className = 'k-pill' + tone + ' cmt-health-pill cmt-health-' + healthState;
     pill.title = healthState === 'online'
       ? 'Server reachable.'
       : healthState === 'offline'
@@ -661,7 +665,7 @@
     if (head && !document.getElementById('cmt-outbox-badge')) {
       var badge = document.createElement('span');
       badge.id = 'cmt-outbox-badge';
-      badge.className = 'cmt-outbox-badge';
+      badge.className = 'k-pill k-pill-warn cmt-outbox-badge';
       badge.style.display = 'none';
       badge.title = 'Comments queued locally — will retry until the server is back.';
       head.appendChild(badge);
@@ -673,7 +677,7 @@
     if (head && !document.getElementById('cmt-health-pill')) {
       var pill = document.createElement('span');
       pill.id = 'cmt-health-pill';
-      pill.className = 'cmt-health-pill cmt-health-unknown';
+      pill.className = 'k-pill cmt-health-pill cmt-health-unknown';
       pill.textContent = '○ …';
       // Insert before the close button so it sits at the right edge
       // of the header content, not after the close glyph.

@@ -186,7 +186,11 @@ JS = r"""
   function renderHealthPill() {
     var pill = document.getElementById('cmt-health-pill');
     if (!pill) return;
-    pill.className = 'cmt-health-pill cmt-health-' + healthState;
+    // Filled status pill = the control kit's .k-pill (+ tone by meaning);
+    // unknown -> neutral bare. cmt-health-* kept as the state hook.
+    var tone = healthState === 'online' ? ' k-pill-ok'
+             : healthState === 'offline' ? ' k-pill-bad' : '';
+    pill.className = 'k-pill' + tone + ' cmt-health-pill cmt-health-' + healthState;
     pill.title = healthState === 'online'
       ? 'Server reachable.'
       : healthState === 'offline'
@@ -297,7 +301,7 @@ JS = r"""
     if (head && !document.getElementById('cmt-outbox-badge')) {
       var badge = document.createElement('span');
       badge.id = 'cmt-outbox-badge';
-      badge.className = 'cmt-outbox-badge';
+      badge.className = 'k-pill k-pill-warn cmt-outbox-badge';
       badge.style.display = 'none';
       badge.title = 'Comments queued locally — will retry until the server is back.';
       head.appendChild(badge);
@@ -309,7 +313,7 @@ JS = r"""
     if (head && !document.getElementById('cmt-health-pill')) {
       var pill = document.createElement('span');
       pill.id = 'cmt-health-pill';
-      pill.className = 'cmt-health-pill cmt-health-unknown';
+      pill.className = 'k-pill cmt-health-pill cmt-health-unknown';
       pill.textContent = '○ …';
       // Insert before the close button so it sits at the right edge
       // of the header content, not after the close glyph.
@@ -837,45 +841,26 @@ CSS = r"""
 }
 .cmt-close:hover { color: var(--ink); }
 
-/* Outbox status badge — shown in the sidebar header when the local
-   queue is non-empty. Amber to signal "pending recovery", not error. */
+/* Outbox status badge — shown in the sidebar header when the local queue is
+   non-empty. Rides the control kit's .k-pill (k-pill-warn = "pending recovery",
+   set in JS); this rule adds only layout (right-aligned) + its mono-micro refine.
+   The warn tone fill lives on .k-pill-warn now, not here. */
 .cmt-outbox-badge {
-  display: inline-block;
   margin: 2px 8px 0 auto;
-  padding: 2px 8px;
-  font-size: var(--fs-micro); font-weight: 600;
+  font-size: var(--fs-micro);
   font-family: var(--mono);
-  background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn);
-  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
-  border-radius: var(--radius-full);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
 
-/* Health pill — server reachability indicator in the sidebar header.
-   Green when /healthz responds, red when it doesn't, muted while the
-   first poll is still in flight. */
+/* Health pill — server reachability indicator in the sidebar header. Rides the
+   kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the
+   first poll is in flight, tone set in renderHealthPill); layout + mono-micro
+   refine only here. */
 .cmt-health-pill {
-  display: inline-block;
   margin: 2px 6px 0 6px;
-  padding: 2px 8px;
-  font-size: var(--fs-micro); font-weight: 600;
+  font-size: var(--fs-micro);
   font-family: var(--mono);
-  border-radius: var(--radius-full);
   text-transform: uppercase; letter-spacing: 0.04em;
-  border: 1px solid var(--hairline);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--ink-muted);
-}
-.cmt-health-pill.cmt-health-online {
-  color: var(--ok);
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
-}
-.cmt-health-pill.cmt-health-offline {
-  color: var(--bad);
-  background: color-mix(in srgb, var(--bad) 14%, transparent);
-  border-color: color-mix(in srgb, var(--bad) 45%, transparent);
 }
 
 /* Offline banner inside the form — telegraphs the failure mode BEFORE

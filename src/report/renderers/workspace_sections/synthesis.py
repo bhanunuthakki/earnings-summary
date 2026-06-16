@@ -79,10 +79,12 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
                 age_str = f" · {age.days}d ago"
             else:
                 age_str = f" · {int(age.total_seconds() / 3600)}h ago"
+        # Filled status markers ride the control kit's .k-pill (dirty = warn,
+        # stale = neutral bare) — no bespoke per-surface pill skin.
         warn = (
-            ' <span class="lens-warn">DIRTY</span>'
+            ' <span class="k-pill k-pill-warn">DIRTY</span>'
             if lens.is_dirty
-            else (' <span class="lens-stale">STALE</span>' if lens.is_stale else "")
+            else (' <span class="k-pill">STALE</span>' if lens.is_stale else "")
         )
         model_str = f" · {lens.model}" if lens.model else ""
 

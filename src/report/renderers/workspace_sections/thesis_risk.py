@@ -750,6 +750,15 @@ def _summarize_rule(r: BreakRuleEvaluation) -> str:
     return f"{r.kpi_name} ({r.consecutive_periods}q)"
 
 
+# Decision outcome → kit .k-pill tone suffix. correct/wrong/mixed carry status
+# meaning (ok/bad/warn); pending + unfalsifiable are the neutral bare pill.
+_OUTCOME_PILL_TONE: dict[str, str] = {
+    "correct": "k-pill-ok",
+    "wrong": "k-pill-bad",
+    "mixed": "k-pill-warn",
+}
+
+
 def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> None:
     """Last 3 LLM recommendations from the decisions audit ledger.
 
@@ -768,13 +777,17 @@ def _decision_history_panel(body: StringIO, decisions: list[DecisionBadge]) -> N
         + '<div class="decision-list">'
     )
     for d in decisions:
-        cls = f"decision-badge outcome-{_esc(d.outcome_label)}"
         tooltip = f' title="{_esc(d.rationale_short)}"' if d.rationale_short else ""
+        # The outcome chip is the control kit's .k-pill (+ tone by meaning); the
+        # outer .decision-badge stays the grid layout container. .decision-outcome
+        # rides alongside k-pill for its uppercase-micro typographic refinement.
+        tone = _OUTCOME_PILL_TONE.get(d.outcome_label, "")
+        outcome_cls = f"k-pill {tone} decision-outcome".replace("  ", " ").strip()
         body.write(
-            f'<div class="{cls}"{tooltip}>'
+            f'<div class="decision-badge"{tooltip}>'
             f'<span class="decision-date mono">{_esc(d.date_short)}</span>'
             f'<span class="decision-kind">{_esc(d.recommendation_kind.upper())}</span>'
-            f'<span class="decision-outcome">{_esc(d.outcome_label)}</span>'
+            f'<span class="{outcome_cls}">{_esc(d.outcome_label)}</span>'
             "</div>"
         )
     body.write("</div></div>")
