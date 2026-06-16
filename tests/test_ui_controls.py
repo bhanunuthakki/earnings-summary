@@ -326,7 +326,25 @@ _ALIAS = re.compile(
     r"|font-serif|font-mono|font-body)(?![\w-])"
 )
 
-DIMENSIONS = ("color", "font-size", "radius", "font-family", "alias")
+# --- COMPONENT drift the five TOKEN dimensions above are BLIND to
+# (design_language §4): a surface that hand-rolls a FILLED STATUS BADGE — a
+# selector the author NAMED a pill / badge / chip / tag, given an ok/warn/bad
+# ``color-mix`` fill — instead of the kit's ``.k-pill``. ok/warn/bad are STATUS
+# (never category, decoration, or unread), so the signal is unambiguous: it
+# excludes tone WASHES (named differently — .chat-role, .cmt-pin, row tints),
+# ACCENT unread/count marks (.ix-badge), and the §2 report CATEGORY tags
+# (.qa-tag/.ir-type/.oi-kind — accent, not ok/warn/bad). And it catches the
+# base+modifier pill pattern (e.g. ``.x-pill { radius-full } .x-pill.bad
+# { color-mix fill }``) because the SELECTOR NAME, not the fill rule, carries the
+# badge intent. The token guard passed every reinvented pill this whole sweep
+# removed — this is the dimension that finally fails them. ``.k-pill`` /
+# ``.k-chip`` / ``.k-well`` / ``.p-pill`` are the kit and are excluded. ---
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_NAMED_BADGE = re.compile(r"[.#][\w-]*(?:pill|badge|chip|tag)\b", re.IGNORECASE)
+_KIT_BADGE = re.compile(r"\b(?:k-pill|k-chip|k-well|p-pill)\b")
+_STATUS_FILL = re.compile(r"background(?:-color)?:\s*color-mix\(in srgb, var\(--(?:ok|warn|bad)\)")
+
+DIMENSIONS = ("color", "font-size", "radius", "font-family", "alias", "kit-badge")
 
 # All CSS-emitting modules (src-relative, posix). The registry IS the contract:
 # a filesystem surface missing here — or here but gone from the filesystem —
@@ -446,9 +464,25 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
     # the 2026-06-14 sweep; alias/font-size stay quarantined (report unfork).
     "report/renderers/workspace_chat.py": frozenset({"alias", "font-size"}),
-    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius"}),
-    "report/renderers/workspace_styles.py": frozenset({"alias", "radius"}),
+    "report/renderers/workspace_comments.py": frozenset(
+        # + kit-badge: .cmt-outbox-badge / .cmt-health-pill are reinvented filled
+        #   status pills (color-mix ok/bad) that should be .k-pill — golden-impact
+        #   migration, tracked as a follow-up to the 2026-06-15 component guard.
+        {"alias", "font-size", "radius", "kit-badge"}
+    ),
+    "report/renderers/workspace_styles.py": frozenset(
+        # + kit-badge: .decision-badge.outcome-* (correct/wrong/mixed) is a
+        #   reinvented filled status badge → .k-pill. Report golden-impact; tracked.
+        {"alias", "radius", "kit-badge"}
+    ),
     "ui/cite_marks.py": frozenset({"alias", "radius"}),
+    # --- kit-badge (the 2026-06-15 component dimension): surfaces still hand-rolling
+    #     a FILLED status pill instead of .k-pill. Seeded from the scanner; the
+    #     ratchet drives them down. The command-center two are no-golden migrations
+    #     (a clean follow-up); the report two ride the workspace golden. NEW
+    #     reinvented status badges in any other (clean) surface fail immediately. ---
+    "pipeline/allocation_decisions_panel.py": frozenset({"kit-badge"}),  # .ad-pill.p-*
+    "pipeline/position_lifecycle_panel.py": frozenset({"kit-badge"}),  # .plc-pill.*
 }
 
 _STRING_TOKENS = frozenset({_token.STRING})
@@ -549,6 +583,17 @@ def scan_surface(rel: str, text: str) -> dict[str, list[str]]:
     if aliases:
         found["alias"] = aliases
 
+    # Component drift: a reinvented filled status badge (see the regexes above).
+    # CSS comments are stripped first so a /* … */ aside never reads as a rule.
+    badges: list[str] = []
+    for rule in re.split(r"(?<=})\s*", _CSS_COMMENT.sub("", text)):
+        head, _, body = rule.partition("{")
+        named = _NAMED_BADGE.search(head)
+        if named and not _KIT_BADGE.search(head) and _STATUS_FILL.search(body):
+            badges.append(named.group(0))
+    if badges:
+        found["kit-badge"] = sorted(set(badges))
+
     return found
 
 
@@ -582,7 +627,8 @@ def test_no_unquarantined_token_drift() -> None:
     """Every clean surface — and every non-quarantined DIMENSION of a
     quarantined surface — must be free of denied literals. This is the live
     enforcement: the moment a clean surface (or clean dimension) gains raw hex,
-    an off-scale size/radius, a stray font, or a legacy alias, CI fails."""
+    an off-scale size/radius, a stray font, a legacy alias, or a reinvented
+    status badge (kit-badge), CI fails."""
     offenders: dict[str, dict[str, list[str]]] = {}
     for rel in REGISTERED - EXEMPT:
         violations = scan_surface(rel, _css_text(SRC / rel))
@@ -591,9 +637,14 @@ def test_no_unquarantined_token_drift() -> None:
         if live:
             offenders[rel] = live
     assert not offenders, (
-        "token-conformance drift in non-quarantined surface(s)/dimension(s). "
-        "Fix the CSS (tokens / color-mix / on-scale size / --radius / canonical "
-        f"var names) — do not add to QUARANTINE: {offenders}"
+        "design-language drift in non-quarantined surface(s)/dimension(s). Fix the "
+        "rendered output, do NOT add to QUARANTINE:\n"
+        "  · color / font-size / radius / font-family / alias → use the token "
+        "(tokens.py) / color-mix / on-scale value / canonical var name.\n"
+        "  · kit-badge → you hand-rolled a FILLED STATUS PILL; use the kit's "
+        "`.k-pill` (+ `.k-pill-ok/-warn/-bad`) from ui/controls.py, never a "
+        "`color-mix(var(--ok|warn|bad))` background on your own .*-pill/-badge "
+        f"class (design_language §4).\n{offenders}"
     )
 
 
@@ -643,6 +694,43 @@ def test_sanctioned_escapes_survive() -> None:
     assert scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py")) == {}
     # 0.93em inline mono is an em, never a px font-size — naturally unflagged.
     assert scan_surface("x", "code { font-size: 0.93em; }") == {}
+
+
+def test_kit_badge_flags_reinvented_status_pills_only() -> None:
+    """The COMPONENT dimension (design_language §4): a selector NAMED a
+    pill/badge/chip/tag carrying an ok/warn/bad ``color-mix`` fill is a reinvented
+    filled status pill — token-clean, so the five token dimensions never see it;
+    this is the check that fails it. It must fire ONLY there — never on tone
+    washes, accent unread/count marks, §2 report category tags, or the kit."""
+    # FIRES: a hand-rolled filled status pill — including the base+modifier split
+    # (the radius is on the base rule, the tone fill on a modifier rule).
+    assert scan_surface(
+        "x", ".x-pill { border-radius: var(--radius-full); }\n"
+        ".x-pill.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
+    )["kit-badge"] == [".x-pill"]
+    assert "kit-badge" in scan_surface(
+        "x", ".foo-badge { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }"
+    )
+    # DOES NOT fire on a tone WASH (not named a badge/pill/chip/tag) …
+    assert "kit-badge" not in scan_surface(
+        "x", ".chat-role-user { background: color-mix(in srgb, var(--ok) 7%, transparent); }"
+    )
+    # … an ACCENT unread/count mark (accent is not a status tone) …
+    assert "kit-badge" not in scan_surface(
+        "x", ".ix-badge { background: var(--accent); color: var(--accent-contrast); }"
+    )
+    # … a §2 report CATEGORY tag (accent-soft, not ok/warn/bad) …
+    assert "kit-badge" not in scan_surface(
+        "x", ".qa-tag { background: var(--accent-soft); color: var(--accent); }"
+    )
+    # … the kit's OWN tone fills (.k-pill / .k-well are the canonical source) …
+    assert "kit-badge" not in scan_surface(
+        "x", ".k-pill-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
+    )
+    # … and a /* commented-out */ rule never reads as a live one.
+    assert "kit-badge" not in scan_surface(
+        "x", "/* .old-pill { background: color-mix(in srgb, var(--bad) 16%, transparent); } */"
+    )
 
 
 def test_scope_is_color_font_radius_never_layout() -> None:

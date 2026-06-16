@@ -105,6 +105,8 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 ## UI / Front-end
 
 - Any HTML surface work follows `directives/design_language.md` (canonical): tokens from `src/ui/tokens.py`, controls/chips/ticker-labels from `src/ui/controls.py`, no raw hex or off-scale font sizes in surface CSS.
+- **Compose the kit; never reinvent a component.** Anything rendered — a button, a status badge, a chip/tag, a callout, a ticker label — uses the `src/ui/controls.py` primitive, not freehand CSS: buttons → `.k-btn`(`-primary`/`-quiet`/`-danger`/`-sm`); filled status pill → `.k-pill`(+`-ok/-warn/-bad`); outline kind/filter tag → `.k-chip`(+tones/`-mono`/`-btn`); callout block → `.k-well`; ticker+name → `ticker_label()`; rendered prose → `ui.prose.render_prose`. A surface adds **layout only** (width/flex/grid/gap), and preserves JS-hook classes *alongside* the kit class (e.g. `class="ix-act k-btn k-btn-quiet k-btn-sm"`). Using on-scale tokens (`var(--fs-body)`, `var(--radius)`, a `color-mix` tone fill) does NOT make a hand-rolled button/pill compliant — it is still §4 drift.
+- **The guard is partial — `tests/test_ui_controls.py` auto-enforces tokens + the `kit-badge` component check (a reinvented filled status pill fails CI); the rest of §4 is on you.** A NEW `src/**.py` that emits `var(--` must be added to that file's `REGISTERED` set and be token-clean (or quarantined) or CI fails. **Run `python -m pytest tests/test_ui_controls.py -q` for any frontend change** — targeted test selection misses the surface-discovery + component checks. Touching a report renderer also needs `GOLDEN_REGEN=1 python -m pytest tests/test_workspace_golden.py` and a diff review.
 
 ## Security
 
