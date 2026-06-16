@@ -221,7 +221,7 @@ UPCOMING_CSS = """
 .up-strip-list { list-style: none; margin: 0; padding: 0; }
 .up-strip-list li { padding: 3px 0; font-size: var(--fs-caption); }
 .up-row { display: flex; align-items: baseline; gap: 8px; }
-.up-ticker { font-family: var(--mono, monospace); font-weight: 700;
+.up-ticker { font-family: var(--mono, monospace); font-weight: 600;
   color: var(--fg); }
 .up-est { color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; }

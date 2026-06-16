@@ -122,7 +122,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
 .src-pop > summary { list-style: none; cursor: pointer; }
 .src-pop > summary::-webkit-details-marker { display: none; }
 .src-chip {
-  display: inline-block; font-size: 8.5px; font-weight: 700;
+  display: inline-block; font-size: 8.5px; font-weight: 600;
   letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px;
   border: 1px solid var(--border-2); border-radius: 3px;
   color: var(--muted-2); background: transparent;
@@ -1041,7 +1041,7 @@ details.panel > summary:hover { background: var(--paper); }
   display: flex; justify-content: space-between; align-items: center;
 }
 .peer-ticker {
-  font-family: var(--mono); font-weight: 700; font-size: 14px;
+  font-family: var(--mono); font-weight: 600; font-size: 14px;
   letter-spacing: -0.005em;
 }
 .peer-name { font-size: var(--fs-caption); color: var(--muted); }
@@ -1268,9 +1268,9 @@ details.panel > summary:hover { background: var(--paper); }
 
 /* Peer-row tile variants by list type — quiet borders that hint at
    portfolio / watchlist / evaluation membership without shouting. */
-.peer-portfolio { border-left: 3px solid var(--accent); }
+.peer-portfolio { border-left: 3px solid var(--border-2); }
 .peer-watchlist { border-left: 3px solid var(--muted-2); }
-.peer-evaluation { border-left: 3px solid var(--warn); }
+.peer-evaluation { border-left: 3px solid var(--border-2); }
 .peer-grid {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
@@ -1401,18 +1401,9 @@ a.peer:hover { background: var(--paper); }
 /* ============================================================
    Phase 5 — Executive Compensation tab
    ============================================================ */
-.ceo-pill {
-  display: inline-block;
-  font-size: var(--fs-micro);
-  font-family: var(--mono);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  margin-left: 6px;
-  vertical-align: middle;
-  letter-spacing: 0.5px;
-}
+/* the CEO role tag rides the kit's .k-chip .k-chip-mono (outline mono) now —
+   accent fill is interactive-only (§2), a role tag stays quiet. */
+.ceo-pill { margin-left: 6px; vertical-align: middle; }
 .kpi-match { color: var(--ok); font-weight: 500; }
 
 .insider-table tr.tx-buy { background: color-mix(in srgb, var(--ok) 6%, transparent); }

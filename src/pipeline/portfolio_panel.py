@@ -257,7 +257,7 @@ _ANALYTICS_CSS = """<style>
 .pf-info { position: relative; display: inline-flex; align-items: center;
   justify-content: center; width: 15px; height: 15px; border-radius: var(--radius-full);
   border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-micro);
-  font-style: italic; font-weight: 700; cursor: help; margin-left: 7px;
+  font-weight: 600; cursor: help; margin-left: 7px;
   vertical-align: middle; transition: color var(--transition), border-color var(--transition); }
 .pf-info:hover, .pf-info:focus { color: var(--fg); border-color: var(--border-2); outline: none; }
 .pf-info-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 5; width: 300px;

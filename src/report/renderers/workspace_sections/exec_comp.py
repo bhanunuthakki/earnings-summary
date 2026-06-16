@@ -92,7 +92,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             "</tr></thead><tbody>"
         )
         for pkg in section.packages:
-            ceo_pill = ' <span class="ceo-pill">CEO</span>' if pkg.is_ceo else ""
+            ceo_pill = ' <span class="ceo-pill k-chip k-chip-mono">CEO</span>' if pkg.is_ceo else ""
             body.write("<tr>")
             body.write(f"<td>{_esc(pkg.executive_name)}{ceo_pill}</td>")
             body.write(f"<td>{_esc(pkg.role or '?')}</td>")

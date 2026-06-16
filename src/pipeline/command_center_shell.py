@@ -648,7 +648,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-topbar { display: flex; align-items: center; gap: var(--sp-1);
   padding: 10px 24px; border-bottom: 1px solid var(--border);
   position: sticky; top: 0; background: var(--bg); z-index: 30; }
-.cc-brand { font-size: var(--fs-title); font-weight: 700; letter-spacing: 0.2px;
+.cc-brand { font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px;
   margin-right: 18px; white-space: nowrap; }
 .cc-topnav { display: flex; gap: 2px; margin-right: auto; overflow-x: auto; }
 .cc-topnav .cc-tab { padding: 8px 13px; font-size: var(--fs-section); }
@@ -783,7 +783,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .panel-h3 { font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600;
   color: var(--fg); }
 /* Synthesis */
-.synthesis-panel { border-left: 3px solid var(--ok); }
+.synthesis-panel { border-left: 3px solid var(--border); }
 .synthesis-body { font-size: var(--fs-section); line-height: 1.65; }
 .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
 .synthesis-body h5, .synthesis-body h6 { color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }
@@ -791,7 +791,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .synthesis-body h3 { font-size: var(--fs-section); }
 /* h4-h6 share the body size: the one prose boundary maps deep markdown headings
    (###/####) here, and panels already own the h2/h3 levels above them. */
-.synthesis-body h4, .synthesis-body h5, .synthesis-body h6 { font-size: var(--fs-body); color: var(--ok); }
+.synthesis-body h4, .synthesis-body h5, .synthesis-body h6 { font-size: var(--fs-body); color: var(--fg); }
 .synthesis-body strong { color: var(--fg); }
 .synthesis-body code { background: var(--paper); padding: 1px 5px; border-radius: var(--radius); }
 .synthesis-body ul { padding-left: 22px; }
@@ -807,7 +807,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .reread-stamp { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }
 .reread-body { font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }
 .reread-body h2, .reread-body h3, .reread-body h4 { color: var(--fg); margin: 10px 0 4px; }
-.reread-body h2 { font-size: var(--fs-section); color: var(--ok); }
+.reread-body h2 { font-size: var(--fs-section); color: var(--fg); }
 .reread-body h3 { font-size: var(--fs-body); }
 .reread-body strong { color: var(--fg); }
 .reread-body ul { padding-left: 18px; }
@@ -823,7 +823,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .kpi-card.neg .kpi-value { color: var(--bad); }
 .kpi-label { font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em;
   text-transform: uppercase; }
-.kpi-value { font-size: var(--fs-display); font-weight: 700; margin: 2px 0; color: var(--fg);
+.kpi-value { font-size: var(--fs-display); font-weight: 600; margin: 2px 0; color: var(--fg);
   font-variant-numeric: tabular-nums; }
 .kpi-sub { font-size: var(--fs-micro); color: var(--muted); font-family: var(--sans); }
 .calib-strip { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }
@@ -1056,7 +1056,7 @@ td.ticker a:hover { color: var(--accent); }
   animation: cc-slide-in-right var(--transition); }
 .cc-drawer[hidden] { display: none; }
 .cc-drawer-head { display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; }
 .cc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px; }
 .cc-drawer-close:hover { color: var(--fg); }
@@ -1116,7 +1116,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-peek[hidden], .cc-hovercard[hidden] { display: none; }
 .cc-peek-head { display: flex; align-items: center; gap: 12px; padding: 9px 14px;
   border-bottom: 1px solid var(--border); flex: none; }
-.cc-peek-title { font-weight: 700; font-size: var(--fs-body); margin-right: auto;
+.cc-peek-title { font-weight: 600; font-size: var(--fs-body); margin-right: auto;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cc-peek-openfull { font-size: var(--fs-caption); color: var(--muted); text-decoration: none;
   white-space: nowrap; }
@@ -1140,7 +1140,7 @@ td.ticker a:hover { color: var(--accent); }
   border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
   box-shadow: 0 10px 28px rgba(0,0,0,0.45); font-size: var(--fs-body); }
 .cc-mini-head { display: flex; align-items: center; gap: 8px; }
-.cc-mini-ticker { font-family: var(--mono); font-weight: 700; font-size: var(--fs-section); }
+.cc-mini-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-section); }
 .cc-mini-name { color: var(--muted); font-size: var(--fs-caption); margin: 1px 0 6px; }
 .cc-mini-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 .cc-mini-row > span { color: var(--muted); }

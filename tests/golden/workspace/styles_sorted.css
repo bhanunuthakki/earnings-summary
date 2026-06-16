@@ -372,14 +372,14 @@
 .panel-title { font-size: 13.5px; font-weight: 600; letter-spacing: 0.005em; color: var(--fg); }
 .panel-xlink:hover { text-decoration: underline; }
 .peer { appearance: none; border: 0; background: var(--surface); padding: 14px 14px; display: flex; flex-direction: column; gap: 8px; text-align: left; font: inherit; color: inherit; text-decoration: none; }
-.peer-evaluation { border-left: 3px solid var(--warn); }
+.peer-evaluation { border-left: 3px solid var(--border-2); }
 .peer-eyebrow { font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-right: 14px; }
 .peer-eyebrow-sub { color: var(--muted-2); }
 .peer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
 .peer-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 .peer-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 14px; font-size: var(--fs-caption); color: var(--muted); flex-wrap: wrap; gap: 10px; }
 .peer-name { font-size: var(--fs-caption); color: var(--muted); }
-.peer-ticker { font-family: var(--mono); font-weight: 700; font-size: 14px; letter-spacing: -0.005em; }
+.peer-ticker { font-family: var(--mono); font-weight: 600; font-size: 14px; letter-spacing: -0.005em; }
 .peer-top { display: flex; justify-content: space-between; align-items: center; }
 .peer-watchlist { border-left: 3px solid var(--muted-2); }
 .peer.active .peer-name { color: var(--muted-2); }
@@ -478,7 +478,7 @@
 .signals-all { padding: 0 var(--panel-pad-x) 14px; }
 .signals-all[open] > summary::before { content: '▾ '; }
 .signals-fires { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; padding: 14px var(--panel-pad-x); }
-.src-chip { display: inline-block; font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px; border: 1px solid var(--border-2); border-radius: 3px; color: var(--muted-2); background: transparent; opacity: 0.65; user-select: none; }
+.src-chip { display: inline-block; font-size: 8.5px; font-weight: 600; letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px; border: 1px solid var(--border-2); border-radius: 3px; color: var(--muted-2); background: transparent; opacity: 0.65; user-select: none; }
 .src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
 .src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
@@ -623,7 +623,7 @@
 /* ============================================================ P3 panels (P4-A1) — macro sensitivities, strategic targets, customer concentrations, lease ladder, decision history full ledger, say-do verdicts, peer comp. Most reuse the canonical .tbl class; the styles below are for the Decisions tab's summary-chip ribbon + small layout tweaks. ============================================================ */ .macro-sens-panel, .strategic-targets-panel, .customer-concentration-panel, .lease-ladder-panel, .saydo-verdicts-panel, .peer-comp-panel { margin-top: var(--gap); }
 /* ============================================================ Panels ============================================================ */ .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 /* ============================================================ Peer row ============================================================ */ .peer-row { margin: var(--section-gap) var(--pad-x) 0; padding-top: 22px; border-top: 1px solid var(--border); }
-/* ============================================================ Phase 5 — Executive Compensation tab ============================================================ */ .ceo-pill { display: inline-block; font-size: var(--fs-micro); font-family: var(--mono); background: var(--accent); color: var(--accent-contrast); padding: 1px 5px; border-radius: var(--radius-full); margin-left: 6px; vertical-align: middle; letter-spacing: 0.5px; }
+/* ============================================================ Phase 5 — Executive Compensation tab ============================================================ */ /* the CEO role tag rides the kit's .k-chip .k-chip-mono (outline mono) now — accent fill is interactive-only (§2), a role tag stays quiet. */ .ceo-pill { margin-left: 6px; vertical-align: middle; }
 /* ============================================================ Position tab ============================================================ */ .position-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
 /* ============================================================ Primitives ============================================================ */ .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px; font-size: var(--fs-caption); font-weight: 500; color: var(--fg-soft); background: var(--surface); letter-spacing: 0.01em; white-space: nowrap; }
 /* ============================================================ Print ============================================================ */ @media print { .l1-chrome, .twk-toggle-btn, .twk-panel { display: none; } .tab-group-pane { display: block !important; } .tab-pane { display: block !important; padding-top: 16px; break-before: page; } .tabs, .subtabs { display: none; } .news-strip, .kpi-strip, .l1-identity { break-after: avoid; } }
@@ -661,7 +661,7 @@
 /* P4.1 empty-state anatomy: empty sections collapse to a single muted summary line (<details class="panel panel-empty">) that expands to an analyst-language explanation. Replaces the old full-height .stub blocks. */ .panel-empty .panel-title { color: var(--muted); font-weight: 500; }
 /* P4.3 cross-tab links: small accent links in the panel-meta that jump to a related panel on another tab (data-xtab handler in workspace_script.JS). The landing panel flashes briefly so the eye finds it after the switch. */ .panel-xlink { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; white-space: nowrap; }
 /* P4.4 — the open watch-items strip under the thesis lede: every build leads with what the owner already said to watch for. */ .l1-open-items { margin: 0 var(--pad-x) 8px; }
-/* Peer-row tile variants by list type — quiet borders that hint at portfolio / watchlist / evaluation membership without shouting. */ .peer-portfolio { border-left: 3px solid var(--accent); }
+/* Peer-row tile variants by list type — quiet borders that hint at portfolio / watchlist / evaluation membership without shouting. */ .peer-portfolio { border-left: 3px solid var(--border-2); }
 /* Pillbox warn variant — used by the Validation panel chip. */ .pill-warn-cell { color: var(--warn); }
 /* Position tab — decision brief link + outcome notes block. */ .decision-brief-link { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; font-family: var(--mono); padding: 1px 6px; border: 1px solid var(--accent); border-radius: var(--radius-full); }
 /* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this rule keeps only the row layout + the Apply button's ok-tint affordance (a positive-action hint, token-routed). */ .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
