@@ -190,6 +190,20 @@ results, palettes).
 Field captions: `.k-label` (micro size — matches `.k-chip` so a caption never
 out-sizes the chips/controls beside it — 600, uppercase, 0.06em).
 
+**Specialized controls without a kit primitive.** The kit covers
+button / pill / chip / well / label / menu. A few controls have **no** kit
+primitive and are legitimately bespoke — "compose the kit, never reinvent" can't
+bind where there is nothing to compose. The reviewed keeps: a **segmented
+selector** (`.qbtn` quarter picker — a radio-group of buttons sharing one track),
+a **toggle track** (`.twk-toggle-btn`), an **icon-only button** (`.ic-btn`), and
+**status list-items** (`.flag-list li`, whose status reads via a `border-left`
+rail — a list row is not a chip). These stay local CSS by design; they route
+color through the status tokens (`--ok/--warn/--bad`) for *status* (§2-correct)
+and carry no `color-mix` filled *pill* skin, so the `kit-badge` enforcer (§7.1)
+leaves them alone by construction. Add a NEW bespoke control here only when the
+kit genuinely lacks the primitive — not to dodge it; a filled status badge is
+never one of these (use `.k-pill`).
+
 ### 4.1 Doorways — every datum is a depth (Law 2)
 
 Any number, count, KPI, cell, or stream item **with a deeper view** is rendered
@@ -702,4 +716,9 @@ TRACKED ticker is a `news` row; a move on an UNTRACKED ticker is a
 > `.k-well/.k-pill` status kit; **S7** swept the dashboard / cockpit / pipeline
 > long-tail onto tokens and `color-mix` (deleting the reinvented pill systems);
 > the provenance / evals / sources console (**S10**) and the report iframe /
-> editorial surfaces are the last quarantined surfaces.
+> editorial surfaces are the last quarantined surfaces. The **`kit-badge`
+> component dimension** (added 2026-06-15) seeded four reinvented filled-pill
+> surfaces — command-center `allocation .ad-pill` / `position_lifecycle .plc-pill`
+> and report `workspace_comments .cmt-*` / `workspace_styles .decision-badge` —
+> all four have since **graduated onto `.k-pill`**, so `kit-badge` now carries no
+> quarantine: a new reinvented filled status badge in any surface fails on merge.
