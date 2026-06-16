@@ -262,10 +262,12 @@ def test_workspace_renderer_emits_decision_panel() -> None:
     html = out.getvalue()
     assert "decision-history-panel" in html
     assert "Recent decisions" in html
-    # Outcome classes on the badge divs
-    assert "outcome-correct" in html
-    assert "outcome-pending" in html
-    assert "outcome-mixed" in html
+    # Outcome chips graduated to the control kit's .k-pill (+ tone by meaning, #637):
+    # correct -> k-pill-ok, mixed -> k-pill-warn, pending -> neutral bare .k-pill.
+    # The label text carries the state; .decision-outcome rides for typography.
+    assert 'class="k-pill k-pill-ok decision-outcome">correct<' in html
+    assert 'class="k-pill decision-outcome">pending<' in html
+    assert 'class="k-pill k-pill-warn decision-outcome">mixed<' in html
     # Each kind label is uppercased for display
     assert ">TRIM<" in html
     assert ">HOLD<" in html

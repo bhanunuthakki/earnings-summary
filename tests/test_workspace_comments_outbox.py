@@ -136,9 +136,8 @@ def test_badge_is_injected_and_updated() -> None:
 
 def test_badge_css_exists() -> None:
     # Amber pill, not error red — pending recovery, not failure. The warn tone
-    # rides the --warn token (color-mix), not a hardcoded amber rgba.
-    badge_rule = COMMENTS_CSS.split(".cmt-outbox-badge {", 1)
-    assert len(badge_rule) == 2
-    rule = badge_rule[1].split("}", 1)[0]
-    assert "color: var(--warn)" in rule
-    assert "color-mix(in srgb, var(--warn)" in rule
+    # graduated to the control kit (#637): the badge rides .k-pill .k-pill-warn
+    # (set in the injector, k-pill-warn -> --warn), so this rule keeps only its
+    # layout + mono-micro refine.
+    assert ".cmt-outbox-badge {" in COMMENTS_CSS  # layout rule survives
+    assert "k-pill k-pill-warn cmt-outbox-badge" in COMMENTS_JS
