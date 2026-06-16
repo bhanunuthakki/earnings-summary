@@ -117,6 +117,19 @@ _COUNT_TOKENS: tuple[str, ...] = (
     "weighted average number",
     "shares issued",
     "shares authorized",
+    # Explicit unit-declaration parentheticals: a row whose label declares its own
+    # unit as a share / unit COUNT — "Issued and Outstanding (in shares)",
+    # "Authorized Shares (in shares)", "Outstanding (in units)". The word-order
+    # tokens above miss these because "shares"/"units" sits in the trailing
+    # parenthetical, not adjacent to issued/outstanding/authorized. Without this the
+    # section $-scale ("USD millions") multiplies a raw share count into phantom
+    # billions/trillions (BN preferred units: 24M shares -> $24T; RBRK preferred
+    # share schedule). Parenthetical-anchored so a real dollar row that merely
+    # mentions shares ("Investments in shares of associates") is NOT deferred.
+    "(in shares)",
+    "(shares)",
+    "(in units)",
+    "(units)",
 )
 
 # Section titles we never capture even when they carry "(Details)": these hold
