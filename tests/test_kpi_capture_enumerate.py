@@ -254,6 +254,46 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
     conn.close()
 
 
+# An enumerate batch where one ACTUAL value is an absurd magnitude — a share count
+# the LLM emitted as a whole-dollar figure (e.g. a x1e6 mis-read). The persist-time
+# ACTUAL magnitude cap must drop it while the sane Revenue fact lands.
+_ABSURD_ENUMERATE_JSON = (
+    "[\n"
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "source_excerpt": "x"},\n'
+    '  {"label": "Treasury stock", "value": 4609988545000000, "unit": "actual", "source_excerpt": "y"}\n'
+    "]"
+)
+
+
+def test_capture_for_ticker_drops_absurd_actual_magnitude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The persist-time ACTUAL magnitude cap protects the Stage-B enumerate path
+    too: an absurd whole-dollar value is dropped-with-log, the sane fact stored,
+    and the coverage record reflects the drop (never silent)."""
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    _make_capture_db(db)
+    _write_brief(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+
+    monkeypatch.setattr(kes, "_call_claude", _const_caller(_ABSURD_ENUMERATE_JSON))
+
+    log = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
+    assert log.kpis_inserted_total == 1  # only the sane Revenue fact
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+
+    from pipeline.capture_coverage import load_coverage
+
+    cov = load_coverage(tmp_path)
+    assert len(cov) == 1
+    assert cov[0].seen == 2
+    assert cov[0].captured == 1
+    assert cov[0].dropped_validation == 1  # the absurd value, accounted for
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # capture_for_ir_pdf_docs — the ir_supplement PDF capture path
 # ---------------------------------------------------------------------------

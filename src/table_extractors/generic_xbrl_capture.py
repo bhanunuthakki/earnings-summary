@@ -168,6 +168,21 @@ _DETAILS_SUFFIX_RX = re.compile(r"\s*\((?:Details|Tables|Parenthetical)[^)]*\)\s
 # names to fit (the canonical match key folds variants regardless).
 _NAME_MAX = 200
 
+# A monetary cell that survives every label/magnitude guard but whose pre-scale
+# magnitude sits in the percent/ratio band (>= 1, so past the sub-unit drop, and
+# below _RESIDUAL_RISK_RAW_CEILING) is a RESIDUAL mis-scale risk: a clean-labeled
+# whole-number percentage (a "Common equity tier 1 capital" 13.5 with no
+# rate/ratio/percent token) scales to a plausible-LOOKING $13.5M we can't
+# deterministically tell from a real $13.5M line item. The program's prime
+# directive is to capture every number, so we DON'T drop it — but we DON'T claim
+# full confidence either: it lands down-weighted (tallied in CaptureAudit.penalized
+# → the coverage log) so the UI/rankers flag it and Stage B / review can
+# adjudicate, instead of it sitting silently at face confidence. Per-share rows
+# return earlier and are never down-weighted — small per-share dollars (EPS, DPS)
+# are expected, not suspicious.
+_RESIDUAL_RISK_RAW_CEILING = Decimal("100")
+_RESIDUAL_RISK_CONFIDENCE = 0.5
+
 
 @dataclass(slots=True)
 class CaptureAudit:
@@ -183,6 +198,11 @@ class CaptureAudit:
     rows_seen: int = 0
     cells_seen: int = 0
     captured: int = 0
+    # Of the captured cells, the count down-weighted for residual mis-scale risk
+    # (a percent/ratio-shaped magnitude that slipped the label net). A SUBSET of
+    # ``captured``, not a separate bucket — it leaves the captured+skips==seen
+    # invariant intact while making the confidence haircut measurable.
+    penalized: int = 0
     # reason -> count, for every cell seen-but-not-captured.
     skipped: dict[str, int] = field(default_factory=dict[str, int])
     # validation_issues persist_manifest raised on the cells we DID hand it
@@ -199,6 +219,7 @@ class CaptureAudit:
             "rows_seen": self.rows_seen,
             "cells_seen": self.cells_seen,
             "captured": self.captured,
+            "penalized": self.penalized,
             "dropped_validation": self.dropped_validation,
             "skipped": dict(sorted(self.skipped.items())),
         }
@@ -316,6 +337,7 @@ def _emit_coverage(
             fiscal_year=fiscal_year,
             seen=audit.cells_seen,
             captured=audit.captured,
+            penalized=audit.penalized,
             dropped_validation=audit.dropped_validation,
             skipped=dict(audit.skipped),
         ),
@@ -400,46 +422,61 @@ def _walk_section(
             if col >= len(period_ends) or period_ends[col] is None:
                 audit.skip("off_cycle_or_unparseable_period")
                 continue
-            value, outcome = _classify_value(row.label, raw, factor)
+            value, outcome, confidence = _classify_value(row.label, raw, factor)
             if value is None:
                 audit.skip(outcome)
                 continue
+            if confidence < 1.0:
+                audit.penalized += 1
             period_end = cast("datetime", period_ends[col])
             per_period[period_end].append(
                 KpiValue(
                     name=name,
                     value=value,
                     unit=Unit.ACTUAL,
-                    confidence=1.0,  # deterministic table read
+                    # 1.0 for a normal monetary cell (deterministic table read); a
+                    # haircut for a percent/ratio-shaped residual-risk magnitude
+                    # (see _classify_value / _RESIDUAL_RISK_*). persist_manifest
+                    # folds this self-report into the stored confidence.
+                    confidence=confidence,
                     source_excerpt=_excerpt(row.label, raw, units.currency, scale),
                     locator=FactLocator(section=section_key),
                 )
             )
 
 
-def _classify_value(label: str, raw: object, factor: int) -> tuple[Decimal | None, str]:
+def _classify_value(label: str, raw: object, factor: int) -> tuple[Decimal | None, str, float]:
     """Decide whether a cell is a captureable monetary value.
 
-    Returns ``(scaled_value, "")`` to capture, or ``(None, reason)`` to defer.
+    Returns ``(scaled_value, "", confidence)`` to capture, or
+    ``(None, reason, 1.0)`` to defer. ``confidence`` is 1.0 for a normal monetary
+    magnitude and ``_RESIDUAL_RISK_CONFIDENCE`` for a percent/ratio-shaped
+    residual-risk cell (see ``_RESIDUAL_RISK_RAW_CEILING``) — captured, but
+    down-weighted rather than stored at a misleading face confidence.
     """
     ll = label.lower()
     if any(tok in ll for tok in _RATE_TOKENS):
-        return None, "rate_or_percent"
+        return None, "rate_or_percent", 1.0
     if any(tok in ll for tok in _COUNT_TOKENS):
-        return None, "share_or_count"
+        return None, "share_or_count", 1.0
     try:
         dv = Decimal(str(raw))
     except (InvalidOperation, ValueError, TypeError):
-        return None, "non_numeric"
-    # Per-share amounts are dollars already — do NOT apply the $-in-millions scale.
+        return None, "non_numeric", 1.0
+    # Per-share amounts are dollars already — do NOT apply the $-in-millions scale,
+    # and never penalize them: small per-share dollars (EPS, DPS) are expected.
     if any(tok in ll for tok in _PER_SHARE_TOKENS):
-        return dv, ""
+        return dv, "", 1.0
     # A "monetary" cell below 1 whole unit in a thousands/millions/billions section
     # is almost certainly a rate/ratio that slipped the label net (a 0.0338 coupon),
     # never a real $0.03M line item — defer rather than expand it by 1e6.
     if abs(dv) < 1:
-        return None, "subunit_magnitude"
-    return dv * factor, ""
+        return None, "subunit_magnitude", 1.0
+    # Residual mis-scale risk: a clean-labeled value in the percent/ratio band that
+    # scales to plausible-looking dollars. Capture (program directive) but haircut
+    # the confidence so it isn't trusted blind (see _RESIDUAL_RISK_*).
+    confidence = _RESIDUAL_RISK_CONFIDENCE if abs(dv) < _RESIDUAL_RISK_RAW_CEILING else 1.0
+    return dv * factor, "", confidence
 
 
 def _inner_title(section: Sequence[object]) -> str | None:

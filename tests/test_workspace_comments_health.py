@@ -118,16 +118,16 @@ def test_render_functions_drive_dom_from_state() -> None:
 
 
 def test_pill_css_has_distinct_state_colors() -> None:
-    assert ".cmt-health-pill {" in COMMENTS_CSS
-    assert ".cmt-health-pill.cmt-health-online" in COMMENTS_CSS
-    assert ".cmt-health-pill.cmt-health-offline" in COMMENTS_CSS
-    # Green for online, red for offline — semantic, from the shared tokens
-    # (UI polish v3: raw hex left this stylesheet; the pill follows --ok/--bad
-    # so it stays correct in both report themes).
-    online = COMMENTS_CSS.split(".cmt-health-pill.cmt-health-online")[1].split("}")[0]
-    offline = COMMENTS_CSS.split(".cmt-health-pill.cmt-health-offline")[1].split("}")[0]
-    assert "var(--ok)" in online
-    assert "var(--bad)" in offline
+    # The pill's layout ride stays in COMMENTS_CSS; its STATE COLOR graduated to
+    # the control kit (#637 "graduate status pills onto the kit"): renderHealthPill
+    # applies .k-pill-ok (green, online) / .k-pill-bad (red, offline) / neutral bare
+    # .k-pill while the first poll is in flight. So the distinct state colors now
+    # come from the kit tone the JS assigns (k-pill-ok -> --ok, k-pill-bad -> --bad),
+    # not per-class CSS here.
+    assert ".cmt-health-pill {" in COMMENTS_CSS  # layout rule survives
+    pill_fn = COMMENTS_JS.split("function renderHealthPill")[1].split("\n  }")[0]
+    assert "healthState === 'online' ? ' k-pill-ok'" in pill_fn
+    assert "healthState === 'offline' ? ' k-pill-bad'" in pill_fn
 
 
 def test_offline_banner_css_exists() -> None:

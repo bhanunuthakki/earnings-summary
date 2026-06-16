@@ -33,6 +33,20 @@ from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 # an over-eager extractor can't push a page of context into the column.
 _SOURCE_EXCERPT_MAX = 1024
 
+# A captured ACTUAL (whole-currency-unit) fact above this magnitude is almost
+# certainly a mis-scale, not a real line item. The Stage-A XBRL walker expands a
+# cell by its section scale (x1e3/1e6/1e9), and a count/ratio that slipped the
+# label denylist gets the x1e6 treatment too — a billions-scale share count
+# (NU's ~4.6e9 shares) becomes ~$4.6e15. No single reported financial line item
+# reaches this magnitude (the largest legit single cells — mega-bank total assets
+# and gross derivative notionals — top out near 1e14), so a value past the cap is
+# dropped-with-log (a PLAUSIBLE_RANGE issue) rather than stored at face confidence.
+# The narrower count/percent traps are deferred upstream (generic_xbrl_capture);
+# this is the persist-time backstop for what slips through into ANY ACTUAL fact
+# (Stage A or the Stage-B enumerate path), the unit the existing PERCENT/RATIO/BPS
+# guards left unchecked.
+_ACTUAL_PLAUSIBLE_MAX = Decimal("1e15")
+
 
 class KpiValue(BaseModel):
     """One LLM-extracted KPI value tied to a tracked metric."""
@@ -401,6 +415,12 @@ def _validate_value_range(value: Decimal, unit: Unit) -> tuple[bool, str | None]
         return (False, f"ratio={value} outside plausible range [-100, 100]")
     if unit is Unit.BPS and (value < Decimal("-100000") or value > Decimal("100000")):
         return (False, f"bps={value} outside plausible range")
+    if unit is Unit.ACTUAL and abs(value) > _ACTUAL_PLAUSIBLE_MAX:
+        return (
+            False,
+            f"actual={value} exceeds plausible magnitude cap {_ACTUAL_PLAUSIBLE_MAX:.0e} "
+            "(likely a count/ratio mis-scaled by the section unit)",
+        )
     return (True, None)
 
 

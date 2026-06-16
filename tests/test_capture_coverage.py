@@ -97,7 +97,25 @@ def test_summarize_rolls_up_totals_and_skips() -> None:
     assert list(skipped) == ["rate_or_percent", "share_or_count", "unparseable_or_blank"]
 
 
+def test_summarize_rolls_up_penalized() -> None:
+    recs = [
+        _rec(stage="xbrl_capture", ticker="A", seen=10, captured=8, penalized=2),
+        _rec(stage="xbrl_capture", ticker="B", seen=5, captured=5, penalized=1),
+    ]
+    s = summarize(recs)
+    assert s["penalized"] == 3
+    by_stage = cast("dict[str, dict[str, int]]", s["by_stage"])
+    assert by_stage["xbrl_capture"]["penalized"] == 3
+
+
+def test_penalized_survives_record_roundtrip(tmp_path: Path) -> None:
+    record_coverage(tmp_path, _rec(seen=10, captured=8, penalized=2))
+    loaded = load_coverage(tmp_path)
+    assert loaded[0].penalized == 2
+
+
 def test_summarize_empty_is_zero_rate() -> None:
     s = summarize([])
     assert s["seen"] == 0
+    assert s["penalized"] == 0
     assert s["capture_rate"] == 0.0
