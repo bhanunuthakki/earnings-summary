@@ -100,6 +100,22 @@ def _payload() -> dict[str, object]:
     }
 
 
+def _mis_scale_payload() -> dict[str, object]:
+    """A single $-in-Millions detail section that interleaves a real aggregate, a
+    clean-labeled whole-number percentage (no rate/ratio/percent token), and a
+    clean-labeled share count — the two residual mis-scale traps that slip the
+    label denylist."""
+    return {
+        "symbol": "X",
+        "Capital - Detail": [
+            {"Capital (Details) - USD ($) $ in Millions": ["Dec. 31, 2024"]},
+            {"Total long-term debt": [10883]},  # real $ aggregate -> scaled, full confidence
+            {"Common equity tier 1 capital": [13.5]},  # whole-number percent -> down-weighted
+            {"Treasury stock": [4609988545]},  # share count -> absurd x1e6 -> dropped at persist
+        ],
+    }
+
+
 def _walk_all(payload: dict[str, object]) -> tuple[dict[datetime, list[KpiValue]], g.CaptureAudit]:
     fye = g._detect_fye_monthday(payload)  # pyright: ignore[reportPrivateUsage]
     per: dict[datetime, list[KpiValue]] = defaultdict(list)
@@ -185,29 +201,41 @@ def test_build_name_qualifies_and_folds() -> None:
 
 
 def test_classify_value_monetary_is_scaled() -> None:
-    val, reason = g._classify_value("Total long-term debt", 10883, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    val, reason, conf = g._classify_value("Total long-term debt", 10883, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert reason == "" and val == Decimal("10883000000")
+    assert conf == 1.0  # a normal monetary magnitude keeps full confidence
 
 
 def test_classify_value_rate_deferred() -> None:
-    val, reason = g._classify_value("Coupon Rate", 0.0338, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    val, reason, _conf = g._classify_value("Coupon Rate", 0.0338, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert val is None and reason == "rate_or_percent"
 
 
 def test_classify_value_count_deferred() -> None:
-    val, reason = g._classify_value("Number of notes outstanding", 12, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    val, reason, _conf = g._classify_value("Number of notes outstanding", 12, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert val is None and reason == "share_or_count"
 
 
 def test_classify_value_per_share_not_scaled() -> None:
-    val, reason = g._classify_value("Dividends declared per share", 0.80, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    val, reason, conf = g._classify_value("Dividends declared per share", 0.80, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert reason == "" and val == Decimal("0.80")  # NOT 800,000
+    assert conf == 1.0  # small per-share dollars are expected, never penalized
 
 
 def test_classify_value_subunit_deferred() -> None:
     # A <1 magnitude in a millions section is a rate that slipped the label net.
-    val, reason = g._classify_value("Some fractional coverage", 0.5, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    val, reason, _conf = g._classify_value("Some fractional coverage", 0.5, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert val is None and reason == "subunit_magnitude"
+
+
+def test_classify_value_residual_risk_percent_is_downweighted() -> None:
+    """A clean-labeled whole-number percentage (no rate/ratio/percent token) in a
+    $-scaled section scales to plausible-looking dollars we can't prove are money,
+    so it's captured but at a haircut confidence rather than face value."""
+    val, reason, conf = g._classify_value("Common equity tier 1 capital", 13.5, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    assert reason == "" and val == Decimal("13500000")  # still captured (scaled)
+    assert conf == g._RESIDUAL_RISK_CONFIDENCE  # pyright: ignore[reportPrivateUsage]
+    assert conf < 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +409,84 @@ def test_capture_within_batch_dedup() -> None:
     )
     rows = conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone()
     assert rows[0] == 1
+
+
+# ---------------------------------------------------------------------------
+# ACTUAL mis-scale guards: persist-time magnitude cap + capture-time haircut
+# ---------------------------------------------------------------------------
+
+
+def test_persist_drops_absurd_actual_magnitude() -> None:
+    """A clean-labeled share count that slipped the denylist and got scaled ×1e6
+    into an absurd dollar figure is dropped-with-log at persist, never stored —
+    the ACTUAL-unit backstop the old PERCENT/RATIO/BPS-only guard lacked."""
+    conn = _capture_db()
+    mis_scaled = Decimal("4609988545") * 1_000_000  # ~4.6e15: a mega-cap share count x1e6
+    res = persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_capture_manifest(
+            [KpiValue(name="Treasury stock", value=mis_scaled, unit=Unit.ACTUAL)],
+            DefinitionOrigin.CAPTURE,
+        ),
+    )
+    assert res.inserted == 0
+    assert res.validation_issues == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    # No orphan definition either — the range check fires before find_or_create.
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definitions").fetchone()[0] == 0
+    rule = conn.execute("SELECT rule FROM validation_issues").fetchone()[0]
+    assert str(rule) == "plausible_range"
+
+
+def test_persist_keeps_largest_plausible_actual() -> None:
+    """The cap doesn't false-drop a genuinely large single line item: a mega-bank
+    gross derivative notional (~$6e13) is below the cap and survives."""
+    conn = _capture_db()
+    res = persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_capture_manifest(
+            [KpiValue(name="Gross notional", value=Decimal("60000000000000"), unit=Unit.ACTUAL)],
+            DefinitionOrigin.CAPTURE,
+        ),
+    )
+    assert res.inserted == 1
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+
+
+def test_mis_scaled_count_and_percent_not_stored_at_face_confidence() -> None:
+    """End-to-end (walk + persist) for the deliverable: in a $-in-millions section,
+    a clean-labeled share count is DROPPED (absurd ×1e6 magnitude) and a
+    clean-labeled whole-number percent is captured only at a down-weighted
+    confidence — neither survives as a trusted 1e6-scaled dollar fact."""
+    per, audit = _walk_all(_mis_scale_payload())
+    values = per[datetime(2024, 12, 31)]
+    # Capture layer: the percent is flagged residual-risk; the share count is
+    # handed on (its absurdity is caught at persist, not here).
+    assert audit.penalized == 1
+
+    conn = _capture_db()
+    res = persist_manifest(
+        conn, run_id="r1", manifest=_capture_manifest(values, DefinitionOrigin.CAPTURE)
+    )
+    # The share-count value (x1e6 -> ~4.6e15) was dropped-with-log, not stored.
+    assert res.validation_issues == 1
+    rule = conn.execute("SELECT rule FROM validation_issues").fetchone()[0]
+    assert str(rule) == "plausible_range"
+
+    rows = conn.execute(
+        "SELECT value, confidence FROM kpi_facts ORDER BY CAST(value AS REAL)"
+    ).fetchall()
+    assert len(rows) == 2  # debt + percent stored; share count absent
+    percent_val, percent_conf = float(rows[0]["value"]), float(rows[0]["confidence"])
+    debt_val, debt_conf = float(rows[-1]["value"]), float(rows[-1]["confidence"])
+    assert percent_val == 13_500_000  # the percent IS captured (program directive)
+    assert debt_val == 10_883_000_000
+    # ...but down-weighted: the full-confidence aggregate outranks it, and the
+    # absurd share count never landed as a $4.6-quadrillion fact.
+    assert percent_conf < debt_conf
+    assert all(float(r["value"]) < 1e15 for r in rows)
 
 
 # ---------------------------------------------------------------------------

@@ -11,8 +11,15 @@ than scrolling past in a log line.
 One :class:`CaptureCoverageRecord` is appended per (stage, ticker, source) run:
   - ``seen``               — atomic numbers the pass examined
   - ``captured``           — landed in kpi_facts
+  - ``penalized``          — of ``captured``, those down-weighted (NOT dropped) for
+                             residual mis-scale risk: a percent/ratio-shaped value
+                             that slipped the label net and was stored at reduced
+                             confidence rather than at face value. A subset of
+                             ``captured`` — tracked so the haircut is never silent.
   - ``dropped_validation`` — handed to persist_manifest but dropped by its
-                             PLAUSIBLE_RANGE / UNIT_MISMATCH guards
+                             PLAUSIBLE_RANGE / UNIT_MISMATCH guards (incl. the
+                             ACTUAL magnitude cap that kills a count/ratio
+                             mis-scaled ×1e6 into an absurd dollar figure)
   - ``skipped``            — ``{reason: count}`` for everything deferred before
                              persist (per-row guards, off-cycle columns, …)
 
@@ -47,6 +54,9 @@ class CaptureCoverageRecord(BaseModel):
     source: str  # e.g. "10k", "ir", "earnings"
     seen: int
     captured: int
+    # Of ``captured``, those stored at a down-weighted confidence for residual
+    # mis-scale risk (a subset of captured, not an additional bucket).
+    penalized: int = 0
     dropped_validation: int = 0
     skipped: dict[str, int] = Field(default_factory=dict[str, int])
     fiscal_year: int | None = None
@@ -117,20 +127,25 @@ def summarize(records: list[CaptureCoverageRecord]) -> dict[str, object]:
     """
     seen = sum(r.seen for r in records)
     captured = sum(r.captured for r in records)
+    penalized = sum(r.penalized for r in records)
     dropped = sum(r.dropped_validation for r in records)
     skip_hist: dict[str, int] = {}
     by_stage: dict[str, dict[str, int]] = {}
     for r in records:
         for reason, n in r.skipped.items():
             skip_hist[reason] = skip_hist.get(reason, 0) + n
-        bucket = by_stage.setdefault(r.stage, {"seen": 0, "captured": 0, "dropped_validation": 0})
+        bucket = by_stage.setdefault(
+            r.stage, {"seen": 0, "captured": 0, "penalized": 0, "dropped_validation": 0}
+        )
         bucket["seen"] += r.seen
         bucket["captured"] += r.captured
+        bucket["penalized"] += r.penalized
         bucket["dropped_validation"] += r.dropped_validation
     return {
         "runs": len(records),
         "seen": seen,
         "captured": captured,
+        "penalized": penalized,
         "dropped_validation": dropped,
         "capture_rate": round(captured / seen, 4) if seen else 0.0,
         "by_stage": by_stage,
