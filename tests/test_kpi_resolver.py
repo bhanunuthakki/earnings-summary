@@ -358,6 +358,44 @@ def test_same_unit_family_does_merge() -> None:
     assert canonical_metric_name(conn, "X", "Revenue $", Unit.BILLIONS) == "Revenue USD"
 
 
+def test_no_false_merge_on_identical_surface_across_unit_families() -> None:
+    """The bare-collision seam: when the incoming label is SURFACE-IDENTICAL to an
+    existing definition of an incompatible unit family, the unit gate empties the
+    candidate set — but returning the bare name would let find_or_create (keyed on
+    (ticker, name), unit absent) merge a COUNT metric onto the dollar definition.
+    The minted name must be disambiguated so the split survives to persistence.
+    The pre-fix test only covered DISTINCT surfaces ('Revenue %' vs 'Revenue USD')
+    and was blind to this case."""
+    conn = _make_db()
+    _add_def(conn, "X", "Deposits", unit="millions")  # a dollar LEVEL
+    # Incoming COUNT 'Deposits' shares the exact surface AND match key, but COUNT ⟂
+    # MILLIONS — it must NOT come back as the bare 'Deposits' (which would collide).
+    out = canonical_metric_name(conn, "X", "Deposits", Unit.COUNT)
+    assert out != "Deposits"
+    assert out.startswith("Deposits (")  # family-disambiguated, e.g. 'Deposits (count)'
+
+
+def test_disambiguated_name_is_stable_for_reencounter() -> None:
+    """Disambiguation is deterministic: a second capture of the same (label, unit)
+    re-derives the SAME unit-safe name, so find_or_create reuses one row rather
+    than minting a fresh duplicate each pass."""
+    conn = _make_db()
+    _add_def(conn, "X", "Deposits", unit="millions")
+    first = canonical_metric_name(conn, "X", "Deposits", Unit.COUNT)
+    # Register the disambiguated row the first capture would create, then re-run.
+    _add_def(conn, "X", first, unit="count", origin="capture")
+    second = canonical_metric_name(conn, "X", "Deposits", Unit.COUNT)
+    assert second == first
+
+
+def test_compatible_magnitude_still_merges_on_identical_surface() -> None:
+    """The disambiguation is unit-GATED, not surface-gated: a same-family value
+    with an identical surface still reuses the existing row (no needless split)."""
+    conn = _make_db()
+    _add_def(conn, "X", "Deposits", unit="millions")
+    assert canonical_metric_name(conn, "X", "Deposits", Unit.BILLIONS) == "Deposits"
+
+
 def test_canonicalization_is_ticker_scoped() -> None:
     conn = _make_db()
     _add_def(conn, "MELI", "Monthly ARPAC", unit="millions")
