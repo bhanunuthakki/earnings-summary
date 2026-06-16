@@ -849,7 +849,7 @@ INBOX_CSS = """
 .ix-badge { display: inline-block; min-width: 14px; text-align: center;
   margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
   background: var(--accent); color: var(--accent-contrast);
-  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 700;
+  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
   line-height: 1.4; vertical-align: 2px; }
 .ix-badge[hidden] { display: none; }
 /* Category filter chips (Inbox v2) — client-side, scoped per stream. */

@@ -210,7 +210,7 @@ SOURCE_CHIP_CSS = """
 .src-pop > summary { list-style: none; cursor: pointer; }
 .src-pop > summary::-webkit-details-marker { display: none; }
 .src-chip {
-  display: inline-block; font-size: 8.5px; font-weight: 700;
+  display: inline-block; font-size: 8.5px; font-weight: 600;
   letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px;
   border: 1px solid var(--border-2, var(--border)); border-radius: 3px;
   color: var(--muted-2, var(--muted)); background: transparent;
@@ -218,7 +218,7 @@ SOURCE_CHIP_CSS = """
 }
 .src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
-.src-fmp-normalized { color: var(--accent); border-color: var(--accent); }
+.src-fmp-normalized { color: var(--muted); border-color: var(--border-2); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
 .src-yfinance-fallback, .src-s1-provisional { color: var(--muted-2, var(--muted)); }
 /* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell

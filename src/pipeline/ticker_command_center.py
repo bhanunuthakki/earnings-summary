@@ -1060,7 +1060,7 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
   animation: cc-slide-in-right var(--transition); }
 .tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
 .tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 700; }
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; }
 .tcc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px;
   transition: color var(--transition); }
@@ -1482,7 +1482,7 @@ _PAGE_HEAD = (
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }}
   .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; }}
   .kpi-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
-  .kpi-value {{ font-size: var(--fs-title); font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }}
+  .kpi-value {{ font-size: var(--fs-title); font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
   ul {{ margin: 6px 0; padding-left: 20px; }}
   li {{ margin-bottom: 3px; }}
 </style>
