@@ -35,11 +35,6 @@ _PANEL_STYLE = """<style>
 .plc-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
 .plc-dates { font-family:var(--mono); font-weight:600; font-size:var(--fs-body); }
 .plc-price { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
-.plc-pill { background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent); }
-.plc-pill.open { background:color-mix(in srgb, var(--ok) 14%, transparent); color:var(--ok); }
-.plc-pill.broke { background:color-mix(in srgb, var(--bad) 14%, transparent); color:var(--bad); }
-.plc-pill.played_out { background:color-mix(in srgb, var(--ok) 14%, transparent);
-  color:var(--ok); }
 .plc-meta { color:var(--muted); font-size:var(--fs-caption); margin-top:2px; }
 .plc-thesis { font-size:var(--fs-caption); line-height:1.5; margin:4px 0 0;
   color:var(--muted); }
@@ -132,22 +127,21 @@ def _entry_li(entry: PositionEntry) -> str:
     entry_label = entry.entry_date or "date unknown"
     if entry.is_open:
         parts.append(f'<span class="plc-dates">{escape(entry_label)} → open</span>')
-        parts.append('<span class="p-pill plc-pill open">OPEN</span>')
+        parts.append('<span class="k-pill k-pill-ok">OPEN</span>')
     else:
         parts.append(
             f'<span class="plc-dates">{escape(entry_label)} → {escape(entry.exit_date or "?")}</span>'
         )
         outcome = entry.outcome_vs_thesis
         if outcome:
+            tone = {"broke": "k-pill-bad", "played_out": "k-pill-ok"}.get(outcome, "")
+            cls = f"k-pill {tone}".strip()
             parts.append(
-                f'<span class="p-pill plc-pill {escape(outcome)}">'
-                f"{escape(_OUTCOME_LABELS.get(outcome, outcome))}</span>"
+                f'<span class="{cls}">{escape(_OUTCOME_LABELS.get(outcome, outcome))}</span>'
             )
     parts.append(_price_span(entry))
     if entry.entry_conviction:
-        parts.append(
-            f'<span class="p-pill plc-pill">{escape(entry.entry_conviction)} conviction</span>'
-        )
+        parts.append(f'<span class="k-pill">{escape(entry.entry_conviction)} conviction</span>')
     parts.append("</div>")
 
     meta_bits: list[str] = [f"source: {entry.source}"]

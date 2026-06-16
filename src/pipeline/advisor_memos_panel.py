@@ -258,8 +258,10 @@ def _score_pill(score: StanceScoreRow) -> str:
         f"graded {score.start_date or '?'} → {score.end_date or '?'} · "
         f"basis {score.benchmark_basis}"
     )
+    # Filled status pill = the control kit's .k-pill (+ tone); muted → bare.
+    suffix = f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
     return (
-        f'<span class="p-pill am-verdict-{tone}" title="{escape(tip)}">'
+        f'<span class="k-pill{suffix}" title="{escape(tip)}">'
         f"{escape(score.verdict.replace('_', ' '))}{escape(detail)}</span>"
     )
 
@@ -275,17 +277,16 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
         horizon = f" · {m.horizon_days}d" if m.horizon_days else ""
         # Every displayed stance carries its track record (directive): the
         # graded verdict once scored, the pending state until then.
+        # Stance is the analyst's position, not a status — a neutral bare
+        # .k-pill (the local .am-stance now carries only its typographic refine).
         stance = (
-            f'<span class="p-pill am-stance" title="scoring {escape(m.score_status)}">'
+            f'<span class="k-pill am-stance" title="scoring {escape(m.score_status)}">'
             f"stance: {escape(m.stance)}{escape(horizon)}</span>"
         )
     if score is not None:
         stance += _score_pill(score)
     elif m.score_status == "pending" and m.kind == "swap_check":
-        stance += (
-            '<span class="p-pill am-verdict-muted" title="screen grades at horizon">'
-            "scoring pending</span>"
-        )
+        stance += '<span class="k-pill" title="screen grades at horizon">scoring pending</span>'
     links: list[str] = []
     if m.note_id is not None:
         links.append(f"note #{m.note_id}")
@@ -310,7 +311,7 @@ _PANEL_CSS = """<style>
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
 .am-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
-  text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+  text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .am-note { font-size: var(--fs-caption); }
 .am-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
@@ -339,9 +340,10 @@ _PANEL_CSS = """<style>
 .am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
 .am-runbar select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption);
   font-family: var(--mono); }
-.am-stance { background: color-mix(in srgb, var(--warn) 16%, transparent);
-  color: var(--warn); text-transform: uppercase;
-  letter-spacing: 0.4px; font-size: var(--fs-micro); cursor: help; }
+/* Stance pill rides the kit's neutral .k-pill; .am-stance adds only its
+   typographic refinement (uppercase micro, help cursor) — no color. */
+.am-stance { text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: var(--fs-micro); cursor: help; }
 .soc-q { margin: 12px 0; }
 .soc-q label { display: block; font-size: var(--fs-body); color: var(--fg); margin-bottom: 6px; }
 .soc-q textarea { width: 100%; resize: vertical; }
@@ -350,10 +352,8 @@ _PANEL_CSS = """<style>
 .soc-status { font-size: var(--fs-caption); }
 .soc-saved { color: var(--ok); font-size: var(--fs-body); }
 .am-track { font-size: var(--fs-body); margin: 0 0 12px; font-family: var(--mono); }
-.am-verdict-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.am-verdict-bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
-.am-verdict-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.am-verdict-muted { background: var(--paper); color: var(--muted); }
+/* Verdict pills migrated to the control kit's .k-pill (+ -ok/-warn/-bad);
+   the muted/pending verdict is the neutral bare .k-pill. */
 </style>"""
 
 # Run-bar wiring: POST the action, stream the job's SSE frames into the log,
