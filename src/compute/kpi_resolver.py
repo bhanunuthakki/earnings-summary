@@ -368,6 +368,53 @@ def _units_mergeable(incoming: Unit, stored_raw: object) -> bool:
     return same_family(incoming, stored)
 
 
+def _unit_family_token(unit: Unit) -> str:
+    """A short, stable tag for ``unit``'s dimensional FAMILY — used to disambiguate
+    a minted name from a surface-identical definition of an incompatible family.
+
+    Family-level (not the specific unit) so every member of one family shares a
+    single disambiguated name: a later capture in a different magnitude of the same
+    family (``count``→``thousands`` say) re-derives the SAME tag and reuses the row
+    rather than minting a per-magnitude duplicate. Magnitudes → ``amount``,
+    proportions → ``rate``, everything else (raw counts, out-of-vocab) → its own
+    unit value, which is its own singleton family under ``same_family``."""
+    if same_family(unit, Unit.ACTUAL):
+        return "amount"
+    if same_family(unit, Unit.RATIO):
+        return "rate"
+    return unit.value
+
+
+def _mint_unit_safe_name(cleaned: str, unit: Unit, rows: list[sqlite3.Row]) -> str:
+    """The name to mint for a captured ``(cleaned, unit)`` that found no
+    family-compatible normalized match — GUARANTEED not to collide on
+    ``(ticker, name)`` with an existing definition of an INCOMPATIBLE unit family.
+
+    ``find_or_create_kpi_definition`` keys only on ``(ticker, name)`` with the unit
+    absent from its identity (``UNIQUE(ticker, name)``), so returning ``cleaned``
+    bare when a surface-identical row of an incompatible family already exists
+    would silently route this distinct metric's facts onto that row — the exact
+    false merge the candidate-step unit gate exists to prevent, and the governing
+    invariant says a false merge is worse than a duplicate. Append a family tag (and
+    in the pathological case that the tagged name ALSO collides incompatibly, a
+    numeric suffix) until the name is unit-safe. Deterministic in the common
+    single-collision case, so a re-encounter of the same ``(label, unit)`` reuses
+    the disambiguated row instead of minting another."""
+
+    def _collides(name: str) -> bool:
+        return any(str(r["name"]) == name and not _units_mergeable(unit, r["unit"]) for r in rows)
+
+    if not _collides(cleaned):
+        return cleaned
+    tagged = f"{cleaned} ({_unit_family_token(unit)})"
+    if not _collides(tagged):
+        return tagged
+    suffix = 2
+    while _collides(f"{tagged} #{suffix}"):
+        suffix += 1
+    return f"{tagged} #{suffix}"
+
+
 def _kpi_definitions_has_origin(conn: sqlite3.Connection) -> bool:
     """True iff kpi_definitions carries ``definition_origin`` (migration 0113).
     Schema-defensive: a pre-0113 / minimal test DB simply skips origin-aware
@@ -419,13 +466,17 @@ def canonical_metric_name(
        resolver's most-observations defragmentation so capture reuses the rich
        series), then analyst-origin over capture-origin, then an exact surface
        match, then lowest id — a fully deterministic order.
-    4. Otherwise mint a clean new name (``_clean_new_name``).
+    4. Otherwise mint a clean new name (``_clean_new_name``) — but if that bare
+       name is surface-identical to an existing definition of an INCOMPATIBLE unit
+       family, disambiguate it with a family tag (``_mint_unit_safe_name``) so the
+       unit gate's split is not silently undone downstream.
 
-    The returned name is fed straight to ``find_or_create_kpi_definition``; when
-    no safe normalized match exists but the cleaned label is surface-identical to
-    an existing row, that row is reused there by its ``(ticker, name)`` key (and
-    the ``UNIQUE(ticker, name)`` constraint guarantees a minted name can only ever
-    map to at most one row). Requires ``conn.row_factory = sqlite3.Row``.
+    The returned name is fed straight to ``find_or_create_kpi_definition``, which
+    keys on ``(ticker, name)`` with the unit ABSENT from its identity. So when no
+    family-compatible normalized match exists, returning a bare name that collides
+    with a surface-identical row of a DIFFERENT unit family would false-merge two
+    distinct metrics; step 4 prevents that by minting a unit-safe name instead.
+    Requires ``conn.row_factory = sqlite3.Row``.
     """
     cleaned = _clean_new_name(raw_label)
     if not cleaned:
@@ -447,7 +498,13 @@ def canonical_metric_name(
         if _canonical_match_key(str(r["name"])) == want and _units_mergeable(unit, r["unit"])
     ]
     if not candidates:
-        return cleaned
+        # No family-compatible normalized match. A bare ``cleaned`` here would let
+        # find_or_create_kpi_definition — keyed on (ticker, name), unit ABSENT —
+        # silently merge this value onto a surface-identical definition of an
+        # incompatible unit family (a COUNT "Deposits" onto the dollar "Deposits").
+        # Mint a unit-disambiguated name so the unit gate's split survives to
+        # persistence.
+        return _mint_unit_safe_name(cleaned, unit, rows)
 
     counts = _definition_fact_counts(conn, ticker)
 
