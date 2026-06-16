@@ -37,6 +37,21 @@ _PRESS_RELEASE = (
     "MONTEVIDEO, Uruguay, May 14, 2025 — dLocal Limited today reported financial "
     "results for the first quarter 2025.\n"
 )
+# A GENUINE IR supplement that cross-references its Form 10-K within the first
+# ~500 chars (and names the SEC) but carries NONE of the EDGAR cover-page
+# scaffolding. The #626 position anchor alone fired the veto here — silently
+# mis-filing it as sec_* and dropping it from `capture_for_ir_pdf_docs`.
+_SUPPLEMENT_CITES_10K = (
+    "Nu Holdings Ltd.\nFourth Quarter 2025 Financial Supplement\n"
+    "The non-GAAP measures herein are reconciled in, and consistent with, our "
+    "Annual Report on Form 10-K filed with the Securities and Exchange Commission.\n"
+    "Net interest income, gross profit, and customer metrics follow.\n"
+)
+_SUPPLEMENT_CITES_10Q = (
+    "Wix.com Ltd. — Q2 2025 Quarterly Financial Data\n"
+    "Figures should be read together with our Quarterly Report on Form 10-Q.\n"
+    "Bookings and free cash flow detail below.\n"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +74,47 @@ def test_detect_sec_form_anchored_to_cover_not_disclaimer() -> None:
     # NOT be treated as a SEC filing (the rule anchors to the first ~500 chars).
     text = "Investor Presentation\n" + ("blah " * 200) + "see our Annual Report on Form 10-K"
     assert ir_uploads.detect_sec_form(text) is None
+
+
+def test_detect_sec_form_ignores_supplement_citing_form_in_first_500_chars() -> None:
+    # The <500-char cross-reference case the #626 position anchor missed: a real
+    # supplement that cites "Form 10-K"/"Form 10-Q" (and the SEC) near its TOP, but
+    # without any EDGAR cover scaffolding, must NOT be vetoed. The positive
+    # cover-structure signal — not position — is what distinguishes a filing here.
+    assert "Form 10-K" in _SUPPLEMENT_CITES_10K[:500]  # the citation IS within range
+    assert ir_uploads.detect_sec_form(_SUPPLEMENT_CITES_10K) is None
+    assert "Form 10-Q" in _SUPPLEMENT_CITES_10Q[:500]
+    assert ir_uploads.detect_sec_form(_SUPPLEMENT_CITES_10Q) is None
+
+
+def test_detect_sec_form_requires_positive_cover_structure() -> None:
+    # The form designator alone is necessary but not sufficient; a cover signal is.
+    bare = "FORM 10-K\nNet revenue grew 20% year over year.\n"
+    assert ir_uploads.detect_sec_form(bare) is None
+    with_cover = "FORM 10-K\n(Mark One)\nNet revenue grew 20% year over year.\n"
+    assert ir_uploads.detect_sec_form(with_cover) is DocType.SEC_10K
+
+
+# ---------------------------------------------------------------------------
+# _detect_doc_type (the deterministic classify_ir_file path) shares the gate
+# ---------------------------------------------------------------------------
+
+
+def test_detect_doc_type_does_not_classify_citing_supplement_as_sec() -> None:
+    # The manual-upload deterministic classifier must not misfile a citing
+    # supplement either: with no cover structure, the SEC rule is skipped and the
+    # filename fallback recognizes it as the IR supplement it actually is.
+    doc_type, _ev = ir_uploads._detect_doc_type(
+        _SUPPLEMENT_CITES_10K, ".pdf", "nu-q4-2025-financial-supplement.pdf"
+    )
+    assert doc_type is DocType.IR_SUPPLEMENT
+
+
+def test_detect_doc_type_still_classifies_genuine_cover_as_sec() -> None:
+    # A real 10-K cover (positive structure present) still resolves to SEC_10K
+    # through the deterministic path — the #626 behavior is preserved.
+    doc_type, _ev = ir_uploads._detect_doc_type(_TENK_COVER, ".pdf", "rbrk-10k.pdf")
+    assert doc_type is DocType.SEC_10K
 
 
 # ---------------------------------------------------------------------------
