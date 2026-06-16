@@ -809,10 +809,16 @@ def _detect_doc_type(
     if ext == ".xlsx":
         return DocType.IR_SUPPLEMENT, ["xlsx_extension"]
 
+    # An SEC form designator only counts when the positive cover-page structure is
+    # present (same gate as `detect_sec_form`); otherwise a supplement that merely
+    # cites "Form 10-K" near its top would be classified as a filing and mis-filed.
+    sec_cover = _has_sec_cover_structure(text)
     earliest_pos: int | None = None
     earliest_idx: int | None = None
     earliest_match: tuple[DocType, str, str] | None = None
     for idx, (doc_type, rx, label) in enumerate(_DOC_TYPE_RULES):
+        if doc_type in _SEC_DOC_TYPES and not sec_cover:
+            continue
         m = rx.search(text)
         if m is None:
             continue
@@ -856,16 +862,62 @@ _SEC_DOC_TYPES: frozenset[DocType] = frozenset(
 )
 
 
+# Positive SEC cover-page structural signals. A genuine 10-K / 10-Q / 20-F / 8-K /
+# 6-K reproduces these EDGAR cover-page artifacts verbatim; an IR document that
+# merely *cites* a form ("…consistent with our Annual Report on Form 10-K filed
+# with the Securities and Exchange Commission") does not. Requiring at least one —
+# alongside the boundary-anchored form designator — closes the false-positive seam
+# the #626 position-anchor alone left open: a supplement whose Form 10-K
+# cross-reference sits within the first ~500 chars was mistaken for the filing
+# itself, mis-filed as `sec_*`, and silently dropped from `capture_for_ir_pdf_docs`
+# (which scans only `ir_supplement`). Deliberately EXCLUDES a bare "Securities and
+# Exchange Commission" mention: a citation routinely names the SEC, so that phrase
+# cannot distinguish a cover from a reference.
+_SEC_COVER_SIGNALS: tuple[re.Pattern[str], ...] = (
+    # The SEC's filing address — on every EDGAR cover page, never in a citation.
+    re.compile(r"\bWashington,?\s*D\.?\s*C\.?\s*20549\b", re.IGNORECASE),
+    # The cover-page report-type checkbox header.
+    re.compile(r"\(\s*Mark\s+One\s*\)", re.IGNORECASE),
+    # The cover's report-type declaration (ANNUAL / QUARTERLY / TRANSITION REPORT
+    # PURSUANT TO SECTION 13 OR 15(d) of the Securities Exchange Act of 1934).
+    re.compile(
+        r"\b(?:ANNUAL|QUARTERLY|TRANSITION)\s+REPORT\s+PURSUANT\s+TO\s+SECTION\b",
+        re.IGNORECASE,
+    ),
+    # The commission file number line on the cover.
+    re.compile(r"\bCommission\s+File\s+(?:Number|No\.?)\b", re.IGNORECASE),
+)
+
+
+def _has_sec_cover_structure(text: str) -> bool:
+    """True iff `text` carries at least one positive SEC cover-page structural
+    artifact (EDGAR address, the "(Mark One)" checkbox header, the report-type
+    "…REPORT PURSUANT TO SECTION…" declaration, or a commission-file-number line).
+
+    The form designator alone ("FORM 10-K") is necessary but not sufficient: a
+    genuine filing's cover reproduces this scaffolding, whereas an IR document that
+    references the filing does not. See `_SEC_COVER_SIGNALS`.
+    """
+    return any(rx.search(text) for rx in _SEC_COVER_SIGNALS)
+
+
 def detect_sec_form(text: str) -> DocType | None:
     """Return the SEC form DocType iff `text` (a cover-page fingerprint) is an SEC
     filing (10-K / 10-Q / 20-F / 8-K / 6-K), else None.
 
-    Reuses the same boundary-anchored cover-page rules as `_detect_doc_type`, but
-    scoped to SEC forms only — the deterministic signal that a PDF is a regulatory
-    filing rather than an IR document. Picks the earliest-position match (mirroring
-    `_detect_doc_type`), so a stray disclaimer mention of "Form 10-K" deep in the
-    body of an IR deck doesn't trip it (the rules anchor to the first ~500 chars).
+    Two conditions must BOTH hold, so an IR document is never mistaken for a filing:
+      1. a boundary-anchored form designator in the first ~500 chars (the same
+         cover-page rules `_detect_doc_type` uses), and
+      2. at least one positive SEC cover-page structural signal anywhere in the
+         fingerprint (`_has_sec_cover_structure`).
+
+    Condition (1) alone — the #626 behavior — false-positives on a supplement that
+    cites "Form 10-K" near its top; condition (2) is the positive "this really is a
+    filing" gate that a passing mention cannot satisfy. Picks the earliest-position
+    designator match (mirroring `_detect_doc_type`) when both hold.
     """
+    if not _has_sec_cover_structure(text):
+        return None
     earliest_pos: int | None = None
     earliest: DocType | None = None
     for doc_type, rx, _label in _DOC_TYPE_RULES:

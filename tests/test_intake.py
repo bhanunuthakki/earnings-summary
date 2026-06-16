@@ -255,6 +255,37 @@ def test_classify_leaves_genuine_ir_doc_untouched(monkeypatch: pytest.MonkeyPatc
     assert classification.doc_type is DocType.IR_PRESS_RELEASE  # no SEC override
 
 
+def test_classify_does_not_veto_supplement_that_cites_sec_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import intake
+
+    # A genuine financial supplement that cites its Form 10-K (and the SEC) in its
+    # first few hundred chars but carries no EDGAR cover scaffolding. The LLM types
+    # it as ir_supplement; the deterministic veto must NOT override that, or the
+    # doc is mis-filed as sec_* and dropped from capture_for_ir_pdf_docs.
+    supplement = (
+        "Nu Holdings Ltd.\nFourth Quarter 2025 Financial Supplement\n"
+        "The non-GAAP measures herein are consistent with our Annual Report on "
+        "Form 10-K filed with the Securities and Exchange Commission.\n"
+    )
+
+    def fake_llm(filename: str, text: str, hint: dict[str, object]) -> dict[str, object]:
+        return {
+            "ticker": "NU",
+            "period_end": "2025-12-31",
+            "doc_type": "ir_supplement",
+            "confidence": 0.95,
+            "reasoning": "financial supplement",
+        }
+
+    monkeypatch.setattr(intake, "classify_intake_document", fake_llm)
+    classification, skip = intake._classify(Path("NU-Q4-supplement.pdf"), supplement)
+    assert skip == ""
+    assert classification is not None
+    assert classification.doc_type is DocType.IR_SUPPLEMENT  # veto did NOT fire
+
+
 def test_dest_path_for_sec_form_uses_sec_stem() -> None:
     import intake
 
