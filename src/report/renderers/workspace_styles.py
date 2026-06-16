@@ -1444,28 +1444,8 @@ ul.flag-list li.flag-positive {
   padding-bottom: 4px;
 }
 .lens-panel .lens-body { padding: 14px 18px 18px; }
-.lens-warn {
-  display: inline-block;
-  font-size: var(--fs-micro);
-  font-family: var(--mono);
-  background: var(--warn);
-  color: var(--surface);
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  margin-left: 6px;
-  letter-spacing: 0.5px;
-}
-.lens-stale {
-  display: inline-block;
-  font-size: var(--fs-micro);
-  font-family: var(--mono);
-  background: var(--muted);
-  color: var(--surface);
-  padding: 1px 5px;
-  border-radius: var(--radius-full);
-  margin-left: 6px;
-  letter-spacing: 0.5px;
-}
+/* .lens-warn / .lens-stale migrated to the control kit's .k-pill (+ k-pill-warn
+   for DIRTY; neutral bare for STALE) — see workspace_sections/synthesis.py. */
 .lens-five_min_reread .lens-body h2 {
   color: var(--accent);
   font-size: 16px;
@@ -1503,34 +1483,15 @@ ul.flag-list li.flag-positive {
   letter-spacing: 0.4px;
   color: var(--fg);
 }
+/* The outcome chip now rides the control kit's .k-pill (shape + tone fill); this
+   selector adds only its uppercase-micro typographic refinement. Tone is routed
+   in Python (_OUTCOME_PILL_TONE in workspace_sections/thesis_risk.py): correct ->
+   k-pill-ok, wrong -> k-pill-bad, mixed -> k-pill-warn, pending/unfalsifiable ->
+   neutral bare .k-pill. */
 .decision-badge .decision-outcome {
   font-size: var(--fs-micro);
-  padding: 2px 8px;
-  border-radius: 999px;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
-  font-weight: 600;
-}
-.decision-badge.outcome-correct .decision-outcome {
-  background: color-mix(in srgb, var(--ok) 12%, transparent);
-  color: var(--ok);
-}
-.decision-badge.outcome-wrong .decision-outcome {
-  background: color-mix(in srgb, var(--bad) 12%, transparent);
-  color: var(--bad);
-}
-.decision-badge.outcome-mixed .decision-outcome {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
-  color: var(--warn);
-}
-.decision-badge.outcome-pending .decision-outcome {
-  background: var(--paper);
-  color: var(--muted);
-}
-.decision-badge.outcome-unfalsifiable .decision-outcome {
-  background: var(--paper);
-  color: var(--muted);
-  font-style: italic;
+  letter-spacing: 0.06em;
 }
 
 /* ============================================================

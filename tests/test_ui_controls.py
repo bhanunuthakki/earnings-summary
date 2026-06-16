@@ -464,25 +464,22 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
     # the 2026-06-14 sweep; alias/font-size stay quarantined (report unfork).
     "report/renderers/workspace_chat.py": frozenset({"alias", "font-size"}),
-    "report/renderers/workspace_comments.py": frozenset(
-        # + kit-badge: .cmt-outbox-badge / .cmt-health-pill are reinvented filled
-        #   status pills (color-mix ok/bad) that should be .k-pill — golden-impact
-        #   migration, tracked as a follow-up to the 2026-06-15 component guard.
-        {"alias", "font-size", "radius", "kit-badge"}
-    ),
-    "report/renderers/workspace_styles.py": frozenset(
-        # + kit-badge: .decision-badge.outcome-* (correct/wrong/mixed) is a
-        #   reinvented filled status badge → .k-pill. Report golden-impact; tracked.
-        {"alias", "radius", "kit-badge"}
-    ),
+    # workspace_comments graduated its kit-badge dimension in the deferred-items
+    # pass: .cmt-outbox-badge / .cmt-health-pill now ride the kit's .k-pill (tone
+    # set in JS) with layout/mono-micro refine only. alias/font-size/radius stay
+    # quarantined (report unfork — unrelated to the pill migration).
+    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius"}),
+    # workspace_styles graduated its kit-badge dimension in the same pass: the
+    # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
+    # thesis_risk.py). alias/radius stay quarantined (report unfork).
+    "report/renderers/workspace_styles.py": frozenset({"alias", "radius"}),
     "ui/cite_marks.py": frozenset({"alias", "radius"}),
-    # --- kit-badge (the 2026-06-15 component dimension): surfaces still hand-rolling
-    #     a FILLED status pill instead of .k-pill. Seeded from the scanner; the
-    #     ratchet drives them down. The command-center two (allocation .ad-pill,
-    #     position_lifecycle .plc-pill) GRADUATED onto .k-pill in the deferred-items
-    #     pass — no-golden migrations, now clean. The report two remain (workspace_
-    #     comments / workspace_styles entries above) — they ride the workspace golden.
-    #     NEW reinvented status badges in any other (clean) surface fail immediately. ---
+    # --- kit-badge (the 2026-06-15 component dimension): all seeded surfaces have
+    #     now GRADUATED onto .k-pill — the command-center two (allocation .ad-pill,
+    #     position_lifecycle .plc-pill) and the report two (workspace_comments
+    #     .cmt-* / workspace_styles .decision-badge) in the deferred-items pass.
+    #     No surface carries a kit-badge quarantine: a NEW reinvented filled status
+    #     badge in ANY surface now fails CI immediately. ---
 }
 
 _STRING_TOKENS = frozenset({_token.STRING})
