@@ -216,6 +216,28 @@ def test_classify_value_count_deferred() -> None:
     assert val is None and reason == "share_or_count"
 
 
+def test_classify_value_in_shares_parenthetical_deferred() -> None:
+    """A row whose label declares '(in shares)'/'(in units)' is a COUNT and MUST
+    defer even in a $-scaled section. Regression for the prod-capture mis-scale
+    where BN 'Issued and Outstanding (in shares)' (24M shares) was multiplied by
+    the section's 1e6 $-scale into a phantom $24T, and RBRK's preferred-share
+    schedule likewise. The word-order tokens missed the trailing parenthetical."""
+    for label in (
+        "Issued and Outstanding (in shares)",
+        "Authorized Shares (in shares)",
+        "Preferred Equity Units Outstanding (in units)",
+    ):
+        val, reason, _conf = g._classify_value(label, 24_000_000, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+        assert val is None and reason == "share_or_count", label
+
+
+def test_classify_value_dollar_row_mentioning_shares_still_captured() -> None:
+    """Guard against over-deferral: a genuine $ line item that merely mentions
+    'shares' WITHOUT a count-unit parenthetical is still captured + scaled."""
+    val, reason, _conf = g._classify_value("Investments in shares of associates", 5000, 1_000_000)  # pyright: ignore[reportPrivateUsage]
+    assert reason == "" and val == Decimal("5000000000")
+
+
 def test_classify_value_per_share_not_scaled() -> None:
     val, reason, conf = g._classify_value("Dividends declared per share", 0.80, 1_000_000)  # pyright: ignore[reportPrivateUsage]
     assert reason == "" and val == Decimal("0.80")  # NOT 800,000
