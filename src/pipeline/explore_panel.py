@@ -543,6 +543,50 @@ _PANEL_JS = """
       showError('network error — try again');
     });
   });
+
+  // ---- Park one picked fact on the DCF reference sheet (S7). A single fact +
+  // single ticker; the server resolves the latest value (override-aware) and
+  // writes it — native unit, value + period + source — into the companion
+  // dcf/facts/<T>.xlsx the refresh never rebuilds, so it survives every model
+  // refresh. Reference-only: no driver field, no reprice. ----
+  function renderReference(res) {
+    var f = res.fact || {};
+    var unit = f.unit ? (' ' + f.unit) : '';
+    var verb = res.action === 'updated' ? 'Updated on' : 'Added to';
+    var html = '<div class="vx-inject-ok"><strong>' + verb + ' ' + askEsc(res.ticker)
+      + ' DCF reference sheet.</strong> ' + askEsc(f.label) + ' = ' + fmtNum(f.value) + unit
+      + (f.period_end ? ' \\u00b7 as of ' + askEsc(f.period_end) : '')
+      + (f.source ? ' \\u00b7 ' + askEsc(f.source) : '')
+      + (f.fact_id !== null && f.fact_id !== undefined ? ' \\u00b7 fact #' + f.fact_id : '')
+      + '<br>' + res.count + (res.count === 1 ? ' fact' : ' facts') + ' on the sheet \\u00b7 '
+      + 'survives DCF refresh (separate workbook)</div>';
+    el('vx-result').innerHTML = html;
+  }
+  var refBtn = el('vx-inject-ref');
+  if (refBtn) refBtn.addEventListener('click', function () {
+    var ts = tickers();
+    if (ts.length !== 1) {
+      showError('A DCF reference fact attaches to one company — narrow to exactly one ticker.');
+      return;
+    }
+    var toks = selectedTokens();
+    if (toks.length !== 1) { showError('Pick exactly one fact to add as a DCF reference.'); return; }
+    refBtn.disabled = true;
+    el('vx-result').innerHTML = '<div class="vx-none">Adding reference\\u2026</div>';
+    fetch('/api/dcf/inject-fact-sheet', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ticker: ts[0], token: toks[0]})
+    }).then(function (r) {
+      return r.json().then(function (res) { return {ok: r.ok, res: res}; });
+    }).then(function (o) {
+      refBtn.disabled = false;
+      if (!o.ok) { showError((o.res && o.res.error) || 'adding reference failed'); return; }
+      renderReference(o.res);
+    }).catch(function () {
+      refBtn.disabled = false;
+      showError('network error — try again');
+    });
+  });
   root.addEventListener('click', function (ev) {
     var btn = ev.target.closest('button[data-act]');
     if (!btn) return;
@@ -1068,6 +1112,8 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
     <select id="vx-inject-field" aria-label="DCF driver field">{inject_field_opts}</select>
     <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-inject-dcf"
       title="Set a redesigned-DCF driver from the single picked fact &amp; single ticker — latest value, override-aware, unit-converted, sanity-bounded">Inject as DCF driver</button>
+    <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="vx-inject-ref"
+      title="Park the single picked fact on the ticker's DCF reference sheet (a companion workbook the refresh never rebuilds) — latest value, override-aware, native unit, survives every model refresh">Add as reference</button>
   </div>
 </div>
 <div id="vx-result"><div class="vx-none">Pick tickers + metrics and run. Saved views
