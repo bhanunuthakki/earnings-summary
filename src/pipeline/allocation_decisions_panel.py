@@ -1057,6 +1057,17 @@ def _skill_read(d: SkillDecomposition) -> str:
     return f'<p class="adc-line sk-read">{lead}{"; ".join(bits)}.</p>'
 
 
+# Timeline kind → semantic tone word for its filled status pill. Tones exist
+# only where they carry meaning (bear append = bad, thesis update = ok); every
+# other kind (sizing intent, decision note, the old accent default) maps to no
+# tone and renders the neutral bare .k-pill — color is for meaning, not
+# category, and accent on a non-interactive timeline pill was decoration.
+_TIMELINE_PILL_TONE: dict[str, str] = {
+    "bear_append": "bad",
+    "thesis_update": "ok",
+}
+
+
 def _timeline_section(timeline: list[TimelineEvent]) -> str:
     head = (
         '<section class="panel"><h2>Decisions timeline</h2>'
@@ -1073,7 +1084,8 @@ def _timeline_section(timeline: list[TimelineEvent]) -> str:
         "<tr>"
         f'<td class="when">{escape(e.when.date().isoformat())}</td>'
         f'<td class="tk">{escape(e.ticker or "—")}</td>'
-        f'<td><span class="p-pill ad-pill p-{escape(e.kind)}">{escape(e.label)}</span></td>'
+        f'<td><span class="k-pill{_pill_tone(_TIMELINE_PILL_TONE.get(e.kind, "muted"))}">'
+        f"{escape(e.label)}</span></td>"
         f'<td class="ad-body">{render_prose(e.body, inline=True)}</td>'
         "</tr>"
         for e in timeline
@@ -1124,15 +1136,9 @@ _PANEL_CSS = """<style>
 .adc-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
 .adc-sub { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
-/* Timeline kinds: semantic tones where they exist (bear=bad, thesis=ok);
-   the rest stay one quiet treatment — color is for meaning, not category. */
-.ad-pill { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
-.ad-pill.p-bear_append { background: color-mix(in srgb, var(--bad) 16%, transparent);
-  color: var(--bad); }
-.ad-pill.p-thesis_update { background: color-mix(in srgb, var(--ok) 16%, transparent);
-  color: var(--ok); }
-.ad-pill.p-sizing_intent, .ad-pill.p-decision_note { background: var(--paper);
-  color: var(--muted); border: 1px solid var(--border); }
+/* Timeline kinds: the filled status pill is now the control kit's .k-pill
+   (+ k-pill-bad for bear append, k-pill-ok for thesis update; every other kind
+   is the neutral bare .k-pill). Tone is mapped in _TIMELINE_PILL_TONE. */
 .ad-body { font-size: var(--fs-body); line-height: 1.5; }
 td.pos, span.pos { color: var(--ok); }
 td.neg, span.neg { color: var(--bad); }

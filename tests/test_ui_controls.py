@@ -478,11 +478,11 @@ QUARANTINE: dict[str, frozenset[str]] = {
     "ui/cite_marks.py": frozenset({"alias", "radius"}),
     # --- kit-badge (the 2026-06-15 component dimension): surfaces still hand-rolling
     #     a FILLED status pill instead of .k-pill. Seeded from the scanner; the
-    #     ratchet drives them down. The command-center two are no-golden migrations
-    #     (a clean follow-up); the report two ride the workspace golden. NEW
-    #     reinvented status badges in any other (clean) surface fail immediately. ---
-    "pipeline/allocation_decisions_panel.py": frozenset({"kit-badge"}),  # .ad-pill.p-*
-    "pipeline/position_lifecycle_panel.py": frozenset({"kit-badge"}),  # .plc-pill.*
+    #     ratchet drives them down. The command-center two (allocation .ad-pill,
+    #     position_lifecycle .plc-pill) GRADUATED onto .k-pill in the deferred-items
+    #     pass — no-golden migrations, now clean. The report two remain (workspace_
+    #     comments / workspace_styles entries above) — they ride the workspace golden.
+    #     NEW reinvented status badges in any other (clean) surface fail immediately. ---
 }
 
 _STRING_TOKENS = frozenset({_token.STRING})
