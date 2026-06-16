@@ -2473,6 +2473,114 @@ def create_app(
             payload["inputs"] = saved_inp.to_dict()
         return {**payload, "injected": True, "injection": injection, "result": result}
 
+    @app.route("/api/dcf/inject-fact-sheet", methods=["POST", "OPTIONS"])
+    def dcf_inject_fact_sheet():  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Park a picked DIY fact on a ticker's DCF *reference sheet* (S7).
+
+        Body: ``{"ticker": T, "token": "<metric token>"}`` (no driver field — a
+        reference fact is not wired into the recompute). Resolves the metric's
+        LATEST value through the SAME loaders the driver path uses (so company-doc
+        ``fact_overrides`` win — S2), then writes it — value + unit + period +
+        source/provenance, in its native unit (NOT converted) — into the companion
+        workbook ``dcf/facts/<T>.xlsx`` that the refresh NEVER rebuilds, so it
+        survives every model refresh (the S7 deliverable; see
+        ``dcf.fact_sheet`` for the why).
+
+        400 on a malformed body / unparseable token; 404 when the ticker has no
+        DCF model workbook to attach a reference to; 422 when the fact cannot be
+        resolved (no observations)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from datetime import date as _date
+
+        from dcf import fact_drivers, fact_sheet
+        from viewspec.spec import MetricRef, ViewSpecError
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return ({"error": "JSON body required"}, 400)
+        data = cast("dict[str, object]", body)
+        ticker_raw = data.get("ticker")
+        token = data.get("token")
+        if not isinstance(ticker_raw, str) or not ticker_raw.strip():
+            return ({"error": "body.ticker required"}, 400)
+        if not isinstance(token, str) or not token.strip():
+            return ({"error": "body.token (a picked metric token) required"}, 400)
+        try:
+            metric = MetricRef.parse_token(token)
+        except ViewSpecError as exc:
+            return ({"error": str(exc)}, 400)
+
+        t = ticker_raw.strip().upper()
+        # A reference attaches to a ticker's DCF — any model archetype qualifies
+        # (FCFF/bank/holdco/...), since the companion file is model-agnostic. A
+        # never-built name has nothing to reference.
+        if not (repo_root / "dcf" / f"{t}.xlsx").exists():
+            return ({"error": f"{t} has no DCF model to attach a reference to"}, 404)
+
+        try:
+            resolved = fact_drivers.resolve_fact_value(
+                metric, ticker=t, repo_root=repo_root, db_path=db_path
+            )
+        except fact_drivers.FactDriverError as exc:
+            return ({"error": str(exc)}, 422)
+
+        fact = fact_sheet.ReferenceFact(
+            token=token,
+            label=metric.label,
+            value=resolved.value,
+            unit=resolved.unit,
+            period_end=resolved.period_end,
+            source=resolved.source,
+            fact_id=resolved.fact_id,
+            captured_on=_date.today().isoformat(),
+        )
+        path = fact_sheet.facts_workbook_path(repo_root, t)
+        outcome = fact_sheet.upsert_fact(path, fact)
+        return {
+            "ticker": t,
+            "added": True,
+            "action": outcome["action"],
+            "count": outcome["count"],
+            "workbook": str(path),
+            "fact": {
+                "token": fact.token,
+                "label": fact.label,
+                "value": fact.value,
+                "unit": fact.unit,
+                "period_end": fact.period_end,
+                "source": fact.source,
+                "fact_id": fact.fact_id,
+                "captured_on": fact.captured_on,
+            },
+        }
+
+    @app.route("/api/dcf/reference-facts/<ticker>", methods=["GET"])
+    def dcf_reference_facts(ticker: str):  # pyright: ignore[reportUnusedFunction]  # registered via decorator
+        """Every reference fact parked on a ticker's DCF (the companion
+        ``dcf/facts/<T>.xlsx``), as ``{"ticker", "facts": [...]}``. Empty list
+        when none have been injected."""
+        from dcf import fact_sheet
+
+        t = ticker.upper()
+        facts = fact_sheet.read_facts(fact_sheet.facts_workbook_path(repo_root, t))
+        return {
+            "ticker": t,
+            "facts": [
+                {
+                    "token": f.token,
+                    "label": f.label,
+                    "value": f.value,
+                    "unit": f.unit,
+                    "period_end": f.period_end,
+                    "source": f.source,
+                    "fact_id": f.fact_id,
+                    "captured_on": f.captured_on,
+                }
+                for f in facts
+            ],
+        }
+
     # ----- ACTIONS (PR 2a — refresh dispatcher) -----
 
     @app.route("/actions/refresh", methods=["POST", "OPTIONS"])

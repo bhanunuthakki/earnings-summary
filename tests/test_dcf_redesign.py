@@ -36,7 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import dcf_sheets  # noqa: E402
 import refresh_dcf  # noqa: E402
 
-from dcf import redesign  # noqa: E402
+from dcf import fact_sheet, redesign  # noqa: E402
 
 BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 
@@ -1297,6 +1297,68 @@ def test_inject_fact_route_reprices_and_syncs_end_to_end(
     conn.close()
     assert npv1 > float(npv0)
     assert body["fair_value_per_share_usd"] == pytest.approx(float(npv1))
+
+
+def test_inject_fact_sheet_survives_a_dcf_refresh_end_to_end(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE S7 DELIVERABLE, end-to-end through the real route: pick a fact → add
+    it as a DCF reference → the model workbook is REFRESHED (rebuilt from scratch)
+    → the reference still has the value.
+
+    Survival is structural: the reference lands in the companion ``dcf/facts/
+    TESTCO.xlsx``, NOT in the main workbook the rebuild discards. The proof is the
+    second ``refresh_one`` (a full FMP rebuild + os.replace of the main workbook)
+    leaving the companion untouched."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    facts_path = fact_sheet.facts_workbook_path(refresh_repo, "TESTCO")
+
+    # Build the model, seed a fact, then park it as a reference via the route.
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    _seed_kpi_fact(db, "TESTCO", "Operating margin", 42.0, "percent")
+
+    import comments_server
+
+    client = comments_server.create_app(refresh_repo).test_client()
+    resp = client.post(
+        "/api/dcf/inject-fact-sheet",
+        json={"ticker": "TESTCO", "token": "kpi:Operating margin"},
+    )
+    assert resp.status_code == 200, resp.get_json()
+    body = resp.get_json()
+    assert body["added"] is True and body["action"] == "added" and body["count"] == 1
+    # Faithful reference: stored in its NATIVE unit (no driver conversion).
+    assert body["fact"]["value"] == pytest.approx(42.0)
+    assert body["fact"]["unit"] == "percent"
+    assert facts_path.exists()
+
+    # The reference lives in the COMPANION, never appended to the model workbook
+    # (which is what makes it survive the rebuild).
+    wb = openpyxl.load_workbook(str(dest))
+    assert fact_sheet.SHEET_NAME not in wb.sheetnames
+    wb.close()
+
+    facts_before = fact_sheet.read_facts(facts_path)
+    assert [f.value for f in facts_before] == [pytest.approx(42.0)]
+
+    # The survival event: a full refresh rebuilds dcf/TESTCO.xlsx from scratch.
+    res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res2["status"] == "ok"
+
+    # The companion — and the parked fact — survived untouched.
+    assert facts_path.exists()
+    facts_after = fact_sheet.read_facts(facts_path)
+    assert len(facts_after) == 1
+    assert facts_after[0].token == "kpi:Operating margin"
+    assert facts_after[0].value == pytest.approx(42.0)
+    assert facts_after[0].unit == "percent"
+
+    # And the route reads them back the same way.
+    got = client.get("/api/dcf/reference-facts/TESTCO").get_json()
+    assert got["ticker"] == "TESTCO"
+    assert len(got["facts"]) == 1 and got["facts"][0]["value"] == pytest.approx(42.0)
 
 
 def test_apply_edits_no_workbook_fails_soft(refresh_repo: Path) -> None:
