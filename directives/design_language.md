@@ -351,6 +351,20 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   literals** — only the three font tokens (`var(--sans|serif|mono)`) + generic
   keywords are legal, any fourth family is the "too many fonts" drift; and
   legacy alias var-names (`--panel`/`--ink`/`--link`/`--font-mono`/…).
+- **Component dimension `kit-badge` (the §4 enforcer).** The five dimensions
+  above are TOKEN-level — they catch raw literals but are *blind to a component
+  reinvented from valid tokens*: a hand-rolled status pill built with `var(--bad)`
+  + `var(--radius-full)` passes every one of them. `kit-badge` closes that hole. A
+  CSS rule whose selector the author **named** a `pill`/`badge`/`chip`/`tag`
+  (anything but the kit's `.k-pill`/`.k-chip`/`.k-well`/`.p-pill`) and which sets a
+  `color-mix(in srgb, var(--ok|warn|bad) …)` **background** is a reinvented FILLED
+  STATUS PILL → use `.k-pill` (+ `.k-pill-ok/-warn/-bad`). `ok/warn/bad` are
+  status, never category/decoration/unread, so the check is precise: it does NOT
+  fire on tone *washes* (named otherwise — `.chat-role`, `.cmt-pin`), accent
+  unread/count marks (`.ix-badge`), or the §2 report category tags. It is the one
+  component check that auto-enforces; the rest of §4 (buttons → `.k-btn`, outline
+  tags → `.k-chip`, freehand-button skins) is **author + reviewer responsibility**
+  — composing the kit is the whole point.
 - **Dimension-scoped.** Layout px (width/margin/padding/gap/top/left/height) is
   NEVER touched — only color/font/radius. The px checks anchor on `font-size:` /
   `border-radius:`.
