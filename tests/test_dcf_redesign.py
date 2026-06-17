@@ -987,6 +987,20 @@ def test_refresh_redesign_preserves_dashboard_edit_and_updates_actuals(
     newest = max(inc, key=lambda r: (int(r["fiscalYear"]), str(r["period"])))
     newest["revenue"] = 9_999 * 1e6
     inc_path.write_text(json.dumps(inc), encoding="utf-8")
+    # Scale that quarter's product segmentation to match the new revenue. Otherwise a 6x
+    # income jump against flat segments would (correctly) trip the partial-coverage guard
+    # (src/dcf/segment_coverage.py) and fall back to a whole-company build — which has no
+    # "Cloud" segment row, defeating the per-segment edit-preservation this test asserts.
+    seg_path = (
+        refresh_repo / "data" / "historical" / "fmp" / "TESTCO_product_segments_quarterly.json"
+    )
+    pseg = json.loads(seg_path.read_text(encoding="utf-8"))
+    for rec in pseg:
+        if int(rec["fiscalYear"]) == int(newest["fiscalYear"]) and str(rec["period"]) == str(
+            newest["period"]
+        ):
+            rec["data"] = {"Cloud": 9_999 * 0.6 * 1e6, "Devices": 9_999 * 0.4 * 1e6}
+    seg_path.write_text(json.dumps(pseg), encoding="utf-8")
 
     res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
     assert res["status"] == "ok", res

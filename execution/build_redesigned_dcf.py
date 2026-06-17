@@ -39,7 +39,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
-from dcf import assumptions_doc
+from dcf import assumptions_doc, segment_coverage
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 
@@ -226,30 +226,42 @@ FC_YEARS = list(range(full_fys[-1] + 1, full_fys[-1] + 1 + N_FC))
 
 # current reporting structure = segments present in the latest quarter (drops
 # AMZN's pre-2019 legacy segment names that only populate old columns).
-_latest_p = pseg_i.get(keys[-1]) or {}
 _latest_g = gseg_i.get(keys[-1]) or {}
-PROD = sorted(
-    (s for s, v in _latest_p.items() if isinstance(v, (int, float))), key=lambda s: -_latest_p[s]
-)
 GEO = sorted(
     (s for s, v in _latest_g.items() if isinstance(v, (int, float))), key=lambda s: -_latest_g[s]
 )
-# Fallback for names without usable FMP product-segment data: model one revenue
-# line (the whole company) instead of a per-segment build. Trigger on <2 segments
-# in the latest quarter, OR when the reported segments carry no revenue for the
-# base fiscal year: FMP sometimes drops segment disclosure for a stretch of years
-# (e.g. LITE reports Components/Systems only for older + the newest quarters,
-# leaving FY2025 at zero), which would otherwise collapse the whole forecast to 0.
+# Product segments + the whole-company fallback guard (src/dcf/segment_coverage.py).
+# The modeled set is the segments present in the LATEST quarter; we fall back to ONE
+# whole-company revenue line (income-statement total, anchored to consensus below) when:
+#   * <2 segments are reported (no per-segment model to build), OR
+#   * the reported segments carry no base-year revenue — FMP sometimes drops segment
+#     disclosure for a stretch of years (e.g. LITE leaves FY2025 at zero), OR
+#   * the segments cover materially LESS than the base-year income total. This last is
+#     the partial-contamination case the bare len/zero checks missed: when FMP's latest
+#     quarter drops a big segment (VEEV FY2026 Q4 dropped both R&D segments -> ~45%
+#     coverage), `base_revenue_by_segment` silently undercounts and the entire DCF is
+#     built on a fraction of the company. Whole-company is always safe on the revenue
+#     level (it rebuilds from the COMPLETE income statement at lines below), so we
+#     downgrade rather than ship a fair value that's off by the missing-revenue fraction.
 _base_fy = full_fys[-1]
-_seg_base_total = sum(
-    v
-    for p in PERIODS
-    for v in ((pseg_i.get((_base_fy, p)) or {}).get(s) for s in PROD)
-    if isinstance(v, (int, float))
+# DCF_COVERAGE_FLOOR lets the audit / a before-after check tune the floor; production
+# uses the module default (segment_coverage.COVERAGE_FLOOR).
+try:
+    _cov_floor = float(os.environ.get("DCF_COVERAGE_FLOOR", segment_coverage.COVERAGE_FLOOR))
+except ValueError:
+    _cov_floor = segment_coverage.COVERAGE_FLOOR
+_cov = segment_coverage.resolve_product_segments(
+    pseg_i, inc_i, PERIODS, _base_fy, keys[-1], floor=_cov_floor
 )
-SINGLE_SEG = len(PROD) < 2 or _seg_base_total <= 0
-if SINGLE_SEG:
-    PROD = ["Total company"]
+PROD = _cov.prod
+SINGLE_SEG = _cov.single_seg
+if SINGLE_SEG and _cov.reason and _cov.reason.startswith("coverage"):
+    # Loud diagnostic: a contaminated name must NEVER be silently downgraded.
+    print(
+        f"COVERAGE\t{T}\t{_cov.reason} -> whole-company "
+        f"(seg-sum {_cov.seg_base_total / 1e6:,.0f}M vs income {_cov.income_base_total / 1e6:,.0f}M)",
+        file=sys.stderr,
+    )
 
 
 def m(v):
@@ -1807,7 +1819,11 @@ DEST.parent.mkdir(parents=True, exist_ok=True)
 wb.save(str(DEST))
 _up = (full_value / price - 1) if price else 0.0
 _seg = "single" if SINGLE_SEG else str(len(PROD))
-print(f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\t{DEST}")
+# Surface the base-FY segment coverage on every build so a contaminated name is
+# never silently downgraded (the `cov=` field; see the COVERAGE stderr line above
+# for the loud warning when the floor forced whole-company).
+_cov_str = f"{_cov.coverage:.2f}" if _cov.coverage is not None else "n/a"
+print(f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\tcov={_cov_str}\t{DEST}")
 _b = f"{_sv.bull:.2f}" if _sv.bull is not None else "n/a"
 _r = f"{_sv.bear:.2f}" if _sv.bear is not None else "n/a"
 print(f"SCENARIOS\t{T}\tbase={_sv.base:.2f}\tbull={_b}\tbear={_r}")
