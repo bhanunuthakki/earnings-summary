@@ -39,7 +39,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
-from dcf import assumptions_doc, segment_coverage
+from dcf import assumptions_doc, country_risk, segment_coverage
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 
@@ -430,6 +430,12 @@ BETA = float(_beta_override) if _beta_override is not None else (prof.get("beta"
 RF = float(_opus.get("risk_free_rate", _g.risk_free_rate))
 ERP = float(_opus.get("equity_risk_premium", _g.equity_risk_premium))
 KD = float(_opus.get("cost_of_debt", 0.045))
+# Country risk premium: Damodaran's country premiums weighted by where this name
+# earns revenue (FMP geo segments). A US/mature name resolves to 0.0 and is left
+# exactly where it was; a LatAm/EM name carries the sovereign-risk layer the US
+# ERP omits. A per-name override in the block wins (so a hand-set value survives a
+# rebuild); else the systematic revenue-weighted value.
+CRP = float(_opus.get("country_risk_premium", country_risk.country_risk_premium(REPO, T)))
 
 # ----------------------------------------------------------------------------- Monte Carlo
 # A reduced-form model (single revenue CAGR, linear margin ramp) calibrated so the
@@ -442,7 +448,7 @@ cash_now = m(bal_i[latest].get("cashAndShortTermInvestments")) or 0.0
 debt_now = m(bal_i[latest].get("longTermDebt")) or 0.0
 shares_now = m(inc_i[latest].get("weightedAverageShsOutDil")) or 1.0
 beta = BETA
-ke = RF + beta * ERP
+ke = RF + beta * ERP + CRP
 mktcap = price * shares_now
 we = mktcap / (mktcap + debt_now) if (mktcap + debt_now) else 1.0
 wacc0 = we * ke + (1 - we) * KD * (1 - TAX)
@@ -515,8 +521,9 @@ BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
 BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED)
 
 
-def _seg_g(s, j):  # hold near-term ~3y, then fade to terminal (tracks consensus plateau)
-    return g1_def[s] + (gT_def[s] - g1_def[s]) * max(0, j - 2) / (N_FC - 3)
+def _seg_g(s, j):  # convex near->terminal fade (front-loaded deceleration)
+    frac = ((N_FC - 1 - j) / (N_FC - 1)) ** redesign_mod.GROWTH_FADE_CURVATURE
+    return gT_def[s] + (g1_def[s] - gT_def[s]) * frac
 
 
 def _oim(j):  # ramp to terminal by the end of the consensus window, then hold
@@ -665,6 +672,7 @@ DB = {
     "erp": "Dashboard!$B$39",
     "beta": "Dashboard!$B$40",
     "kd": "Dashboard!$B$41",
+    "crp": "Dashboard!$B$47",
     "method": "Dashboard!$B$43",
     "basis": "Dashboard!$B$44",
     "mult": "Dashboard!$B$45",
@@ -822,14 +830,18 @@ wc.sheet_view.showGridLines = False
 wc.column_dimensions["A"].width = 34
 wc.column_dimensions["B"].width = 14
 put(wc, 1, 1, "WACC Calculator", bold=True).font = TITLE
+# Cost of equity = rf + beta*erp + country risk premium (Damodaran additive
+# form). The CRP row sits between beta and the CAPM line, so cost of equity is
+# B2+B4*B3+B5; every downstream row index shifts by one vs the pre-CRP layout.
 wrows = [
     ("Risk-free rate (10Y)", f"={DB['rf']}", PCT, "f"),
     ("Equity risk premium", f"={DB['erp']}", PCT, "f"),
     ("Beta (levered)", f"={DB['beta']}", NUM3, "f"),
-    ("Cost of equity (CAPM)", "=B2+B4*B3", PCT, "f"),
+    ("Country risk premium", f"={DB['crp']}", PCT, "f"),
+    ("Cost of equity (CAPM)", "=B2+B4*B3+B5", PCT, "f"),
     ("Pre-tax cost of debt", f"={DB['kd']}", PCT, "f"),
     ("Tax rate", f"={DB['tax']}", PCT, "f"),
-    ("After-tax cost of debt", "=B6*(1-B7)", PCT, "f"),
+    ("After-tax cost of debt", "=B7*(1-B8)", PCT, "f"),
     (
         "Market cap (E)",
         f"={DB['price']}*Financials!{LAST}{fin_row['Diluted Shares (M)']}",
@@ -837,20 +849,21 @@ wrows = [
         "f",
     ),
     ("Total debt (D)", f"=Financials!{LAST}{fin_row['Long-term Debt']}", USD, "f"),
-    ("Equity weight", "=B9/(B9+B10)", PCT, "f"),
-    ("Debt weight", "=B10/(B9+B10)", PCT, "f"),
+    ("Equity weight", "=B10/(B10+B11)", PCT, "f"),
+    ("Debt weight", "=B11/(B10+B11)", PCT, "f"),
 ]
 for i, (lab, v, fmt, kind) in enumerate(wrows):
     put(wc, 2 + i, 1, lab)
     put(wc, 2 + i, 2, v, fmt=fmt, kind=kind)
 WACC_ROW = 2 + len(wrows) + 1
 put(wc, WACC_ROW, 1, "WACC", bold=True)
-put(wc, WACC_ROW, 2, "=B11*B5+B12*B8", fmt=PCT, bold=True)
+put(wc, WACC_ROW, 2, "=B12*B6+B13*B9", fmt=PCT, bold=True)
 put(
     wc,
     WACC_ROW + 2,
     1,
-    "Yellow = edit. CAPM cost of equity; market-value weights. Feeds Valuation!WACC.",
+    "Yellow = edit. CAPM cost of equity (incl. country risk premium); "
+    "market-value weights. Feeds Valuation!WACC.",
 ).font = SUB
 
 # ===== Model =====
@@ -891,15 +904,16 @@ for i, s in enumerate(PROD):
     for y in FC_YEARS:
         put(md, r, yc[y], f"={mc(y - 1)}{r}*(1+{mc(y)}{r + 1})", fmt=USD)
     r += 1
-    put(md, r, 1, "    growth % (interpolated from Dashboard)")
+    put(md, r, 1, "    growth % (convex fade from Dashboard)")
     for y in full_fys[1:]:
         put(md, r, yc[y], ie(f"{mc(y)}{r - 1}/{mc(y - 1)}{r - 1}-1"), fmt=PCT)
-    for y in FC_YEARS:  # hold near-term ~3y then fade to terminal (green link to Dashboard)
+    _P = redesign_mod.GROWTH_FADE_CURVATURE
+    for y in FC_YEARS:  # convex near->terminal fade (green link to Dashboard)
         put(
             md,
             r,
             yc[y],
-            f"={DB['g1'](i)}+({DB['gT'](i)}-{DB['g1'](i)})*MAX(0,{fcj[y]}-2)/{N_FC - 3}",
+            f"={DB['gT'](i)}+({DB['g1'](i)}-{DB['gT'](i)})*(({N_FC - 1}-{fcj[y]})/{N_FC - 1})^{_P}",
             fmt=PCT,
         )
     r += 1
@@ -1585,6 +1599,14 @@ put(dsh, 45, 1, "Exit multiple")
 put(dsh, 45, 2, EXIT_MULT, fmt=MULT, kind="in")
 put(dsh, 46, 1, "Terminal growth (g)")
 put(dsh, 46, 2, TG, fmt=PCT, kind="in")
+put(dsh, 47, 1, "Country risk premium")
+put(dsh, 47, 2, CRP, fmt=PCT, kind="in")
+put(
+    dsh,
+    47,
+    5,
+    f"Damodaran country premiums, revenue-weighted ({country_risk.COUNTRY_CRP_AS_OF}); 0 for US/mature",
+).font = SUB
 put(dsh, 48, 1, "Current price")
 put(dsh, 48, 2, price, fmt=PXS, kind="in")
 
@@ -1777,6 +1799,7 @@ _inp = redesign_mod.RedesignInputs(
     risk_free_rate=RF,
     equity_risk_premium=ERP,
     cost_of_debt=KD,
+    country_risk_premium=CRP,
     terminal_method=OPUS_METHOD,
     terminal_basis=OPUS_BASIS,
     exit_multiple=EXIT_MULT,
