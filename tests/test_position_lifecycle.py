@@ -95,8 +95,26 @@ CREATE TABLE position_sizing_intent (
 );
 """
 
+# ``_NOW`` is an opaque insert timestamp whose value is never asserted
+# (archived_at sentinel, decisions.made_at ordering) — a collection-time
+# snapshot is fine. The reconciler's "today", though, is stamped at RUN time
+# (position_lifecycle._today_iso), so a module-level today CONSTANT captured at
+# COLLECTION goes stale whenever a full serial run crosses UTC midnight before
+# this file's tests execute (collection runs at the start; this file is ~#261 of
+# ~320). That skew — not test ordering — flaked the "stamps today" asserts. Take
+# the expected UTC date at call time instead: see _utc_today() and the bracketed
+# asserts below.
 _NOW = datetime.now(UTC).replace(tzinfo=None).isoformat()
-_TODAY = datetime.now(UTC).replace(tzinfo=None).date().isoformat()
+
+
+def _utc_today() -> str:
+    """Current UTC calendar date — the reconciler's ``_today_iso`` source,
+    sampled at call time (NOT a module constant). Bracketing a stamping
+    ``sync_position_lifecycle`` call with two samples and asserting the stamp
+    lands in ``{before, after}`` keeps the assertion correct across a UTC-midnight
+    boundary while staying strict (an arbitrary wrong date still fails)."""
+    return datetime.now(UTC).date().isoformat()
+
 
 _CONDITION = {
     "metric": "NPL 90d+",
@@ -186,7 +204,9 @@ def _txn(ticker: str, type_: str, date: str, quantity: float, amount: float) -> 
 
 def test_open_on_new_portfolio_name_tracker_offline(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
+    before = _utc_today()
     tally = sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    after = _utc_today()
     assert tally == {
         "opened": 1,
         "closed": 0,
@@ -196,7 +216,7 @@ def test_open_on_new_portfolio_name_tracker_offline(repo: Path) -> None:
     }
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.is_open
-    assert entry.entry_date == _TODAY  # live transition: today is honest
+    assert entry.entry_date in {before, after}  # live transition: today is honest
     assert entry.entry_price is None  # tracker offline — no invented price
     assert entry.source == "reconciler"
     assert entry.entry_thesis_excerpt is not None
@@ -222,14 +242,16 @@ def test_open_uses_buy_transaction_then_avg_cost(repo: Path) -> None:
             _txn("NU", "buy", "2026-06-08", 50.0, -640.0),  # later buy — earliest wins
         ],
     )
+    before = _utc_today()
     sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    after = _utc_today()
 
     [nu] = list_entries(db_path=_db(repo), ticker="NU")
     assert nu.entry_date == "2026-06-01"
     assert nu.entry_price == 11.8
 
     [meli] = list_entries(db_path=_db(repo), ticker="MELI")
-    assert meli.entry_date == _TODAY  # no txn visible — detection date
+    assert meli.entry_date in {before, after}  # no txn visible — detection date
     assert meli.entry_price == 1800.0  # avg-cost fallback
 
 
@@ -286,9 +308,11 @@ def test_close_tracker_offline_stamps_today(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
     _set_portfolio(repo, [])
+    before = _utc_today()
     sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    after = _utc_today()
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
-    assert entry.exit_date == _TODAY
+    assert entry.exit_date in {before, after}
     assert entry.exit_price is None
 
 
