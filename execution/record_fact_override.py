@@ -86,6 +86,12 @@ def main() -> None:
     parser.add_argument(
         "--list", action="store_true", help="List active overrides for the ticker and exit"
     )
+    parser.add_argument(
+        "--retire",
+        action="store_true",
+        help="Retire (deactivate) the active override for the given key and exit. Requires "
+        "--period-end / --fiscal-period-type / --fact-kind / --fact-key.",
+    )
     parser.add_argument("--period-end", help="YYYY-MM-DD")
     parser.add_argument("--fiscal-period-type", help="Q1..Q4 | FY | H1 ...")
     parser.add_argument("--fact-kind", choices=list(overrides.FACT_KINDS))
@@ -121,6 +127,41 @@ def main() -> None:
     try:
         if args.list:
             _cmd_list(conn, args.ticker)
+            return
+
+        if args.retire:
+            missing_r = [
+                name
+                for name, val in (
+                    ("--period-end", args.period_end),
+                    ("--fiscal-period-type", args.fiscal_period_type),
+                    ("--fact-kind", args.fact_kind),
+                    ("--fact-key", args.fact_key),
+                )
+                if not val
+            ]
+            if missing_r:
+                raise SystemExit(
+                    f"missing required args for retiring an override: {', '.join(missing_r)}"
+                )
+            retired = overrides.retire_override(
+                conn,
+                ticker=args.ticker,
+                period_end=args.period_end,
+                fiscal_period_type=args.fiscal_period_type,
+                fact_kind=args.fact_kind,
+                fact_key=args.fact_key,
+            )
+            tag = f"{args.ticker.upper()} {args.period_end} {args.fact_kind}/{args.fact_key}"
+            if args.dry_run:
+                conn.rollback()
+                verb = "retire" if retired else "find no active override for"
+                print(f"  [dry-run] would {verb} {tag} (rolled back)")
+            elif retired:
+                conn.commit()
+                print(f"  [ok] retired active override for {tag}")
+            else:
+                print(f"  [no-op] no active override for {tag}")
             return
 
         missing = [
