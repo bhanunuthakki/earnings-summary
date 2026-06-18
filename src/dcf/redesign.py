@@ -8,9 +8,10 @@ mirroring the in-sheet formulas exactly and bridging through
 ``dcf.valuation.compute_valuation``.
 
 The projection here is the live counterpart of the builder's ``_project``
-mirror: same segment-growth interpolation (hold ~3y, fade to terminal), same
-margin ramp, same FCFF bridge, same EV-multiple / perpetuity terminal, same
-``× FX`` conversion for non-USD reporters. The difference is that this reads
+mirror: same segment-growth fade (convex near→terminal, see
+``GROWTH_FADE_CURVATURE``), same margin ramp, same FCFF bridge, same
+EV-multiple / perpetuity terminal, same ``× FX`` conversion for non-USD
+reporters. The difference is that this reads
 *arbitrary* (possibly user-edited) Dashboard inputs, so the persisted value
 tracks whatever the user sees when they open the workbook.
 
@@ -62,6 +63,17 @@ _REDESIGN_MARKER_SHEETS = (DASHBOARD_SHEET, MODEL_SHEET, FINANCIALS_SHEET, CONSE
 N_FC = 10  # forecast years (matches the builder)
 NWC_PCT = 0.005  # working-capital draw on incremental revenue (builder literal)
 
+# Growth fade shape. Each segment's growth decays from its near-term rate to its
+# terminal rate as ``g_t = g_T + (g_1 - g_T) * ((N-1-j)/(N-1))**CURVATURE``.
+# CURVATURE = 1.0 is the old straight-line glide; > 1.0 is CONVEX — deceleration
+# is front-loaded (fast early, flattening late), the empirical shape of how
+# hyper-growth actually fades (the law of large numbers bites hardest while the
+# base is small). 2.0 keeps near-term growth honest to consensus in years 1-3
+# then pulls the terminal revenue base down hard, instead of compounding an
+# elevated rate for a decade. The builder writes the identical closed form into
+# the Model sheet, so the in-cell value and this mirror never drift.
+GROWTH_FADE_CURVATURE = 2.0
+
 SEG_ROW0 = 20  # first Dashboard segment row
 SEG_ROW_MAX = 27  # segments occupy rows 20..27 (the PROFITABILITY band sits at 28)
 
@@ -79,6 +91,10 @@ _DB_METHOD = 43
 _DB_BASIS = 44
 _DB_MULT = 45
 _DB_TG = 46
+# Country risk premium (revenue-weighted Damodaran CRP) lives at row 47 — a free
+# row between Terminal growth (46) and Current price (48), so no other Dashboard
+# address shifts. Optional: a pre-CRP workbook with no row 47 reads back as 0.0.
+_DB_CRP = 47
 _DB_PRICE = 48
 
 # SCENARIOS block (Dashboard rows 50+): Bull/Bear expressed as DELTAS vs the Base
@@ -118,6 +134,7 @@ _PRESERVED_SCALAR_ROWS: tuple[int, ...] = (
     _DB_ERP,
     _DB_BETA,
     _DB_KD,
+    _DB_CRP,
     _DB_MULT,
     _DB_TG,
 )
@@ -232,6 +249,14 @@ class RedesignInputs:
     total_debt_m: float
     diluted_shares_m: float
     fx_to_usd: float
+    # Operation-weighted Damodaran country risk premium, ADDED to the CAPM cost
+    # of equity (ke = rf + beta*erp + crp). 0.0 for a US/mature name. Defaulted
+    # so a pre-CRP workbook (or a test fixture) reads back as 0.0 — i.e. exactly
+    # the old behaviour. The discount rate of record is ``wacc`` (already
+    # CRP-inclusive once the builder/reader fold it in), so ``value()`` reads
+    # ``wacc`` directly; this field is carried for the workbook round-trip and
+    # for ``read_inputs``' CAPM re-derivation.
+    country_risk_premium: float = 0.0
     # Bull/Bear scenario offsets (Dashboard SCENARIOS block). Frozen instances
     # are immutable, so the shared seed defaults are safe; a pre-scenario
     # workbook reads back as the seeds, giving every name a meaningful range.
@@ -314,6 +339,11 @@ class RedesignInputs:
         if not isinstance(basis, str) or not basis.strip():
             raise RedesignError("DCF input 'terminal_basis' must be a non-empty string")
 
+        crp_raw = data.get("country_risk_premium", 0.0)
+        if isinstance(crp_raw, bool) or not isinstance(crp_raw, (int, float)):
+            raise RedesignError("DCF input 'country_risk_premium' must be a number")
+        country_risk_premium = float(crp_raw)
+
         bull_raw = data.get("bull_deltas")
         bull = (
             ScenarioDeltas.from_dict(cast("Mapping[str, object]", bull_raw))
@@ -353,6 +383,7 @@ class RedesignInputs:
             total_debt_m=req_float("total_debt_m"),
             diluted_shares_m=req_float("diluted_shares_m"),
             fx_to_usd=req_float("fx_to_usd"),
+            country_risk_premium=country_risk_premium,
             bull_deltas=bull,
             bear_deltas=bear,
         )
@@ -595,6 +626,9 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         erp = _num(dsh, _DB_ERP, 2)
         beta = _num(dsh, _DB_BETA, 2)
         kd = _num(dsh, _DB_KD, 2)
+        # Country risk premium is optional: a pre-CRP workbook has no row 47, so
+        # a blank reads back as 0.0 (the old US-only behaviour) rather than failing.
+        crp = _num(dsh, _DB_CRP, 2) or 0.0
         exit_mult = _num(dsh, _DB_MULT, 2)
         tg = _num(dsh, _DB_TG, 2)
         price = _num(dsh, _DB_PRICE, 2)
@@ -660,8 +694,9 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
     finally:
         wb.close()
 
-    # WACC mirrors the in-sheet WACC tab exactly: CAPM cost of equity, market-value
-    # weights from the Dashboard price + Financials shares/debt.
+    # WACC mirrors the in-sheet WACC tab exactly: CAPM cost of equity (incl. the
+    # revenue-weighted country risk premium), market-value weights from the
+    # Dashboard price + Financials shares/debt.
     assert (
         rf is not None
         and erp is not None
@@ -670,7 +705,7 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         and tax is not None
         and price is not None
     )
-    ke = rf + beta * erp
+    ke = rf + beta * erp + crp
     after_tax_kd = kd * (1.0 - tax)
     market_cap = price * shares
     equity_weight = market_cap / (market_cap + debt) if (market_cap + debt) > 0 else 1.0
@@ -710,6 +745,7 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         total_debt_m=debt,
         diluted_shares_m=shares,
         fx_to_usd=fx,
+        country_risk_premium=crp,
         bull_deltas=bull,
         bear_deltas=bear,
     )
@@ -752,20 +788,22 @@ class _ProjectedStreams:
 def _project(inp: RedesignInputs) -> _ProjectedStreams:
     """Project N_FC years of revenue / EBIT / D&A / valuation-FCF.
 
-    Mirrors the in-sheet formulas: per-segment growth holds near-term ~3y then
-    fades to terminal over the 10y window; operating margin ramps near→terminal
-    by the end of the consensus window; D&A = ratio × revenue; capex = D&A ×
-    (capex/D&A), where the 2026 ratio = capex / first-year D&A and fades to the
-    terminal ratio; ΔNWC = 0.5% of incremental revenue; valuation FCF =
-    NOPAT + D&A − capex − ΔNWC (SBC nets out).
+    Mirrors the in-sheet formulas: per-segment growth fades near→terminal over
+    the 10y window on a CONVEX curve (front-loaded deceleration, ``g_t = g_T +
+    (g_1 - g_T) * ((N-1-j)/(N-1))**GROWTH_FADE_CURVATURE``); operating margin
+    ramps near→terminal by the end of the consensus window; D&A = ratio ×
+    revenue; capex = D&A × (capex/D&A), where the 2026 ratio = capex / first-year
+    D&A and fades to the terminal ratio; ΔNWC = 0.5% of incremental revenue;
+    valuation FCF = NOPAT + D&A − capex − ΔNWC (SBC nets out).
     """
-    n_seg_steps = N_FC - 3
     ramp_steps = inp.consensus_years - 1
+    fade_span = N_FC - 1
 
     def seg_growth(segment: str, j: int) -> float:
         g1 = inp.near_growth_by_segment[segment]
         gt = inp.terminal_growth_by_segment[segment]
-        return g1 + (gt - g1) * max(0, j - 2) / n_seg_steps
+        frac = ((fade_span - j) / fade_span) ** GROWTH_FADE_CURVATURE
+        return gt + (g1 - gt) * frac
 
     def op_margin(j: int) -> float:
         spread = inp.terminal_op_margin - inp.near_op_margin
@@ -1122,6 +1160,7 @@ _SCALAR_ROW_ATTR: tuple[tuple[int, str], ...] = (
     (_DB_ERP, "equity_risk_premium"),
     (_DB_BETA, "beta"),
     (_DB_KD, "cost_of_debt"),
+    (_DB_CRP, "country_risk_premium"),
     (_DB_MULT, "exit_multiple"),
     (_DB_TG, "terminal_growth_g"),
 )

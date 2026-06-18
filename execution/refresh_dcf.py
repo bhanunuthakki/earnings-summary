@@ -64,6 +64,7 @@ _BANK_BUILDER = PROJECT_ROOT / "execution" / "build_bank_dcf.py"
 _HOLDCO_BUILDER = PROJECT_ROOT / "execution" / "build_holdco_sotp.py"
 _FINTECH_BUILDER = PROJECT_ROOT / "execution" / "build_fintech_sotp.py"
 _PLATFORM_BUILDER = PROJECT_ROOT / "execution" / "build_nu_platform_dcf.py"
+_MELI_SOTP_BUILDER = PROJECT_ROOT / "execution" / "build_meli_platform_dcf.py"
 
 
 def main() -> int:
@@ -181,6 +182,7 @@ def refresh_one(
       - "holdco_sotp"         -> the capital-allocator SOTP model (`_refresh_holdco`).
       - "fintech_sotp"        -> the fintech segment SOTP (`_refresh_fintech_sotp`).
       - "platform_dcf"        -> the customer-driven platform DCF (`_refresh_platform`).
+      - "meli_platform_sotp"  -> the MELI Commerce/Fintech SOTP (`_refresh_meli_sotp`).
       - "new"/"none"/unknown  -> skip, surfacing any Opus-proposed new-model spec.
     """
     model, suggestion = _valuation_model(repo_root, ticker)
@@ -192,6 +194,8 @@ def refresh_one(
         return _refresh_fintech_sotp(ticker, repo_root)
     if model == "platform_dcf":
         return _refresh_platform(ticker, repo_root)
+    if model == "meli_platform_sotp":
+        return _refresh_meli_sotp(ticker, repo_root)
     if model != "fcff_dcf":
         # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
         # or an unknown model string — no template to run.
@@ -394,6 +398,40 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
         "ticker": t,
         "status": "ok",
         "format": "platform_dcf",
+        "workbook": str(dest),
+        "result": line,
+    }
+
+
+def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
+    """Build the MELI sum-of-the-parts platform DCF
+    (``execution/build_meli_platform_dcf.py``) to ``dcf/<T>.xlsx`` — values
+    Commerce + Fintech-payments as operating FCFF (@ WACC) and the Mercado Pago
+    credit book as a separate excess-return/FCFE piece (@ Ke), summed to NAV. The
+    right lens for a hybrid where one FCFF model can't hold both a capital-light
+    marketplace and a capital-consuming lending book. The builder computes the
+    value-of-record and upserts ``dcf_runs`` itself, like the platform/bank
+    builders."""
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    env = dict(os.environ, DCF_TICKER=t, DCF_REPO_ROOT=str(repo_root), DCF_DEST=str(dest))
+    proc = subprocess.run(
+        [sys.executable, str(_MELI_SOTP_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if line is None:
+        reason = (proc.stderr.strip().splitlines() or [""])[-1][:160]
+        return {"ticker": t, "status": "failed", "format": "meli_platform_sotp", "reason": reason}
+    return {
+        "ticker": t,
+        "status": "ok",
+        "format": "meli_platform_sotp",
         "workbook": str(dest),
         "result": line,
     }

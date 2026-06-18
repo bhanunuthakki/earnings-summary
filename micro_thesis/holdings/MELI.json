@@ -1,6 +1,7 @@
 {
   "ticker": "MELI",
   "name": "MercadoLibre",
+  "valuation_model": "meli_platform_sotp",
   "last_updated": "2026-06-01",
   "thesis": "Latin America's e-commerce + fintech compounder built on the lowest cost-to-serve. (1) Marketplace GMV (1P + 3P) compounds on category penetration and the logistics flywheel (Mercado Envios) - unit shipping costs keep falling as density builds; (2) Mercado Pago scales fintech with risk-adjusted interest income (NIMAL) as credit + payments grow ahead of GMV; (3) decades of management execution credibility. Core call: the market is too scared about credit performance while NPLs are stable and well-provisioned. Deliberate near-term margin compression (free-shipping thresholds, 1P, cross-border, credit, AI) is ACCEPTED as investment for share - it is not a thesis breaker. The real leg to watch is NIMAL (risk-adjusted spread), which compresses structurally as the lower-spread credit-card book grows.",
   "verdict": "Intact",
