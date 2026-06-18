@@ -65,13 +65,15 @@ NWC_PCT = 0.005  # working-capital draw on incremental revenue (builder literal)
 
 # Growth fade shape. Each segment's growth decays from its near-term rate to its
 # terminal rate as ``g_t = g_T + (g_1 - g_T) * ((N-1-j)/(N-1))**CURVATURE``.
-# CURVATURE = 1.0 is the old straight-line glide; > 1.0 is CONVEX — deceleration
-# is front-loaded (fast early, flattening late), the empirical shape of how
-# hyper-growth actually fades (the law of large numbers bites hardest while the
-# base is small). 2.0 keeps near-term growth honest to consensus in years 1-3
-# then pulls the terminal revenue base down hard, instead of compounding an
-# elevated rate for a decade. The builder writes the identical closed form into
-# the Model sheet, so the in-cell value and this mirror never drift.
+# CURVATURE = 1.0 is a straight-line glide; > 1.0 is CONVEX — deceleration is
+# front-loaded (fast early, flattening late), the empirical shape of how
+# hyper-growth fades (the law of large numbers bites hardest while the base is
+# small). This constant is the DEFAULT; the builder calibrates a per-name value
+# (``dcf.fade_calibration``) so each name's revenue path best-fits its consensus
+# and writes it to the Dashboard, which this engine reads back — so the curvature
+# is a real driver (``RedesignInputs.growth_fade_curvature``), defaulting here
+# only when no consensus / no override pins it. The builder writes the identical
+# closed form into the Model sheet, so the in-cell value and this mirror never drift.
 GROWTH_FADE_CURVATURE = 2.0
 
 SEG_ROW0 = 20  # first Dashboard segment row
@@ -96,6 +98,9 @@ _DB_TG = 46
 # address shifts. Optional: a pre-CRP workbook with no row 47 reads back as 0.0.
 _DB_CRP = 47
 _DB_PRICE = 48
+# Growth-fade curvature (per-name, calibrated to consensus by the builder) at the
+# free row 49. Optional: a pre-curvature workbook reads back as the default 2.0.
+_DB_CURV = 49
 
 # SCENARIOS block (Dashboard rows 50+): Bull/Bear expressed as DELTAS vs the Base
 # yellow cells, one lever per row. Column C = Bull Δ, column D = Bear Δ (both
@@ -257,6 +262,10 @@ class RedesignInputs:
     # ``wacc`` directly; this field is carried for the workbook round-trip and
     # for ``read_inputs``' CAPM re-derivation.
     country_risk_premium: float = 0.0
+    # Per-name growth-fade curvature, calibrated to consensus by the builder
+    # (``dcf.fade_calibration``). Defaults to the module constant so a
+    # pre-curvature workbook / test fixture reproduces the old global behaviour.
+    growth_fade_curvature: float = GROWTH_FADE_CURVATURE
     # Bull/Bear scenario offsets (Dashboard SCENARIOS block). Frozen instances
     # are immutable, so the shared seed defaults are safe; a pre-scenario
     # workbook reads back as the seeds, giving every name a meaningful range.
@@ -344,6 +353,11 @@ class RedesignInputs:
             raise RedesignError("DCF input 'country_risk_premium' must be a number")
         country_risk_premium = float(crp_raw)
 
+        curv_raw = data.get("growth_fade_curvature", GROWTH_FADE_CURVATURE)
+        if isinstance(curv_raw, bool) or not isinstance(curv_raw, (int, float)):
+            raise RedesignError("DCF input 'growth_fade_curvature' must be a number")
+        growth_fade_curvature = float(curv_raw)
+
         bull_raw = data.get("bull_deltas")
         bull = (
             ScenarioDeltas.from_dict(cast("Mapping[str, object]", bull_raw))
@@ -384,6 +398,7 @@ class RedesignInputs:
             diluted_shares_m=req_float("diluted_shares_m"),
             fx_to_usd=req_float("fx_to_usd"),
             country_risk_premium=country_risk_premium,
+            growth_fade_curvature=growth_fade_curvature,
             bull_deltas=bull,
             bear_deltas=bear,
         )
@@ -629,6 +644,9 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         # Country risk premium is optional: a pre-CRP workbook has no row 47, so
         # a blank reads back as 0.0 (the old US-only behaviour) rather than failing.
         crp = _num(dsh, _DB_CRP, 2) or 0.0
+        # Fade curvature is optional too: a pre-curvature workbook has no row 49,
+        # so a blank reads back as the default (the old global behaviour).
+        curv = _num(dsh, _DB_CURV, 2) or GROWTH_FADE_CURVATURE
         exit_mult = _num(dsh, _DB_MULT, 2)
         tg = _num(dsh, _DB_TG, 2)
         price = _num(dsh, _DB_PRICE, 2)
@@ -746,6 +764,7 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         diluted_shares_m=shares,
         fx_to_usd=fx,
         country_risk_premium=crp,
+        growth_fade_curvature=curv,
         bull_deltas=bull,
         bear_deltas=bear,
     )
@@ -802,7 +821,7 @@ def _project(inp: RedesignInputs) -> _ProjectedStreams:
     def seg_growth(segment: str, j: int) -> float:
         g1 = inp.near_growth_by_segment[segment]
         gt = inp.terminal_growth_by_segment[segment]
-        frac = ((fade_span - j) / fade_span) ** GROWTH_FADE_CURVATURE
+        frac = ((fade_span - j) / fade_span) ** inp.growth_fade_curvature
         return gt + (g1 - gt) * frac
 
     def op_margin(j: int) -> float:

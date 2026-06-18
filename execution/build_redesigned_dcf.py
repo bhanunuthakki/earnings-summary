@@ -39,7 +39,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
-from dcf import assumptions_doc, country_risk, segment_coverage
+from dcf import assumptions_doc, country_risk, fade_calibration, segment_coverage
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 
@@ -501,6 +501,19 @@ if _opus.get("segments"):
     capex_da = fade(cda0, float(_opus.get("terminal_capex_da", 1.05)))
 
 
+# Per-name growth-fade curvature: the convex shape whose revenue path best fits
+# Street consensus, weighting near-term years most (dcf.fade_calibration). Runs for
+# every name (Opus-override or consensus-default g1/gT); an explicit block override
+# wins, and a name with < 2 consensus years keeps the default 2.0.
+_cons_by_offset = {y - FC_YEARS[0]: cons_rev[y] for y in cons_rev}
+CURV = float(
+    _opus.get("growth_fade_curvature")
+    or fade_calibration.calibrate_curvature(
+        {s: seg_ann[ly][s] for s in PROD}, g1_def, gT_def, _cons_by_offset, N_FC
+    )
+)
+
+
 def _scen_deltas(raw, seed):
     """Bull/Bear scenario offsets: the block's `scenario_bull`/`scenario_bear`
     override (mirrored back by refresh_dcf.sync_assumptions_json, so user edits
@@ -521,8 +534,8 @@ BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
 BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED)
 
 
-def _seg_g(s, j):  # convex near->terminal fade (front-loaded deceleration)
-    frac = ((N_FC - 1 - j) / (N_FC - 1)) ** redesign_mod.GROWTH_FADE_CURVATURE
+def _seg_g(s, j):  # convex near->terminal fade (curvature = consensus-fit CURV)
+    frac = ((N_FC - 1 - j) / (N_FC - 1)) ** CURV
     return gT_def[s] + (g1_def[s] - gT_def[s]) * frac
 
 
@@ -673,6 +686,7 @@ DB = {
     "beta": "Dashboard!$B$40",
     "kd": "Dashboard!$B$41",
     "crp": "Dashboard!$B$47",
+    "curv": "Dashboard!$B$49",
     "method": "Dashboard!$B$43",
     "basis": "Dashboard!$B$44",
     "mult": "Dashboard!$B$45",
@@ -904,16 +918,16 @@ for i, s in enumerate(PROD):
     for y in FC_YEARS:
         put(md, r, yc[y], f"={mc(y - 1)}{r}*(1+{mc(y)}{r + 1})", fmt=USD)
     r += 1
-    put(md, r, 1, "    growth % (convex fade from Dashboard)")
+    put(md, r, 1, "    growth % (convex fade; curvature from Dashboard)")
     for y in full_fys[1:]:
         put(md, r, yc[y], ie(f"{mc(y)}{r - 1}/{mc(y - 1)}{r - 1}-1"), fmt=PCT)
-    _P = redesign_mod.GROWTH_FADE_CURVATURE
-    for y in FC_YEARS:  # convex near->terminal fade (green link to Dashboard)
+    for y in FC_YEARS:  # convex near->terminal fade, curvature = Dashboard cell (green link)
         put(
             md,
             r,
             yc[y],
-            f"={DB['gT'](i)}+({DB['g1'](i)}-{DB['gT'](i)})*(({N_FC - 1}-{fcj[y]})/{N_FC - 1})^{_P}",
+            f"={DB['gT'](i)}+({DB['g1'](i)}-{DB['gT'](i)})"
+            f"*(({N_FC - 1}-{fcj[y]})/{N_FC - 1})^{DB['curv']}",
             fmt=PCT,
         )
     r += 1
@@ -1609,6 +1623,15 @@ put(
 ).font = SUB
 put(dsh, 48, 1, "Current price")
 put(dsh, 48, 2, price, fmt=PXS, kind="in")
+put(dsh, 49, 1, "Growth fade curvature")
+put(dsh, 49, 2, CURV, fmt=NUM3, kind="in")
+put(
+    dsh,
+    49,
+    5,
+    "convexity of the near->terminal growth fade, fit to consensus (1.0=linear); "
+    "higher = faster early deceleration",
+).font = SUB
 
 # --- SCENARIOS: Bull/Bear as user-editable DELTAS vs the Base yellow cells ---
 # Rows/cols are the redesign-module contract (SCEN_ROW_*); the fair-value row is
@@ -1800,6 +1823,7 @@ _inp = redesign_mod.RedesignInputs(
     equity_risk_premium=ERP,
     cost_of_debt=KD,
     country_risk_premium=CRP,
+    growth_fade_curvature=CURV,
     terminal_method=OPUS_METHOD,
     terminal_basis=OPUS_BASIS,
     exit_multiple=EXIT_MULT,
@@ -1846,7 +1870,9 @@ _seg = "single" if SINGLE_SEG else str(len(PROD))
 # never silently downgraded (the `cov=` field; see the COVERAGE stderr line above
 # for the loud warning when the floor forced whole-company).
 _cov_str = f"{_cov.coverage:.2f}" if _cov.coverage is not None else "n/a"
-print(f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\tcov={_cov_str}\t{DEST}")
+print(
+    f"RESULT\t{T}\t{full_value:.2f}\t{price:.2f}\t{_up:+.3f}\t{_seg}\tcov={_cov_str}\tcurv={CURV:.2f}\t{DEST}"
+)
 _b = f"{_sv.bull:.2f}" if _sv.bull is not None else "n/a"
 _r = f"{_sv.bear:.2f}" if _sv.bear is not None else "n/a"
 print(f"SCENARIOS\t{T}\tbase={_sv.base:.2f}\tbull={_b}\tbear={_r}")
