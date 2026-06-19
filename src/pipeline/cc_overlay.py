@@ -153,8 +153,11 @@ CC_OVERLAY_JS = r"""
       ensureScrim();
       scrim.classList.remove('cc-scrim-out');
       scrim.style.zIndex = String(zOf(s.el) - 1);
+      // Default scrim alpha rides the .k-scrim class (var(--scrim)); a custom
+      // scrimOpacity composes a neutral black veil at that alpha without a raw
+      // rgba literal (token discipline — see tests/test_ui_controls.py color dim).
       scrim.style.background = (s.opts.scrimOpacity != null)
-        ? 'rgba(0, 0, 0, ' + s.opts.scrimOpacity + ')' : '';
+        ? 'color-mix(in srgb, black ' + (s.opts.scrimOpacity * 100) + '%, transparent)' : '';
       scrim.hidden = false;
     } else {
       scrim.classList.remove('cc-scrim-out');

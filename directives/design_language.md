@@ -359,11 +359,15 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   set; a **new unregistered surface fails CI** until it is registered and
   classified (clean / exempt / quarantined).
 - **Denied dimensions** (per surface, in CSS rules AND inline `style="…"`):
-  raw hex — including `var(--x, #hex)` fallbacks and hex inside
-  `linear-gradient(...)`; off-scale `font-size` px (not a `TYPE_SCALE` step);
-  off-scale `border-radius` px (not `--radius`/`--radius-full`); **font-family
-  literals** — only the three font tokens (`var(--sans|serif|mono)`) + generic
-  keywords are legal, any fourth family is the "too many fonts" drift; and
+  raw color — `#hex` (incl. `var(--x, #hex)` fallbacks and hex inside
+  `linear-gradient(...)`) **and raw `rgb()/rgba()/hsl()/hsla()`** (the gap that
+  hid every freehand shadow / status wash / white-hover — compose `--scrim` /
+  `--shadow-pop` / `color-mix(var(--token) …)` instead); off-scale `font-size` px
+  (not a `TYPE_SCALE` step); off-scale `border-radius` px (not
+  `--radius`/`--radius-full`); **font-family literals** — only the three font
+  tokens (`var(--sans|serif|mono)`) + generic keywords are legal, any fourth
+  family is the "too many fonts" drift; **`font-weight` 700/800/900/bold** (the
+  kit tops out at 600); **`transition: all`** (explicit properties only, §3); and
   legacy alias var-names (`--panel`/`--ink`/`--link`/`--font-mono`/…).
 - **Component dimension `kit-badge` (the §4 enforcer).** The five dimensions
   above are TOKEN-level — they catch raw literals but are *blind to a component
@@ -375,10 +379,16 @@ where the shell itself shipped a legacy-alias `:root` and passed green.
   STATUS PILL → use `.k-pill` (+ `.k-pill-ok/-warn/-bad`). `ok/warn/bad` are
   status, never category/decoration/unread, so the check is precise: it does NOT
   fire on tone *washes* (named otherwise — `.chat-role`, `.cmt-pin`), accent
-  unread/count marks (`.ix-badge`), or the §2 report category tags. It is the one
-  component check that auto-enforces; the rest of §4 (buttons → `.k-btn`, outline
-  tags → `.k-chip`, freehand-button skins) is **author + reviewer responsibility**
-  — composing the kit is the whole point.
+  unread/count marks (`.ix-badge`), or the §2 report category tags. Two component
+  checks now auto-enforce: `kit-badge` (reinvented filled status pill) and
+  **`test_buttons_compose_the_kit`** — a POSITIVE markup scan asserting every
+  emitted `<button>` carries a kit class (`.k-btn`/`.k-chip`/`.k-prov-act`) or an
+  allowlisted bespoke control (close glyphs, tabs, the icon toggle, the §4.1
+  doorway), so a net-new freehand button fails CI. The remaining §4 drift that
+  resists a precise regex (outline-tag reinvention, accent/mono used *as
+  decoration*, hierarchy inversions) is caught by the **monthly semantic audit**
+  (`directives/design_conformance_audit.md`, the advisory third layer) plus
+  reviewer discipline. Composing the kit is the whole point.
 - **Dimension-scoped.** Layout px (width/margin/padding/gap/top/left/height) is
   NEVER touched — only color/font/radius. The px checks anchor on `font-size:` /
   `border-radius:`.

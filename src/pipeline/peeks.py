@@ -443,7 +443,7 @@ _SCORE_CSS = """
 .cc-score-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .cc-score-cap { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.05em; }
-.cc-score-big { font-family: var(--mono); font-size: var(--fs-display); font-weight: 700; }
+.cc-score-big { font-family: var(--mono); font-size: var(--fs-display); font-weight: 600; }
 .cc-score-big.score-hi { color: var(--ok); }
 .cc-score-big.score-lo { color: var(--muted); }
 .cc-score-big.score-warn { color: var(--warn); }

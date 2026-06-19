@@ -1044,7 +1044,7 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
 .fdot-warn { color: var(--warn); }
 .fdot-bad { color: var(--bad); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); height: calc(100dvh - 200px); }
-.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 34;
+.tcc-drawer-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 34;
   animation: cc-fade-in var(--transition); }
 .tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 35;

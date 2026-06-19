@@ -226,7 +226,7 @@ a.k-tick-sym:hover { color: var(--accent); }
    trap/restore); the kit owns their look + open motion. Exit is instant — the
    [hidden] toggle can't animate display:none. The scrim is a neutral wash, not
    a palette color. ---- */
-.k-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+.k-scrim { position: fixed; inset: 0; background: var(--scrim);
   z-index: 40; animation: k-overlay-fade var(--transition); }
 .k-overlay { position: fixed; z-index: 41; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius);

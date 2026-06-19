@@ -742,7 +742,7 @@ _PAGE_HEAD = (
   .kpi-card.tone-bad {{ border-left: 3px solid var(--bad); }}
   .kpi-card.tone-muted {{ border-left: 3px solid var(--muted-2); }}
   .kpi-label {{ font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }}
-  .kpi-value {{ font-size: var(--fs-display); font-weight: 700; margin: 2px 0; color: var(--fg); font-variant-numeric: tabular-nums; }}
+  .kpi-value {{ font-size: var(--fs-display); font-weight: 600; margin: 2px 0; color: var(--fg); font-variant-numeric: tabular-nums; }}
   .kpi-sub {{ font-size: var(--fs-micro); color: var(--muted); font-family: var(--sans); }}
   .calib-strip {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }}
   .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }}
