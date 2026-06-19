@@ -92,6 +92,18 @@ def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 30000")
+    # WAL mode: a single writer no longer blocks concurrent readers (and vice
+    # versa). This DB is hit simultaneously by sibling-branch pipelines and the
+    # scheduled cron jobs (morning pipeline, backups, refresh) — under the
+    # default rollback journal those overlapping transactions serialize and risk
+    # "database is locked" / partial-write corruption. journal_mode=WAL is
+    # persisted in the DB header, so re-asserting it per connection is a cheap
+    # idempotent no-op; on an in-memory DB it silently stays 'memory'.
+    # synchronous=NORMAL is the standard WAL pairing: durable across application
+    # crashes, only the last transaction is at risk on OS/power loss — the right
+    # trade for a local single-operator tool.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
