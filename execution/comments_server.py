@@ -400,6 +400,25 @@ def create_app(
         conn.row_factory = sqlite3.Row
         return conn
 
+    @app.before_request
+    def csrf_origin_guard():
+        # CSRF defense-in-depth for the unauthenticated localhost control plane.
+        # A site the operator is visiting can drive a cross-origin state-changing
+        # request at this server; reject any unsafe-method request whose browser
+        # Origin is cross-site (judged by the same loopback / "null" / whitelist
+        # rule as CORS, via _cors_allow_origin). Safe methods and the OPTIONS
+        # preflight are exempt; an absent Origin (local CLI / curl / tests /
+        # same-origin non-browser caller) is allowed. This complements the
+        # CORS-withholding in add_cors_headers, which only stops requests the
+        # browser bothers to preflight — the Origin check also covers a simple
+        # or forged cross-site request that skips preflight.
+        if request.method in ("GET", "HEAD", "OPTIONS"):
+            return None
+        origin = request.headers.get("Origin", "")
+        if origin and _cors_allow_origin(origin) is None:
+            return ({"error": "cross-origin state-changing request refused"}, 403)
+        return None
+
     @app.after_request
     def add_cors_headers(response):
         # The workspace report HTML opens via file://, so its browser Origin is
