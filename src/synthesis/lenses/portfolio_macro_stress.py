@@ -30,6 +30,7 @@ from ._shared import (
     format_shocks,
     read_holdings_json,
     sha8,
+    spotlight_template_kwargs,
 )
 
 log = logging.getLogger(__name__)
@@ -200,7 +201,12 @@ def run_portfolio_macro_stress_lens(
                 log.info({"event": "portfolio_macro_stress_cache_hit", "scenario": scenario_id})
                 return existing
     try:
-        prompt = _PROMPT_PORTFOLIO_MACRO_STRESS.format(**ctx.template_kwargs)
+        safe_kwargs = spotlight_template_kwargs(
+            ctx.template_kwargs,
+            frozenset({"portfolio_summary"}),
+            lens_name="portfolio_macro_stress",
+        )
+        prompt = _PROMPT_PORTFOLIO_MACRO_STRESS.format(**safe_kwargs)
     except KeyError as exc:
         log.warning({"event": "portfolio_macro_stress_template_key", "key": str(exc)})
         return None

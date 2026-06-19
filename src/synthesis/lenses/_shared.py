@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Callable, cast
 
 from llm.style import compose_brief_prompt, style_block_cache_token
+from llm.untrusted import spotlight
 from llm_artifact_store import (
     Artifact,
     UpsertRequest,
@@ -63,6 +64,54 @@ class Lens:
     scope: str  # 'ticker' or 'portfolio'
     prompt_template: str
     build_context: Callable[[str | None, Path], LensContext | None]
+
+
+# ===========================================================================
+# Untrusted-input spotlighting (sec-llm; directives/llm_injection_threat_model.md §6)
+# ===========================================================================
+
+# Per-lens registry of template_kwargs whose VALUES carry untrusted external
+# text — issuer filings (10-K risk factors, Item 8 footnotes, customer-
+# concentration disclosures), earnings-call / IR summaries (.tmp briefs), and
+# chained prior-LLM artifacts (bear-case heads re-embedded into a downstream
+# prompt). Those values are spotlight()-wrapped before .format(), so an
+# instruction injected into that content cannot hijack the lens prompt. Trusted
+# kwargs (our computed numbers, DB rows, the operator's own thesis/KPIs) are NOT
+# wrapped. EVERY generic lens in LENSES MUST appear here, even mapped to an empty
+# frozenset — the guard in tests/test_lens_spotlight.py fails if a new lens is
+# added unclassified, so this choke point can't be silently bypassed.
+LENS_UNTRUSTED_KWARGS: dict[str, frozenset[str]] = {
+    "bull_case": frozenset({"latest_summary"}),
+    "catalyst_calendar": frozenset({"latest_summary"}),
+    "cross_portfolio_synthesis": frozenset({"portfolio_summary"}),
+    "customer_concentration_risk": frozenset({"concentrations_block", "anonymized_block"}),
+    "filing_diff_narrative": frozenset({"risk_diffs"}),
+    "five_min_reread": frozenset({"latest_summary"}),
+    "footnote_anomaly": frozenset({"footnotes"}),
+    "llm_calibration": frozenset(),
+    "mgmt_credibility_score": frozenset({"recent_commitments"}),
+    "reverse_dcf": frozenset({"latest_summary"}),
+    "thesis_drift_qoq": frozenset({"prior_bear_case", "recent_summaries"}),
+    "underweighted_facts": frozenset({"latest_summary"}),
+}
+
+
+def spotlight_template_kwargs(
+    template_kwargs: dict[str, str], untrusted_keys: frozenset[str], *, lens_name: str
+) -> dict[str, str]:
+    """Return a copy of ``template_kwargs`` with each key in ``untrusted_keys``
+    wrapped via :func:`spotlight`, marking that interpolated content as DATA, not
+    instructions. Keys that are absent or blank are left as-is (spotlight already
+    returns ``""`` for blank input). Used by the generic ``run_lens`` and by the
+    macro entry points, which render their prompts outside ``run_lens``."""
+    out = dict(template_kwargs)
+    for key in untrusted_keys:
+        val = out.get(key)
+        if isinstance(val, str) and val.strip():
+            out[key] = spotlight(
+                val, source=f"{lens_name}:{key} (issuer/filing/chained-LLM content)"
+            )
+    return out
 
 
 # ===========================================================================
@@ -137,7 +186,12 @@ def run_lens(
                 return existing
 
     try:
-        prompt = lens.prompt_template.format(**ctx.template_kwargs)
+        safe_kwargs = spotlight_template_kwargs(
+            ctx.template_kwargs,
+            LENS_UNTRUSTED_KWARGS.get(lens.name, frozenset()),
+            lens_name=lens.name,
+        )
+        prompt = lens.prompt_template.format(**safe_kwargs)
     except KeyError as exc:
         log.warning(
             {

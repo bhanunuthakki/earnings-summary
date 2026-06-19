@@ -32,6 +32,7 @@ from ._shared import (
     load_dcf,
     load_recent_summaries,
     sha8,
+    spotlight_template_kwargs,
     thesis_block,
 )
 
@@ -183,7 +184,10 @@ def run_macro_scenario_lens(
                 )
                 return existing
     try:
-        prompt = _PROMPT_MACRO_SCENARIO.format(**ctx.template_kwargs)
+        safe_kwargs = spotlight_template_kwargs(
+            ctx.template_kwargs, frozenset({"latest_summary"}), lens_name="macro_scenario"
+        )
+        prompt = _PROMPT_MACRO_SCENARIO.format(**safe_kwargs)
     except KeyError as exc:
         log.warning({"event": "macro_scenario_template_key", "key": str(exc)})
         return None
