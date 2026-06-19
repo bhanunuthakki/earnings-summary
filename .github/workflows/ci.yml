@@ -206,3 +206,28 @@ jobs:
             exit 1
           fi
           echo "No new pyright strict errors (baseline $base_n tolerated)."
+
+  security:
+    # Supply-chain (dependency CVE) + SAST visibility. Like the ruff/pyright
+    # baselines, these SURFACE findings without blocking: CI installs deps fresh
+    # (so transitives resolve to their latest, patched builds) and the direct
+    # security-sensitive pins live in requirements.txt, while bandit carries the
+    # usual noise on a mature codebase. Promote a scanner to blocking (drop its
+    # `|| true`) once its baseline is clean.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install scanners + runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit bandit
+      - name: pip-audit — dependency CVEs (advisory)
+        run: pip-audit --progress-spinner off || true
+      - name: bandit — SAST, medium+ severity (advisory)
+        run: bandit -q -r src execution -ll || true
