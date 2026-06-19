@@ -17,7 +17,7 @@ Public surface (consumed by execution/comments_server.py):
   build_chat_response.load_thread(repo_root, ticker, report_date) -> list[ThreadTurn]
   build_chat_response.stream_response(repo_root, ticker, report_date, user_message)
       -> generator yielding dicts: {type: "delta"|"final"|"diff_proposal"|"error", ...}
-  apply_chat_diff(repo_root, ticker, diff, dry_run) -> dict
+  apply_chat_diff(repo_root, ticker, report_date, diff, dry_run) -> dict
 """
 
 from __future__ import annotations
@@ -614,8 +614,32 @@ def stream_response(
 # ---------------------------------------------------------------------------
 
 
+def _diff_identity(d: dict[str, object]) -> tuple[object, object, object, object]:
+    """The identity of a proposed edit — which file/key it writes and the
+    before/after values. Used to match an apply request against the model's
+    stored proposal."""
+    return (d.get("target_file"), d.get("target_path"), d.get("old_value"), d.get("new_value"))
+
+
+def _matches_stored_proposal(diff: dict[str, object], thread: list[ChatTurn]) -> bool:
+    """True iff ``diff`` matches an edit the assistant actually proposed in this
+    thread. Blocks applying a request-supplied diff the model never proposed
+    (e.g. a forged/CSRF apply call that swaps the target file or the value)."""
+    incoming = _diff_identity(diff)
+    return any(
+        turn.role == "assistant"
+        and turn.proposed_diff is not None
+        and _diff_identity(turn.proposed_diff) == incoming
+        for turn in thread
+    )
+
+
 def apply_chat_diff(
-    repo_root: Path, ticker: str, diff: dict[str, object], dry_run: bool = False
+    repo_root: Path,
+    ticker: str,
+    report_date: date,
+    diff: dict[str, object],
+    dry_run: bool = False,
 ) -> dict[str, object]:
     """Apply a chatbot-proposed diff. Currently supports:
 
@@ -632,6 +656,11 @@ def apply_chat_diff(
     back into later prompts, so a chat-driven write there is an
     injection-persistence vector, not a user edit.
 
+    Proposal binding: the diff must match an edit the assistant actually
+    proposed in this report's thread (keyed by ``report_date``). An apply
+    request carrying a diff the model never proposed — a forged/CSRF call that
+    swaps the target file or value — is refused.
+
     Optimistic-concurrency: when the proposal carries `old_value` (the schema
     always asks for it), the on-disk value must still match it — otherwise the
     proposal is stale (the analyst or a rebuild changed it since) and we refuse
@@ -646,6 +675,13 @@ def apply_chat_diff(
         return {
             "applied": False,
             "error": "diff missing target_file or target_path",
+            "summary": str(summary),
+        }
+
+    if not _matches_stored_proposal(diff, load_thread(repo_root, ticker, report_date)):
+        return {
+            "applied": False,
+            "error": "diff does not match any edit proposed in this conversation",
             "summary": str(summary),
         }
 

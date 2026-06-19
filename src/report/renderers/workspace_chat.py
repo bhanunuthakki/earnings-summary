@@ -258,7 +258,7 @@ JS = (
           fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({diff: diff, dry_run: dryRun}),
+            body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
           }).then(function(r) { return r.json(); }).then(function(res) {
             var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
               (res.summary || '') + (res.error ? ' — ' + res.error : '');
