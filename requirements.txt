@@ -1,9 +1,14 @@
 flask
 pandas
 lxml
-requests
+# Security floor: CVE-2026-25645 (fixed 2.33.0). CI installs latest; the floor
+# stops dev/prod from resolving a known-vulnerable build.
+requests>=2.33.0
 python-dotenv
-pypdf
+# Security floor: pypdf parses UNTRUSTED IR/filing PDFs, so it sits on the
+# attacker-reachable path and carries a heavy CVE stream — keep it current
+# (>=6.13.3 clears the 30+ CVEs flagged by the 2026-06-18 SCA).
+pypdf>=6.13.3
 reportlab
 mcp
 # LLM access — primary path: Claude Code CLI (`claude -p`) via subprocess. No Python
@@ -25,7 +30,6 @@ openpyxl
 pydantic
 yt-dlp
 faster-whisper
-pydantic
 beautifulsoup4
 markdown
 # Free fallback source for live price + earnings calendar (src/sources/) and
