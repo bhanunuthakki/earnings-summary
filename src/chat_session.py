@@ -626,9 +626,16 @@ def apply_chat_diff(
 
     Returns: `{"applied": bool, "summary": str, "path": str, "error": str | None}`.
 
-    Refuses to write outside `data/`, `micro_thesis/`, `.tmp/`, or
-    `directives/` — same filesystem scope as the LLM's read tool, with
-    write being explicit user-driven.
+    Refuses to write outside `data/`, `micro_thesis/`, or `.tmp/` — the
+    filesystem scope the analyst edits via the chatbot. `directives/` is
+    deliberately NOT writable: those are pipeline-control specs that get read
+    back into later prompts, so a chat-driven write there is an
+    injection-persistence vector, not a user edit.
+
+    Optimistic-concurrency: when the proposal carries `old_value` (the schema
+    always asks for it), the on-disk value must still match it — otherwise the
+    proposal is stale (the analyst or a rebuild changed it since) and we refuse
+    rather than silently clobber the newer value.
     """
     target_file = diff.get("target_file")
     target_path = diff.get("target_path")
@@ -679,6 +686,19 @@ def apply_chat_diff(
             "summary": str(summary),
         }
 
+    # Optimistic-concurrency guard: refuse to overwrite if the on-disk value has
+    # drifted from what the proposal expected to replace. Only enforced when the
+    # proposal supplies `old_value` (always, per the prompt schema); a legacy
+    # proposal that omits it falls back to the prior apply-anyway behavior.
+    if "old_value" in diff and payload[target_path] != diff["old_value"]:
+        return {
+            "applied": False,
+            "error": "value changed since the proposal — refusing to overwrite",
+            "summary": str(summary),
+            "old_preview": str(payload[target_path])[:120],
+            "expected_preview": str(diff["old_value"])[:120],
+        }
+
     if dry_run:
         return {
             "applied": False,
@@ -704,7 +724,6 @@ def _is_in_writable_scope(repo_root: Path, abs_target: Path) -> bool:
         repo_root / "data",
         repo_root / "micro_thesis",
         repo_root / ".tmp",
-        repo_root / "directives",
     )
     try:
         for base in allowed:
