@@ -58,6 +58,9 @@ PALETTE_LIGHT: dict[str, str] = {
     "tone-neg": "#fdf2f2",
     # One popover/menu elevation per theme (combobox lists, peeks, palettes).
     "shadow-pop": "0 12px 32px rgba(15, 15, 20, 0.18)",
+    # The one modal scrim wash (CCOverlay / .k-scrim). A neutral black veil, not
+    # a palette color — tokenized so surfaces never freehand `rgba(0,0,0,.5)`.
+    "scrim": "rgba(0, 0, 0, 0.5)",
 }
 
 # "white" is the light palette with a brighter page background.
@@ -99,6 +102,7 @@ PALETTE_DARK: dict[str, str] = {
     "tone-opt": "#2b2418",
     "tone-neg": "#2b1a1a",
     "shadow-pop": "0 12px 32px rgba(0, 0, 0, 0.45)",
+    "scrim": "rgba(0, 0, 0, 0.5)",
 }
 
 FONT_TOKENS: dict[str, str] = {

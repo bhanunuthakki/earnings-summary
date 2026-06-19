@@ -325,6 +325,20 @@ _ALIAS = re.compile(
     r"--(?:panel-alt|panel|bg-card|bg-elev|row-hover|ink-muted|ink|fg-muted|link"
     r"|font-serif|font-mono|font-body)(?![\w-])"
 )
+# Raw FUNCTION-form colors — rgb()/rgba()/hsl()/hsla(). The hex regex above is
+# blind to these, which is exactly how every freehand drop-shadow, status wash,
+# and white-wash hover slipped past the color guard across the whole dashboard
+# (only the workspace had a bespoke rgba check). They fold into the "color"
+# dimension: a surface composes --scrim / --shadow-pop / color-mix(var(--token)),
+# never a raw rgba. The (?<![a-z]) lookbehind keeps the "rgb" inside
+# "color-mix(in srgb, …)" from matching. tokens.py + charts_v2 stay EXEMPT.
+_FUNC_COLOR = re.compile(r"(?<![a-z])(?:rgba?|hsla?)\([^)]*\)", re.IGNORECASE)
+# Off-scale font WEIGHT: the kit/scale tops out at 600. 700/800/900/bold is the
+# "heavier than the system" drift (design_language §1; the dominant non-guarded
+# drift this enforcement closes).
+_FONT_WEIGHT = re.compile(r"font-weight:\s*(bold|[789]00)\b")
+# transition: all is forbidden — explicit properties only (design_language §3).
+_TRANSITION_ALL = re.compile(r"transition:\s*all\b")
 
 # --- COMPONENT drift the five TOKEN dimensions above are BLIND to
 # (design_language §4): a surface that hand-rolls a FILLED STATUS BADGE — a
@@ -344,7 +358,16 @@ _NAMED_BADGE = re.compile(r"[.#][\w-]*(?:pill|badge|chip|tag)\b", re.IGNORECASE)
 _KIT_BADGE = re.compile(r"\b(?:k-pill|k-chip|k-well|p-pill)\b")
 _STATUS_FILL = re.compile(r"background(?:-color)?:\s*color-mix\(in srgb, var\(--(?:ok|warn|bad)\)")
 
-DIMENSIONS = ("color", "font-size", "radius", "font-family", "alias", "kit-badge")
+DIMENSIONS = (
+    "color",
+    "font-size",
+    "radius",
+    "font-family",
+    "alias",
+    "kit-badge",
+    "font-weight",
+    "transition",
+)
 
 # All CSS-emitting modules (src-relative, posix). The registry IS the contract:
 # a filesystem surface missing here — or here but gone from the filesystem —
@@ -463,17 +486,22 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # defines — as do their font-size / radius dimensions, untouched here.
     # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
     # the 2026-06-14 sweep; alias/font-size stay quarantined (report unfork).
-    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size"}),
+    # The report surfaces' `color` dimension is quarantined for the raw rgba the
+    # NEW func-color check now sees (drop-shadows -> --shadow-pop, white washes ->
+    # color-mix, the Tweaks-panel neutral micro-shadows): pre-existing drift, part
+    # of the same report-unfork backlog as their alias/radius/font-size entries —
+    # not touched here to keep the report HTML goldens frozen.
+    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size", "color"}),
     # workspace_comments graduated its kit-badge dimension in the deferred-items
     # pass: .cmt-outbox-badge / .cmt-health-pill now ride the kit's .k-pill (tone
     # set in JS) with layout/mono-micro refine only. alias/font-size/radius stay
     # quarantined (report unfork — unrelated to the pill migration).
-    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius"}),
+    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius", "color"}),
     # workspace_styles graduated its kit-badge dimension in the same pass: the
     # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
     # thesis_risk.py). alias/radius stay quarantined (report unfork).
-    "report/renderers/workspace_styles.py": frozenset({"alias", "radius"}),
-    "ui/cite_marks.py": frozenset({"alias", "radius"}),
+    "report/renderers/workspace_styles.py": frozenset({"alias", "radius", "color"}),
+    "ui/cite_marks.py": frozenset({"alias", "radius", "color"}),
     # --- kit-badge (the 2026-06-15 component dimension): all seeded surfaces have
     #     now GRADUATED onto .k-pill — the command-center two (allocation .ad-pill,
     #     position_lifecycle .plc-pill) and the report two (workspace_comments
@@ -551,9 +579,9 @@ def scan_surface(rel: str, text: str) -> dict[str, list[str]]:
         return {}
     found: dict[str, list[str]] = {}
 
-    hexes = _RAW_HEX.findall(text)
-    if hexes:
-        found["color"] = sorted(set(hexes))
+    colors = set(_RAW_HEX.findall(text)) | set(_FUNC_COLOR.findall(text))
+    if colors:
+        found["color"] = sorted(colors)
 
     if rel not in _FONT_SIZE_EXEMPT:
         sizes = [m for m in _FONT_SIZE.findall(text) if m not in TYPE_SCALE_PX]
@@ -590,6 +618,13 @@ def scan_surface(rel: str, text: str) -> dict[str, list[str]]:
             badges.append(named.group(0))
     if badges:
         found["kit-badge"] = sorted(set(badges))
+
+    weights = _FONT_WEIGHT.findall(text)
+    if weights:
+        found["font-weight"] = sorted(set(weights))
+
+    if _TRANSITION_ALL.search(text):
+        found["transition"] = ["all"]
 
     return found
 
@@ -691,6 +726,134 @@ def test_sanctioned_escapes_survive() -> None:
     assert scan_surface("ui/controls.py", _css_text(SRC / "ui/controls.py")) == {}
     # 0.93em inline mono is an em, never a px font-size — naturally unflagged.
     assert scan_surface("x", "code { font-size: 0.93em; }") == {}
+
+
+def test_func_color_dimension_catches_raw_rgba_hsl() -> None:
+    """The color dimension now also denies rgb()/rgba()/hsl()/hsla() — the gap
+    that hid every freehand shadow/wash/hover. It must NOT false-fire on the
+    ``rgb`` inside ``color-mix(in srgb, …)`` (the sanctioned token idiom)."""
+    assert "rgba(0, 0, 0, 0.3)" in scan_surface(
+        "x", ".a { box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3); }"
+    ).get("color", [])
+    assert "rgba(255,255,255,0.04)" in scan_surface(
+        "x", ".a:hover { background: rgba(255,255,255,0.04); }"
+    ).get("color", [])
+    assert scan_surface("x", ".a { color: hsl(210, 50%, 40%); }").get("color")
+    # NEGATIVE: the kit's color-mix idiom (note the "rgb" inside "srgb") is clean.
+    assert "color" not in scan_surface(
+        "x", ".a { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
+    )
+    # NEGATIVE: a tokenized scrim / shadow carries no raw color.
+    assert scan_surface("x", ".k-scrim { background: var(--scrim); }") == {}
+
+
+def test_font_weight_and_transition_dimensions() -> None:
+    """font-weight 700/800/900/bold (the kit tops out at 600) and ``transition:
+    all`` (explicit properties only, §3) are denied; 600 and explicit-prop
+    transitions are clean."""
+    assert scan_surface("x", ".a { font-weight: 700; }")["font-weight"] == ["700"]
+    assert scan_surface("x", ".a { font-weight: bold; }")["font-weight"] == ["bold"]
+    assert "font-weight" not in scan_surface("x", ".a { font-weight: 600; }")
+    assert scan_surface("x", ".a { transition: all 150ms ease; }")["transition"] == ["all"]
+    assert "transition" not in scan_surface(
+        "x", ".a { transition: color var(--transition), border-color var(--transition); }"
+    )
+
+
+# ===========================================================================
+# Layer B — button kit-coverage (design_language §4: "compose the kit, never
+# reinvent"). The TOKEN dimensions + kit-badge are blind to a reinvented BUTTON
+# (accent/border/padding fills are legit everywhere, so a CSS-signature regex
+# false-fires). Instead this is a POSITIVE check on EMITTED <button> markup:
+# every button carries a kit class (.k-btn / .k-chip / .k-prov-act) or an
+# allowlisted bespoke control. A NEW `<button class="my-btn">` fails until it
+# composes the kit — the structural backstop that stops button reinvention the
+# way the workspace-consistency sweep had to fix it by hand.
+# ===========================================================================
+_BUTTON_TAG = re.compile(r"<button\b[^>]*>", re.IGNORECASE)
+_CLASS_ATTR = re.compile(r'class="([^"]*)"')
+#: A button is kit-composed if any of its classes is one of these.
+_KIT_BUTTON = frozenset({"k-btn", "k-chip", "k-prov-act"})
+#: Sanctioned + grandfathered bespoke button classes — the QUARANTINE analogue
+#: for §4 buttons (seeded from the current emitted set). Close glyphs (§3), tabs,
+#: the icon theme-toggle / ⌘K launcher, and the §4.1 doorway are sanctioned
+#: bespoke controls; the rest are grandfathered current-state to migrate
+#: opportunistically. The check's job is to stop NET-NEW reinvented buttons — a
+#: button whose class is none of these and not kit fails.
+_BESPOKE_BUTTON_OK = frozenset(
+    {
+        # close-glyph dismiss buttons (§3): drawers / peeks / palette / chat / comments
+        "cc-drawer-close",
+        "tcc-drawer-close",
+        "cc-peek-close",
+        "cc-palette-close",
+        "tri-d-close",
+        "chat-close",
+        "cmt-close",
+        # icon-only launcher + theme toggle (§4 specialized-control carve-out)
+        "cc-palette-btn",
+        "cc-theme-toggle",
+        # bespoke tab control
+        "cc-tab",
+        # the doorway: a datum rendered as a label that opens Ask (§4.1)
+        "fact-doorway",
+        # specialized Ask-dock control cluster
+        "ask-dock-ctl",
+        # grandfathered bespoke interactive rows / text buttons (migrate later)
+        "up-watch-item",
+        "tri-text",
+        "dq-peek",
+    }
+)
+
+
+def _emitted_button_classes(text: str) -> list[set[str]]:
+    """Class token-sets of every ``<button>`` emitted in a source file. Skips
+    classless buttons (JS-wired/structural — out of scope) and dynamic classes
+    (``{…}`` / string concatenation — unverifiable statically, kit in practice)."""
+    out: list[set[str]] = []
+    for tag in _BUTTON_TAG.findall(text):
+        m = _CLASS_ATTR.search(tag)
+        if not m:
+            continue
+        cls = m.group(1)
+        if "{" in cls or "+" in cls:
+            continue
+        out.append(set(cls.split()))
+    return out
+
+
+def test_buttons_compose_the_kit() -> None:
+    """Every emitted ``<button>`` carries a kit button/chip class or an
+    allowlisted bespoke control — a reinvented button cannot ship (design_language
+    §4). Scans ALL of ``src`` (buttons live in markup files, not only the
+    CSS-emitting surfaces). Seeded green; a net-new freehand button fails here."""
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(SRC.rglob("*.py")):
+        for classes in _emitted_button_classes(path.read_text(encoding="utf-8")):
+            if classes & _KIT_BUTTON or classes & _BESPOKE_BUTTON_OK:
+                continue
+            offenders.setdefault(path.relative_to(SRC).as_posix(), []).append(
+                " ".join(sorted(classes))
+            )
+    assert not offenders, (
+        "reinvented <button>(s) — compose the kit (.k-btn / .k-chip) instead of a "
+        "freehand class. A genuinely-bespoke control (close glyph, segmented "
+        "selector, …) is justified into _BESPOKE_BUTTON_OK, not skinned ad hoc:\n"
+        + "\n".join(f"  {rel}: {sorted(set(v))}" for rel, v in offenders.items())
+    )
+
+
+def test_button_coverage_fires_on_reinvention() -> None:
+    """The Layer-B check's own contract: it flags a freehand button, passes kit
+    + allowlisted ones, and ignores dynamic / classless buttons."""
+    freehand = _emitted_button_classes('<button class="my-save-btn" type="button">Save</button>')
+    assert freehand == [{"my-save-btn"}]
+    assert not (freehand[0] & _KIT_BUTTON or freehand[0] & _BESPOKE_BUTTON_OK)  # → flagged
+    assert _emitted_button_classes('<button class="k-btn k-btn-quiet">x</button>')[0] & _KIT_BUTTON
+    assert _emitted_button_classes('<button class="cc-tab">x</button>')[0] & _BESPOKE_BUTTON_OK
+    assert _emitted_button_classes('<button class="{cls}">x</button>') == []  # dynamic → skipped
+    assert _emitted_button_classes("<button type='button'>x</button>") == []  # classless → skipped
 
 
 def test_kit_badge_flags_reinvented_status_pills_only() -> None:
