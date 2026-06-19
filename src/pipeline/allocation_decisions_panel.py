@@ -663,7 +663,9 @@ def _audit_row(r: SizingAuditRow) -> str:
     else:
         alpha = '<span class="muted">&mdash;</span>'
     if r.mismatch_reasons:
-        chips = "".join(f'<span class="ad-chip">{escape(c)}</span>' for c in r.mismatch_reasons)
+        chips = "".join(
+            f'<span class="k-chip ad-chip">{escape(c)}</span>' for c in r.mismatch_reasons
+        )
         mismatch = f'<b class="ad-score">{r.mismatch_score:g}</b>{chips}'
     else:
         mismatch = '<span class="muted ad-aligned">aligned</span>'
@@ -1113,9 +1115,9 @@ _PANEL_CSS = """<style>
 .ad-note { font-size: var(--fs-caption); margin: 0 0 10px; }
 /* verdict / outcome badges → the kit filled status pill (.k-pill + tone). */
 .ad-score { color: var(--warn); font-variant-numeric: tabular-nums; margin-right: 8px; }
-.ad-chip { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 7px;
-  border-radius: var(--radius-full); font-size: var(--fs-caption); font-family: var(--sans);
-  background: var(--paper); border: 1px solid var(--border); color: var(--muted); }
+/* reason chips compose the kit .k-chip (micro/uppercase/outline); the surface
+   adds only the wrap-spacing so several chips stack inside the Mismatch cell. */
+.ad-chip { margin: 1px 4px 1px 0; }
 .ad-mismatch { max-width: 420px; }
 .ad-aligned { font-size: var(--fs-caption); }
 .ad-editor { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
@@ -1134,7 +1136,7 @@ _PANEL_CSS = """<style>
 .adc-kpi b { color: var(--fg); font-variant-numeric: tabular-nums; margin-right: 4px; }
 .adc-table { margin-bottom: 10px; }
 .adc-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
-.adc-sub { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
+.adc-sub { font-size: var(--fs-section); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
 /* Timeline kinds: the filled status pill is now the control kit's .k-pill
    (+ k-pill-bad for bear append, k-pill-ok for thesis update; every other kind

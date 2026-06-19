@@ -56,7 +56,7 @@ _PANEL_STYLE = """<style>
 .diet-sig a { color: var(--fg); text-decoration: none; }
 .diet-sig a:hover { color: var(--accent); text-decoration: underline; }
 .diet-firm { color: var(--muted); font-size: var(--fs-caption); }
-.diet-date { font-family: var(--mono); font-weight: 600; color: var(--accent);
+.diet-date { font-family: var(--mono); font-weight: 600; color: var(--fg);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .diet-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
 .diet-scaffold { margin-top: var(--sp-5); padding: var(--sp-3) var(--sp-4);
@@ -64,12 +64,14 @@ _PANEL_STYLE = """<style>
   font-size: var(--fs-caption); color: var(--muted); line-height: 1.55; }
 </style>"""
 
-# signal_type → (display label, .k-pill tone class).
+# signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
+# dashboard (bare .k-pill, neutral --paper fill): accent is reserved for
+# interactive/selected/unread/status, not a decorative category tint.
 _TYPE_PILL: dict[str, tuple[str, str]] = {
-    SIGNAL_CONSENSUS_RATING: ("Rating", "k-pill-accent"),
+    SIGNAL_CONSENSUS_RATING: ("Rating", ""),
     "general_news": ("News", ""),
-    "investor_day": ("Investor day", "k-pill-accent"),
-    SIGNAL_MEDIA_APPEARANCE: ("Podcast", "k-pill-accent"),
+    "investor_day": ("Investor day", ""),
+    SIGNAL_MEDIA_APPEARANCE: ("Podcast", ""),
 }
 
 
@@ -118,7 +120,7 @@ def _stream_section(rows: list[SignalRow]) -> str:
 
 def _stream_row(r: SignalRow) -> str:
     label, tone = _TYPE_PILL.get(r.signal_type, (r.signal_type, ""))
-    pill_cls = f"p-pill k-pill {tone}".strip()
+    pill_cls = f"k-pill {tone}".strip()
     type_cell = f'<span class="{pill_cls}">{escape(label)}</span>'
     title = escape(r.title)
     sig_cell = (

@@ -242,12 +242,6 @@ _ANALYTICS_CSS = """<style>
 .pf-window-standalone { margin-bottom: 18px; }
 .pf-window-label { font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted); margin-right: 2px; }
-.pf-btn { background: var(--paper); color: var(--fg-soft); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 4px 10px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--sans); transition: color var(--transition), border-color var(--transition); }
-.pf-btn:hover { border-color: var(--border-2); color: var(--fg); }
-.pf-btn-apply { background: var(--accent); color: var(--accent-contrast); border: none;
-  font-weight: 600; }
 .pf-window input[type="date"] { padding: 3px 6px; font-size: var(--fs-caption);
   font-family: var(--mono); }
 .pf-backfill-label { color: var(--muted); display: inline-flex; align-items: center;
@@ -281,10 +275,6 @@ _INSIGHTS_CSS = """<style>
 .pf-insights { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 0 18px; align-items: start; }
 .pf-th-chips { display: flex; gap: 8px; flex-wrap: wrap; }
-.pf-th-chip { font-family: var(--sans); font-size: var(--fs-caption); text-decoration: none;
-  border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 9px; }
-.pf-th-warn { color: var(--warn); border-color: var(--warn); }
-.pf-th-bad { color: var(--bad); border-color: var(--bad); }
 .pf-exp-row { display: grid; grid-template-columns: minmax(110px, 1fr) 2fr 44px; gap: 10px;
   align-items: center; font-size: var(--fs-body); padding: 3px 0; }
 .pf-exp-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -303,10 +293,6 @@ _INSIGHTS_CSS = """<style>
 .pf-nd-now { text-align: right; font-variant-numeric: tabular-nums; font-size: var(--fs-caption); }
 .pf-nd-wf { display: none; gap: 6px; flex-wrap: wrap; padding: 1px 0 6px; }
 .pf-nd-item:hover .pf-nd-wf, .pf-nd-item:focus-within .pf-nd-wf { display: flex; }
-.pf-nd-chip { font-family: var(--sans); font-size: var(--fs-caption); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 2px 7px; cursor: help; color: var(--muted); }
-.pf-nd-chip.pos { color: var(--ok); border-color: var(--ok); }
-.pf-nd-chip.neg { color: var(--bad); border-color: var(--bad); }
 .pf-nd-note { font-size: var(--fs-caption); }
 .pf-nd-hint { font-size: var(--fs-caption); }
 .pf-nd-memo-h { margin-top: 12px; }
@@ -487,7 +473,7 @@ def _window_bar(w: WindowSelection) -> str:
     applied window), the modeled-backfill toggle, and the refetch script.
     Always rendered — when the tracker is down it doubles as a retry control."""
     buttons = "".join(
-        f'<button type="button" class="pf-btn" data-preset="{key}">{label}</button>'
+        f'<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-preset="{key}">{label}</button>'
         for key, label in _WINDOW_PRESETS
     )
     checked = " checked" if w.include_backfill else ""
@@ -505,7 +491,7 @@ def _window_bar(w: WindowSelection) -> str:
         '<span class="muted">→</span>'
         f'<input type="date" id="pf-end" value="{escape(w.end_date or "")}" '
         'aria-label="window end date">'
-        '<button type="button" class="pf-btn pf-btn-apply" id="pf-apply">Apply</button>'
+        '<button type="button" class="k-btn k-btn-primary k-btn-sm" id="pf-apply">Apply</button>'
         f'<label class="pf-backfill-label" title="{escape(backfill_tip)}">'
         f'<input type="checkbox" id="pf-backfill"{checked}> modeled backfill</label>'
         "</div>"
@@ -1013,7 +999,7 @@ def _thesis_rollup_panel(db_path: Path) -> str:
     chips = "".join(
         # data-peek-ticker: the chip text carries " · status", so the hover
         # mini-card needs the bare symbol spelled out (UX9).
-        f'<a class="pf-th-chip pf-th-{tones.get(s, "bad")}" href="#holding={escape(t)}" '
+        f'<a class="k-chip k-chip-{tones.get(s, "bad")}" href="#holding={escape(t)}" '
         f'data-peek-ticker="{escape(t)}">'
         f"{escape(t)} · {escape(s)}</a>"
         for t, s in flagged
@@ -1169,17 +1155,17 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
             reading = r.reading(key)
             if reading is None:
                 chips.append(
-                    f'<span class="pf-nd-chip" title="no {escape(label)} data for this '
+                    f'<span class="k-chip" title="no {escape(label)} data for this '
                     f'holding — its blend renormalizes over the rest">{escape(label)} —</span>'
                 )
                 continue
-            tone = " pos" if reading.contribution >= 0 else " neg"
+            tone = " k-chip-ok" if reading.contribution >= 0 else " k-chip-bad"
             tip = (
                 f"z {reading.z:+.2f} · weight {round(reading.weight * 100.0, 6):.0f}% · "
                 f"raw {reading.raw * 100.0:+.1f}% · {reading.detail}"
             )
             chips.append(
-                f'<span class="pf-nd-chip{tone}" title="{escape(tip)}">'
+                f'<span class="k-chip{tone}" title="{escape(tip)}">'
                 f"{escape(label)} {reading.contribution:+.2f}</span>"
             )
         ticker = escape(r.ticker)

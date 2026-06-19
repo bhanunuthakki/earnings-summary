@@ -26,7 +26,7 @@ _PANEL_STYLE = """<style>
 .fov-act-drop { color:var(--bad); font-weight:600; }
 .fov-act-qualify { color:var(--warn); font-weight:600; }
 .fov-muted { color:var(--muted); }
-.fov-src { font-size:var(--fs-caption); color:var(--muted); white-space:nowrap; }
+.fov-src { font-family:var(--mono); font-size:var(--fs-caption); color:var(--muted); white-space:nowrap; }
 </style>"""
 
 

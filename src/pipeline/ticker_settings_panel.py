@@ -17,14 +17,18 @@ from pathlib import Path
 
 _SCRIPT = """<script>
 (function () {
+  function setPill(cell, cls, text) {
+    if (!cell) return;
+    cell.innerHTML = '<span class="' + cls + '">' + text + '</span>';
+  }
   function post(t, value, cell) {
     fetch('/api/ticker-settings/' + encodeURIComponent(t), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({bypass_budget: value})
     }).then(function (r) { return r.json(); }).then(function (j) {
-      if (cell) cell.textContent = j.bypass_budget ? 'on' : 'off';
-    }).catch(function () { if (cell) cell.textContent = 'error'; });
+      setPill(cell, j.bypass_budget ? 'k-pill k-pill-ok' : 'k-pill', j.bypass_budget ? 'ON' : 'OFF');
+    }).catch(function () { setPill(cell, 'k-pill k-pill-bad', 'ERR'); });
   }
   document.querySelectorAll('.ts-toggle').forEach(function (cb) {
     cb.addEventListener('change', function () {
@@ -46,6 +50,18 @@ _SCRIPT = """<script>
 </script>"""
 
 
+def _state_pill(bypass: bool) -> str:
+    """The bypass-budget state as the kit's filled status pill.
+
+    ``ON`` (bypass active) takes ``.k-pill-ok`` (green = present/active); ``OFF``
+    is the neutral ``.k-pill``. The toggle JS swaps the same class+text in place,
+    so server-render and client-update stay one shape.
+    """
+    if bypass:
+        return '<span class="k-pill k-pill-ok">ON</span>'
+    return '<span class="k-pill">OFF</span>'
+
+
 def render_ticker_settings_panel(db_path: Path) -> str:
     """Drawer fragment: existing per-ticker settings rows + a set-form."""
     rows = _load_rows(db_path)
@@ -58,7 +74,7 @@ def render_ticker_settings_panel(db_path: Path) -> str:
     body = "".join(
         "<tr>"
         f"<td>{escape(t)}</td>"
-        f'<td class="ts-state">{"on" if bypass else "off"}</td>'
+        f'<td class="ts-state">{_state_pill(bypass)}</td>'
         f'<td><input type="checkbox" class="ts-toggle" data-ticker="{escape(t)}"'
         f'{" checked" if bypass else ""} aria-label="Bypass budget for {escape(t)}" '
         f'title="When on, EVERY LLM build for {escape(t)} ignores the per-purpose '
@@ -68,7 +84,7 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         for t, bypass, updated in rows
     )
     table = (
-        "<table><thead><tr><th>Ticker</th><th>Bypass budget</th><th>Toggle</th>"
+        '<table class="p-table"><thead><tr><th>Ticker</th><th>Bypass budget</th><th>Toggle</th>'
         '<th class="num">Updated</th></tr></thead>'
         f"<tbody>{body}</tbody></table>"
         if rows
@@ -81,7 +97,7 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         "(the one-shot bypass lives on the per-ticker Refresh panel).</p>"
         f"{table}"
         '<div style="margin-top:12px; display:flex; gap:8px; align-items:center;">'
-        '<input id="ts-add-ticker" placeholder="TICKER" style="width:110px; padding:6px 8px;" '
+        '<input id="ts-add-ticker" placeholder="TICKER" style="width:110px" '
         'aria-label="Ticker symbol">'
         '<label style="font-size:var(--fs-body);"><input type="checkbox" id="ts-add-bypass"> '
         "bypass budget</label>"

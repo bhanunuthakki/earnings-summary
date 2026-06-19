@@ -118,7 +118,7 @@ def _run_bar(holdings: list[str]) -> str:
     )
     return (
         '<div class="am-runbar" id="am-runbar">'
-        '<span class="am-runbar-label">Advisor</span>'
+        '<span class="k-label">Advisor</span>'
         '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-kind="next_dollar">'
         "Generate next-dollar memo</button>"
         '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-kind="swap_checks">'
@@ -295,7 +295,7 @@ def _memo_card(m: AdvisorMemoRow, score: StanceScoreRow | None = None) -> str:
     link_str = f' · <span class="muted">{escape(" · ".join(links))}</span>' if links else ""
     return (
         f'<details class="am-card"><summary>'
-        f'<span class="p-pill am-kind-{escape(m.kind)}">{escape(kind)}</span>'
+        f'<span class="k-chip">{escape(kind)}</span>'
         f'<span class="am-scope">{escape(scope)}</span>'
         f"{stance}"
         f'<span class="am-title">{escape(m.title)}</span>'
@@ -310,8 +310,6 @@ _PANEL_CSS = """<style>
 .am-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.am-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
-  text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .am-note { font-size: var(--fs-caption); }
 .am-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
@@ -325,10 +323,8 @@ _PANEL_CSS = """<style>
 .am-card summary::-webkit-details-marker { display: none; }
 .am-card summary::before { content: '\\25B8  '; color: var(--muted); font-family: var(--mono); }
 .am-card[open] summary::before { content: '\\25BE  '; }
-/* Memo kinds: ONE quiet treatment — the label text differentiates; color is
-   reserved for status/semantics (design_language.md §2). */
-.am-kind-next_dollar, .am-kind-swap_check, .am-kind-socratic {
-  background: transparent; color: var(--muted); border: 1px solid var(--border); }
+/* Memo kind tag rides the kit's neutral .k-chip (outline, micro, uppercase) —
+   the label text differentiates; color stays reserved for status/semantics. */
 .am-scope { font-family: var(--mono); font-weight: 600; }
 .am-title { color: var(--fg-soft); font-size: var(--fs-body); }
 .am-stamp { margin-left: auto; color: var(--muted); font-size: var(--fs-caption);
@@ -351,7 +347,7 @@ _PANEL_CSS = """<style>
 .soc-controls select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption); }
 .soc-status { font-size: var(--fs-caption); }
 .soc-saved { color: var(--ok); font-size: var(--fs-body); }
-.am-track { font-size: var(--fs-body); margin: 0 0 12px; font-family: var(--mono); }
+.am-track { font-size: var(--fs-body); margin: 0 0 12px; font-variant-numeric: tabular-nums; }
 /* Verdict pills migrated to the control kit's .k-pill (+ -ok/-warn/-bad);
    the muted/pending verdict is the neutral bare .k-pill. */
 </style>"""

@@ -117,7 +117,7 @@ _PANEL_STYLE = """<style>
 .ask-inputrow input { flex:1; padding:9px 13px; }
 .ask-ctx { color:var(--muted); font-size:var(--fs-caption); }
 .ask-ctx a { color:var(--accent); cursor:pointer; }
-.ask-builder-pop { border:1px solid var(--accent); border-radius:var(--radius); background:var(--surface);
+.ask-builder-pop { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface);
   padding:0 14px 12px; margin-top:10px; box-shadow:var(--shadow-pop); }
 .ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
   font-size:var(--fs-body); font-weight:600; color:var(--fg); }

@@ -226,14 +226,15 @@ def load_section_coverage(
 
 
 _PANEL_STYLE = """<style>
-.sc-table { width:100%; border-collapse:collapse; font-size:var(--fs-caption); }
-.sc-table th, .sc-table td {
-  padding:5px 7px; border-bottom:1px solid var(--border); text-align:center;
-  white-space:nowrap; }
-.sc-table th { font-size:var(--fs-micro); text-transform:uppercase; letter-spacing:.05em;
-  color:var(--muted); }
-.sc-table th:first-child, .sc-table td:first-child,
-.sc-table th:nth-child(2), .sc-table td:nth-child(2) { text-align:left; }
+/* The matrix rides .p-table; .sc-matrix is layout-only (centered dots, compact
+   dense rows, nowrap) — the kit owns the base table rhythm. */
+.sc-scroll { overflow-x:auto; }
+.sc-matrix.p-table th, .sc-matrix.p-table td {
+  padding:5px 7px; text-align:center; white-space:nowrap; }
+.sc-matrix.p-table th { font-size:var(--fs-micro); letter-spacing:.05em; }
+.sc-matrix.p-table td { font-size:var(--fs-caption); }
+.sc-matrix.p-table th:first-child, .sc-matrix.p-table td:first-child,
+.sc-matrix.p-table th:nth-child(2), .sc-matrix.p-table td:nth-child(2) { text-align:left; }
 .sc-tkr { font-family:var(--mono); font-weight:600; }
 .sc-list { color:var(--muted); font-size:var(--fs-micro); }
 .sc-filled { color:var(--ok); }
@@ -241,11 +242,6 @@ _PANEL_STYLE = """<style>
 .sc-na { color:var(--border-2); }
 .sc-noreport { color:var(--warn); font-size:var(--fs-micro); }
 .sc-gaps { font-variant-numeric:tabular-nums; color:var(--muted); }
-.sc-kpis { display:flex; gap:18px; margin:4px 0 14px; flex-wrap:wrap; }
-.sc-kpi { background:var(--paper); border:1px solid var(--border);
-  border-radius:var(--radius); padding:8px 14px; }
-.sc-kpi b { display:block; font-size:var(--fs-display); font-variant-numeric:tabular-nums; }
-.sc-kpi span { font-size:var(--fs-caption); color:var(--muted); }
 .sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
   line-height:1.55; color:var(--muted); }
@@ -268,11 +264,11 @@ def render_section_coverage_panel(
 ) -> str:
     """The Governance → Coverage tab fragment."""
     rows = load_section_coverage(db_path=db_path, repo_root=repo_root, user_id=user_id)
-    parts: list[str] = [_PANEL_STYLE, "<h2>Section coverage</h2>"]
+    parts: list[str] = [_PANEL_STYLE, '<section class="panel"><h2>Section coverage</h2>']
     if not rows:
         parts.append(
             '<p class="sc-note">No tracked names found — the coverage matrix '
-            "fills in once companies are onboarded and reports are built.</p>"
+            "fills in once companies are onboarded and reports are built.</p></section>"
         )
         return "".join(parts)
 
@@ -280,15 +276,19 @@ def render_section_coverage_panel(
     total_gaps = sum(r.gap_count for r in rows)
     fully = sum(1 for r in rows if r.report_date is not None and r.gap_count == 0)
     parts.append(
-        '<div class="sc-kpis">'
-        f'<div class="sc-kpi"><b>{len(rows)}</b><span>tracked names</span></div>'
-        f'<div class="sc-kpi"><b>{built}</b><span>with a built report</span></div>'
-        f'<div class="sc-kpi"><b>{fully}</b><span>fully covered</span></div>'
-        f'<div class="sc-kpi"><b>{total_gaps}</b><span>section gaps</span></div>'
+        '<div class="kpi-strip">'
+        '<div class="kpi-card"><div class="kpi-label">Tracked names</div>'
+        f'<div class="kpi-value">{len(rows)}</div></div>'
+        '<div class="kpi-card"><div class="kpi-label">Built report</div>'
+        f'<div class="kpi-value">{built}</div></div>'
+        '<div class="kpi-card"><div class="kpi-label">Fully covered</div>'
+        f'<div class="kpi-value">{fully}</div></div>'
+        '<div class="kpi-card"><div class="kpi-label">Section gaps</div>'
+        f'<div class="kpi-value">{total_gaps}</div></div>'
         "</div>"
     )
 
-    parts.append('<div style="overflow-x:auto"><table class="sc-table"><thead><tr>')
+    parts.append('<div class="sc-scroll"><table class="p-table sc-matrix"><thead><tr>')
     parts.append("<th>Ticker</th><th>List</th><th>Built</th>")
     for _key, label in SECTION_COLUMNS:
         parts.append(f"<th>{escape(label)}</th>")
@@ -317,6 +317,6 @@ def render_section_coverage_panel(
         "(P4.2 hide-don't-stub) — this matrix is where those gaps stay "
         "visible. Spec sections read each name's latest sections sidecar; "
         "verdict/decision/macro/target/concentration/lease columns are live "
-        "row counts.</p>"
+        "row counts.</p></section>"
     )
     return "".join(parts)

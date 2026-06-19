@@ -106,11 +106,11 @@ def _render_header(
         body.write('<div class="dash-filters">')
         for label, value, remove_href in active:
             body.write(
-                f'<a class="dash-filter-chip" href="{_esc(remove_href)}" '
+                f'<a class="k-chip k-chip-btn" href="{_esc(remove_href)}" '
                 'title="Remove this filter">'
-                f'<span class="filter-label">{_esc(label)}:</span> '
+                f"<span>{_esc(label)}:</span> "
                 f'<span class="filter-value">{_esc(value)}</span> '
-                '<span class="filter-x">✕</span></a>'
+                "<span>✕</span></a>"
             )
         body.write("</div>")
     body.write("</header>")

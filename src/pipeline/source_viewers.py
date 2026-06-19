@@ -63,11 +63,8 @@ VIEWER_CONTENT_CSS = """
 .sv-lines .ln-text { white-space: pre-wrap; word-break: break-word; }
 .sv-lines .ln-speaker { font-weight: 600; color: var(--accent); }
 .sv-secnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
-.sv-secnav a { font-size: var(--fs-caption); padding: 3px 9px; border: 1px solid var(--border);
-  border-radius: var(--radius-full); text-decoration: none; color: var(--muted); }
-.sv-secnav a.active { color: var(--accent); border-color: var(--accent); }
-.sv-secnav a:hover { color: var(--fg); }
-.sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.sv-secnav a { text-decoration: none; }
+.sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--hairline); }
 .sv-sec-key { color: var(--muted); font-size: var(--fs-caption); }
 .sv-sec-val { white-space: pre-wrap; word-break: break-word; }
 .sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
@@ -271,13 +268,13 @@ def render_form10k_page(
 
     nav_parts: list[str] = []
     for k in sections:
-        cls = ' class="active"' if k == active else ""
+        cls = "k-chip k-chip-btn is-on" if k == active else "k-chip k-chip-btn"
         href = (
             f"/source/{doc.id}?section={urllib.parse.quote(k)}"
             if fragment
             else f"?section={escape(k)}"
         )
-        nav_parts.append(f'<a href="{href}"{cls}>{escape(k)}</a>')
+        nav_parts.append(f'<a class="{cls}" href="{href}">{escape(k)}</a>')
     nav = "".join(nav_parts)
     year = doc_map.get("year")
     period = doc_map.get("period")

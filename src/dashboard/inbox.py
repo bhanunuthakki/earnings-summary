@@ -508,7 +508,7 @@ def _render_category_chips(out: StringIO, items: list[InboxItem]) -> None:
         return
     out.write('<div class="ix-cats" role="toolbar" aria-label="Filter by category">')
     out.write(
-        '<button type="button" class="ix-cat k-chip-btn is-on" data-cat="*">'
+        '<button type="button" class="ix-cat k-chip k-chip-btn is-on" data-cat="*">'
         f"All <span>{len(items)}</span></button>"
     )
     for slug in CATEGORY_ORDER:
@@ -516,7 +516,7 @@ def _render_category_chips(out: StringIO, items: list[InboxItem]) -> None:
         if not n:
             continue
         out.write(
-            f'<button type="button" class="ix-cat k-chip-btn" data-cat="{_esc(slug)}">'
+            f'<button type="button" class="ix-cat k-chip k-chip-btn" data-cat="{_esc(slug)}">'
             f"{_esc(CATEGORY_LABELS[slug])} <span>{n}</span></button>"
         )
     out.write("</div>")
@@ -560,7 +560,10 @@ def _render_item(
         f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_chip_label(it))}</span>'
     )
     if show_status and it.status and it.status not in ("open",):
-        out.write(f'<span class="ix-status ix-status-{_esc(it.status)}">{_esc(it.status)}</span>')
+        # The filled status pill is the kit .k-pill (controls.py §3); .ix-status
+        # stays only as the JS hook (INBOX_JS swaps the tone in place).
+        pill_cls = f"ix-status k-pill {_status_pill_tone(it.status)}".strip()
+        out.write(f'<span class="{pill_cls}">{_esc(it.status)}</span>')
     if compact:
         _render_quick_actions(out, it)
     out.write(stamp_html(it.when, css="ix-when"))
@@ -570,6 +573,21 @@ def _render_item(
         out.write(f'<div class="ix-body">{_esc(body)}</div>')
     _render_card_footer(out, it, compact=compact)
     out.write("</div>")
+
+
+# Status → kit .k-pill tone. pending→warn, applied/approved→ok; anything else
+# (cancelled, …) rides the neutral base .k-pill (--paper fill / --fg-soft ink).
+# INBOX_JS carries the same map inline so a swapped-in-place status pill picks
+# the same tone the server-rendered one would.
+_STATUS_PILL_TONES: dict[str, str] = {
+    "pending": "k-pill-warn",
+    "applied": "k-pill-ok",
+    "approved": "k-pill-ok",
+}
+
+
+def _status_pill_tone(status: str) -> str:
+    return _STATUS_PILL_TONES.get(status, "")
 
 
 def _chip_label(it: InboxItem) -> str:
@@ -795,11 +813,8 @@ INBOX_CSS = """
 .ix-ticker:hover { color: var(--accent); }
 .ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--muted); }
-.ix-status { font-size: var(--fs-micro); font-weight: 600; border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 0 5px; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.05em; }
-.ix-status-pending { color: var(--warn); border-color: var(--warn); }
-.ix-status-applied, .ix-status-approved { color: var(--ok); }
+/* Status badge = the kit .k-pill (controls.py §3); .ix-status is now only the
+   JS hook INBOX_JS swaps the tone on — no local skin. */
 .ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-micro);
   font-family: var(--mono); white-space: nowrap; }
 .ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg);
@@ -840,7 +855,6 @@ INBOX_CSS = """
 .ix-acted { margin-left: auto; font-size: var(--fs-micro); font-weight: 600;
   white-space: nowrap; color: var(--muted); }
 .ix-acted-applied { color: var(--ok); }
-.ix-status-cancelled { color: var(--muted); }
 .ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
 /* Unread ("since you last looked") — inset accent bar: no border-width
    change, zero layout shift. Accent is sanctioned here: unread marks are
@@ -854,8 +868,8 @@ INBOX_CSS = """
 .ix-badge[hidden] { display: none; }
 /* Category filter chips (Inbox v2) — client-side, scoped per stream. */
 .ix-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-/* Category filter chip = .k-chip-btn (kit); .is-on is the kit's active state.
-   Only the count span's de-emphasis is local. */
+/* Category filter chip = .k-chip .k-chip-btn (kit base + clickable modifier);
+   .is-on is the kit's active state. Only the count span's de-emphasis is local. */
 .ix-cat span { opacity: 0.7; margin-left: 2px; }
 .ix-hide { display: none !important; }
 /* "Why ranked here" — the factor breakdown rides the kind chip's title. */
@@ -993,7 +1007,10 @@ INBOX_JS = r"""
           var anchor = card.querySelector('.ix-acted') || card.querySelector('.ix-when');
           if (head) head.insertBefore(chip, anchor);
         }
-        chip.className = 'ix-status ix-status-' + status;
+        // The kit .k-pill (controls.py §3); .ix-status stays as the JS hook,
+        // the tone tracks the Python _status_pill_tone map.
+        var tone = { pending: 'k-pill-warn', applied: 'k-pill-ok', approved: 'k-pill-ok' }[status] || '';
+        chip.className = ('ix-status k-pill ' + tone).trim();
         chip.textContent = status;
         var dOpen = card.querySelector('.ix-open');
         if (dOpen) dOpen.remove();

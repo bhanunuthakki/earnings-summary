@@ -55,9 +55,7 @@ _PANEL_STYLE = """<style>
   border:1px solid var(--border); border-radius:var(--radius);
   font-size:var(--fs-body); line-height:1.55; }
 .dcv-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
-.dcv-badge { display:inline-block; padding:0 6px; border-radius:var(--radius-full);
-  border:1px solid var(--border); font-size:var(--fs-caption);
-  color:var(--muted); white-space:nowrap; }
+.dcv-mono { font-family:var(--mono); }
 </style>"""
 
 
@@ -368,15 +366,22 @@ def _sync_cell(r: CoverageRow) -> str:
         return '<span class="dcv-muted">—</span>'
     if r.sync_status.startswith("failed"):
         return f'<span class="dcv-bad" title="{escape(r.sync_status)}">FAILED</span>'
-    when = f" {r.synced_at.isoformat()}" if r.synced_at else ""
-    return f'<span class="dcv-ok">{escape(r.sync_status)}{escape(when)}</span>'
+    when = (
+        f' <span class="dcv-mono">{escape(r.synced_at.isoformat())}</span>' if r.synced_at else ""
+    )
+    return f'<span class="dcv-ok">{escape(r.sync_status)}</span>{when}'
 
 
 def _workbook_cell(r: CoverageRow) -> str:
     if not r.workbook_exists:
         return '<span class="dcv-bad">missing</span>'
-    fmt = f" · {escape(r.run_format)}" if r.run_format else ""
-    return f'<span class="dcv-ok">yes</span><span class="dcv-muted">{fmt}</span>'
+    fmt = (
+        f' <span class="dcv-muted"> · </span>'
+        f'<span class="dcv-muted dcv-mono">{escape(r.run_format)}</span>'
+        if r.run_format
+        else ""
+    )
+    return f'<span class="dcv-ok">yes</span>{fmt}'
 
 
 def _kpi_strip(rows: list[CoverageRow], today: date) -> str:
@@ -432,7 +437,7 @@ def _kpi_strip(rows: list[CoverageRow], today: date) -> str:
 def _row_html(r: CoverageRow, today: date) -> str:
     model = escape(r.model)
     if r.model_source != "default":
-        model += f' <span class="dcv-badge">{escape(r.model_source)}</span>'
+        model += f' <span class="k-chip">{escape(r.model_source)}</span>'
     state_cls = {
         "none": "dcv-warn",
         "sync-created": "dcv-muted",

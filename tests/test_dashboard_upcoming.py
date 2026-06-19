@@ -194,7 +194,7 @@ def test_strip_renders_watch_items_inline_as_ask_doorways(db_path: Path) -> None
     assert 'class="up-watch-item"' in html
     assert 'data-ask-q="Ask about deposit franchise costs on the call. (NU)"' in html
     assert "Ask about deposit franchise costs on the call." in html
-    assert 'class="up-watch-kind">watch<' in html
+    assert 'class="up-watch-kind k-chip">watch<' in html
 
 
 def test_strip_surfaces_open_questions_too(db_path: Path) -> None:
@@ -211,7 +211,7 @@ def test_strip_surfaces_open_questions_too(db_path: Path) -> None:
     )
     html = render_upcoming_strip(db_path, TODAY)
     assert 'data-ask-q="Did NIM expansion stall this quarter? (NU)"' in html
-    assert 'class="up-watch-kind">question<' in html
+    assert 'class="up-watch-kind k-chip">question<' in html
 
 
 def test_strip_caps_watch_items_with_overflow_hint(db_path: Path) -> None:

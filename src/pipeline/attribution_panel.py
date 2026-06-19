@@ -26,7 +26,7 @@ from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlphaRow, fetch_portfolio_analytics
 
 _ATTRIB_STYLE = """<style>
-.atr-card { padding:9px 12px; margin-bottom:8px; }
+.atr-card { margin-bottom:var(--sp-2); }
 .atr-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-bottom:4px; }
 .atr-ticker { font-family:var(--mono); font-weight:600; }
 .atr-alpha { font-family:var(--mono); font-variant-numeric:tabular-nums;

@@ -1169,9 +1169,12 @@ _COCKPIT_CSS = """
 .cockpit-section h2 { display: flex; align-items: baseline; gap: 6px; }
 .cockpit-table td { white-space: nowrap; }
 .cockpit-table td.kpi-moves { white-space: normal; }
-/* The Evaluation table is secondary to the Portfolio table — caption-tier
-   type + tighter padding marks it as the lower-importance grid. */
-.cockpit-thin td, .cockpit-thin th { padding: 4px 10px; font-size: var(--fs-caption); }
+/* The Evaluation table is secondary to the Portfolio table — tighter padding
+   (density) marks it as the lower-importance grid, NOT a smaller type tier:
+   size encodes importance, not which table you're in, so body cells stay
+   --fs-body (13px, via the shell `table` baseline) and headers stay
+   --fs-caption (via the shell `th` rule) exactly like the Portfolio table. */
+.cockpit-thin td, .cockpit-thin th { padding: 4px 10px; }
 /* Five reinvented badge/chip systems collapsed onto the kit (controls.py): the
    status verdict → .k-pill (filled tone); the KPI-move / attractiveness-score /
    portfolio-fit doorways → .k-chip-mono (outline mono, + tone); the alert/doc/
