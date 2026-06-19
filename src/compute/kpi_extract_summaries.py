@@ -44,6 +44,7 @@ from typing import cast
 
 import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
+from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, Unit
@@ -606,6 +607,13 @@ def _llm_extract_enumerate(
     """
     if not text.strip():
         return []
+    # Spotlight the untrusted document text: it is issuer-published / IR / filing
+    # prose that can carry adversarial instructions. Wrapping it in tamper-evident
+    # markers marks it as DATA, not instructions (sec-llm; the enumerate path is a
+    # no-allowlist capture so the doc text reaches the model verbatim).
+    spotlighted = spotlight(
+        text, source=f"{ticker} {period_label} earnings/IR document (issuer-published)"
+    )
     prompt = f"""You are enumerating EVERY reported numeric fact for {ticker} ({period_label}) from the document below.
 
 There is NO list of metrics to look for — capture every labeled number that is a reported ACTUAL for THIS period: revenue and each revenue line, margins, growth rates, customer/subscriber/account counts, ARPU/ARPAC, take rate, GMV, deposits, loans, NPL, efficiency ratio, capex, free cash flow, headcount, and anything else stated.
@@ -631,9 +639,7 @@ Rules:
   - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
 
 Document text:
-\"\"\"
-{text}
-\"\"\""""
+{spotlighted}"""
     raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
     if raw.startswith("```"):
         raw = JSON_FENCE_RE.sub("", raw).strip()
