@@ -11,6 +11,9 @@ Run directly (cron/run_backup_db.bat schedules it daily):
 
 Backup dir is `ES_DB_BACKUP_DIR` (default: a Google Drive folder so the snapshot
 is cloud-backed). Keeps the most recent ES_DB_BACKUP_RETAIN snapshots.
+
+Restore is the tested counterpart `cron/restore_db.py` (integrity-checked
+gunzip + move), which also documents the RPO/RTO targets (sre-3).
 """
 
 from __future__ import annotations

@@ -103,6 +103,11 @@ from discovery.store import BUILDABLE_STATUSES  # noqa: E402
 from dispatch_registry import Registry, RegistryConflict  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
+from logging_config import (  # noqa: E402
+    configure_logging,
+    new_correlation_id,
+    set_correlation_id,
+)
 from pipeline.analytical_dashboard import build_analytical_dashboard  # noqa: E402
 from pipeline.command_center_shell import render_overview_panel, render_shell  # noqa: E402
 from pipeline.dashboard_status import build_dashboard_rows  # noqa: E402
@@ -399,6 +404,16 @@ def create_app(
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         return conn
+
+    @app.before_request
+    def bind_correlation_id() -> None:
+        # Fresh correlation id per request so all log lines for one operation
+        # stitch together (sre-4). Honor an upstream X-Correlation-ID if present.
+        incoming = request.headers.get("X-Correlation-ID", "")
+        if incoming:
+            set_correlation_id(incoming)
+        else:
+            new_correlation_id()
 
     @app.before_request
     def csrf_origin_guard():
@@ -3406,6 +3421,7 @@ def _drain_events(
 
 
 def main() -> int:
+    configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7421)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
