@@ -3351,13 +3351,14 @@ def create_app(
 
     @app.route("/chat/<ticker>/apply", methods=["POST"])
     def chat_apply_endpoint(ticker: str):
-        body = request.get_json(silent=True) or {}
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
-            diff = body["diff"]
+            diff = cast("dict[str, object]", body["diff"])
+            report_date = _parse_date(str(body["report_date"]))
             dry_run = bool(body.get("dry_run", False))
-        except (KeyError, TypeError):
-            return ({"error": "diff required"}, 400)
-        return apply_chat_diff(repo_root, ticker, diff, dry_run=dry_run)
+        except (KeyError, TypeError, ValueError):
+            return ({"error": "diff and report_date required"}, 400)
+        return apply_chat_diff(repo_root, ticker, report_date, diff, dry_run=dry_run)
 
     return app
 
