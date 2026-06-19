@@ -293,12 +293,12 @@ def render_shell(
             f'aria-label="Command palette (Ctrl+K)" '
             f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">⌘K</button>'
             f"{_render_system_button(themes)}"
-            f'<button class="cc-notes-btn" id="cc-notes-toggle" type="button" '
+            f'<button class="cc-notes-btn k-btn k-btn-quiet" id="cc-notes-toggle" type="button" '
             f'aria-label="Quick notes" '
             f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
             f'<button class="cc-theme-toggle" id="cc-theme-toggle" type="button" '
             f'aria-label="Toggle light/dark theme" title="Toggle light / dark theme">◑</button>'
-            f'<button class="cc-settings-btn" id="cc-settings-toggle" type="button" '
+            f'<button class="cc-settings-btn k-btn k-btn-quiet" id="cc-settings-toggle" type="button" '
             f'title="Budgets · ticker settings · maintenance">⚙ Settings</button>'
             f"{stamp}</div>",
             _render_subnav_rows(themes),
@@ -412,7 +412,7 @@ def _render_system_button(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ..
             continue
         sub_labels = " · ".join(label for _pid, label, _ep, _pk, _rq in subs)
         return (
-            f'<button class="cc-theme-tab cc-system-btn" type="button" role="tab" '
+            f'<button class="cc-theme-tab cc-system-btn k-btn k-btn-quiet" type="button" role="tab" '
             f'tabindex="-1" data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
             f'aria-label="{escape(tlabel)}" title="{escape(f"{tlabel} · {sub_labels}", quote=True)}"'
             f">▦</button>"
@@ -754,18 +754,18 @@ th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border)
   font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
 td { padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
-tbody tr:hover td { background: rgba(255,255,255,0.025); }
+tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
 td.muted { color: var(--muted-2); }
 td.pos { color: var(--ok); }
 td.neg { color: var(--bad); }
 .ticker-link { color: var(--fg); text-decoration: none; font-weight: 600; }
 .ticker-link:hover { color: var(--accent); }
-tr.tone-sell { background: rgba(248, 113, 113, 0.06); }
-tr.tone-trim { background: rgba(251, 191, 36, 0.04); }
-tr.tone-init { background: rgba(74, 222, 128, 0.06); }
-tr.tx-buy { background: rgba(74, 222, 128, 0.04); }
-tr.tx-sell { background: rgba(248, 113, 113, 0.02); }
+tr.tone-sell { background: color-mix(in srgb, var(--bad) 6%, transparent); }
+tr.tone-trim { background: color-mix(in srgb, var(--warn) 4%, transparent); }
+tr.tone-init { background: color-mix(in srgb, var(--ok) 6%, transparent); }
+tr.tx-buy { background: color-mix(in srgb, var(--ok) 4%, transparent); }
+tr.tx-sell { background: color-mix(in srgb, var(--bad) 2%, transparent); }
 td.trigger-cell { font-family: var(--sans); font-size: var(--fs-caption);
   text-transform: uppercase; }
 tr.tone-sell .trigger-cell { color: var(--bad); }
@@ -782,8 +782,8 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
   overflow-x: auto; margin: 6px 0 0; }
 .panel-h3 { font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600;
   color: var(--fg); }
-/* Synthesis */
-.synthesis-panel { border-left: 3px solid var(--border); }
+/* Synthesis — a plain surface panel; no decorative left rail (rails are
+   reserved for value status: tone-*/sig-* using --ok/--warn/--bad). */
 .synthesis-body { font-size: var(--fs-section); line-height: 1.65; }
 .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
 .synthesis-body h5, .synthesis-body h6 { color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }
@@ -849,24 +849,18 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 /* Inputs/selects: skinned by the shared control kit (ui/controls.py). */
 .budget-table input, .budget-table select { padding: 4px 6px; }
 .budget-table select { padding-right: 26px; }
-.budget-save { background: var(--accent); color: var(--accent-contrast); border: none;
-  padding: 5px 12px; border-radius: var(--radius); font-weight: 600;
-  font-size: var(--fs-body); cursor: pointer; }
+/* .budget-save composes the kit (.k-btn .k-btn-quiet .k-btn-sm) at its emitter. */
 /* Tier coverage strip */
 .tier-strip { background: var(--surface); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex;
   align-items: center; flex-wrap: wrap; gap: var(--sp-1); }
 .tier-strip-label { color: var(--muted); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }
-.tier-chip { font-family: var(--sans); font-size: var(--fs-caption); padding: 2px 6px;
-  border-radius: var(--radius-full); cursor: help; }
-a.tier-chip { text-decoration: none; cursor: pointer; }
-.tier-ok { color: var(--ok); }
-.tier-stale { color: var(--warn); }
+/* The tier strip's chips compose the kit (.k-chip + tones) at their emitter
+   (render_tier_coverage_strip); only the in-chip count keeps a color modifier. */
+a.k-chip { text-decoration: none; }
 .tier-stale-count { color: var(--bad); font-weight: 600; }
-.tier-backfill { color: var(--muted); }
-.tier-backfill .tier-stale-count { color: var(--muted); font-weight: 400; }
-.tier-empty { color: var(--muted-2); }
+.tier-stale-count-muted { color: var(--muted); font-weight: 400; }
 
 /* ============================================================
    Overview status tables + action blocks (re-themed dark)
@@ -879,13 +873,7 @@ a.tier-chip { text-decoration: none; cursor: pointer; }
 td.ticker { font-family: var(--mono); font-weight: 600; }
 td.ticker a { color: var(--fg); text-decoration: none; }
 td.ticker a:hover { color: var(--accent); }
-.qa-yes, .qa-no { font-size: var(--fs-micro); padding: 1px 5px; border-radius: var(--radius-full); letter-spacing: 0.3px; }
-.qa-yes { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
-.qa-no { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
 .comments-open { color: var(--warn); font-weight: 500; }
-.breach-badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-micro); color: white; text-transform: uppercase;
-  letter-spacing: 0.05em; font-weight: 600; }
 .open-link { color: var(--accent); text-decoration: none; }
 .open-link:hover { text-decoration: underline; }
 .empty { color: var(--muted); font-style: italic; padding: 12px; }
@@ -906,9 +894,9 @@ td.ticker a:hover { color: var(--accent); }
   color: var(--muted); }
 .fresh-val { font-size: var(--fs-section); font-variant-numeric: tabular-nums; }
 .ok-dot { color: var(--ok); }
-.tcc-refresh, .tcc-refresh + .tcc-refresh { background: var(--accent); color: var(--accent-contrast); border: none;
-  padding: 6px 12px; border-radius: var(--radius); font-weight: 600; font-size: var(--fs-body);
-  cursor: pointer; margin-right: 4px; }
+/* .tcc-refresh buttons compose the kit (.k-btn .k-btn-primary / .k-btn-quiet) at
+   their emitter; only the inter-button spacing stays local. */
+.tcc-refresh { margin-right: 4px; }
 .artifact-table code { background: transparent; padding: 0; }
 .cc-report-embed { padding-bottom: 8px; }
 .cc-report-frame { width: 100%; height: calc(100vh - 220px); height: calc(100dvh - 220px); min-height: 560px;
@@ -1000,7 +988,7 @@ td.ticker a:hover { color: var(--accent); }
 .evidence-section-title { font-size: var(--fs-micro); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted); margin-bottom: 3px; }
 .evidence-summary-text { color: var(--fg-soft); font-size: var(--fs-body); }
-.evidence-malformed { padding: 8px; background: rgba(240, 138, 138, 0.08);
+.evidence-malformed { padding: 8px; background: color-mix(in srgb, var(--bad) 8%, transparent);
   border: 1px solid var(--bad); border-radius: var(--radius); color: var(--bad);
   margin-bottom: 8px; font-size: var(--fs-caption); }
 .evidence-citations-table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
@@ -1031,32 +1019,29 @@ td.ticker a:hover { color: var(--accent); }
 .cc-subtabs { z-index: 19; }
 .cc-subtabs .cc-tab { font-size: var(--fs-body); }
 
-/* Settings drawer (P3.4): admin-as-drawer instead of admin-as-tab. */
-.cc-settings-btn { background: var(--paper); color: var(--fg); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 5px 12px; font-size: var(--fs-body); font-weight: 600;
-  cursor: pointer; font-family: var(--sans); margin-right: 14px; margin-left: 6px; }
-.cc-settings-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Settings drawer (P3.4): admin-as-drawer instead of admin-as-tab. The button
+   composes the kit .k-btn .k-btn-quiet; only its top-bar spacing is local. */
+.cc-settings-btn { margin-right: 14px; margin-left: 6px; }
 
 /* System demoted to a utility icon (UX9b): same activation contract as a nav
-   section button, skinned like its ⌘K / ⚙ neighbours. */
-.cc-system-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
-  border-radius: var(--radius); padding: 5px 10px; font-size: var(--fs-body); cursor: pointer;
-  font-family: var(--sans); margin-left: 6px; line-height: 1.2; }
-.cc-system-btn:hover, .cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
+   section button, rendered as a kit .k-btn .k-btn-quiet. Its selected state
+   keeps the accent edge (accent = selected, per design language). */
+.cc-system-btn { margin-left: 6px; }
+.cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
 
-/* Shared ✎ Notes drawer trigger (UX9b). */
-.cc-notes-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
-  border-radius: var(--radius); padding: 5px 10px; font-size: var(--fs-body); cursor: pointer;
-  font-family: var(--sans); margin-left: 6px; line-height: 1.2; }
-.cc-notes-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Shared ✎ Notes drawer trigger (UX9b) — a kit .k-btn .k-btn-quiet. */
+.cc-notes-btn { margin-left: 6px; }
 .cc-notes-drawer { width: min(560px, 94vw); }
 .cc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(780px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 39;
-  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35);
+  display: flex; flex-direction: column; box-shadow: var(--shadow-pop);
   animation: cc-slide-in-right var(--transition); }
 .cc-drawer[hidden] { display: none; }
+/* Panel/drawer/peek head titles share one tier (--fs-section): a drawer head
+   must not render below a peek/rail head when you click into depth (§6.1). */
 .cc-drawer-head { display: flex; justify-content: space-between; align-items: center;
-  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600;
+  font-size: var(--fs-section); }
 .cc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px; }
 .cc-drawer-close:hover { color: var(--fg); }
@@ -1074,11 +1059,11 @@ td.ticker a:hover { color: var(--accent); }
 /* Command palette (Ctrl/Cmd+K) */
 .cc-palette-btn { background: transparent; border: 1px solid var(--border); color: var(--muted);
   border-radius: var(--radius); padding: 5px 9px; font-size: var(--fs-caption); cursor: pointer;
-  font-family: var(--mono); }
+  font-family: var(--sans); }
 .cc-palette-btn:hover { border-color: var(--accent); color: var(--accent); }
 .cc-palette { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
   width: min(560px, 92vw); background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); z-index: 49; box-shadow: 0 18px 48px rgba(0,0,0,0.5);
+  border-radius: var(--radius); z-index: 49; box-shadow: var(--shadow-pop);
   overflow: hidden; animation: cc-pop-in var(--transition); }
 .cc-palette[hidden] { display: none; }
 /* Corner close (the triad's x on the palette) — over the input's right edge. */
@@ -1111,7 +1096,7 @@ td.ticker a:hover { color: var(--accent); }
    ============================================================ */
 .cc-peek { position: fixed; z-index: 45; width: min(680px, 92vw);
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: 0 18px 48px rgba(0,0,0,0.5); display: flex; flex-direction: column;
+  box-shadow: var(--shadow-pop); display: flex; flex-direction: column;
   overflow: hidden; animation: cc-rise-in var(--transition); }
 .cc-peek[hidden], .cc-hovercard[hidden] { display: none; }
 .cc-peek-head { display: flex; align-items: center; gap: 12px; padding: 9px 14px;
@@ -1132,13 +1117,13 @@ td.ticker a:hover { color: var(--accent); }
 .cc-peek-memo-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .cc-peek-memo-head h2 { font-size: var(--fs-section); margin: 0; }
 /* JS-applied stand-in for the full page's :target highlight (#L<n>). */
-.cc-peek-target { background: rgba(245, 198, 106, 0.14);
+.cc-peek-target { background: color-mix(in srgb, var(--warn) 14%, transparent);
   outline: 1px solid var(--warn); border-radius: var(--radius); }
 
 /* Ticker hover mini-card */
 .cc-hovercard { position: fixed; z-index: 46; width: 300px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
-  box-shadow: 0 10px 28px rgba(0,0,0,0.45); font-size: var(--fs-body); }
+  box-shadow: var(--shadow-pop); font-size: var(--fs-body); }
 .cc-mini-head { display: flex; align-items: center; gap: 8px; }
 .cc-mini-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-section); }
 .cc-mini-name { color: var(--muted); font-size: var(--fs-caption); margin: 1px 0 6px; }
@@ -1167,7 +1152,7 @@ td.ticker a:hover { color: var(--accent); }
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: var(--radius);
   border: 1px solid var(--border); background: transparent;
-  color: var(--muted); cursor: pointer; font-size: 14px;
+  color: var(--muted); cursor: pointer; font-size: var(--fs-section);
   transition: var(--transition);
 }
 .cc-theme-toggle:hover { border-color: var(--border-2); color: var(--fg); }
@@ -1192,7 +1177,7 @@ td.ticker a:hover { color: var(--accent); }
 @media (pointer: coarse) {
   .k-btn, .cc-tab, .cc-drawer-close, .cc-peek-close,
   .cc-settings-btn, .cc-notes-btn, .cc-system-btn { min-height: 44px; }
-  a.tier-chip { min-height: 44px; display: inline-flex; align-items: center; }
+  .tier-strip a.k-chip { min-height: 44px; display: inline-flex; align-items: center; }
 }
 
 /* Offline banner (L13): fixed top ribbon, hidden when online. */
@@ -1202,15 +1187,9 @@ td.ticker a:hover { color: var(--accent); }
   padding: 8px 16px; font-size: var(--fs-caption); font-weight: 600;
 }
 
-/* Retry button inside panel error states (L13). */
-.cc-retry-btn {
-  display: inline-flex; align-items: center;
-  margin-left: 10px; padding: 3px 10px;
-  background: var(--accent-soft); color: var(--accent);
-  border: 1px solid var(--accent); border-radius: var(--radius);
-  font-size: var(--fs-caption); font-weight: 600; cursor: pointer;
-}
-.cc-retry-btn:hover { background: var(--accent); color: var(--accent-contrast); }
+/* Retry button inside panel error states (L13): a kit .k-btn .k-btn-quiet
+   .k-btn-sm; only its inline spacing after the error text is local. */
+.cc-retry-btn { margin-left: 10px; }
 """
     + VIEWER_CONTENT_CSS
     + INBOX_CSS
@@ -1500,7 +1479,7 @@ SHELL_JS = r"""
     }).catch(function (e) {
       if (!served) {
         body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
-          + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+          + ' <button class="cc-retry-btn k-btn k-btn-quiet k-btn-sm" type="button">Retry</button></div>';
         var rb = body.querySelector('.cc-retry-btn');
         if (rb) rb.onclick = function () { loadBody(panel, ticker); };
         announce((pid || 'panel') + ' failed to load');
@@ -1657,7 +1636,7 @@ SHELL_JS = r"""
     }).catch(function (e) {
       sec.setAttribute('data-loaded', '0');
       body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
-        + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+        + ' <button class="cc-retry-btn k-btn k-btn-quiet k-btn-sm" type="button">Retry</button></div>';
       var rb = body.querySelector('.cc-retry-btn');
       if (rb) rb.onclick = function () { loadDrawerSection(sec); };
     });
@@ -1708,7 +1687,7 @@ SHELL_JS = r"""
         injectHtml(notesBody, html);
       }).catch(function (e) {
         notesBody.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
-          + ' <button class="cc-retry-btn" type="button">Retry</button></div>';
+          + ' <button class="cc-retry-btn k-btn k-btn-quiet k-btn-sm" type="button">Retry</button></div>';
         var rb = notesBody.querySelector('.cc-retry-btn');
         if (rb) rb.onclick = loadNotesDrawer;
       });

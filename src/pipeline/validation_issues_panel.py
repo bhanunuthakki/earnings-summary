@@ -20,15 +20,11 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
-from ui.controls import prov_row
+from ui.controls import prov_row, prov_severity_tick
 
 _PANEL_STYLE = """<style>
-.vi-sev-halt { color:var(--bad); font-weight:600; }
-.vi-sev-warn { color:var(--warn); }
 .vi-raw { font-family:var(--mono); font-size:var(--fs-caption); word-break:break-all; }
-.vi-note { margin-top:14px; padding:10px 13px; background:var(--paper);
-  border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
-  line-height:1.55; }
+.vi-note { margin-top:14px; line-height:1.55; }
 .vi-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 </style>"""
 
@@ -141,7 +137,7 @@ def render_validation_panel(db_path: Path) -> str:
             '<p class="sub">Data-quality issues raised by the validation engine and the '
             "persist-time sanity checks (plausible ranges, magnitude jumps, source "
             "disagreement, unit mismatches).</p>"
-            f'<div class="vi-note">No open issues.{escape(resolved)} Sweep the book with '
+            f'<div class="vi-note k-well">No open issues.{escape(resolved)} Sweep the book with '
             "<code>python execution/run_validation_engine.py</code> after big ingests "
             "to keep this honest.</div></section>"
         )
@@ -187,7 +183,7 @@ def _rule_table(ov: ValidationOverview) -> str:
     rows = "".join(
         "<tr>"
         f"<td>{escape(rule)}</td>"
-        f'<td class="vi-sev-{escape(sev)}">{escape(sev)}</td>'
+        f"<td>{prov_severity_tick(sev)}</td>"
         f'<td class="num">{n:,}</td>'
         "</tr>"
         for rule, sev, n in ov.by_rule
@@ -218,7 +214,7 @@ def _detail_section(ov: ValidationOverview) -> str:
         for ticker, sev, rule, raw, exp, raised, issue_id in ov.detail
     )
     capped = (
-        f'<div class="vi-note">Showing the latest {_DETAIL_LIMIT} of '
+        f'<div class="vi-note k-well">Showing the latest {_DETAIL_LIMIT} of '
         f"{ov.open_total:,} open issues (halt first).</div>"
         if ov.open_total > _DETAIL_LIMIT
         else ""

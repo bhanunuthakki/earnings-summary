@@ -114,7 +114,7 @@ SCORECARD_CSS = """
   color: var(--muted); }
 .cs-tell, .cs-exp-test { font-size: var(--fs-caption); margin: 2px 0; }
 .cs-tell-k { font-family: var(--sans); color: var(--muted); text-transform: uppercase;
-  font-size: 0.72em; letter-spacing: 0.04em; margin-right: 6px; }
+  font-size: var(--fs-micro); letter-spacing: 0.04em; margin-right: 6px; }
 .cs-experiment { margin-top: 12px; }
 .cs-exp-hyp { font-size: var(--fs-body); font-weight: 600; margin: 0 0 2px; }
 .cs-exp-why { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 4px; }

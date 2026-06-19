@@ -55,7 +55,7 @@ from ui.cite_marks import CITE_MARKS_CSS, CITE_MARKS_JS
 _DOCK_CSS = """
 .ask-dock { position:fixed; right:18px; bottom:14px; bottom:calc(14px + env(safe-area-inset-bottom, 0px)); width:400px; max-width:calc(100vw - 36px);
   z-index:35; border:1px solid var(--border); border-radius:var(--radius);
-  background:var(--surface); box-shadow:0 16px 48px rgba(0,0,0,0.55);
+  background:var(--surface); box-shadow:var(--shadow-pop);
   display:flex; flex-direction:column; overflow:hidden; }
 .ask-dock-head { display:flex; align-items:center; gap:8px; width:100%; padding:9px 12px;
   background:var(--paper); cursor:pointer; }
@@ -77,7 +77,7 @@ _DOCK_CSS = """
    beside it via the body[data-ask-split] rule below. */
 .ask-dock[data-mode="split"] { top:var(--ask-dock-top, 52px); right:0; bottom:0; width:420px;
   max-width:100vw; border:none; border-left:1px solid var(--border); border-radius:0;
-  box-shadow:-12px 0 32px rgba(0,0,0,0.35); }
+  box-shadow:var(--shadow-pop); }
 .ask-dock[data-mode="split"] .ask-dock-body { flex:1; min-height:0; max-height:none; }
 .ask-dock[data-mode="split"] .ask-dock-thread { flex:1; }
 .ask-dock[data-mode="split"] .ask-dock-splitbtn { color:var(--accent); }
@@ -95,10 +95,10 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
 .ask-dock-user { align-self:flex-end; max-width:80%; background:var(--accent-soft);
   border:1px solid var(--accent); color:var(--fg);
   border-radius:var(--radius); padding:5px 10px;
-  font-size:var(--fs-caption); }
+  font-size:var(--fs-body); }
 .ask-dock-asst { align-self:stretch; border:1px solid var(--border);
   background:var(--paper); border-radius:var(--radius); padding:8px 10px;
-  font-size:var(--fs-caption); color:var(--fg); overflow-x:auto; }
+  font-size:var(--fs-body); color:var(--fg); overflow-x:auto; }
 .ask-dock-asst p { margin:0 0 6px; } .ask-dock-asst p:last-child { margin-bottom:0; }
 .ask-dock-asst ul { margin:0 0 6px 16px; padding:0; }
 .ask-dock-busy { color:var(--muted); font-size:var(--fs-caption); }
@@ -107,12 +107,11 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   75% { content:'...'; } }
 .ask-dock-err { color:var(--bad); }
 .ask-dock-cites { margin-top:6px; display:flex; gap:5px; flex-wrap:wrap; }
-.ask-dock-cite { font-size:var(--fs-micro); color:var(--accent); border:1px solid var(--border);
-  border-radius:var(--radius-full); padding:1px 7px; text-decoration:none; }
-.ask-dock-cite:hover { border-color:var(--accent); }
 .ask-dock-form { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--border); }
-/* Input + submit button skinned by the shared control kit (ui/controls.py). */
-.ask-dock-form input { flex:1; padding:7px 10px; font-size:var(--fs-caption); }
+/* Input + submit button skinned by the shared control kit (ui/controls.py):
+   the input drops its font-size override so it inherits the --fs-body kit
+   baseline and matches the .k-btn beside it (cf. explore_panel .ask-inputrow). */
+.ask-dock-form input { flex:1; padding:7px 10px; }
 /* Thread list overlay — covers the .ask-dock-body while open. */
 .ask-dock-threads { position:absolute; inset:0; background:var(--surface);
   display:flex; flex-direction:column; z-index:1; }
@@ -134,9 +133,9 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
   background:none; border:none; cursor:pointer; padding:2px 4px;
   flex-shrink:0; line-height:1; }
 .ask-dock-thread-del:hover { color:var(--bad); }
-.ask-dock-thread-rename { flex:1; font-size:var(--fs-caption); color:var(--fg);
-  background:var(--surface); border:1px solid var(--accent);
-  border-radius:var(--radius); padding:2px 6px; }
+/* Layout only: the kit's <input> baseline (border / background / radius /
+   focus ring) owns the chrome — no hand-set solid --accent border. */
+.ask-dock-thread-rename { flex:1; font-size:var(--fs-caption); padding:2px 6px; }
 .ask-dock-threads-empty { color:var(--muted); font-size:var(--fs-caption);
   padding:16px 12px; }
 """
@@ -523,7 +522,7 @@ _DOCK_JS = r"""
     var chips = (items || []).map(function (c) {
       var href = (c && (c.href || c.source_url)) || '';
       if (!href) return '';
-      return '<a class="ask-dock-cite" href="' + esc(href) + '" target="_blank">['
+      return '<a class="k-chip k-chip-accent" href="' + esc(href) + '" target="_blank">['
         + esc(String(c.n)) + '] ' + esc(c.label || 'source') + '</a>';
     }).join('');
     var warn = window.ccCiteMarks ? window.ccCiteMarks.unverifiedChipHtml(claims) : '';

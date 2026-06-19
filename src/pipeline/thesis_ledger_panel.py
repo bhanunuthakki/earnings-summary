@@ -30,9 +30,10 @@ _KIND_LABELS: Mapping[str, str] = {
 }
 
 _PANEL_STYLE = """<style>
-.tl-table td.tk { font-weight:600; white-space:nowrap; font-family:var(--mono); }
+.tl-table td.tk { white-space:nowrap; }
 .tl-table td.when { color:var(--muted); white-space:nowrap; }
 .tl-body { font-size:var(--fs-body); line-height:1.5; }
+.tl-kpi-text { font-size:var(--fs-section); font-weight:600; margin:2px 0; color:var(--fg); }
 </style>"""
 
 # entry_kind -> filled status-pill tone (kit .k-pill modifier). A bear-case append
@@ -83,7 +84,7 @@ def _kpi_strip(entries: list[ThesisLedgerEntryRow]) -> str:
         f'<div class="kpi-value">{tickers}</div>'
         '<div class="kpi-sub">with a ledger history</div></div>'
         '<div class="kpi-card"><div class="kpi-label">By kind</div>'
-        f'<div class="kpi-value" style="font-size:var(--fs-section)">{escape(top_kinds) or "—"}</div>'
+        f'<div class="tl-kpi-text">{escape(top_kinds) or "—"}</div>'
         '<div class="kpi-sub">most common</div></div>'
         "</div>"
     )
@@ -107,7 +108,7 @@ def _row(e: ThesisLedgerEntryRow) -> str:
     return (
         "<tr>"
         f'<td class="when">{when}</td>'
-        f'<td class="tk">{escape(e.ticker)}</td>'
+        f'<td class="tk"><span class="k-tick-sym">{escape(e.ticker)}</span></td>'
         f'<td><span class="{pill_cls}">{escape(label)}</span></td>'
         f'<td class="tl-body">{render_prose(e.body, inline=True)}</td>'
         "</tr>"

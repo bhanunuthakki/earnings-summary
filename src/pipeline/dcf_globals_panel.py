@@ -143,13 +143,13 @@ def _row_html(field: str, label: str, value: float, overrides: list[str]) -> str
     return (
         f'<div class="dcfg-row" data-field="{escape(field)}" style="margin-bottom:16px;">'
         '<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
-        f'<label style="min-width:220px; font-weight:600;" for="dcfg-{escape(field)}">{escape(label)}</label>'
+        f'<label class="k-label" style="min-width:220px;" for="dcfg-{escape(field)}">{escape(label)}</label>'
         f'<input id="dcfg-{escape(field)}" class="dcfg-input" type="number" min="0" max="1" '
         f'step="0.001" value="{value:.4f}" style="width:90px; padding:6px 8px;" '
         f'aria-label="{escape(label)} (decimal ratio)" '
         f'title="Decimal ratio, e.g. 0.043 = 4.3%">'
         f'<span class="muted" style="min-width:64px;">= {escape(pct)}%</span>'
-        '<button type="button" class="dcfg-save tcc-refresh" '
+        '<button type="button" class="dcfg-save k-btn k-btn-quiet k-btn-sm" '
         f'title="Apply this global {escape(label)} to every DCF model">Save</button>'
         '<span class="dcfg-msg muted" style="font-size:var(--fs-caption);"></span>'
         "</div>"
@@ -182,12 +182,12 @@ def render_dcf_globals_panel(db_path: Path) -> str:
         "models use an explicit cost of equity, so risk-free/ERP reach them only via their opt-in "
         "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it.</p>"
         '<div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">'
-        '<button type="button" id="dcfg-rebuild" class="tcc-refresh" '
+        '<button type="button" id="dcfg-rebuild" class="k-btn k-btn-primary" '
         'title="Re-run every DCF model so a global change propagates into the workbooks and dcf_runs">'
         "Rebuild affected models</button>"
         '<span id="dcfg-rebuild-msg" class="muted" style="font-size:var(--fs-caption);"></span>'
         "</div>"
         '<pre id="dcfg-rebuild-log" style="display:none; max-height:240px; overflow:auto; '
-        'white-space:pre-wrap; font-size:var(--fs-caption); margin-top:8px;"></pre>'
+        'white-space:pre-wrap; font-family:var(--mono); font-size:var(--fs-body); margin-top:8px;"></pre>'
         "</section>" + _SCRIPT
     )

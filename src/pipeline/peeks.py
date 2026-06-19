@@ -868,14 +868,14 @@ def _prov_row_html(row: _ProvRow) -> str:
     note = f' <span class="cc-prov-note">{escape(row.note)}</span>' if row.note else ""
     if row.action is not None:
         control = (
-            '<button type="button" class="cc-prov-btn" '
+            '<button type="button" class="cc-prov-btn k-btn k-btn-quiet k-btn-sm" '
             f'data-prov-post="{escape(row.action.post_url, quote=True)}" '
             f'data-prov-body="{escape(json.dumps(row.action.body), quote=True)}" '
             f'title="{escape(row.action.title, quote=True)}">{escape(row.action.label)}</button>'
         )
     elif row.cron_hint:
         control = (
-            '<span class="cc-prov-cron" title="No on-demand action — refreshed by '
+            '<span class="cc-prov-cron k-chip" title="No on-demand action — refreshed by '
             f'{escape(row.cron_hint, quote=True)}">cron</span>'
         )
     else:
@@ -899,15 +899,10 @@ _PROV_CSS = """
 .cc-prov-when { flex: 1 1 auto; min-width: 0; }
 .cc-prov-age { font-weight: 600; }
 .cc-prov-note { color: var(--muted); font-size: var(--fs-caption); }
-.cc-prov-cron { flex: none; color: var(--muted); font-size: var(--fs-micro);
-  border: 1px solid var(--border); border-radius: var(--radius-full);
-  padding: 1px 8px; cursor: default; }
-.cc-prov-btn { flex: none; font: inherit; font-size: var(--fs-caption);
-  color: var(--accent); background: var(--paper); border: 1px solid var(--border);
-  border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer;
-  transition: border-color var(--transition); }
-.cc-prov-btn:hover { border-color: var(--accent); }
-.cc-prov-btn:disabled { color: var(--muted); cursor: progress; border-color: var(--border); }
+/* cron marker + refresh button compose the kit (.k-chip / .k-btn-quiet.k-btn-sm);
+   only the flex-child layout stays local. */
+.cc-prov-cron { flex: none; }
+.cc-prov-btn { flex: none; }
 .cc-prov-log { font-family: var(--mono); font-size: var(--fs-micro); color: var(--fg-soft);
   background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 8px 10px; margin: 10px 0 0; max-height: 200px; overflow-y: auto;

@@ -89,9 +89,9 @@ _PANEL_STYLE = """<style>
 /* Pending reconciliation strip. */
 .jr-rec-sec { margin:0 0 16px; }
 .jr-rec-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
-.jr-rec { border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);
-  border-radius:var(--radius); background:var(--surface);
-  padding:9px 12px; margin-bottom:8px; }
+/* Reconciliation card = the kit warn well (.k-well .k-well-warn); .jr-rec keeps
+   only layout (padding/margin) and is the parent hook for .jr-rec-row. */
+.jr-rec { padding:9px 12px; margin-bottom:8px; }
 .jr-rec .jr-rec-row { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
 .jr-rec-concl { font-size:var(--fs-caption); color:var(--warn); margin:4px 0 6px; }
 /* Machine-authored silo (S11): advisor/synthesis memos demote out of the
@@ -101,7 +101,9 @@ _PANEL_STYLE = """<style>
 .jr-synthesis > summary { cursor:pointer; display:flex; align-items:baseline; gap:8px;
   padding:4px 0; list-style:none; }
 .jr-synthesis > summary::-webkit-details-marker { display:none; }
-.jr-synth-note { border:1px dashed var(--border); border-radius:var(--radius);
+/* Demoted memo card: the --paper inset surface alone signals 'recessed'; no
+   dashed edge (not in the de-emphasis ladder — hairline/border/border-2 only). */
+.jr-synth-note { border-radius:var(--radius);
   background:var(--paper); padding:10px 14px; margin-bottom:8px; }
 </style>"""
 
@@ -157,7 +159,7 @@ def _note_card(
     ticker_html = (
         f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
         if n.ticker
-        else '<span class="k-tick-sym" style="color:var(--muted)">PORTFOLIO</span>'
+        else '<span class="k-chip">PORTFOLIO</span>'
     )
     anchor = ""
     if n.anchor_type:
@@ -235,7 +237,7 @@ def _synthesis_card(n: AnalystNoteRow) -> str:
     ticker_html = (
         f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
         if n.ticker
-        else '<span class="k-tick-sym" style="color:var(--muted)">PORTFOLIO</span>'
+        else '<span class="k-chip">PORTFOLIO</span>'
     )
     return (
         f'<div class="jr-synth-note" data-note="{n.id}">'
@@ -363,9 +365,13 @@ def render_reconciliation_list(
 def _reconciliation_card(item: ReconciliationItem) -> str:
     n = item.note
     t = item.target
-    ticker_html = f'<span class="k-tick-sym">{escape(n.ticker or "PORTFOLIO")}</span>'
+    ticker_html = (
+        f'<span class="k-tick-sym">{escape(n.ticker)}</span>'
+        if n.ticker
+        else '<span class="k-chip">PORTFOLIO</span>'
+    )
     return (
-        f'<div class="jr-rec" data-note-id="{n.id}" '
+        f'<div class="jr-rec k-well k-well-warn" data-note-id="{n.id}" '
         f'data-suggest="{escape(item.suggested_resolution, quote=True)}">'
         '<div class="jr-rec-row">'
         f'<span class="k-chip">{escape(n.kind)}</span>'

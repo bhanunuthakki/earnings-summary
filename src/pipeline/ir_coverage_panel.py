@@ -21,9 +21,6 @@ from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
 
 _PANEL_STYLE = """<style>
 .ir-cov-table td.tk { font-weight:600; font-family:var(--mono); }
-.ir-ok { background:color-mix(in srgb, var(--ok) 16%, transparent); color:var(--ok); }
-.ir-gap { background:color-mix(in srgb, var(--bad) 16%, transparent); color:var(--bad); }
-tr.ir-gap-row td { background:color-mix(in srgb, var(--bad) 7%, transparent); }
 .ir-reason { font-size:var(--fs-caption); color:var(--muted); margin-top:3px; }
 .ir-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
@@ -93,22 +90,20 @@ def _coverage_table(rows: list[IrCoverageRow]) -> str:
 def _row(r: IrCoverageRow) -> str:
     if r.has_docs:
         plural = "s" if r.doc_count != 1 else ""
-        status_cell = f'<span class="p-pill ir-ok">&#10003; {r.doc_count} doc{plural}</span>'
+        status_cell = f'<span class="k-pill k-pill-ok">&#10003; {r.doc_count} doc{plural}</span>'
         docs_cell = f'<td class="num">{r.doc_count}</td>'
         period = escape(r.latest_period or "—")
         fetched = _fmt_date(r.last_doc_at)
-        row_attr = ""
     else:
         status_cell = (
-            '<span class="p-pill ir-gap">manual pull</span>'
+            '<span class="k-pill k-pill-bad">manual pull</span>'
             f'<div class="ir-reason">{escape(_gap_reason(r))}</div>'
         )
         docs_cell = '<td class="num muted">0</td>'
         period = "—"
         fetched = "—"
-        row_attr = ' class="ir-gap-row"'
     return (
-        f"<tr{row_attr}>"
+        "<tr>"
         f'<td class="tk">{escape(r.ticker)}</td>'
         f"<td>{escape(r.name or '—')}</td>"
         f"<td>{escape(r.list_type)}</td>"

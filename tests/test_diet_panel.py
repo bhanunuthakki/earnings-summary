@@ -61,7 +61,9 @@ def test_renders_both_lenses_through_the_kit(db: Path) -> None:
     assert "Ingest stream" in html
     assert "MS upgrades META to Buy" in html
     assert "Nu launches product" in html
-    assert 'k-pill-accent">Rating' in html
+    # Category pills stay QUIET (neutral .k-pill, no accent): accent is reserved
+    # for interactive/selected/unread, not a decorative category tint (§2).
+    assert 'k-pill">Rating' in html
     # forward agenda: the investor day as a dated row.
     assert "Forward agenda" in html
     assert "Analyst Day 2099" in html
@@ -85,7 +87,7 @@ def test_media_appearance_renders_in_the_stream(db: Path) -> None:
         conn.close()
     html = render_diet_panel(db)
     assert "David Vélez on Invest Like the Best" in html
-    assert 'k-pill-accent">Podcast' in html
+    assert 'k-pill">Podcast' in html  # neutral category pill (§2 accent discipline)
     assert "Invest Like the Best" in html  # the show name in the source column
 
 

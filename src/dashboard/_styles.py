@@ -55,15 +55,12 @@ button { transition: color var(--transition), border-color var(--transition),
 .dash-section { margin-bottom: var(--gap-lg); }
 
 /* Active-filter chips — feed only. Only the constraints actually narrowing the
-   view render here, each a removable pill linking back to the unfiltered feed
-   (no "ALL · ALL" band when nothing is filtered). */
+   view render here, each a removable chip linking back to the unfiltered feed
+   (no "ALL · ALL" band when nothing is filtered). The chip itself is the shared
+   kit (.k-chip + .k-chip-btn, controls.py), emitted by src/dashboard/feed.py;
+   only the layout row + the mono value treatment stay local. */
 .dash-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.dash-filters .dash-filter-chip { display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-full); text-decoration: none; transition: border-color var(--transition); }
-.dash-filters .dash-filter-chip:hover { border-color: var(--border-2); }
-.dash-filters .filter-label { color: var(--muted); font-size: var(--fs-caption); }
-.dash-filters .filter-value { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg); }
-.dash-filters .filter-x { color: var(--muted); font-size: var(--fs-micro); }
-.dash-filters .dash-filter-chip:hover .filter-x { color: var(--bad); }
+.dash-filters .filter-value { font-family: var(--mono); }
 
 /* Alert cards — elevation (surface on bg), not border boxes. */
 .alert-card {
@@ -154,7 +151,7 @@ button { transition: color var(--transition), border-color var(--transition),
    report-category exception) and lives in workspace_styles.py. */
 .evidence-malformed {
   padding: 10px;
-  background: rgba(240, 138, 138, 0.08);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
   border: 1px solid var(--bad);
   border-radius: var(--radius);
   color: var(--bad);

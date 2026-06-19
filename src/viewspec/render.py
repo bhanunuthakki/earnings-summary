@@ -42,8 +42,9 @@ VIEWSPEC_CSS = (
 .vx-meta { color: var(--muted); font-size: var(--fs-caption); margin: 4px 0 8px; }
 .vx-warn { color: var(--warn); font-size: var(--fs-caption); margin: 2px 0; }
 .vx-wrap { overflow-x: auto; }
-.vx-matrix { border-collapse: collapse; font-size: var(--fs-caption); }
-.vx-matrix th, .vx-matrix td { padding: 4px 7px; border: 1px solid var(--border);
+.vx-matrix { border-collapse: collapse; font-size: var(--fs-caption);
+  border: 1px solid var(--border); }
+.vx-matrix th, .vx-matrix td { padding: 4px 7px; border: 1px solid var(--hairline);
   text-align: right; white-space: nowrap; }
 .vx-matrix thead th { color: var(--fg); background: var(--paper, var(--surface)); }
 .vx-matrix .vx-label { text-align: left; font-weight: 600; color: var(--fg);

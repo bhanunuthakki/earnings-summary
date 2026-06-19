@@ -216,7 +216,7 @@ def test_render_full_panel(tmp_path: Path) -> None:
     assert "generic risks, no math chain" in html
     assert "facet_scores" in html
     # Version strip shows both version chips; health table shows the rates.
-    assert html.count('class="ev-vchip"') == 2
+    assert html.count('class="k-chip k-chip-mono ev-vchip"') == 2
     assert "25%" in html  # bear_case error rate
     assert "12%" in html  # bear_case fallback rate (12.5% under banker's rounding)
 

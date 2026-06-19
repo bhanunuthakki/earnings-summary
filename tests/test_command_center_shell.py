@@ -136,8 +136,9 @@ def test_system_demoted_to_utility_icon() -> None:
     for primary in ("home", "companies", "ask", "portfolio"):
         assert f'data-theme-target="{primary}"' in topnav
     assert 'data-theme-target="system"' not in topnav
-    # The icon button: theme contract intact, palette label carried.
-    assert 'class="cc-theme-tab cc-system-btn"' in html
+    # The icon button: theme contract intact (cc-theme-tab + cc-system-btn
+    # activation hooks preserved), now composing the kit quiet button.
+    assert 'class="cc-theme-tab cc-system-btn k-btn k-btn-quiet"' in html
     assert 'data-theme-target="system" data-pal-label="System"' in html
     # The palette JS prefers the readable label over the glyph text.
     assert "data-pal-label" in SHELL_JS

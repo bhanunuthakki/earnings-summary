@@ -297,13 +297,18 @@ def compose_evals_page(
 
 
 def _run_bar() -> str:
+    # One solid-accent primary per view (design_language §4): viewspec_compile
+    # is the live golden set, so it alone is .k-btn-primary; the rest are the
+    # quiet, dense run buttons.
     buttons = "".join(
-        f'<button type="button" class="k-btn k-btn-primary" data-purpose="{escape(p)}">{escape(p)}</button>'
+        f'<button type="button" data-purpose="{escape(p)}"'
+        f' class="k-btn {"k-btn-primary" if p == "viewspec_compile" else "k-btn-quiet"} k-btn-sm">'
+        f"{escape(p)}</button>"
         for p in RUNNABLE_PURPOSES
     )
     return (
         '<div class="ev-runbar" id="ev-runbar">'
-        '<span class="ev-runbar-label">Run eval</span>'
+        '<span class="k-label">Run eval</span>'
         f"{buttons}"
         '<span class="muted ev-note">viewspec_compile = live golden set (16 questions); '
         "the rest audit existing artifacts against their rubric (full corpus — the weekly "
@@ -349,13 +354,13 @@ def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow
         cost = f"${r.cost_usd:.4f}" if r.cost_usd else "—"
         rows_html.append(
             "<tr>"
-            f'<td class="ticker">{escape(r.purpose)}</td>'
+            f'<td class="ev-purpose">{escape(r.purpose)}</td>'
             f"<td>{_score_pill(r.avg_score)}</td>"
             f'<td class="num">{escape(pass_rate)}</td>'
             f"<td>{_mode_pill(r.mode)}</td>"
-            f'<td class="mono">{escape(r.prompt_version)}</td>'
+            f'<td class="ev-loc">{escape(r.prompt_version)}</td>'
             f'<td class="num">{cost}<span class="muted"> · {r.call_count} calls</span></td>'
-            f'<td class="mono muted">{escape(r.started_at)}'
+            f'<td class="ev-loc muted">{escape(r.started_at)}'
             f"{' · ' + escape(r.git_sha) if r.git_sha else ''}</td>"
             "</tr>"
         )
@@ -411,13 +416,13 @@ def _versions_section(versions: list[VersionSummary]) -> str:
     rows: list[str] = []
     for purpose in sorted(by_purpose):
         chips = "".join(
-            f'<span class="ev-vchip" title="n={v.score_count} · p25 {v.p25:.2f} · '
+            f'<span class="k-chip k-chip-mono ev-vchip" title="n={v.score_count} · p25 {v.p25:.2f} · '
             f'p50 {v.p50:.2f} · p75 {v.p75:.2f}">'
             f"{escape(v.prompt_version)} {_score_pill(v.avg_score)}"
             f'<span class="muted">&times;{v.score_count}</span></span>'
             for v in sorted(by_purpose[purpose], key=lambda s: s.prompt_version)
         )
-        rows.append(f'<tr><td class="ticker">{escape(purpose)}</td><td>{chips}</td></tr>')
+        rows.append(f'<tr><td class="ev-purpose">{escape(purpose)}</td><td>{chips}</td></tr>')
     return f'{head}<table class="ev-versions"><tbody>{"".join(rows)}</tbody></table></section>'
 
 
@@ -432,7 +437,7 @@ def _health_section(health: list[CallHealthRow]) -> str:
         return f'{head}<p class="muted">No LLM calls in the window.</p></section>'
     rows = "".join(
         "<tr>"
-        f'<td class="ticker">{escape(h.purpose)}</td>'
+        f'<td class="ev-purpose">{escape(h.purpose)}</td>'
         f'<td class="num">{h.calls}</td>'
         f'<td class="num {"ev-bad" if h.error_rate > 0.1 else ""}">'
         f"{h.error_rate * 100:.0f}%<span class='muted'> ({h.errors})</span></td>"
@@ -462,19 +467,21 @@ _PANEL_CSS = """<style>
 .ev-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
-.ev-runbar-label { font-family: var(--sans); font-size: var(--fs-caption);
-  text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .ev-note { font-size: var(--fs-caption); }
 .ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
   font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
 .ev-runs td, .ev-health td { vertical-align: middle; }
 .ev-drawer-row > td { padding: 0 0 10px 12px; border: none; }
-.ev-vchip { display: inline-flex; gap: 6px; align-items: baseline; margin-right: 14px;
-  font-family: var(--mono); font-size: var(--fs-body); cursor: help; }
+/* The version locator rides the kit's .k-chip.k-chip-mono; only the inter-chip
+   separation + tooltip affordance are layout-local. */
+.ev-vchip { margin-right: 8px; cursor: help; }
 .ev-bad { color: var(--bad); font-weight: 600; }
 .ev-warn { color: var(--warn); font-weight: 600; }
-.mono { font-family: var(--mono); }
+/* Purpose names are sans labels (NOT tickers) — emphasis without mono. */
+.ev-purpose { font-weight: 600; }
+/* Genuine mono locators only (prompt_version, run timestamp). */
+.ev-loc { font-family: var(--mono); }
 </style>"""
 
 # Run-bar wiring — same POST + SSE + refetch shape as the Memos panel.

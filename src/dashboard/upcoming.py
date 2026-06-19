@@ -153,7 +153,7 @@ def _watch_doorways(db_path: Path | None, user_id: str, ticker: str) -> str:
         out.write(
             '<li><button type="button" class="up-watch-item" '
             f'data-ask-q="{_esc(ask_q)}" title="{_esc(full)}">'
-            f'<span class="up-watch-kind">{_esc(n.kind)}</span>'
+            f'<span class="up-watch-kind k-chip">{_esc(n.kind)}</span>'
             f'<span class="up-watch-body">{_esc(label)}</span>'
             "</button></li>"
         )
@@ -237,9 +237,7 @@ UPCOMING_CSS = """
   min-width: 0; }
 .up-watch-item:hover { color: var(--accent); }
 .up-watch-item:hover .up-watch-body { text-decoration: underline; }
-.up-watch-kind { flex: none; color: var(--muted); font-size: var(--fs-micro);
-  text-transform: uppercase; letter-spacing: 0.05em;
-  border: 1px solid var(--hairline); border-radius: var(--radius); padding: 0 3px; }
+.up-watch-kind { flex: none; }
 .up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .up-watch-more { font-size: var(--fs-micro); color: var(--muted); padding-left: 2px; }
 """.strip()

@@ -25,7 +25,7 @@ from pipeline.analytical_dashboard import (
     PredictionOutcomeRow,
     TriggerLadderRow,
 )
-from ui.controls import controls_css
+from ui.controls import controls_css, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -109,16 +109,20 @@ def _decisions_section(panel: DecisionsPanel) -> str:
     Shows even when empty so the operator sees the panel exists."""
     if not panel.recent and not panel.hit_rate_by_kind:
         return (
-            '<section class="panel"><h2>Decisions (LLM recommendations · audit ledger)</h2>'
+            '<section class="panel"><div class="panel-head">'
+            "<h2>Decisions (LLM recommendations · audit ledger)</h2></div>"
+            '<div class="panel-body">'
             '<p class="muted">No decisions recorded yet. Extract from existing rereads via:</p>'
             '<pre class="cli-hint">python execution/record_decisions.py</pre>'
-            "</section>"
+            "</div></section>"
         )
 
     out: list[str] = [
-        '<section class="panel"><h2>Decisions (LLM recommendations · audit ledger)</h2>',
+        '<section class="panel"><div class="panel-head">'
+        "<h2>Decisions (LLM recommendations · audit ledger)</h2>"
         '<p class="sub">Every five-min-reread recommendation extracted into a durable ledger. '
-        "Outcomes graded against realized price moves; calibration curve below.</p>",
+        "Outcomes graded against realized price moves; calibration curve below.</p>"
+        '</div><div class="panel-body">',
     ]
 
     # Hit-rate strip — one card per kind, with correct% when graded
@@ -205,7 +209,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             )
         out.append("</tbody></table>")
 
-    out.append("</section>")
+    out.append("</div></section>")
     return "".join(out)
 
 
@@ -244,17 +248,19 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
     the dashboard works on older repos without a hard failure."""
     if not panel.rows:
         return (
-            '<section class="panel"><h2>LLM spend & budget</h2>'
+            '<section class="panel"><div class="panel-head"><h2>LLM spend & budget</h2></div>'
+            '<div class="panel-body">'
             '<p class="muted">No budget data. Run <code>python -m alembic upgrade head</code> '
             "to install migration 0052, then revisit.</p>"
-            "</section>"
+            "</div></section>"
         )
     out: list[str] = [
-        '<section class="panel"><h2>LLM spend & budget</h2>',
+        '<section class="panel"><div class="panel-head"><h2>LLM spend & budget</h2>'
         f'<p class="sub">Per-purpose monthly caps · {escape(panel.month_label)} · '
         "edit the cap or mode below and click Save. "
         "<code>skip</code> forgoes the call when over cap (and flags it in the brief); "
-        "<code>block</code> fails the build; <code>warn</code> overspends.</p>",
+        "<code>block</code> fails the build; <code>warn</code> overspends.</p>"
+        '</div><div class="panel-body">',
         '<table class="budget-table"><thead><tr>',
         '<th title="The LLM call site this cap governs (one row per purpose)">Purpose</th>',
         '<th class="num" title="Spent this month against this purpose">Spend</th>',
@@ -292,7 +298,7 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
         )
         for t in panel.by_ticker:
             out.append(
-                f"<tr><td><code>{escape(t.ticker)}</code></td>"
+                f"<tr><td>{ticker_label(t.ticker)}</td>"
                 f'<td class="num">${t.current_spend_usd:,.2f}</td>'
                 f'<td class="num">{t.call_count}</td></tr>'
             )
@@ -302,7 +308,7 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
             f"${by_ticker_total:,.2f}</p>"
         )
     out.append(_BUDGET_PANEL_SCRIPT)
-    out.append("</section>")
+    out.append("</div></section>")
     return "".join(out)
 
 
@@ -339,7 +345,7 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         f"<td><code>{purpose_esc}</code></td>"
         f'<td class="num">${r.current_spend_usd:,.2f}</td>'
         f'<td class="num"><input class="budget-cap" type="number" min="0" step="1" '
-        f'style="width:80px" value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}" '
+        f'value="{r.monthly_cap_usd:.2f}" aria-label="cap for {purpose_esc}" '
         f'title="Monthly cap in USD for {purpose_esc}"></td>'
         f'<td class="burn-cell"><div class="burn-bar">'
         f'<div class="burn-fill {bar_tone}" style="width: {min(100, bar_width_pct)}%"></div>'
@@ -347,7 +353,7 @@ def _budget_row_html(r: LlmBudgetRow) -> str:
         f'<td class="num">{r.headroom_pct * 100:+.0f}%</td>'
         f'<td><select class="budget-mode" aria-label="mode for {purpose_esc}" '
         f'title="What happens once {purpose_esc} is over cap">{mode_opts}</select></td>'
-        f'<td><button type="button" class="budget-save" '
+        f'<td><button type="button" class="budget-save k-btn k-btn-quiet k-btn-sm" '
         f'title="Apply this cap + mode for {purpose_esc}">Save</button> '
         f'<span class="budget-msg muted"></span></td>'
         "</tr>"
@@ -382,29 +388,33 @@ def _tier_coverage_strip(coverage: dict[str, dict[str, int]]) -> str:
         stale = int(c.get("stale", 0))
         total = int(c.get("total", 0))
         if total == 0:
-            chips.append(f'<a {peek} class="tier-chip tier-empty">{tier}: 0 tracked</a>')
+            chips.append(f'<a {peek} class="k-chip">{tier}: 0 tracked</a>')
             continue
         # Pretty-printer for large counts ("1.8k / 2.3k") on P3.
         fresh_disp = _fmt_count(fresh)
         total_disp = _fmt_count(total)
         if stale == 0:
             chips.append(
-                f'<a {peek} class="tier-chip tier-ok" title="{tier} — all fresh">'
+                f'<a {peek} class="k-chip k-chip-ok" title="{tier} — all fresh">'
                 f"{tier}: {fresh_disp} / {total_disp} fresh</a>"
             )
         else:
             # P3 is the deep-history backfill tier — thousands of old rows
-            # pending is routine, not an incident, so it renders muted instead
-            # of shouting red on the landing page (PR1).
-            stale_cls = "tier-backfill" if tier == "P3" else "tier-stale"
+            # pending is routine, not an incident, so it renders muted (the
+            # plain .k-chip tone + a muted count) instead of shouting red on
+            # the landing page (PR1); other tiers take the warn tone.
+            tone_cls = "" if tier == "P3" else " k-chip-warn"
+            count_cls = "tier-stale-count-muted" if tier == "P3" else "tier-stale-count"
             chips.append(
-                f'<a {peek} class="tier-chip {stale_cls}" title="To force-refresh: '
+                f'<a {peek} class="k-chip{tone_cls}" title="To force-refresh: '
                 f"python execution/daily_fetch_and_brief.py --ignore-tier "
                 f'(or run the {_tier_cron_hint(tier)} cron)">'
                 f"{tier}: {fresh_disp} / {total_disp} fresh "
-                f'<span class="tier-stale-count">({stale} stale)</span></a>'
+                f'<span class="{count_cls}">({stale} stale)</span></a>'
             )
-    parts.append(" · ".join(chips))
+    # Bordered radius-full chips delimit themselves; the flex gap spaces them
+    # (no middot separator needed now that each chip has its own outline).
+    parts.append("".join(chips))
     parts.append("</div>")
     return "".join(parts)
 
@@ -429,19 +439,21 @@ def _portfolio_synthesis_section(content_md: str | None) -> str:
     """The cross_portfolio_synthesis lens output as the lead panel."""
     if not content_md:
         return (
-            '<section class="panel"><h2>Portfolio synthesis</h2>'
+            '<section class="panel"><div class="panel-head"><h2>Portfolio synthesis</h2></div>'
+            '<div class="panel-body">'
             '<p class="muted">No cross-portfolio synthesis cached. Run:</p>'
             '<pre class="cli-hint">python execution/run_lens.py --lens cross_portfolio_synthesis</pre>'
-            "</section>"
+            "</div></section>"
         )
     # Render markdown minimally — preserve headers + bold + bullets
     rendered = light_markdown_to_html(content_md)
     return (
-        '<section class="panel synthesis-panel">'
+        '<section class="panel synthesis-panel"><div class="panel-head">'
         "<h2>Portfolio synthesis</h2>"
         '<p class="sub">Cross-ticker patterns · this week\'s deeper-look · capital-allocation suggestions.</p>'
+        '</div><div class="panel-body">'
         f'<div class="synthesis-body">{rendered}</div>'
-        "</section>"
+        "</div></section>"
     )
 
 
@@ -449,18 +461,20 @@ def _per_ticker_reread_section(rows: list[PortfolioLensRow]) -> str:
     """Compact 5-min reread cards for every holding that has one cached."""
     if not rows:
         return (
-            '<section class="panel"><h2>Per-holding 5-min rereads</h2>'
+            '<section class="panel"><div class="panel-head"><h2>Per-holding 5-min rereads</h2></div>'
+            '<div class="panel-body">'
             '<p class="muted">No per-holding rereads cached. Generate via <code>python execution/run_lens.py --tickers AMZN,GOOG,META --lens five_min_reread</code> (or --all for every lens).</p>'
-            "</section>"
+            "</div></section>"
         )
     out: list[str] = [
-        '<section class="panel"><h2>Per-holding 5-min rereads</h2>',
-        '<p class="sub">Decision-oriented per-ticker artifact. Click a ticker for the full memo.</p>',
+        '<section class="panel"><div class="panel-head"><h2>Per-holding 5-min rereads</h2>'
+        '<p class="sub">Decision-oriented per-ticker artifact. Click a ticker for the full memo.</p>'
+        '</div><div class="panel-body">',
         '<div class="reread-grid">',
     ]
     for r in rows:
         out.append(_reread_card(r))
-    out.append("</div></section>")
+    out.append("</div></div></section>")
     return "".join(out)
 
 
@@ -493,13 +507,15 @@ def light_markdown_to_html(md: str) -> str:
 def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
     if not rows:
         return (
-            '<section class="panel"><h2>Trigger ladder</h2>'
-            '<p class="muted">No DCF runs yet. Run <code>python execution/refresh_dcf.py --all-named</code>.</p></section>'
+            '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2></div>'
+            '<div class="panel-body">'
+            '<p class="muted">No DCF runs yet. Run <code>python execution/refresh_dcf.py --all-named</code>.</p></div></section>'
         )
 
     out: list[str] = [
-        '<section class="panel"><h2>Trigger ladder</h2>',
-        '<p class="sub">Every holding positioned by DCF over/under vs MoS bar. Sorted by absolute deviation.</p>',
+        '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2>'
+        '<p class="sub">Every holding positioned by DCF over/under vs MoS bar. Sorted by absolute deviation.</p>'
+        '</div><div class="panel-body">',
         '<table class="trigger-table"><thead><tr>',
         "<th>Ticker</th><th>List</th><th>Verdict</th>",
         '<th class="num">Live</th><th class="num">Fair value</th>',
@@ -535,19 +551,21 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
             f'<td class="trigger-cell">{escape((r.trigger_status or "unknown").replace("_", " "))}</td>'
             "</tr>"
         )
-    out.append("</tbody></table></section>")
+    out.append("</tbody></table></div></section>")
     return "".join(out)
 
 
 def _insider_events_section(rows: list[InsiderEventRow]) -> str:
     if not rows:
         return (
-            '<section class="panel"><h2>Cross-ticker insider activity (last 90d)</h2>'
-            '<p class="muted">No insider data. Run <code>python execution/backfill_insider_transactions.py --since 2024-01-01</code>.</p></section>'
+            '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2></div>'
+            '<div class="panel-body">'
+            '<p class="muted">No insider data. Run <code>python execution/backfill_insider_transactions.py --since 2024-01-01</code>.</p></div></section>'
         )
     out: list[str] = [
-        '<section class="panel"><h2>Cross-ticker insider activity (last 90d)</h2>',
-        '<p class="sub">Discretionary trades only · ranked by conviction signal · 10b5-1 sells filtered out.</p>',
+        '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2>'
+        '<p class="sub">Discretionary trades only · ranked by conviction signal · 10b5-1 sells filtered out.</p>'
+        '</div><div class="panel-body">',
         '<table class="insider-table"><thead><tr>',
         "<th>Date</th><th>Ticker</th><th>Insider</th><th>Role</th><th>Action</th>",
         '<th class="num">Shares</th><th class="num">Value</th><th class="num">Signal</th><th>Why</th>',
@@ -593,7 +611,7 @@ def _insider_events_section(rows: list[InsiderEventRow]) -> str:
         out.append(
             f'<td class="num {strength_tone}">{signal_pct}</td><td>{escape(r.rationale)}</td></tr>'
         )
-    out.append("</tbody></table></section>")
+    out.append("</tbody></table></div></section>")
     return "".join(out)
 
 
@@ -608,8 +626,9 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
         by_ticker[r.ticker][r.source_kind][r.outcome] = r.count
 
     out: list[str] = [
-        '<section class="panel"><h2>Predictions outcomes (cross-ticker)</h2>',
-        '<p class="sub">SayDo, LLM bear-case, risk-factor materialization tallied across all forward-looking sources.</p>',
+        '<section class="panel"><div class="panel-head"><h2>Predictions outcomes (cross-ticker)</h2>'
+        '<p class="sub">SayDo, LLM bear-case, risk-factor materialization tallied across all forward-looking sources.</p>'
+        '</div><div class="panel-body">',
         '<table class="predictions-table"><thead><tr>',
         "<th>Ticker</th><th>Source</th>",
         '<th class="num">Pending</th><th class="num">Met</th>',
@@ -632,7 +651,7 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
                 f'<td class="num">{hit_rate}</td>'
                 "</tr>"
             )
-    out.append("</tbody></table></section>")
+    out.append("</tbody></table></div></section>")
     return "".join(out)
 
 
@@ -653,24 +672,29 @@ _PAGE_HEAD = (
   h1 {{ font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }}
   h2 {{ font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }}
   .stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); margin-bottom: 24px; }}
-  .panel {{ margin-bottom: 32px; background: var(--surface); border-radius: var(--radius); padding: 18px 20px; }}
+  .panel {{ margin-bottom: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
+  .panel-head {{ padding: 14px 20px; border-bottom: 1px solid var(--hairline); }}
+  .panel-head h2 {{ margin: 0; }}
+  .panel-head .sub {{ margin: 4px 0 0; }}
+  .panel-body {{ padding: 18px 20px; }}
+  .panel-foot {{ padding: 12px 20px; border-top: 1px solid var(--hairline); background: var(--paper); }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 16px; }}
   .muted {{ color: var(--muted); }}
   table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
   th {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
   td {{ padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
-  tbody tr:hover td {{ background: rgba(255,255,255,0.025); }}
+  tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   td.muted {{ color: var(--muted-2); }}
   td.pos {{ color: var(--ok); }}
   td.neg {{ color: var(--bad); }}
   .ticker-link {{ color: var(--fg); text-decoration: none; font-weight: 600; transition: color var(--transition); }}
   .ticker-link:hover {{ color: var(--accent); }}
-  tr.tone-sell {{ background: rgba(248, 113, 113, 0.06); }}
-  tr.tone-trim {{ background: rgba(251, 191, 36, 0.04); }}
-  tr.tone-init {{ background: rgba(74, 222, 128, 0.06); }}
-  tr.tx-buy {{ background: rgba(74, 222, 128, 0.04); }}
-  tr.tx-sell {{ background: rgba(248, 113, 113, 0.02); }}
+  tr.tone-sell {{ background: color-mix(in srgb, var(--bad) 6%, transparent); }}
+  tr.tone-trim {{ background: color-mix(in srgb, var(--warn) 4%, transparent); }}
+  tr.tone-init {{ background: color-mix(in srgb, var(--ok) 6%, transparent); }}
+  tr.tx-buy {{ background: color-mix(in srgb, var(--ok) 4%, transparent); }}
+  tr.tx-sell {{ background: color-mix(in srgb, var(--bad) 2%, transparent); }}
   td.trigger-cell {{ font-family: var(--sans); font-size: var(--fs-caption); text-transform: uppercase; }}
   tr.tone-sell .trigger-cell {{ color: var(--bad); }}
   tr.tone-trim .trigger-cell {{ color: var(--warn); }}
@@ -678,8 +702,8 @@ _PAGE_HEAD = (
   td.signal-strong {{ color: var(--ok); font-weight: 600; }}
   td.signal-medium {{ color: var(--warn); }}
   td.signal-weak {{ color: var(--muted); }}
-  /* Synthesis panel */
-  .synthesis-panel {{ border-left: 3px solid var(--ok); }}
+  /* Synthesis panel — lead panel distinguished by placement + panel anatomy,
+     not a decorative status rail (status color is reserved for value status). */
   .synthesis-body {{ font-size: var(--fs-section); line-height: 1.65; }}
   .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
   .synthesis-body h5, .synthesis-body h6 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
@@ -708,7 +732,7 @@ _PAGE_HEAD = (
   .reread-body strong {{ color: var(--fg); }}
   .reread-body ul {{ padding-left: 18px; }}
   .reread-body hr {{ border: none; border-top: 1px solid var(--border); margin: 10px 0; }}
-  .cli-hint {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); color: var(--ok); overflow-x: auto; margin: 6px 0 0; }}
+  .cli-hint {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); color: var(--fg-soft); overflow-x: auto; margin: 6px 0 0; }}
   /* Decisions panel */
   .panel-h3 {{ font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600; color: var(--fg); }}
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 12px; }}
@@ -732,9 +756,10 @@ _PAGE_HEAD = (
   .decisions-table td.outcome-pending {{ color: var(--muted); }}
   /* LLM budget panel */
   .budget-table td code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg); background: transparent; padding: 0; }}
+  .budget-table .budget-cap {{ width: 80px; }}
   .burn-cell {{ width: 200px; padding: 6px 10px; }}
   .burn-bar {{ width: 100%; height: 8px; background: var(--paper); border-radius: var(--radius-full); overflow: hidden; }}
-  .burn-fill {{ height: 100%; transition: width 0.2s; }}
+  .burn-fill {{ height: 100%; transition: width var(--transition); }}
   .burn-ok {{ background: var(--ok); }}
   .burn-warn {{ background: var(--warn); }}
   .burn-over {{ background: var(--bad); }}
@@ -743,16 +768,11 @@ _PAGE_HEAD = (
   .budget-footer {{ margin-top: 12px; font-size: var(--fs-body); color: var(--fg-soft); }}
   .budget-footer strong {{ color: var(--fg); }}
   /* Tier coverage strip */
-  .tier-strip {{ background: var(--surface); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }}
+  .tier-strip {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }}
   .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
-  .tier-chip {{ font-family: var(--sans); font-size: var(--fs-caption); padding: 2px 6px; border-radius: var(--radius); cursor: help; }}
-  a.tier-chip {{ text-decoration: none; cursor: pointer; }}
-  .tier-ok {{ color: var(--ok); }}
-  .tier-stale {{ color: var(--warn); }}
+  a.k-chip {{ text-decoration: none; }}
   .tier-stale-count {{ color: var(--bad); font-weight: 600; }}
-  .tier-backfill {{ color: var(--muted); }}
-  .tier-backfill .tier-stale-count {{ color: var(--muted); font-weight: 400; }}
-  .tier-empty {{ color: var(--muted-2); }}
+  .tier-stale-count-muted {{ color: var(--muted); font-weight: 400; }}
 </style>
 </head>
 <body>

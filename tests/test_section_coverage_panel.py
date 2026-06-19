@@ -125,8 +125,10 @@ def test_render_fragment_contains_matrix_and_legend(repo: Path) -> None:
     html = render_section_coverage_panel(repo / "data" / "portfolio.db", repo, user_id="u1")
     assert "Section coverage" in html
     assert "AAA" in html and "BBB" in html
-    assert "sc-table" in html
-    assert "tracked names" in html
+    # Matrix composes the kit table (.p-table) with a layout-only modifier.
+    assert "p-table sc-matrix" in html
+    # KPI counters ride the shell kpi-strip/kpi-card vocabulary.
+    assert "kpi-strip" in html and "Tracked names" in html
     assert "hide-don't-stub" in html
     # Cell glyphs present for both filled and empty states.
     assert "sc-filled" in html and "sc-empty" in html

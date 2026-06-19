@@ -425,9 +425,6 @@ _QUICK_NOTE_STYLE = """<style>
 .cc-quicknote textarea { width: 100%; box-sizing: border-box; resize: vertical;
   margin-bottom: 8px; }
 .cc-quicknote .qn-ticker { width: 120px; text-transform: uppercase; }
-.cc-quicknote .qn-save { background: var(--accent); color: var(--accent-contrast);
-  border: none; padding: 6px 14px; border-radius: var(--radius); font-weight: 600;
-  font-size: var(--fs-body); cursor: pointer; }
 .cc-quicknote .qn-msg { font-size: var(--fs-caption); }
 .cc-notes-foot { color: var(--muted); font-size: var(--fs-caption); }
 </style>"""
@@ -486,7 +483,7 @@ def _quick_add_form(ticker: str | None) -> str:
         "</div>"
         '<textarea class="qn-body" rows="3" '
         'placeholder="What did you notice? Enter saves · Shift+Enter for a newline."></textarea>'
-        '<div class="qn-row"><button type="button" class="qn-save">Add note</button>'
+        '<div class="qn-row"><button type="button" class="qn-save k-btn k-btn-primary">Add note</button>'
         '<span class="qn-msg muted"></span></div>'
         "</section>" + _QUICK_NOTE_STYLE + _QUICK_NOTE_SCRIPT
     )
@@ -615,9 +612,9 @@ def _refresh_section(ticker: str) -> str:
         '<section class="panel"><h2>Refresh</h2>'
         '<p class="sub">Rebuild this brief. "Run anyway" ignores per-purpose LLM budget '
         "caps for this run, so analyses forgone under a skip-mode cap are included.</p>"
-        f'<button type="button" class="tcc-refresh" data-ticker="{t}" data-bypass="0">'
+        f'<button type="button" class="tcc-refresh k-btn k-btn-primary" data-ticker="{t}" data-bypass="0">'
         "Refresh</button> "
-        f'<button type="button" class="tcc-refresh" data-ticker="{t}" data-bypass="1">'
+        f'<button type="button" class="tcc-refresh k-btn k-btn-quiet" data-ticker="{t}" data-bypass="1">'
         "Run anyway (ignore caps)</button> "
         '<span class="tcc-refresh-msg muted"></span>'
         '<p style="margin-top:8px">'
@@ -679,8 +676,8 @@ def _dcf_sheets_section(ticker: str) -> str:
         '<p class="sub">Push this ticker\'s DCF workbook to a Google Sheet, edit the Forecast '
         "INPUTS in the browser, then re-ingest to recompute the fair value into "
         "<code>dcf_runs</code>.</p>"
-        '<button type="button" class="tcc-dcf-export">Push to Sheets</button> '
-        '<button type="button" class="tcc-dcf-import">Re-ingest from Sheets</button> '
+        '<button type="button" class="tcc-dcf-export k-btn k-btn-primary">Push to Sheets</button> '
+        '<button type="button" class="tcc-dcf-import k-btn k-btn-quiet">Re-ingest from Sheets</button> '
         '<a class="tcc-dcfsheets-open" href="#" target="_blank" rel="noopener" '
         'style="display:none">Open in Google Sheets ↗</a> '
         '<span class="tcc-dcfsheets-msg muted"></span>' + _DCF_SHEETS_SCRIPT + "</section>"
@@ -756,10 +753,10 @@ def _holding_band(tcc: TickerCommandCenter) -> str:
         '<div class="cc-holding-right">'
         f"{_identity_badges(ident)}{_freshness_dot(ident)}"
         f'<span class="cc-holding-links">{" · ".join(links)}</span>'
-        ' <button type="button" class="tcc-drawer-btn" data-tcc-drawer="ops" '
+        ' <button type="button" class="tcc-drawer-btn k-btn k-btn-quiet k-btn-sm" data-tcc-drawer="ops" '
         'title="Refresh · budgets · DCF⇄Sheets · analyses log · artifacts · 5-min reread">'
         "⚙ Ops</button>"
-        ' <button type="button" class="tcc-drawer-btn" data-cc-notes-open '
+        ' <button type="button" class="tcc-drawer-btn k-btn k-btn-quiet k-btn-sm" data-cc-notes-open '
         'title="Quick note + open notes + recent alerts for this name">✎ Notes</button>'
         "</div></div>"
     )
@@ -1046,17 +1043,12 @@ a.cc-fdot { text-decoration: none; cursor: pointer; }
 .fdot-ok { color: var(--ok); }
 .fdot-warn { color: var(--warn); }
 .fdot-bad { color: var(--bad); }
-.tcc-drawer-btn { background: transparent; border: 1px solid var(--border);
-  color: var(--muted); border-radius: var(--radius); padding: 4px 10px;
-  font-size: var(--fs-caption); cursor: pointer;
-  transition: color var(--transition), border-color var(--transition); }
-.tcc-drawer-btn:hover { border-color: var(--accent); color: var(--accent); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); height: calc(100dvh - 200px); }
-.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 34;
+.tcc-drawer-scrim { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 34;
   animation: cc-fade-in var(--transition); }
 .tcc-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(680px, 94vw);
   background: var(--bg); border-left: 1px solid var(--border); z-index: 35;
-  display: flex; flex-direction: column; box-shadow: -12px 0 32px rgba(0,0,0,0.35);
+  display: flex; flex-direction: column; box-shadow: var(--shadow-pop);
   animation: cc-slide-in-right var(--transition); }
 .tcc-drawer[hidden], .tcc-drawer-scrim[hidden] { display: none; }
 .tcc-drawer-head { display: flex; justify-content: space-between; align-items: center;
@@ -1464,23 +1456,23 @@ _PAGE_HEAD = (
   /* identity badges → the kit (.k-chip list_type + .k-pill breach status). */
   .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
-  .panel-h3 {{ font-size: var(--fs-body); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
+  .panel-h3 {{ font-size: var(--fs-section); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
   .muted {{ color: var(--muted); }}
   table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
   th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
   td {{ padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
-  tbody tr:hover td {{ background: rgba(255,255,255,0.025); }}
+  tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
   .pos .kpi-value, td.pos {{ color: var(--ok); }}
   .neg .kpi-value, td.neg {{ color: var(--bad); }}
   .ok-dot {{ color: var(--ok); }}
-  .fresh-strip {{ display: flex; gap: 10px; margin-bottom: 22px; }}
-  .fresh-cell {{ background: var(--surface); border-radius: var(--radius); padding: 8px 14px; flex: 1; }}
+  .fresh-strip {{ display: flex; gap: 1px; margin-bottom: 22px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
+  .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
   .fresh-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
-  .fresh-val {{ font-size: var(--fs-section); font-variant-numeric: tabular-nums; }}
-  .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 12px; }}
-  .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; }}
+  .fresh-val {{ font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
+  .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; margin-bottom: 12px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
+  .kpi-card {{ background: var(--surface); padding: 10px 12px; }}
   .kpi-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
   .kpi-value {{ font-size: var(--fs-title); font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
   ul {{ margin: 6px 0; padding-left: 20px; }}
