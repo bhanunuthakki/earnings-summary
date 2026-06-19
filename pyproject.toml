@@ -106,7 +106,7 @@ exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scr
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
 # without it every such import is an unresolved-import error with a cascade of
 # Unknowns behind it.
-extraPaths = ["src", "execution", "scratch"]
+extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -131,7 +131,7 @@ include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
            "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
            "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py"]
-extraPaths = ["src", "execution", "scratch"]
+extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
 reportMissingTypeStubs = false
