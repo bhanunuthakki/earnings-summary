@@ -2,16 +2,22 @@
 
 Reads all *.task.xml files under the cron/ directory, extracts the registered
 task name (from the <URI> element), then queries ``schtasks /query /fo csv`` for
-the live state of each.  Reports three problem categories:
+the live state of each.  Reports five problem categories:
 
+  unparseable — the .task.xml could not be read/parsed (e.g. the bytes are
+                UTF-8 but the XML declaration claims encoding="UTF-16"); a HARD
+                failure — never silently skipped, or the audit would give a
+                false all-clear over files it never actually checked
+  no_uri    — file parsed but contains no <URI> (structurally incomplete task)
   missing   — XML exists but no matching task is registered
   disabled  — registered but the task's Status is not Ready/Running
   mismatch  — registered but the scheduled trigger time differs from the XML
 
 Human-readable table is printed to stdout.  Exit code:
 
-  0  all tasks registered, enabled, and schedule matches
-  1  one or more tasks have a problem (missing / disabled / mismatch)
+  0  all tasks parsed, registered, enabled, and schedule matches
+  1  one or more tasks have a problem (unparseable / no_uri / missing /
+     disabled / mismatch)
   2  could not query the scheduler (non-Windows or permission error)
 
 Intended to run weekly via Task Scheduler (see cron/verify_cron.task.xml) and
@@ -54,6 +60,8 @@ class TaskReport:
     """Aggregated comparison result."""
 
     ok: list[str] = field(default_factory=list[str])
+    unparseable: list[str] = field(default_factory=list[str])  # "name: error"
+    no_uri: list[str] = field(default_factory=list[str])  # filenames
     missing: list[str] = field(default_factory=list[str])
     disabled: list[str] = field(default_factory=list[str])
     mismatch: list[tuple[str, str, str]] = field(
@@ -62,20 +70,20 @@ class TaskReport:
 
     @property
     def has_problems(self) -> bool:
-        return bool(self.missing or self.disabled or self.mismatch)
+        return bool(
+            self.unparseable or self.no_uri or self.missing or self.disabled or self.mismatch
+        )
 
 
 def _parse_xml(path: Path) -> _XmlTask | None:
     """Extract task name and first trigger start time from a .task.xml file.
 
-    Returns None if the file cannot be parsed or lacks a <URI>.
+    Raises ``ET.ParseError`` (or ``OSError``) when the file cannot be read or
+    parsed — an unparseable task XML is a HARD failure that ``compare`` records
+    as a problem, never a swallowed warning. Returns None only when the file
+    parses cleanly but lacks a <URI> (a structurally incomplete task).
     """
-    try:
-        tree = ET.parse(str(path))
-    except ET.ParseError as exc:
-        sys.stderr.write(f"WARNING: cannot parse {path.name}: {exc}\n")
-        return None
-
+    tree = ET.parse(str(path))
     root = tree.getroot()
     ns = f"{{{_NS}}}"
 
@@ -171,14 +179,26 @@ def _extract_next_run_time(next_run: str) -> str | None:
 def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
     """Parse all XMLs in cron_dir and compare against the live scheduler.
 
-    Returns (TaskReport, xml_tasks_list). If schtasks cannot be queried,
-    returns a TaskReport where every XML is listed as "missing" so the exit
-    code is still non-zero.
+    Returns (TaskReport, xml_tasks_list). Files that cannot be parsed are
+    recorded under report.unparseable (a hard problem) rather than being
+    skipped; files that parse but lack a <URI> go to report.no_uri. If schtasks
+    cannot be queried, every parsed XML is listed as "missing" so the exit code
+    is still non-zero.
     """
-    xml_tasks = [t for p in sorted(cron_dir.glob("*.task.xml")) if (t := _parse_xml(p)) is not None]
+    report = TaskReport()
+    xml_tasks: list[_XmlTask] = []
+    for p in sorted(cron_dir.glob("*.task.xml")):
+        try:
+            xt = _parse_xml(p)
+        except (ET.ParseError, OSError) as exc:
+            report.unparseable.append(f"{p.name}: {exc}")
+            continue
+        if xt is None:
+            report.no_uri.append(p.name)
+            continue
+        xml_tasks.append(xt)
 
     live = _query_schtasks()
-    report = TaskReport()
 
     for xt in xml_tasks:
         key = xt.task_name.lower()
@@ -214,16 +234,30 @@ def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
 
 
 def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
-    total = len(xml_tasks)
+    # Count every .task.xml discovered, including those we failed to parse —
+    # otherwise the header would silently undercount the unparseable files.
+    total = len(xml_tasks) + len(report.unparseable) + len(report.no_uri)
     ok = len(report.ok)
     print(f"\nCron registration check — {total} task XML(s) found\n")
 
     if not report.has_problems:
-        print(f"  ✓  All {ok} tasks registered and enabled\n")
+        print(f"  ✓  All {ok} tasks parsed, registered and enabled\n")
         return
 
     if report.ok:
         print(f"  OK ({len(report.ok)}): {', '.join(report.ok)}\n")
+
+    if report.unparseable:
+        print(f"  UNPARSEABLE ({len(report.unparseable)}) — could not read/parse the XML:")
+        for desc in report.unparseable:
+            print(f"    ✗  {desc}")
+        print()
+
+    if report.no_uri:
+        print(f"  NO URI ({len(report.no_uri)}) — parsed but missing <URI>:")
+        for name in report.no_uri:
+            print(f"    ✗  {name}")
+        print()
 
     if report.missing:
         print(f"  MISSING ({len(report.missing)}) — not registered in Windows Task Scheduler:")
@@ -243,7 +277,13 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
             print(f"    ✗  {name}: XML={xml_time} vs scheduler={sched_time}")
         print()
 
-    problems = len(report.missing) + len(report.disabled) + len(report.mismatch)
+    problems = (
+        len(report.unparseable)
+        + len(report.no_uri)
+        + len(report.missing)
+        + len(report.disabled)
+        + len(report.mismatch)
+    )
     print(f"  {problems} problem(s) found. Fix: re-run schtasks /create or check the XML.\n")
 
 
@@ -269,7 +309,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args.quiet:
         _print_report(report, xml_tasks)
 
-    if not xml_tasks:
+    # "Nothing to check" means zero *.task.xml files on disk — NOT zero that
+    # happened to parse. If every file failed to parse, xml_tasks is empty but
+    # report.unparseable is not, and that must surface as a problem (exit 1),
+    # never a false all-clear.
+    total_found = len(xml_tasks) + len(report.unparseable) + len(report.no_uri)
+    if total_found == 0:
         sys.stderr.write("WARNING: no *.task.xml files found — nothing to check.\n")
         return 0
 

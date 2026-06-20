@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,7 @@ from execution.verify_cron_registration import (
     _extract_next_run_time,  # pyright: ignore[reportPrivateUsage]
     _parse_xml,  # pyright: ignore[reportPrivateUsage]
     compare,
+    main,
 )
 
 _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
@@ -74,10 +76,27 @@ def test_parse_xml_missing_uri_returns_none(tmp_path: Path) -> None:
     assert _parse_xml(p) is None
 
 
-def test_parse_xml_bad_encoding_returns_none(tmp_path: Path) -> None:
+def test_parse_xml_bad_content_raises(tmp_path: Path) -> None:
+    # An unparseable task XML is a HARD failure — _parse_xml must raise, not
+    # swallow it and return None (which silently dropped the file from the audit).
     p = tmp_path / "bad.task.xml"
     p.write_bytes(b"this is not xml at all <<<")
-    assert _parse_xml(p) is None
+    with pytest.raises(ET.ParseError):
+        _parse_xml(p)
+
+
+def test_parse_xml_utf8_bytes_declaring_utf16_raises(tmp_path: Path) -> None:
+    # Regression for the exact root-cause bug: UTF-8 bytes whose XML
+    # declaration claims encoding="UTF-16". ET honors the declaration and
+    # raises; this must propagate as a hard failure rather than be skipped.
+    p = tmp_path / "mislabeled.task.xml"
+    p.write_bytes(
+        b'<?xml version="1.0" encoding="UTF-16"?>\r\n'
+        b'<Task version="1.4" xmlns="' + _NS.encode() + b'">'
+        b"<RegistrationInfo><URI>\\earnings-summary\\x</URI></RegistrationInfo></Task>"
+    )
+    with pytest.raises(ET.ParseError):
+        _parse_xml(p)
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +216,6 @@ def test_main_exit_code_zero_all_ok(tmp_path: Path) -> None:
                 "status": "Ready",
             }
         }
-        from execution.verify_cron_registration import main
-
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
     assert rc == 0
 
@@ -207,7 +224,68 @@ def test_main_exit_code_one_on_missing(tmp_path: Path) -> None:
     _write_task_xml(tmp_path / "t.task.xml", r"\earnings-summary\t", "03:00:00")
     with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
         mock_q.return_value = {}
-        from execution.verify_cron_registration import main
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1
 
+
+# ---------------------------------------------------------------------------
+# unparseable / no_uri: a malformed task XML must never be silently skipped
+# ---------------------------------------------------------------------------
+
+
+def _write_mislabeled_utf16(path: Path, uri: str = r"\earnings-summary\x") -> None:
+    """UTF-8 bytes whose declaration claims encoding=UTF-16 (the prod root cause)."""
+    path.write_bytes(
+        b'<?xml version="1.0" encoding="UTF-16"?>\r\n'
+        b'<Task version="1.4" xmlns="' + _NS.encode() + b'">'
+        b"<RegistrationInfo><URI>" + uri.encode() + b"</URI></RegistrationInfo></Task>"
+    )
+
+
+def test_compare_unparseable_is_problem(tmp_path: Path) -> None:
+    _write_mislabeled_utf16(tmp_path / "broken.task.xml")
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {}
+        report, xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert len(report.unparseable) == 1
+    assert "broken.task.xml" in report.unparseable[0]
+    assert xml_tasks == []  # the malformed file is NOT counted as a checked task
+
+
+def test_compare_no_uri_is_problem(tmp_path: Path) -> None:
+    p = tmp_path / "nouri.task.xml"
+    content = f'<?xml version="1.0"?><Task xmlns="{_NS}"><Settings/></Task>'
+    p.write_text(content, encoding="utf-16")
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {}
+        report, _xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert report.no_uri == ["nouri.task.xml"]
+
+
+def test_main_exit_nonzero_on_unparseable(tmp_path: Path) -> None:
+    _write_mislabeled_utf16(tmp_path / "broken.task.xml")
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {}
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1  # malformed file → problem, never a false exit-0
+
+
+def test_main_no_false_allclear_when_unparseable_mixed_with_ok(tmp_path: Path) -> None:
+    # One perfectly-registered task plus one malformed file. The audit must NOT
+    # report "all clear" while ignoring the file it failed to parse.
+    _write_task_xml(tmp_path / "good.task.xml", r"\earnings-summary\good", "03:00:00")
+    _write_mislabeled_utf16(tmp_path / "broken.task.xml")
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {
+            r"\earnings-summary\good".lower(): {
+                "name": r"\earnings-summary\good",
+                "next_run": "6/12/2026 3:00:00 AM",
+                "status": "Ready",
+            }
+        }
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
     assert rc == 1
