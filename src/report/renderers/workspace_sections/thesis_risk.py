@@ -355,7 +355,8 @@ def _thesis_hygiene_panels(
         if tracked_only:
             sub += f" · {len(tracked_only)} awaiting data"
         body.write(
-            '<details class="panel" open id="panel-kpi-ledger"><summary class="panel-head">'
+            '<details class="panel" open id="panel-kpi-ledger" data-persist="kpi-ledger">'
+            '<summary class="panel-head">'
             '<span class="panel-title">KPI ledger detail</span>'
             '<span class="panel-meta">'
             + _xlink_html("valuation", "valuation →")

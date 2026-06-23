@@ -140,6 +140,115 @@ JS = r"""
     });
   });
 
+  // ---- Collapsible persist: <details data-persist="key"> remembers state ---
+  // Open/closed state survives reopen via localStorage (works offline). Silent
+  // no-op when storage is unavailable (some file:// sandboxes).
+  document.querySelectorAll('details[data-persist]').forEach(function (d) {
+    var key = 'ws:det:' + d.getAttribute('data-persist');
+    try {
+      var saved = localStorage.getItem(key);
+      if (saved === 'open') d.open = true;
+      else if (saved === 'closed') d.open = false;
+    } catch (e) {}
+    d.addEventListener('toggle', function () {
+      try { localStorage.setItem(key, d.open ? 'open' : 'closed'); } catch (e) {}
+    });
+  });
+
+  // ---- Keyboard shortcuts: j/k panels · / filter · ? help · Esc -----------
+  function inField(el) {
+    return (
+      !!el &&
+      (el.tagName === 'INPUT' ||
+        el.tagName === 'TEXTAREA' ||
+        el.tagName === 'SELECT' ||
+        el.isContentEditable)
+    );
+  }
+  function visiblePanels() {
+    return Array.prototype.filter.call(document.querySelectorAll('.panel'), function (p) {
+      return p.offsetParent !== null;
+    });
+  }
+  function movePanel(dir) {
+    var panels = visiblePanels();
+    if (!panels.length) return;
+    var idx = -1;
+    for (var i = 0; i < panels.length; i++) {
+      if (panels[i].getBoundingClientRect().top <= 10) idx = i;
+    }
+    var next = Math.max(0, Math.min(panels.length - 1, idx + dir));
+    panels[next].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function focusFilter() {
+    var filters = Array.prototype.filter.call(
+      document.querySelectorAll('.lg-filter'),
+      function (f) {
+        return f.offsetParent !== null;
+      }
+    );
+    if (!filters.length) return false;
+    var pick = filters[0];
+    for (var i = 0; i < filters.length; i++) {
+      if (filters[i].getBoundingClientRect().top > 0) {
+        pick = filters[i];
+        break;
+      }
+    }
+    pick.focus();
+    pick.select();
+    return true;
+  }
+  var helpEl = null;
+  function buildHelp() {
+    if (helpEl) return helpEl;
+    helpEl = document.createElement('div');
+    helpEl.className = 'ws-kbd-help';
+    helpEl.setAttribute('role', 'dialog');
+    helpEl.setAttribute('aria-label', 'Keyboard shortcuts');
+    helpEl.innerHTML =
+      '<div class="ws-kbd-card"><div class="ws-kbd-title">Keyboard shortcuts</div>' +
+      '<dl class="ws-kbd-list">' +
+      '<dt>j / k</dt><dd>next / previous panel</dd>' +
+      '<dt>/</dt><dd>focus the table filter</dd>' +
+      '<dt>?</dt><dd>toggle this help</dd>' +
+      '</dl><div class="ws-kbd-hint">click or ? to close</div></div>';
+    helpEl.addEventListener('click', function () {
+      hideHelp();
+    });
+    document.body.appendChild(helpEl);
+    return helpEl;
+  }
+  function showHelp() {
+    buildHelp().classList.add('is-open');
+  }
+  function hideHelp() {
+    if (helpEl) helpEl.classList.remove('is-open');
+  }
+  function helpOpen() {
+    return !!helpEl && helpEl.classList.contains('is-open');
+  }
+  // NB: Escape is intentionally NOT handled here — CCOverlay owns the single
+  // Escape handler for this document (one-Escape design law). The help overlay
+  // closes on click or a second ? press.
+  document.addEventListener('keydown', function (ev) {
+    if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (inField(document.activeElement)) return;
+    if (ev.key === 'j') {
+      ev.preventDefault();
+      movePanel(1);
+    } else if (ev.key === 'k') {
+      ev.preventDefault();
+      movePanel(-1);
+    } else if (ev.key === '/') {
+      if (focusFilter()) ev.preventDefault();
+    } else if (ev.key === '?') {
+      ev.preventDefault();
+      if (helpOpen()) hideHelp();
+      else showHelp();
+    }
+  });
+
   // ---- Initial highlight: ensure the first top tab is active if none set --
   var anyActive = document.querySelector('.tabs .tab.active');
   if (!anyActive && topTabs.length) topTabs[0].click();

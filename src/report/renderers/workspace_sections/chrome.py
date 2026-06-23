@@ -142,7 +142,8 @@ def _open_items_strip(body: StringIO, notes: list[AnalystNoteRow]) -> None:
     if not notes:
         return
     body.write(
-        '<details class="panel l1-open-items" open><summary class="panel-head">'
+        '<details class="panel l1-open-items" open data-persist="open-items">'
+        '<summary class="panel-head">'
         '<span class="panel-title">Open watch-items</span>'
         '<span class="panel-meta"><span class="panel-sub">'
         f"{len(notes)} open · from the analyst journal</span></span></summary>"
