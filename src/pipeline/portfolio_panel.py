@@ -73,6 +73,7 @@ from portfolio_risk_snapshot_store import (
     write_snapshot,
 )
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
+from ui import living_grid as lg
 from ui.controls import ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
@@ -542,7 +543,7 @@ def _performance_section(
     )
     head = (
         '<section class="panel"><div class="pf-perf-head">'
-        '<h2>Performance vs benchmarks'
+        "<h2>Performance vs benchmarks"
         f'<span class="pf-info" tabindex="0" role="note" aria-label="{escape(note)}">i'
         f'<span class="pf-info-pop">{escape(note)}</span></span></h2>'
         f"{_window_bar(window)}</div>"
@@ -806,7 +807,7 @@ def _alpha_section(pa: PositionAlpha) -> str:
     if not pa.rows:
         return f'{head}<p class="muted">Tracker returned no positions for the window.</p></section>'
     show_policy = pa.has_policy
-    policy_th = f'<th class="num">{_ALPHA} vs policy</th>' if show_policy else ""
+    policy_th = lg.th(f"{_ALPHA} vs policy", "policy", "num") if show_policy else ""
     rows: list[str] = []
     for r in sorted(pa.rows, key=lambda x: (x.alpha is None, -(x.alpha or 0.0))):
         ticker = r.ticker or "—"
@@ -821,8 +822,23 @@ def _alpha_section(pa: PositionAlpha) -> str:
                 '— row is approximate">⚠</span>'
             )
         policy_td = _money_cell(r.alpha_vs_policy, colored=True) if show_policy else ""
+        # Living-grid hooks: data-text drives the filter box; the per-column
+        # data-* carry the RAW sort keys so the client re-orders without
+        # re-parsing the formatted cells (progressive enhancement — the rows
+        # already arrive alpha-sorted from the server above).
+        data = (
+            lg.data_text(f"{r.ticker or ''} {r.name or ''}")
+            + lg.data_text_key("ticker", r.ticker)
+            + lg.data_text_key("name", r.name)
+            + lg.data_num("value", r.value_at_end)
+            + lg.data_num("pl", r.actual_pl)
+            + lg.data_num("spy", r.spy_counterfactual_pl)
+            + lg.data_num("alpha", r.alpha)
+            + lg.data_num("qqq", r.alpha_vs_qqq)
+            + (lg.data_num("policy", r.alpha_vs_policy) if show_policy else "")
+        )
         rows.append(
-            "<tr>"
+            f"<tr{data}>"
             f"<td>{ticker_cell}</td>"
             f"<td>{escape(r.name or '—')}</td>"
             f"{_money_cell(r.value_at_end)}"
@@ -842,16 +858,27 @@ def _alpha_section(pa: PositionAlpha) -> str:
         f"{_money_cell(pa.total_alpha_vs_qqq, colored=True)}"
         f"{policy_total}</tr>"
     )
+    headers = (
+        lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Name", "name", "text", num=False)
+        + lg.th("Value", "value", "num")
+        + lg.th("P&amp;L", "pl", "num")
+        + lg.th("SPY P&amp;L", "spy", "num")
+        + lg.th(f"{_ALPHA} vs SPY", "alpha", "num")
+        + lg.th(f"{_ALPHA} vs QQQ", "qqq", "num")
+        + policy_th
+    )
     return (
-        f"{head}"
-        '<table class="alpha-table"><thead><tr>'
-        "<th>Ticker</th><th>Name</th>"
-        '<th class="num">Value</th><th class="num">P&amp;L</th>'
-        f'<th class="num">SPY P&amp;L</th><th class="num">{_ALPHA} vs SPY</th>'
-        f'<th class="num">{_ALPHA} vs QQQ</th>{policy_th}'
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        f"</tbody><tfoot>{totals}</tfoot></table></section>"
+        head
+        + lg.grid_open()
+        + lg.filter_bar(len(pa.rows), noun="positions")
+        + '<table class="alpha-table"><thead><tr>'
+        + headers
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + f"</tbody><tfoot>{totals}</tfoot></table>"
+        + lg.grid_close()
+        + "</section>"
     )
 
 
@@ -1946,7 +1973,7 @@ def _summary_strip(live: LivePortfolio) -> str:
 
 def _positions_table(live: LivePortfolio) -> str:
     rows: list[str] = []
-    # Largest position first.
+    # Largest position first (the client can re-sort; this is the default view).
     for p in sorted(live.positions, key=lambda x: -(x.market_value or 0.0)):
         treatments = sorted({lot.tax_treatment for lot in p.accounts})
         treat_str = ", ".join(_TAX_LABELS.get(t, t) for t in treatments) or "—"
@@ -1963,8 +1990,18 @@ def _positions_table(live: LivePortfolio) -> str:
             if p.ticker
             else "—"
         )
+        data = (
+            lg.data_text(f"{p.ticker or ''} {p.name or ''} {treat_str}")
+            + lg.data_text_key("ticker", p.ticker)
+            + lg.data_text_key("name", p.name)
+            + lg.data_text_key("treat", treat_str)
+            + lg.data_num("shares", p.quantity)
+            + lg.data_num("mv", p.market_value)
+            + lg.data_num("pct", p.percent_of_portfolio)
+            + lg.data_num("pnl", p.unrealized_pnl)
+        )
         rows.append(
-            "<tr>"
+            f"<tr{data}>"
             f"<td>{ticker_cell}</td>"
             f"<td>{escape(p.name or '—')}</td>"
             f'<td class="num">{p.quantity:,.2f}</td>'
@@ -1974,15 +2011,24 @@ def _positions_table(live: LivePortfolio) -> str:
             f"<td>{escape(treat_str)}</td>"
             "</tr>"
         )
+    headers = (
+        lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Name", "name", "text", num=False)
+        + lg.th("Shares", "shares", "num")
+        + lg.th("Market value", "mv", "num")
+        + lg.th("% of book", "pct", "num")
+        + lg.th("Unrealized P&amp;L", "pnl", "num")
+        + lg.th("Tax treatment", "treat", "text", num=False)
+    )
     return (
-        '<table class="positions-table"><thead><tr>'
-        "<th>Ticker</th><th>Name</th>"
-        '<th class="num">Shares</th><th class="num">Market value</th>'
-        '<th class="num">% of book</th><th class="num">Unrealized P&amp;L</th>'
-        "<th>Tax treatment</th>"
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(live.positions), noun="positions")
+        + '<table class="positions-table"><thead><tr>'
+        + headers
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+        + lg.grid_close()
     )
 
 
@@ -1993,9 +2039,20 @@ def _transactions_section(live: LivePortfolio) -> str:
     for t in live.transactions:
         kind = t.type + (f" · {t.subtype}" if t.subtype else "")
         qty = f"{t.quantity:,.2f}" if t.quantity is not None else "—"
+        iso_date = t.date[:10]
+        # data-date is the ISO date — text-sorts chronologically.
+        data = (
+            lg.data_text(f"{iso_date} {t.ticker or ''} {kind} {t.account_name}")
+            + lg.data_text_key("date", iso_date)
+            + lg.data_text_key("ticker", t.ticker)
+            + lg.data_text_key("type", kind)
+            + lg.data_text_key("account", t.account_name)
+            + lg.data_num("qty", t.quantity)
+            + lg.data_num("amount", t.amount)
+        )
         rows.append(
-            "<tr>"
-            f"<td>{escape(t.date[:10])}</td>"
+            f"<tr{data}>"
+            f"<td>{escape(iso_date)}</td>"
             f"<td>{escape(t.ticker or '—')}</td>"
             f"<td>{escape(kind)}</td>"
             f'<td class="num">{qty}</td>'
@@ -2003,15 +2060,26 @@ def _transactions_section(live: LivePortfolio) -> str:
             f"<td>{escape(t.account_name)}</td>"
             "</tr>"
         )
+    headers = (
+        lg.th("Date", "date", "text", num=False)
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Type", "type", "text", num=False)
+        + lg.th("Shares", "qty", "num")
+        + lg.th("Amount", "amount", "num")
+        + lg.th("Account", "account", "text", num=False)
+    )
     return (
         '<section class="panel"><h2>Latest transactions</h2>'
         '<p class="sub">Most recent trades + cashflows across all linked accounts.</p>'
-        '<table class="txn-table"><thead><tr>'
-        "<th>Date</th><th>Ticker</th><th>Type</th>"
-        '<th class="num">Shares</th><th class="num">Amount</th><th>Account</th>'
-        "</tr></thead><tbody>"
-        f"{''.join(rows)}"
-        "</tbody></table></section>"
+        + lg.grid_open()
+        + lg.filter_bar(len(live.transactions), noun="transactions")
+        + '<table class="txn-table"><thead><tr>'
+        + headers
+        + "</tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+        + lg.grid_close()
+        + "</section>"
     )
 
 
