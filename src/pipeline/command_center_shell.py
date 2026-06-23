@@ -90,6 +90,7 @@ from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
+from ui import living_grid
 from ui.controls import controls_css, panel_section_title
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
@@ -2280,12 +2281,13 @@ _DOC_HEAD = (
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>{css}</style>
+{alpine_head}
 </head>
 <body>
 <a class="cc-skip" href="#cc-main">Skip to content</a>
 <div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
 <div id="cc-offline-banner" class="cc-offline-banner" hidden aria-live="polite">Offline — data panels cannot reload until you reconnect</div>
-""".replace("{css}", SHELL_CSS)
+""".replace("{css}", SHELL_CSS).replace("{alpine_head}", living_grid.head_assets())
 )
 
 _DOC_FOOT = "</body></html>"

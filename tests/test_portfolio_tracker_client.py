@@ -603,7 +603,8 @@ def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     assert "Per-position alpha" in html
     assert html.index("research/NU/") < html.index("research/AAPL/")
     assert "pf-total" in html
-    assert "vs policy</th>" in html
+    # The has_policy=True column renders, now as a sortable living-grid header.
+    assert "vs policy" in html and "sortBy('policy','num')" in html
     assert 'class="pf-flag"' in html  # AAPL's incomplete-window marker
     assert "<!doctype" not in html.lower()
 

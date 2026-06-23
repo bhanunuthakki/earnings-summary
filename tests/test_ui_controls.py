@@ -421,6 +421,7 @@ REGISTERED: frozenset[str] = frozenset(
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
         "ui/controls.py",
+        "ui/living_grid.py",
         "ui/source_chip.py",
         "ui/tokens.py",
         "viewspec/render.py",
@@ -865,11 +866,13 @@ def test_kit_badge_flags_reinvented_status_pills_only() -> None:
     # FIRES: a hand-rolled filled status pill — including the base+modifier split
     # (the radius is on the base rule, the tone fill on a modifier rule).
     assert scan_surface(
-        "x", ".x-pill { border-radius: var(--radius-full); }\n"
-        ".x-pill.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }"
+        "x",
+        ".x-pill { border-radius: var(--radius-full); }\n"
+        ".x-pill.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }",
     )["kit-badge"] == [".x-pill"]
     assert "kit-badge" in scan_surface(
-        "x", ".foo-badge { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }"
+        "x",
+        ".foo-badge { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }",
     )
     # DOES NOT fire on a tone WASH (not named a badge/pill/chip/tag) …
     assert "kit-badge" not in scan_surface(
