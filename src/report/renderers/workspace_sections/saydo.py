@@ -27,6 +27,7 @@ from report.renderers.workspace_sections._shared import (
     _render_markdown,
 )
 from report.sections.p3_data import SayDoVerdictRow
+from ui import living_grid as lg
 
 __all__ = [
     "_fmt_made_period",
@@ -162,15 +163,17 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
             classes="saydo-verdicts-panel",
         )
     )
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(rows), noun="commitments"))
     body.write(
         '<table class="tbl"><thead><tr>'
-        "<th>Made</th>"
-        "<th>Target period</th>"
-        "<th>KPI</th>"
-        "<th>Promised</th>"
-        "<th>Realized</th>"
-        "<th>Verdict</th>"
-        "</tr></thead><tbody>"
+        + lg.th("Made", "made", "text", num=False)
+        + lg.th("Target period", "target", "text", num=False)
+        + lg.th("KPI", "kpi", "text", num=False)
+        + "<th>Promised</th>"
+        + "<th>Realized</th>"
+        + lg.th("Verdict", "verdict", "text", num=False)
+        + "</tr></thead><tbody>"
     )
     comp_map = {"ge": "≥", "gt": ">", "le": "≤", "lt": "<", "eq": "≈"}
     for r in rows:
@@ -180,15 +183,28 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         else:
             realized = '<span class="muted">—</span>'
         outcome = r.outcome if r.outcome else "no_data"
-        body.write("<tr>")
-        body.write(f'<td class="mono xsmall">{_esc(_fmt_made_period(r.period_made))}</td>')
-        body.write(f'<td class="mono xsmall">{_esc(_fmt_made_period(r.period_target))}</td>')
+        made_label = _fmt_made_period(r.period_made)
+        target_label = _fmt_made_period(r.period_target)
+        # data-made/-target are ISO dates so the text sort orders chronologically
+        # (the displayed cell is the quarter label).
+        data = (
+            lg.data_text(f"{made_label} {r.kpi_name} {promise} {outcome}")
+            + lg.data_text_key("made", r.period_made.isoformat())
+            + lg.data_text_key("target", r.period_target.isoformat())
+            + lg.data_text_key("kpi", r.kpi_name)
+            + lg.data_text_key("verdict", outcome)
+        )
+        body.write(f"<tr{data}>")
+        body.write(f'<td class="mono xsmall">{_esc(made_label)}</td>')
+        body.write(f'<td class="mono xsmall">{_esc(target_label)}</td>')
         body.write(f'<td class="saydo-metric">{_esc(r.kpi_name)}</td>')
         body.write(f'<td class="saydo-guide">{_esc(promise)}</td>')
         body.write(f'<td class="saydo-actual"><strong>{realized}</strong></td>')
         body.write(f"<td>{_outcome_pill(outcome)}</td>")
         body.write("</tr>")
-    body.write("</tbody></table></div>")
+    body.write("</tbody></table>")
+    body.write(lg.grid_close())
+    body.write("</div>")
 
 
 def _fmt_made_period(dt: datetime) -> str:

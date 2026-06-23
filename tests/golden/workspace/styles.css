@@ -1929,6 +1929,22 @@ ul.flag-list li.flag-positive {
   .tabs, .subtabs { overflow-x: auto; }
 }
 
+/* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles,
+   Esc / click closes). Token-only so it tracks the active theme. */
+.ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none;
+  align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent); }
+.ws-kbd-help.is-open { display: flex; }
+.ws-kbd-card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 18px 22px;
+  min-width: 280px; }
+.ws-kbd-title { font-size: var(--fs-body); font-weight: 600; margin-bottom: 10px; }
+.ws-kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px;
+  margin: 0; font-size: var(--fs-caption); }
+.ws-kbd-list dt { font-family: var(--mono); color: var(--accent); }
+.ws-kbd-list dd { margin: 0; color: var(--muted); }
+.ws-kbd-hint { margin-top: 12px; font-size: var(--fs-micro); color: var(--muted); }
+
 
 .cv2-chart { display: block; max-width: 100%; height: auto; font-family: var(--sans, 'Inter', sans-serif); }
 .cv2-title { font-size: 12px; font-weight: 600; fill: #1a1f2e; }
@@ -2361,3 +2377,16 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .dcf-hm-table th { color: var(--muted); font-weight: 600; }
 .dcf-hm-table td.base { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 600; }
 .dcf-hm-axis { font-size: var(--fs-micro); color: var(--muted); }
+
+
+.lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
+.lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans);
+  background: var(--paper); color: var(--fg); border: 1px solid var(--border);
+  border-radius: var(--radius); min-width: 210px; }
+.lg-filter:focus { outline: none; border-color: var(--accent); }
+.lg-count { font-size: var(--fs-caption); }
+th.lg-sortable { cursor: pointer; user-select: none; transition: color var(--transition); }
+th.lg-sortable:hover, th.lg-sortable:focus { color: var(--fg); outline: none; }
+th.lg-sortable.num { text-align: right; }
+.lg-ind { font-family: var(--mono); color: var(--accent); }
+.lg-hide { display: none; }

@@ -311,6 +311,12 @@
 .lens-five_min_reread .lens-body strong { color: var(--fg); }
 .lens-panel .lens-body { padding: 14px 18px 18px; }
 .lens-panel .panel-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
+.lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
+.lg-count { font-size: var(--fs-caption); }
+.lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans); background: var(--paper); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 210px; }
+.lg-filter:focus { outline: none; border-color: var(--accent); }
+.lg-hide { display: none; }
+.lg-ind { font-family: var(--mono); color: var(--accent); }
 .logo { font-family: var(--mono); font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em; color: var(--fg); }
 .logo-sm { color: var(--muted-2); margin: 0 2px; }
 .meta-pip { color: var(--muted-2); }
@@ -586,6 +592,13 @@
 .valuation-spark { padding: 12px 0 4px; }
 .valuation-spark-axis { display: flex; justify-content: space-between; font-size: var(--fs-caption); color: var(--muted); padding-bottom: 6px; }
 .valuation-verdict { margin-left: auto; padding: 6px 10px; background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius); font-size: var(--fs-caption); color: var(--ink); font-style: italic; }
+.ws-kbd-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 18px 22px; min-width: 280px; }
+.ws-kbd-help.is-open { display: flex; }
+.ws-kbd-hint { margin-top: 12px; font-size: var(--fs-micro); color: var(--muted); }
+.ws-kbd-list dd { margin: 0; color: var(--muted); }
+.ws-kbd-list dt { font-family: var(--mono); color: var(--accent); }
+.ws-kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0; font-size: var(--fs-caption); }
+.ws-kbd-title { font-size: var(--fs-body); font-weight: 600; margin-bottom: 10px; }
 .xlink-flash { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* ---- button hierarchy: primary (one per view) / quiet / danger ---- */ .k-btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: var(--fs-body); font-weight: 600; line-height: 1.3; border-radius: var(--radius); padding: 6px 14px; cursor: pointer; border: 1px solid transparent; background: transparent; color: var(--fg); white-space: nowrap; transition: color var(--transition), border-color var(--transition), background var(--transition), filter var(--transition); }
 /* ---- chips: ONE badge shape (radius-full · micro · uppercase) ---- */ .k-chip { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-micro); font-weight: 600; line-height: 1.5; text-transform: uppercase; letter-spacing: 0.05em; border-radius: var(--radius-full); padding: 1px 8px; border: 1px solid var(--border); color: var(--muted); background: transparent; white-space: nowrap; }
@@ -639,6 +652,7 @@
 /* Free-text highlight (the underlined excerpt the user commented on). Open = warn-tinted, addressed = ok-tinted, both routed through the status tokens via color-mix (no raw rgba). */ mark.cmt-highlight { background: color-mix(in srgb, var(--warn) 18%, transparent); border-bottom: 2px solid var(--warn); color: inherit; cursor: pointer; padding: 0 1px; border-radius: 1px; transition: background 0.12s; }
 /* Health pill — server reachability indicator in the sidebar header. Rides the kit's .k-pill (+ k-pill-ok online / k-pill-bad offline / neutral bare while the first poll is in flight, tone set in renderHealthPill); layout + mono-micro refine only here. */ .cmt-health-pill { margin: 2px 6px 0 6px; font-size: var(--fs-micro); font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.04em; }
 /* Hero quote (Earnings tab) */ .hero-quote { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: 28px 32px 26px; border-radius: var(--radius); display: flex; gap: 22px; position: relative; }
+/* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles, Esc / click closes). Token-only so it tracks the active theme. */ .ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; background: color-mix(in srgb, var(--bg) 72%, transparent); }
 /* Misc tiny helpers used by the higher-density panels. */ .xsmall { font-size: var(--fs-micro); line-height: 1.4; }
 /* Narrow/tablet: KPI strip drops from 4 to 2 columns; multi-column grids collapse; identity cluster wraps. */ @media (max-width: 900px) { .kpi-strip { grid-template-columns: repeat(2, 1fr); } .grid-2col, .grid-fin, .grid-thesis-top, .grid-thesis-bottom { grid-template-columns: 1fr; } .identity-right { flex-wrap: wrap; } }
 /* News tab: per-section sub-panels use a slightly tighter grid than the page-level news strip used to. */ .news-grid-tab { padding: 12px var(--panel-pad-x) 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
@@ -717,6 +731,9 @@ select:focus-visible, textarea:focus-visible, input:focus-visible { outline: non
 select:not([multiple]) { appearance: none; -webkit-appearance: none; cursor: pointer; background-image: var(--k-chevron); background-repeat: no-repeat; background-position: right 9px center; background-size: 14px; padding-right: 28px; }
 select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
 select[multiple] { padding: 4px; }
+th.lg-sortable { cursor: pointer; user-select: none; transition: color var(--transition); }
+th.lg-sortable.num { text-align: right; }
+th.lg-sortable:hover, th.lg-sortable:focus { color: var(--fg); outline: none; }
 ul.flag-list li { padding: 8px 12px; border-left: 3px solid; background: var(--paper); font-size: 13px; line-height: 1.5; }
 ul.flag-list li.flag-positive { border-left-color: var(--ok); background: color-mix(in srgb, var(--ok) 6%, transparent); }
 ul.flag-list li.flag-warn { border-left-color: var(--warn); }

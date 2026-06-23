@@ -298,19 +298,33 @@
 <span class="panel-sub">2 commitments · 1 graded</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter commitments…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter commitments…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> commitments</span>
+</div>
 <table class="tbl">
 <thead>
 <tr>
-<th>Made</th>
-<th>Target period</th>
-<th>KPI</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('made','text')" @keydown.enter.prevent="sortBy('made','text')" :aria-sort="ariaSort('made')">Made<span class="lg-ind" x-text="arrow('made')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('target','text')" @keydown.enter.prevent="sortBy('target','text')" :aria-sort="ariaSort('target')">Target period<span class="lg-ind" x-text="arrow('target')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('kpi','text')" @keydown.enter.prevent="sortBy('kpi','text')" :aria-sort="ariaSort('kpi')">KPI<span class="lg-ind" x-text="arrow('kpi')">
+</span>
+</th>
 <th>Promised</th>
 <th>Realized</th>
-<th>Verdict</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('verdict','text')" @keydown.enter.prevent="sortBy('verdict','text')" :aria-sort="ariaSort('verdict')">Verdict<span class="lg-ind" x-text="arrow('verdict')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="q4 ’25 revenue gte 1760 usd millions met" data-made="2025-11-05t00:00:00" data-target="2026-03-31t00:00:00" data-kpi="revenue" data-verdict="met">
 <td class="mono xsmall">Q4 ’25</td>
 <td class="mono xsmall">Q1 ’26</td>
 <td class="saydo-metric">Revenue</td>
@@ -322,7 +336,7 @@
 <span class="k-chip k-chip-mono">MET</span>
 </td>
 </tr>
-<tr>
+<tr data-text="q1 ’26 operating margin gte 24 % no_data" data-made="2026-02-04t00:00:00" data-target="2026-06-30t00:00:00" data-kpi="operating margin" data-verdict="no_data">
 <td class="mono xsmall">Q1 ’26</td>
 <td class="mono xsmall">Q2 ’26</td>
 <td class="saydo-metric">Operating margin</td>
@@ -338,6 +352,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 </div>

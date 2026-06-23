@@ -171,8 +171,14 @@ from report.renderers.workspace_sections.thesis_risk import (
 )
 from report.renderers.workspace_sections.valuation import _TIMES, _valuation_tab
 from report.renderers.workspace_styles import CSS
+from ui.living_grid import head_assets as _living_grid_head_assets
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.tokens import FAVICON_LINK
+
+# Alpine + the livingGrid factory + grid CSS, inlined once into the report head.
+# Self-contained (no asset fetches) so the report's living grids work offline
+# (file://) — the same module the live shell loads (Wave 1).
+_LIVING_GRID_HEAD = _living_grid_head_assets()
 
 __all__ = [
     "_LENS_LABELS",
@@ -369,6 +375,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <style>{COMMENTS_CSS}</style>
 <style>{CHAT_CSS}</style>
 <style>{DCF_CSS}</style>
+{_LIVING_GRID_HEAD}
 </head>
 <body>
 {body}

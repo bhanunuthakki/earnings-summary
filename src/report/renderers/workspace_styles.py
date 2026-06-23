@@ -1632,5 +1632,21 @@ ul.flag-list li.flag-positive {
   :root { --pad-x: 12px; }
   .tabs, .subtabs { overflow-x: auto; }
 }
+
+/* Keyboard-shortcut help overlay (JS-injected by workspace_script; ? toggles,
+   Esc / click closes). Token-only so it tracks the active theme. */
+.ws-kbd-help { position: fixed; inset: 0; z-index: 60; display: none;
+  align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg) 72%, transparent); }
+.ws-kbd-help.is-open { display: flex; }
+.ws-kbd-card { background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 18px 22px;
+  min-width: 280px; }
+.ws-kbd-title { font-size: var(--fs-body); font-weight: 600; margin-bottom: 10px; }
+.ws-kbd-list { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px;
+  margin: 0; font-size: var(--fs-caption); }
+.ws-kbd-list dt { font-family: var(--mono); color: var(--accent); }
+.ws-kbd-list dd { margin: 0; color: var(--muted); }
+.ws-kbd-hint { margin-top: 12px; font-size: var(--fs-micro); color: var(--muted); }
 """
 )

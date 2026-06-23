@@ -13,6 +13,7 @@ from io import StringIO
 from report.models import EvaluationSnapshotSection, SectionStatus
 from report.renderers.workspace_sections._shared import _esc, _missing_panel, _panel_head
 from report.sections.p3_data import PeerCompRow
+from ui import living_grid as lg
 
 __all__ = [
     "_eval_cell",
@@ -95,22 +96,33 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
             ),
         )
     )
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(rows), noun="peers"))
     body.write(
         '<table class="tbl tbl-nowrap"><thead><tr>'
-        "<th>Ticker</th>"
-        "<th>Name</th>"
-        "<th>Why</th>"
-        '<th class="num">Market cap</th>'
-        '<th class="num">Revenue TTM</th>'
-        '<th class="num">Net margin TTM</th>'
-        '<th class="num">ROIC TTM</th>'
-        "</tr></thead><tbody>"
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Name", "name", "text", num=False)
+        + "<th>Why</th>"
+        + lg.th("Market cap", "mcap", "num")
+        + lg.th("Revenue TTM", "rev", "num")
+        + lg.th("Net margin TTM", "margin", "num")
+        + lg.th("ROIC TTM", "roic", "num")
+        + "</tr></thead><tbody>"
     )
     for r in rows:
-        body.write("<tr>")
+        why = " · ".join(r.match_reasons) if r.match_reasons else "—"
+        data = (
+            lg.data_text(f"{r.peer_ticker} {r.peer_name or ''} {why}")
+            + lg.data_text_key("ticker", r.peer_ticker)
+            + lg.data_text_key("name", r.peer_name)
+            + lg.data_num("mcap", r.market_cap_usd)
+            + lg.data_num("rev", r.revenue_ttm_usd)
+            + lg.data_num("margin", r.net_margin_ttm)
+            + lg.data_num("roic", r.roic_ttm)
+        )
+        body.write(f"<tr{data}>")
         body.write(f'<td><strong class="mono">{_esc(r.peer_ticker)}</strong></td>')
         body.write(f"<td>{_esc(r.peer_name or '—')}</td>")
-        why = " · ".join(r.match_reasons) if r.match_reasons else "—"
         body.write(f'<td class="muted xsmall">{_esc(why)}</td>')
         body.write(
             f'<td class="num">{_fmt_usd_compact(r.market_cap_usd)}</td>'
@@ -133,7 +145,9 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
             else '<td class="num muted">—</td>'
         )
         body.write("</tr>")
-    body.write("</tbody></table></div>")
+    body.write("</tbody></table>")
+    body.write(lg.grid_close())
+    body.write("</div>")
 
 
 def _eval_cell(v: float | None, unit: str, digits: int) -> str:
