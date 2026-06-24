@@ -39,6 +39,7 @@ from report.renderers.workspace_sections._shared import (
 )
 from report.renderers.workspace_sections.valuation import _TIMES
 from report.sections.p3_data import DecisionHistorySummary, MacroSensitivityRow
+from ui import living_grid as lg
 from ui.controls import fact_anchor_attrs
 
 __all__ = [
@@ -177,13 +178,15 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
             "Decision ledger",
             sub=f"{len(history.rows)} row{'s' if len(history.rows) != 1 else ''} · newest first",
         )
+        + lg.grid_open()
+        + lg.filter_bar(len(history.rows), noun="decisions")
         + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-        "<th>Made</th>"
-        "<th>Kind</th>"
-        "<th>Conviction</th>"
-        '<th class="num">Outcome %</th>'
-        "<th>Rationale</th>"
-        "</tr></thead><tbody>"
+        + lg.th("Made", "made", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + lg.th("Conviction", "conviction", "text", num=False)
+        + lg.th("Outcome %", "outcome", "num")
+        + "<th>Rationale</th>"
+        + "</tr></thead><tbody>"
     )
     for r in history.rows:
         if r.outcome_pct is not None:
@@ -199,14 +202,25 @@ def _decisions_tab(body: StringIO, history: DecisionHistorySummary) -> None:
         else:
             outcome_cell = '<td class="num muted">—</td>'
         rationale = r.rationale_excerpt or "—"
-        body.write("<tr>")
-        body.write(f'<td class="mono xsmall">{_esc(r.made_at.strftime("%Y-%m-%d"))}</td>')
-        body.write(f"<td><strong>{_esc(r.recommendation_kind.upper())}</strong></td>")
+        made = r.made_at.strftime("%Y-%m-%d")
+        kind = r.recommendation_kind.upper()
+        data = (
+            lg.data_text(f"{made} {kind} {r.conviction or ''} {rationale}")
+            + lg.data_text_key("made", made)
+            + lg.data_text_key("kind", kind)
+            + lg.data_text_key("conviction", r.conviction)
+            + lg.data_num("outcome", r.outcome_pct)
+        )
+        body.write(f"<tr{data}>")
+        body.write(f'<td class="mono xsmall">{_esc(made)}</td>')
+        body.write(f"<td><strong>{_esc(kind)}</strong></td>")
         body.write(f"<td>{_esc(r.conviction or '—')}</td>")
         body.write(outcome_cell)
         body.write(f'<td class="seg-desc">{_esc(rationale)}</td>')
         body.write("</tr>")
-    body.write("</tbody></table></div></div>")
+    body.write("</tbody></table></div>")
+    body.write(lg.grid_close())
+    body.write("</div>")
     body.write("</div>")
 
 
@@ -362,15 +376,23 @@ def _thesis_hygiene_panels(
             + _xlink_html("valuation", "valuation →")
             + f'<span class="panel-sub">{_esc(sub)}</span></span>'
             "</summary>"
-            '<div class="table-scroll"><table class="tbl tbl-nowrap kpi-ledger-table"><thead><tr>'
-            "<th>KPI</th><th>Tier</th><th>Unit</th>"
-            '<th class="num">Latest</th><th>Trend</th>'
-            "<th>Status</th><th>Break condition</th><th>Source</th>"
-            "</tr></thead><tbody>"
+            + lg.grid_open()
+            + lg.filter_bar(len(shown), noun="KPIs")
+            + '<div class="table-scroll"><table class="tbl tbl-nowrap kpi-ledger-table"><thead><tr>'
+            + "<th>KPI</th>"
+            + lg.th("Tier", "tier", "text", num=False)
+            + lg.th("Unit", "unit", "text", num=False)
+            + lg.th("Latest", "latest", "num")
+            + "<th>Trend</th>"
+            + lg.th("Status", "status", "text", num=False)
+            + lg.th("Break condition", "break_cond", "text", num=False)
+            + lg.th("Source", "source", "text", num=False)
+            + "</tr></thead><tbody>"
         )
         for r in shown:
             _kpi_ledger_row(body, r, report_date, ticker=ticker)
         body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
         if tracked_only:
             names = ", ".join(_esc(clean_kpi_name(r.name)) for r in tracked_only)
             body.write(
@@ -414,8 +436,10 @@ def _kpi_ledger_row(
     # flag when the latest fact predates the report by more than ~2 quarters so
     # a year-old number doesn't read as current.
     stale = False
+    latest_num: float | None = None
     if r.history:
         period_label, value = r.history[-1]
+        latest_num = value
         latest_text = format_ledger_value(value, r.unit, r.name) if value is not None else "—"
         latest_html = (
             f'{_esc(latest_text)} <span class="muted xsmall">{_esc(period_label[:7])}</span>'
@@ -462,9 +486,21 @@ def _kpi_ledger_row(
     if r.definition:
         name_html += f'<div class="ledger-def muted xsmall">{_esc(r.definition)}</div>'
 
+    lg_data = (
+        lg.data_text(
+            f"{clean_kpi_name(r.name)} {r.tier} {r.unit or ''} "
+            f"{r.current_status} {r.break_condition or ''} {r.source_hint or ''}"
+        )
+        + lg.data_text_key("tier", r.tier.replace("_", " "))
+        + lg.data_text_key("unit", r.unit)
+        + lg.data_text_key("status", r.current_status)
+        + lg.data_text_key("break_cond", r.break_condition)
+        + lg.data_text_key("source", r.source_hint)
+        + lg.data_num("latest", latest_num)
+    )
     body.write(
         f'<tr class="{row_cls}" data-commentable="true" data-anchor-type="kpi_ledger_row" '
-        f'{fact_anchor_attrs(fact_ref, r.name)} data-anchor-tab="thesis">'
+        f'{fact_anchor_attrs(fact_ref, r.name)} data-anchor-tab="thesis"{lg_data}>'
         f"<td>{name_html}</td>"
         f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
         f"<td>{_esc(r.unit or '')}</td>"

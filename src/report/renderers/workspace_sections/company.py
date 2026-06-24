@@ -40,6 +40,7 @@ from report.sections.p3_data import (
     PeerCompRow,
     StrategicTargetRow,
 )
+from ui import living_grid as lg
 
 __all__ = [
     "_company_tab",
@@ -286,17 +287,26 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
             classes="strategic-targets-panel",
         )
     )
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(rows), noun="targets"))
     body.write(
         '<table class="tbl"><thead><tr>'
-        "<th>Target</th>"
-        '<th class="num">Value</th>'
-        "<th>Period</th>"
-        '<th class="num">Conf.</th>'
-        "<th>Source excerpt</th>"
-        "</tr></thead><tbody>"
+        + lg.th("Target", "target", "text", num=False)
+        + lg.th("Value", "value", "num")
+        + lg.th("Period", "period", "text", num=False)
+        + lg.th("Conf.", "conf", "num")
+        + "<th>Source excerpt</th>"
+        + "</tr></thead><tbody>"
     )
     for r in rows:
-        body.write("<tr>")
+        data = (
+            lg.data_text(f"{r.target_kind} {r.target_period} {r.narrative_excerpt}")
+            + lg.data_text_key("target", r.target_kind)
+            + lg.data_text_key("period", r.target_period)
+            + lg.data_num("value", r.target_value)
+            + lg.data_num("conf", r.confidence)
+        )
+        body.write(f"<tr{data}>")
         body.write(f"<td><strong>{_esc(r.target_kind)}</strong></td>")
         if r.target_value is not None:
             cur = f"{r.target_currency} " if r.target_currency else ""
@@ -310,7 +320,9 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
         body.write(f'<td class="num">{r.confidence * 100:.0f}%</td>')
         body.write(f'<td class="seg-desc"><em>&ldquo;{_esc(r.narrative_excerpt)}&rdquo;</em></td>')
         body.write("</tr>")
-    body.write("</tbody></table></div>")
+    body.write("</tbody></table>")
+    body.write(lg.grid_close())
+    body.write("</div>")
 
 
 def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrationRow]) -> None:
@@ -338,13 +350,15 @@ def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrati
             classes="customer-concentration-panel",
         )
     )
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(rows), noun="customers"))
     body.write(
         '<table class="tbl"><thead><tr>'
-        "<th>Period</th>"
-        "<th>Customer</th>"
-        '<th class="num">% of revenue</th>'
-        '<th class="num">Revenue</th>'
-        "</tr></thead><tbody>"
+        + lg.th("Period", "period", "text", num=False)
+        + lg.th("Customer", "customer", "text", num=False)
+        + lg.th("% of revenue", "pct", "num")
+        + lg.th("Revenue", "revenue", "num")
+        + "</tr></thead><tbody>"
     )
     for r in rows:
         period = f"{r.fiscal_period} {r.fiscal_period_type}"
@@ -356,7 +370,14 @@ def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrati
             rev_cell = f"{r.revenue_currency} {r.revenue_amount:,.0f}"
         else:
             rev_cell = '<span class="muted">—</span>'
-        body.write("<tr>")
+        data = (
+            lg.data_text(f"{period} {r.customer_label}")
+            + lg.data_text_key("period", period)
+            + lg.data_text_key("customer", r.customer_label)
+            + lg.data_num("pct", share_pct)
+            + lg.data_num("revenue", r.revenue_amount)
+        )
+        body.write(f"<tr{data}>")
         body.write(f'<td class="mono xsmall">{_esc(period)}</td>')
         body.write(f"<td><strong>{_esc(r.customer_label)}</strong></td>")
         body.write(
@@ -365,7 +386,9 @@ def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrati
         )
         body.write(f'<td class="num">{rev_cell}</td>')
         body.write("</tr>")
-    body.write("</tbody></table></div>")
+    body.write("</tbody></table>")
+    body.write(lg.grid_close())
+    body.write("</div>")
 
 
 def _lease_ladder_panel(body: StringIO, rows: list[LeaseLadderRow]) -> None:
