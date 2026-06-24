@@ -88,6 +88,37 @@ TIME_SENSITIVE_ENDPOINTS: set[str] = {
     "historical-market-capitalization",
 }
 
+# Under --skip-existing we normally skip any endpoint already 'ok'. But the
+# TIME_SENSITIVE_ENDPOINTS above carry an as-of-today value (current price,
+# market cap, DCF, forward consensus, ratings) that goes stale — skipping them on
+# a name whose statements are already cached leaves the brief showing a weeks-old
+# price (the "stale profile" trap: a name promoted from index_member keeps its
+# last monthly profile snapshot, so §1 + the evaluation "Numbers at a glance"
+# panel mis-state price/market-cap/valuation). So those endpoints are re-fetched
+# once their cached row ages past this TTL, which matches the daily snapshot
+# cadence for active names. Statements (NOT in the set) keep skipping when 'ok' —
+# they only change at earnings and re-fetching them burns request volume.
+_SKIP_EXISTING_TTL_DAYS = 1
+
+
+def _snapshot_is_stale(
+    last_pulled: str | None,
+    *,
+    ttl_days: int = _SKIP_EXISTING_TTL_DAYS,
+    now: datetime | None = None,
+) -> bool:
+    """True if a time-sensitive endpoint's cached row is older than ``ttl_days``
+    (or has a missing / unparseable ``last_pulled``). Only meaningful for
+    endpoints in TIME_SENSITIVE_ENDPOINTS — callers gate on membership first."""
+    if not last_pulled:
+        return True
+    try:
+        pulled = datetime.fromisoformat(last_pulled)
+    except ValueError:
+        return True
+    return ((now or datetime.now()) - pulled) >= timedelta(days=ttl_days)
+
+
 # Snapshot cadence by list_type. Anything not present here defaults to monthly.
 # Active-universe names (portfolio/watchlist/evaluation) get daily history;
 # index members are sampled monthly to keep snapshot drift bounded across
@@ -765,14 +796,17 @@ def run_ticker(
         conn = portfolio_db.get_connection()
         cur = conn.cursor()
         cur.execute(
-            """SELECT endpoint, period FROM fmp_endpoint_status
+            """SELECT endpoint, period, last_pulled FROM fmp_endpoint_status
                        WHERE ticker = ? AND status = 'ok'""",
             (ticker,),
         )
-        already_ok = {(r["endpoint"], r["period"]) for r in cur.fetchall()}
+        # Map (endpoint, period) -> last_pulled so time-sensitive endpoints can be
+        # re-fetched once their cached snapshot is stale (see _snapshot_is_stale);
+        # everything else still skips on a plain 'ok'.
+        already_ok = {(r["endpoint"], r["period"]): r["last_pulled"] for r in cur.fetchall()}
         conn.close()
     else:
-        already_ok = set()
+        already_ok = {}
 
     # Accumulate fmp_endpoint_status upserts and flush once at end-of-ticker.
     # 57 individual commits cost ~1s/ticker on Windows; one batch commit is ~50ms.
@@ -788,7 +822,10 @@ def run_ticker(
         period = cast("str", job["period"])
         suffix = cast("str", job["suffix"])
 
-        if (endpoint, period) in already_ok:
+        if (endpoint, period) in already_ok and not (
+            endpoint in TIME_SENSITIVE_ENDPOINTS
+            and _snapshot_is_stale(already_ok[(endpoint, period)])
+        ):
             summary["skipped"] += 1
             src_calls.append(
                 source_calls_log.PendingSourceCall(
@@ -1239,7 +1276,10 @@ def main():
         help="Active universe (portfolio + watchlist + evaluation) + sector/industry",
     )
     ap.add_argument(
-        "--skip-existing", action="store_true", help="Skip endpoints already 'ok' in DB"
+        "--skip-existing",
+        action="store_true",
+        help="Skip endpoints already 'ok' in DB (time-sensitive price/DCF/consensus "
+        "endpoints still re-fetch once their cached snapshot ages past the freshness TTL)",
     )
     ap.add_argument(
         "--force-snapshot",
