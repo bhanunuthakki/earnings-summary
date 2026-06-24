@@ -47,6 +47,7 @@ from alerts.store import (
     list_queued_actions_for_alert,
     list_queued_actions_for_alerts,
     queue_action,
+    uncancel_action,
 )
 
 __all__ = [
@@ -74,4 +75,5 @@ __all__ = [
     "list_queued_actions_for_alert",
     "list_queued_actions_for_alerts",
     "queue_action",
+    "uncancel_action",
 ]

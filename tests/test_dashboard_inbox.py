@@ -413,14 +413,22 @@ def test_plain_note_gets_a_dismiss_chip_but_ledger_does_not(db_path: Path) -> No
     assert "ix-quick" not in ledger_card[:head_end]
 
 
-def test_inbox_js_routes_alert_and_note_dismissals(db_path: Path) -> None:
-    """Rendered-markup contract: the .ix-act handler dispatches by id —
-    data-alert-id to the alert-dismiss route, data-note-id to note-archive,
-    data-action-id to /approve."""
-    assert "/api/alerts/" in INBOX_JS
-    assert "/dismiss" in INBOX_JS
-    assert "data-alert-id" in INBOX_JS
-    assert "data-note-id" in INBOX_JS
+def test_quick_actions_post_by_id_via_htmx() -> None:
+    """Wave 3b: each quick action routes by id via HTMX hx-post (not the old JS
+    fetch dispatcher) — alert-id → alert-dismiss, note-id → note-archive,
+    action-id → /approve — and swaps its .ix-quick span in place."""
+    from dashboard.inbox import _btn_approve, _btn_dismiss_alert, _btn_dismiss_note
+
+    dis_alert = _btn_dismiss_alert(7)
+    assert 'hx-post="/api/alerts/7/dismiss"' in dis_alert
+    assert "data-alert-id" in dis_alert
+    assert 'hx-target="closest .ix-quick"' in dis_alert and 'hx-swap="outerHTML"' in dis_alert
+    dis_note = _btn_dismiss_note(9)
+    assert 'hx-post="/api/notes/9/archive"' in dis_note and "data-note-id" in dis_note
+    approve = _btn_approve(5)
+    assert 'hx-post="/approve"' in approve and '"action_id": "5"' in approve
+    # The old JS fetch dispatcher is gone — HTMX drives the actions now.
+    assert "/api/alerts/" not in INBOX_JS
 
 
 # ----------------------------------------------------------------------------
@@ -480,15 +488,13 @@ def test_stream_carries_surface_and_per_card_timestamps(db_path: Path) -> None:
 
 def test_inbox_js_wires_unread_and_quick_actions() -> None:
     """Rendered-markup contract for the page script: per-surface localStorage
-    keys, the rail badge hook, see-it-to-clear-it (IntersectionObserver), and
-    the POST /approve fetch that updates cards in place."""
+    keys, the rail badge hook, and see-it-to-clear-it (IntersectionObserver).
+    The quick actions themselves are HTMX now (Wave 3b) — the old POST /approve
+    fetch dispatcher is gone (see test_quick_actions_post_by_id_via_htmx)."""
     assert "ix-last-seen:" in INBOX_JS
     assert "data-ix-badge" in INBOX_JS
     assert "IntersectionObserver" in INBOX_JS
     assert "ix-new" in INBOX_JS
-    assert "'/approve'" in INBOX_JS
-    assert "method: 'POST'" in INBOX_JS
-    # Draft cards swap their status chip; alert cards must NOT have theirs
-    # swapped (the chip shows the ALERT's status, which approving a queued
-    # action does not change) — the kind gate is load-bearing.
-    assert "data-kind') === 'draft'" in INBOX_JS
+    # The quick-action fetch dispatcher moved to HTMX hx-post on the buttons
+    # (the advisor-memo dismiss below still POSTs via fetch — a separate path).
+    assert "'/approve'" not in INBOX_JS

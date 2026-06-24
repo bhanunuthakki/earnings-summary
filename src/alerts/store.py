@@ -539,6 +539,25 @@ def cancel_action(action_id: int, db_path: Path | str | None = None) -> QueuedAc
     )
 
 
+def uncancel_action(action_id: int, db_path: Path | str | None = None) -> QueuedActionRow:
+    """Undo a dismiss: transition cancelled → pending and clear ``cancelled_at``.
+    The reverse of :func:`cancel_action`, for the inbox's optimistic-dismiss
+    Undo (Wave 3b). 409 (KeyError) when the action is not currently cancelled —
+    a stale or already-restored card."""
+    conn = _open(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE queued_actions SET status = ?, cancelled_at = NULL WHERE id = ? AND status = ?",
+            (ACTION_STATUS_PENDING, action_id, ACTION_STATUS_CANCELLED),
+        )
+        if cur.rowcount == 0:
+            _raise_transition_conflict(conn, "queued_actions", action_id, ACTION_STATUS_CANCELLED)
+        conn.commit()
+        return _fetch_action(conn, action_id)
+    finally:
+        conn.close()
+
+
 def _transition_action(
     *,
     action_id: int,

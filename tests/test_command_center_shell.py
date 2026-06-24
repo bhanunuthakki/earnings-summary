@@ -38,7 +38,8 @@ def test_overview_panel_is_the_research_cockpit() -> None:
 
 def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     """Inbox v2: the rail header carries the per-surface unread badge and the
-    aside embeds INBOX_JS (unread accents + the hover ✓/✕ POST wiring)."""
+    aside embeds INBOX_JS (unread accents; the hover ✓/✕ actions are HTMX now,
+    Wave 3b)."""
     html = render_overview_panel(
         {"portfolio": [], "evaluation": []},
         coverage={},
@@ -46,7 +47,7 @@ def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     )
     assert 'data-ix-badge="home"' in html
     assert "ix-last-seen:" in html  # INBOX_JS inlined with the rail
-    assert "'/approve'" in html  # quick-action fetch wiring rides along
+    assert "IntersectionObserver" in html  # the unread-accent observer rides along
     # No rail → no badge, no script (the panel renders bare).
     bare = render_overview_panel({"portfolio": [], "evaluation": []}, coverage={})
     assert "data-ix-badge" not in bare
