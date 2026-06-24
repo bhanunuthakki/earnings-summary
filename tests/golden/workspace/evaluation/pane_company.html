@@ -258,18 +258,32 @@
 <span class="panel-sub">2 long-term commitments · from investor decks</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter targets…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter targets…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> targets</span>
+</div>
 <table class="tbl">
 <thead>
 <tr>
-<th>Target</th>
-<th class="num">Value</th>
-<th>Period</th>
-<th class="num">Conf.</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('target','text')" @keydown.enter.prevent="sortBy('target','text')" :aria-sort="ariaSort('target')">Target<span class="lg-ind" x-text="arrow('target')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('value','num')" @keydown.enter.prevent="sortBy('value','num')" :aria-sort="ariaSort('value')">Value<span class="lg-ind" x-text="arrow('value')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('period','text')" @keydown.enter.prevent="sortBy('period','text')" :aria-sort="ariaSort('period')">Period<span class="lg-ind" x-text="arrow('period')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('conf','num')" @keydown.enter.prevent="sortBy('conf','num')" :aria-sort="ariaSort('conf')">Conf.<span class="lg-ind" x-text="arrow('conf')">
+</span>
+</th>
 <th>Source excerpt</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="operating_margin fy2028 reach 40% operating margin by fy2028 at scale." data-target="operating_margin" data-period="fy2028" data-value="40.000000" data-conf="0.900000">
 <td>
 <strong>operating_margin</strong>
 </td>
@@ -281,7 +295,7 @@
 <em>&ldquo;Reach 40% operating margin by FY2028 at scale.&rdquo;</em>
 </td>
 </tr>
-<tr>
+<tr data-text="revenue fy2029 a $10b revenue run-rate by the end of the decade." data-target="revenue" data-period="fy2029" data-value="10.000000" data-conf="0.700000">
 <td>
 <strong>revenue</strong>
 </td>
@@ -296,6 +310,7 @@
 </tbody>
 </table>
 </div>
+</div>
 <div class="panel customer-concentration-panel">
 <div class="panel-head">
 <span class="panel-title">Customer concentration</span>
@@ -304,17 +319,31 @@
 <span class="panel-sub">2 customers ≥ 5% of revenue</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter customers…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter customers…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> customers</span>
+</div>
 <table class="tbl">
 <thead>
 <tr>
-<th>Period</th>
-<th>Customer</th>
-<th class="num">% of revenue</th>
-<th class="num">Revenue</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('period','text')" @keydown.enter.prevent="sortBy('period','text')" :aria-sort="ariaSort('period')">Period<span class="lg-ind" x-text="arrow('period')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('customer','text')" @keydown.enter.prevent="sortBy('customer','text')" :aria-sort="ariaSort('customer')">Customer<span class="lg-ind" x-text="arrow('customer')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('pct','num')" @keydown.enter.prevent="sortBy('pct','num')" :aria-sort="ariaSort('pct')">% of revenue<span class="lg-ind" x-text="arrow('pct')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('revenue','num')" @keydown.enter.prevent="sortBy('revenue','num')" :aria-sort="ariaSort('revenue')">Revenue<span class="lg-ind" x-text="arrow('revenue')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="2025 fy customer a" data-period="2025 fy" data-customer="customer a" data-pct="1100.000000" data-revenue="199.000000">
 <td class="mono xsmall">2025 FY</td>
 <td>
 <strong>Customer A</strong>
@@ -324,7 +353,7 @@
 </td>
 <td class="num">USD 199</td>
 </tr>
-<tr>
+<tr data-text="2025 fy customer b" data-period="2025 fy" data-customer="customer b" data-pct="1020.000000" data-revenue="185.000000">
 <td class="mono xsmall">2025 FY</td>
 <td>
 <strong>Customer B</strong>
@@ -336,6 +365,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 <div class="panel lease-ladder-panel">
 <div class="panel-head">

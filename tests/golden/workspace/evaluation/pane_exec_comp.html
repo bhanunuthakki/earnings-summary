@@ -32,22 +32,44 @@
 <span class="panel-sub">2 executives · USD</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter executives…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter executives…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> executives</span>
+</div>
 <table class="tbl">
 <thead>
 <tr>
-<th>Executive</th>
-<th>Role</th>
-<th class="num">Salary</th>
-<th class="num">Bonus (actual/target)</th>
-<th class="num">Equity grant</th>
-<th class="num">Total granted</th>
-<th class="num">Realized vs granted</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('exec','text')" @keydown.enter.prevent="sortBy('exec','text')" :aria-sort="ariaSort('exec')">Executive<span class="lg-ind" x-text="arrow('exec')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('role','text')" @keydown.enter.prevent="sortBy('role','text')" :aria-sort="ariaSort('role')">Role<span class="lg-ind" x-text="arrow('role')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('salary','num')" @keydown.enter.prevent="sortBy('salary','num')" :aria-sort="ariaSort('salary')">Salary<span class="lg-ind" x-text="arrow('salary')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('bonus','num')" @keydown.enter.prevent="sortBy('bonus','num')" :aria-sort="ariaSort('bonus')">Bonus (actual/target)<span class="lg-ind" x-text="arrow('bonus')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('equity','num')" @keydown.enter.prevent="sortBy('equity','num')" :aria-sort="ariaSort('equity')">Equity grant<span class="lg-ind" x-text="arrow('equity')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('total','num')" @keydown.enter.prevent="sortBy('total','num')" :aria-sort="ariaSort('total')">Total granted<span class="lg-ind" x-text="arrow('total')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('rvg','num')" @keydown.enter.prevent="sortBy('rvg','num')" :aria-sort="ariaSort('rvg')">Realized vs granted<span class="lg-ind" x-text="arrow('rvg')">
+</span>
+</th>
 <th>Performance metrics (weight%)</th>
-<th>KPI match</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('kpimatch','text')" @keydown.enter.prevent="sortBy('kpimatch','text')" :aria-sort="ariaSort('kpimatch')">KPI match<span class="lg-ind" x-text="arrow('kpimatch')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="pat founder ceo revenue growth (50%), nrr (30%), margin (20%)" data-exec="pat founder" data-role="ceo" data-kpimatch="yes" data-salary="850000.000000" data-bonus="1200000.000000" data-equity="12000000.000000" data-total="14050000.000000" data-rvg="-0.302000">
 <td>Pat Founder <span class="ceo-pill k-chip k-chip-mono">CEO</span>
 </td>
 <td>CEO</td>
@@ -60,7 +82,7 @@
 <td>Revenue growth (50%), NRR (30%), margin (20%)</td>
 <td class="kpi-match">✓ matches thesis</td>
 </tr>
-<tr>
+<tr data-text="chris finance cfo revenue growth (40%), fcf (40%), margin (20%)" data-exec="chris finance" data-role="cfo" data-kpimatch="yes" data-salary="560000.000000" data-bonus="520000.000000" data-equity="4200000.000000" data-total="5280000.000000" data-rvg="-0.167000">
 <td>Chris Finance</td>
 <td>CFO</td>
 <td class="num">$560K</td>
@@ -72,11 +94,14 @@
 <td>Revenue growth (40%), FCF (40%), margin (20%)</td>
 <td class="kpi-match">✓ matches thesis</td>
 </tr>
+</tbody>
+<tfoot>
 <tr>
 <td colspan="9" class="table-footer">CEO pay ratio: <strong>212x</strong> median employee comp (S&amp;P 500 average ~300x).</td>
 </tr>
-</tbody>
+</tfoot>
 </table>
+</div>
 </div>
 <div class="panel">
 <div class="panel-head">
@@ -85,21 +110,41 @@
 <span class="panel-sub">Top 1 by conviction signal · last 12 months</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter transactions…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter transactions…">
+<span class="lg-count muted">
+<span x-text="shown">1</span> of <span x-text="total">1</span> transactions</span>
+</div>
 <table class="tbl insider-table">
 <thead>
 <tr>
-<th>Date</th>
-<th>Insider</th>
-<th>Role</th>
-<th>Action</th>
-<th class="num">Shares</th>
-<th class="num">Value</th>
-<th class="num">Signal</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('date','text')" @keydown.enter.prevent="sortBy('date','text')" :aria-sort="ariaSort('date')">Date<span class="lg-ind" x-text="arrow('date')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('insider','text')" @keydown.enter.prevent="sortBy('insider','text')" :aria-sort="ariaSort('insider')">Insider<span class="lg-ind" x-text="arrow('insider')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('role','text')" @keydown.enter.prevent="sortBy('role','text')" :aria-sort="ariaSort('role')">Role<span class="lg-ind" x-text="arrow('role')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('action','text')" @keydown.enter.prevent="sortBy('action','text')" :aria-sort="ariaSort('action')">Action<span class="lg-ind" x-text="arrow('action')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('shares','num')" @keydown.enter.prevent="sortBy('shares','num')" :aria-sort="ariaSort('shares')">Shares<span class="lg-ind" x-text="arrow('shares')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('value','num')" @keydown.enter.prevent="sortBy('value','num')" :aria-sort="ariaSort('value')">Value<span class="lg-ind" x-text="arrow('value')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('signal','num')" @keydown.enter.prevent="sortBy('signal','num')" :aria-sort="ariaSort('signal')">Signal<span class="lg-ind" x-text="arrow('signal')">
+</span>
+</th>
 <th>Why</th>
 </tr>
 </thead>
 <tbody>
-<tr class="">
+<tr class="" data-text="2026-03-12 pat founder ceo p-purchase" data-date="2026-03-12" data-insider="pat founder" data-role="ceo" data-action="p-purchase" data-shares="25000.000000" data-value="1790000.000000" data-signal="0.820000">
 <td>2026-03-12</td>
 <td>Pat Founder</td>
 <td>CEO</td>
@@ -111,6 +156,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 </div>

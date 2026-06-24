@@ -17,6 +17,7 @@ from report.renderers.workspace_sections._shared import (
     _panel_head,
     _render_markdown,
 )
+from ui import living_grid as lg
 
 __all__ = [
     "_exec_comp_tab",
@@ -80,20 +81,36 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
                 "Named-Executive-Officer compensation",
                 sub=f"{len(section.packages)} executives · {section.packages[0].currency}",
             )
+            + lg.grid_open()
+            + lg.filter_bar(len(section.packages), noun="executives")
             + '<table class="tbl"><thead><tr>'
-            "<th>Executive</th><th>Role</th>"
-            '<th class="num">Salary</th>'
-            '<th class="num">Bonus (actual/target)</th>'
-            '<th class="num">Equity grant</th>'
-            '<th class="num">Total granted</th>'
-            '<th class="num">Realized vs granted</th>'
-            "<th>Performance metrics (weight%)</th>"
-            "<th>KPI match</th>"
-            "</tr></thead><tbody>"
+            + lg.th("Executive", "exec", "text", num=False)
+            + lg.th("Role", "role", "text", num=False)
+            + lg.th("Salary", "salary", "num")
+            + lg.th("Bonus (actual/target)", "bonus", "num")
+            + lg.th("Equity grant", "equity", "num")
+            + lg.th("Total granted", "total", "num")
+            + lg.th("Realized vs granted", "rvg", "num")
+            + "<th>Performance metrics (weight%)</th>"
+            + lg.th("KPI match", "kpimatch", "text", num=False)
+            + "</tr></thead><tbody>"
         )
         for pkg in section.packages:
             ceo_pill = ' <span class="ceo-pill k-chip k-chip-mono">CEO</span>' if pkg.is_ceo else ""
-            body.write("<tr>")
+            data = (
+                lg.data_text(
+                    f"{pkg.executive_name} {pkg.role or ''} {pkg.performance_metrics_summary or ''}"
+                )
+                + lg.data_text_key("exec", pkg.executive_name)
+                + lg.data_text_key("role", pkg.role)
+                + lg.data_text_key("kpimatch", "yes" if pkg.metrics_have_thesis_kpi else "no")
+                + lg.data_num("salary", pkg.base_salary)
+                + lg.data_num("bonus", pkg.cash_bonus_actual)
+                + lg.data_num("equity", pkg.equity_grant_value)
+                + lg.data_num("total", pkg.total_comp_granted)
+                + lg.data_num("rvg", pkg.realized_vs_granted_pct)
+            )
+            body.write(f"<tr{data}>")
             body.write(f"<td>{_esc(pkg.executive_name)}{ceo_pill}</td>")
             body.write(f"<td>{_esc(pkg.role or '?')}</td>")
             body.write(f'<td class="num">{_fmt_usd_short(pkg.base_salary)}</td>')
@@ -116,15 +133,19 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             cls = "kpi-match" if pkg.metrics_have_thesis_kpi else "muted"
             body.write(f'<td class="{cls}">{_esc(match)}</td>')
             body.write("</tr>")
-        # CEO pay ratio footer if available
+        body.write("</tbody>")
+        # CEO pay ratio footer in a real <tfoot> so the living grid's sort/filter
+        # (tbody-only) never moves it.
         ceo = next((p for p in section.packages if p.is_ceo), None)
         if ceo and ceo.ceo_pay_ratio:
             body.write(
-                f'<tr><td colspan="9" class="table-footer">CEO pay ratio: '
+                f'<tfoot><tr><td colspan="9" class="table-footer">CEO pay ratio: '
                 f"<strong>{ceo.ceo_pay_ratio:.0f}x</strong> median employee comp "
-                f"(S&amp;P 500 average ~300x).</td></tr>"
+                f"(S&amp;P 500 average ~300x).</td></tr></tfoot>"
             )
-        body.write("</tbody></table></div>")
+        body.write("</table>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     # 4. Insider transactions
     if section.insider_signals:
@@ -133,14 +154,18 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
                 "Recent insider activity",
                 sub=f"Top {len(section.insider_signals)} by conviction signal · last 12 months",
             )
+            + lg.grid_open()
+            + lg.filter_bar(len(section.insider_signals), noun="transactions")
             + '<table class="tbl insider-table"><thead><tr>'
-            "<th>Date</th><th>Insider</th><th>Role</th>"
-            "<th>Action</th>"
-            '<th class="num">Shares</th>'
-            '<th class="num">Value</th>'
-            '<th class="num">Signal</th>'
-            "<th>Why</th>"
-            "</tr></thead><tbody>"
+            + lg.th("Date", "date", "text", num=False)
+            + lg.th("Insider", "insider", "text", num=False)
+            + lg.th("Role", "role", "text", num=False)
+            + lg.th("Action", "action", "text", num=False)
+            + lg.th("Shares", "shares", "num")
+            + lg.th("Value", "value", "num")
+            + lg.th("Signal", "signal", "num")
+            + "<th>Why</th>"
+            + "</tr></thead><tbody>"
         )
         for s in section.insider_signals:
             tone = (
@@ -158,17 +183,30 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
                 if s.signal_strength >= 0.3
                 else "signal-weak"
             )
-            body.write(f'<tr class="{tone}">')
+            action = s.transaction_type.replace("_", " ")
+            data = (
+                lg.data_text(f"{s.transaction_date} {s.insider_name} {s.role or ''} {action}")
+                + lg.data_text_key("date", s.transaction_date)
+                + lg.data_text_key("insider", s.insider_name)
+                + lg.data_text_key("role", s.role)
+                + lg.data_text_key("action", action)
+                + lg.data_num("shares", s.shares)
+                + lg.data_num("value", s.transaction_value)
+                + lg.data_num("signal", s.signal_strength)
+            )
+            body.write(f'<tr class="{tone}"{data}>')
             body.write(f"<td>{_esc(s.transaction_date)}</td>")
             body.write(f"<td>{_esc(s.insider_name)}</td>")
             body.write(f"<td>{_esc(s.role or '?')}</td>")
-            body.write(f"<td>{_esc(s.transaction_type.replace('_', ' '))}</td>")
+            body.write(f"<td>{_esc(action)}</td>")
             body.write(f'<td class="num">{s.shares:,.0f}</td>')
             body.write(f'<td class="num">{_fmt_usd_short(s.transaction_value)}</td>')
             body.write(f'<td class="num {strength_tone}">{strength_pct}</td>')
             body.write(f"<td>{_esc(s.rationale)}</td>")
             body.write("</tr>")
-        body.write("</tbody></table></div>")
+        body.write("</tbody></table>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     body.write("</div>")
 

@@ -69,19 +69,33 @@
 <span class="panel-sub">2 rows · newest first</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter decisions…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter decisions…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> decisions</span>
+</div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
 <thead>
 <tr>
-<th>Made</th>
-<th>Kind</th>
-<th>Conviction</th>
-<th class="num">Outcome %</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('made','text')" @keydown.enter.prevent="sortBy('made','text')" :aria-sort="ariaSort('made')">Made<span class="lg-ind" x-text="arrow('made')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('kind','text')" @keydown.enter.prevent="sortBy('kind','text')" :aria-sort="ariaSort('kind')">Kind<span class="lg-ind" x-text="arrow('kind')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('conviction','text')" @keydown.enter.prevent="sortBy('conviction','text')" :aria-sort="ariaSort('conviction')">Conviction<span class="lg-ind" x-text="arrow('conviction')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('outcome','num')" @keydown.enter.prevent="sortBy('outcome','num')" :aria-sort="ariaSort('outcome')">Outcome %<span class="lg-ind" x-text="arrow('outcome')">
+</span>
+</th>
 <th>Rationale</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="2026-04-14 add high post-print dip; thesis kpis intact." data-made="2026-04-14" data-kind="add" data-conviction="high">
 <td class="mono xsmall">2026-04-14</td>
 <td>
 <strong>ADD</strong>
@@ -90,7 +104,7 @@
 <td class="num muted">—</td>
 <td class="seg-desc">Post-print dip; thesis KPIs intact.</td>
 </tr>
-<tr>
+<tr data-text="2025-08-02 trim medium run-up above dcf fair value." data-made="2025-08-02" data-kind="trim" data-conviction="medium" data-outcome="0.090000">
 <td class="mono xsmall">2025-08-02</td>
 <td>
 <strong>TRIM</strong>
@@ -101,6 +115,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 </div>
