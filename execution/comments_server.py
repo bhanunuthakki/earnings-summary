@@ -522,6 +522,21 @@ def create_app(
             conn.close()
         return {k: [r.to_dict() for r in v] for k, v in rows.items()}
 
+    @app.route("/api/cockpit", methods=["GET"])
+    def cockpit_fragment():
+        """The Research cockpit re-rendered as an HTML fragment for HTMX's
+        periodic poll (Wave 3): the Overview's ``#cc-cockpit-live`` wrapper
+        re-fetches this every 90s so the time-varying tiles (price · earnings
+        countdown · staleness) refresh in place without a full page reload."""
+        from pipeline.research_cockpit import render_research_cockpit
+
+        conn = _open_db()
+        try:
+            rows = build_cockpit_rows(conn, repo_root)
+        finally:
+            conn.close()
+        return Response(render_research_cockpit(rows), mimetype="text/html")
+
     @app.route("/api/overview", methods=["GET"])
     def overview_api():
         """Cross-ticker analytical overview as JSON: trigger ladder, insider

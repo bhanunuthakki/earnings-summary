@@ -90,7 +90,7 @@ from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
 from pipeline.source_viewers import VIEWER_CONTENT_CSS
-from ui import living_grid
+from ui import htmx_runtime, living_grid
 from ui.controls import controls_css, panel_section_title
 from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
@@ -238,7 +238,16 @@ def render_overview_panel(
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
     from pipeline.research_cockpit import render_research_cockpit
 
-    main = render_research_cockpit(rows_by_list) + render_tier_coverage_strip(coverage or {})
+    # The cockpit's time-varying tiles (price · earnings countdown · staleness)
+    # self-refresh every 90s via HTMX, re-rendering the whole cockpit fragment
+    # in place (GET /api/cockpit) — no manual reload, no per-cell polling.
+    main = (
+        '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
+        'hx-trigger="every 90s" hx-swap="innerHTML">'
+        + render_research_cockpit(rows_by_list)
+        + "</div>"
+        + render_tier_coverage_strip(coverage or {})
+    )
     if not inbox_html:
         return main
     # The badge carries the "new since you last looked" count; INBOX_JS (one
@@ -1339,6 +1348,9 @@ SHELL_JS = r"""
       if (old.src) s.src = old.src; else s.textContent = old.textContent;
       old.parentNode.replaceChild(s, old);
     }
+    // Activate any hx-* on the freshly injected fragment — the shell's own
+    // innerHTML path bypasses HTMX's mutation observer, so process it by hand.
+    if (window.htmx) { window.htmx.process(container); }
   }
 
   function fetchTickers() {
@@ -2282,12 +2294,15 @@ _DOC_HEAD = (
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>{css}</style>
 {alpine_head}
+{htmx_head}
 </head>
 <body>
 <a class="cc-skip" href="#cc-main">Skip to content</a>
 <div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
 <div id="cc-offline-banner" class="cc-offline-banner" hidden aria-live="polite">Offline — data panels cannot reload until you reconnect</div>
-""".replace("{css}", SHELL_CSS).replace("{alpine_head}", living_grid.head_assets())
+""".replace("{css}", SHELL_CSS)
+    .replace("{alpine_head}", living_grid.head_assets())
+    .replace("{htmx_head}", htmx_runtime.htmx_head())
 )
 
 _DOC_FOOT = "</body></html>"
