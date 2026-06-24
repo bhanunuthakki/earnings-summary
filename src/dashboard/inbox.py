@@ -715,6 +715,77 @@ def _quick_action_id(it: InboxItem) -> int | None:
     return qa.id if qa is not None else None
 
 
+# --- Wave 3b: HTMX optimistic quick actions -------------------------------
+# Each button POSTs to its endpoint with HMX and swaps the .ix-quick span for a
+# terminal "done" chip (``acted_span``); reversible actions (dismiss-action,
+# archive-note) carry an Undo that POSTs the reverse and restores the buttons.
+# The data-* hooks stay (peek / analytics); HTMX drives the action now, so the
+# old INBOX_JS click handler is gone.
+_HX_QUICK = 'hx-target="closest .ix-quick" hx-swap="outerHTML"'
+
+
+def _btn_approve(action_id: int) -> str:
+    return (
+        '<button class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="button" '
+        f'data-action-id="{action_id}" title="Approve &amp; apply" '
+        f'hx-post="/approve" hx-vals=\'{{"action_id": "{action_id}"}}\' {_HX_QUICK}>&#10003;</button>'
+    )
+
+
+def _btn_dismiss_action(action_id: int) -> str:
+    return (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
+        f'data-action-id="{action_id}" data-dismiss="1" title="Dismiss" '
+        f'hx-post="/approve" hx-vals=\'{{"action_id": "{action_id}", "dismiss": "1"}}\' '
+        f"{_HX_QUICK}>&#10005;</button>"
+    )
+
+
+def _btn_dismiss_alert(alert_id: int) -> str:
+    return (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
+        f'data-alert-id="{alert_id}" title="Dismiss alert" '
+        f'hx-post="/api/alerts/{alert_id}/dismiss" {_HX_QUICK}>&#10005;</button>'
+    )
+
+
+def _btn_dismiss_note(note_id: int) -> str:
+    return (
+        '<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
+        f'data-note-id="{note_id}" title="Dismiss" '
+        f'hx-post="/api/notes/{note_id}/archive" {_HX_QUICK}>&#10005;</button>'
+    )
+
+
+def quick_actions_span(buttons: list[str]) -> str:
+    """Wrap quick-action buttons in the ``.ix-quick`` span (the HTMX swap unit)."""
+    return '<span class="ix-quick">' + "".join(buttons) + "</span>"
+
+
+def acted_span(label: str, status: str, *, undo_url: str | None = None) -> str:
+    """The ``.ix-quick`` replacement a quick-action endpoint returns to HTMX: a
+    terminal done-chip, optionally with an Undo button (reversible actions
+    only) that POSTs ``undo_url`` and restores the buttons."""
+    undo = ""
+    if undo_url:
+        undo = (
+            ' <button type="button" class="ix-undo k-btn k-btn-quiet k-btn-sm" '
+            f'hx-post="{_esc(undo_url)}" hx-target="closest .ix-quick" hx-swap="outerHTML">'
+            "undo</button>"
+        )
+    return f'<span class="ix-quick ix-acted ix-acted-{_esc(status)}">{_esc(label)}{undo}</span>'
+
+
+def restored_action_buttons(action_id: int) -> str:
+    """The original approve/dismiss pair, for an un-cancel Undo to swap back in."""
+    return quick_actions_span([_btn_approve(action_id), _btn_dismiss_action(action_id)])
+
+
+def restored_note_button(note_id: int) -> str:
+    """The original note-dismiss button, for an un-archive Undo to swap back in."""
+    return quick_actions_span([_btn_dismiss_note(note_id)])
+
+
 def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
     """The compact rail's hover ✓/✕ affordances, written into the EXISTING
     header row before the timestamp — visibility-flipped on card hover / focus
@@ -724,15 +795,15 @@ def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
     dismiss on every actionable card):
 
       * a pending queued action (a draft, or an alert that drafted one) → a
-        ✓ that approves it (``data-action-id`` → POST /approve);
-      * an alert → a ✕ that dismisses the ALERT itself (``data-alert-id`` →
-        POST /api/alerts/<id>/dismiss), the alert-level counterpart to a
-        draft's action-level dismiss; the route also cancels any pending draft
-        so the dismissed alert can't leave one behind to resurface;
-      * a standalone draft → its ✕ dismisses the ACTION (``data-action-id`` +
-        ``data-dismiss``), unchanged;
-      * a plain analyst note → a ✕ that archives it (``data-note-id`` → POST
-        /api/notes/<id>/archive).
+        ✓ that approves it (POST /approve via HTMX);
+      * an alert → a ✕ that dismisses the ALERT itself (POST
+        /api/alerts/<id>/dismiss), the alert-level counterpart to a draft's
+        action-level dismiss; the route also cancels any pending draft so the
+        dismissed alert can't leave one behind to resurface;
+      * a standalone draft → its ✕ dismisses the ACTION (POST /approve
+        &dismiss=1) — reversible, so its done-chip carries an Undo;
+      * a plain analyst note → a ✕ that archives it (POST
+        /api/notes/<id>/archive) — also reversible (Undo).
 
     Informational ledger / synthesis cards carry nothing — they age out on
     recency decay (owner choice: dismiss is for actionable items only).
@@ -742,33 +813,19 @@ def _render_quick_actions(out: StringIO, it: InboxItem) -> None:
     buttons: list[str] = []
     action_id = _quick_action_id(it)
     if action_id is not None:
-        buttons.append(
-            f'<button class="ix-act ix-act-approve k-btn k-btn-quiet k-btn-sm" type="button" '
-            f'data-action-id="{action_id}" title="Approve &amp; apply">&#10003;</button>'
-        )
+        buttons.append(_btn_approve(action_id))
     if it.kind == "alert" and it.alert is not None and it.alert.status == ALERT_STATUS_PENDING:
-        # The card-level dismiss: clear the whole alert from the inbox (not
-        # just one drafted action). Present whether or not a draft exists, so
-        # an alert that never drafted an action (e.g. earnings_tone) is still
-        # dismissable from the rail.
-        buttons.append(
-            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-            f'data-alert-id="{it.alert.id}" title="Dismiss alert">&#10005;</button>'
-        )
+        # The card-level dismiss: clear the whole alert (not just one drafted
+        # action). Present whether or not a draft exists, so an alert that never
+        # drafted one (e.g. earnings_tone) is still dismissable.
+        buttons.append(_btn_dismiss_alert(it.alert.id))
     elif action_id is not None:
-        # A standalone draft (no parent alert on this card) — dismiss the
-        # action itself, the original behavior.
-        buttons.append(
-            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-            f'data-action-id="{action_id}" data-dismiss="1" title="Dismiss">&#10005;</button>'
-        )
+        # A standalone draft (no parent alert on this card) — dismiss the action.
+        buttons.append(_btn_dismiss_action(action_id))
     elif it.kind == "note" and it.note_id is not None and it.semantic_kind != SEMANTIC_ADVISOR_MEMO:
-        buttons.append(
-            f'<button class="ix-act ix-act-dismiss k-btn k-btn-quiet k-btn-sm" type="button" '
-            f'data-note-id="{it.note_id}" title="Dismiss">&#10005;</button>'
-        )
+        buttons.append(_btn_dismiss_note(it.note_id))
     if buttons:
-        out.write('<span class="ix-quick">' + "".join(buttons) + "</span>")
+        out.write(quick_actions_span(buttons))
 
 
 def _article_url(it: InboxItem) -> str | None:
@@ -949,79 +1006,11 @@ INBOX_JS = r"""
     }
   });
 
-  document.addEventListener('click', function (ev) {
-    if (!ev.target || !ev.target.closest) return;
-    var btn = ev.target.closest('.ix-act');
-    if (!btn || btn.disabled) return;
-    var actionId = btn.getAttribute('data-action-id');
-    var alertId = btn.getAttribute('data-alert-id');
-    var noteId = btn.getAttribute('data-note-id');
-    // alert / note ✕ are dismissals by construction; the action ✓/✕ pair keys
-    // off data-dismiss. A dismissal clears the card; an approve swaps a pill.
-    var dismiss = btn.getAttribute('data-dismiss') === '1' || alertId !== null || noteId !== null;
-    var clears = alertId !== null || noteId !== null;
-    var card = btn.closest('.ix-card');
-    var quick = btn.closest('.ix-quick');
-    var btns = quick ? quick.querySelectorAll('.ix-act') : [btn];
-    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
-    var req;
-    if (alertId !== null) {
-      req = fetch('/api/alerts/' + encodeURIComponent(alertId) + '/dismiss', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-      });
-    } else if (noteId !== null) {
-      req = fetch('/api/notes/' + encodeURIComponent(noteId) + '/archive', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
-      });
-    } else {
-      req = fetch('/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: 'action_id=' + encodeURIComponent(actionId) + (dismiss ? '&dismiss=1' : '')
-      });
-    }
-    req.then(function (resp) {
-      return resp.json().catch(function () { return {}; }).then(function (payload) {
-        if (!resp.ok) throw new Error(payload.error || ('HTTP ' + resp.status));
-        return payload;
-      });
-    }).then(function (payload) {
-      if (!card) return;
-      var status = payload.status || (dismiss ? 'cancelled' : 'applied');
-      if (quick) {
-        var done = document.createElement('span');
-        done.className = 'ix-acted ix-acted-' + status;
-        done.textContent = dismiss ? '✕ dismissed' : '✓ applied';
-        quick.parentNode.replaceChild(done, quick);
-      }
-      if (clears) {
-        // A dismissed alert / archived note leaves the inbox entirely.
-        var open = card.querySelector('.ix-open');
-        if (open) open.remove();
-        card.classList.add('ix-dismissed');
-      } else if (card.getAttribute('data-kind') === 'draft') {
-        var chip = card.querySelector('.ix-status');
-        if (!chip) {
-          chip = document.createElement('span');
-          var head = card.querySelector('.ix-head');
-          var anchor = card.querySelector('.ix-acted') || card.querySelector('.ix-when');
-          if (head) head.insertBefore(chip, anchor);
-        }
-        // The kit .k-pill (controls.py §3); .ix-status stays as the JS hook,
-        // the tone tracks the Python _status_pill_tone map.
-        var tone = { pending: 'k-pill-warn', applied: 'k-pill-ok', approved: 'k-pill-ok' }[status] || '';
-        chip.className = ('ix-status k-pill ' + tone).trim();
-        chip.textContent = status;
-        var dOpen = card.querySelector('.ix-open');
-        if (dOpen) dOpen.remove();
-        if (dismiss) card.classList.add('ix-dismissed');
-      }
-    }).catch(function (err) {
-      for (var k = 0; k < btns.length; k++) btns[k].disabled = false;
-      btn.classList.add('ix-act-fail');
-      btn.title = String((err && err.message) || err);
-    });
-  });
+  // The .ix-act quick actions (approve / dismiss / archive) are driven by HTMX
+  // now (Wave 3b): each button POSTs and swaps its .ix-quick span for a
+  // terminal "done" chip — with an Undo on the reversible ones. No JS handler
+  // here; the server returns the chip HTML. (Category filtering + the
+  // advisor-memo dismiss below stay vanilla.)
 
   // Advisor-memo dismiss chip (.ix-note-dismiss): archive the note-backed memo
   // via the REST endpoint the journal already uses, then fade the card in

@@ -1134,6 +1134,20 @@ def create_app(
             # payload — 409 either way; the message says which. The CLI hint
             # on the card remains the fallback path.
             return ({"error": str(exc)}, 409)
+        if request.headers.get("HX-Request"):
+            # Wave 3b: the inbox quick action swaps its .ix-quick for a done-chip.
+            # Approve is terminal (downstream ledger write); a dismiss (cancel)
+            # is reversible, so its chip carries an Undo.
+            from dashboard.inbox import acted_span
+
+            if dismissed:
+                return Response(
+                    acted_span(
+                        "✕ dismissed", "cancelled", undo_url=f"/api/actions/{action_id}/uncancel"
+                    ),
+                    mimetype="text/html",
+                )
+            return Response(acted_span("✓ applied", "applied"), mimetype="text/html")
         if request.method == "POST":
             status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
             return {"ok": True, "action_id": action_id, "status": status}
@@ -1173,12 +1187,40 @@ def create_app(
         except (ValueError, KeyError) as exc:
             # Transition conflict — already dismissed/approved/expired.
             return ({"error": str(exc)}, 409)
+        if request.headers.get("HX-Request"):
+            # Wave 3b: alert-dismiss cascades (it cancels the alert's pending
+            # actions too), so there's no clean single Undo — the chip is
+            # terminal, matching approve.
+            from dashboard.inbox import acted_span
+
+            return Response(acted_span("✕ dismissed", "cancelled"), mimetype="text/html")
         return {
             "ok": True,
             "alert_id": dismissed.id,
             "status": dismissed.status,
             "cancelled_actions": cancelled,
         }
+
+    @app.route("/api/actions/<int:action_id>/uncancel", methods=["POST", "OPTIONS"])
+    def uncancel_action_api(action_id: int):
+        """Undo a dismiss-action (Wave 3b): restore a cancelled queued action to
+        pending and return the inbox card's approve/dismiss buttons for HTMX to
+        swap back in. 404 unknown id; 409 if the action isn't cancelled (stale
+        or already restored)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+            return ({"error": "cross-site uncancel rejected"}, 403)
+        from alerts import uncancel_action
+        from dashboard.inbox import restored_action_buttons
+
+        try:
+            uncancel_action(action_id, db_path=db_path)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+        except (ValueError, KeyError) as exc:
+            return ({"error": str(exc)}, 409)
+        return Response(restored_action_buttons(action_id), mimetype="text/html")
 
     # ----- LLM BUDGET (editable caps + on_exceed modes — the #215 track) -----
 
@@ -1381,6 +1423,9 @@ def create_app(
                 )
             elif action == "archive":
                 updated = notes_store.archive_note(note_id, db_path=db_path)
+            elif action == "unarchive":
+                # Wave 3b: the inbox's optimistic-archive Undo.
+                updated = notes_store.unarchive_note(note_id, db_path=db_path)
             elif action == "reclassify":
                 updated = notes_store.reclassify_note(
                     note_id, kind=str(payload.get("kind") or ""), db_path=db_path
@@ -1439,6 +1484,19 @@ def create_app(
             return ({"error": str(exc)}, 404)
         if updated is None:
             return ({"error": f"note {note_id} not found"}, 404)
+        if request.headers.get("HX-Request") and action in ("archive", "unarchive"):
+            # Wave 3b: the inbox quick action swaps its .ix-quick for a done-chip
+            # (archive → "archived" + Undo) or restores the dismiss button (undo).
+            from dashboard.inbox import acted_span, restored_note_button
+
+            if action == "archive":
+                return Response(
+                    acted_span(
+                        "✕ archived", "archived", undo_url=f"/api/notes/{note_id}/unarchive"
+                    ),
+                    mimetype="text/html",
+                )
+            return Response(restored_note_button(note_id), mimetype="text/html")
         return {"note": _note_to_json(updated)}
 
     @app.route("/api/viewspec/catalog", methods=["GET"])

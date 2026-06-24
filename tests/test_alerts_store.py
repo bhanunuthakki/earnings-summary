@@ -247,6 +247,26 @@ def test_cancel_action_transitions_and_stamps(db_path: Path) -> None:
     assert cancelled.applied_at is None
 
 
+def test_uncancel_action_restores_pending(db_path: Path) -> None:
+    """Wave 3b: the inbox's optimistic-dismiss Undo flips a cancelled action
+    back to pending and clears cancelled_at; uncancelling an action that isn't
+    cancelled is a transition conflict (nothing to reverse)."""
+    alert = _fire(db_path, signature="sig-uncancel-1")
+    qa = store.queue_action(
+        alert_id=alert.id,
+        action_kind="thesis_update",
+        payload={"body": "x"},
+        db_path=db_path,
+    )
+    store.cancel_action(qa.id, db_path=db_path)
+    restored = store.uncancel_action(qa.id, db_path=db_path)
+    assert restored.status == store.ACTION_STATUS_PENDING
+    assert restored.cancelled_at is None
+    # Pending again — a second uncancel has nothing to reverse.
+    with pytest.raises((ValueError, KeyError, LookupError)):
+        store.uncancel_action(qa.id, db_path=db_path)
+
+
 def test_apply_action_raises_after_cancellation(db_path: Path) -> None:
     alert = _fire(db_path, signature="sig-double-action")
     qa = store.queue_action(

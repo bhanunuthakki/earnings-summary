@@ -331,6 +331,13 @@ def archive_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystN
     return _set_status(note_id, "archived", resolution_note=None, db_path=db_path)
 
 
+def unarchive_note(note_id: int, *, db_path: Path | str | None = None) -> AnalystNoteRow | None:
+    """Undo an archive: return a note to ``open``. Returns the row, or None if
+    missing. The reverse of :func:`archive_note`, for the inbox's optimistic
+    Undo (Wave 3b)."""
+    return _set_status(note_id, "open", resolution_note=None, db_path=db_path)
+
+
 def reclassify_note(
     note_id: int, *, kind: str, db_path: Path | str | None = None
 ) -> AnalystNoteRow | None:
