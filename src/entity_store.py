@@ -23,9 +23,9 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import cast
 
 from clock import now_iso, to_naive_utc
+from db_paths import resolve_db_path
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class MappingProposal:
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     """Open or return None if DB / tables unavailable (graceful degrade)."""
     try:
-        path = _resolve_path(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = sqlite3.connect(str(path), timeout=5.0)
@@ -99,17 +99,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         return conn
     except (sqlite3.Error, OSError) as exc:
         log.debug({"event": "entity_store_open_failed", "error": str(exc)})
-        return None
-
-
-def _resolve_path(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(cast("str", DB_PATH))
-    except ImportError:
         return None
 
 

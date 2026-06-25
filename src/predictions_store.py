@@ -22,7 +22,9 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
+
+from db_paths import resolve_db_path
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ class Prediction:
 
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     try:
-        path = _resolve(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = sqlite3.connect(str(path), timeout=5.0)
@@ -79,17 +81,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             return None
         return conn
     except (sqlite3.Error, OSError):
-        return None
-
-
-def _resolve(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(cast("str", DB_PATH))
-    except ImportError:
         return None
 
 

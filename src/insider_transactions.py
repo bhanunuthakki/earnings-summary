@@ -43,6 +43,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 # SEC EDGAR submissions API requires a User-Agent header per their fair-use policy.
@@ -106,7 +108,7 @@ class ConvictionSignal:
 
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     try:
-        path = _resolve(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = sqlite3.connect(str(path), timeout=10.0)
@@ -122,17 +124,6 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
             return None
         return conn
     except (sqlite3.Error, OSError):
-        return None
-
-
-def _resolve(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(cast("str", DB_PATH))
-    except ImportError:
         return None
 
 
