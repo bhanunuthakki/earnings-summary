@@ -30,7 +30,84 @@ from io import StringIO
 
 from report.renderers.workspace_sections._shared import _esc
 
-__all__ = ["CSS", "JS", "render_dcf_editor"]
+__all__ = ["CSS", "JS", "dcf_inject_button", "dcf_inject_for_kpi", "render_dcf_editor"]
+
+# --- Wave 5: KPI -> DCF driver mapping ------------------------------------
+# A captured report value maps to a DCF input when its NAME matches an
+# assumption AND its value can be put in MODEL units (a ratio for the percent
+# fields; raw for beta / exit multiple). The match is conservative: an unknown
+# unit or an out-of-range value yields no affordance (safe default — better to
+# omit the link than inject a garbage assumption).
+_DCF_KPI_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("effective tax", "tax_rate"),
+    ("tax rate", "tax_rate"),
+    ("cost of debt", "cost_of_debt"),
+    ("equity risk premium", "equity_risk_premium"),
+    ("risk-free", "risk_free_rate"),
+    ("risk free", "risk_free_rate"),
+    ("terminal growth", "terminal_growth_g"),
+    ("exit multiple", "exit_multiple"),
+    ("operating margin", "near_op_margin"),
+    ("op margin", "near_op_margin"),
+    ("wacc", "wacc"),
+    ("beta", "beta"),
+)
+_DCF_RATIO_KEYS: frozenset[str] = frozenset(
+    {
+        "tax_rate",
+        "cost_of_debt",
+        "equity_risk_premium",
+        "risk_free_rate",
+        "terminal_growth_g",
+        "near_op_margin",
+        "wacc",
+    }
+)
+
+
+def dcf_inject_for_kpi(
+    name: str, value: float | None, unit: str | None
+) -> tuple[str, float] | None:
+    """Map a captured KPI to ``(dcf_input_key, value_in_model_units)`` or None
+    when it doesn't cleanly map. Percent fields require a known unit so the
+    percent->ratio conversion is unambiguous, and the result is range-bound so an
+    odd capture can't inject an absurd assumption."""
+    if value is None:
+        return None
+    low = name.lower()
+    key: str | None = None
+    for pat, candidate in _DCF_KPI_PATTERNS:
+        if pat in low:
+            key = candidate
+            break
+    if key is None:
+        return None
+    if key in _DCF_RATIO_KEYS:
+        unit_norm = (unit or "").strip().lower()
+        if unit_norm in ("%", "pct", "percent"):
+            ratio = value / 100.0
+        elif unit_norm in ("", "ratio") and abs(value) <= 1.5:
+            ratio = value  # already a ratio
+        else:
+            return None
+        if not (-0.5 <= ratio <= 1.5):
+            return None
+        return (key, ratio)
+    # beta / exit multiple — raw value, light sanity bounds.
+    if not (-5.0 <= value <= 100.0):
+        return None
+    return (key, value)
+
+
+def dcf_inject_button(key: str, value: float, label: str) -> str:
+    """The "-> DCF" affordance the DCF editor's global click handler picks up
+    (``data-dcf-inject``). ``value`` is already in DCF model units."""
+    return (
+        '<button type="button" class="dcf-inject-btn k-btn k-btn-quiet k-btn-sm" '
+        f'data-dcf-inject="{_esc(key)}" data-dcf-value="{value:.6f}" '
+        f'data-dcf-label="{_esc(label)}" '
+        f'title="Use {_esc(label)} in the DCF editor">&#8594; DCF</button>'
+    )
 
 
 def render_dcf_editor(body: StringIO, ticker: str) -> None:
@@ -116,6 +193,11 @@ CSS = """
 .dcf-hm-table th { color: var(--muted); font-weight: 600; }
 .dcf-hm-table td.base { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 600; }
 .dcf-hm-axis { font-size: var(--fs-micro); color: var(--muted); }
+/* Wave 5: a captured report value injected into a driver flashes; the report's
+   "-> DCF" affordance is a quiet accent micro-button. */
+.dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
 """
 
 
@@ -164,6 +246,9 @@ JS = r"""
     {key: 'equity_risk_premium', label: 'ERP', pct: true, step: 0.1},
     {key: 'cost_of_debt', label: 'Cost of debt', pct: true, step: 0.1}
   ];
+  var SPEC_BY_KEY = {};
+  SCALARS.concat(DRIVERS).forEach(function (s) { SPEC_BY_KEY[s.key] = s; });
+  var inputsByKey = {};   // key -> <input>, refreshed by buildControls (Wave 5)
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
@@ -250,6 +335,7 @@ JS = r"""
         scheduleRecompute();
       });
       if (spec.key === 'wacc') waccInput = f.input;
+      inputsByKey[spec.key] = f.input;
       fieldsVal.appendChild(f.wrap);
     });
     gVal.appendChild(fieldsVal);
@@ -266,6 +352,7 @@ JS = r"""
         if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
         scheduleRecompute();
       });
+      inputsByKey[spec.key] = f.input;
       fieldsCapm.appendChild(f.wrap);
     });
     gCapm.appendChild(fieldsCapm);
@@ -434,10 +521,60 @@ JS = r"""
         ready = true;
         buildControls();
         recompute();
+        if (pendingInject) {
+          var pi = pendingInject; pendingInject = null;
+          applyInject(pi.key, pi.value, pi.label);
+        }
       }).catch(function () {
         setStatus('Research server offline — start comments_server to edit.', 'bad');
       });
   }
+
+  // --- Wave 5: KPI -> DCF driver injection ---------------------------------
+  // A captured report value carries a "-> DCF" affordance
+  // [data-dcf-inject=key data-dcf-value=<model units> data-dcf-label]. Clicking
+  // it opens the editor, sets that input (re-deriving WACC for a CAPM driver),
+  // and recomputes. If the editor hasn't loaded, the inject is queued and
+  // applied once the model arrives.
+  var pendingInject = null;
+  function applyInject(key, value, label) {
+    if (!model || !(key in model)) { setStatus('No DCF input "' + key + '".', 'bad'); return; }
+    model[key] = value;
+    if (DRIVERS.some(function (d) { return d.key === key; })) {
+      model.wacc = deriveWacc(model);
+      if (inputsByKey.wacc) inputsByKey.wacc.value = (model.wacc * 100).toFixed(2);
+    }
+    var inp = inputsByKey[key], spec = SPEC_BY_KEY[key];
+    if (inp && spec) {
+      inp.value = spec.pct ? (value * 100).toFixed(2) : String(value);
+      inp.classList.add('dcf-injected');
+      setTimeout(function () { inp.classList.remove('dcf-injected'); }, 1500);
+    }
+    setStatus('Injected ' + (label || key) + ' — recomputing…', 'ok');
+    scheduleRecompute();
+  }
+  window.dcfSetDriver = function (key, value, label) {
+    if (isNaN(value)) return;
+    if (elBody.hidden) { elBody.hidden = false; elToggle.setAttribute('aria-expanded', 'true'); }
+    root.scrollIntoView({behavior: 'smooth', block: 'center'});
+    if (ready && model) {
+      applyInject(key, value, label);
+    } else {
+      pendingInject = {key: key, value: value, label: label};
+      if (loaded === null) load();
+      else setStatus('Loading model to inject ' + (label || key) + '…', 'warn');
+    }
+  };
+  document.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('[data-dcf-inject]') : null;
+    if (!a) return;
+    ev.preventDefault();
+    window.dcfSetDriver(
+      a.getAttribute('data-dcf-inject'),
+      parseFloat(a.getAttribute('data-dcf-value')),
+      a.getAttribute('data-dcf-label') || ''
+    );
+  });
 
   elToggle.addEventListener('click', function () {
     var open = elBody.hidden;

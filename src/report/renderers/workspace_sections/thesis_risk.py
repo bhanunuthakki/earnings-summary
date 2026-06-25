@@ -27,7 +27,11 @@ from report.models import (
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_data import format_ledger_value, kpi_is_stale, kpi_trend_delta
-from report.renderers.workspace_dcf import render_dcf_editor
+from report.renderers.workspace_dcf import (
+    dcf_inject_button,
+    dcf_inject_for_kpi,
+    render_dcf_editor,
+)
 from report.renderers.workspace_sections._shared import (
     _empty_panel,
     _esc,
@@ -486,6 +490,11 @@ def _kpi_ledger_row(
     if r.definition:
         name_html += f'<div class="ledger-def muted xsmall">{_esc(r.definition)}</div>'
 
+    # Wave 5: when this KPI maps to a DCF assumption (name + unit-safe value), a
+    # "→ DCF" affordance injects it into the editor's driver and recomputes.
+    inject = dcf_inject_for_kpi(clean_kpi_name(r.name), latest_num, r.unit)
+    inject_btn = dcf_inject_button(inject[0], inject[1], clean_kpi_name(r.name)) if inject else ""
+
     lg_data = (
         lg.data_text(
             f"{clean_kpi_name(r.name)} {r.tier} {r.unit or ''} "
@@ -504,7 +513,7 @@ def _kpi_ledger_row(
         f"<td>{name_html}</td>"
         f"<td>{_esc(r.tier.replace('_', ' '))}</td>"
         f"<td>{_esc(r.unit or '')}</td>"
-        f'<td class="num"{tooltip_attr}>{latest_html}</td>'
+        f'<td class="num"{tooltip_attr}>{latest_html}{inject_btn}</td>'
         f'<td class="ledger-trend">{trend_html}</td>'
         f'<td class="num {status_cls}">{_esc(r.current_status.upper())}</td>'
         f"<td>{_esc(r.break_condition or '')}</td>"
