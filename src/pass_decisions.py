@@ -33,8 +33,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+
+from clock import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -88,7 +90,7 @@ def _resolve(override: Path | str | None) -> Path | None:
 
 def _now_iso() -> str:
     # Naive-UTC, the repo-wide convention (matches decision_conditions).
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+    return now_iso()
 
 
 def _clean(text: str | None, *, cap: int) -> str | None:

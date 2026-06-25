@@ -32,9 +32,10 @@ import logging
 import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from enum import StrEnum
 from typing import cast
+
+from clock import now_naive_utc
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +109,7 @@ def segment_cell_key(dim_type: str, dim_name: str, metric: str = "revenue") -> s
 
 def _now_iso() -> str:
     """Naive-UTC ISO stamp — the repo storage convention."""
-    return datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+    return now_naive_utc().isoformat(sep=" ", timespec="seconds")
 
 
 def _has_table(conn: sqlite3.Connection, table: str = "fact_overrides") -> bool:
