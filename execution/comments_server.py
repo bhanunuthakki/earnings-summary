@@ -537,6 +537,17 @@ def create_app(
             conn.close()
         return Response(render_research_cockpit(rows), mimetype="text/html")
 
+    @app.route("/api/cron-health", methods=["GET"])
+    def cron_health_fragment():
+        """The cron-health live body (KPI strip + 7-day timeline) for HTMX's
+        periodic poll (Wave 9 live-tile): the Cron Health panel's
+        ``#cc-cron-live`` wrapper re-fetches this every 60s so today's pipeline
+        verdict flips from "Not run yet" to OK/FAILED in place — the same
+        self-refresh idiom as ``/api/cockpit``, no bespoke JS."""
+        from pipeline.cron_health_panel import render_cron_health_live_body
+
+        return Response(render_cron_health_live_body(db_path), mimetype="text/html")
+
     @app.route("/api/overview", methods=["GET"])
     def overview_api():
         """Cross-ticker analytical overview as JSON: trigger ladder, insider

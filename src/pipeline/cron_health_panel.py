@@ -163,20 +163,22 @@ def _timeline_table(
     )
 
 
-def render_cron_health_panel(db_path: Path) -> str:
-    """The Cron Health tab fragment: a KPI strip + 7-day per-job timeline."""
+def render_cron_health_live_body(db_path: Path) -> str:
+    """The time-varying part of the panel (KPI strip + 7-day timeline) — the
+    fragment the HTMX poller re-fetches via ``GET /api/cron-health`` so today's
+    pipeline verdict flips from "Not run yet" to OK/FAILED in place, without a
+    manual reload. Returned alone so the wrapper's chrome + CLI note never
+    re-render on a poll."""
     today = date.today()
     dates = [today - timedelta(days=i) for i in range(6, -1, -1)]
     since = datetime.combine(dates[0], datetime.min.time())
 
     all_runs = _query_runs(db_path, since)
-
     if not all_runs:
         return (
-            '<section class="panel"><h2>Cron health</h2>'
             '<p class="muted">No pipeline run rows yet. '
             "The morning pipeline writes to <code>ingestion_runs</code> after each "
-            "run; this panel fills as the daily jobs execute.</p></section>"
+            "run; this panel fills as the daily jobs execute.</p>"
         )
 
     today_str = today.isoformat()
@@ -192,15 +194,29 @@ def render_cron_health_panel(db_path: Path) -> str:
         else:
             break
 
+    return _kpi_strip(today_verdict, streak) + _timeline_table(all_runs, dates)
+
+
+def render_cron_health_panel(db_path: Path) -> str:
+    """The Cron Health tab fragment: a KPI strip + 7-day per-job timeline.
+
+    The live body self-refreshes every 60s via HTMX (the Wave 3 live-tile
+    pattern the Overview cockpit uses): the ``#cc-cron-live`` wrapper re-fetches
+    ``GET /api/cron-health`` so today's verdict updates in place while the
+    morning pipeline runs. Degrades cleanly with JS off — the body is
+    server-rendered, the poll is pure enhancement."""
     return "".join(
         [
             _PANEL_STYLE,
             '<section class="panel"><h2>Cron health</h2>',
             '<p class="sub">Last 7 days of pipeline run history from '
             "<code>ingestion_runs</code>. "
-            "Green = OK · Red = failed · Grey = no run recorded.</p>",
-            _kpi_strip(today_verdict, streak),
-            _timeline_table(all_runs, dates),
+            "Green = OK · Red = failed · Grey = no run recorded. "
+            '<span class="muted">Auto-refreshes every 60s.</span></p>',
+            '<div id="cc-cron-live" hx-get="/api/cron-health" '
+            'hx-trigger="every 60s" hx-swap="innerHTML">',
+            render_cron_health_live_body(db_path),
+            "</div>",
             '<div class="ch-note">Run '
             "<code>python execution/verify_cron_registration.py</code> to audit "
             "the Windows Task Scheduler registration, or "
