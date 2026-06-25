@@ -18,6 +18,7 @@ from html import escape
 from pathlib import Path
 
 from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
+from ui import living_grid as lg
 
 _PANEL_STYLE = """<style>
 .ir-cov-table td.tk { font-weight:600; font-family:var(--mono); }
@@ -78,16 +79,32 @@ def _kpi_strip(covered: int, gaps: int, total_docs: int) -> str:
 def _coverage_table(rows: list[IrCoverageRow]) -> str:
     body = "".join(_row(r) for r in rows)
     return (
-        '<table class="p-table ir-cov-table"><thead><tr>'
-        "<th>Ticker</th><th>Name</th><th>List</th>"
-        '<th class="num">IR docs</th><th>Latest period</th><th>Last fetched</th>'
-        "<th>Last crawl</th><th>Status</th>"
-        "</tr></thead><tbody>"
-        f"{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(rows), noun="names", placeholder="Filter by ticker / name…")
+        + '<table class="p-table ir-cov-table"><thead><tr>'
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Name", "name", "text", num=False)
+        + lg.th("List", "list", "text", num=False)
+        + lg.th("IR docs", "docs", "num")
+        + lg.th("Latest period", "period", "text", num=False)
+        + lg.th("Last fetched", "fetched", "text", num=False)
+        + "<th>Last crawl</th><th>Status</th>"
+        + "</tr></thead><tbody>"
+        + f"{body}</tbody></table>"
+        + lg.grid_close()
     )
 
 
 def _row(r: IrCoverageRow) -> str:
+    data = (
+        lg.data_text(f"{r.ticker} {r.name or ''} {r.list_type}")
+        + lg.data_text_key("ticker", r.ticker)
+        + lg.data_text_key("name", r.name)
+        + lg.data_text_key("list", r.list_type)
+        + lg.data_num("docs", r.doc_count)
+        + lg.data_text_key("period", r.latest_period or "")
+        + lg.data_text_key("fetched", (r.last_doc_at or "")[:10])
+    )
     if r.has_docs:
         plural = "s" if r.doc_count != 1 else ""
         status_cell = f'<span class="k-pill k-pill-ok">&#10003; {r.doc_count} doc{plural}</span>'
@@ -103,7 +120,7 @@ def _row(r: IrCoverageRow) -> str:
         period = "—"
         fetched = "—"
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="tk">{escape(r.ticker)}</td>'
         f"<td>{escape(r.name or '—')}</td>"
         f"<td>{escape(r.list_type)}</td>"

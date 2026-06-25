@@ -36,6 +36,8 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from ui import living_grid as lg
+
 FRESH_DAYS = 7  # refreshed within a week = fresh
 STALE_DAYS = 30  # older than a month = loudly stale
 
@@ -434,6 +436,10 @@ def _kpi_strip(rows: list[CoverageRow], today: date) -> str:
     )
 
 
+def _date_num(d: date | None) -> float | None:
+    return float(d.toordinal()) if d is not None else None
+
+
 def _row_html(r: CoverageRow, today: date) -> str:
     model = escape(r.model)
     if r.model_source != "default":
@@ -444,14 +450,24 @@ def _row_html(r: CoverageRow, today: date) -> str:
         "opus (seeded)": "dcv-muted",
         "opus": "dcv-ok",
     }.get(r.assumptions_state, "dcv-muted")
+    list_key = r.list_type or ("wacc seed" if r.legacy_maintained else "orphan")
     if r.list_type is not None:
         list_cell = escape(r.list_type)
     elif r.legacy_maintained:
         list_cell = '<span class="dcv-muted">wacc seed</span>'
     else:
         list_cell = '<span class="dcv-warn">orphan</span>'
+    data = (
+        lg.data_text(f"{r.ticker} {list_key} {r.model} {r.assumptions_state} {r.note}")
+        + lg.data_text_key("ticker", r.ticker)
+        + lg.data_text_key("list", list_key)
+        + lg.data_text_key("model", r.model)
+        + lg.data_num("valued", _date_num(r.last_valued))
+        + lg.data_num("priced", _date_num(r.last_priced))
+        + lg.data_text_key("assumptions", r.assumptions_state)
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="dcv-tick">{escape(r.ticker)}</td>'
         f"<td>{list_cell}</td>"
         f"<td>{model}</td>"
@@ -502,15 +518,21 @@ def render_dcf_coverage_panel(db_path: Path, repo_root: Path) -> str:
             "Refresh a name with "
             "<code>python execution/refresh_dcf.py --ticker T</code>.</p>",
             _kpi_strip(rows, today),
+            lg.grid_open(),
+            lg.filter_bar(len(rows), noun="names", placeholder="Filter by ticker / model / note…"),
             '<table class="p-table"><thead><tr>'
-            "<th>Ticker</th><th>List</th><th>Model</th><th>Workbook</th>"
-            '<th title="Fair-value leg: dcf_runs.valuation_date">Last valued</th>'
-            '<th title="Price leg: dcf_runs.live_price_at — re-priced daily by '
-            'reprice_dcf, independent of the fair-value date">Priced</th>'
-            "<th>Assumptions</th><th>JSON sync</th><th>Note</th>"
-            "</tr></thead><tbody>",
+            + lg.th("Ticker", "ticker", "text", num=False)
+            + lg.th("List", "list", "text", num=False)
+            + lg.th("Model", "model", "text", num=False)
+            + "<th>Workbook</th>"
+            + lg.th("Last valued", "valued", "num", num=False)
+            + lg.th("Priced", "priced", "num", num=False)
+            + lg.th("Assumptions", "assumptions", "text", num=False)
+            + "<th>JSON sync</th><th>Note</th>"
+            + "</tr></thead><tbody>",
             table_rows,
             "</tbody></table>",
+            lg.grid_close(),
             stale_note,
             "</section>",
         ]

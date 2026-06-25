@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from ui import living_grid as lg
+
 _PANEL_STYLE = """<style>
 .rs-was { color:var(--muted); text-decoration:line-through; }
 .rs-now { font-weight:600; }
@@ -204,18 +206,24 @@ def _rows_table(ov: RestatementOverview) -> str:
     body: list[str] = []
     for r in ov.rows:
         delta_cls = "rs-up" if r.new_value > r.old_value else "rs-down"
-        pct = (
-            f"{(r.new_value / r.old_value - 1) * 100:+.1f}%"
-            if r.old_value not in (0, 0.0)
-            else "n/m"
-        )
+        delta_num = (r.new_value / r.old_value - 1) if r.old_value not in (0, 0.0) else None
+        pct = f"{delta_num * 100:+.1f}%" if delta_num is not None else "n/m"
         doc_bits = r.new_doc_type or ""
         if r.new_accession:
             doc_bits += f" · {r.new_accession}"
             if r.new_filing_date:
                 doc_bits += f" · filed {r.new_filing_date}"
+        data = (
+            lg.data_text(f"{r.ticker} {r.line_item} {doc_bits}")
+            + lg.data_text_key("ticker", r.ticker)
+            + lg.data_text_key("item", r.line_item)
+            + lg.data_text_key("period", r.period_end)
+            + lg.data_num("was", r.old_value)
+            + lg.data_num("now", r.new_value)
+            + lg.data_num("delta", delta_num)
+        )
         body.append(
-            "<tr>"
+            f"<tr{data}>"
             f"<td>{escape(r.ticker)}</td>"
             f"<td>{escape(r.line_item)}</td>"
             f'<td class="num">{escape(r.period_end)} {escape(r.fiscal_period_type)}</td>'
@@ -234,9 +242,17 @@ def _rows_table(ov: RestatementOverview) -> str:
         else ""
     )
     return (
-        '<table class="p-table"><thead><tr>'
-        "<th>Ticker</th><th>Line item</th>"
-        '<th class="num">Period</th><th class="num">Was</th><th class="num">Now</th>'
-        '<th class="num">Δ</th><th>New filing</th><th>Open</th>'
-        f"</tr></thead><tbody>{''.join(body)}</tbody></table>{capped}"
+        lg.grid_open()
+        + lg.filter_bar(len(ov.rows), noun="restatements", placeholder="Filter by ticker / item…")
+        + '<table class="p-table"><thead><tr>'
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Line item", "item", "text", num=False)
+        + lg.th("Period", "period", "text")
+        + lg.th("Was", "was", "num")
+        + lg.th("Now", "now", "num")
+        + lg.th("Δ", "delta", "num")
+        + "<th>New filing</th><th>Open</th>"
+        + f"</tr></thead><tbody>{''.join(body)}</tbody></table>"
+        + lg.grid_close()
+        + capped
     )

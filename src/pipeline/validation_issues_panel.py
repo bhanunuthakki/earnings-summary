@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from ui import living_grid as lg
 from ui.controls import prov_row, prov_severity_tick
 
 _PANEL_STYLE = """<style>
@@ -181,7 +182,8 @@ def _kpi_strip(ov: ValidationOverview) -> str:
 
 def _rule_table(ov: ValidationOverview) -> str:
     rows = "".join(
-        "<tr>"
+        f"<tr{lg.data_text(rule + ' ' + sev)}"
+        f"{lg.data_text_key('rule', rule)}{lg.data_text_key('sev', sev)}{lg.data_num('open', n)}>"
         f"<td>{escape(rule)}</td>"
         f"<td>{prov_severity_tick(sev)}</td>"
         f'<td class="num">{n:,}</td>'
@@ -190,9 +192,14 @@ def _rule_table(ov: ValidationOverview) -> str:
     )
     return (
         "<h3>Open issues by rule</h3>"
-        '<table class="p-table"><thead><tr>'
-        '<th>Rule</th><th>Severity</th><th class="num">Open</th>'
-        f"</tr></thead><tbody>{rows}</tbody></table>"
+        + lg.grid_open()
+        + lg.filter_bar(len(ov.by_rule), noun="rules")
+        + '<table class="p-table"><thead><tr>'
+        + lg.th("Rule", "rule", "text", num=False)
+        + lg.th("Severity", "sev", "text", num=False)
+        + lg.th("Open", "open", "num")
+        + f"</tr></thead><tbody>{rows}</tbody></table>"
+        + lg.grid_close()
     )
 
 
