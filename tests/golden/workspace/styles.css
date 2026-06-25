@@ -2377,6 +2377,11 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .dcf-hm-table th { color: var(--muted); font-weight: 600; }
 .dcf-hm-table td.base { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 600; }
 .dcf-hm-axis { font-size: var(--fs-micro); color: var(--muted); }
+/* Wave 5: a captured report value injected into a driver flashes; the report's
+   "-> DCF" affordance is a quiet accent micro-button. */
+.dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
 
 
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }

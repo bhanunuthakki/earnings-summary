@@ -146,6 +146,7 @@
 .dcf-hm-table th { color: var(--muted); font-weight: 600; }
 .dcf-hm-table th, .dcf-hm-table td { padding: var(--sp-1) var(--sp-2); text-align: right; border: 1px solid var(--hairline); }
 .dcf-hm-table { border-collapse: collapse; font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
 .dcf-scn { flex: 1; border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-2); text-align: center; }
 .dcf-scn-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .dcf-scn-up { font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
@@ -684,6 +685,7 @@
 /* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge system was removed (2026-06-14): an outline mono micro chip that duplicated the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/ -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a separate table-cell text color, not part of that system, and stays.) */ /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny tier-colored <summary class="src-chip"> badge; the open panel is an absolutely-positioned popover with the document identity + source link. */ .src-pop { display: inline-block; position: relative; vertical-align: baseline; }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
+/* Wave 5: a captured report value injected into a driver flashes; the report's "-> DCF" affordance is a quiet accent micro-button. */ .dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
 /* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
 /* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
 /* inline action: a small quiet control (resolve/refresh/diagnose) or a /source deep-link, radius-full like a chip. */ .k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer; text-decoration: none; white-space: nowrap; transition: border-color var(--transition), color var(--transition); }

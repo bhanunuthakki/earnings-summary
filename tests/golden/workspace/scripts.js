@@ -1769,6 +1769,9 @@ window.livingGrid = window.livingGrid || function () {
     {key: 'equity_risk_premium', label: 'ERP', pct: true, step: 0.1},
     {key: 'cost_of_debt', label: 'Cost of debt', pct: true, step: 0.1}
   ];
+  var SPEC_BY_KEY = {};
+  SCALARS.concat(DRIVERS).forEach(function (s) { SPEC_BY_KEY[s.key] = s; });
+  var inputsByKey = {};   // key -> <input>, refreshed by buildControls (Wave 5)
 
   function setStatus(msg, tone) {
     elStatus.textContent = msg || '';
@@ -1855,6 +1858,7 @@ window.livingGrid = window.livingGrid || function () {
         scheduleRecompute();
       });
       if (spec.key === 'wacc') waccInput = f.input;
+      inputsByKey[spec.key] = f.input;
       fieldsVal.appendChild(f.wrap);
     });
     gVal.appendChild(fieldsVal);
@@ -1871,6 +1875,7 @@ window.livingGrid = window.livingGrid || function () {
         if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
         scheduleRecompute();
       });
+      inputsByKey[spec.key] = f.input;
       fieldsCapm.appendChild(f.wrap);
     });
     gCapm.appendChild(fieldsCapm);
@@ -2039,10 +2044,60 @@ window.livingGrid = window.livingGrid || function () {
         ready = true;
         buildControls();
         recompute();
+        if (pendingInject) {
+          var pi = pendingInject; pendingInject = null;
+          applyInject(pi.key, pi.value, pi.label);
+        }
       }).catch(function () {
         setStatus('Research server offline — start comments_server to edit.', 'bad');
       });
   }
+
+  // --- Wave 5: KPI -> DCF driver injection ---------------------------------
+  // A captured report value carries a "-> DCF" affordance
+  // [data-dcf-inject=key data-dcf-value=<model units> data-dcf-label]. Clicking
+  // it opens the editor, sets that input (re-deriving WACC for a CAPM driver),
+  // and recomputes. If the editor hasn't loaded, the inject is queued and
+  // applied once the model arrives.
+  var pendingInject = null;
+  function applyInject(key, value, label) {
+    if (!model || !(key in model)) { setStatus('No DCF input "' + key + '".', 'bad'); return; }
+    model[key] = value;
+    if (DRIVERS.some(function (d) { return d.key === key; })) {
+      model.wacc = deriveWacc(model);
+      if (inputsByKey.wacc) inputsByKey.wacc.value = (model.wacc * 100).toFixed(2);
+    }
+    var inp = inputsByKey[key], spec = SPEC_BY_KEY[key];
+    if (inp && spec) {
+      inp.value = spec.pct ? (value * 100).toFixed(2) : String(value);
+      inp.classList.add('dcf-injected');
+      setTimeout(function () { inp.classList.remove('dcf-injected'); }, 1500);
+    }
+    setStatus('Injected ' + (label || key) + ' — recomputing…', 'ok');
+    scheduleRecompute();
+  }
+  window.dcfSetDriver = function (key, value, label) {
+    if (isNaN(value)) return;
+    if (elBody.hidden) { elBody.hidden = false; elToggle.setAttribute('aria-expanded', 'true'); }
+    root.scrollIntoView({behavior: 'smooth', block: 'center'});
+    if (ready && model) {
+      applyInject(key, value, label);
+    } else {
+      pendingInject = {key: key, value: value, label: label};
+      if (loaded === null) load();
+      else setStatus('Loading model to inject ' + (label || key) + '…', 'warn');
+    }
+  };
+  document.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('[data-dcf-inject]') : null;
+    if (!a) return;
+    ev.preventDefault();
+    window.dcfSetDriver(
+      a.getAttribute('data-dcf-inject'),
+      parseFloat(a.getAttribute('data-dcf-value')),
+      a.getAttribute('data-dcf-label') || ''
+    );
+  });
 
   elToggle.addEventListener('click', function () {
     var open = elBody.hidden;
