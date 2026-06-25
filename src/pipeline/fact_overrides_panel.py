@@ -20,6 +20,8 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from ui import living_grid as lg
+
 _PANEL_STYLE = """<style>
 .fov-tick { font-weight:600; white-space:nowrap; }
 .fov-act-replace { color:var(--ok); font-weight:600; }
@@ -145,8 +147,20 @@ def _kpi_strip(rows: list[_OverrideRow]) -> str:
 def _row_html(r: _OverrideRow) -> str:
     act_cls = f"fov-act-{r.action}"
     ref = f' <span class="fov-src">{escape(r.source_ref)}</span>' if r.source_ref else ""
+    data = (
+        lg.data_text(
+            f"{r.ticker} {r.period_end} {r.fact_kind} {r.fact_key} "
+            f"{r.action} {r.value_summary} {r.source_doc_type} {r.source_ref}"
+        )
+        + lg.data_text_key("ticker", r.ticker)
+        + lg.data_text_key("period", r.period_end)
+        + lg.data_text_key("kind", r.fact_kind)
+        + lg.data_text_key("key", r.fact_key)
+        + lg.data_text_key("action", r.action)
+        + lg.data_text_key("by", r.created_by)
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="fov-tick">{escape(r.ticker)}</td>'
         f"<td>{escape(r.period_end)} {escape(r.fiscal_period_type)}</td>"
         f"<td>{escape(r.fact_kind)}</td>"
@@ -178,12 +192,20 @@ def render_fact_overrides_panel(db_path: Path) -> str:
             "read/resolve time (segments, KPIs, line items). Each cites the filing that "
             "justifies it. See <code>directives/provenance_override_2026_06.md</code>.</p>",
             _kpi_strip(rows),
+            lg.grid_open(),
+            lg.filter_bar(len(rows), noun="overrides", placeholder="Filter by ticker / key…"),
             '<table class="p-table"><thead><tr>'
-            "<th>Ticker</th><th>Period</th><th>Kind</th><th>Key</th><th>Action</th>"
-            "<th>Value</th><th>Source</th><th>By</th>"
-            "</tr></thead><tbody>",
+            + lg.th("Ticker", "ticker", "text", num=False)
+            + lg.th("Period", "period", "text", num=False)
+            + lg.th("Kind", "kind", "text", num=False)
+            + lg.th("Key", "key", "text", num=False)
+            + lg.th("Action", "action", "text", num=False)
+            + "<th>Value</th><th>Source</th>"
+            + lg.th("By", "by", "text", num=False)
+            + "</tr></thead><tbody>",
             table_rows,
             "</tbody></table>",
+            lg.grid_close(),
             "</section>",
         ]
     )

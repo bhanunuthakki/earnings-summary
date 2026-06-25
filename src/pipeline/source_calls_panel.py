@@ -22,6 +22,7 @@ from sources.registry import (
     SourceCallSummary,
     cache_effectiveness_overview,
 )
+from ui import living_grid as lg
 
 _PANEL_STYLE = """<style>
 .sc-table td.src { font-weight:600; }
@@ -141,12 +142,20 @@ def _kpi_strip(ov: CacheEffectivenessOverview) -> str:
 def _source_table(rows: list[SourceCallSummary]) -> str:
     body = "".join(_row(r) for r in rows)
     return (
-        '<table class="p-table sc-table"><thead><tr>'
-        "<th>Source</th><th>Kind</th>"
-        '<th class="num">Calls</th><th class="num">Skip%</th><th class="num">Err%</th>'
-        '<th class="num">Saved</th><th class="num">p50 ms</th><th class="num">Records</th>'
-        "</tr></thead><tbody>"
-        f"{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(rows), noun="sources", placeholder="Filter by source / kind…")
+        + '<table class="p-table sc-table"><thead><tr>'
+        + lg.th("Source", "source", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + lg.th("Calls", "calls", "num")
+        + lg.th("Skip%", "skip", "num")
+        + lg.th("Err%", "err", "num")
+        + lg.th("Saved", "saved", "num")
+        + lg.th("p50 ms", "p50", "num")
+        + lg.th("Records", "records", "num")
+        + "</tr></thead><tbody>"
+        + f"{body}</tbody></table>"
+        + lg.grid_close()
     )
 
 
@@ -154,8 +163,19 @@ def _row(r: SourceCallSummary) -> str:
     skip_cls = "sc-skip-hi" if r.cache_skip_rate >= 0.5 else "sc-skip-lo"
     err_cls = "sc-err" if r.error_rate > 0.05 else ""
     p50 = "—" if r.p50_latency_ms is None else f"{r.p50_latency_ms:,}"
+    data = (
+        lg.data_text(f"{r.source_name} {r.kind}")
+        + lg.data_text_key("source", r.source_name)
+        + lg.data_text_key("kind", r.kind)
+        + lg.data_num("calls", r.total)
+        + lg.data_num("skip", r.cache_skip_rate)
+        + lg.data_num("err", r.error_rate)
+        + lg.data_num("saved", r.calls_saved)
+        + lg.data_num("p50", float(r.p50_latency_ms) if r.p50_latency_ms is not None else None)
+        + lg.data_num("records", r.total_records)
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="src">{escape(r.source_name)}</td>'
         f"<td>{escape(r.kind)}</td>"
         f'<td class="num">{r.total:,}</td>'

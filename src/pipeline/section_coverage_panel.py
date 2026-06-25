@@ -37,6 +37,7 @@ from industry_classifier import (
     SECTION_STRATEGIC_TARGETS,
     suppressed_sections_for_ticker,
 )
+from ui import living_grid as lg
 
 # Column order of the matrix: (key, short label). Sidecar-fed sections first,
 # then the DB-probed render-time panels.
@@ -288,13 +289,26 @@ def render_section_coverage_panel(
         "</div>"
     )
 
+    parts.append(lg.grid_open())
+    parts.append(lg.filter_bar(len(rows), noun="names", placeholder="Filter by ticker…"))
     parts.append('<div class="sc-scroll"><table class="p-table sc-matrix"><thead><tr>')
-    parts.append("<th>Ticker</th><th>List</th><th>Built</th>")
+    parts.append(
+        lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("List", "list", "text", num=False)
+        + lg.th("Built", "built", "text", num=False)
+    )
     for _key, label in SECTION_COLUMNS:
         parts.append(f"<th>{escape(label)}</th>")
-    parts.append('<th class="num">Gaps</th></tr></thead><tbody>')
+    parts.append(lg.th("Gaps", "gaps", "num") + "</tr></thead><tbody>")
     for r in rows:
-        parts.append("<tr>")
+        data = (
+            lg.data_text(f"{r.ticker} {r.list_type}")
+            + lg.data_text_key("ticker", r.ticker)
+            + lg.data_text_key("list", r.list_type)
+            + lg.data_text_key("built", r.report_date or "")
+            + lg.data_num("gaps", r.gap_count)
+        )
+        parts.append(f"<tr{data}>")
         parts.append(f'<td class="sc-tkr">{escape(r.ticker)}</td>')
         parts.append(f'<td class="sc-list">{escape(r.list_type)}</td>')
         built_cell = escape(r.report_date) if r.report_date else "&mdash;"
@@ -309,6 +323,7 @@ def render_section_coverage_panel(
         parts.append(f'<td class="sc-gaps">{r.gap_count}</td>')
         parts.append("</tr>")
     parts.append("</tbody></table></div>")
+    parts.append(lg.grid_close())
 
     parts.append(
         '<p class="sc-note">&#9679; populated &nbsp; &#9675; no data &nbsp; '
