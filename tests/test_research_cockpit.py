@@ -787,10 +787,13 @@ def test_render_eval_score_column(rows: dict[str, list[CockpitRow]]) -> None:
     factor missing) renders a low-tone dashed partial chip whose hover names
     all four n/a factors."""
     html = render_research_cockpit(rows)
-    assert html.count(">Score</th>") == 1
+    # The header is now a living-grid sortable <th> (label + sort indicator span),
+    # so the column reads ">Score<span …" rather than ">Score</th>".
+    assert html.count(">Score<") == 1
+    assert "sortBy('score','num')" in html  # the column is a living-grid sortable header
     # The Fit column sits beside Score (thin table only); with no candidate_fit
     # cache the fixture's V carries no fit, so its cell is the muted em-dash.
-    assert html.count(">Fit</th>") == 1
+    assert html.count(">Fit<") == 1
     assert "k-chip k-chip-mono chip-partial" in html
     assert ">0.52</a>" in html
     assert "dcf 0.85 (n/a) x growth 0.85 (n/a) x fcf 0.85 (n/a) x peg 0.85 (n/a) = 0.52" in html

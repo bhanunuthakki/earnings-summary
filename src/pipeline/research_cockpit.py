@@ -56,6 +56,34 @@ from cockpit_fundamentals import (
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
+from ui import living_grid as lg
+
+# Thesis-verdict sort rank: worst = highest so a numeric (descending-first) sort
+# floats breaches to the top, matching the cockpit's default attention order.
+_THESIS_SORT_RANK: dict[str, int] = {
+    "breach": 3,
+    "broken": 3,
+    "warn": 2,
+    "watch": 2,
+    "unresolved": 2,
+    "ok": 1,
+    "intact": 1,
+}
+
+
+def _sort_th(label: str, key: str, sort_type: str, *, num: bool = True, title: str = "") -> str:
+    """A living-grid sortable header that also carries an optional title tooltip
+    (lg.th has no title slot, and several cockpit headers explain their column)."""
+    cls = "lg-sortable" + (" num" if num else "")
+    title_attr = f' title="{escape(title, quote=True)}"' if title else ""
+    return (
+        f'<th class="{cls}" role="button" tabindex="0" aria-sort="none"{title_attr} '
+        f"@click=\"sortBy('{key}','{sort_type}')\" "
+        f"@keydown.enter.prevent=\"sortBy('{key}','{sort_type}')\" "
+        f":aria-sort=\"ariaSort('{key}')\">"
+        f'{label}<span class="lg-ind" x-text="arrow(\'{key}\')"></span></th>'
+    )
+
 
 # Worst-wins ordering for thesis verdicts and rule statuses; doubles as the
 # attention sort key (breach floats to the top of the cockpit).
@@ -851,45 +879,86 @@ def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, t
     else:
         head = (
             "<thead><tr>"
-            "<th>Ticker</th><th>Thesis</th>"
+            + _sort_th("Ticker", "ticker", "text", num=False)
+            + _sort_th("Thesis", "thesis", "num", num=False)
             # The eval table's sort key leads its numeric columns: next-dollar
             # attractiveness, factor math in each chip's hover.
             + (
-                "<th class='num' title='next-dollar attractiveness: DCF upside x Rev growth "
-                "x FCF margin x PEG (hover a score for its factor math; dashed = partial "
-                "data)'>Score</th>"
+                _sort_th(
+                    "Score",
+                    "score",
+                    "num",
+                    title="next-dollar attractiveness: DCF upside x Rev growth x FCF margin "
+                    "x PEG (hover a score for its factor math; dashed = partial data)",
+                )
                 # Sibling to Score: how the name would sit in the HELD book —
                 # marginal Sharpe x diversification x factor exposure x sector
                 # (>1 accretive, <1 dilutive). Click for the breakdown.
-                "<th class='num' title='portfolio fit to the held book: marginal Sharpe "
-                "x diversification x factor exposure x sector (>1 accretive, <1 dilutive; "
-                "click for the breakdown; dashed = partial data)'>Fit</th>"
+                + _sort_th(
+                    "Fit",
+                    "fit",
+                    "num",
+                    title="portfolio fit to the held book: marginal Sharpe x diversification "
+                    "x factor exposure x sector (>1 accretive, <1 dilutive; click for the "
+                    "breakdown; dashed = partial data)",
+                )
                 if thin
                 else ""
             )
             + ("<th>Tier-1 moves</th>" if not thin else "")
-            + "<th class='num'>Price</th><th class='num'>vs DCF FV</th>"
-            "<th class='num'>PEG</th>"
+            + _sort_th("Price", "price", "num")
+            + _sort_th("vs DCF FV", "fvgap", "num")
+            + _sort_th("PEG", "peg", "num")
             # Eval rows trade the (mostly empty for them) Tier-1 column for
             # screen fundamentals (PR7).
             + (
-                "<th class='num' title='latest quarter vs the year-ago quarter'>Rev YoY</th>"
-                "<th class='num' title='trailing-twelve-month FCF margin'>FCF mgn</th>"
+                _sort_th("Rev YoY", "revyoy", "num", title="latest quarter vs the year-ago quarter")
+                + _sort_th("FCF mgn", "fcfmgn", "num", title="trailing-twelve-month FCF margin")
                 if thin
                 else ""
             )
-            + "<th>Next ER</th><th>Inbox</th>"
+            + _sort_th("Next ER", "er", "text", num=False)
+            + "<th>Inbox</th>"
             "<th class='dot-col' title='Ops freshness'>&#9679;</th>"
             "</tr></thead>"
         )
         body_rows = "".join(_render_row(r, now, thin=thin) for r in rows)
         cls = "cockpit-table cockpit-thin" if thin else "cockpit-table"
-        body = f"<table class='{cls}'>{head}<tbody>{body_rows}</tbody></table>"
+        noun = "evaluations" if thin else "holdings"
+        body = (
+            lg.grid_open()
+            + lg.filter_bar(len(rows), noun=noun, placeholder="Filter by ticker / name…")
+            + f"<table class='{cls}'>{head}<tbody>{body_rows}</tbody></table>"
+            + lg.grid_close()
+        )
     return (
         f"<section class='list-section cockpit-section'>"
         f"<h2>{escape(title)} <span class='count'>({len(rows)})</span></h2>"
         f"{body}</section>"
     )
+
+
+def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
+    """The living-grid sort/filter attributes for one cockpit row. Shared keys
+    (ticker/thesis/price/fvgap/peg/er) plus the thin-only screen columns."""
+    status = (row.base.breach_status or "").lower()
+    data = (
+        lg.data_text(f"{row.base.ticker} {row.name or ''}")
+        + lg.data_text_key("ticker", row.base.ticker)
+        + lg.data_num("thesis", float(_THESIS_SORT_RANK.get(status, 0)))
+        + lg.data_num("price", row.price)
+        + lg.data_num("fvgap", row.fv_gap_pct)
+        + lg.data_num("peg", row.peg_ratio)
+        + lg.data_text_key("er", row.next_earnings or "")
+    )
+    if thin:
+        data += (
+            lg.data_num("score", row.attractiveness)
+            + lg.data_num("fit", row.fit)
+            + lg.data_num("revyoy", row.rev_yoy_pct)
+            + lg.data_num("fcfmgn", row.fcf_margin_pct)
+        )
+    return data
 
 
 def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
@@ -925,7 +994,7 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
             f"<td class='dot-col'>{_staleness_dot(row, now)}</td>",
         ]
     )
-    return "<tr>" + "".join(cells) + "</tr>"
+    return f"<tr{_row_sort_data(row, thin=thin)}>" + "".join(cells) + "</tr>"
 
 
 def _score_cell(row: CockpitRow) -> str:

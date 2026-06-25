@@ -37,6 +37,7 @@ from signals.store import (
     load_diet_signals,
     load_forward_agenda,
 )
+from ui import living_grid as lg
 from ui.controls import ticker_label
 
 # The non-forward-dated reading lanes shown in the ingest stream: news-backed
@@ -111,9 +112,16 @@ def _stream_section(rows: list[SignalRow]) -> str:
         )
     body = "".join(_stream_row(r) for r in rows)
     table = (
-        '<table class="p-table"><thead><tr>'
-        "<th>When</th><th>Name</th><th>Type</th><th>Signal</th><th>Source</th>"
-        f"</tr></thead><tbody>{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(rows), noun="signals", placeholder="Filter by name / source / text…")
+        + '<table class="p-table"><thead><tr>'
+        + lg.th("When", "when", "text", num=False)
+        + lg.th("Name", "name", "text", num=False)
+        + lg.th("Type", "type", "text", num=False)
+        + "<th>Signal</th>"
+        + lg.th("Source", "source", "text", num=False)
+        + f"</tr></thead><tbody>{body}</tbody></table>"
+        + lg.grid_close()
     )
     return head + table + "</div>"
 
@@ -129,8 +137,15 @@ def _stream_row(r: SignalRow) -> str:
         else title
     )
     firm = f'<span class="diet-firm">{escape(r.firm)}</span>' if r.firm else "—"
+    data = (
+        lg.data_text(f"{r.ticker} {r.title} {r.firm or ''} {label}")
+        + lg.data_text_key("when", r.published_at[:10])
+        + lg.data_text_key("name", r.ticker)
+        + lg.data_text_key("type", label)
+        + lg.data_text_key("source", r.firm or "")
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="diet-when">{escape(r.published_at[:10])}</td>'
         f"<td>{ticker_label(r.ticker)}</td>"
         f"<td>{type_cell}</td>"
@@ -153,9 +168,16 @@ def _agenda_section(rows: list[SignalRow], today: date) -> str:
         )
     body = "".join(_agenda_row(r, today) for r in rows)
     table = (
-        '<table class="p-table"><thead><tr>'
-        "<th>Date</th><th>In</th><th>Name</th><th>Event</th><th>Source</th>"
-        f"</tr></thead><tbody>{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(rows), noun="events", placeholder="Filter by name / event…")
+        + '<table class="p-table"><thead><tr>'
+        + lg.th("Date", "date", "text", num=False)
+        + "<th>In</th>"
+        + lg.th("Name", "name", "text", num=False)
+        + "<th>Event</th>"
+        + lg.th("Source", "source", "text", num=False)
+        + f"</tr></thead><tbody>{body}</tbody></table>"
+        + lg.grid_close()
     )
     return head + table + "</div>"
 
@@ -169,8 +191,14 @@ def _agenda_row(r: SignalRow, today: date) -> str:
         else title
     )
     firm = f'<span class="diet-firm">{escape(r.firm)}</span>' if r.firm else "—"
+    data = (
+        lg.data_text(f"{r.ticker} {r.title} {r.firm or ''}")
+        + lg.data_text_key("date", r.event_date or "")
+        + lg.data_text_key("name", r.ticker)
+        + lg.data_text_key("source", r.firm or "")
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="diet-date">{escape(r.event_date or "")}</td>'
         f'<td class="diet-when">{escape(in_days)}</td>'
         f"<td>{ticker_label(r.ticker)}</td>"

@@ -25,6 +25,7 @@ from pipeline.analytical_dashboard import (
     PredictionOutcomeRow,
     TriggerLadderRow,
 )
+from ui import living_grid as lg
 from ui.controls import controls_css, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -292,19 +293,30 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
             f"<h3>By ticker · {escape(panel.month_label)}</h3>"
             '<p class="sub">All LLM calls this month grouped by attributed ticker '
             "(every purpose, budgeted or not — so this can exceed the capped total above).</p>"
-            '<table class="budget-table"><thead><tr>'
-            '<th>Ticker</th><th class="num">Spend</th><th class="num">Calls</th>'
-            "</tr></thead><tbody>"
+            + lg.grid_open()
+            + lg.filter_bar(len(panel.by_ticker), noun="tickers", placeholder="Filter by ticker…")
+            + '<table class="budget-table"><thead><tr>'
+            + lg.th("Ticker", "ticker", "text", num=False)
+            + lg.th("Spend", "spend", "num")
+            + lg.th("Calls", "calls", "num")
+            + "</tr></thead><tbody>"
         )
         for t in panel.by_ticker:
+            data = (
+                lg.data_text(t.ticker)
+                + lg.data_text_key("ticker", t.ticker)
+                + lg.data_num("spend", t.current_spend_usd)
+                + lg.data_num("calls", float(t.call_count))
+            )
             out.append(
-                f"<tr><td>{ticker_label(t.ticker)}</td>"
+                f"<tr{data}><td>{ticker_label(t.ticker)}</td>"
                 f'<td class="num">${t.current_spend_usd:,.2f}</td>'
                 f'<td class="num">{t.call_count}</td></tr>'
             )
         out.append(
             "</tbody></table>"
-            f'<p class="budget-footer"><strong>By-ticker total:</strong> '
+            + lg.grid_close()
+            + f'<p class="budget-footer"><strong>By-ticker total:</strong> '
             f"${by_ticker_total:,.2f}</p>"
         )
     out.append(_BUDGET_PANEL_SCRIPT)

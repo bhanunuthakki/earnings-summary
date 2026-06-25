@@ -64,6 +64,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
 )
 from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
+from ui import living_grid as lg
 from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -1070,6 +1071,26 @@ _TIMELINE_PILL_TONE: dict[str, str] = {
 }
 
 
+def _timeline_row(e: TimelineEvent) -> str:
+    iso = e.when.date().isoformat()
+    ticker = e.ticker or ""
+    data = (
+        lg.data_text(f"{ticker} {e.label} {e.body[:200]}")
+        + lg.data_text_key("date", iso)
+        + lg.data_text_key("ticker", ticker)
+        + lg.data_text_key("kind", e.label)
+    )
+    return (
+        f"<tr{data}>"
+        f'<td class="when">{escape(iso)}</td>'
+        f'<td class="tk">{escape(e.ticker or "—")}</td>'
+        f'<td><span class="k-pill{_pill_tone(_TIMELINE_PILL_TONE.get(e.kind, "muted"))}">'
+        f"{escape(e.label)}</span></td>"
+        f'<td class="ad-body">{render_prose(e.body, inline=True)}</td>'
+        "</tr>"
+    )
+
+
 def _timeline_section(timeline: list[TimelineEvent]) -> str:
     head = (
         '<section class="panel"><h2>Decisions timeline</h2>'
@@ -1082,22 +1103,22 @@ def _timeline_section(timeline: list[TimelineEvent]) -> str:
             '<p class="muted">Nothing recorded yet. Approving an alert action, recording a '
             "sizing intent above, or capturing a decision note all land here.</p></section>"
         )
-    rows = "".join(
-        "<tr>"
-        f'<td class="when">{escape(e.when.date().isoformat())}</td>'
-        f'<td class="tk">{escape(e.ticker or "—")}</td>'
-        f'<td><span class="k-pill{_pill_tone(_TIMELINE_PILL_TONE.get(e.kind, "muted"))}">'
-        f"{escape(e.label)}</span></td>"
-        f'<td class="ad-body">{render_prose(e.body, inline=True)}</td>'
-        "</tr>"
-        for e in timeline
-    )
+    rows = "".join(_timeline_row(e) for e in timeline)
     return (
         f"{head}"
-        '<table class="ad-timeline"><thead><tr>'
-        "<th>Date</th><th>Ticker</th><th>Kind</th><th>Decision</th>"
-        "</tr></thead><tbody>"
-        f"{rows}</tbody></table></section>"
+        + lg.grid_open()
+        + lg.filter_bar(
+            len(timeline), noun="decisions", placeholder="Filter by ticker / kind / text…"
+        )
+        + '<table class="ad-timeline"><thead><tr>'
+        + lg.th("Date", "date", "text", num=False)
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + "<th>Decision</th>"
+        + "</tr></thead><tbody>"
+        + f"{rows}</tbody></table>"
+        + lg.grid_close()
+        + "</section>"
     )
 
 

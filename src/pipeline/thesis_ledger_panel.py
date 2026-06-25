@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from html import escape
 from pathlib import Path
 
+from ui import living_grid as lg
 from ui.prose import render_prose
 from user_state.ledger import ThesisLedgerEntryRow, list_recent_entries
 
@@ -93,10 +94,16 @@ def _kpi_strip(entries: list[ThesisLedgerEntryRow]) -> str:
 def _ledger_table(entries: list[ThesisLedgerEntryRow]) -> str:
     body = "".join(_row(e) for e in entries)
     return (
-        '<table class="p-table tl-table"><thead><tr>'
-        "<th>Date</th><th>Ticker</th><th>Kind</th><th>Change</th>"
-        "</tr></thead><tbody>"
-        f"{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(entries), noun="entries", placeholder="Filter by ticker / kind / text…")
+        + '<table class="p-table tl-table"><thead><tr>'
+        + lg.th("Date", "date", "text", num=False)
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + "<th>Change</th>"
+        + "</tr></thead><tbody>"
+        + f"{body}</tbody></table>"
+        + lg.grid_close()
     )
 
 
@@ -104,9 +111,16 @@ def _row(e: ThesisLedgerEntryRow) -> str:
     label = _KIND_LABELS.get(e.entry_kind, e.entry_kind)
     tone = _KIND_PILL_TONE.get(e.entry_kind, "")
     pill_cls = f"k-pill {tone}".strip()
-    when = escape(e.created_at.date().isoformat())
+    iso = e.created_at.date().isoformat()
+    when = escape(iso)
+    data = (
+        lg.data_text(f"{e.ticker} {label} {e.body[:200]}")
+        + lg.data_text_key("date", iso)
+        + lg.data_text_key("ticker", e.ticker)
+        + lg.data_text_key("kind", label)
+    )
     return (
-        "<tr>"
+        f"<tr{data}>"
         f'<td class="when">{when}</td>'
         f'<td class="tk"><span class="k-tick-sym">{escape(e.ticker)}</span></td>'
         f'<td><span class="{pill_cls}">{escape(label)}</span></td>'
