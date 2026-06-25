@@ -56,6 +56,7 @@ import re
 import sqlite3
 import urllib.parse
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -928,22 +929,65 @@ def _flatten_section(value: object) -> str:
     return "\n".join(lines)
 
 
-def _latest_filing_paths(repo_root: Path, ticker: str) -> list[tuple[str, int, Path]]:
-    """[(form, year, path)] — the newest 10-K and newest 10-Q on disk."""
+# Filing files are named ``{ticker}_form_{form}_{YEAR}.json``. Only that exact
+# shape is selected — quarter-suffixed 10-Q files were already excluded by the
+# former year-regex, so this preserves the prior selection byte-for-byte.
+_FILING_NAME_RX = re.compile(r"^(.+)_form_(10[kq])_(\d{4})\.json$")
+_FILING_DOC_TYPES = ("fmp_10k_json", "fmp_10q_json")
+# How many fiscal years back the no-DB fallback probe scans (exact-name stat
+# calls, never a directory glob).
+_FILING_PROBE_BACK_YEARS = 30
+
+
+def _latest_filing_paths(
+    repo_root: Path, ticker: str, conn: sqlite3.Connection | None = None
+) -> list[tuple[str, int, Path]]:
+    """[(form, year, path)] — the newest 10-K and newest 10-Q on disk for this
+    ticker.
+
+    Resolved through the indexed ``documents`` table (``file_path`` natural key)
+    rather than globbing ``data/historical/fmp``, which holds ~110k files — the
+    documented "never glob fmp" trap, and this runs on the LIVE ask path. The
+    fiscal year is parsed from the file name (``documents.period_end`` is NULL
+    for these rows on prod). Falls back to a bounded exact-name probe — never a
+    directory scan — when no DB is available or it holds no rows for the ticker.
+    """
     base = repo_root / "data" / "historical" / "fmp"
-    out: list[tuple[str, int, Path]] = []
-    for form in ("10k", "10q"):
-        best: tuple[int, Path] | None = None
-        for path in base.glob(f"{ticker}_form_{form}_*.json"):
-            m = re.search(r"_(\d{4})\.json$", path.name)
-            if not m:
+    best: dict[str, tuple[int, Path]] = {}
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT file_path FROM documents WHERE ticker = ? AND doc_type IN (?, ?)",
+                (ticker, *_FILING_DOC_TYPES),
+            ).fetchall()
+        except sqlite3.Error:
+            rows = []
+        for row in rows:
+            m = _FILING_NAME_RX.match(Path(str(row[0])).name)
+            if m is None or m.group(1) != ticker:
                 continue
-            year = int(m.group(1))
-            if best is None or year > best[0]:
-                best = (year, path)
-        if best is not None:
-            out.append((form, best[0], best[1]))
-    return out
+            form, year = m.group(2), int(m.group(3))
+            path = repo_root / str(row[0])
+            if (form not in best or year > best[form][0]) and path.exists():
+                best[form] = (year, path)
+    if not best:
+        best = _probe_latest_filing_paths(base, ticker)
+    return [(form, best[form][0], best[form][1]) for form in ("10k", "10q") if form in best]
+
+
+def _probe_latest_filing_paths(base: Path, ticker: str) -> dict[str, tuple[int, Path]]:
+    """Newest 10-K/10-Q for ``ticker`` by probing exact file names over a bounded
+    descending fiscal-year window — the no-DB fallback that still never scans the
+    ~110k-file directory."""
+    this_year = datetime.now(UTC).year
+    best: dict[str, tuple[int, Path]] = {}
+    for form in ("10k", "10q"):
+        for year in range(this_year + 1, this_year - _FILING_PROBE_BACK_YEARS, -1):
+            path = base / f"{ticker}_form_{form}_{year}.json"
+            if path.exists():
+                best[form] = (year, path)
+                break
+    return best
 
 
 def _filing_doc_id(conn: sqlite3.Connection | None, repo_root: Path, path: Path) -> int | None:
@@ -1062,7 +1106,7 @@ def _filing_evidence(
     for ticker in tickers:
         scored.extend(
             _scored_filing_sections(
-                conn, repo_root, terms, ticker, _latest_filing_paths(repo_root, ticker)
+                conn, repo_root, terms, ticker, _latest_filing_paths(repo_root, ticker, conn)
             )
         )
     scored.sort(key=lambda s: s[0], reverse=True)
@@ -1385,7 +1429,7 @@ def gather_requested_evidence(
                         paths = (
                             _filing_paths_for_year(repo_root, ticker, year)
                             if year is not None
-                            else _latest_filing_paths(repo_root, ticker)
+                            else _latest_filing_paths(repo_root, ticker, conn)
                         )
                         scored = _scored_filing_sections(conn, repo_root, terms, ticker, paths)
                         scored.sort(key=lambda s: s[0], reverse=True)

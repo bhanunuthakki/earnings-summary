@@ -28,6 +28,9 @@ from pathlib import Path
 from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from report import metrics_view  # noqa: E402
 
 
 def main() -> int:
@@ -185,26 +188,15 @@ def _extract_year_from_filename(name: str) -> int | None:
 def _load_annual_rows(
     conn: sqlite3.Connection, ticker: str, table: str, n: int
 ) -> list[dict[str, object]]:
-    cur = conn.cursor()
-    cur.execute(
-        f"SELECT * FROM {table} WHERE ticker = ? AND fiscal_period_type = 'FY' "
-        f"ORDER BY period_end DESC LIMIT ?",
-        (ticker, n),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    rows.reverse()
-    return rows
+    """Ticker-scoped ``metrics`` / ``ratios`` FY rows (oldest first). See
+    ``report.metrics_view`` — the dedup window is scoped to one ticker so cost
+    scales with this ticker's facts, not the whole financial_facts table."""
+    return metrics_view.annual_rows(conn, ticker, table, n)
 
 
 def _load_ttm_row(conn: sqlite3.Connection, ticker: str, table: str) -> dict[str, object] | None:
-    cur = conn.cursor()
-    cur.execute(
-        f"SELECT * FROM {table} WHERE ticker = ? AND fiscal_period_type = 'TTM' "
-        f"ORDER BY period_end DESC LIMIT 1",
-        (ticker,),
-    )
-    row = cur.fetchone()
-    return dict(row) if row else None
+    """Ticker-scoped most-recent TTM row (see ``_load_annual_rows``)."""
+    return metrics_view.ttm_row(conn, ticker, table)
 
 
 # ---------------------------------------------------------------------------
