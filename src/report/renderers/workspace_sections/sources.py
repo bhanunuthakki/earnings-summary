@@ -16,6 +16,7 @@ from llm.calibration import VersionSummary, daily_avg_scores, summarize_by_promp
 from report.models import AppendixSection, ProvenanceSection
 from report.renderers.workspace_charts import sparkline
 from report.renderers.workspace_sections._shared import _esc, _panel_head
+from ui import living_grid as lg
 from ui.controls import prov_severity_tick
 
 # The research server the report deep-links into. The report opens via file://,
@@ -82,24 +83,40 @@ def _sources_tab(
                 "Open validation issues",
                 sub_html=f'<span class="k-chip k-chip-mono k-chip-warn">{prov.open_validation_issues} open</span>',
             )
-            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-            "<th>Severity</th><th>Rule</th><th>Raw value</th><th>Expected</th><th>Raised</th>"
-            "</tr></thead><tbody>"
+        )
+        body.write(lg.grid_open())
+        body.write(lg.filter_bar(len(prov.open_issues_detail), noun="issues"))
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            + lg.th("Severity", "sev", "text", num=False)
+            + lg.th("Rule", "rule", "text", num=False)
+            + "<th>Raw value</th><th>Expected</th>"
+            + lg.th("Raised", "raised", "text", num=False)
+            + "</tr></thead><tbody>"
         )
         for v in prov.open_issues_detail:
             # Severity tick via the shared kit (prov_severity_tick) so the tone
             # derives from the live Severity enum — the writer emits halt/warn,
             # and the prior hand-typed {error,warning} map rendered every real
             # issue (incl. HALT) muted grey. See test_provenance_severity_contract.
+            raised = (v.raised_at or "")[:10]
+            data = (
+                lg.data_text(f"{v.severity} {v.rule} {v.raw_value or ''} {v.expected or ''}")
+                + lg.data_text_key("sev", str(v.severity))
+                + lg.data_text_key("rule", v.rule)
+                + lg.data_text_key("raised", raised)
+            )
             body.write(
-                f"<tr>"
+                f"<tr{data}>"
                 f"<td>{prov_severity_tick(v.severity)}</td>"
                 f"<td>{_esc(v.rule)}</td>"
                 f"<td>{_esc(v.raw_value or '—')}</td>"
                 f"<td>{_esc(v.expected or '—')}</td>"
-                f"<td>{_esc((v.raised_at or '')[:10])}</td></tr>"
+                f"<td>{_esc(raised)}</td></tr>"
             )
-        body.write("</tbody></table></div></div>")
+        body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     if prov.coverage:
         body.write(
@@ -107,37 +124,63 @@ def _sources_tab(
                 "Coverage matrix",
                 sub=f"{prov.open_validation_issues} open validation issues",
             )
-            + '<div class="table-scroll"><table class="tbl coverage-table"><thead><tr>'
-            "<th>Quarter</th>"
-            '<th class="cov-cell">Audio</th>'
-            '<th class="cov-cell">Transcript</th>'
-            '<th class="cov-cell">Release</th>'
-            '<th class="cov-cell">Slides</th>'
-            '<th class="cov-cell">SayDo</th>'
-            '<th class="cov-cell">Summary</th></tr></thead><tbody>'
         )
+        body.write(lg.grid_open())
+        body.write(lg.filter_bar(len(prov.coverage), noun="quarters"))
+        _cov_cols = (
+            ("audio", "Audio"),
+            ("transcript", "Transcript"),
+            ("release", "Release"),
+            ("slides", "Slides"),
+            ("saydo", "SayDo"),
+            ("summary", "Summary"),
+        )
+        body.write('<div class="table-scroll"><table class="tbl coverage-table"><thead><tr>')
+        body.write(lg.th("Quarter", "quarter", "text", num=False))
+        for key, label in _cov_cols:
+            body.write(
+                f'<th class="cov-cell lg-sortable num" role="button" tabindex="0" '
+                f"aria-sort=\"none\" @click=\"sortBy('{key}','num')\" "
+                f"@keydown.enter.prevent=\"sortBy('{key}','num')\" "
+                f":aria-sort=\"ariaSort('{key}')\">{label}"
+                f'<span class="lg-ind" x-text="arrow(\'{key}\')"></span></th>'
+            )
+        body.write("</tr></thead><tbody>")
         for c in prov.coverage:
-            body.write(f"<tr><td>{_esc(c.quarter)} {c.year}</td>")
-            for present in (
+            presence = (
                 c.has_audio_file,
                 c.has_transcript_file,
                 c.has_release_file,
                 c.has_slides_file,
                 c.step_saydo_analyzed,
                 c.step_llm_summarized,
-            ):
+            )
+            data = lg.data_text(f"{c.quarter} {c.year}") + lg.data_text_key(
+                "quarter", f"{c.year} {c.quarter}"
+            )
+            for (key, _label), present in zip(_cov_cols, presence, strict=True):
+                data += lg.data_num(key, 1.0 if present else 0.0)
+            body.write(f"<tr{data}><td>{_esc(c.quarter)} {c.year}</td>")
+            for present in presence:
                 mark = "●" if present else "○"
                 cls = "cov-yes" if present else "cov-no"
                 body.write(f'<td class="cov-cell {cls}">{mark}</td>')
             body.write("</tr>")
-        body.write("</tbody></table></div></div>")
+        body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     if prov.source_docs:
+        body.write(_panel_head("Source documents", sub=f"{len(prov.source_docs)} files"))
+        body.write(lg.grid_open())
+        body.write(lg.filter_bar(len(prov.source_docs), noun="files"))
         body.write(
-            _panel_head("Source documents", sub=f"{len(prov.source_docs)} files")
-            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-            "<th>Type</th><th>Period</th><th>Path</th><th>Fetched</th>"
-            "</tr></thead><tbody>"
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            + lg.th("Type", "type", "text", num=False)
+            + lg.th("Period", "period", "text", num=False)
+            + "<th>Path</th>"
+            + lg.th("Fetched", "fetched", "text", num=False)
+            + "</tr></thead><tbody>"
         )
         for d in prov.source_docs:
             # Path deep-links the in-app /source/<doc_id> viewer (numbered
@@ -151,13 +194,23 @@ def _sources_tab(
                 )
             else:
                 path_cell = _esc(d.file_path)
+            data = (
+                lg.data_text(
+                    f"{d.doc_type} {d.period_end or ''} {d.file_path} {d.fetched_at or ''}"
+                )
+                + lg.data_text_key("type", d.doc_type)
+                + lg.data_text_key("period", d.period_end)
+                + lg.data_text_key("fetched", d.fetched_at)
+            )
             body.write(
-                f"<tr><td>{_esc(d.doc_type)}</td>"
+                f"<tr{data}><td>{_esc(d.doc_type)}</td>"
                 f"<td>{_esc(d.period_end or '—')}</td>"
                 f"<td>{path_cell}</td>"
                 f"<td>{_esc(d.fetched_at or '—')}</td></tr>"
             )
-        body.write("</tbody></table></div></div>")
+        body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     _prompt_quality_panel(body, Path(repo_root) / "data" / "portfolio.db")
     body.write("</div>")
@@ -190,24 +243,38 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
     )
 
     daily = daily_avg_scores(db_path=db_path, since=since)
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(summaries), noun="versions"))
     body.write(
         '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-        "<th>Purpose</th><th>Version</th>"
-        '<th class="num">n</th>'
-        '<th class="num">avg</th>'
-        '<th class="num">p25</th>'
-        '<th class="num">p50</th>'
-        '<th class="num">p75</th>'
-        "<th>Last scored</th>"
-        "<th>30d trend</th>"
-        "</tr></thead><tbody>"
+        + lg.th("Purpose", "purpose", "text", num=False)
+        + lg.th("Version", "version", "text", num=False)
+        + lg.th("n", "n", "num")
+        + lg.th("avg", "avg", "num")
+        + lg.th("p25", "p25", "num")
+        + lg.th("p50", "p50", "num")
+        + lg.th("p75", "p75", "num")
+        + lg.th("Last scored", "last", "text", num=False)
+        + "<th>30d trend</th>"
+        + "</tr></thead><tbody>"
     )
     for s in summaries:
         spark_vals = [v for _, v in daily.get((s.purpose, s.prompt_version), [])]
         spark = sparkline(spark_vals, width=120, height=24) if spark_vals else "—"
         last = (s.last_scored_at or "—")[:19].replace("T", " ")
+        data = (
+            lg.data_text(f"{s.purpose} {s.prompt_version}")
+            + lg.data_text_key("purpose", s.purpose)
+            + lg.data_text_key("version", s.prompt_version)
+            + lg.data_num("n", s.score_count)
+            + lg.data_num("avg", s.avg_score)
+            + lg.data_num("p25", s.p25)
+            + lg.data_num("p50", s.p50)
+            + lg.data_num("p75", s.p75)
+            + lg.data_text_key("last", last)
+        )
         body.write(
-            "<tr>"
+            f"<tr{data}>"
             f"<td>{_esc(s.purpose)}</td>"
             f"<td>{_esc(s.prompt_version)}</td>"
             f'<td class="num">{s.score_count}</td>'
@@ -219,4 +286,6 @@ def _prompt_quality_panel(body: StringIO, db_path: Path) -> None:
             f"<td>{spark}</td>"
             "</tr>"
         )
-    body.write("</tbody></table></div></div>")
+    body.write("</tbody></table></div>")
+    body.write(lg.grid_close())
+    body.write("</div>")

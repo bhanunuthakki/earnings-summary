@@ -12,6 +12,7 @@ from io import StringIO
 
 from report.models import PortfolioPositionSection
 from report.renderers.workspace_sections._shared import _empty_panel, _esc, _fmt_usd, _panel_head
+from ui import living_grid as lg
 
 __all__ = [
     "_position_stat",
@@ -64,31 +65,48 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
                 sub=f"{len(pp.accounts)} rows",
                 as_of=pp.position_as_of.isoformat() if pp.position_as_of is not None else None,
             )
-            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-            "<th>Account</th>"
-            '<th class="num">Shares</th>'
-            '<th class="num">Cost basis</th>'
-            '<th class="num">Cost source</th>'
-            '<th class="num">Market value</th>'
-            '<th class="num">P&L</th>'
-            '<th class="num">Return</th></tr></thead><tbody>'
+        )
+        body.write(lg.grid_open())
+        body.write(lg.filter_bar(len(pp.accounts), noun="accounts"))
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            + lg.th("Account", "account", "text", num=False)
+            + lg.th("Shares", "shares", "num")
+            + lg.th("Cost basis", "cost", "num")
+            + lg.th("Cost source", "source", "text")
+            + lg.th("Market value", "mv", "num")
+            + lg.th("P&L", "pnl", "num")
+            + lg.th("Return", "ret", "num")
+            + "</tr></thead><tbody>"
         )
         for a in pp.accounts:
             pnl_cls = ""
             if a.unrealized_pnl is not None:
                 pnl_cls = " pos" if a.unrealized_pnl >= 0 else " neg"
-            body.write(f"<tr><td>{_esc(a.account_name)}</td>")
+            src = a.cost_basis_source or "broker"
+            data = (
+                lg.data_text(f"{a.account_name} {src}")
+                + lg.data_text_key("account", a.account_name)
+                + lg.data_num("shares", a.quantity)
+                + lg.data_num("cost", a.cost_basis)
+                + lg.data_text_key("source", src)
+                + lg.data_num("mv", a.market_value)
+                + lg.data_num("pnl", a.unrealized_pnl)
+                + lg.data_num("ret", a.unrealized_pct)
+            )
+            body.write(f"<tr{data}><td>{_esc(a.account_name)}</td>")
             body.write(f'<td class="num">{a.quantity:.0f}</td>')
             body.write(f'<td class="num">{_fmt_usd(a.cost_basis)}</td>')
             # Cost-basis source — 'broker' (None means broker), 'manual',
             # 'inferred_acats', etc. Surfaces data-quality at a glance.
-            src = a.cost_basis_source or "broker"
             body.write(f'<td class="num muted xsmall">{_esc(src)}</td>')
             body.write(f'<td class="num">{_fmt_usd(a.market_value)}</td>')
             body.write(f'<td class="num{pnl_cls}">{_fmt_usd(a.unrealized_pnl)}</td>')
             pct = f"{a.unrealized_pct * 100:+.1f}%" if a.unrealized_pct is not None else "—"
             body.write(f'<td class="num{pnl_cls}">{_esc(pct)}</td></tr>')
-        body.write("</tbody></table></div></div>")
+        body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     # Recent transactions panel — last N broker activity rows on this ticker.
     # Goes ABOVE the decisions section so the activity context is visible
@@ -99,20 +117,38 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
                 "Recent transactions",
                 sub=f"{len(pp.recent_transactions)} most-recent",
             )
-            + '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
-            "<th>Date</th><th>Account</th><th>Type</th>"
-            '<th class="num">Shares</th><th class="num">Amount</th>'
-            "</tr></thead><tbody>"
+        )
+        body.write(lg.grid_open())
+        body.write(lg.filter_bar(len(pp.recent_transactions), noun="transactions"))
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            + lg.th("Date", "date", "text", num=False)
+            + lg.th("Account", "account", "text", num=False)
+            + lg.th("Type", "type", "text", num=False)
+            + lg.th("Shares", "shares", "num")
+            + lg.th("Amount", "amount", "num")
+            + "</tr></thead><tbody>"
         )
         for t in pp.recent_transactions:
+            iso = t.date.isoformat()
+            data = (
+                lg.data_text(f"{iso} {t.account_name} {t.type}")
+                + lg.data_text_key("date", iso)
+                + lg.data_text_key("account", t.account_name)
+                + lg.data_text_key("type", t.type)
+                + lg.data_num("shares", t.quantity)
+                + lg.data_num("amount", t.amount)
+            )
             body.write(
-                f"<tr><td>{t.date.isoformat()}</td>"
+                f"<tr{data}><td>{iso}</td>"
                 f"<td>{_esc(t.account_name)}</td>"
                 f"<td>{_esc(t.type)}</td>"
                 f'<td class="num">{t.quantity:+.0f}</td>'
                 f'<td class="num">{_fmt_usd(t.amount)}</td></tr>'
             )
-        body.write("</tbody></table></div></div>")
+        body.write("</tbody></table></div>")
+        body.write(lg.grid_close())
+        body.write("</div>")
 
     if pp.open_decisions or pp.closed_decisions:
         body.write('<div class="grid-2col">')

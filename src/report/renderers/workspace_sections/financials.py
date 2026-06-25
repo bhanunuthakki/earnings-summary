@@ -30,6 +30,7 @@ from report.renderers.workspace_sections._shared import (
     _source_hover_title,
     _xlink_html,
 )
+from ui import living_grid as lg
 
 __all__ = [
     "_SIGNALS_SEVERITIES",
@@ -490,26 +491,46 @@ def _signal_card_workspace(body: StringIO, r: SignalRow) -> None:
     body.write("</div>")
 
 
+_SEVERITY_RANK = {"red": 3, "yellow": 2, "green": 1}
+
+
 def _signals_table_workspace(body: StringIO, rows: list[SignalRow]) -> None:
-    body.write('<div class="prose-pad"><div class="table-scroll">')
+    body.write('<div class="prose-pad">')
+    body.write(lg.grid_open())
+    body.write(lg.filter_bar(len(rows), noun="signals"))
+    body.write('<div class="table-scroll">')
     body.write('<table class="tbl"><thead><tr>')
     body.write(
-        "<th>Sev</th><th>Metric</th><th>Kind</th><th>Signal</th><th>Narrative</th><th>Stat</th>"
+        lg.th("Sev", "sev", "num")
+        + lg.th("Metric", "metric", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + lg.th("Signal", "signal", "text", num=False)
+        + "<th>Narrative</th><th>Stat</th>"
     )
     body.write("</tr></thead><tbody>")
     for r in rows:
         narrative = _esc(r.narrative) if r.narrative else "—"
         stat = _esc(r.value_summary) if r.value_summary else "—"
+        signal_label = r.signal_type.replace("_", " ")
+        data = (
+            lg.data_text(f"{r.severity} {r.metric_name} {r.metric_kind} {signal_label}")
+            + lg.data_num("sev", _SEVERITY_RANK.get(r.severity))
+            + lg.data_text_key("metric", r.metric_name)
+            + lg.data_text_key("kind", r.metric_kind)
+            + lg.data_text_key("signal", signal_label)
+        )
         body.write(
-            f'<tr><td class="signal-sev {_signal_severity_class(r.severity)}">'
+            f'<tr{data}><td class="signal-sev {_signal_severity_class(r.severity)}">'
             f"{_esc(r.severity)}</td>"
             f"<td><strong>{_esc(r.metric_name)}</strong></td>"
             f"<td>{_esc(r.metric_kind)}</td>"
-            f"<td>{_esc(r.signal_type.replace('_', ' '))}</td>"
+            f"<td>{_esc(signal_label)}</td>"
             f"<td>{narrative}</td>"
             f'<td class="mono">{stat}</td></tr>'
         )
-    body.write("</tbody></table></div></div>")
+    body.write("</tbody></table></div>")
+    body.write(lg.grid_close())
+    body.write("</div>")
 
 
 def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:

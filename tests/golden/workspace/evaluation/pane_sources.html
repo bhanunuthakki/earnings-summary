@@ -29,19 +29,31 @@ Pat Founder: Thanks everyone for joining.</div>
 <span class="k-chip k-chip-mono k-chip-warn">2 open</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter issues…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter issues…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> issues</span>
+</div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
 <thead>
 <tr>
-<th>Severity</th>
-<th>Rule</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('sev','text')" @keydown.enter.prevent="sortBy('sev','text')" :aria-sort="ariaSort('sev')">Severity<span class="lg-ind" x-text="arrow('sev')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('rule','text')" @keydown.enter.prevent="sortBy('rule','text')" :aria-sort="ariaSort('rule')">Rule<span class="lg-ind" x-text="arrow('rule')">
+</span>
+</th>
 <th>Raw value</th>
 <th>Expected</th>
-<th>Raised</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('raised','text')" @keydown.enter.prevent="sortBy('raised','text')" :aria-sort="ariaSort('raised')">Raised<span class="lg-ind" x-text="arrow('raised')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="halt magnitude_jump 1810.0 ≤ 1600.0" data-sev="halt" data-rule="magnitude_jump" data-raised="2026-05-03">
 <td>
 <span class="k-prov-tick k-prov-tick-bad">HALT</span>
 </td>
@@ -50,7 +62,7 @@ Pat Founder: Thanks everyone for joining.</div>
 <td>≤ 1600.0</td>
 <td>2026-05-03</td>
 </tr>
-<tr>
+<tr data-text="warn source_disagreement 1810.0 1807.0" data-sev="warn" data-rule="source_disagreement" data-raised="2026-05-02">
 <td>
 <span class="k-prov-tick k-prov-tick-warn">WARN</span>
 </td>
@@ -63,6 +75,7 @@ Pat Founder: Thanks everyone for joining.</div>
 </table>
 </div>
 </div>
+</div>
 <div class="panel">
 <div class="panel-head">
 <span class="panel-title">Coverage matrix</span>
@@ -70,21 +83,41 @@ Pat Founder: Thanks everyone for joining.</div>
 <span class="panel-sub">2 open validation issues</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter quarters…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter quarters…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> quarters</span>
+</div>
 <div class="table-scroll">
 <table class="tbl coverage-table">
 <thead>
 <tr>
-<th>Quarter</th>
-<th class="cov-cell">Audio</th>
-<th class="cov-cell">Transcript</th>
-<th class="cov-cell">Release</th>
-<th class="cov-cell">Slides</th>
-<th class="cov-cell">SayDo</th>
-<th class="cov-cell">Summary</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('quarter','text')" @keydown.enter.prevent="sortBy('quarter','text')" :aria-sort="ariaSort('quarter')">Quarter<span class="lg-ind" x-text="arrow('quarter')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('audio','num')" @keydown.enter.prevent="sortBy('audio','num')" :aria-sort="ariaSort('audio')">Audio<span class="lg-ind" x-text="arrow('audio')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('transcript','num')" @keydown.enter.prevent="sortBy('transcript','num')" :aria-sort="ariaSort('transcript')">Transcript<span class="lg-ind" x-text="arrow('transcript')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('release','num')" @keydown.enter.prevent="sortBy('release','num')" :aria-sort="ariaSort('release')">Release<span class="lg-ind" x-text="arrow('release')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('slides','num')" @keydown.enter.prevent="sortBy('slides','num')" :aria-sort="ariaSort('slides')">Slides<span class="lg-ind" x-text="arrow('slides')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('saydo','num')" @keydown.enter.prevent="sortBy('saydo','num')" :aria-sort="ariaSort('saydo')">SayDo<span class="lg-ind" x-text="arrow('saydo')">
+</span>
+</th>
+<th class="cov-cell lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('summary','num')" @keydown.enter.prevent="sortBy('summary','num')" :aria-sort="ariaSort('summary')">Summary<span class="lg-ind" x-text="arrow('summary')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="q1 2026" data-quarter="2026 q1" data-audio="0.000000" data-transcript="1.000000" data-release="1.000000" data-slides="1.000000" data-saydo="1.000000" data-summary="1.000000">
 <td>Q1 2026</td>
 <td class="cov-cell cov-no">○</td>
 <td class="cov-cell cov-yes">●</td>
@@ -93,7 +126,7 @@ Pat Founder: Thanks everyone for joining.</div>
 <td class="cov-cell cov-yes">●</td>
 <td class="cov-cell cov-yes">●</td>
 </tr>
-<tr>
+<tr data-text="q4 2025" data-quarter="2025 q4" data-audio="0.000000" data-transcript="1.000000" data-release="1.000000" data-slides="0.000000" data-saydo="1.000000" data-summary="1.000000">
 <td>Q4 2025</td>
 <td class="cov-cell cov-no">○</td>
 <td class="cov-cell cov-yes">●</td>
@@ -106,6 +139,7 @@ Pat Founder: Thanks everyone for joining.</div>
 </table>
 </div>
 </div>
+</div>
 <div class="panel">
 <div class="panel-head">
 <span class="panel-title">Source documents</span>
@@ -113,18 +147,30 @@ Pat Founder: Thanks everyone for joining.</div>
 <span class="panel-sub">2 files</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter files…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter files…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> files</span>
+</div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
 <thead>
 <tr>
-<th>Type</th>
-<th>Period</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('type','text')" @keydown.enter.prevent="sortBy('type','text')" :aria-sort="ariaSort('type')">Type<span class="lg-ind" x-text="arrow('type')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('period','text')" @keydown.enter.prevent="sortBy('period','text')" :aria-sort="ariaSort('period')">Period<span class="lg-ind" x-text="arrow('period')">
+</span>
+</th>
 <th>Path</th>
-<th>Fetched</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('fetched','text')" @keydown.enter.prevent="sortBy('fetched','text')" :aria-sort="ariaSort('fetched')">Fetched<span class="lg-ind" x-text="arrow('fetched')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="10-q 2026-03-31 data/historical/sec/test_10q_2026q1.json 2026-05-02t08:00:00" data-type="10-q" data-period="2026-03-31" data-fetched="2026-05-02t08:00:00">
 <td>10-Q</td>
 <td>2026-03-31</td>
 <td>
@@ -132,7 +178,7 @@ Pat Founder: Thanks everyone for joining.</div>
 </td>
 <td>2026-05-02T08:00:00</td>
 </tr>
-<tr>
+<tr data-text="transcript 2026-03-31 data/transcripts/test_q1_2026.txt 2026-04-30t21:00:00" data-type="transcript" data-period="2026-03-31" data-fetched="2026-04-30t21:00:00">
 <td>transcript</td>
 <td>2026-03-31</td>
 <td>data/transcripts/TEST_Q1_2026.txt</td>
@@ -140,6 +186,7 @@ Pat Founder: Thanks everyone for joining.</div>
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 </div>

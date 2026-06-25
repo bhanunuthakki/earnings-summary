@@ -32,21 +32,41 @@
 <span class="panel-sub">2 rows</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter accounts…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter accounts…">
+<span class="lg-count muted">
+<span x-text="shown">2</span> of <span x-text="total">2</span> accounts</span>
+</div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
 <thead>
 <tr>
-<th>Account</th>
-<th class="num">Shares</th>
-<th class="num">Cost basis</th>
-<th class="num">Cost source</th>
-<th class="num">Market value</th>
-<th class="num">P&L</th>
-<th class="num">Return</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('account','text')" @keydown.enter.prevent="sortBy('account','text')" :aria-sort="ariaSort('account')">Account<span class="lg-ind" x-text="arrow('account')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('shares','num')" @keydown.enter.prevent="sortBy('shares','num')" :aria-sort="ariaSort('shares')">Shares<span class="lg-ind" x-text="arrow('shares')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('cost','num')" @keydown.enter.prevent="sortBy('cost','num')" :aria-sort="ariaSort('cost')">Cost basis<span class="lg-ind" x-text="arrow('cost')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('source','text')" @keydown.enter.prevent="sortBy('source','text')" :aria-sort="ariaSort('source')">Cost source<span class="lg-ind" x-text="arrow('source')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('mv','num')" @keydown.enter.prevent="sortBy('mv','num')" :aria-sort="ariaSort('mv')">Market value<span class="lg-ind" x-text="arrow('mv')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('pnl','num')" @keydown.enter.prevent="sortBy('pnl','num')" :aria-sort="ariaSort('pnl')">P&L<span class="lg-ind" x-text="arrow('pnl')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('ret','num')" @keydown.enter.prevent="sortBy('ret','num')" :aria-sort="ariaSort('ret')">Return<span class="lg-ind" x-text="arrow('ret')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="taxable broker" data-account="taxable" data-shares="420.000000" data-cost="24150.000000" data-source="broker" data-mv="30408.000000" data-pnl="6258.000000" data-ret="0.259000">
 <td>Taxable</td>
 <td class="num">420</td>
 <td class="num">$24,150.00</td>
@@ -55,7 +75,7 @@
 <td class="num pos">$6,258.00</td>
 <td class="num pos">+25.9%</td>
 </tr>
-<tr>
+<tr data-text="ira manual" data-account="ira" data-shares="180.000000" data-cost="11700.000000" data-source="manual" data-mv="13032.000000" data-pnl="1332.000000" data-ret="0.114000">
 <td>IRA</td>
 <td class="num">180</td>
 <td class="num">$11,700.00</td>
@@ -68,6 +88,7 @@
 </table>
 </div>
 </div>
+</div>
 <div class="panel">
 <div class="panel-head">
 <span class="panel-title">Recent transactions</span>
@@ -75,19 +96,35 @@
 <span class="panel-sub">1 most-recent</span>
 </span>
 </div>
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter transactions…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter transactions…">
+<span class="lg-count muted">
+<span x-text="shown">1</span> of <span x-text="total">1</span> transactions</span>
+</div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
 <thead>
 <tr>
-<th>Date</th>
-<th>Account</th>
-<th>Type</th>
-<th class="num">Shares</th>
-<th class="num">Amount</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('date','text')" @keydown.enter.prevent="sortBy('date','text')" :aria-sort="ariaSort('date')">Date<span class="lg-ind" x-text="arrow('date')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('account','text')" @keydown.enter.prevent="sortBy('account','text')" :aria-sort="ariaSort('account')">Account<span class="lg-ind" x-text="arrow('account')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('type','text')" @keydown.enter.prevent="sortBy('type','text')" :aria-sort="ariaSort('type')">Type<span class="lg-ind" x-text="arrow('type')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('shares','num')" @keydown.enter.prevent="sortBy('shares','num')" :aria-sort="ariaSort('shares')">Shares<span class="lg-ind" x-text="arrow('shares')">
+</span>
+</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('amount','num')" @keydown.enter.prevent="sortBy('amount','num')" :aria-sort="ariaSort('amount')">Amount<span class="lg-ind" x-text="arrow('amount')">
+</span>
+</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="2026-04-14 taxable buy" data-date="2026-04-14" data-account="taxable" data-type="buy" data-shares="60.000000" data-amount="4280.000000">
 <td>2026-04-14</td>
 <td>Taxable</td>
 <td>BUY</td>
@@ -96,6 +133,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 <div class="grid-2col">
