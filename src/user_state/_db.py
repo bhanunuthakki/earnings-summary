@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from clock import now_naive_utc, to_naive_utc
+from db_paths import resolve_db_path
 
 
 def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
@@ -31,7 +32,7 @@ def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
     ``RuntimeError`` when no path is configured. The caller owns closing
     the connection (use try/finally).
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError(
             "DB path not configured: pass db_path explicitly or ensure db.DB_PATH "
@@ -44,17 +45,6 @@ def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
-
-
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
 
 
 def now_iso() -> str:

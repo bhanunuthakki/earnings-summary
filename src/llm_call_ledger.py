@@ -22,6 +22,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 
@@ -152,7 +154,7 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
     pipeline has configured via ``db.DB_PATH``.
     """
     try:
-        path = _resolve_db_path(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             log.debug(
                 {
@@ -206,24 +208,4 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
                 "ticker": record.ticker,
             }
         )
-        return None
-
-
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    """Resolve the target DB path.
-
-    Order of preference:
-      1. Explicit ``db_path`` override (tests + ad-hoc callers).
-      2. ``db.DB_PATH`` if importable — this is what build_artifacts.py
-         mutates via ``_sync_db_to_repo`` when ``--repo-root`` is passed.
-      3. None — caller's data dir doesn't have a DB yet (early bootstrap).
-    """
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH  # late import — keeps this module
-        # importable without a DB context configured
-
-        return Path(DB_PATH)
-    except ImportError:
         return None

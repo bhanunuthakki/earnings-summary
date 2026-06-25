@@ -32,6 +32,8 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 # Special key in llm_budgets for purposes not explicitly listed. Seeded by
@@ -73,19 +75,6 @@ class BudgetCheck:
     reason: str | None = None
 
 
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    """Same resolution pattern as llm_call_ledger: explicit override wins,
-    then db.DB_PATH if importable, else None (caller has no DB context)."""
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
-
-
 def _month_start_iso(now: datetime | None = None) -> tuple[str, str]:
     """Return (start_of_current_month_iso, 'YYYY-MM') for the given clock
     or now (UTC). Helper for the spend window and the alert key."""
@@ -104,7 +93,7 @@ def current_month_spend(
 
     `now` is optional for tests that need a deterministic month boundary.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return Decimal("0")
     start_iso, _ = _month_start_iso(now)
@@ -175,7 +164,7 @@ def _load_budget(purpose: str, *, db_path: Path | str | None = None) -> _BudgetR
     """Look up the budget row for `purpose`, falling back to '__default__'.
     Returns None when neither row exists (no migrations run, or seed
     missing). Read failures return None — the enforcer fails open."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return None
     try:
@@ -381,7 +370,7 @@ def record_alert(
     after burn first crosses 80% — we record once, the dashboard reads it,
     the operator decides what to do.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     _, month = _month_start_iso(now)
@@ -427,7 +416,7 @@ def list_budgets(
     """Return all llm_budgets rows annotated with the current month's spend
     and headroom%. Used by the manage_llm_budget CLI and the dashboard panel.
     Returns [] when the DB / table is missing."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return []
     try:
@@ -496,7 +485,7 @@ def set_cap(
     """Update monthly_cap_usd for `purpose`. Returns True on update,
     False if the row didn't exist or the DB is unavailable. Used by the
     manage_llm_budget CLI."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     cap_str = str(Decimal(str(new_cap_usd)).quantize(Decimal("0.01")))
@@ -543,7 +532,7 @@ def set_mode(
     """
     if mode not in _VALID_MODES:
         raise ValueError(f"invalid on_exceed mode {mode!r}; expected one of {sorted(_VALID_MODES)}")
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     updated_at = (now or datetime.now(UTC)).isoformat()
@@ -577,7 +566,7 @@ def month_report(
     month if None. Joins budgets ⨝ aggregated spend so the report shows
     capped + uncapped purposes side by side. Returns [] when the DB is
     missing."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return []
     if month is None:

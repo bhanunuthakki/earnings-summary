@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from report import metrics_view
 from report.models import (
     EvaluationSnapshotSection,
     QuickCategorizationRow,
@@ -84,33 +85,20 @@ def build(ticker: str, repo_root: Path) -> EvaluationSnapshotSection:
 def _load_annual(
     conn: sqlite3.Connection, ticker: str, table: str, n: int
 ) -> list[dict[str, object]]:
-    """Return up to N most-recent FY rows from `table`, oldest first."""
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT * FROM {table}
-        WHERE ticker = ? AND fiscal_period_type = 'FY'
-        ORDER BY period_end DESC LIMIT ?
-        """,
-        (ticker, n),
-    )
-    rows = [dict(r) for r in cursor.fetchall()]
-    rows.reverse()  # oldest → newest
-    return rows
+    """Up to N most-recent FY rows from the ``metrics`` / ``ratios`` view for
+    this ticker, oldest first.
+
+    Routed through ``report.metrics_view``, which inlines the view's dedup+pivot
+    with ``WHERE ticker = ?`` *inside* the ROW_NUMBER partition — so cost scales
+    with this ticker's facts, not the whole financial_facts table (the global
+    views can't push the ticker filter past the window). Row shape is identical.
+    """
+    return metrics_view.annual_rows(conn, ticker, table, n)
 
 
 def _load_ttm(conn: sqlite3.Connection, ticker: str, table: str) -> dict[str, object] | None:
-    cursor = conn.cursor()
-    cursor.execute(
-        f"""
-        SELECT * FROM {table}
-        WHERE ticker = ? AND fiscal_period_type = 'TTM'
-        ORDER BY period_end DESC LIMIT 1
-        """,
-        (ticker,),
-    )
-    row = cursor.fetchone()
-    return dict(row) if row is not None else None
+    """Most-recent TTM row for this ticker (ticker-scoped; see ``_load_annual``)."""
+    return metrics_view.ttm_row(conn, ticker, table)
 
 
 def _load_company_name(conn: sqlite3.Connection, ticker: str) -> str | None:

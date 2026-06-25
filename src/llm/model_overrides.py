@@ -10,7 +10,7 @@ by ``execution/apply_model_switches.py`` after the eval sweep accumulates
 enough evidence.
 
 All helpers degrade gracefully — a DB read failure never blocks an LLM call.
-The ``db_path`` param mirrors ``llm_budget._resolve_db_path``:
+The ``db_path`` param mirrors ``db_paths.resolve_db_path``:
   1. An explicit override wins (useful in tests and CLIs that pass --repo-root).
   2. Otherwise ``db.DB_PATH`` is imported at call-time so the per-process
      ``set_db_path`` override (set by any CLI that passes --db-path) is
@@ -27,20 +27,11 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 SET_BY_AUTO = "auto:model_eval_loop"
-
-
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
 
 
 def active_override(purpose: str, *, db_path: Path | str | None = None) -> str | None:
@@ -50,7 +41,7 @@ def active_override(purpose: str, *, db_path: Path | str | None = None) -> str |
     Reads the most recently set active override so that a manual correction
     always wins over an older auto-switch row.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return None
     try:
@@ -96,7 +87,7 @@ def write_pin_override(
     ``reason`` is an arbitrary JSON-serialisable dict (run_id, parity_rate,
     verdict_count, …) persisted as ``reason_json``.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("write_pin_override: no DB path available")
     now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
@@ -137,7 +128,7 @@ def deactivate_override(
     Returns True if at least one row was deactivated, False if no active row
     existed (idempotent).  The rows are kept (active=0) as history.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("deactivate_override: no DB path available")
     conn = sqlite3.connect(str(path), timeout=10.0)
@@ -177,7 +168,7 @@ def record_verdict(
     the full verdict + per-case judge rationales for a complete DB audit trail
     (no JSONL dependency). ``recorded_at`` is stamped now-UTC.
     """
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("record_verdict: no DB path available")
     now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()

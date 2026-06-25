@@ -560,10 +560,15 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
                 "reason": check.reason,
             }
         )
-        try:  # noqa: SIM105
+        try:
             record_alert(purpose, 1.0, check.current_spend)
         except Exception:
-            pass
+            # Alerting is best-effort and must never break the budget-check
+            # path — degrade, but don't swallow silently.
+            log.warning(
+                {"event": "llm_budget_alert_record_failed", "purpose": purpose, "level": "hard"},
+                exc_info=True,
+            )
     if check.warn:
         log.warning(
             {
@@ -575,10 +580,14 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
                 "reason": check.reason,
             }
         )
-        try:  # noqa: SIM105
+        try:
             record_alert(purpose, 0.80, check.current_spend)
         except Exception:
-            pass
+            # Best-effort alerting (see above) — log and continue.
+            log.warning(
+                {"event": "llm_budget_alert_record_failed", "purpose": purpose, "level": "warn"},
+                exc_info=True,
+            )
 
 
 def _call_claude(

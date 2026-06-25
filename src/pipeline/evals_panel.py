@@ -372,7 +372,7 @@ def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow
             )
     return (
         f"{head}"
-        '<table class="ev-runs"><thead><tr>'
+        '<table class="p-table"><thead><tr>'
         '<th>Purpose</th><th>Avg score</th><th class="num">Pass</th><th>Mode</th>'
         '<th>Prompt</th><th class="num">Run cost</th><th>When</th>'
         "</tr></thead><tbody>"
@@ -453,7 +453,7 @@ def _health_section(health: list[CallHealthRow]) -> str:
         f"{head}"
         + lg.grid_open()
         + lg.filter_bar(len(health), noun="purposes", placeholder="Filter by purpose…")
-        + '<table class="ev-health"><thead><tr>'
+        + '<table class="p-table"><thead><tr>'
         + lg.th("Purpose", "purpose", "text", num=False)
         + lg.th("Calls", "calls", "num")
         + lg.th("Error rate", "err", "num")
@@ -491,7 +491,6 @@ _PANEL_CSS = """<style>
 .ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);
   font-size: var(--fs-caption); max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
-.ev-runs td, .ev-health td { vertical-align: middle; }
 .ev-drawer-row > td { padding: 0 0 10px 12px; border: none; }
 /* The version locator rides the kit's .k-chip.k-chip-mono; only the inter-chip
    separation + tooltip affordance are layout-local. */

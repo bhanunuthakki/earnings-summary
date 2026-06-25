@@ -75,6 +75,7 @@ from refresh_dispatch import STEP_NAMES  # noqa: E402
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
+import ticker_validation  # noqa: E402
 from alerts import (  # noqa: E402
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
@@ -2464,7 +2465,10 @@ def create_app(
 
         import refresh_dcf  # heavy CLI module — imported only on the save path
 
-        t = ticker.upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
         if result.get("status") != "ok":
             reason = str(result.get("reason", "save failed"))
@@ -2520,7 +2524,10 @@ def create_app(
         except ViewSpecError as exc:
             return ({"error": str(exc)}, 400)
 
-        t = ticker_raw.strip().upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker_raw)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         # FCFF-only guard: archetype models (bank/holdco/fintech/platform) and
         # un-built names have no redesigned workbook to seed from.
         live = repo_root / "dcf" / f"{t}.xlsx"
@@ -2629,7 +2636,10 @@ def create_app(
         except ViewSpecError as exc:
             return ({"error": str(exc)}, 400)
 
-        t = ticker_raw.strip().upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker_raw)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         # A reference attaches to a ticker's DCF — any model archetype qualifies
         # (FCFF/bank/holdco/...), since the companion file is model-agnostic. A
         # never-built name has nothing to reference.
@@ -2713,6 +2723,10 @@ def create_app(
             return ({"error": "ticker required"}, 400)
         if mode not in ("stale", "full"):
             return ({"error": f"mode must be 'stale' or 'full', got {mode!r}"}, 400)
+        try:
+            ticker = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         force_budget_bypass = bool(body.get("force_budget_bypass", False))
         force = bool(body.get("force", False))
         steps_raw = body.get("steps")
@@ -2859,6 +2873,10 @@ def create_app(
         if not ticker:
             return ({"error": "ticker required"}, 400)
         try:
+            ticker = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
+        try:
             quarters = int(body.get("quarters", 8))
         except (TypeError, ValueError):
             return ({"error": "quarters must be an integer"}, 400)
@@ -2904,6 +2922,10 @@ def create_app(
         ticker = str(body.get("ticker", "")).upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
+        try:
+            ticker = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
         argv = [
             sys.executable,
@@ -2946,6 +2968,10 @@ def create_app(
         ticker = str(body.get("ticker", "")).upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
+        try:
+            ticker = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         script = repo_root / "execution" / "dcf_sheets.py"
         argv = [
             sys.executable,
@@ -3020,6 +3046,10 @@ def create_app(
             ticker = str(body.get("ticker", "")).upper()
             if not ticker:
                 return ({"error": "onboard requires a ticker"}, 400)
+            try:
+                ticker = ticker_validation.safe_ticker(ticker)
+            except ValueError:
+                return ({"error": "invalid ticker"}, 400)
             parts = ["onboard_ticker.py", "--ticker", ticker]
             slot_ticker, kind = ticker, "maint-onboard"
         elif action in _MAINTENANCE_ACTIONS:
@@ -3365,6 +3395,10 @@ def create_app(
         ticker = str(body.get("ticker", "")).upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
+        try:
+            ticker = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         apply_flag = bool(body.get("apply", False))
         report_date_str = body.get("report_date")
         report_date: date | None = None

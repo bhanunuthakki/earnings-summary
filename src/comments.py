@@ -47,6 +47,8 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
+from ticker_validation import safe_ticker
+
 # ---------------------------------------------------------------------------
 # Anchor types — what a comment can be attached to in the rendered report.
 # Renderers emit `data-anchor-type=<type> data-anchor-key=<key>` attributes
@@ -220,7 +222,10 @@ class CommentStore(BaseModel):
 
 
 def _store_path(repo_root: Path, ticker: str, report_date: date) -> Path:
-    out = repo_root / "data" / "report_comments" / ticker.upper()
+    # safe_ticker is the path-traversal gate (defense in depth): the comment
+    # store is one file per ticker, so the ticker must be a single safe path
+    # segment before it names a directory under data/report_comments/.
+    out = repo_root / "data" / "report_comments" / safe_ticker(ticker)
     out.mkdir(parents=True, exist_ok=True)
     return out / f"{report_date.isoformat()}.json"
 

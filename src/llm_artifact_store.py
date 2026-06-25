@@ -29,7 +29,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+
+from db_paths import resolve_db_path
 
 log = logging.getLogger(__name__)
 
@@ -552,7 +553,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     Best-effort pattern matches llm_call_ledger so the LLM pipeline never
     fails on telemetry."""
     try:
-        path = _resolve_db_path(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = sqlite3.connect(str(path), timeout=5.0)
@@ -567,15 +568,4 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         return conn
     except (sqlite3.Error, OSError) as exc:
         log.debug({"event": "artifact_store_open_failed", "error": str(exc)})
-        return None
-
-
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(cast("str", DB_PATH))
-    except ImportError:
         return None

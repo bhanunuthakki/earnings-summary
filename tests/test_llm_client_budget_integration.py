@@ -170,9 +170,13 @@ def stub_claude_cli(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]
 
 @pytest.fixture
 def db_patch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Point `llm_budget._resolve_db_path` (and the ledger writer's
+    """Point `llm_budget.resolve_db_path` (and the ledger writer's
     resolver) at a tmp-path DB. Tests configure the row contents via
-    `_seed_db`. Returns the path so the test can re-read or alter it."""
+    `_seed_db`. Returns the path so the test can re-read or alter it.
+
+    Both modules import the shared resolver via
+    ``from db_paths import resolve_db_path``, so the name is bound as a
+    module-level attribute on each — patch it in each module's namespace."""
     db = tmp_path / "test.db"
 
     def _fake_resolve(override: Path | str | None) -> Path | None:
@@ -180,11 +184,11 @@ def db_patch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
             return Path(override)
         return db
 
-    monkeypatch.setattr(llm_budget, "_resolve_db_path", _fake_resolve)
+    monkeypatch.setattr(llm_budget, "resolve_db_path", _fake_resolve)
     # Ledger writer also resolves DB path — point it at the same DB so the
     # post-call telemetry write doesn't fail audibly. (record_call is
     # best-effort and would log+swallow anyway, but cleaner this way.)
-    monkeypatch.setattr(llm_call_ledger, "_resolve_db_path", _fake_resolve)
+    monkeypatch.setattr(llm_call_ledger, "resolve_db_path", _fake_resolve)
     return db
 
 
