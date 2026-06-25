@@ -30,20 +30,34 @@
 <details class="signals-all">
 <summary>All signals (3)</summary>
 <div class="prose-pad">
+<div class="lg" x-data="livingGrid()">
+<div class="lg-bar">
+<input type="search" class="lg-filter" placeholder="Filter signals…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter signals…">
+<span class="lg-count muted">
+<span x-text="shown">3</span> of <span x-text="total">3</span> signals</span>
+</div>
 <div class="table-scroll">
 <table class="tbl">
 <thead>
 <tr>
-<th>Sev</th>
-<th>Metric</th>
-<th>Kind</th>
-<th>Signal</th>
+<th class="lg-sortable num" role="button" tabindex="0" aria-sort="none" @click="sortBy('sev','num')" @keydown.enter.prevent="sortBy('sev','num')" :aria-sort="ariaSort('sev')">Sev<span class="lg-ind" x-text="arrow('sev')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('metric','text')" @keydown.enter.prevent="sortBy('metric','text')" :aria-sort="ariaSort('metric')">Metric<span class="lg-ind" x-text="arrow('metric')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('kind','text')" @keydown.enter.prevent="sortBy('kind','text')" :aria-sort="ariaSort('kind')">Kind<span class="lg-ind" x-text="arrow('kind')">
+</span>
+</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('signal','text')" @keydown.enter.prevent="sortBy('signal','text')" :aria-sort="ariaSort('signal')">Signal<span class="lg-ind" x-text="arrow('signal')">
+</span>
+</th>
 <th>Narrative</th>
 <th>Stat</th>
 </tr>
 </thead>
 <tbody>
-<tr>
+<tr data-text="red services_revenue segment anomaly" data-sev="3.000000" data-metric="services_revenue" data-kind="segment" data-signal="anomaly">
 <td class="signal-sev sig-red">red</td>
 <td>
 <strong>services_revenue</strong>
@@ -53,7 +67,7 @@
 <td>Services revenue printed 2.8 sigma below its 8Q trend.</td>
 <td class="mono">z=-2.8</td>
 </tr>
-<tr>
+<tr data-text="yellow operating_margin financial yoy acceleration" data-sev="2.000000" data-metric="operating_margin" data-kind="financial" data-signal="yoy acceleration">
 <td class="signal-sev sig-yellow">yellow</td>
 <td>
 <strong>operating_margin</strong>
@@ -63,7 +77,7 @@
 <td>Margin expansion pace halved vs the prior four quarters.</td>
 <td class="mono">delta=-180bps</td>
 </tr>
-<tr>
+<tr data-text="green active customers kpi trend" data-sev="1.000000" data-metric="active customers" data-kind="kpi" data-signal="trend">
 <td class="signal-sev sig-green">green</td>
 <td>
 <strong>Active customers</strong>
@@ -75,6 +89,7 @@
 </tr>
 </tbody>
 </table>
+</div>
 </div>
 </div>
 </details>
