@@ -75,6 +75,7 @@ from refresh_dispatch import STEP_NAMES  # noqa: E402
 import comments  # noqa: E402
 import llm_budget  # noqa: E402
 import ticker_settings  # noqa: E402
+import ticker_validation  # noqa: E402
 from alerts import (  # noqa: E402
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
@@ -2464,7 +2465,10 @@ def create_app(
 
         import refresh_dcf  # heavy CLI module — imported only on the save path
 
-        t = ticker.upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
         if result.get("status") != "ok":
             reason = str(result.get("reason", "save failed"))
@@ -2520,7 +2524,10 @@ def create_app(
         except ViewSpecError as exc:
             return ({"error": str(exc)}, 400)
 
-        t = ticker_raw.strip().upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker_raw)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         # FCFF-only guard: archetype models (bank/holdco/fintech/platform) and
         # un-built names have no redesigned workbook to seed from.
         live = repo_root / "dcf" / f"{t}.xlsx"
@@ -2629,7 +2636,10 @@ def create_app(
         except ViewSpecError as exc:
             return ({"error": str(exc)}, 400)
 
-        t = ticker_raw.strip().upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker_raw)
+        except ValueError:
+            return ({"error": "invalid ticker"}, 400)
         # A reference attaches to a ticker's DCF — any model archetype qualifies
         # (FCFF/bank/holdco/...), since the companion file is model-agnostic. A
         # never-built name has nothing to reference.

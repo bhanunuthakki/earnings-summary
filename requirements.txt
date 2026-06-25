@@ -1,6 +1,10 @@
-flask
+# Security floor: Flask serves the localhost app — keep it past the 2.x
+# session-cookie CVE (CVE-2023-30861, fixed 2.3.2). CI installs latest.
+flask>=3.0.0
 pandas
-lxml
+# Security floor: lxml parses UNTRUSTED filing XML/HTML on the ingest path —
+# keep it past the old XXE/ReDoS CVEs (cleared by 5.x). CI installs latest.
+lxml>=5.2.0
 # Security floor: CVE-2026-25645 (fixed 2.33.0). CI installs latest; the floor
 # stops dev/prod from resolving a known-vulnerable build.
 requests>=2.33.0
@@ -9,7 +13,9 @@ python-dotenv
 # attacker-reachable path and carries a heavy CVE stream — keep it current
 # (>=6.13.3 clears the 30+ CVEs flagged by the 2026-06-18 SCA).
 pypdf>=6.13.3
-reportlab
+# Security floor: reportlab renders PDFs — keep it past the 3.x toRGB RCE
+# (CVE-2023-33733, cleared by 4.x). CI installs latest.
+reportlab>=4.0.0
 mcp
 # LLM access — primary path: Claude Code CLI (`claude -p`) via subprocess. No Python
 # SDK dependency. Install separately: see https://code.claude.com/docs/en/setup. The
@@ -26,12 +32,17 @@ google-generativeai
 # see feedback_anthropic_api_key.md). The synchronous LLM path still goes through
 # the CLI; this is the off-hours bulk-submission lane only.
 anthropic
-openpyxl
+# Security floor: openpyxl parses UNTRUSTED IR spreadsheets — keep it past the
+# old XXE-era versions. CI installs latest.
+openpyxl>=3.1.0
 pydantic
 yt-dlp
 faster-whisper
-beautifulsoup4
-markdown
+# Security floor: beautifulsoup4 parses UNTRUSTED HTML — keep it past the old
+# ReDoS CVEs. CI installs latest.
+beautifulsoup4>=4.12.3
+# Security floor: markdown renders to HTML in the report/UI layer — keep current.
+markdown>=3.5
 # Free fallback source for live price + earnings calendar (src/sources/) and
 # EPS surprise (src/surprise_sources.py). Wraps Yahoo Finance's unofficial
 # endpoints — fragile but durable across an FMP downgrade.

@@ -56,6 +56,7 @@ from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
+from ticker_validation import safe_ticker  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
@@ -805,7 +806,12 @@ def apply_edits(
     ``dcf_runs``. The market quote is preserved from the prior run. Returns a
     result dict shaped like ``_refresh_redesign``'s.
     """
-    ticker = ticker.upper()
+    try:
+        ticker = safe_ticker(ticker)
+    except ValueError:
+        # Defense in depth: the web routes 400 a bad ticker, but apply_edits is
+        # also a CLI/internal entry point and ``ticker`` names the workbook path.
+        return {"ticker": str(ticker), "status": "failed", "reason": "invalid ticker"}
     dest = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
     if not redesign_mod.is_redesign_format(dest):
         return {"ticker": ticker, "status": "failed", "reason": "no redesigned workbook to edit"}
