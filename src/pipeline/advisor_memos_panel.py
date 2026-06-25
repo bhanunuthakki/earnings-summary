@@ -34,6 +34,7 @@ from advisor.context import (
 from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
+from ui import living_grid as lg
 from ui.controls import controls_css
 from ui.prose import render_prose
 from ui.tokens import FAVICON_LINK, palette_css
@@ -167,7 +168,7 @@ def _screen_section(
             "usable DCF runs.</p></section>"
         )
     rows = "".join(
-        "<tr>"
+        f"<tr{_screen_data(s)}>"
         f'<td class="ticker"><a href="/ticker/{escape(s.holding)}" class="ticker-link">'
         f"{escape(s.holding)}</a></td>"
         f'<td class="num">{s.holding_upside_pct:+.0f}%</td>'
@@ -180,12 +181,30 @@ def _screen_section(
     )
     return (
         f"{head}"
-        '<table class="am-screen"><thead><tr>'
-        '<th>Holding</th><th class="num">Upside</th>'
-        '<th>Best alternative</th><th class="num">Upside</th>'
-        '<th class="num">Margin</th><th>Bar</th>'
-        "</tr></thead><tbody>"
-        f"{rows}</tbody></table></section>"
+        + lg.grid_open()
+        + lg.filter_bar(len(screen), noun="rows", placeholder="Filter by holding / alternative…")
+        + '<table class="am-screen"><thead><tr>'
+        + lg.th("Holding", "holding", "text", num=False)
+        + lg.th("Upside", "hupside", "num")
+        + lg.th("Best alternative", "alt", "text", num=False)
+        + lg.th("Upside", "aupside", "num")
+        + lg.th("Margin", "margin", "num")
+        + "<th>Bar</th>"
+        + "</tr></thead><tbody>"
+        + f"{rows}</tbody></table>"
+        + lg.grid_close()
+        + "</section>"
+    )
+
+
+def _screen_data(s: SwapCandidate) -> str:
+    return (
+        lg.data_text(f"{s.holding} {s.candidate} {s.candidate_list}")
+        + lg.data_text_key("holding", s.holding)
+        + lg.data_num("hupside", s.holding_upside_pct)
+        + lg.data_text_key("alt", s.candidate)
+        + lg.data_num("aupside", s.candidate_upside_pct)
+        + lg.data_num("margin", s.margin_pp)
     )
 
 

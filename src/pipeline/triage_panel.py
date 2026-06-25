@@ -33,6 +33,7 @@ from html import escape
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
+from ui import living_grid as lg
 from ui.controls import panel_toolbar, ticker_label
 from user_state.notes import ROUTABLE_INTENTS, AnalystNoteRow, list_triage_notes
 
@@ -120,8 +121,11 @@ def _row(n: AnalystNoteRow) -> str:
         f'data-created="{escape(n.created_at.date().isoformat(), quote=True)}" '
         f'data-body="{escape(body, quote=True)}"'
     )
+    # The living-grid filter key (data-text); the sort keys reuse the drill-in
+    # data-* already on the row (data-created / data-ticker / data-anchor).
+    filt = lg.data_text(f"{n.ticker or ''} {_anchor_text(n)} {body}")
     return (
-        f"<tr {data}>"
+        f"<tr{filt} {data}>"
         f'<td class="tri-when">{escape(n.created_at.date().isoformat())}</td>'
         f"<td>{ticker_cell}</td>"
         f'<td><span class="tri-anchor">{escape(_anchor_text(n))}</span></td>'
@@ -150,9 +154,16 @@ def render_triage_list(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
         )
     body = "".join(_row(n) for n in notes)
     return (
-        '<table class="p-table"><thead><tr>'
-        "<th>When</th><th>Name</th><th>Anchor</th><th>Comment</th><th>Disposition</th>"
-        f"</tr></thead><tbody>{body}</tbody></table>"
+        lg.grid_open()
+        + lg.filter_bar(len(notes), noun="parked", placeholder="Filter by name / anchor / text…")
+        + '<table class="p-table"><thead><tr>'
+        + lg.th("When", "created", "text", num=False)
+        + lg.th("Name", "ticker", "text", num=False)
+        + lg.th("Anchor", "anchor", "text", num=False)
+        + "<th>Comment</th><th>Disposition</th>"
+        + "</tr></thead><tbody>"
+        + f"{body}</tbody></table>"
+        + lg.grid_close()
     )
 
 
