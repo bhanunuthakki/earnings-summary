@@ -21,9 +21,11 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import cast
+
+from clock import now_iso, to_naive_utc
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +114,7 @@ def _resolve_path(override: Path | str | None) -> Path | None:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return now_iso()
 
 
 # ---------------------------------------------------------------------------
@@ -1059,9 +1061,12 @@ def _loads_dict(raw: object) -> dict[str, object]:
 def _parse_dt(raw: object) -> datetime | None:
     if raw is None:
         return None
+    # Normalize to naive-UTC: rows written before the naive-UTC migration carry
+    # an aware +00:00 offset; strip it so old (aware) and new (naive) effective-
+    # dating stamps compare without TypeError.
     if isinstance(raw, datetime):
-        return raw
+        return to_naive_utc(raw)
     try:
-        return datetime.fromisoformat(str(raw))
+        return to_naive_utc(datetime.fromisoformat(str(raw)))
     except ValueError:
         return None

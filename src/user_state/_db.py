@@ -18,8 +18,10 @@ we raise — the absence of any path is itself a bug.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+
+from clock import now_naive_utc, to_naive_utc
 
 
 def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
@@ -56,15 +58,18 @@ def _resolve_db_path(override: Path | str | None) -> Path | None:
 
 
 def now_iso() -> str:
-    """Current UTC time as an ISO 8601 string — the canonical format for every
-    TEXT timestamp column in the Personal CIO schema."""
-    return datetime.now(UTC).isoformat()
+    """Current UTC time as a naive-UTC ISO 8601 string — the canonical format
+    for every TEXT timestamp column in the Personal CIO schema."""
+    return now_naive_utc().isoformat()
 
 
 def parse_dt(raw: object) -> datetime:
-    """Parse an ISO 8601 TEXT timestamp coming back from SQLite. Raises if the
-    value can't be parsed — there's no graceful fallback because every row's
-    created_at / updated_at column is NOT NULL by schema."""
-    if isinstance(raw, datetime):
-        return raw
-    return datetime.fromisoformat(str(raw))
+    """Parse an ISO 8601 TEXT timestamp coming back from SQLite into a naive-UTC
+    datetime. Raises if the value can't be parsed — there's no graceful fallback
+    because every row's created_at / updated_at column is NOT NULL by schema.
+
+    Rows written before the naive-UTC migration carry an aware ``+00:00`` offset;
+    ``to_naive_utc`` strips it so old (aware) and new (naive) stamps compare
+    without ``TypeError``."""
+    dt = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw))
+    return to_naive_utc(dt)

@@ -17,10 +17,11 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
+
+from clock import now_iso
 
 # ---------------------------------------------------------------------------
 # Naive-UTC convention
@@ -29,7 +30,7 @@ from uuid import uuid4
 
 def _now_iso() -> str:
     """Naive-UTC ISO string — the repo-wide convention for TEXT timestamps."""
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+    return now_iso()
 
 
 def _open(db_path: Path) -> sqlite3.Connection:

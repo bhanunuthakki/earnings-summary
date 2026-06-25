@@ -72,6 +72,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from clock import now_iso
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
 
@@ -571,7 +572,7 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
 
 def _now_iso() -> str:
     # Naive-UTC, the repo-wide convention.
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+    return now_iso()
 
 
 def record_socratic_decisions(

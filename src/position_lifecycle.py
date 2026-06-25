@@ -44,6 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from clock import now_iso
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import LivePortfolio, fetch_live_portfolio
 
@@ -115,7 +116,7 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
 
 def _now_iso() -> str:
     # Naive-UTC, the repo-wide convention.
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+    return now_iso()
 
 
 def _today_iso() -> str:

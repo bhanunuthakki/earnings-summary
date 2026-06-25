@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+
+from clock import now_naive_utc
 
 # The "briefed" active universe — portfolio + evaluation (mirrors
 # db.BRIEFED_LIST_TYPES; duplicated as a literal to keep this module import-light
@@ -37,7 +38,7 @@ BRIEFED_LIST_TYPES: tuple[str, ...] = ("portfolio", "evaluation")
 
 def _now_iso() -> str:
     """Naive-UTC ISO timestamp (repo convention — never store an aware stamp)."""
-    return datetime.now(UTC).replace(tzinfo=None).isoformat(timespec="seconds")
+    return now_naive_utc().isoformat(timespec="seconds")
 
 
 @dataclass(slots=True, frozen=True)

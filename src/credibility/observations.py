@@ -27,8 +27,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
+from clock import now_naive_utc
 from timeseries.loaders import SOURCE_QUALITY_TIER_RANK
 
 log = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ class _GradedFact:
 
 def _now_iso() -> str:
     """Naive-UTC ISO stamp — the repo storage convention."""
-    return datetime.now(UTC).replace(tzinfo=None).isoformat(sep=" ", timespec="seconds")
+    return now_naive_utc().isoformat(sep=" ", timespec="seconds")
 
 
 def _delta_pct(old: float | None, new: float | None) -> float | None:

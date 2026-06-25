@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from clock import now_iso
 from identity import DEFAULT_USER_ID
 
 ALERT_STATUS_PENDING = "pending"
@@ -625,7 +626,7 @@ def _now_iso() -> str:
     # ``datetime.now(UTC).replace(tzinfo=None)``) and the repo-wide
     # convention. An aware offset here is the landmine that crashes any
     # consumer comparing a store stamp against a naive datetime.
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+    return now_iso()
 
 
 def _parse_dt(raw: object) -> datetime:
