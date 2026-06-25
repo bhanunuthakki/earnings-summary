@@ -35,6 +35,7 @@ from html import escape
 from pathlib import Path
 
 from llm.calibration import VersionSummary, summarize_by_prompt_version
+from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
 
 # Purposes the run bar offers — mirrors execution/run_llm_evals.py PURPOSES
@@ -436,7 +437,7 @@ def _health_section(health: list[CallHealthRow]) -> str:
     if not health:
         return f'{head}<p class="muted">No LLM calls in the window.</p></section>'
     rows = "".join(
-        "<tr>"
+        f"<tr{_health_data(h)}>"
         f'<td class="ev-purpose">{escape(h.purpose)}</td>'
         f'<td class="num">{h.calls}</td>'
         f'<td class="num {"ev-bad" if h.error_rate > 0.1 else ""}">'
@@ -450,12 +451,31 @@ def _health_section(health: list[CallHealthRow]) -> str:
     )
     return (
         f"{head}"
-        '<table class="ev-health"><thead><tr>'
-        '<th>Purpose</th><th class="num">Calls</th><th class="num">Error rate</th>'
-        '<th class="num">Fallback rate</th><th class="num">Cost</th>'
-        '<th class="num">Avg ms</th>'
-        "</tr></thead><tbody>"
-        f"{rows}</tbody></table></section>"
+        + lg.grid_open()
+        + lg.filter_bar(len(health), noun="purposes", placeholder="Filter by purpose…")
+        + '<table class="ev-health"><thead><tr>'
+        + lg.th("Purpose", "purpose", "text", num=False)
+        + lg.th("Calls", "calls", "num")
+        + lg.th("Error rate", "err", "num")
+        + lg.th("Fallback rate", "fb", "num")
+        + lg.th("Cost", "cost", "num")
+        + lg.th("Avg ms", "ms", "num")
+        + "</tr></thead><tbody>"
+        + f"{rows}</tbody></table>"
+        + lg.grid_close()
+        + "</section>"
+    )
+
+
+def _health_data(h: CallHealthRow) -> str:
+    return (
+        lg.data_text(h.purpose)
+        + lg.data_text_key("purpose", h.purpose)
+        + lg.data_num("calls", h.calls)
+        + lg.data_num("err", h.error_rate)
+        + lg.data_num("fb", h.fallback_rate)
+        + lg.data_num("cost", h.cost_usd)
+        + lg.data_num("ms", float(h.avg_elapsed_ms) if h.avg_elapsed_ms is not None else None)
     )
 
 
