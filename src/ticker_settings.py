@@ -14,25 +14,15 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
-
-
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    """Explicit override wins, then db.DB_PATH if importable, else None."""
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
 
 
 def get_bypass_budget(ticker: str, *, db_path: Path | str | None = None) -> bool:
     """True when `ticker` is set to always ignore LLM budget caps. Returns False
     on a missing DB / table / row or any read error (fail safe: no bypass)."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     try:
@@ -65,7 +55,7 @@ def set_bypass_budget(
 ) -> bool:
     """Upsert the per-ticker `bypass_budget` flag. Returns True on write, False
     when the DB / table is unavailable."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     ts = (now or datetime.now(UTC)).isoformat()

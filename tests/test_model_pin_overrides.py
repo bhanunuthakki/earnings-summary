@@ -113,7 +113,7 @@ def test_active_override_returns_none_when_no_db_path(monkeypatch: pytest.Monkey
     def _resolve_none(_: Path | str | None) -> Path | None:
         return None
 
-    monkeypatch.setattr(model_overrides, "_resolve_db_path", _resolve_none)
+    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_none)
     assert model_overrides.active_override("bear_case") is None
 
 
@@ -187,7 +187,7 @@ def test_model_for_uses_override_over_code_pin(
     def _resolve_test_db(_: Path | str | None) -> Path | None:
         return db_path
 
-    monkeypatch.setattr(model_overrides, "_resolve_db_path", _resolve_test_db)
+    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_test_db)
     model_overrides.write_pin_override("bear_case", "claude-haiku-4-5-20251001", db_path=db_path)
     assert _model_for("bear_case") == "claude-haiku-4-5-20251001"
 
@@ -201,7 +201,7 @@ def test_model_for_falls_back_to_code_pin_when_no_override(
     def _resolve_test_db(_: Path | str | None) -> Path | None:
         return db_path
 
-    monkeypatch.setattr(model_overrides, "_resolve_db_path", _resolve_test_db)
+    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_test_db)
     expected = LLM_MODELS.get("bear_case", "claude-sonnet-4-6")
     assert _model_for("bear_case") == expected
 
@@ -214,7 +214,7 @@ def test_model_for_falls_back_when_db_unavailable(monkeypatch: pytest.MonkeyPatc
     def _resolve_missing(_: Path | str | None) -> Path | None:
         return Path("/no/such/db.db")
 
-    monkeypatch.setattr(model_overrides, "_resolve_db_path", _resolve_missing)
+    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_missing)
     expected = LLM_MODELS.get("bear_case", "claude-sonnet-4-6")
     assert _model_for("bear_case") == expected
 
@@ -228,7 +228,7 @@ def test_model_for_falls_back_to_default_for_unknown_purpose(
     def _resolve_test_db(_: Path | str | None) -> Path | None:
         return db_path
 
-    monkeypatch.setattr(model_overrides, "_resolve_db_path", _resolve_test_db)
+    monkeypatch.setattr(model_overrides, "resolve_db_path", _resolve_test_db)
     assert _model_for("totally_unknown_purpose_xyz") == DEFAULT_MODEL
 
 

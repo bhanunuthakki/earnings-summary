@@ -30,6 +30,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 # The fields this store governs. Adding a field means a follow-up migration seed
@@ -65,24 +67,11 @@ class GlobalDcfAssumptions:
         return asdict(self)
 
 
-def _resolve_db_path(override: Path | str | None) -> Path | None:
-    """Explicit override wins, then ``db.DB_PATH`` if importable, else None.
-    Same resolution pattern as ``src/llm_budget.py``."""
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
-
-
 def _read_stored(db_path: Path | str | None) -> dict[str, float]:
     """Return {field: value} for the rows actually present in the table.
     Empty dict when the DB / table is missing or unreadable (fails to seed
     defaults at the caller)."""
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return {}
     try:
@@ -206,7 +195,7 @@ def set_value(
     (the POST route maps that to a 400). Creates the row if absent, so the
     store is editable even before the seed migration's row exists."""
     v = _validate(field, value)
-    path = _resolve_db_path(db_path)
+    path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return False
     updated_at = (now or datetime.now(UTC).replace(tzinfo=None)).isoformat()

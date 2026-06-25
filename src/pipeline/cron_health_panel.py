@@ -15,10 +15,13 @@ Each day in the timeline renders as one coloured dot:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _PANEL_STYLE = """<style>
 .ch-dir { font-weight:600; white-space:nowrap; }
@@ -65,8 +68,10 @@ def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
                 result[key] = str(row["status"])
         finally:
             conn.close()
-    except Exception:
-        pass
+    except sqlite3.Error:
+        # DB/table not ready (e.g. ingestion_runs absent on a fresh setup) —
+        # render whatever rows were gathered rather than failing the panel.
+        log.warning({"event": "cron_health_query_failed"}, exc_info=True)
     return result
 
 

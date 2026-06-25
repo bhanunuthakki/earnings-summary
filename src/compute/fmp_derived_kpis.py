@@ -33,6 +33,7 @@ can read that freshly-persisted series as a base).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -51,6 +52,8 @@ from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, active_scalar_override_map
+
+log = logging.getLogger(__name__)
 
 # Canonical KPI names registered with kpi_definitions on first emission.
 KPI_OPERATING_MARGIN_GAAP = "Operating Margin (GAAP)"
@@ -526,8 +529,13 @@ def _derive_segment_kpis(conn: sqlite3.Connection, ticker: str) -> list[DerivedK
                                 kpi_targets.append((kpi, seg, "operating_income_growth"))
                             else:
                                 kpi_targets.append((kpi, seg, "revenue_growth"))
-        except Exception:
-            pass
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError):
+            # Malformed/unreadable holdings config — degrade to the defaults
+            # below rather than crashing the derive; record why it was skipped.
+            log.warning(
+                {"event": "fmp_kpi_target_config_unreadable", "ticker": ticker},
+                exc_info=True,
+            )
 
     if ticker.upper() == "AMZN":
         default_amzn = [
