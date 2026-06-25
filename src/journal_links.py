@@ -40,6 +40,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
 from user_state.notes import AnalystNoteRow, get_note, resolve_note, set_note_links
 
@@ -81,20 +82,9 @@ class ReconciliationItem:
 # ---------------------------------------------------------------------------
 
 
-def _resolve(db_path: Path | str | None) -> Path | None:
-    if db_path is not None:
-        return Path(db_path)
-    try:
-        from db import DB_PATH
-
-        return Path(DB_PATH)
-    except ImportError:
-        return None
-
-
 def _open_ro(db_path: Path | str | None) -> sqlite3.Connection | None:
     try:
-        path = _resolve(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not path.exists():
             return None
         conn = sqlite3.connect(str(path), timeout=5.0)

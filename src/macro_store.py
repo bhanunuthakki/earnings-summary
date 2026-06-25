@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from db_paths import resolve_db_path
+
 log = logging.getLogger(__name__)
 
 
@@ -57,20 +59,9 @@ class Sensitivity:
 # ---------------------------------------------------------------------------
 
 
-def _resolve(override: Path | str | None) -> Path | None:
-    if override is not None:
-        return Path(override)
-    try:
-        from db import DB_PATH
-
-        return Path(str(DB_PATH))
-    except ImportError:
-        return None
-
-
 def _open(db_path: Path | str | None, *, expect_table: str) -> sqlite3.Connection | None:
     try:
-        path = _resolve(db_path)
+        path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
         conn = sqlite3.connect(str(path), timeout=5.0)
