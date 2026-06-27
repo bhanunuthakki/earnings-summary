@@ -676,9 +676,7 @@ def test_record_process_quality_writes_column(db: Path) -> None:
     assert record_process_quality(decision_id=pid, process_quality="lucky", db_path=db) is True
     conn = sqlite3.connect(str(db))
     try:
-        row = conn.execute(
-            "SELECT process_quality FROM decisions WHERE id = ?", (pid,)
-        ).fetchone()
+        row = conn.execute("SELECT process_quality FROM decisions WHERE id = ?", (pid,)).fetchone()
         assert row[0] == "lucky"
     finally:
         conn.close()

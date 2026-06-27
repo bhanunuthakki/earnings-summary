@@ -468,8 +468,11 @@ def calibration_block(ctx: AdvisorContext, ticker: str) -> str:
     # Proper-scoring Brier on the conviction language itself (L-seam 2) — only
     # asserted once the denominator clears the min-n guard.
     cc = stats.conviction_calibration
-    if cc is not None and cc.brier is not None and cc.baseline_brier is not None and is_confident(
-        cc.n
+    if (
+        cc is not None
+        and cc.brier is not None
+        and cc.baseline_brier is not None
+        and is_confident(cc.n)
     ):
         verdict = (
             "your conviction discriminates — it beats a flat base-rate guess"

@@ -653,9 +653,7 @@ def test_drawdown_and_exit_quality_are_opt_in(mock_tracker: None) -> None:
 
 
 def test_fetch_analytics_only_loads_drawdown_and_exit_quality(mock_tracker: None) -> None:
-    a = fetch_portfolio_analytics(
-        api_url="http://tracker.test", only={"drawdown", "exit_quality"}
-    )
+    a = fetch_portfolio_analytics(api_url="http://tracker.test", only={"drawdown", "exit_quality"})
     assert a.available is True
     # Only the two requested sections loaded.
     assert a.performance is None and a.beta is None
@@ -712,7 +710,9 @@ def test_fetch_exit_quality_totals_from_nested_object(monkeypatch: pytest.Monkey
 
 
 def test_fetch_after_tax_standalone(mock_tracker: None) -> None:
-    at = ptc.fetch_after_tax(tax_year=2026, st_rate=0.37, lt_rate=0.20, api_url="http://tracker.test")
+    at = ptc.fetch_after_tax(
+        tax_year=2026, st_rate=0.37, lt_rate=0.20, api_url="http://tracker.test"
+    )
     assert at is not None
     assert at.tax_year == 2026
     assert at.total_tax == pytest.approx(3260.0)

@@ -1019,8 +1019,7 @@ def _expectancy_line(stats: CalibrationStats) -> str:
     if exp.avg_win is not None and exp.avg_loss is not None:
         slug = f", slugging {exp.slugging:.1f}&times;" if exp.slugging is not None else ""
         parts.append(
-            f"winners avg {_signed_usd0(exp.avg_win)} vs losers "
-            f"{_signed_usd0(-exp.avg_loss)}{slug}"
+            f"winners avg {_signed_usd0(exp.avg_win)} vs losers {_signed_usd0(-exp.avg_loss)}{slug}"
         )
     return (
         f'<p class="adc-line">Batting vs slugging ({escape(confidence_note(exp.n))}): '

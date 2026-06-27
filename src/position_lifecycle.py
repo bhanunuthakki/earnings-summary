@@ -346,9 +346,7 @@ def _avg_cost(portfolio: LivePortfolio, ticker: str) -> float | None:
     return None
 
 
-def infer_outcome_vs_thesis(
-    conn: sqlite3.Connection, ticker: str, exit_date: str
-) -> str | None:
+def infer_outcome_vs_thesis(conn: sqlite3.Connection, ticker: str, exit_date: str) -> str | None:
     """Infer ``outcome_vs_thesis`` at exit from the thesis-evaluation breach
     history (#seam 9) — a PREFILL the analyst confirms/overrides, not a verdict.
 

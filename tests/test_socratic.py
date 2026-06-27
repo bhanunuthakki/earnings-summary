@@ -325,9 +325,15 @@ def test_calibration_block_surfaces_brier_and_expectancy(tmp_path: Path) -> None
             rows=[ConvictionReliabilityRow(conviction="high", predicted=0.75, observed=0.4, n=12)],
         ),
         expectancy=Expectancy(
-            n=12, wins=5, losses=7, avg_win=4000.0, avg_loss=1000.0, slugging=4.0,
-            expectancy=83.0, total=996.0,
-        ),  # fmt: skip
+            n=12,
+            wins=5,
+            losses=7,
+            avg_win=4000.0,
+            avg_loss=1000.0,
+            slugging=4.0,
+            expectancy=83.0,
+            total=996.0,
+        ),
     )
     block = calibration_block(ctx, "NU")
     assert "Conviction Brier 0.180 vs 0.240 baseline (n=12)" in block

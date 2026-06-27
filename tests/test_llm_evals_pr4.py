@@ -325,6 +325,9 @@ def test_production_wrappers_propagate_hard_stops(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(llm_client, "call_llm", capped)
     monkeypatch.setattr(llm_client, "call_llm_with_web", capped)
+    # classify_intake_document now routes through call_llm_structured (Track B
+    # seam 10), so the hard-stop must be injected at that transport too.
+    monkeypatch.setattr(llm_client, "call_llm_structured", capped)
     with pytest.raises(LLMBudgetExceeded):
         llm_client.identify_transcript_metadata("some cover page")
     with pytest.raises(LLMBudgetExceeded):
@@ -338,6 +341,7 @@ def test_production_wrappers_propagate_hard_stops(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(llm_client, "call_llm", flaky)
     monkeypatch.setattr(llm_client, "call_llm_with_web", flaky)
+    monkeypatch.setattr(llm_client, "call_llm_structured", flaky)
     assert llm_client.identify_transcript_metadata("x") == "UNKNOWN"
     assert llm_client.classify_intake_document("f.pdf", "t", {}) is None
     assert llm_client.structure_recent_news_json("NU") == []
