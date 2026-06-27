@@ -147,6 +147,12 @@ from llm.ledger import (
 from llm.ledger import (
     record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
+from llm.structured import (
+    StructuredParseError as StructuredParseError,
+)
+from llm.structured import (
+    call_llm_structured as call_llm_structured,
+)
 from llm.style import (
     NUMBER_FORMATTING_BLOCK as NUMBER_FORMATTING_BLOCK,
 )
@@ -1515,11 +1521,12 @@ Provide 3 to 5 failure_modes. At least 2 must be non-consensus per the rule
 above. Return strictly the JSON object — nothing else.
 """
     try:
-        raw = call_llm(prompt, purpose="bear_case", ticker=ticker).strip()
-        # Strip ``` fences if Claude wraps the JSON despite the instruction.
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        # call_llm_structured: parse + one retry-with-feedback + loud-fail
+        # (StructuredParseError) instead of a silent fence-strip that ships
+        # malformed JSON downstream. Re-serialized so the str return contract
+        # holds for the caller's json.loads.
+        payload = call_llm_structured(prompt, purpose="bear_case", ticker=ticker, expect="object")
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Bear case generation failed for {ticker}: {e}")
         raise
@@ -1567,10 +1574,8 @@ The "id" must echo back the input id verbatim. The "topic" must read cleanly
 on its own — no "asks about" prefix; just the topic itself.
 """
     try:
-        raw = call_llm(prompt, purpose="qa_topics", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(prompt, purpose="qa_topics", ticker=ticker, expect="array")
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Q&A topic generation failed for {ticker}: {e}")
         raise
@@ -1618,10 +1623,8 @@ delta. The point is to filter for THESIS-relevant signal, not generic
 beats/misses.
 """
     try:
-        raw = call_llm(prompt, purpose="saydo_filter", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(prompt, purpose="saydo_filter", ticker=ticker, expect="array")
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: SayDo filter failed for {ticker}: {e}")
         raise
@@ -1795,10 +1798,10 @@ Field-by-field rules:
 Return ONLY the JSON object. No markdown fence, no prose before or after.
 """
     try:
-        raw = call_llm(prompt, purpose="company_description", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(
+            prompt, purpose="company_description", ticker=ticker, expect="object"
+        )
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Company description generation failed for {ticker}: {e}")
         raise
@@ -1884,10 +1887,10 @@ Caption rules:
 Return strictly the JSON object — no prose before or after, no markdown fence around the JSON.
 """
     try:
-        raw = call_llm(prompt, purpose="platform_diagram", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(
+            prompt, purpose="platform_diagram", ticker=ticker, expect="object"
+        )
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Platform diagram generation failed for {ticker}: {e}")
         raise
@@ -1938,10 +1941,12 @@ def classify_intake_document(filename: str, text: str, hint: dict) -> dict | Non
     )
 
     try:
-        raw = call_llm(prompt, purpose="intake_classifier").strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return json.loads(raw)
+        # call_llm_structured adds the parse + one-retry discipline; the
+        # established degrade-to-None contract is preserved by catching the
+        # StructuredParseError below (this call runs ~50x/batch — a parse miss
+        # on one document must not sink the others).
+        payload = call_llm_structured(prompt, purpose="intake_classifier", expect="object")
+        return cast("dict[str, object]", payload)
     except Exception as e:
         # Hard stops propagate — a budget cap returning None would be
         # indistinguishable from "could not classify" (llm_evals_plan §5.4).
@@ -2048,10 +2053,10 @@ Return ONLY a JSON object (no markdown fence, no prose):
 }}
 """
     try:
-        raw = call_llm(prompt, purpose="valuation_basis", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(
+            prompt, purpose="valuation_basis", ticker=ticker, expect="object"
+        )
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Valuation basis generation failed for {ticker}: {e}")
         raise
@@ -2107,10 +2112,10 @@ Echo IDs verbatim from input. Do NOT invent IDs. Do NOT include omitted
 bullets.
 """
     try:
-        raw = call_llm(prompt, purpose="saydo_importance", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(
+            prompt, purpose="saydo_importance", ticker=ticker, expect="array"
+        )
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: SayDo importance ranking failed for {ticker}: {e}")
         raise
@@ -2279,10 +2284,10 @@ Return strictly the JSON object — nothing else.
         return '{"prepared_themes": [], "qa_themes": []}'
 
     try:
-        raw = call_llm(prompt, purpose="earnings_themes_split", ticker=ticker).strip()
-        if raw.startswith("```"):
-            raw = JSON_FENCE_RE.sub("", raw).strip()
-        return raw
+        payload = call_llm_structured(
+            prompt, purpose="earnings_themes_split", ticker=ticker, expect="object"
+        )
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Earnings themes split failed for {ticker}: {e}")
         raise
