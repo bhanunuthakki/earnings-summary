@@ -28,6 +28,10 @@ class StandupConfig:
     # A position whose live weight drifts at least this many percentage points
     # from its stated target weight trips the drift watcher.
     drift_min_pp: float = 3.0
+    # An ungraded decision (outcome_at NULL) whose made_at is at least this many
+    # days old has had its review horizon elapse — it's due for a verdict. Mirrors
+    # decision_extractor.pending_for_grading's default older-than window.
+    decision_verdict_days: int = 30
     # Floor on a signal's deterministic materiality before it is even composed.
     min_materiality: float = 0.0
     # Hard cap on compose attempts per run (defence against a flood of trips).

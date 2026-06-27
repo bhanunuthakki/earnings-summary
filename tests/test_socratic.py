@@ -301,9 +301,45 @@ def test_calibration_block_challenges_the_cohort(tmp_path: Path) -> None:
     assert "challenge this conviction against your own" in block.lower()
     assert "graded calls 40% correct (n=10)" in block
     assert "NU is a high-conviction name (you rate it 4/5)" in block
-    assert "your high-conviction calls have graded 40% correct (n=10)" in block
+    # L-seam 3: the focus-cohort rate is now widened with its Wilson 95% CI.
+    assert "your high-conviction calls have graded 40% correct (95% CI 17-69%, n=10)" in block
     assert "why THIS one is different" in block
     assert "2 vindicated vs 1 cost" in block
+
+
+def test_calibration_block_surfaces_brier_and_expectancy(tmp_path: Path) -> None:
+    import dataclasses
+
+    from decision_calibration import ConvictionCalibration, ConvictionReliabilityRow, Expectancy
+
+    ctx = _ctx(tmp_path, "NU")
+    # L-seam 2: a Brier that beats the base-rate baseline; L-seam 1: winners
+    # bigger than losers. CalibrationStats is frozen → replace, don't mutate.
+    ctx.calibration = dataclasses.replace(
+        _calib(high_hit=0.4, high_n=12),
+        conviction_calibration=ConvictionCalibration(
+            n=12,
+            brier=0.18,
+            baseline_brier=0.24,
+            base_rate=0.4,
+            rows=[ConvictionReliabilityRow(conviction="high", predicted=0.75, observed=0.4, n=12)],
+        ),
+        expectancy=Expectancy(
+            n=12,
+            wins=5,
+            losses=7,
+            avg_win=4000.0,
+            avg_loss=1000.0,
+            slugging=4.0,
+            expectancy=83.0,
+            total=996.0,
+        ),
+    )
+    block = calibration_block(ctx, "NU")
+    assert "Conviction Brier 0.180 vs 0.240 baseline (n=12)" in block
+    assert "discriminates" in block
+    assert "slugging 4.0x" in block
+    assert "realized alpha/call" in block
 
 
 def test_calibration_block_empty_when_nothing_graded(tmp_path: Path) -> None:
@@ -327,7 +363,7 @@ def test_socratic_prompts_carry_the_calibration_challenge(
     ctx.calibration = _calib(high_hit=0.4, high_n=10)
     generate_questions(tmp_path, "NU", ctx=ctx)
     # The block reached the prompt, and the prompt instructs the model to use it.
-    assert "your high-conviction calls have graded 40% correct (n=10)" in prompts[0]
+    assert "your high-conviction calls have graded 40% correct (95% CI 17-69%, n=10)" in prompts[0]
     assert "documented calibration" in prompts[0]
 
 

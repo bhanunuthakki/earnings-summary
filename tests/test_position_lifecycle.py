@@ -304,6 +304,52 @@ def test_close_on_portfolio_exit_with_sell_enrichment(repo: Path) -> None:
     assert entry.exit_reason is None  # grading is the analyst's, not the bot's
 
 
+def _add_thesis_eval(db: Path, ticker: str, status: str, evaluated_at: str) -> None:
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS thesis_evaluations (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ticker TEXT, evaluated_at TEXT, overall_status TEXT, run_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO thesis_evaluations (ticker, evaluated_at, overall_status, run_id) "
+        "VALUES (?, ?, ?, 'r1')",
+        (ticker.upper(), evaluated_at, status),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_close_prefills_outcome_broke_from_breach_history(repo: Path) -> None:
+    # seam 9: a breach preceded the exit → prefill "broke" (confirm/override).
+    _set_portfolio(repo, ["NU"])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    _add_thesis_eval(_db(repo), "NU", "breach", "2026-05-01T00:00:00")
+    _set_portfolio(repo, [])
+    tracker = _online(transactions=[_txn("NU", "sell", "2026-06-10", 150.0, 1920.0)])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    [entry] = list_entries(db_path=_db(repo), ticker="NU")
+    assert entry.outcome_vs_thesis == "broke"
+
+
+def test_close_prefills_played_out_when_thesis_held(repo: Path) -> None:
+    _set_portfolio(repo, ["NU"])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    _add_thesis_eval(_db(repo), "NU", "ok", "2026-05-01T00:00:00")
+    _set_portfolio(repo, [])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    [entry] = list_entries(db_path=_db(repo), ticker="NU")
+    assert entry.outcome_vs_thesis == "played_out"
+
+
+def test_close_leaves_outcome_null_without_evaluations(repo: Path) -> None:
+    _set_portfolio(repo, ["NU"])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    _set_portfolio(repo, [])
+    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    [entry] = list_entries(db_path=_db(repo), ticker="NU")
+    assert entry.outcome_vs_thesis is None
+
+
 def test_close_tracker_offline_stamps_today(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())

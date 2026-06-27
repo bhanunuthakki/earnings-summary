@@ -27,8 +27,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from calibration_guard import rate_phrase
-from decision_calibration import CalibrationStats, bucket_for_conviction, build_calibration
+from calibration_guard import is_confident, rate_phrase, rate_phrase_ci
+from decision_calibration import (
+    CalibrationStats,
+    Expectancy,
+    bucket_for_conviction,
+    build_calibration,
+    realized_magnitudes,
+)
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -223,8 +229,11 @@ def build_advisor_context(
     except (sqlite3.OperationalError, FileNotFoundError, RuntimeError):
         intents = []
     live = fetch_live_portfolio(api_url=api_url)
+    # exit_quality is opt-in (the sell-side magnitude for batting-vs-slugging,
+    # L-seam 1); the other four are the established advisor reads.
     analytics = fetch_portfolio_analytics(
-        api_url=api_url, only={"position_alpha", "positioning", "performance", "policy"}
+        api_url=api_url,
+        only={"position_alpha", "positioning", "performance", "policy", "exit_quality"},
     )
     audit_rows = build_sizing_audit_rows(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha
@@ -238,7 +247,14 @@ def build_advisor_context(
         analytics=analytics,
         open_notes_block=open_notes_block(db_path, user_id=user_id),
         generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
-        calibration=build_calibration(db_path=db_path),
+        # Feed the realized window magnitudes so the calibration block carries
+        # the dollar view (win SIZE), not just the hit rate.
+        calibration=build_calibration(
+            db_path=db_path,
+            magnitudes_by_ticker=realized_magnitudes(
+                analytics.position_alpha, analytics.exit_quality
+            ),
+        ),
     )
 
 
@@ -440,11 +456,38 @@ def calibration_block(ctx: AdvisorContext, ticker: str) -> str:
         f"- Overall: {rate_phrase('graded calls', stats.overall_hit_rate, stats.graded)}, "
         f"of {stats.total} logged.",
     ]
+    # By conviction, each rate widened with its Wilson 95% CI (L-seam 3) — a
+    # band, not a point estimate that a thin denominator would flatter.
     conv = [
-        rate_phrase(b.conviction, b.hit_rate, b.graded) for b in stats.by_conviction if b.graded
+        rate_phrase_ci(b.conviction, b.hit_rate, b.correct, b.graded)
+        for b in stats.by_conviction
+        if b.graded
     ]
     if conv:
         lines.append("- By conviction: " + "; ".join(conv) + ".")
+    # Proper-scoring Brier on the conviction language itself (L-seam 2) — only
+    # asserted once the denominator clears the min-n guard.
+    cc = stats.conviction_calibration
+    if (
+        cc is not None
+        and cc.brier is not None
+        and cc.baseline_brier is not None
+        and is_confident(cc.n)
+    ):
+        verdict = (
+            "your conviction discriminates — it beats a flat base-rate guess"
+            if cc.beats_baseline
+            else "your conviction does NOT beat a flat base-rate guess — the labels add "
+            "little signal over your average"
+        )
+        lines.append(
+            f"- Conviction Brier {cc.brier:.3f} vs {cc.baseline_brier:.3f} baseline "
+            f"(n={cc.n}): {verdict}."
+        )
+    # The dollar view: batting is above, this is slugging (L-seam 1).
+    exp_clause = _expectancy_clause(stats.expectancy, lead="Across your graded calls")
+    if exp_clause:
+        lines.append(f"- {exp_clause}")
     if stats.reversals_vindicated or stats.reversals_cost:
         lines.append(
             f"- Reversals: {stats.reversals_vindicated} vindicated vs "
@@ -456,18 +499,47 @@ def calibration_block(ctx: AdvisorContext, ticker: str) -> str:
         bucket, descriptor = cohort
         cb = next((b for b in stats.by_conviction if b.conviction == bucket), None)
         if cb is not None and cb.graded:
-            lines.append(
+            line = (
                 f"- {ticker.upper()} is {descriptor}: "
-                + rate_phrase(f"your {bucket}-conviction calls have graded", cb.hit_rate, cb.graded)
+                + rate_phrase_ci(
+                    f"your {bucket}-conviction calls have graded",
+                    cb.hit_rate,
+                    cb.correct,
+                    cb.graded,
+                )
                 + ". If that rate undercuts the conviction here, the burden is to say why "
                 "THIS one is different."
             )
+            cohort_exp = _expectancy_clause(cb.expectancy, lead=f"Those {bucket}-conviction calls")
+            if cohort_exp:
+                line += f" ({cohort_exp})"
+            lines.append(line)
         else:
             lines.append(
                 f"- {ticker.upper()} is {descriptor}, but you have no graded "
                 f"{bucket}-conviction calls yet (n=0) — one to calibrate going forward."
             )
     return "\n".join(lines)
+
+
+def _expectancy_clause(exp: Expectancy | None, *, lead: str) -> str:
+    """One honest batting-vs-slugging clause (L-seam 1) — the dollar SIZE of the
+    wins, not just the hit rate. Empty when there is no magnitude data or the
+    denominator is below the min-n guard (a slugging ratio on n=2 is noise)."""
+    if exp is None or not is_confident(exp.n):
+        return ""
+    bits = [f"expected {_signed_money(exp.expectancy)} realized alpha/call"]
+    if exp.avg_win is not None and exp.avg_loss is not None:
+        slug = f", slugging {exp.slugging:.1f}x" if exp.slugging is not None else ""
+        bits.append(
+            f"winners avg {_signed_money(exp.avg_win)} vs losers {_signed_money(-exp.avg_loss)}{slug}"
+        )
+    return f"{lead}: " + "; ".join(bits) + f" (n={exp.n})"
+
+
+def _signed_money(v: float) -> str:
+    sign = "+" if v >= 0 else "-"
+    return f"{sign}${abs(v):,.0f}"
 
 
 def swap_context_json(s: SwapCandidate, *, margin_pp: float) -> dict[str, object]:

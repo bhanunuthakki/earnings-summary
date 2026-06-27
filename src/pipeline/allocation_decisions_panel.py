@@ -55,9 +55,16 @@ from statistics import median
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
-from decision_calibration import CalibrationStats, CohortPeriod, build_calibration
+from decision_calibration import (
+    CalibrationStats,
+    CohortPeriod,
+    ConvictionBucket,
+    build_calibration,
+    realized_magnitudes,
+)
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
+    BetaStats,
     LivePortfolio,
     PositionAlpha,
     fetch_live_portfolio,
@@ -492,12 +499,20 @@ def render_allocation_decisions_panel(
     except sqlite3.OperationalError:
         intents = []
     live = fetch_live_portfolio(api_url=api_url)
-    analytics = fetch_portfolio_analytics(api_url=api_url, only={"position_alpha"})
+    # exit_quality is opt-in — the sell-side magnitude for the batting-vs-slugging
+    # view (L-seam 1) that rides beside the hit-rate buckets.
+    # beta carries the Jensen alpha joined beside the decomposition (L-seam 5).
+    analytics = fetch_portfolio_analytics(
+        api_url=api_url, only={"position_alpha", "exit_quality", "beta"}
+    )
     audit = build_sizing_audit_rows(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha, dcf_scenarios
     )
     timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
-    calibration = build_calibration(db_path=db_path)
+    calibration = build_calibration(
+        db_path=db_path,
+        magnitudes_by_ticker=realized_magnitudes(analytics.position_alpha, analytics.exit_quality),
+    )
     attribution = decompose_alpha(
         analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
@@ -509,6 +524,7 @@ def render_allocation_decisions_panel(
         calibration=calibration,
         attribution=attribution,
         scorecard_html=_scorecard_html(db_path),
+        beta=analytics.beta,
     )
 
 
@@ -542,19 +558,21 @@ def compose_decisions_page(
     calibration: CalibrationStats | None = None,
     attribution: SkillDecomposition | None = None,
     scorecard_html: str = "",
+    beta: BetaStats | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
     (tracker offline / nothing to decompose) hides the skill block;
     ``scorecard_html`` "" (no L8 scorecard generated yet) hides the coach's-read
-    section. The coach section is pre-rendered upstream (with its own <style>) so
-    this module never imports calibration_coach (which imports this one)."""
+    section; ``beta`` carries the Jensen alpha joined beside the decomposition
+    (L-seam 5). The coach section is pre-rendered upstream (with its own <style>)
+    so this module never imports calibration_coach (which imports this one)."""
     return "".join(
         [
             _PANEL_CSS,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
-            _skill_decomposition_section(attribution) if attribution is not None else "",
+            _skill_decomposition_section(attribution, beta) if attribution is not None else "",
             scorecard_html,
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
@@ -867,18 +885,23 @@ def _calibration_section(stats: CalibrationStats) -> str:
         f'<td class="num">{b.mixed}</td>'
         f'<td class="num muted">{b.ungraded}</td>'
         f'<td class="num">{f"{b.hit_rate * 100.0:.0f}%" if b.hit_rate is not None else "&mdash;"}'
-        "</td></tr>"
+        "</td>"
+        f'<td class="num muted">{_wilson_cell(b)}</td>'
+        "</tr>"
         for b in stats.by_conviction
     )
     conviction_table = (
         '<table class="ad-table adc-table"><thead><tr>'
         '<th>Conviction</th><th class="num">Graded</th><th class="num">Correct</th>'
         '<th class="num">Wrong</th><th class="num">Mixed</th><th class="num">Ungraded</th>'
-        '<th class="num">Hit rate</th>'
+        '<th class="num">Hit rate</th><th class="num">95% CI</th>'
         f"</tr></thead><tbody>{conviction_rows}</tbody></table>"
         if conviction_rows
         else ""
     )
+    brier_line = _brier_line(stats)
+    expectancy_line = _expectancy_line(stats)
+    process_block = _process_matrix_block(stats)
 
     mix_bits = " &middot; ".join(
         f"{label} {stats.action_mix.get(key, 0)}"
@@ -922,8 +945,86 @@ def _calibration_section(stats: CalibrationStats) -> str:
     trend_block = _cohort_trend_block(stats)
     omission_block = _omission_block(stats)
     return (
-        f"{head}{kpis}{trend_block}{conviction_table}{mix_line}{timing_line}"
-        f"{omission_block}{reversal_table}</section>"
+        f"{head}{kpis}{trend_block}{conviction_table}{brier_line}{expectancy_line}"
+        f"{process_block}{mix_line}{timing_line}{omission_block}{reversal_table}</section>"
+    )
+
+
+def _process_matrix_block(stats: CalibrationStats) -> str:
+    """Process quality × outcome (Track B seam 8) — the two-axis read the flat
+    hit-rate can't give: how many calls were right for the WRONG reasons, and
+    wrong for the RIGHT ones. Hidden until at least one call is process-scored."""
+    m = stats.process_outcome
+    if m is None or not m.total_scored:
+        return ""
+    outcomes = ("correct", "wrong", "mixed")
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(pq)}</td>"
+        + "".join(f'<td class="num">{m.cells.get((pq, o), 0)}</td>' for o in outcomes)
+        + "</tr>"
+        for pq in ("sound", "flawed", "lucky")
+    )
+    return (
+        '<h3 class="adc-sub">Process &times; outcome</h3>'
+        '<p class="adc-line">Process quality is a separate axis from outcome — '
+        f"<b>{m.right_for_wrong_reasons}</b> right for the wrong reasons "
+        "(flawed/lucky yet correct), "
+        f"<b>{m.wrong_for_right_reasons}</b> wrong for the right reasons (sound yet wrong), "
+        f"over {m.total_scored} process-scored call(s).</p>"
+        '<table class="ad-table adc-table"><thead><tr>'
+        '<th>Process</th><th class="num">Correct</th><th class="num">Wrong</th>'
+        '<th class="num">Mixed</th>'
+        f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
+def _signed_usd0(v: float) -> str:
+    return f"{'+' if v >= 0 else '-'}${abs(v):,.0f}"
+
+
+def _wilson_cell(b: ConvictionBucket) -> str:
+    """The bucket's Wilson 95% CI (L-seam 3) as a band, or em-dash when nothing
+    is graded — so a thin denominator reads as a range, not a false point."""
+    if b.wilson_low is None or b.wilson_high is None:
+        return "&mdash;"
+    return f"{b.wilson_low * 100.0:.0f}&ndash;{b.wilson_high * 100.0:.0f}%"
+
+
+def _brier_line(stats: CalibrationStats) -> str:
+    """Proper-scoring Brier on the owner's own conviction (L-seam 2) — does the
+    conviction language discriminate, or is it just loud? Min-n framed."""
+    cc = stats.conviction_calibration
+    if cc is None or cc.brier is None or cc.baseline_brier is None:
+        return ""
+    verdict = (
+        "beats a flat base-rate guess &mdash; your conviction labels carry signal"
+        if cc.beats_baseline
+        else "does not beat a flat base-rate guess &mdash; the labels add little over your average"
+    )
+    return (
+        f'<p class="adc-line">Conviction Brier <b>{cc.brier:.3f}</b> vs '
+        f"{cc.baseline_brier:.3f} baseline ({escape(confidence_note(cc.n))}): {verdict}.</p>"
+    )
+
+
+def _expectancy_line(stats: CalibrationStats) -> str:
+    """Batting-vs-slugging (L-seam 1): the SIZE of the wins, from the tracker's
+    realized per-name magnitudes. Hidden offline (no magnitudes) or below the
+    min-n guard (a slugging ratio on a handful of names is noise)."""
+    exp = stats.expectancy
+    if exp is None or not is_confident(exp.n):
+        return ""
+    parts = [f"expected <b>{_signed_usd0(exp.expectancy)}</b> realized alpha/call"]
+    if exp.avg_win is not None and exp.avg_loss is not None:
+        slug = f", slugging {exp.slugging:.1f}&times;" if exp.slugging is not None else ""
+        parts.append(
+            f"winners avg {_signed_usd0(exp.avg_win)} vs losers {_signed_usd0(-exp.avg_loss)}{slug}"
+        )
+    return (
+        f'<p class="adc-line">Batting vs slugging ({escape(confidence_note(exp.n))}): '
+        + "; ".join(parts)
+        + ".</p>"
     )
 
 
@@ -973,22 +1074,28 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     return badge
 
 
-def _skill_decomposition_section(d: SkillDecomposition) -> str:
+def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None = None) -> str:
     """The shared selection/sizing/timing decomposition (L8 §6), rendered as a
-    KPI strip + an edge-vs-leak read + the conviction → outcome join. The
-    arithmetic is the engine's; this only frames it."""
+    KPI strip + an edge-vs-leak read + the conviction → outcome join, with the
+    tracker's Jensen alpha (L-seam 5) joined in beside it. The arithmetic is the
+    engine's; this only frames it."""
     window = (
         f"{escape(d.window_start)} → {escape(d.window_end)}"
         if d.window_start and d.window_end
         else "the tracker window"
+    )
+    basis_text = (
+        "your policy benchmark (the designated, anti-cherry-pick benchmark)"
+        if d.benchmark_basis == "policy"
+        else "the SPY counterfactual"
     )
     head = (
         '<section class="panel"><h2>Skill decomposition</h2>'
         f'<p class="sub">Realized dollar alpha over {window}, split into the repeatable '
         "decisions behind it — <b>selection</b> (which names, size-neutral), <b>sizing</b> "
         "(did your weighting amplify selection), <b>timing</b> (did within-window adds/trims "
-        "lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
-        "diagnostic. Alpha is the tracker's SPY-counterfactual — never recomputed here.</p>"
+        f"lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
+        f"diagnostic. Alpha is the tracker's {basis_text} — never recomputed here.</p>"
     )
 
     def kpi(label: str, v: float | None) -> str:
@@ -1009,6 +1116,7 @@ def _skill_decomposition_section(d: SkillDecomposition) -> str:
     )
 
     read = _skill_read(d)
+    jensen = _jensen_line(beta)
 
     def _rating(v: float | None) -> str:
         return f"{v:.1f}/5" if v is not None else "&mdash;"
@@ -1033,7 +1141,32 @@ def _skill_decomposition_section(d: SkillDecomposition) -> str:
         else ""
     )
     notes = "".join(f'<p class="muted ad-note">{escape(n)}</p>' for n in d.notes)
-    return f"{head}{kpis}{read}{conv_table}{notes}</section>"
+    return f"{head}{kpis}{jensen}{read}{conv_table}{notes}</section>"
+
+
+def _jensen_line(beta: BetaStats | None) -> str:
+    """The tracker's Jensen alpha (L-seam 5) — the regression-intercept alpha vs
+    one benchmark, annualized — joined beside the dollar decomposition. Carries
+    the skill-vs-luck verdict from the new beta trio (is it distinguishable from
+    zero?). Pure presentation; the value is the tracker's, never recomputed."""
+    if beta is None or beta.alpha_annualized_pct is None:
+        return ""
+    bench = escape(beta.benchmark or "the benchmark")
+    val = f"{beta.alpha_annualized_pct:+.1f}%"
+    tone = "pos" if beta.alpha_annualized_pct >= 0 else "neg"
+    sig = ""
+    if beta.alpha_significant is not None:
+        t = f", t={beta.alpha_t_stat:.1f}" if beta.alpha_t_stat is not None else ""
+        sig = (
+            f' &mdash; <span class="pos">statistically distinguishable from zero{t}</span>'
+            if beta.alpha_significant
+            else f' &mdash; <span class="muted">not distinguishable from zero — '
+            f"could be luck{t}</span>"
+        )
+    return (
+        f'<p class="adc-line">Jensen &alpha; (annualized regression intercept vs {bench}): '
+        f'<b class="{tone}">{val}</b>{sig}.</p>'
+    )
 
 
 def _signed_span(v: float) -> str:

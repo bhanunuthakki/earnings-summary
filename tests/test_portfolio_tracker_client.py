@@ -315,6 +315,9 @@ _BETA = {
     "risk_free_annual": 0.04,
     "beta": 1.12,
     "alpha_annualized_pct": 2.5,
+    "alpha_t_stat": 2.31,
+    "alpha_std_error_annualized_pct": 1.08,
+    "alpha_significant": True,
     "r_squared": 0.82,
     "correlation": 0.91,
     "sharpe": 0.85,
@@ -324,6 +327,83 @@ _BETA = {
     "benchmark_volatility_annualized": 0.15,
     "tracking_error_annualized": 0.08,
     "notes": ["Dropped 2 day(s) with implausible (>30%) reconstructed portfolio moves"],
+}
+_DRAWDOWN = {
+    "start_date": "2025-06-10",
+    "end_date": "2026-06-10",
+    "max_drawdown_pct": "-14.6",
+    "peak_date": "2025-11-02",
+    "trough_date": "2026-01-18",
+    "recovery_date": "2026-03-30",
+    "days_to_recovery": 71,
+    "current_drawdown_pct": "-2.1",
+    "annualized_return_pct": "18.2",
+    "calmar": "1.25",
+    "underwater": [
+        {"date": "2025-11-02", "drawdown_pct": "0.0"},
+        {"date": "2026-01-18", "drawdown_pct": "-14.6"},
+        {"date": "2026-06-10", "drawdown_pct": "-2.1"},
+    ],
+}
+_EXIT_QUALITY = {
+    "start_date": "2025-06-10",
+    "end_date": "2026-06-10",
+    "total_sold_proceeds": "30000.00",
+    "total_value_if_held": "33500.00",
+    "total_regret_vs_hold": "3500.00",
+    "total_spy_value_if_reinvested": "31200.00",
+    "total_exit_alpha_vs_spy": "-1200.00",
+    "rows": [
+        {
+            "ticker": "TSLA",
+            "name": "Tesla",
+            "sold_shares": "100",
+            "sold_proceeds": "20000.00",
+            "avg_sell_price": "200.00",
+            "price_now": "240.00",
+            "value_if_held": "24000.00",
+            "regret_vs_hold": "4000.00",
+            "spy_value_if_reinvested": "21000.00",
+            "exit_alpha_vs_spy": "-3000.00",
+            "still_held": False,
+        },
+        {
+            "ticker": "META",
+            "name": "Meta",
+            "sold_shares": "20",
+            "sold_proceeds": "10000.00",
+            "avg_sell_price": "500.00",
+            "price_now": "475.00",
+            "value_if_held": "9500.00",
+            "regret_vs_hold": "-500.00",
+            "spy_value_if_reinvested": "10200.00",
+            "exit_alpha_vs_spy": "1800.00",
+            "still_held": True,
+        },
+    ],
+}
+_AFTER_TAX = {
+    "tax_year": 2026,
+    "st_rate": "0.37",
+    "lt_rate": "0.20",
+    "realized_gain_pretax": "12000.00",
+    "realized_gain_aftertax": "8740.00",
+    "total_tax": "3260.00",
+    "by_term": [
+        {
+            "term": "short",
+            "realized_gain_pretax": "4000.00",
+            "tax": "1480.00",
+            "realized_gain_aftertax": "2520.00",
+        },
+        {
+            "term": "long",
+            "realized_gain_pretax": "8000.00",
+            "tax": "1600.00",
+            "realized_gain_aftertax": "6400.00",
+        },
+    ],
+    "notes": ["Rates are the caller's assumptions; state taxes not modeled."],
 }
 
 
@@ -351,6 +431,12 @@ def _route(url: str) -> _FakeResp:
         return _FakeResp(_POLICY)
     if "/api/portfolio/beta" in url:
         return _FakeResp(_BETA)
+    if "/api/portfolio/drawdown" in url:
+        return _FakeResp(_DRAWDOWN)
+    if "/api/portfolio/exit-quality" in url:
+        return _FakeResp(_EXIT_QUALITY)
+    if "/api/portfolio/after-tax" in url:
+        return _FakeResp(_AFTER_TAX)
     if "/holdings" in url:
         return _FakeResp(_HOLDINGS)
     if "/plaid/items" in url:
@@ -537,6 +623,128 @@ def test_fetch_analytics_parses_all_endpoints(mock_tracker: None) -> None:
     assert beta.tracking_error_annualized == pytest.approx(0.08)
     assert beta.sample_size == 250
     assert beta.notes and "implausible" in beta.notes[0]
+    # Skill-vs-luck trio parses 1:1.
+    assert beta.alpha_t_stat == pytest.approx(2.31)
+    assert beta.alpha_std_error_annualized_pct == pytest.approx(1.08)
+    assert beta.alpha_significant is True
+
+
+def test_beta_significance_absent_is_tristate_none() -> None:
+    # An older tracker that predates the trio: missing key → None, not False.
+    payload = {k: v for k, v in _BETA.items() if not k.startswith("alpha_t")}
+    payload.pop("alpha_significant")
+    payload.pop("alpha_std_error_annualized_pct")
+    beta = ptc._parse_beta(payload)
+    assert beta.alpha_significant is None
+    assert beta.alpha_t_stat is None
+    assert beta.alpha_std_error_annualized_pct is None
+    # The pre-existing alpha number is untouched.
+    assert beta.alpha_annualized_pct == pytest.approx(2.5)
+
+
+def test_drawdown_and_exit_quality_are_opt_in(mock_tracker: None) -> None:
+    # A default fetch does NOT request the two new sections (existing callers
+    # keep their round-trip count) — they stay None with no errors entry.
+    a = fetch_portfolio_analytics(api_url="http://tracker.test")
+    assert a.drawdown is None
+    assert a.exit_quality is None
+    assert "drawdown" not in a.errors
+    assert "exit_quality" not in a.errors
+
+
+def test_fetch_analytics_only_loads_drawdown_and_exit_quality(mock_tracker: None) -> None:
+    a = fetch_portfolio_analytics(api_url="http://tracker.test", only={"drawdown", "exit_quality"})
+    assert a.available is True
+    # Only the two requested sections loaded.
+    assert a.performance is None and a.beta is None
+    dd = a.drawdown
+    assert dd is not None
+    assert dd.max_drawdown_pct == pytest.approx(-14.6)
+    assert dd.days_to_recovery == 71
+    assert dd.calmar == pytest.approx(1.25)
+    assert [p.date for p in dd.underwater] == ["2025-11-02", "2026-01-18", "2026-06-10"]
+    assert dd.underwater[1].drawdown_pct == pytest.approx(-14.6)
+    eq = a.exit_quality
+    assert eq is not None
+    assert eq.total_regret_vs_hold == pytest.approx(3500.0)
+    assert eq.total_exit_alpha_vs_spy == pytest.approx(-1200.0)
+    by_ticker = {r.ticker: r for r in eq.rows}
+    assert by_ticker["TSLA"].regret_vs_hold == pytest.approx(4000.0)
+    assert by_ticker["TSLA"].still_held is False
+    assert by_ticker["META"].exit_alpha_vs_spy == pytest.approx(1800.0)
+    assert by_ticker["META"].still_held is True
+
+
+def test_fetch_drawdown_standalone(mock_tracker: None) -> None:
+    dd = ptc.fetch_drawdown(api_url="http://tracker.test")
+    assert dd is not None
+    assert dd.max_drawdown_pct == pytest.approx(-14.6)
+    assert dd.recovery_date == "2026-03-30"
+
+
+def test_fetch_exit_quality_standalone(mock_tracker: None) -> None:
+    eq = ptc.fetch_exit_quality(api_url="http://tracker.test")
+    assert eq is not None
+    assert len(eq.rows) == 2
+    assert eq.total_sold_proceeds == pytest.approx(30000.0)
+
+
+def test_fetch_exit_quality_totals_from_nested_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Robust to a tracker that nests totals under a ``totals`` key instead of
+    # top-level ``total_*``.
+    nested = {
+        "start_date": "2025-06-10",
+        "end_date": "2026-06-10",
+        "rows": _EXIT_QUALITY["rows"],
+        "totals": {"total_regret_vs_hold": "999.00", "total_exit_alpha_vs_spy": "111.00"},
+    }
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        return _FakeResp(nested)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    eq = ptc.fetch_exit_quality(api_url="http://tracker.test")
+    assert eq is not None
+    assert eq.total_regret_vs_hold == pytest.approx(999.0)
+    assert eq.total_exit_alpha_vs_spy == pytest.approx(111.0)
+
+
+def test_fetch_after_tax_standalone(mock_tracker: None) -> None:
+    at = ptc.fetch_after_tax(
+        tax_year=2026, st_rate=0.37, lt_rate=0.20, api_url="http://tracker.test"
+    )
+    assert at is not None
+    assert at.tax_year == 2026
+    assert at.total_tax == pytest.approx(3260.0)
+    assert at.realized_gain_aftertax == pytest.approx(8740.0)
+    by_term = {t.term: t for t in at.by_term}
+    assert by_term["short"].tax == pytest.approx(1480.0)
+    assert by_term["long"].realized_gain_aftertax == pytest.approx(6400.0)
+    assert at.notes and "assumptions" in at.notes[0]
+
+
+def test_after_tax_passes_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        seen["url"] = url
+        return _FakeResp(_AFTER_TAX)
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    ptc.fetch_after_tax(tax_year=2026, st_rate=0.37, lt_rate=0.2, api_url="http://tracker.test")
+    assert "tax_year=2026" in seen["url"]
+    assert "st_rate=0.37" in seen["url"]
+    assert "lt_rate=0.2" in seen["url"]
+
+
+def test_new_fetchers_degrade_to_none_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(ptc.requests, "get", _boom)
+    assert ptc.fetch_drawdown(api_url="http://tracker.test") is None
+    assert ptc.fetch_exit_quality(api_url="http://tracker.test") is None
+    assert ptc.fetch_after_tax(tax_year=2026, api_url="http://tracker.test") is None
 
 
 def test_fetch_analytics_degrades_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:

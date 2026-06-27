@@ -18,8 +18,10 @@ ledger rows on every morning-pipeline run:
     conditions (decisions.decision_conditions).
   * open row whose ticker left the portfolio → CLOSE it. Exit date/price from
     the tracker's sell transactions when visible, else the detection date.
-    ``exit_reason`` / ``lessons`` / ``outcome_vs_thesis`` stay NULL — they are
-    the analyst's post-exit grading, written from the holding-page timeline.
+    ``exit_reason`` / ``lessons`` stay NULL (the analyst's post-exit grading,
+    written from the holding-page timeline); ``outcome_vs_thesis`` is PREFILLED
+    from the thesis breach history at exit (seam 9) — broke vs played-out — as a
+    suggestion the analyst confirms/overrides, not a final verdict.
 
 The tracker may be OFFLINE (``LivePortfolio.available=False``): the reconciler
 still runs — membership comes from ``tracked_companies`` alone and the
@@ -345,6 +347,41 @@ def _avg_cost(portfolio: LivePortfolio, ticker: str) -> float | None:
     return None
 
 
+def infer_outcome_vs_thesis(conn: sqlite3.Connection, ticker: str, exit_date: str) -> str | None:
+    """Infer ``outcome_vs_thesis`` at exit from the thesis-evaluation breach
+    history (#seam 9) — a PREFILL the analyst confirms/overrides, not a verdict.
+
+    Reads ``thesis_evaluations`` (via ``thesis_history.fetch_history``) for the
+    evaluations dated on/before the exit:
+      * a BREACH anywhere before the exit → ``broke`` (the thesis broke — likely
+        why you sold);
+      * a WARN (and no breach) → ``mixed``;
+      * OK-only → ``played_out``;
+      * no evaluable history → None (leave NULL — honest, nothing to infer).
+
+    Best-effort: a missing table / pre-0016 schema / import problem → None."""
+    try:
+        from compute.thesis_history import fetch_history
+        from models.kpis import BreachStatus
+    except Exception:  # import problem — inference is optional
+        return None
+    try:
+        history = fetch_history(conn, ticker)
+    except Exception:  # missing table / unparseable status — inference is optional
+        return None
+    prior = [h for h in history if str(h.evaluated_at)[:10] <= exit_date]
+    if not prior:
+        return None
+    statuses = {h.status for h in prior}
+    if BreachStatus.BREACH in statuses:
+        return "broke"
+    if BreachStatus.WARN in statuses:
+        return "mixed"
+    if BreachStatus.OK in statuses:
+        return "played_out"
+    return None  # only UNRESOLVED → can't say
+
+
 # ---------------------------------------------------------------------------
 # The reconciler
 # ---------------------------------------------------------------------------
@@ -442,13 +479,25 @@ def sync_position_lifecycle(
                 exit_date, exit_price = _txn_dates_and_price(
                     portfolio, ticker, kinds=_SELL_TYPES, earliest=False
                 )
+            final_exit_date = exit_date or today
+            # Prefill the broke-vs-played-out grade from the thesis breach history
+            # (#seam 9) — a suggestion the analyst confirms/overrides on the
+            # holding page, not a final verdict. Only set on the fresh close
+            # (the row is NULL here), so a later manual override is never clobbered.
+            inferred_outcome = infer_outcome_vs_thesis(conn, ticker, final_exit_date)
             conn.execute(
                 """
                 UPDATE position_entries
-                SET exit_date = ?, exit_price = ?, updated_at = ?
+                SET exit_date = ?, exit_price = ?, outcome_vs_thesis = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (exit_date or today, exit_price, now, int(open_rows[ticker]["id"])),
+                (
+                    final_exit_date,
+                    exit_price,
+                    inferred_outcome,
+                    now,
+                    int(open_rows[ticker]["id"]),
+                ),
             )
             closed += 1
 

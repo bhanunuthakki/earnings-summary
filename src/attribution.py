@@ -415,6 +415,10 @@ class SkillDecomposition:
     excluded_no_value: int
     confident: bool
     notes: list[str]
+    # Which counterfactual the alpha is measured against (L-seam 4): "policy"
+    # (the designated anti-cherry-pick benchmark) when one is configured, else
+    # "spy". Defaulted so any pre-seam hand-construction still builds.
+    benchmark_basis: str = "spy"
 
 
 def _usable_value(row: PositionAlphaRow) -> float | None:
@@ -432,6 +436,18 @@ def _net_flow(row: PositionAlphaRow) -> float:
     """Net within-window dollar flow: bought − sold. Positive = net buyer
     (added), negative = net seller (trimmed). Missing legs read as 0."""
     return float(row.bought_in_window or 0.0) - float(row.sold_in_window or 0.0)
+
+
+def _row_alpha(row: PositionAlphaRow, *, use_policy: bool) -> float | None:
+    """The per-name alpha on the chosen benchmark basis (L-seam 4). When a policy
+    benchmark is configured, the policy counterfactual is primary — the
+    designated, anti-cherry-pick benchmark the owner committed to — falling back
+    to the SPY counterfactual only when a row lacks a policy figure (or no policy
+    is set). All three legs (selection / sizing / timing) read the SAME basis so
+    the decomposition is internally consistent."""
+    if use_policy and row.alpha_vs_policy is not None:
+        return row.alpha_vs_policy
+    return row.alpha
 
 
 def decompose_alpha(
@@ -459,16 +475,22 @@ def decompose_alpha(
     if alpha is None:
         return None
     conv_map = {k.upper(): v for k, v in (conviction_by_ticker or {}).items()}
+    # Policy is the primary basis when configured (L-seam 4); SPY is the fallback.
+    use_policy = bool(alpha.has_policy)
+    benchmark_basis = "policy" if use_policy else "spy"
 
     priced: list[tuple[str, float, float, float | None]] = []  # ticker, alpha, value, conviction
     excluded_no_value = 0
     timing_usd = 0.0
     n_timed = 0
     for row in alpha.rows:
-        if row.ticker is None or row.alpha is None:
+        if row.ticker is None:
+            continue
+        a_val = _row_alpha(row, use_policy=use_policy)
+        if a_val is None:
             continue
         ticker = row.ticker.upper()
-        a = float(row.alpha)
+        a = float(a_val)
         flow = _net_flow(row)
         if flow != 0.0:
             timing_usd += (1.0 if flow > 0 else -1.0) * a
@@ -512,9 +534,15 @@ def decompose_alpha(
     top = sorted(contributions, key=lambda c: -abs(c.alpha_usd))[:_MAX_CONTRIBUTORS]
 
     confident = is_confident(n_names)
+    basis_label = (
+        "your policy benchmark (the designated, anti-cherry-pick benchmark)"
+        if use_policy
+        else "SPY (no policy benchmark configured)"
+    )
     notes: list[str] = [
+        f"Alpha basis: vs {basis_label}.",
         f"Selection vs sizing split over {confidence_note(n_names)} priced name"
-        f"{'s' if n_names != 1 else ''}."
+        f"{'s' if n_names != 1 else ''}.",
     ]
     if not confident:
         notes.append("Thin book — read the split as directional, not a settled skill verdict.")
@@ -542,6 +570,7 @@ def decompose_alpha(
         excluded_no_value=excluded_no_value,
         confident=confident,
         notes=notes,
+        benchmark_basis=benchmark_basis,
     )
 
 

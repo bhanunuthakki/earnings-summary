@@ -110,6 +110,7 @@ _LIST_TYPE_TIMEOUT_S = 120
 # + tracker holdings — pure SQLite + one loopback HTTP group (sub-second
 # connect cap when the tracker is down). 2 min is generous.
 _LIFECYCLE_TIMEOUT_S = 120
+_DECISION_ACTIONS_TIMEOUT_S = 120
 # Stage 0d (cockpit fundamentals) runs the financial_facts double-scan that
 # was measured at ~1.2s on prod (726k rows). 60s is generous.
 _FUNDAMENTALS_TIMEOUT_S = 60
@@ -136,6 +137,7 @@ STAGE_NEWS = "stage_0_news"
 STAGE_LIST_TYPE = "stage_0a_list_type"
 STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
+STAGE_DECISION_ACTIONS = "stage_0c2_decision_actions"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
@@ -149,6 +151,7 @@ _ALL_STAGE_KEYS = (
     STAGE_LIST_TYPE,
     STAGE_DECISIONS,
     STAGE_LIFECYCLE,
+    STAGE_DECISION_ACTIONS,
     STAGE_FUNDAMENTALS,
     STAGE_REPRICE,
     STAGE_CANDIDATE_FIT,
@@ -319,6 +322,27 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *lifecycle_args,
                 ],
                 timeout_s=_LIFECYCLE_TIMEOUT_S,
+            )
+        )
+        # Stage 0c2 -- decision→action reconciler (Track B): match NULL-action
+        # decisions to the tracker's subsequent fills and write user_action_kind,
+        # so calibration's action mix stops being structurally empty. Runs after
+        # the lifecycle reconciler (both read the tracker's transaction window).
+        # Only --db-path is forwarded (the decisions ledger is single-operator).
+        # Skipped on the re-render-only path (no new fills to reconcile).
+        decision_actions_db_args = (
+            ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        )
+        stages.append(
+            _Stage(
+                key=STAGE_DECISION_ACTIONS,
+                label="Stage 0c2 - decision actions (reconcile_decision_actions.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "reconcile_decision_actions.py"),
+                    *decision_actions_db_args,
+                ],
+                timeout_s=_DECISION_ACTIONS_TIMEOUT_S,
             )
         )
         # Stage 0d -- cockpit fundamentals precompute: materialises per-ticker

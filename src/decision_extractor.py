@@ -41,9 +41,12 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+    from integrations.portfolio_tracker_client import LivePortfolio
 
 from db_paths import resolve_db_path
 
@@ -53,6 +56,11 @@ log = logging.getLogger(__name__)
 RecommendationKind = Literal["add", "trim", "hold", "sell", "initiate", "avoid"]
 UserAction = Literal["followed", "ignored", "partial", "reversed"]
 OutcomeLabel = Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]
+# Process-quality is a SEPARATE axis from outcome (Track B seam 8): a 'sound'
+# process can still grade 'wrong' (wrong for the right reasons) and a 'lucky' one
+# can grade 'correct' (right for the wrong reasons).
+ProcessQuality = Literal["sound", "flawed", "lucky"]
+PROCESS_QUALITY_VOCAB: frozenset[str] = frozenset({"sound", "flawed", "lucky"})
 
 # Recognized recommendation kinds. Order matters for the regex alternation —
 # put longer literals first so "INITIATE" wins over "INIT" if someone writes
@@ -124,6 +132,9 @@ class Decision:
     outcome_label: str | None
     outcome_pct: float | None
     outcome_notes: str | None
+    # Process quality (Track B seam 8) — a separate axis from outcome. Defaulted
+    # so a SELECT off a pre-0114 schema (no column) still builds the dataclass.
+    process_quality: str | None = None
 
 
 # ===========================================================================
@@ -450,6 +461,38 @@ def record_outcome(
         conn.close()
 
 
+def record_process_quality(
+    *,
+    decision_id: int,
+    process_quality: ProcessQuality,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Score a decision's PROCESS quality (sound / flawed / lucky) — the axis
+    distinct from its outcome (Track B seam 8). Idempotent — repeated calls
+    overwrite. Raises ``ValueError`` on an unknown label; returns False on DB
+    unavailability (best-effort, like the other write paths)."""
+    if process_quality not in PROCESS_QUALITY_VOCAB:
+        raise ValueError(
+            f"unknown process_quality {process_quality!r}; "
+            f"expected one of {sorted(PROCESS_QUALITY_VOCAB)}"
+        )
+    conn = _open(db_path)
+    if conn is None:
+        return False
+    try:
+        conn.execute(
+            "UPDATE decisions SET process_quality = ? WHERE id = ?",
+            (process_quality, decision_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as exc:
+        log.warning({"event": "decision_process_quality_failed", "error": str(exc)})
+        return False
+    finally:
+        conn.close()
+
+
 def history(
     *,
     ticker: str | None = None,
@@ -484,6 +527,150 @@ def history(
         return [_row_to_decision(r) for r in rows]
     finally:
         conn.close()
+
+
+# Recommendation kind → the tracker transaction direction it implies. HOLD /
+# AVOID imply NO trade (inaction is the action), so they're absent here and
+# handled separately in the reconciler.
+_KIND_DIRECTION: dict[str, str] = {
+    "add": "buy",
+    "initiate": "buy",
+    "trim": "sell",
+    "sell": "sell",
+}
+
+
+def _date_prefix(raw: object) -> date | None:
+    """Parse the YYYY-MM-DD prefix of a transaction stamp; None on bad input."""
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def reconcile_decision_actions(
+    *,
+    db_path: Path | str | None = None,
+    portfolio: LivePortfolio | None = None,
+    window_days: int = 30,
+    lookback_days: int = 180,
+    transactions_limit: int = 200,
+    now: datetime | None = None,
+) -> dict[str, int]:
+    """Match every decision with NO recorded user action to the tracker's
+    subsequent fills (same ticker, the direction the call implies, within
+    ``[made_at, made_at + window_days]``) and write ``user_action_kind`` — the
+    decision→fill link that has had no production caller, leaving calibration's
+    ``action_mix`` structurally empty.
+
+      'followed'  — a matching-direction fill landed in the window.
+      'reversed'  — only the OPPOSITE-direction fill landed (you did the contrary).
+      'partial'   — a HOLD / AVOID that nonetheless traded (you didn't fully
+                    hold / pass).
+      'ignored'   — no fill AND the window has fully elapsed (the call lapsed).
+
+    Undetermined calls (no fill yet, window still open) are left NULL and
+    revisited next run. Idempotent: only NULL-action rows are touched, and a
+    second run against the same world is a no-op. Best-effort: a missing DB or an
+    offline tracker returns a tally with the reason flagged, never raises."""
+    tally = {
+        k: 0
+        for k in ("followed", "reversed", "partial", "ignored", "skipped_undetermined", "scanned")
+    }
+    tally["db_unavailable"] = 0
+    tally["tracker_unavailable"] = 0
+
+    now_naive = (now or datetime.now(UTC)).replace(tzinfo=None)
+    conn = _open(db_path)
+    if conn is None:
+        tally["db_unavailable"] = 1
+        return tally
+    try:
+        cutoff = (now_naive - timedelta(days=lookback_days)).isoformat()
+        rows = conn.execute(
+            "SELECT id, ticker, recommendation_kind, made_at FROM decisions "
+            "WHERE user_action_kind IS NULL AND made_at >= ? ORDER BY made_at DESC",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return tally
+
+    if portfolio is None:
+        try:
+            from integrations.portfolio_tracker_client import fetch_live_portfolio
+
+            portfolio = fetch_live_portfolio(transactions_limit=transactions_limit)
+        except Exception:  # tracker import / call is best-effort
+            tally["tracker_unavailable"] = 1
+            return tally
+    if not portfolio.available:
+        tally["tracker_unavailable"] = 1
+        return tally
+
+    fills_by_ticker: dict[str, list[tuple[date, str]]] = {}
+    for txn in portfolio.transactions:
+        tk = (txn.ticker or "").upper()
+        direction = txn.type.lower()
+        day = _date_prefix(txn.date)
+        if tk and direction in ("buy", "sell") and day is not None:
+            fills_by_ticker.setdefault(tk, []).append((day, direction))
+
+    for row in rows:
+        tally["scanned"] += 1
+        ticker = str(row["ticker"] or "").upper()
+        made_dt = _parse_dt(row["made_at"])
+        if not ticker or made_dt is None:
+            tally["skipped_undetermined"] += 1
+            continue
+        made_dt = made_dt.replace(tzinfo=None)
+        window_end = made_dt + timedelta(days=window_days)
+        window_elapsed = now_naive > window_end
+        in_window = [
+            (day, direction)
+            for day, direction in fills_by_ticker.get(ticker, [])
+            if made_dt.date() <= day <= window_end.date()
+        ]
+        has_buy = any(direction == "buy" for _, direction in in_window)
+        has_sell = any(direction == "sell" for _, direction in in_window)
+        kind = str(row["recommendation_kind"] or "").lower()
+        direction = _KIND_DIRECTION.get(kind)
+        action: str | None = None
+        fill_day: date | None = None
+        if direction is not None:
+            opposite = "sell" if direction == "buy" else "buy"
+            matched = has_buy if direction == "buy" else has_sell
+            opposed = has_sell if direction == "buy" else has_buy
+            if matched:
+                action = "followed"
+                fill_day = min(d for d, dr in in_window if dr == direction)
+            elif opposed:
+                action = "reversed"
+                fill_day = min(d for d, dr in in_window if dr == opposite)
+            elif window_elapsed:
+                action = "ignored"
+        elif has_buy or has_sell:  # HOLD / AVOID that nonetheless traded
+            action = "partial"
+            fill_day = min(d for d, _ in in_window)
+        elif window_elapsed:  # held / passed cleanly through the window
+            action = "followed"
+
+        if action is None:
+            tally["skipped_undetermined"] += 1
+            continue
+        acted_at = (
+            datetime.combine(fill_day, datetime.min.time()) if fill_day is not None else window_end
+        )
+        ok = record_user_action(
+            decision_id=int(row["id"]),
+            user_action_kind=action,
+            user_notes=f"auto-reconciled from tracker fills ({window_days}d window)",
+            user_acted_at=acted_at,
+            db_path=db_path,
+        )
+        tally[action if ok else "skipped_undetermined"] += 1
+    return tally
 
 
 def pending_for_grading(
@@ -595,6 +782,11 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         outcome_label=row["outcome_label"],
         outcome_pct=float(row["outcome_pct"]) if row["outcome_pct"] is not None else None,
         outcome_notes=row["outcome_notes"],
+        # sqlite3.Row membership tests VALUES, not keys — .keys() is required to
+        # tolerate a SELECT off a pre-0114 schema that lacks the column.
+        process_quality=(
+            row["process_quality"] if "process_quality" in row.keys() else None  # noqa: SIM118
+        ),
     )
 
 

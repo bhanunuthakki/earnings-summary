@@ -36,10 +36,18 @@ from datetime import datetime
 from pathlib import Path
 from statistics import median
 
-from calibration_guard import confidence_note
+from calibration_guard import confidence_note, wilson_interval
+from integrations.portfolio_tracker_client import ExitQuality, PositionAlpha
 
 CONVICTION_ORDER: tuple[str, ...] = ("high", "medium", "low", "unstated")
 GRADED_LABELS: frozenset[str] = frozenset({"correct", "wrong", "mixed"})
+
+# Predicted probability each stated conviction level IMPLIES — "when I call a
+# name high-conviction, I expect to be right ~this often". The Brier score
+# (L-seam 2) scores those implied probabilities against the binary graded
+# outcome, so the owner learns whether his conviction language is calibrated or
+# just loud. 'unstated' has no implied probability and is left out of scoring.
+CONVICTION_PROBABILITY: dict[str, float] = {"high": 0.75, "medium": 0.55, "low": 0.40}
 ACTION_KINDS: tuple[str, ...] = ("followed", "ignored", "partial", "reversed")
 
 # The omission side (L11): a graded 'avoid' that RAN AWAY is an error of omission.
@@ -127,6 +135,32 @@ class CohortPeriod:
 
 
 @dataclass(frozen=True, slots=True)
+class Expectancy:
+    """Batting-vs-slugging for one cohort (L-seam 1): the size of the wins, not
+    just how often they land. ``batting`` is owned by the hit-rate buckets; this
+    is the dollar view over the names with a tracker-supplied realized magnitude
+    (window $-alpha vs SPY: ``/position-alpha`` for open/traded names,
+    ``/exit-quality`` for fully-closed ones). Win/loss is classified by the
+    magnitude SIGN (the trading-desk convention), so it complements — does not
+    restate — the grade-based hit rate.
+
+    ``expectancy`` is the mean magnitude per graded call: positive = the cohort
+    makes money in expectation. ``slugging`` = avg_win / avg_loss (None when the
+    cohort has no win or no loss to size the ratio). Magnitude is the name's
+    whole-window alpha, so multiple calls on one ticker share it — a thin-book
+    diagnostic, gated by the same min-n guard, never a settled verdict."""
+
+    n: int  # graded calls with a usable magnitude
+    wins: int  # magnitude > 0
+    losses: int  # magnitude < 0
+    avg_win: float | None  # mean positive magnitude
+    avg_loss: float | None  # mean |negative magnitude|
+    slugging: float | None  # avg_win / avg_loss
+    expectancy: float  # mean magnitude per graded call (total / n)
+    total: float  # summed magnitude
+
+
+@dataclass(frozen=True, slots=True)
 class ConvictionBucket:
     """Outcome distribution of one stated-conviction level."""
 
@@ -137,6 +171,76 @@ class ConvictionBucket:
     mixed: int
     ungraded: int  # pending / unfalsifiable / not yet judged
     hit_rate: float | None  # correct / graded; None when nothing graded
+    # Wilson 95% CI on the hit-rate (L-seam 3) — so the rate is shown as a band,
+    # not a misleading point estimate on a thin denominator. None when nothing
+    # graded. Defaulted so positional hand-construction (tests) still builds.
+    wilson_low: float | None = None
+    wilson_high: float | None = None
+    # The dollar view (L-seam 1) — None when no tracker magnitude was supplied
+    # (the panels build calibration offline; the advisor supplies it).
+    expectancy: Expectancy | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ConvictionReliabilityRow:
+    """One conviction level's predicted-vs-observed point on the reliability
+    curve (L-seam 2): the probability the level IMPLIES vs the rate it actually
+    graded. ``gap`` > 0 = overconfident at this level."""
+
+    conviction: str  # high | medium | low
+    predicted: float  # the implied probability (CONVICTION_PROBABILITY)
+    observed: float  # correct / (correct + wrong) at this level
+    n: int  # correct + wrong (mixed excluded from the binary score)
+
+    @property
+    def gap(self) -> float:
+        """Predicted − observed. Positive = the conviction overstated the rate."""
+        return self.predicted - self.observed
+
+
+@dataclass(frozen=True, slots=True)
+class ConvictionCalibration:
+    """Proper-scoring Brier + reliability curve on the owner's OWN conviction
+    (L-seam 2). ``brier`` is the mean squared error between each call's implied
+    probability (from its stated conviction) and its binary outcome (correct=1,
+    wrong=0; mixed/unfalsifiable excluded). ``baseline_brier`` is the score of
+    always predicting the base rate — the no-discrimination reference; a brier
+    below it means the conviction LEVELS carry real signal, not just volume.
+    Lower brier is better (0 = perfect, 0.25 = a coin)."""
+
+    n: int  # graded correct/wrong calls with a stated conviction
+    brier: float | None
+    baseline_brier: float | None
+    base_rate: float | None  # overall correct rate over the scored subset
+    rows: list[ConvictionReliabilityRow] = field(default_factory=list[ConvictionReliabilityRow])
+
+    @property
+    def beats_baseline(self) -> bool | None:
+        """True when conviction discriminates better than the flat base rate.
+        None when either score is missing."""
+        if self.brier is None or self.baseline_brier is None:
+            return None
+        return self.brier < self.baseline_brier
+
+
+PROCESS_QUALITY_ORDER: tuple[str, ...] = ("sound", "flawed", "lucky")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessOutcomeMatrix:
+    """Process quality × outcome (Track B seam 8) — the two-axis read the flat
+    hit-rate can't give. ``cells`` is keyed (process_quality, outcome) → count
+    over graded, process-scored decisions. The two headline diagonals name the
+    cases the owner most needs to see: ``right_for_wrong_reasons`` (graded
+    correct but the process was flawed/lucky — don't bank the edge) and
+    ``wrong_for_right_reasons`` (graded wrong but the process was sound — don't
+    punish the discipline)."""
+
+    total_scored: int
+    cells: dict[tuple[str, str], int]
+    right_for_wrong_reasons: int
+    wrong_for_right_reasons: int
+    sound_and_correct: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +319,16 @@ class CalibrationStats:
     # so the pre-L11 hand-constructed call shapes still build; build_calibration
     # always supplies it (None only when there are zero avoid rows).
     omissions: OmissionStats | None = None
+    # Book-wide batting-vs-slugging (L-seam 1) — None when no tracker magnitudes
+    # were supplied (offline panels); the per-conviction view rides on each
+    # ConvictionBucket.expectancy.
+    expectancy: Expectancy | None = None
+    # Proper-scoring Brier + reliability on the owner's own conviction (L-seam
+    # 2). None when no graded correct/wrong call carries a stated conviction.
+    conviction_calibration: ConvictionCalibration | None = None
+    # Process quality x outcome (Track B seam 8). None when no graded decision
+    # has been process-scored yet (pre-0114 schema, or nothing scored).
+    process_outcome: ProcessOutcomeMatrix | None = None
 
 
 def _open(db_path: Path | str) -> sqlite3.Connection | None:
@@ -302,6 +416,73 @@ def _rate(correct: int, graded: int) -> float | None:
     return (correct / graded) if graded else None
 
 
+def realized_magnitudes(
+    position_alpha: PositionAlpha | None,
+    exit_quality: ExitQuality | None = None,
+) -> dict[str, float]:
+    """``ticker → realized window magnitude`` for the batting-vs-slugging view.
+
+    One consistent unit throughout — dollar alpha vs the SPY counterfactual:
+    ``/position-alpha``'s per-name ``alpha`` for open/traded names (takes
+    precedence), with ``/exit-quality``'s ``exit_alpha_vs_spy`` filling in
+    fully-closed names that have left the position book. Built by the caller
+    (advisor / panel) from already-fetched tracker payloads so
+    ``build_calibration`` stays decoupled from the wire shape."""
+    out: dict[str, float] = {}
+    if position_alpha is not None:
+        for row in position_alpha.rows:
+            if row.ticker and row.alpha is not None:
+                out[row.ticker.upper()] = float(row.alpha)
+    if exit_quality is not None:
+        for row in exit_quality.rows:
+            t = (row.ticker or "").upper()
+            if t and t not in out and row.exit_alpha_vs_spy is not None:
+                out[t] = float(row.exit_alpha_vs_spy)
+    return out
+
+
+@dataclass(slots=True)
+class _MagAcc:
+    """Mutable win/loss magnitude tally — the expectancy working state."""
+
+    n: int = 0
+    wins: int = 0
+    losses: int = 0
+    sum_win: float = 0.0
+    sum_loss: float = 0.0  # accumulated as POSITIVE magnitudes
+    total: float = 0.0
+
+    def add(self, magnitude: float) -> None:
+        self.n += 1
+        self.total += magnitude
+        if magnitude > 0:
+            self.wins += 1
+            self.sum_win += magnitude
+        elif magnitude < 0:
+            self.losses += 1
+            self.sum_loss += -magnitude
+
+
+def _to_expectancy(acc: _MagAcc | None) -> Expectancy | None:
+    if acc is None or acc.n == 0:
+        return None
+    avg_win = (acc.sum_win / acc.wins) if acc.wins else None
+    avg_loss = (acc.sum_loss / acc.losses) if acc.losses else None
+    slugging = (
+        (avg_win / avg_loss) if (avg_win is not None and avg_loss not in (None, 0.0)) else None
+    )
+    return Expectancy(
+        n=acc.n,
+        wins=acc.wins,
+        losses=acc.losses,
+        avg_win=avg_win,
+        avg_loss=avg_loss,
+        slugging=slugging,
+        expectancy=acc.total / acc.n,
+        total=acc.total,
+    )
+
+
 def _build_cohorts(
     periods: dict[str, _PeriodAcc],
 ) -> tuple[list[CohortPeriod], float | None, bool | None]:
@@ -340,7 +521,10 @@ def _build_cohorts(
 
 
 def build_calibration(
-    *, db_path: Path | str, cohort_granularity: str = DEFAULT_COHORT_GRANULARITY
+    *,
+    db_path: Path | str,
+    cohort_granularity: str = DEFAULT_COHORT_GRANULARITY,
+    magnitudes_by_ticker: dict[str, float] | None = None,
 ) -> CalibrationStats | None:
     """One pass over the decisions table → the three flat lenses PLUS the
     period-over-period cohort curve. None when the substrate is absent; a
@@ -349,9 +533,15 @@ def build_calibration(
 
     ``cohort_granularity`` ('quarter' | 'year') buckets the curve; an
     unrecognised value falls back to the quarter default rather than raising —
-    a thin coaching surface must never crash on a bad arg."""
+    a thin coaching surface must never crash on a bad arg.
+
+    ``magnitudes_by_ticker`` (L-seam 1) optionally supplies each name's realized
+    window magnitude (see ``realized_magnitudes``); when present the overall +
+    per-conviction batting-vs-slugging (``Expectancy``) is computed alongside
+    the hit-rate. Omitted by the offline panels (expectancy stays None)."""
     if cohort_granularity not in COHORT_GRANULARITIES:
         cohort_granularity = DEFAULT_COHORT_GRANULARITY
+    mags = magnitudes_by_ticker or {}
     conn = _open(db_path)
     if conn is None:
         return None
@@ -362,9 +552,10 @@ def build_calibration(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
         opct = "outcome_pct" if "outcome_pct" in cols else "NULL AS outcome_pct"
         onotes = "outcome_notes" if "outcome_notes" in cols else "NULL AS outcome_notes"
+        pq = "process_quality" if "process_quality" in cols else "NULL AS process_quality"
         rows = conn.execute(
             "SELECT id, ticker, recommendation_kind, conviction, made_at, "
-            f"user_action_kind, outcome_at, outcome_label, {opct}, {onotes} FROM decisions"
+            f"user_action_kind, outcome_at, outcome_label, {opct}, {onotes}, {pq} FROM decisions"
         ).fetchall()
     finally:
         conn.close()
@@ -377,6 +568,18 @@ def build_calibration(
     durations: dict[str, list[float]] = {}
     periods: dict[str, _PeriodAcc] = {}
     graded_total = correct_total = 0
+    # Magnitude accumulators (L-seam 1): overall + per conviction bucket. Stay
+    # empty (→ expectancy None) when no magnitudes were supplied.
+    overall_mag = _MagAcc()
+    bucket_mag: dict[str, _MagAcc] = {c: _MagAcc() for c in CONVICTION_ORDER}
+    # Brier accumulators (L-seam 2): squared error of each stated conviction's
+    # implied probability vs the binary outcome, over correct/wrong calls.
+    brier_sum = 0.0
+    brier_n = 0
+    brier_correct = 0
+    # Process-quality x outcome matrix (Track B seam 8): counts keyed
+    # (process_quality, outcome) over graded, process-scored rows.
+    proc_cells: dict[tuple[str, str], int] = {}
     # Omission accumulators (L11): the graded 'avoid' rows, inverted so a pass
     # that ran away ('wrong') is the miss.
     om_graded = om_dodged = om_missed = om_mixed = 0
@@ -416,6 +619,20 @@ def build_calibration(
             graded_total += 1
             if is_correct:
                 correct_total += 1
+            if mags:
+                m = mags.get(str(row["ticker"] or "").upper())
+                if m is not None:
+                    overall_mag.add(m)
+                    bucket_mag[conviction].add(m)
+            if conviction in CONVICTION_PROBABILITY and label in ("correct", "wrong"):
+                outcome = 1.0 if is_correct else 0.0
+                brier_sum += (CONVICTION_PROBABILITY[conviction] - outcome) ** 2
+                brier_n += 1
+                brier_correct += 1 if is_correct else 0
+            pq = str(row["process_quality"] or "").lower()
+            if pq in PROCESS_QUALITY_ORDER:
+                key = (pq, label)
+                proc_cells[key] = proc_cells.get(key, 0) + 1
         else:
             bucket["ungraded"] += 1
 
@@ -456,19 +673,26 @@ def build_calibration(
                 reversed_any=is_reversed,
             )
 
-    by_conviction = [
-        ConvictionBucket(
-            conviction=c,
-            graded=(g := b["correct"] + b["wrong"] + b["mixed"]),
-            correct=b["correct"],
-            wrong=b["wrong"],
-            mixed=b["mixed"],
-            ungraded=b["ungraded"],
-            hit_rate=(b["correct"] / g) if g else None,
+    by_conviction: list[ConvictionBucket] = []
+    for c, b in counts.items():
+        if (b["correct"] + b["wrong"] + b["mixed"] + b["ungraded"]) == 0:
+            continue
+        g = b["correct"] + b["wrong"] + b["mixed"]
+        ci = wilson_interval(b["correct"], g) if g else None
+        by_conviction.append(
+            ConvictionBucket(
+                conviction=c,
+                graded=g,
+                correct=b["correct"],
+                wrong=b["wrong"],
+                mixed=b["mixed"],
+                ungraded=b["ungraded"],
+                hit_rate=(b["correct"] / g) if g else None,
+                wilson_low=ci[0] if ci else None,
+                wilson_high=ci[1] if ci else None,
+                expectancy=_to_expectancy(bucket_mag.get(c)),
+            )
         )
-        for c, b in counts.items()
-        if (b["correct"] + b["wrong"] + b["mixed"] + b["ungraded"]) > 0
-    ]
     reversals.sort(key=lambda r: r.made_at, reverse=True)
     timing = sorted(
         (
@@ -483,6 +707,41 @@ def build_calibration(
         key=lambda t: -t.n,
     )
     cohorts, hit_rate_delta, improving = _build_cohorts(periods)
+    conviction_cal: ConvictionCalibration | None = None
+    if brier_n:
+        base_rate = brier_correct / brier_n
+        rel_rows: list[ConvictionReliabilityRow] = []
+        for c in ("high", "medium", "low"):
+            b = counts[c]
+            cw = b["correct"] + b["wrong"]
+            if cw == 0:
+                continue
+            rel_rows.append(
+                ConvictionReliabilityRow(
+                    conviction=c,
+                    predicted=CONVICTION_PROBABILITY[c],
+                    observed=b["correct"] / cw,
+                    n=cw,
+                )
+            )
+        conviction_cal = ConvictionCalibration(
+            n=brier_n,
+            brier=brier_sum / brier_n,
+            baseline_brier=base_rate * (1.0 - base_rate),
+            base_rate=base_rate,
+            rows=rel_rows,
+        )
+    process_outcome: ProcessOutcomeMatrix | None = None
+    total_scored = sum(proc_cells.values())
+    if total_scored:
+        process_outcome = ProcessOutcomeMatrix(
+            total_scored=total_scored,
+            cells=proc_cells,
+            right_for_wrong_reasons=proc_cells.get(("flawed", "correct"), 0)
+            + proc_cells.get(("lucky", "correct"), 0),
+            wrong_for_right_reasons=proc_cells.get(("sound", "wrong"), 0),
+            sound_and_correct=proc_cells.get(("sound", "correct"), 0),
+        )
     omissions: OmissionStats | None = None
     if om_graded:
         om_misses.sort(
@@ -511,6 +770,9 @@ def build_calibration(
         hit_rate_delta=hit_rate_delta,
         improving=improving,
         omissions=omissions,
+        expectancy=_to_expectancy(overall_mag),
+        conviction_calibration=conviction_cal,
+        process_outcome=process_outcome,
     )
 
 

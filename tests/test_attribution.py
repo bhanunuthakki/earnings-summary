@@ -449,3 +449,66 @@ def test_book_attribution_section_renders_standalone(db: Path) -> None:
     assert "Attribution narratives" in block
     assert 'href="/ticker/NU"' in block
     assert render_book_attribution_section([]) == ""
+
+
+# ----- L-seam 4: policy benchmark is the primary attribution basis -----
+
+
+def _policy_row(
+    ticker: str, *, value_start: float, alpha_spy: float, alpha_policy: float | None
+) -> PositionAlphaRow:
+    return PositionAlphaRow(
+        ticker=ticker, name=None, value_at_start=value_start, bought_in_window=0.0,
+        sold_in_window=0.0, value_at_end=value_start, actual_pl=None, spy_counterfactual_pl=None,
+        alpha=alpha_spy, alpha_vs_qqq=None, alpha_vs_policy=alpha_policy, incomplete=False,
+    )  # fmt: skip
+
+
+def _policy_alpha(rows: list[PositionAlphaRow]) -> PositionAlpha:
+    return PositionAlpha(
+        start_date="2026-01-01", end_date="2026-03-31", has_policy=True,
+        total_actual_pl=None, total_spy_pl=None, total_alpha=None,
+        total_alpha_vs_qqq=None, total_alpha_vs_policy=None, rows=rows,
+    )  # fmt: skip
+
+
+def test_decompose_uses_policy_basis_when_configured() -> None:
+    # SPY alpha would total +35; policy alpha totals +12 → the decomposition must
+    # measure against POLICY (the designated benchmark), not SPY.
+    d = decompose_alpha(
+        _policy_alpha(
+            [
+                _policy_row("A", value_start=100, alpha_spy=20, alpha_policy=8),
+                _policy_row("B", value_start=300, alpha_spy=15, alpha_policy=4),
+            ]
+        )
+    )
+    assert d is not None
+    assert d.benchmark_basis == "policy"
+    assert d.total_alpha_usd == pytest.approx(12.0)  # 8 + 4, the policy figures
+    assert d.selection_usd is not None and d.sizing_usd is not None
+    assert d.selection_usd + d.sizing_usd == pytest.approx(d.total_alpha_usd)
+    assert any("policy benchmark" in n for n in d.notes)
+
+
+def test_decompose_falls_back_to_spy_without_policy() -> None:
+    d = decompose_alpha(_alpha([_row("A", value_start=100, alpha=20)]))
+    assert d is not None
+    assert d.benchmark_basis == "spy"
+    assert d.total_alpha_usd == pytest.approx(20.0)
+    assert any("SPY" in n for n in d.notes)
+
+
+def test_decompose_policy_row_falls_back_to_spy_when_policy_missing() -> None:
+    # has_policy=True but one row lacks a policy figure → that row uses SPY alpha.
+    d = decompose_alpha(
+        _policy_alpha(
+            [
+                _policy_row("A", value_start=100, alpha_spy=20, alpha_policy=8),
+                _policy_row("B", value_start=100, alpha_spy=15, alpha_policy=None),
+            ]
+        )
+    )
+    assert d is not None
+    assert d.benchmark_basis == "policy"
+    assert d.total_alpha_usd == pytest.approx(23.0)  # 8 (policy) + 15 (SPY fallback)

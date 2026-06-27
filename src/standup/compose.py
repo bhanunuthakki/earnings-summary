@@ -121,6 +121,14 @@ def frame_question(signal: StandupSignal, *, prior: PriorConclusion | None = Non
             "thesis or conviction change worth acting on, or is it just price moves "
             "— and what do conviction, valuation, and your decision ledger say?"
         )
+    elif signal.kind == "decision_verdict_due":
+        kind = ev.get("recommendation_kind") or "call"
+        body = (
+            f"Your {kind} on {ticker} from {ev.get('made_at')} ({ev.get('age_days')}d ago) "
+            "has passed its review horizon but is still ungraded. Brief me: with the benefit "
+            "of what's happened since, did that call play out — correct, wrong, or mixed — and "
+            "what is the one-line verdict to record?"
+        )
     else:  # defensive: an unknown kind still gets a grounded ask off the headline
         body = f"{signal.headline} Brief me on what the latest evidence says."
     return _memory_caveat(prior) + " ".join(body.split()) + _FRAMING_TAIL

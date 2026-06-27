@@ -10,15 +10,18 @@ from pathlib import Path
 import pytest
 
 from decision_extractor import (
-    hit_rate_by_kind,
     history,
+    hit_rate_by_kind,
     outcome_curve_by_conviction,
     pending_for_grading,
+    reconcile_decision_actions,
     record_decision,
     record_decisions_from_artifacts,
     record_outcome,
+    record_process_quality,
     record_user_action,
 )
+from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -64,6 +67,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             outcome_label VARCHAR(16),
             outcome_pct FLOAT,
             outcome_notes TEXT,
+            process_quality VARCHAR(16),
             created_at DATETIME NOT NULL
         );
         CREATE UNIQUE INDEX idx_decisions_source_artifact
@@ -518,3 +522,175 @@ def test_batch_recorder_respects_since_days_window(repo_root: Path) -> None:
 
     tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
     assert tally["inserted"] == 1
+
+
+# ---------------------------------------------------------------------------
+# reconcile_decision_actions — decision→fill matching (Track B seam 7)
+# ---------------------------------------------------------------------------
+
+
+_ART_SEQ = [1000]
+
+
+def _insert_decision(
+    db: Path, *, ticker: str, kind: str, made_at: str, action: str | None = None
+) -> int:
+    _ART_SEQ[0] += 1
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at, "
+            "user_action_kind, created_at) VALUES (?,?,?,?,?,?)",
+            (ticker, kind, _ART_SEQ[0], made_at, action, made_at),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _action(db: Path, decision_id: int) -> str | None:
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT user_action_kind FROM decisions WHERE id = ?", (decision_id,)
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _portfolio(txns: list[tuple[str, str, str]], *, available: bool = True) -> LivePortfolio:
+    """``txns`` is a list of (date, ticker, type) — type is 'buy' / 'sell'."""
+    return LivePortfolio(
+        available=available,
+        api_url="http://tracker.test",
+        transactions=[
+            LiveTransaction(
+                date=d,
+                ticker=t,
+                name=None,
+                type=ty,
+                subtype=None,
+                quantity=1.0,
+                amount=-1.0,
+                account_name="x",
+            )
+            for (d, t, ty) in txns
+        ],
+    )
+
+
+_NOW = datetime(2026, 3, 1, tzinfo=UTC)
+
+
+def test_reconcile_followed_on_matching_buy(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    pf = _portfolio([("2026-01-15", "NU", "buy")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["followed"] == 1
+    assert _action(db, did) == "followed"
+
+
+def test_reconcile_reversed_on_opposite_fill(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    pf = _portfolio([("2026-01-15", "NU", "sell")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["reversed"] == 1
+    assert _action(db, did) == "reversed"
+
+
+def test_reconcile_ignored_when_window_elapsed_no_fill(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="trim", made_at="2026-01-10T00:00:00")
+    tally = reconcile_decision_actions(db_path=db, portfolio=_portfolio([]), now=_NOW)
+    assert tally["ignored"] == 1
+    assert _action(db, did) == "ignored"
+
+
+def test_reconcile_skips_when_window_still_open(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-02-25T00:00:00")
+    # now is 4 days after made_at — the 30d window hasn't elapsed and no fill yet.
+    tally = reconcile_decision_actions(db_path=db, portfolio=_portfolio([]), now=_NOW)
+    assert tally["skipped_undetermined"] == 1
+    assert tally["ignored"] == 0
+    assert _action(db, did) is None
+
+
+def test_reconcile_hold_with_trade_is_partial(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="hold", made_at="2026-01-10T00:00:00")
+    pf = _portfolio([("2026-01-20", "NU", "buy")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["partial"] == 1
+    assert _action(db, did) == "partial"
+
+
+def test_reconcile_hold_no_trade_is_followed(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="hold", made_at="2026-01-10T00:00:00")
+    tally = reconcile_decision_actions(db_path=db, portfolio=_portfolio([]), now=_NOW)
+    assert tally["followed"] == 1
+    assert _action(db, did) == "followed"
+
+
+def test_reconcile_idempotent_skips_actioned_rows(db: Path) -> None:
+    did = _insert_decision(
+        db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00", action="ignored"
+    )
+    pf = _portfolio([("2026-01-15", "NU", "buy")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["scanned"] == 0  # the already-actioned row is never selected
+    assert _action(db, did) == "ignored"  # untouched
+
+
+def test_reconcile_tracker_offline_no_writes(db: Path) -> None:
+    did = _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00")
+    tally = reconcile_decision_actions(
+        db_path=db, portfolio=_portfolio([], available=False), now=_NOW
+    )
+    assert tally["tracker_unavailable"] == 1
+    assert _action(db, did) is None
+
+
+def test_reconcile_missing_db_is_flagged(tmp_path: Path) -> None:
+    tally = reconcile_decision_actions(db_path=tmp_path / "missing.db", now=_NOW)
+    assert tally["db_unavailable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# record_process_quality — the process axis (Track B seam 8)
+# ---------------------------------------------------------------------------
+
+
+def test_record_process_quality_writes_column(db: Path) -> None:
+    pid = record_decision(
+        ticker="NU",
+        recommendation_kind="add",
+        recommendation_value=8.0,
+        conviction="high",
+        source_artifact_id=777,
+        source_lens="five_min_reread",
+        rationale_excerpt="x",
+        made_at=datetime(2026, 4, 1, tzinfo=UTC),
+        db_path=db,
+    )
+    assert pid is not None
+    assert record_process_quality(decision_id=pid, process_quality="lucky", db_path=db) is True
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute("SELECT process_quality FROM decisions WHERE id = ?", (pid,)).fetchone()
+        assert row[0] == "lucky"
+    finally:
+        conn.close()
+
+
+def test_record_process_quality_rejects_unknown_label(db: Path) -> None:
+    with pytest.raises(ValueError, match="unknown process_quality"):
+        record_process_quality(decision_id=1, process_quality="brilliant", db_path=db)  # type: ignore[arg-type]
+
+
+def test_record_process_quality_missing_db_returns_false(tmp_path: Path) -> None:
+    assert (
+        record_process_quality(
+            decision_id=1, process_quality="sound", db_path=tmp_path / "missing.db"
+        )
+        is False
+    )

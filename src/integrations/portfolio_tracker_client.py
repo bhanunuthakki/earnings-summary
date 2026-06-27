@@ -299,6 +299,14 @@ def _i(v: object) -> int | None:
     return int(f) if f is not None else None
 
 
+def _b(v: object) -> bool | None:
+    """Tri-state bool: None when the key was absent / null (a tracker build that
+    predates the field), else ``bool(v)``. Distinguishes "not provided" from an
+    explicit ``False`` — load-bearing for ``alpha_significant`` (None must not
+    read as "insignificant")."""
+    return None if v is None else bool(v)
+
+
 def _dicts(v: object) -> list[dict[str, object]]:
     """The dict elements of a JSON list; [] for absent / non-list / odd shapes."""
     if not isinstance(v, list):
@@ -471,7 +479,14 @@ class BetaStats:
     """``GET /api/portfolio/beta`` — regression + risk-adjusted stats vs one
     benchmark. ``alpha_annualized_pct`` is in percent; the volatility /
     tracking-error fields are FRACTIONS (0.18 = 18% annualized) per the
-    tracker's units."""
+    tracker's units.
+
+    The skill-vs-luck trio (``alpha_t_stat`` / ``alpha_std_error_annualized_pct``
+    / ``alpha_significant``) answers "is the alpha distinguishable from zero?" —
+    a t-stat on the regression intercept, its annualized standard error, and the
+    tracker's significance verdict. ``alpha_significant`` is tri-state: ``None``
+    when the tracker predates the trio (older build), else the bool it returned.
+    """
 
     benchmark: str | None
     start_date: str | None
@@ -480,6 +495,9 @@ class BetaStats:
     risk_free_annual: float | None
     beta: float | None
     alpha_annualized_pct: float | None
+    alpha_t_stat: float | None
+    alpha_std_error_annualized_pct: float | None
+    alpha_significant: bool | None
     r_squared: float | None
     correlation: float | None
     sharpe: float | None
@@ -492,12 +510,117 @@ class BetaStats:
 
 
 @dataclass(slots=True)
+class UnderwaterPoint:
+    """One day of the underwater curve: how far below the running peak the book
+    sat (``drawdown_pct`` is negative or zero; 0 = at a new high)."""
+
+    date: str
+    drawdown_pct: float | None
+
+
+@dataclass(slots=True)
+class Drawdown:
+    """``GET /api/portfolio/drawdown`` — peak-to-trough pain over the TWR series.
+
+    ``max_drawdown_pct`` is the worst peak-to-trough decline in the window;
+    ``current_drawdown_pct`` how far below the running peak the book sits today
+    (0 = at a high). ``calmar`` is ``annualized_return_pct / |max_drawdown_pct|``
+    — return per unit of worst-case pain. ``days_to_recovery`` is None while the
+    book is still underwater from the max-DD trough (``recovery_date`` None too).
+    Percent units throughout (matching the tracker's other percent fields)."""
+
+    start_date: str | None
+    end_date: str | None
+    max_drawdown_pct: float | None
+    peak_date: str | None
+    trough_date: str | None
+    recovery_date: str | None
+    days_to_recovery: int | None
+    current_drawdown_pct: float | None
+    annualized_return_pct: float | None
+    calmar: float | None
+    underwater: list[UnderwaterPoint] = field(default_factory=list[UnderwaterPoint])
+
+
+@dataclass(slots=True)
+class ExitQualityRow:
+    """One sold ticker's hold-counterfactual: did selling beat holding? The
+    tracker computes ``value_if_held`` (the sold shares marked at today's price),
+    ``regret_vs_hold`` (value_if_held − sold_proceeds; positive = selling cost
+    you), and ``exit_alpha_vs_spy`` (proceeds reinvested in SPY vs holding —
+    positive = the exit + redeploy beat just holding). ``still_held`` flags a
+    name only partially sold (the position isn't fully closed)."""
+
+    ticker: str | None
+    name: str | None
+    sold_shares: float | None
+    sold_proceeds: float | None
+    avg_sell_price: float | None
+    price_now: float | None
+    value_if_held: float | None
+    regret_vs_hold: float | None
+    spy_value_if_reinvested: float | None
+    exit_alpha_vs_spy: float | None
+    still_held: bool
+
+
+@dataclass(slots=True)
+class ExitQuality:
+    """``GET /api/portfolio/exit-quality`` — the sell side: for every name sold
+    in the window, whether the exit beat holding (and beat redeploying into SPY).
+    The ``total_*`` fields are the book-level rollups the tracker returns."""
+
+    start_date: str | None
+    end_date: str | None
+    total_sold_proceeds: float | None
+    total_value_if_held: float | None
+    total_regret_vs_hold: float | None
+    total_spy_value_if_reinvested: float | None
+    total_exit_alpha_vs_spy: float | None
+    rows: list[ExitQualityRow] = field(default_factory=list[ExitQualityRow])
+
+
+@dataclass(slots=True)
+class AfterTaxTerm:
+    """One holding-period bucket of the after-tax realized-gain breakdown
+    (``term`` is 'short' / 'long'): the pre-tax realized gain in the bucket, the
+    tax on it, and the after-tax remainder."""
+
+    term: str
+    realized_gain_pretax: float | None
+    tax: float | None
+    realized_gain_aftertax: float | None
+
+
+@dataclass(slots=True)
+class AfterTax:
+    """``GET /api/portfolio/after-tax`` — realized gains for a tax year netted
+    down by the supplied short/long rates. ``total_tax`` is the summed estimated
+    tax; ``by_term`` splits pre-tax/tax/after-tax across short- vs long-term.
+    The rates are the caller's assumptions, not the tracker's — it just applies
+    them, so ``notes`` carries the tracker's caveats verbatim."""
+
+    tax_year: int | None
+    st_rate: float | None
+    lt_rate: float | None
+    realized_gain_pretax: float | None
+    realized_gain_aftertax: float | None
+    total_tax: float | None
+    by_term: list[AfterTaxTerm] = field(default_factory=list[AfterTaxTerm])
+    notes: list[str] = field(default_factory=list[str])
+
+
+@dataclass(slots=True)
 class PortfolioAnalytics:
-    """Aggregate of the five analytics payloads; each is None when its call
-    failed, with the reason keyed under ``errors`` ("performance" /
-    "position_alpha" / "positioning" / "policy" / "beta"). ``available`` is True
-    when at least one section loaded — False means the tracker itself is
-    unreachable (or returned nothing usable)."""
+    """Aggregate of the analytics payloads; each is None when its call failed,
+    with the reason keyed under ``errors`` ("performance" / "position_alpha" /
+    "positioning" / "policy" / "beta" / "drawdown" / "exit_quality").
+    ``available`` is True when at least one section loaded — False means the
+    tracker itself is unreachable (or returned nothing usable).
+
+    ``drawdown`` and ``exit_quality`` are NOT in the default fetch set — they
+    are opt-in via ``only=`` so the established advisor/portfolio reads keep
+    their exact round-trip count; the risk cockpit requests them explicitly."""
 
     available: bool
     api_url: str
@@ -507,6 +630,8 @@ class PortfolioAnalytics:
     positioning: Positioning | None = None
     policy: PolicyMix | None = None
     beta: BetaStats | None = None
+    drawdown: Drawdown | None = None
+    exit_quality: ExitQuality | None = None
 
 
 def fetch_portfolio_analytics(
@@ -537,16 +662,20 @@ def fetch_portfolio_analytics(
     return math stays in the tracker.
 
     ``only`` restricts the fetch to the named sections (``performance`` /
-    ``position_alpha`` / ``positioning`` / ``policy`` / ``beta``) — callers
-    that need one payload (e.g. the sizing audit's alpha join) skip the other
-    round-trips. Skipped sections stay ``None`` without an ``errors`` entry.
+    ``position_alpha`` / ``positioning`` / ``policy`` / ``beta`` / ``drawdown``
+    / ``exit_quality``) — callers that need one payload (e.g. the sizing audit's
+    alpha join) skip the other round-trips. Skipped sections stay ``None``
+    without an ``errors`` entry. ``drawdown`` / ``exit_quality`` are opt-in: a
+    bare ``only=None`` fetch loads only ``_DEFAULT_SECTIONS`` (the original five),
+    so existing callers keep their round-trip count — request the two new ones
+    by name.
     """
-    base = (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
+    base = _resolve_base(api_url)
     out = PortfolioAnalytics(available=False, api_url=base)
     conn_down: str | None = None
 
     def want(key: str) -> bool:
-        return only is None or key in only
+        return key in only if only is not None else key in _DEFAULT_SECTIONS
 
     window: dict[str, str] = {}
     if start_date:
@@ -592,9 +721,23 @@ def fetch_portfolio_analytics(
         out.policy = load("policy", "/api/policy", _parse_policy)
     if want("beta"):
         out.beta = load("beta", f"/api/portfolio/beta{q(window)}", _parse_beta)
+    if want("drawdown"):
+        out.drawdown = load("drawdown", f"/api/portfolio/drawdown{q(window)}", _parse_drawdown)
+    if want("exit_quality"):
+        out.exit_quality = load(
+            "exit_quality", f"/api/portfolio/exit-quality{q(window)}", _parse_exit_quality
+        )
     out.available = any(
         section is not None
-        for section in (out.performance, out.position_alpha, out.positioning, out.policy, out.beta)
+        for section in (
+            out.performance,
+            out.position_alpha,
+            out.positioning,
+            out.policy,
+            out.beta,
+            out.drawdown,
+            out.exit_quality,
+        )
     )
     return out
 
@@ -751,6 +894,9 @@ def _parse_beta(data: dict[str, object]) -> BetaStats:
         risk_free_annual=_f(data.get("risk_free_annual")),
         beta=_f(data.get("beta")),
         alpha_annualized_pct=_f(data.get("alpha_annualized_pct")),
+        alpha_t_stat=_f(data.get("alpha_t_stat")),
+        alpha_std_error_annualized_pct=_f(data.get("alpha_std_error_annualized_pct")),
+        alpha_significant=_b(data.get("alpha_significant")),
         r_squared=_f(data.get("r_squared")),
         correlation=_f(data.get("correlation")),
         sharpe=_f(data.get("sharpe")),
@@ -760,4 +906,182 @@ def _parse_beta(data: dict[str, object]) -> BetaStats:
         benchmark_volatility_annualized=_f(data.get("benchmark_volatility_annualized")),
         tracking_error_annualized=_f(data.get("tracking_error_annualized")),
         notes=notes,
+    )
+
+
+def _parse_drawdown(data: dict[str, object]) -> Drawdown:
+    underwater = [
+        UnderwaterPoint(date=_s(p.get("date")) or "", drawdown_pct=_f(p.get("drawdown_pct")))
+        for p in _dicts(data.get("underwater"))
+    ]
+    return Drawdown(
+        start_date=_s(data.get("start_date")),
+        end_date=_s(data.get("end_date")),
+        max_drawdown_pct=_f(data.get("max_drawdown_pct")),
+        peak_date=_s(data.get("peak_date")),
+        trough_date=_s(data.get("trough_date")),
+        recovery_date=_s(data.get("recovery_date")),
+        days_to_recovery=_i(data.get("days_to_recovery")),
+        current_drawdown_pct=_f(data.get("current_drawdown_pct")),
+        annualized_return_pct=_f(data.get("annualized_return_pct")),
+        calmar=_f(data.get("calmar")),
+        underwater=underwater,
+    )
+
+
+def _parse_exit_quality(data: dict[str, object]) -> ExitQuality:
+    rows = [
+        ExitQualityRow(
+            ticker=_s(r.get("ticker")),
+            name=_s(r.get("name")),
+            sold_shares=_f(r.get("sold_shares")),
+            sold_proceeds=_f(r.get("sold_proceeds")),
+            avg_sell_price=_f(r.get("avg_sell_price")),
+            price_now=_f(r.get("price_now")),
+            value_if_held=_f(r.get("value_if_held")),
+            regret_vs_hold=_f(r.get("regret_vs_hold")),
+            spy_value_if_reinvested=_f(r.get("spy_value_if_reinvested")),
+            exit_alpha_vs_spy=_f(r.get("exit_alpha_vs_spy")),
+            still_held=bool(r.get("still_held")),
+        )
+        for r in _dicts(data.get("rows"))
+    ]
+    # Totals: prefer a nested ``totals`` object if the tracker nests them, else
+    # read the top-level ``total_*`` keys (the PositionAlpha convention).
+    raw_totals = data.get("totals")
+    totals = cast("dict[str, object]", raw_totals) if isinstance(raw_totals, dict) else data
+    return ExitQuality(
+        start_date=_s(data.get("start_date")),
+        end_date=_s(data.get("end_date")),
+        total_sold_proceeds=_f(totals.get("total_sold_proceeds")),
+        total_value_if_held=_f(totals.get("total_value_if_held")),
+        total_regret_vs_hold=_f(totals.get("total_regret_vs_hold")),
+        total_spy_value_if_reinvested=_f(totals.get("total_spy_value_if_reinvested")),
+        total_exit_alpha_vs_spy=_f(totals.get("total_exit_alpha_vs_spy")),
+        rows=rows,
+    )
+
+
+def _parse_after_tax(data: dict[str, object]) -> AfterTax:
+    by_term = [
+        AfterTaxTerm(
+            term=_s(t.get("term")) or "?",
+            realized_gain_pretax=_f(t.get("realized_gain_pretax")),
+            tax=_f(t.get("tax")),
+            realized_gain_aftertax=_f(t.get("realized_gain_aftertax")),
+        )
+        for t in _dicts(data.get("by_term"))
+    ]
+    raw_notes = data.get("notes")
+    notes = (
+        [n for n in cast("list[object]", raw_notes) if isinstance(n, str)]
+        if isinstance(raw_notes, list)
+        else []
+    )
+    return AfterTax(
+        tax_year=_i(data.get("tax_year")),
+        st_rate=_f(data.get("st_rate")),
+        lt_rate=_f(data.get("lt_rate")),
+        realized_gain_pretax=_f(data.get("realized_gain_pretax")),
+        realized_gain_aftertax=_f(data.get("realized_gain_aftertax")),
+        total_tax=_f(data.get("total_tax")),
+        by_term=by_term,
+        notes=notes,
+    )
+
+
+# Sections fetched on a bare ``only=None`` call — the original five, so existing
+# callers keep their round-trip count. ``drawdown`` / ``exit_quality`` are opt-in.
+_DEFAULT_SECTIONS: frozenset[str] = frozenset(
+    {"performance", "position_alpha", "positioning", "policy", "beta"}
+)
+
+
+def _resolve_base(api_url: str | None) -> str:
+    """Resolve the tracker base URL: explicit arg → env → loopback default."""
+    return (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
+
+
+def _fetch_section(
+    path: str,
+    parse: Callable[[dict[str, object]], _T],
+    *,
+    api_url: str | None,
+    timeout: float,
+) -> _T | None:
+    """GET + parse one analytics object with the never-raise contract — None on
+    any tracker problem (offline, HTTP error, malformed JSON). Used by the
+    single-section convenience fetchers below; the aggregate has its own
+    per-section fault isolation."""
+    try:
+        return parse(_get_obj(_resolve_base(api_url), path, timeout=timeout))
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def fetch_drawdown(
+    *,
+    api_url: str | None = None,
+    timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> Drawdown | None:
+    """``GET /api/portfolio/drawdown`` — max drawdown + underwater curve + Calmar.
+    None when the tracker can't answer (offline / predates the endpoint)."""
+    window: dict[str, str] = {}
+    if start_date:
+        window["start_date"] = start_date
+    if end_date:
+        window["end_date"] = end_date
+    suffix = f"?{urlencode(window)}" if window else ""
+    return _fetch_section(
+        f"/api/portfolio/drawdown{suffix}", _parse_drawdown, api_url=api_url, timeout=timeout
+    )
+
+
+def fetch_exit_quality(
+    *,
+    api_url: str | None = None,
+    timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> ExitQuality | None:
+    """``GET /api/portfolio/exit-quality`` — the sell side: did each exit beat
+    holding? None when the tracker can't answer."""
+    window: dict[str, str] = {}
+    if start_date:
+        window["start_date"] = start_date
+    if end_date:
+        window["end_date"] = end_date
+    suffix = f"?{urlencode(window)}" if window else ""
+    return _fetch_section(
+        f"/api/portfolio/exit-quality{suffix}",
+        _parse_exit_quality,
+        api_url=api_url,
+        timeout=timeout,
+    )
+
+
+def fetch_after_tax(
+    *,
+    tax_year: int | None = None,
+    st_rate: float | None = None,
+    lt_rate: float | None = None,
+    api_url: str | None = None,
+    timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+) -> AfterTax | None:
+    """``GET /api/portfolio/after-tax`` — realized gains netted by the supplied
+    short/long rates. Orthogonal params (a tax-year, not a TWR window) so it has
+    its own fetcher rather than riding the windowed aggregate. None when the
+    tracker can't answer."""
+    params: dict[str, str] = {}
+    if tax_year is not None:
+        params["tax_year"] = str(int(tax_year))
+    if st_rate is not None:
+        params["st_rate"] = str(st_rate)
+    if lt_rate is not None:
+        params["lt_rate"] = str(lt_rate)
+    suffix = f"?{urlencode(params)}" if params else ""
+    return _fetch_section(
+        f"/api/portfolio/after-tax{suffix}", _parse_after_tax, api_url=api_url, timeout=timeout
     )

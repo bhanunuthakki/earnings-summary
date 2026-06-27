@@ -1952,6 +1952,32 @@ def create_app(
             return ({"error": "decisions ledger unavailable (run alembic upgrade)"}, 500)
         return {"pass_decision": recorded}
 
+    @app.route("/api/decisions/<int:decision_id>/process-quality", methods=["POST", "OPTIONS"])
+    def record_process_quality_api(decision_id: int):
+        """Score a decision's PROCESS quality (Track B seam 8) — the axis
+        distinct from its outcome, so 'right for the wrong reasons' can be
+        aggregated on the scorecard. ``quality`` ∈ {sound, flawed, lucky}."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from decision_extractor import (
+            PROCESS_QUALITY_VOCAB,
+            ProcessQuality,
+            record_process_quality,
+        )
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        quality = _payload_text(payload.get("quality"))
+        if quality not in PROCESS_QUALITY_VOCAB:
+            return ({"error": f"quality must be one of {sorted(PROCESS_QUALITY_VOCAB)}"}, 400)
+        ok = record_process_quality(
+            decision_id=decision_id,
+            process_quality=cast(ProcessQuality, quality),
+            db_path=db_path,
+        )
+        if not ok:
+            return ({"error": "decisions ledger unavailable (run alembic upgrade)"}, 500)
+        return {"decision_id": decision_id, "process_quality": quality}
+
     @app.route("/api/discovery/sources", methods=["GET"])
     def discovery_sources_api():
         """The discovery_sources weight registry as JSON (the Discovery rule's
