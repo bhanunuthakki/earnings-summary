@@ -336,6 +336,36 @@ def test_panel_renders_skill_decomposition(db: Path) -> None:
     assert "Directional only (thin book)" in html
 
 
+def test_panel_renders_jensen_alpha_beside_decomposition(db: Path) -> None:
+    from integrations.portfolio_tracker_client import BetaStats
+
+    stats = build_calibration(db_path=db)
+    attribution = decompose_alpha(_two_name_alpha(), conviction_by_ticker={"A": 5.0})
+    beta = BetaStats(
+        benchmark="SPY", start_date=None, end_date=None, sample_size=250, risk_free_annual=0.04,
+        beta=1.1, alpha_annualized_pct=2.5, alpha_t_stat=2.3,
+        alpha_std_error_annualized_pct=1.1, alpha_significant=True, r_squared=0.8,
+        correlation=0.9, sharpe=None, sortino=None, information_ratio=None,
+        portfolio_volatility_annualized=None, benchmark_volatility_annualized=None,
+        tracking_error_annualized=None,
+    )  # fmt: skip
+    html = compose_decisions_page(
+        [], [], _offline(), None, calibration=stats, attribution=attribution, beta=beta
+    )
+    assert "Jensen &alpha;" in html
+    assert "+2.5%" in html
+    assert "distinguishable from zero" in html  # skill-vs-luck verdict from the trio
+
+
+def test_panel_jensen_absent_without_beta(db: Path) -> None:
+    stats = build_calibration(db_path=db)
+    attribution = decompose_alpha(_two_name_alpha())
+    html = compose_decisions_page(
+        [], [], _offline(), None, calibration=stats, attribution=attribution
+    )
+    assert "Jensen &alpha;" not in html
+
+
 # ----- L-seam 3: Wilson CI on the conviction buckets -----
 
 

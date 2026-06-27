@@ -64,6 +64,7 @@ from decision_calibration import (
 )
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
+    BetaStats,
     LivePortfolio,
     PositionAlpha,
     fetch_live_portfolio,
@@ -500,7 +501,10 @@ def render_allocation_decisions_panel(
     live = fetch_live_portfolio(api_url=api_url)
     # exit_quality is opt-in — the sell-side magnitude for the batting-vs-slugging
     # view (L-seam 1) that rides beside the hit-rate buckets.
-    analytics = fetch_portfolio_analytics(api_url=api_url, only={"position_alpha", "exit_quality"})
+    # beta carries the Jensen alpha joined beside the decomposition (L-seam 5).
+    analytics = fetch_portfolio_analytics(
+        api_url=api_url, only={"position_alpha", "exit_quality", "beta"}
+    )
     audit = build_sizing_audit_rows(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha, dcf_scenarios
     )
@@ -520,6 +524,7 @@ def render_allocation_decisions_panel(
         calibration=calibration,
         attribution=attribution,
         scorecard_html=_scorecard_html(db_path),
+        beta=analytics.beta,
     )
 
 
@@ -553,19 +558,21 @@ def compose_decisions_page(
     calibration: CalibrationStats | None = None,
     attribution: SkillDecomposition | None = None,
     scorecard_html: str = "",
+    beta: BetaStats | None = None,
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
     (tracker offline / nothing to decompose) hides the skill block;
     ``scorecard_html`` "" (no L8 scorecard generated yet) hides the coach's-read
-    section. The coach section is pre-rendered upstream (with its own <style>) so
-    this module never imports calibration_coach (which imports this one)."""
+    section; ``beta`` carries the Jensen alpha joined beside the decomposition
+    (L-seam 5). The coach section is pre-rendered upstream (with its own <style>)
+    so this module never imports calibration_coach (which imports this one)."""
     return "".join(
         [
             _PANEL_CSS,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
-            _skill_decomposition_section(attribution) if attribution is not None else "",
+            _skill_decomposition_section(attribution, beta) if attribution is not None else "",
             scorecard_html,
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
@@ -1038,22 +1045,28 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     return badge
 
 
-def _skill_decomposition_section(d: SkillDecomposition) -> str:
+def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None = None) -> str:
     """The shared selection/sizing/timing decomposition (L8 §6), rendered as a
-    KPI strip + an edge-vs-leak read + the conviction → outcome join. The
-    arithmetic is the engine's; this only frames it."""
+    KPI strip + an edge-vs-leak read + the conviction → outcome join, with the
+    tracker's Jensen alpha (L-seam 5) joined in beside it. The arithmetic is the
+    engine's; this only frames it."""
     window = (
         f"{escape(d.window_start)} → {escape(d.window_end)}"
         if d.window_start and d.window_end
         else "the tracker window"
+    )
+    basis_text = (
+        "your policy benchmark (the designated, anti-cherry-pick benchmark)"
+        if d.benchmark_basis == "policy"
+        else "the SPY counterfactual"
     )
     head = (
         '<section class="panel"><h2>Skill decomposition</h2>'
         f'<p class="sub">Realized dollar alpha over {window}, split into the repeatable '
         "decisions behind it — <b>selection</b> (which names, size-neutral), <b>sizing</b> "
         "(did your weighting amplify selection), <b>timing</b> (did within-window adds/trims "
-        "lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
-        "diagnostic. Alpha is the tracker's SPY-counterfactual — never recomputed here.</p>"
+        f"lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
+        f"diagnostic. Alpha is the tracker's {basis_text} — never recomputed here.</p>"
     )
 
     def kpi(label: str, v: float | None) -> str:
@@ -1074,6 +1087,7 @@ def _skill_decomposition_section(d: SkillDecomposition) -> str:
     )
 
     read = _skill_read(d)
+    jensen = _jensen_line(beta)
 
     def _rating(v: float | None) -> str:
         return f"{v:.1f}/5" if v is not None else "&mdash;"
@@ -1098,7 +1112,32 @@ def _skill_decomposition_section(d: SkillDecomposition) -> str:
         else ""
     )
     notes = "".join(f'<p class="muted ad-note">{escape(n)}</p>' for n in d.notes)
-    return f"{head}{kpis}{read}{conv_table}{notes}</section>"
+    return f"{head}{kpis}{jensen}{read}{conv_table}{notes}</section>"
+
+
+def _jensen_line(beta: BetaStats | None) -> str:
+    """The tracker's Jensen alpha (L-seam 5) — the regression-intercept alpha vs
+    one benchmark, annualized — joined beside the dollar decomposition. Carries
+    the skill-vs-luck verdict from the new beta trio (is it distinguishable from
+    zero?). Pure presentation; the value is the tracker's, never recomputed."""
+    if beta is None or beta.alpha_annualized_pct is None:
+        return ""
+    bench = escape(beta.benchmark or "the benchmark")
+    val = f"{beta.alpha_annualized_pct:+.1f}%"
+    tone = "pos" if beta.alpha_annualized_pct >= 0 else "neg"
+    sig = ""
+    if beta.alpha_significant is not None:
+        t = f", t={beta.alpha_t_stat:.1f}" if beta.alpha_t_stat is not None else ""
+        sig = (
+            f' &mdash; <span class="pos">statistically distinguishable from zero{t}</span>'
+            if beta.alpha_significant
+            else f' &mdash; <span class="muted">not distinguishable from zero — '
+            f"could be luck{t}</span>"
+        )
+    return (
+        f'<p class="adc-line">Jensen &alpha; (annualized regression intercept vs {bench}): '
+        f'<b class="{tone}">{val}</b>{sig}.</p>'
+    )
 
 
 def _signed_span(v: float) -> str:
