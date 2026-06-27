@@ -14,8 +14,14 @@ from pathlib import Path
 import pytest
 
 from attribution import decompose_alpha
-from decision_calibration import build_calibration
-from integrations.portfolio_tracker_client import LivePortfolio, PositionAlpha, PositionAlphaRow
+from decision_calibration import build_calibration, realized_magnitudes
+from integrations.portfolio_tracker_client import (
+    ExitQuality,
+    ExitQualityRow,
+    LivePortfolio,
+    PositionAlpha,
+    PositionAlphaRow,
+)
 from pipeline.allocation_decisions_panel import compose_decisions_page
 
 _SCHEMA = """
@@ -328,3 +334,121 @@ def test_panel_renders_skill_decomposition(db: Path) -> None:
     assert "Conviction &rarr; outcome" in html
     # Thin book (n=2) → the read is hedged as directional, not a verdict.
     assert "Directional only (thin book)" in html
+
+
+# ----- L-seam 3: Wilson CI on the conviction buckets -----
+
+
+def test_wilson_ci_widens_a_thin_perfect_record(db: Path) -> None:
+    # 3/3 high-conviction correct → the band must be honestly wide, NOT a false
+    # "100% ± 0" that a point estimate on n=3 would imply.
+    for _ in range(3):
+        _insert(db, conviction="high", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    hi = next(b for b in stats.by_conviction if b.conviction == "high")
+    assert hi.hit_rate == 1.0
+    assert hi.wilson_low is not None and hi.wilson_high is not None
+    assert hi.wilson_low < 0.5  # Wilson lower bound on 3/3 is ~0.44
+    assert hi.wilson_high == pytest.approx(1.0)
+
+
+def test_wilson_ci_none_when_nothing_graded(db: Path) -> None:
+    _insert(db, conviction="high", outcome_label="pending")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    hi = next(b for b in stats.by_conviction if b.conviction == "high")
+    assert hi.graded == 0
+    assert hi.wilson_low is None and hi.wilson_high is None
+
+
+# ----- L-seam 2: proper-scoring Brier on the owner's own conviction -----
+
+
+def test_conviction_brier_and_reliability_curve(db: Path) -> None:
+    # high: 4 correct, 1 wrong → observed 0.8 vs implied 0.75 (well calibrated);
+    # low: 1 correct, 3 wrong → observed 0.25 vs implied 0.40 (overconfident).
+    for _ in range(4):
+        _insert(db, conviction="high", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    _insert(db, conviction="high", outcome_label="wrong", outcome_at="2026-02-01T00:00:00")
+    _insert(db, conviction="low", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    for _ in range(3):
+        _insert(db, conviction="low", outcome_label="wrong", outcome_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    cc = stats.conviction_calibration
+    assert cc is not None
+    assert cc.n == 9  # only correct/wrong with a stated conviction
+    assert cc.brier is not None and 0.0 <= cc.brier <= 1.0
+    assert cc.baseline_brier is not None
+    rows = {r.conviction: r for r in cc.rows}
+    assert rows["high"].observed == pytest.approx(0.8)
+    assert rows["high"].predicted == pytest.approx(0.75)
+    assert rows["low"].observed == pytest.approx(0.25)
+    assert rows["low"].gap == pytest.approx(0.40 - 0.25)  # overconfident on lows
+
+
+def test_conviction_brier_excludes_mixed_and_unstated(db: Path) -> None:
+    # mixed isn't binary-scored; unstated has no implied probability.
+    _insert(db, conviction="high", outcome_label="mixed", outcome_at="2026-02-01T00:00:00")
+    _insert(db, conviction=None, outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    assert stats.conviction_calibration is None
+
+
+# ----- L-seam 1: batting-vs-slugging expectancy from tracker magnitudes -----
+
+
+def test_expectancy_from_realized_magnitudes(db: Path) -> None:
+    _insert(db, ticker="NU", conviction="high", outcome_label="correct",
+            outcome_at="2026-02-01T00:00:00")  # fmt: skip
+    _insert(db, ticker="AAPL", conviction="high", outcome_label="wrong",
+            outcome_at="2026-02-01T00:00:00")  # fmt: skip
+    mags = {"NU": 5000.0, "AAPL": -2000.0}
+    stats = build_calibration(db_path=db, magnitudes_by_ticker=mags)
+    assert stats is not None
+    exp = stats.expectancy
+    assert exp is not None
+    assert (exp.n, exp.wins, exp.losses) == (2, 1, 1)
+    assert exp.avg_win == pytest.approx(5000.0)
+    assert exp.avg_loss == pytest.approx(2000.0)
+    assert exp.slugging == pytest.approx(2.5)
+    assert exp.expectancy == pytest.approx(1500.0)  # (5000 - 2000) / 2
+    hi = next(b for b in stats.by_conviction if b.conviction == "high")
+    assert hi.expectancy is not None and hi.expectancy.n == 2
+
+
+def test_expectancy_none_without_magnitudes(db: Path) -> None:
+    _insert(db, conviction="high", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    assert stats.expectancy is None
+    hi = next(b for b in stats.by_conviction if b.conviction == "high")
+    assert hi.expectancy is None
+
+
+def test_realized_magnitudes_precedence_and_fallback() -> None:
+    pa = PositionAlpha(
+        start_date=None, end_date=None, has_policy=False, total_actual_pl=None,
+        total_spy_pl=None, total_alpha=None, total_alpha_vs_qqq=None, total_alpha_vs_policy=None,
+        rows=[PositionAlphaRow(
+            ticker="NU", name=None, value_at_start=None, bought_in_window=None,
+            sold_in_window=None, value_at_end=None, actual_pl=None, spy_counterfactual_pl=None,
+            alpha=3000.0, alpha_vs_qqq=None, alpha_vs_policy=None, incomplete=False)],
+    )  # fmt: skip
+    eq = ExitQuality(
+        start_date=None, end_date=None, total_sold_proceeds=None, total_value_if_held=None,
+        total_regret_vs_hold=None, total_spy_value_if_reinvested=None, total_exit_alpha_vs_spy=None,
+        rows=[
+            ExitQualityRow(ticker="NU", name=None, sold_shares=None, sold_proceeds=None,
+                avg_sell_price=None, price_now=None, value_if_held=None, regret_vs_hold=None,
+                spy_value_if_reinvested=None, exit_alpha_vs_spy=999.0, still_held=False),
+            ExitQualityRow(ticker="TSLA", name=None, sold_shares=None, sold_proceeds=None,
+                avg_sell_price=None, price_now=None, value_if_held=None, regret_vs_hold=None,
+                spy_value_if_reinvested=None, exit_alpha_vs_spy=-400.0, still_held=False),
+        ],
+    )  # fmt: skip
+    mags = realized_magnitudes(pa, eq)
+    assert mags["NU"] == pytest.approx(3000.0)  # position-alpha takes precedence
+    assert mags["TSLA"] == pytest.approx(-400.0)  # exit-quality fills closed names

@@ -55,7 +55,13 @@ from statistics import median
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
-from decision_calibration import CalibrationStats, CohortPeriod, build_calibration
+from decision_calibration import (
+    CalibrationStats,
+    CohortPeriod,
+    ConvictionBucket,
+    build_calibration,
+    realized_magnitudes,
+)
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -492,12 +498,17 @@ def render_allocation_decisions_panel(
     except sqlite3.OperationalError:
         intents = []
     live = fetch_live_portfolio(api_url=api_url)
-    analytics = fetch_portfolio_analytics(api_url=api_url, only={"position_alpha"})
+    # exit_quality is opt-in — the sell-side magnitude for the batting-vs-slugging
+    # view (L-seam 1) that rides beside the hit-rate buckets.
+    analytics = fetch_portfolio_analytics(api_url=api_url, only={"position_alpha", "exit_quality"})
     audit = build_sizing_audit_rows(
         holdings, verdicts, dcf_gaps, intents, live, analytics.position_alpha, dcf_scenarios
     )
     timeline = build_decisions_timeline(db_path, user_id=user_id, intents=intents)
-    calibration = build_calibration(db_path=db_path)
+    calibration = build_calibration(
+        db_path=db_path,
+        magnitudes_by_ticker=realized_magnitudes(analytics.position_alpha, analytics.exit_quality),
+    )
     attribution = decompose_alpha(
         analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
@@ -867,18 +878,22 @@ def _calibration_section(stats: CalibrationStats) -> str:
         f'<td class="num">{b.mixed}</td>'
         f'<td class="num muted">{b.ungraded}</td>'
         f'<td class="num">{f"{b.hit_rate * 100.0:.0f}%" if b.hit_rate is not None else "&mdash;"}'
-        "</td></tr>"
+        "</td>"
+        f'<td class="num muted">{_wilson_cell(b)}</td>'
+        "</tr>"
         for b in stats.by_conviction
     )
     conviction_table = (
         '<table class="ad-table adc-table"><thead><tr>'
         '<th>Conviction</th><th class="num">Graded</th><th class="num">Correct</th>'
         '<th class="num">Wrong</th><th class="num">Mixed</th><th class="num">Ungraded</th>'
-        '<th class="num">Hit rate</th>'
+        '<th class="num">Hit rate</th><th class="num">95% CI</th>'
         f"</tr></thead><tbody>{conviction_rows}</tbody></table>"
         if conviction_rows
         else ""
     )
+    brier_line = _brier_line(stats)
+    expectancy_line = _expectancy_line(stats)
 
     mix_bits = " &middot; ".join(
         f"{label} {stats.action_mix.get(key, 0)}"
@@ -922,8 +937,58 @@ def _calibration_section(stats: CalibrationStats) -> str:
     trend_block = _cohort_trend_block(stats)
     omission_block = _omission_block(stats)
     return (
-        f"{head}{kpis}{trend_block}{conviction_table}{mix_line}{timing_line}"
-        f"{omission_block}{reversal_table}</section>"
+        f"{head}{kpis}{trend_block}{conviction_table}{brier_line}{expectancy_line}"
+        f"{mix_line}{timing_line}{omission_block}{reversal_table}</section>"
+    )
+
+
+def _signed_usd0(v: float) -> str:
+    return f"{'+' if v >= 0 else '-'}${abs(v):,.0f}"
+
+
+def _wilson_cell(b: ConvictionBucket) -> str:
+    """The bucket's Wilson 95% CI (L-seam 3) as a band, or em-dash when nothing
+    is graded — so a thin denominator reads as a range, not a false point."""
+    if b.wilson_low is None or b.wilson_high is None:
+        return "&mdash;"
+    return f"{b.wilson_low * 100.0:.0f}&ndash;{b.wilson_high * 100.0:.0f}%"
+
+
+def _brier_line(stats: CalibrationStats) -> str:
+    """Proper-scoring Brier on the owner's own conviction (L-seam 2) — does the
+    conviction language discriminate, or is it just loud? Min-n framed."""
+    cc = stats.conviction_calibration
+    if cc is None or cc.brier is None or cc.baseline_brier is None:
+        return ""
+    verdict = (
+        "beats a flat base-rate guess &mdash; your conviction labels carry signal"
+        if cc.beats_baseline
+        else "does not beat a flat base-rate guess &mdash; the labels add little over your average"
+    )
+    return (
+        f'<p class="adc-line">Conviction Brier <b>{cc.brier:.3f}</b> vs '
+        f"{cc.baseline_brier:.3f} baseline ({escape(confidence_note(cc.n))}): {verdict}.</p>"
+    )
+
+
+def _expectancy_line(stats: CalibrationStats) -> str:
+    """Batting-vs-slugging (L-seam 1): the SIZE of the wins, from the tracker's
+    realized per-name magnitudes. Hidden offline (no magnitudes) or below the
+    min-n guard (a slugging ratio on a handful of names is noise)."""
+    exp = stats.expectancy
+    if exp is None or not is_confident(exp.n):
+        return ""
+    parts = [f"expected <b>{_signed_usd0(exp.expectancy)}</b> realized alpha/call"]
+    if exp.avg_win is not None and exp.avg_loss is not None:
+        slug = f", slugging {exp.slugging:.1f}&times;" if exp.slugging is not None else ""
+        parts.append(
+            f"winners avg {_signed_usd0(exp.avg_win)} vs losers "
+            f"{_signed_usd0(-exp.avg_loss)}{slug}"
+        )
+    return (
+        f'<p class="adc-line">Batting vs slugging ({escape(confidence_note(exp.n))}): '
+        + "; ".join(parts)
+        + ".</p>"
     )
 
 
