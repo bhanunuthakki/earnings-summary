@@ -32,6 +32,7 @@ NEWS_SCRIPT = "fetch_news.py"
 LIST_TYPE_SCRIPT = "sync_list_type_from_holdings.py"
 DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
+DECISION_ACTIONS_SCRIPT = "reconcile_decision_actions.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
 REPRICE_SCRIPT = "reprice_dcf.py"
 CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
@@ -146,6 +147,7 @@ def test_all_stages_succeed(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -161,6 +163,7 @@ def test_all_stages_succeed(
     assert summary["stage_0a_list_type"] == "ok"
     assert summary["stage_0b_decisions"] == "ok"
     assert summary["stage_0c_lifecycle"] == "ok"
+    assert summary["stage_0c2_decision_actions"] == "ok"
     assert summary["stage_0d_fundamentals"] == "ok"
     assert summary["stage_0e_reprice"] == "ok"
     assert summary["stage_0f_candidate_fit"] == "ok"
@@ -194,6 +197,7 @@ def test_stage1_failure_still_runs_feed(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -225,6 +229,7 @@ def test_feed_failure_still_runs_validation(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -243,8 +248,8 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all twelve still attempted,
-    exit code == 12."""
+    """Every stage failing (preflight included) → all thirteen still attempted,
+    exit code == 13."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -252,6 +257,7 @@ def test_all_stages_fail_exit_code_counts_failures(
             LIST_TYPE_SCRIPT: 1,
             DECISIONS_SCRIPT: 1,
             LIFECYCLE_SCRIPT: 1,
+            DECISION_ACTIONS_SCRIPT: 1,
             FUNDAMENTALS_SCRIPT: 1,
             REPRICE_SCRIPT: 1,
             CANDIDATE_FIT_SCRIPT: 1,
@@ -265,13 +271,14 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 12
+    assert rc == 13
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -287,6 +294,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0a_list_type"] == "failed"
     assert summary["stage_0b_decisions"] == "failed"
     assert summary["stage_0c_lifecycle"] == "failed"
+    assert summary["stage_0c2_decision_actions"] == "failed"
     assert summary["stage_0d_fundamentals"] == "failed"
     assert summary["stage_0e_reprice"] == "failed"
     assert summary["stage_0f_candidate_fit"] == "failed"
@@ -319,6 +327,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -360,6 +369,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert DECISIONS_SCRIPT not in fake.scripts
     assert LIST_TYPE_SCRIPT not in fake.scripts
     assert LIFECYCLE_SCRIPT not in fake.scripts
+    assert DECISION_ACTIONS_SCRIPT not in fake.scripts
     assert FUNDAMENTALS_SCRIPT not in fake.scripts
     assert REPRICE_SCRIPT not in fake.scripts
     assert STANDUP_SCRIPT not in fake.scripts
@@ -369,6 +379,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert summary["stage_0a_list_type"] == "skipped"
     assert summary["stage_0b_decisions"] == "skipped"
     assert summary["stage_0c_lifecycle"] == "skipped"
+    assert summary["stage_0c2_decision_actions"] == "skipped"
     assert summary["stage_0d_fundamentals"] == "skipped"
     assert summary["stage_0e_reprice"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
@@ -423,6 +434,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -452,6 +464,7 @@ def test_skip_validation_removes_only_stage3(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -650,6 +663,7 @@ def test_skip_news_removes_only_stage0(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
@@ -695,6 +709,7 @@ def test_news_failure_does_not_stop_triggers(
         LIST_TYPE_SCRIPT,
         DECISIONS_SCRIPT,
         LIFECYCLE_SCRIPT,
+        DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,

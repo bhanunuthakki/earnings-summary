@@ -257,6 +257,66 @@ def test_dcf_watcher_trips_only_when_stale_and_mispriced(db: Path) -> None:
     assert dcf[0].evidence["mispricing_pct"] == pytest.approx(25.0, abs=0.5)
 
 
+def _add_decision(
+    db: Path,
+    *,
+    ticker: str,
+    kind: str,
+    made_at_days_ago: float,
+    conviction: str | None = None,
+    value: float | None = None,
+    outcome_at_days_ago: float | None = None,
+) -> None:
+    conn = _conn(db)
+    try:
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, recommendation_value, conviction, "
+            "made_at, outcome_at, created_at) VALUES (?,?,?,?,?,?,?)",
+            (
+                ticker,
+                kind,
+                value,
+                conviction,
+                _iso(made_at_days_ago),
+                _iso(outcome_at_days_ago) if outcome_at_days_ago is not None else None,
+                _iso(made_at_days_ago),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_verdict_due_watcher_trips_on_elapsed_ungraded_call(db: Path) -> None:
+    # NU: ungraded, horizon elapsed (45d) → due. MELI: ungraded but fresh (5d) →
+    # quiet. WIX: already graded → never due (outcome recorded).
+    _add_decision(db, ticker="NU", kind="add", value=8, conviction="high", made_at_days_ago=45)
+    _add_decision(db, ticker="MELI", kind="trim", made_at_days_ago=5)
+    _add_decision(db, ticker="WIX", kind="hold", made_at_days_ago=90, outcome_at_days_ago=2)
+    conn = _conn(db)
+    try:
+        signals = collect_signals(conn, user_id=USER, now=_NOW, config=StandupConfig())
+    finally:
+        conn.close()
+    due = [s for s in signals if s.kind == "decision_verdict_due"]
+    assert [s.ticker for s in due] == ["NU"]
+    assert "due for a verdict" in due[0].headline
+    assert due[0].evidence["recommendation_kind"] == "ADD"
+
+
+def test_verdict_due_frames_a_grade_my_call_question(db: Path) -> None:
+    _add_decision(db, ticker="NU", kind="add", made_at_days_ago=45)
+    conn = _conn(db)
+    try:
+        signals = collect_signals(conn, user_id=USER, now=_NOW, config=StandupConfig())
+    finally:
+        conn.close()
+    due = next(s for s in signals if s.kind == "decision_verdict_due")
+    q = frame_question(due)
+    assert "still ungraded" in q
+    assert "did that call play out" in q.lower()
+
+
 def _set_weights(monkeypatch: pytest.MonkeyPatch, weights: dict[str, float]) -> None:
     def fake(conn: sqlite3.Connection, repo_root: Path | None) -> dict[str, float]:
         return weights

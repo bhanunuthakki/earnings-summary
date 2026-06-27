@@ -58,6 +58,7 @@ _NOTE_BODY_CHARS = 140
 
 SIGNAL_KINDS: tuple[str, ...] = (
     "decision_condition",
+    "decision_verdict_due",
     "journal_open_item",
     "dcf_staleness",
     "position_drift",
@@ -185,6 +186,67 @@ def _decision_condition_signals(
                     evidence=ev,
                 )
             )
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Watcher: decision_verdict_due — an ungraded call whose horizon has elapsed
+# ---------------------------------------------------------------------------
+
+
+def _decision_verdict_due_signals(
+    conn: sqlite3.Connection, *, user_id: str, now: datetime, config: StandupConfig
+) -> list[StandupSignal]:
+    """A recorded call whose review horizon has elapsed (made_at past the verdict
+    window) but which was never graded (outcome_at NULL) — surfaced for an
+    interactive verdict alongside the tripped-condition resurfacing. Mirrors
+    ``decision_extractor.pending_for_grading`` (the grading cron's batch read) so
+    the owner is nudged to close his OWN open calls, not just told what tripped.
+    Lower materiality than a tripped condition — a nudge to grade, not an alert."""
+    _ = user_id
+    rows = _rows(
+        conn,
+        "SELECT id, ticker, recommendation_kind, recommendation_value, conviction, made_at "
+        "FROM decisions WHERE outcome_at IS NULL ORDER BY made_at ASC",
+    )
+    out: list[StandupSignal] = []
+    for r in rows:
+        age = _age_days(r["made_at"], now)
+        if age is None or age < config.decision_verdict_days:
+            continue
+        ticker = str(r["ticker"]).upper() if r["ticker"] else None
+        kind = str(r["recommendation_kind"] or "").upper()
+        val = r["recommendation_value"]
+        size = f" {val:g}%" if isinstance(val, (int, float)) else ""
+        conv = str(r["conviction"] or "").strip()
+        conv_str = f", {conv} conviction" if conv else ""
+        made_day = str(r["made_at"] or "")[:10]
+        scope = ticker or "a call"
+        headline = (
+            f"{scope}: your {kind}{size} call from {made_day} ({round(age)}d ago{conv_str}) "
+            "is due for a verdict — its horizon has elapsed and it's still ungraded. "
+            "Did it play out?"
+        )
+        materiality = 0.3 + 0.5 * _ramp(
+            age, config.decision_verdict_days, config.decision_verdict_days * 4
+        )
+        out.append(
+            StandupSignal(
+                kind="decision_verdict_due",
+                ticker=ticker,
+                signature=f"verdict_due:{int(r['id'])}",
+                headline=" ".join(headline.split()),
+                materiality=min(1.0, materiality),
+                evidence={
+                    "decision_id": int(r["id"]),
+                    "recommendation_kind": kind,
+                    "made_at": made_day,
+                    "age_days": round(age, 1),
+                    "conviction": conv or None,
+                    "ticker": ticker,
+                },
+            )
+        )
     return out
 
 
@@ -433,6 +495,10 @@ def collect_signals(
     _safe(
         "decision_condition",
         lambda: _decision_condition_signals(conn, user_id=user_id, now=now, config=cfg),
+    )
+    _safe(
+        "decision_verdict_due",
+        lambda: _decision_verdict_due_signals(conn, user_id=user_id, now=now, config=cfg),
     )
     _safe("journal_open_item", lambda: _journal_signals(conn, user_id=user_id, now=now, config=cfg))
     _safe(
