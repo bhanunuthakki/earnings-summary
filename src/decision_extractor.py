@@ -54,6 +54,11 @@ log = logging.getLogger(__name__)
 RecommendationKind = Literal["add", "trim", "hold", "sell", "initiate", "avoid"]
 UserAction = Literal["followed", "ignored", "partial", "reversed"]
 OutcomeLabel = Literal["correct", "wrong", "mixed", "unfalsifiable", "pending"]
+# Process-quality is a SEPARATE axis from outcome (Track B seam 8): a 'sound'
+# process can still grade 'wrong' (wrong for the right reasons) and a 'lucky' one
+# can grade 'correct' (right for the wrong reasons).
+ProcessQuality = Literal["sound", "flawed", "lucky"]
+PROCESS_QUALITY_VOCAB: frozenset[str] = frozenset({"sound", "flawed", "lucky"})
 
 # Recognized recommendation kinds. Order matters for the regex alternation —
 # put longer literals first so "INITIATE" wins over "INIT" if someone writes
@@ -125,6 +130,9 @@ class Decision:
     outcome_label: str | None
     outcome_pct: float | None
     outcome_notes: str | None
+    # Process quality (Track B seam 8) — a separate axis from outcome. Defaulted
+    # so a SELECT off a pre-0114 schema (no column) still builds the dataclass.
+    process_quality: str | None = None
 
 
 # ===========================================================================
@@ -462,6 +470,38 @@ def record_outcome(
         conn.close()
 
 
+def record_process_quality(
+    *,
+    decision_id: int,
+    process_quality: ProcessQuality,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Score a decision's PROCESS quality (sound / flawed / lucky) — the axis
+    distinct from its outcome (Track B seam 8). Idempotent — repeated calls
+    overwrite. Raises ``ValueError`` on an unknown label; returns False on DB
+    unavailability (best-effort, like the other write paths)."""
+    if process_quality not in PROCESS_QUALITY_VOCAB:
+        raise ValueError(
+            f"unknown process_quality {process_quality!r}; "
+            f"expected one of {sorted(PROCESS_QUALITY_VOCAB)}"
+        )
+    conn = _open(db_path)
+    if conn is None:
+        return False
+    try:
+        conn.execute(
+            "UPDATE decisions SET process_quality = ? WHERE id = ?",
+            (process_quality, decision_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error as exc:
+        log.warning({"event": "decision_process_quality_failed", "error": str(exc)})
+        return False
+    finally:
+        conn.close()
+
+
 def history(
     *,
     ticker: str | None = None,
@@ -751,6 +791,11 @@ def _row_to_decision(row: sqlite3.Row) -> Decision:
         outcome_label=row["outcome_label"],
         outcome_pct=float(row["outcome_pct"]) if row["outcome_pct"] is not None else None,
         outcome_notes=row["outcome_notes"],
+        # sqlite3.Row membership tests VALUES, not keys — .keys() is required to
+        # tolerate a SELECT off a pre-0114 schema that lacks the column.
+        process_quality=(
+            row["process_quality"] if "process_quality" in row.keys() else None  # noqa: SIM118
+        ),
     )
 
 

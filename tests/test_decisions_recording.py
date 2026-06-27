@@ -18,6 +18,7 @@ from decision_extractor import (
     record_decision,
     record_decisions_from_artifacts,
     record_outcome,
+    record_process_quality,
     record_user_action,
 )
 from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction
@@ -66,6 +67,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             outcome_label VARCHAR(16),
             outcome_pct FLOAT,
             outcome_notes TEXT,
+            process_quality VARCHAR(16),
             created_at DATETIME NOT NULL
         );
         CREATE UNIQUE INDEX idx_decisions_source_artifact
@@ -651,3 +653,46 @@ def test_reconcile_tracker_offline_no_writes(db: Path) -> None:
 def test_reconcile_missing_db_is_flagged(tmp_path: Path) -> None:
     tally = reconcile_decision_actions(db_path=tmp_path / "missing.db", now=_NOW)
     assert tally["db_unavailable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# record_process_quality — the process axis (Track B seam 8)
+# ---------------------------------------------------------------------------
+
+
+def test_record_process_quality_writes_column(db: Path) -> None:
+    pid = record_decision(
+        ticker="NU",
+        recommendation_kind="add",
+        recommendation_value=8.0,
+        conviction="high",
+        source_artifact_id=777,
+        source_lens="five_min_reread",
+        rationale_excerpt="x",
+        made_at=datetime(2026, 4, 1, tzinfo=UTC),
+        db_path=db,
+    )
+    assert pid is not None
+    assert record_process_quality(decision_id=pid, process_quality="lucky", db_path=db) is True
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT process_quality FROM decisions WHERE id = ?", (pid,)
+        ).fetchone()
+        assert row[0] == "lucky"
+    finally:
+        conn.close()
+
+
+def test_record_process_quality_rejects_unknown_label(db: Path) -> None:
+    with pytest.raises(ValueError, match="unknown process_quality"):
+        record_process_quality(decision_id=1, process_quality="brilliant", db_path=db)  # type: ignore[arg-type]
+
+
+def test_record_process_quality_missing_db_returns_false(tmp_path: Path) -> None:
+    assert (
+        record_process_quality(
+            decision_id=1, process_quality="sound", db_path=tmp_path / "missing.db"
+        )
+        is False
+    )

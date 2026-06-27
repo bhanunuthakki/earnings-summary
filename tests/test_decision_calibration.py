@@ -38,6 +38,7 @@ CREATE TABLE decisions (
     outcome_at DATETIME,
     outcome_label VARCHAR(16),
     outcome_pct FLOAT,
+    process_quality VARCHAR(16),
     created_at DATETIME NOT NULL
 );
 """
@@ -456,6 +457,45 @@ def test_expectancy_none_without_magnitudes(db: Path) -> None:
     assert stats.expectancy is None
     hi = next(b for b in stats.by_conviction if b.conviction == "high")
     assert hi.expectancy is None
+
+
+# ----- L-seam 8: process-quality x outcome matrix -----
+
+
+def _set_process_quality(db: Path, ticker: str, quality: str) -> None:
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE decisions SET process_quality = ? WHERE ticker = ?", (quality, ticker))
+    conn.commit()
+    conn.close()
+
+
+def test_process_by_outcome_matrix(db: Path) -> None:
+    # AAA: correct but lucky → right for the wrong reasons.
+    # BBB: wrong but sound → wrong for the right reasons.
+    # CCC: correct and sound → the clean case.
+    _insert(db, ticker="AAA", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    _insert(db, ticker="BBB", outcome_label="wrong", outcome_at="2026-02-01T00:00:00")
+    _insert(db, ticker="CCC", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    _set_process_quality(db, "AAA", "lucky")
+    _set_process_quality(db, "BBB", "sound")
+    _set_process_quality(db, "CCC", "sound")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    m = stats.process_outcome
+    assert m is not None
+    assert m.total_scored == 3
+    assert m.right_for_wrong_reasons == 1  # AAA
+    assert m.wrong_for_right_reasons == 1  # BBB
+    assert m.sound_and_correct == 1  # CCC
+    assert m.cells[("lucky", "correct")] == 1
+    assert m.cells[("sound", "wrong")] == 1
+
+
+def test_process_matrix_none_when_unscored(db: Path) -> None:
+    _insert(db, ticker="AAA", outcome_label="correct", outcome_at="2026-02-01T00:00:00")
+    stats = build_calibration(db_path=db)
+    assert stats is not None
+    assert stats.process_outcome is None
 
 
 def test_realized_magnitudes_precedence_and_fallback() -> None:

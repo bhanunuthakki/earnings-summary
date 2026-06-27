@@ -901,6 +901,7 @@ def _calibration_section(stats: CalibrationStats) -> str:
     )
     brier_line = _brier_line(stats)
     expectancy_line = _expectancy_line(stats)
+    process_block = _process_matrix_block(stats)
 
     mix_bits = " &middot; ".join(
         f"{label} {stats.action_mix.get(key, 0)}"
@@ -945,7 +946,36 @@ def _calibration_section(stats: CalibrationStats) -> str:
     omission_block = _omission_block(stats)
     return (
         f"{head}{kpis}{trend_block}{conviction_table}{brier_line}{expectancy_line}"
-        f"{mix_line}{timing_line}{omission_block}{reversal_table}</section>"
+        f"{process_block}{mix_line}{timing_line}{omission_block}{reversal_table}</section>"
+    )
+
+
+def _process_matrix_block(stats: CalibrationStats) -> str:
+    """Process quality × outcome (Track B seam 8) — the two-axis read the flat
+    hit-rate can't give: how many calls were right for the WRONG reasons, and
+    wrong for the RIGHT ones. Hidden until at least one call is process-scored."""
+    m = stats.process_outcome
+    if m is None or not m.total_scored:
+        return ""
+    outcomes = ("correct", "wrong", "mixed")
+    body = "".join(
+        "<tr>"
+        f"<td>{escape(pq)}</td>"
+        + "".join(f'<td class="num">{m.cells.get((pq, o), 0)}</td>' for o in outcomes)
+        + "</tr>"
+        for pq in ("sound", "flawed", "lucky")
+    )
+    return (
+        '<h3 class="adc-sub">Process &times; outcome</h3>'
+        '<p class="adc-line">Process quality is a separate axis from outcome — '
+        f"<b>{m.right_for_wrong_reasons}</b> right for the wrong reasons "
+        "(flawed/lucky yet correct), "
+        f"<b>{m.wrong_for_right_reasons}</b> wrong for the right reasons (sound yet wrong), "
+        f"over {m.total_scored} process-scored call(s).</p>"
+        '<table class="ad-table adc-table"><thead><tr>'
+        '<th>Process</th><th class="num">Correct</th><th class="num">Wrong</th>'
+        '<th class="num">Mixed</th>'
+        f"</tr></thead><tbody>{body}</tbody></table>"
     )
 
 

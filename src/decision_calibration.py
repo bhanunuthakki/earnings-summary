@@ -223,6 +223,26 @@ class ConvictionCalibration:
         return self.brier < self.baseline_brier
 
 
+PROCESS_QUALITY_ORDER: tuple[str, ...] = ("sound", "flawed", "lucky")
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessOutcomeMatrix:
+    """Process quality × outcome (Track B seam 8) — the two-axis read the flat
+    hit-rate can't give. ``cells`` is keyed (process_quality, outcome) → count
+    over graded, process-scored decisions. The two headline diagonals name the
+    cases the owner most needs to see: ``right_for_wrong_reasons`` (graded
+    correct but the process was flawed/lucky — don't bank the edge) and
+    ``wrong_for_right_reasons`` (graded wrong but the process was sound — don't
+    punish the discipline)."""
+
+    total_scored: int
+    cells: dict[tuple[str, str], int]
+    right_for_wrong_reasons: int
+    wrong_for_right_reasons: int
+    sound_and_correct: int
+
+
 @dataclass(frozen=True, slots=True)
 class OmissionMiss:
     """One pass that ran away — a graded 'avoid' the name rallied past, the
@@ -306,6 +326,9 @@ class CalibrationStats:
     # Proper-scoring Brier + reliability on the owner's own conviction (L-seam
     # 2). None when no graded correct/wrong call carries a stated conviction.
     conviction_calibration: ConvictionCalibration | None = None
+    # Process quality x outcome (Track B seam 8). None when no graded decision
+    # has been process-scored yet (pre-0114 schema, or nothing scored).
+    process_outcome: ProcessOutcomeMatrix | None = None
 
 
 def _open(db_path: Path | str) -> sqlite3.Connection | None:
@@ -529,9 +552,10 @@ def build_calibration(
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
         opct = "outcome_pct" if "outcome_pct" in cols else "NULL AS outcome_pct"
         onotes = "outcome_notes" if "outcome_notes" in cols else "NULL AS outcome_notes"
+        pq = "process_quality" if "process_quality" in cols else "NULL AS process_quality"
         rows = conn.execute(
             "SELECT id, ticker, recommendation_kind, conviction, made_at, "
-            f"user_action_kind, outcome_at, outcome_label, {opct}, {onotes} FROM decisions"
+            f"user_action_kind, outcome_at, outcome_label, {opct}, {onotes}, {pq} FROM decisions"
         ).fetchall()
     finally:
         conn.close()
@@ -553,6 +577,9 @@ def build_calibration(
     brier_sum = 0.0
     brier_n = 0
     brier_correct = 0
+    # Process-quality x outcome matrix (Track B seam 8): counts keyed
+    # (process_quality, outcome) over graded, process-scored rows.
+    proc_cells: dict[tuple[str, str], int] = {}
     # Omission accumulators (L11): the graded 'avoid' rows, inverted so a pass
     # that ran away ('wrong') is the miss.
     om_graded = om_dodged = om_missed = om_mixed = 0
@@ -602,6 +629,10 @@ def build_calibration(
                 brier_sum += (CONVICTION_PROBABILITY[conviction] - outcome) ** 2
                 brier_n += 1
                 brier_correct += 1 if is_correct else 0
+            pq = str(row["process_quality"] or "").lower()
+            if pq in PROCESS_QUALITY_ORDER:
+                key = (pq, label)
+                proc_cells[key] = proc_cells.get(key, 0) + 1
         else:
             bucket["ungraded"] += 1
 
@@ -700,6 +731,17 @@ def build_calibration(
             base_rate=base_rate,
             rows=rel_rows,
         )
+    process_outcome: ProcessOutcomeMatrix | None = None
+    total_scored = sum(proc_cells.values())
+    if total_scored:
+        process_outcome = ProcessOutcomeMatrix(
+            total_scored=total_scored,
+            cells=proc_cells,
+            right_for_wrong_reasons=proc_cells.get(("flawed", "correct"), 0)
+            + proc_cells.get(("lucky", "correct"), 0),
+            wrong_for_right_reasons=proc_cells.get(("sound", "wrong"), 0),
+            sound_and_correct=proc_cells.get(("sound", "correct"), 0),
+        )
     omissions: OmissionStats | None = None
     if om_graded:
         om_misses.sort(
@@ -730,6 +772,7 @@ def build_calibration(
         omissions=omissions,
         expectancy=_to_expectancy(overall_mag),
         conviction_calibration=conviction_cal,
+        process_outcome=process_outcome,
     )
 
 
