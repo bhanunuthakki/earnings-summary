@@ -1398,12 +1398,29 @@ SHELL_JS = r"""
   var cacheGet = window.CCState.panel.get;
   var cacheSet = window.CCState.panel.set;
 
+  // Transport-level retry (boot reliability): a freshly-spawned server may not
+  // be accepting connections for the first few hundred ms, so a panel fetch on a
+  // cold open can reject with a TypeError ("Failed to fetch") even though the
+  // shell HTML already loaded. Retry ONLY that class (network failure) with a
+  // short backoff; an HTTP error status RESOLVES the fetch and is handled by the
+  // caller (thrown as 'HTTP <n>' downstream of here), so it is never retried.
+  function fetchWithRetry(url, opts, tries) {
+    return fetch(url, opts).catch(function (err) {
+      if (tries > 0 && err instanceof TypeError) {
+        var wait = 200 * (4 - tries);  // 200ms, 400ms, 600ms
+        return new Promise(function (res) { setTimeout(res, wait); })
+          .then(function () { return fetchWithRetry(url, opts, tries - 1); });
+      }
+      throw err;
+    });
+  }
+
   // One fetch per cache key at a time: a hover prefetch already in flight is
   // reused by the activation that follows it instead of double-fetching.
   function fetchFragment(url, key, etag) {
     if (INFLIGHT[key]) return INFLIGHT[key];
     var opts = etag ? { headers: { 'If-None-Match': etag } } : {};
-    var p = fetch(url, opts).then(function (r) {
+    var p = fetchWithRetry(url, opts, 3).then(function (r) {
       if (r.status === 304) return { status: 304, etag: etag, html: null };
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text().then(function (html) {
@@ -1491,7 +1508,13 @@ SHELL_JS = r"""
       cacheSet(key, entry);
     }).catch(function (e) {
       if (!served) {
-        body.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').'
+        // A TypeError after the retries means the transport never completed —
+        // almost always the server still coming up on a freshly-spawned session,
+        // not a panel error. Say so instead of the bare "Failed to fetch".
+        var msg = (e instanceof TypeError)
+          ? "Couldn't reach the server — it may still be starting."
+          : 'Failed to load (' + e.message + ').';
+        body.innerHTML = '<div class="cc-empty">' + msg
           + ' <button class="cc-retry-btn k-btn k-btn-quiet k-btn-sm" type="button">Retry</button></div>';
         var rb = body.querySelector('.cc-retry-btn');
         if (rb) rb.onclick = function () { loadBody(panel, ticker); };
