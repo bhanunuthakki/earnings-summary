@@ -1,5 +1,7 @@
 # Directive: The Instrument Paradigm — unifying interaction model + structural fixes (2026-06-12)
 
+**Status:** COMPLETE — record-only, do not re-build (every pillar delivered + the boot-latency goal met; see "Program COMPLETE" at the foot of this file).
+
 Canonical plan from the 2026-06-12 usability review (42-agent workflow: 12 feedback
 clusters × diagnose→design→adversarial-verify, + web research, + 4 cross-cutting
 synthesizers + a coherence critic). This directive supersedes ad-hoc UX fixes: the

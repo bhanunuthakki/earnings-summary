@@ -1,5 +1,7 @@
 # Directive: Close the Loops — next program (2026-06-13 re-score)
 
+**Status:** COMPLETE — shipped + in dogfood, do not re-build (2026-06). The per-wave spawn tracking in §4b below is the 2026-06-13 historical snapshot; all waves have since landed.
+
 Canonical plan from the 2026-06-13 goal-anchored re-score (20-agent workflow: 8 pillars ×
 score→adversarial-verify, + 3 synthesis lenses + a coherence critic). Run AFTER the
 fund-grade build and the Interaction Paradigm program (both complete). Read this before
