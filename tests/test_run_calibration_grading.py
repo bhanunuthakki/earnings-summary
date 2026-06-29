@@ -101,6 +101,26 @@ def test_all_graders_run_in_order(
     assert summary["bear_cases"] == "ok"
 
 
+def test_bear_grader_runs_over_whole_portfolio(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: the bear_cases rung must pass --all-portfolio.
+
+    grade_bear_cases.py has a required mutually-exclusive scope group
+    (--ticker | --all-portfolio); with no scope it exits 2 (argparse) before
+    grading anything, which silently failed this rung on every weekly run.
+    """
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_calibration_grading.main([])
+    assert rc == 0
+
+    bear_calls = [c for c in fake.calls if _script_of(c) == BEAR]
+    assert len(bear_calls) == 1
+    assert "--all-portfolio" in bear_calls[0]
+
+
 def test_one_grader_failure_does_not_stop_the_rest(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

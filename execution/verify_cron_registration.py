@@ -241,7 +241,7 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
     print(f"\nCron registration check — {total} task XML(s) found\n")
 
     if not report.has_problems:
-        print(f"  ✓  All {ok} tasks parsed, registered and enabled\n")
+        print(f"  OK  All {ok} tasks parsed, registered and enabled\n")
         return
 
     if report.ok:
@@ -250,31 +250,31 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
     if report.unparseable:
         print(f"  UNPARSEABLE ({len(report.unparseable)}) — could not read/parse the XML:")
         for desc in report.unparseable:
-            print(f"    ✗  {desc}")
+            print(f"    x  {desc}")
         print()
 
     if report.no_uri:
         print(f"  NO URI ({len(report.no_uri)}) — parsed but missing <URI>:")
         for name in report.no_uri:
-            print(f"    ✗  {name}")
+            print(f"    x  {name}")
         print()
 
     if report.missing:
         print(f"  MISSING ({len(report.missing)}) — not registered in Windows Task Scheduler:")
         for name in report.missing:
-            print(f"    ✗  {name}")
+            print(f"    x  {name}")
         print()
 
     if report.disabled:
         print(f"  DISABLED ({len(report.disabled)}) — registered but not Ready:")
         for desc in report.disabled:
-            print(f"    ✗  {desc}")
+            print(f"    x  {desc}")
         print()
 
     if report.mismatch:
         print(f"  SCHEDULE MISMATCH ({len(report.mismatch)}) — registered time differs from XML:")
         for name, xml_time, sched_time in report.mismatch:
-            print(f"    ✗  {name}: XML={xml_time} vs scheduler={sched_time}")
+            print(f"    x  {name}: XML={xml_time} vs scheduler={sched_time}")
         print()
 
     problems = (

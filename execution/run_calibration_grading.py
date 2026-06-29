@@ -11,16 +11,17 @@ dimension. Three OUTCOME graders over matured outputs vs realized data:
   * ``grade_decisions.py``   -- decision-audit outcomes vs realized price moves.
   * ``grade_bear_cases.py``  -- bear-hypothesis materialization.
 
-Plus four QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
+Plus five QUALITY rungs (llm_evals_plan §3 PR 3) — ``run_llm_evals.py``
 rubric audits over the week's fresh artifacts (``--since-days``):
-``bear_case``, ``transcript_summary``, ``advisor_next_dollar``, and
+``bear_case``, ``transcript_summary``, ``advisor_next_dollar``,
 ``ask_advisory_answer`` (the conversational ask path's prose answers from
-``ask_turns`` — close_the_loops L3). Each also writes an ``eval_runs`` row with
+``ask_turns`` — close_the_loops L3), and ``calibration_coach`` (the monthly
+scorecard prose — close_the_loops L8). Each also writes an ``eval_runs`` row with
 per-case judge evidence; a week with no fresh artifacts is a clean no-op.
 
 These were manual CLIs that nothing ran, so ``prompt_calibration_scores`` stayed
 empty even though the machinery was correct (v6 re-grade, LLM pass-through: "the
-loop has never produced a score"). This orchestrator runs all three on a
+loop has never produced a score"). This orchestrator runs all of them on a
 schedule (``cron/grade_calibration.task.xml``, weekly) so the loop is fed
 without a human remembering to run each tool.
 
@@ -84,7 +85,11 @@ _EVAL_AUDIT_SINCE_DAYS = "8"
 _GRADERS: tuple[_Grader, ...] = (
     _Grader("predictions", "grade_predictions.py", _FAST_TIMEOUT_S),
     _Grader("decisions", "grade_decisions.py", _FAST_TIMEOUT_S),
-    _Grader("bear_cases", "grade_bear_cases.py", _BEAR_TIMEOUT_S),
+    # grade_bear_cases.py has a `required=True` mutually-exclusive scope group
+    # (--ticker | --all-portfolio); invoking it with no scope exits 2 (argparse)
+    # before grading anything, which silently failed this rung on every weekly
+    # run. --all-portfolio grades every portfolio holding's matured hypotheses.
+    _Grader("bear_cases", "grade_bear_cases.py", _BEAR_TIMEOUT_S, ("--all-portfolio",)),
     _Grader(
         "eval_bear_case",
         "run_llm_evals.py",
