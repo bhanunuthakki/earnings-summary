@@ -1,10 +1,10 @@
 {
   "ticker": "NU",
   "name": "Nu Holdings",
-  "last_updated": "2026-05-10",
-  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). In Brazil \u2014 now a mature, ~60%+ penetrated market \u2014 the story shifts from customer adds to monetization: ARPAC compounding as cohorts deepen product penetration into credit card, personal loan, investments, and insurance, with risk-adjusted NIM (NIM minus cost of risk) expanding as cost-to-serve stays near-zero. In Mexico and Colombia, total customer count remains the primary signal \u2014 these are the new acquisition engines, compounding on network effects and low CAC, but Mexico's credit book mix is the watch-item (unhedged expansion if it grows >50% QoQ). Bet: durable Brazil profitability \u2014 ROE crossing 30% on a consolidated basis, held above a 25% floor \u2014 funds growth-market expansion while consolidated revenue growth holds the 25%+ track and CET1 stays above 13%. Thesis breaks if ROE sustains below 25% for two quarters, risk-adjusted NIM contracts YoY for two quarters, revenue growth decelerates by more than 80% versus the prior-year same quarter, consolidated NPL 15d+ deteriorates YoY by more than 150bps for two same-fiscal-quarter prints, or net customer adds fall below 5M/Q while Brazil flagship-product penetration rolls over QoQ.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
+  "last_updated": "2026-06-29",
+  "thesis": "Latin America's leading digital bank (Brazil + Mexico + Colombia). In Brazil \u2014 now a mature, ~60%+ penetrated market \u2014 the story shifts from customer adds to monetization: ARPAC compounding as cohorts deepen product penetration into credit card, personal loan, investments, and insurance, with risk-adjusted NIM (NIM minus cost of risk) expanding as cost-to-serve stays near-zero. In Mexico and Colombia, total customer count remains the primary signal \u2014 these are the new acquisition engines, compounding on network effects and low CAC, but Mexico's credit book mix is the watch-item (unhedged expansion if it grows >50% QoQ). Bet: durable Brazil profitability \u2014 ROE crossing 30% on a consolidated basis, held above a 25% floor \u2014 funds growth-market expansion while consolidated revenue growth holds the 25%+ track and CET1 stays above 13%. Thesis breaks if ROE sustains below 25% for two quarters, risk-adjusted NIM contracts YoY for two quarters, revenue growth decelerates by more than 80% versus the prior-year same quarter, consolidated NPL 15d+ deteriorates YoY by more than 150bps for two same-fiscal-quarter prints, or net customer adds fall below 5M/Q while Brazil flagship-product penetration rolls over QoQ. Monetization is already inflecting, not pending: monthly ARPAC is ~$16 and compounding while risk-adjusted NIM expands and the credit book has seasoned well through Brazil's high-Selic period (90d+ NPL eased from the ~7.0% Q3'24 peak to ~6.5%, with the Q1'26 early-stage uptick seasonal). Bull-case optionality: the U.S. (Nubank, N.A. \u2014 OCC charter approved Jan-2026, ~mid/late-2027 launch) is a deliberate, bounded 'call option' framed by management at <100bps consolidated-efficiency drag and contingent on product-market fit, wedging into the Latin-American diaspora via Spanish-language banking and remittances; Mexico (banking license Apr-2025, Q1'26 break-even) and Colombia (3rd-largest market, ~5M customers) compound the multi-country engine. Valuation is the entry edge \u2014 PEG ~0.5 and the cheapest forward multiple since the 2021 IPO \u2014 but downside is NOT structurally capped: high beta (~1.45), ~70% of revenue in Brazil, and the NU+MELI pair concentrate a single leveraged bet on the Brazilian consumer and the real (Selic still restrictive at ~14.5%), so the residual risk is macro/FX/concentration, not a capped drawdown.",
+  "verdict": "Intact",
+  "verdict_color": "green",
   "key_driver": "Customer count \u00d7 ARPAC \u00d7 NIM with NPL controlled",
   "chart_priorities": [
     "ROE (annualized, consolidated)",
@@ -26,48 +26,53 @@
   "tier_1_kpis": [
     {
       "name": "ROE (annualized, consolidated)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "25.3% (trailing-equity basis; 29% IR-reported annualized)",
+      "prior": "25.4% (Q4'25)",
+      "yoy": "positive",
+      "status": "On track",
       "break_condition": "Consolidated ROE <25% for 2 consecutive Qs (thesis bet is ROE crossing 30% durably)",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     },
     {
       "name": "Risk-adjusted NIM (NIM minus cost of risk)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "9.48% (Q1'26 seasonal dip)",
+      "prior": "~10.5% (Q4'25)",
+      "yoy": "+20bps",
+      "status": "On track",
       "break_condition": "Risk-adjusted NIM contracts YoY for 2 consecutive Qs (cost of risk outrunning NIM expansion)",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     },
     {
       "name": "Capital adequacy ratio (CET1 / Basel III total)",
-      "current": "TBV",
+      "current": "16.6%",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
+      "status": "On track",
       "break_condition": "Capital ratio falls below 13% OR drops >150bps QoQ without explicit growth-deployment rationale (cushion erosion)",
-      "source": "earnings release + 20-F"
+      "source": "earnings release + 20-F",
+      "as_of": "2025-12-31"
     },
     {
       "name": "NPL 15d+ ratio (consolidated total: early-stage 15-90d + severe 90d+, YoY-tracked)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "11.5% total (15-90d 5.0% + 90d+ 6.5%)",
+      "prior": "11.0% (Q4'25)",
+      "yoy": "+0.3pp",
+      "status": "On track",
       "break_condition": "Total NPL (15d+ consolidated) YoY deterioration >150bps for 2 consecutive Qs in the same fiscal quarter \u2014 YoY framing controls for LatAm consumer-credit seasonality; absolute level is allowed to drift with the evolving underwriting mix, but rapid YoY worsening signals a credit-cycle break rather than a seasonal pattern",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     },
     {
       "name": "Monthly ARPAC (USD)",
-      "current": "TBV",
+      "current": "$15.9/mo",
       "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "yoy": "rising",
+      "status": "On track",
       "break_condition": "ARPAC growth <15% YoY for 2 consecutive Qs",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     },
     {
       "name": "Product penetration by country (% of customers using each product, Brazil/Mexico/Colombia x credit card/personal loan/investments/insurance)",
@@ -89,21 +94,23 @@
     },
     {
       "name": "Total customers (millions)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "135M",
+      "prior": "131M (FY'25)",
+      "yoy": "+~14M",
+      "status": "On track",
       "break_condition": "Net adds <5M per quarter for 2 consecutive Qs",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     },
     {
       "name": "Operating margin (GAAP) consolidated",
-      "current": "TBV",
+      "current": "19.2%",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
+      "status": "On track",
       "break_condition": "Below 20% for 2 consecutive Qs",
-      "source": "earnings release"
+      "source": "earnings release",
+      "as_of": "2026-03-31"
     }
   ],
   "tier_2_kpis": [
@@ -144,7 +151,9 @@
     "Total NPL (15d+ consolidated) deteriorates YoY beyond ~150bps in the same fiscal quarter \u2014 i.e. worsening that exceeds seasonality and is not explained by deliberate underwriting-mix shifts (credit-cycle break)",
     "Customer net adds <5M/Q",
     "ARPAC stalls (cross-sell saturating)",
-    "Mexico expansion stalls without offset"
+    "Mexico expansion stalls without offset",
+    "Concentration / correlated macro: NU + MELI are a doubled-up bet on the Brazilian consumer and the BRL (Selic ~14.5%); a Brazil credit-cycle or real drawdown hits both holdings at once \u2014 downside is correlated, not capped.",
+    "U.S. call-option fails its bounds: efficiency drag exceeds the <100bps cap, or no credible product-market fit (Spanish/remittance) appears by ~2027 \u2014 optionality turns into ongoing cost."
   ],
   "break_rules": [
     {
@@ -243,5 +252,11 @@
       "narrative": "15-90d NPL > 5% for 2Q \u2014 leading indicator of cohort credit deterioration; fires 1-2Q before 90d+ trips."
     }
   ],
-  "valuation_multiple_override": "P/E (NTM)"
+  "valuation_multiple_override": "P/E (NTM)",
+  "bull_case_legs": [
+    "Re-rating from a historically low multiple: PEG ~0.5, ~15x forward \u2014 cheapest since the Dec-2021 IPO. Base case ~10%+ IRR (double in ~7yr) without re-rating; 15-20% IRR (double in ~4-5yr) with re-rating. Note: a literal 3yr double needs ~26% CAGR, just above the 20% bull top-end.",
+    "U.S. optionality (Nubank, N.A.): OCC charter approved 2026-01-29; fund-by ~Jan-2027, operate-by ~mid/late-2027; bounded <100bps efficiency drag, PMF-contingent; diaspora wedge = Spanish-language banking + remittances. A near-free option, not yet a paid-for growth leg.",
+    "Multi-country compounding: Mexico (banking license Apr-2025, Q1'26 break-even) + Colombia (3rd market, ~5M customers) extend the low-CAC acquisition engine beyond a maturing Brazil.",
+    "Monetization inflection: ARPAC ~$16/mo and rising, risk-adjusted NIM ~9.5% and expanding YoY, on a credit book that seasoned through high-Selic Brazil (90d+ NPL ~6.5%, off the ~7.0% Q3'24 peak)."
+  ]
 }
