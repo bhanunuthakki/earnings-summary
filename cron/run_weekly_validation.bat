@@ -1,11 +1,10 @@
 @echo off
-REM Weekly (Sun @ 03:00) - cross-source validation + confidence backfill.
-REM Stage 1: run_validation_engine checks (range/magnitude/source-disagreement)
-REM         - inserts validation_issues rows for any fact failing a check.
-REM Stage 2: confidence backfill --apply - rescores financial_facts.confidence
-REM         and kpi_facts.confidence, folding fresh issue penalties into scores.
-REM Both stages are idempotent (~12s total on the prod DB). Recorded in
-REM ingestion_runs under directive "weekly_validation" for the cron-health panel.
+REM Weekly (Sun @ 03:00) - confidence backfill.
+REM Rescores financial_facts.confidence and kpi_facts.confidence --apply,
+REM folding fresh validation-issue penalties into per-fact scores (idempotent).
+REM The validation-engine SCAN runs DAILY in run_morning_pipeline (stage 3), so
+REM it is NOT repeated here - the backfill reads the issues the daily run already
+REM inserted. Recorded in ingestion_runs under directive "weekly_validation".
 
 setlocal
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
