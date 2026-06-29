@@ -92,6 +92,24 @@ def poll_once(
     for update in updates:
         bump(f"kind_{update.kind}")
         if update.kind == "text" and update.text:
+            if update.text.lstrip().startswith("/"):
+                # Telegram bot commands (/start, /help, ...) are chrome, not
+                # musings — never capture them. Greet on /start so the owner
+                # gets feedback that capture is live.
+                bump("command")
+                if (
+                    confirm
+                    and update.chat_id is not None
+                    and update.text.lstrip().lower().startswith("/start")
+                ):
+                    with contextlib.suppress(telegram.TelegramError):
+                        telegram.send_message(
+                            token,
+                            update.chat_id,
+                            "Ledger capture is live - send a voice memo or a thought "
+                            "and it lands in your Ledger.",
+                        )
+                continue
             result = ingest.ingest_capture(
                 channel="telegram",
                 media_kind="text",
