@@ -1,6 +1,6 @@
 # Provenance Override — company-published docs supersede FMP
 
-**Status:** design / in-progress (spawned 2026-06-14 from the GOOG segment-fix session)
+**Status:** SHIPPED — LIVE in PROD (spawned 2026-06-14 from the GOOG segment-fix session; `fact_overrides` table via alembic `0111` + `src/provenance/overrides.py`; GOOG id=1 / VEEV id=2 seeded)
 **Owner:** bhanu · **Initiative note:** `project_fmp_provenance_override`
 **Companion directive:** `directives/data_provenance.md` (this adds §9 — Overrides)
 
