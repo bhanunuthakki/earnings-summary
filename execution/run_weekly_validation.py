@@ -1,14 +1,18 @@
-"""Weekly cross-source validation + confidence backfill.
+"""Weekly confidence backfill.
 
-Runs two stages in sequence:
-1. validation engine — scans financial_facts / kpi_facts for range violations,
-   magnitude jumps, and cross-source disagreements; inserts validation_issues rows.
-2. confidence backfill — rescores financial_facts.confidence / kpi_facts.confidence
-   to fold fresh issue penalties into the per-fact score (idempotent).
+Rescores financial_facts.confidence / kpi_facts.confidence to fold fresh
+validation-issue penalties into the per-fact score (idempotent).
 
-Runtime on the ~730k-row prod DB is ~12 s; no ticker batching is needed.
-The run is recorded in ingestion_runs under directive "weekly_validation" so it
-surfaces in the cron-health panel alongside the other scheduled rungs.
+The validation-engine SCAN (range / magnitude / cross-source checks that insert
+validation_issues rows) runs DAILY as stage 3 of run_morning_pipeline
+(run_validation_engine.py --gate), so it is NOT repeated here — this weekly task
+used to re-run the identical full-population scan, inserting a duplicate set of
+validation_issues every Sunday. apply_confidence_scores reads the unresolved
+issues the daily run already inserted, so the rescore needs no scan of its own.
+
+Runtime on the ~730k-row prod DB is a few seconds. The run is recorded in
+ingestion_runs under directive "weekly_validation" so it surfaces in the
+cron-health panel alongside the other scheduled rungs.
 
 Usage:
     python execution/run_weekly_validation.py
@@ -30,7 +34,6 @@ from models.runs import StageStatus  # noqa: E402
 from pipeline.confidence import apply_confidence_scores  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, start_run  # noqa: E402
-from pipeline.validation_engine import run_all_checks  # noqa: E402
 
 _DB_DEFAULT = PROJECT_ROOT / "data" / "portfolio.db"
 
@@ -50,12 +53,6 @@ def main() -> int:
     run_id = start_run(conn, directive="weekly_validation", ticker_scope=["ALL"])
 
     try:
-        t0 = time.monotonic()
-        report = run_all_checks(conn, run_id=run_id, ticker=None)
-        t_validation = time.monotonic() - t0
-
-        total_issues = sum(o.issues_inserted for o in report.outcomes)
-
         t1 = time.monotonic()
         ff_outcome = apply_confidence_scores(conn, table="financial_facts", ticker=None, apply=True)
         kf_outcome = apply_confidence_scores(conn, table="kpi_facts", ticker=None, apply=True)
@@ -68,18 +65,6 @@ def main() -> int:
                 {
                     "run_id": run_id,
                     "stages": {
-                        "validation_engine": {
-                            "elapsed_s": round(t_validation, 1),
-                            "issues_inserted": total_issues,
-                            "by_rule": [
-                                {
-                                    "rule": o.rule.value,
-                                    "rows_examined": o.rows_examined,
-                                    "issues_inserted": o.issues_inserted,
-                                }
-                                for o in report.outcomes
-                            ],
-                        },
                         "confidence_backfill": {
                             "elapsed_s": round(t_backfill, 1),
                             "financial_facts": {
