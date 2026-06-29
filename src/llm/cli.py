@@ -177,10 +177,10 @@ LLM_MODELS: dict[str, str] = {
     # benefits from Opus's wider sector knowledge (knowing P/TBV is the right
     # bank lens, EV/NTM Revenue for SaaS, P/E for cyclicals, etc.). One call
     # per ticker, cached on disk — cost is bounded.
-    "valuation_basis": "claude-opus-4-7",
+    "valuation_basis": "claude-opus-4-8",
     # SayDo importance ordering — judgmental sort across many commitments,
     # benefits from Opus's stronger ranking discipline.
-    "saydo_importance": "claude-opus-4-7",
+    "saydo_importance": "claude-opus-4-8",
     # Auto KPI-registry seeding — proposes which KPIs load-bear the thesis,
     # their polarity, and grounded breaker thresholds with NO human review
     # gate (scratch/seed_kpi_registry.py --auto). The registry decides which
@@ -191,7 +191,7 @@ LLM_MODELS: dict[str, str] = {
     # also gives portfolio-wide auto-seeding its own budget attribution. The
     # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
     # Sonnet, so the two modes diverge cleanly.
-    "kpi_registry_auto_proposal": "claude-opus-4-7",
+    "kpi_registry_auto_proposal": "claude-opus-4-8",
     # News LLM modules — both on Opus per the news-table plan's explicit
     # instruction. material_news_classification is the material-news trigger's
     # per-headline materiality veto (src/triggers/material_news.py): it was
@@ -200,10 +200,10 @@ LLM_MODELS: dict[str, str] = {
     # it needs (one batched call per ticker per run, cached — cost bounded).
     # news_structuring is the WebSearch->structured-rows fallback extractor
     # (turning free-text news into news-table rows); registered now so it runs
-    # on Opus the moment that feed lands. Both use claude-opus-4-7 to match the
-    # repo's existing Opus pins (no one-off newer id).
-    "material_news_classification": "claude-opus-4-7",
-    "news_structuring": "claude-opus-4-7",
+    # on Opus the moment that feed lands. Both use claude-opus-4-8, the current
+    # Opus — all the repo's Opus pins use the one id.
+    "material_news_classification": "claude-opus-4-8",
+    "news_structuring": "claude-opus-4-8",
     # Earnings-tone diff — the earnings_tone trigger's quarter-over-quarter
     # transcript shift detector (src/triggers/earnings_tone.py): it compares the
     # latest call against prior transcripts and emits confidence-scored, cited
@@ -212,8 +212,8 @@ LLM_MODELS: dict[str, str] = {
     # analytical-judgment task — it decides whether an alert fires AND writes the
     # memo — so Opus's instruction-following and citation discipline matter. One
     # retry-capped call per ticker per run, cached on disk via llm_artifacts, so
-    # cost is bounded. claude-opus-4-7 to match the repo's existing Opus pins.
-    "earnings_tone_diff": "claude-opus-4-7",
+    # cost is bounded. claude-opus-4-8, the current Opus (matches the other pins).
+    "earnings_tone_diff": "claude-opus-4-8",
     # Recent-developments web brief (generate_recent_developments, via
     # call_llm_with_web). Stays on Sonnet — long-context news synthesis, not a
     # structured-judgment task. Pinned explicitly to DEFAULT_MODEL because
@@ -232,13 +232,13 @@ LLM_MODELS: dict[str, str] = {
     # (Opus: wider sector knowledge + instruction-following on "evidence, never
     # directives"). Swap checks are per-pair and run several at a time after a
     # deterministic screen; Sonnet keeps the marginal cost proportionate.
-    "advisor_next_dollar": "claude-opus-4-7",
+    "advisor_next_dollar": "claude-opus-4-8",
     "advisor_swap_check": DEFAULT_MODEL,
     # Socratic think-through (P2.4): question generation is a short grounded
     # task (Sonnet); the decision memo weighs the owner's answers against the
     # evidence and commits to a scoreable stance — Opus judgment tier.
     "advisor_socratic_questions": DEFAULT_MODEL,
-    "advisor_socratic_memo": "claude-opus-4-7",
+    "advisor_socratic_memo": "claude-opus-4-8",
     # Calibration coach (close_the_loops L8): names the owner's recurring biases
     # and proposes a behavioural experiment from his OWN graded track record —
     # the highest-judgement, lowest-volume call in the repo (monthly + on a
@@ -246,7 +246,7 @@ LLM_MODELS: dict[str, str] = {
     # beside; its output is eval-gated by the calibration_coach mode-B rubric
     # before it ever reaches the owner, so a cheaper model can only be promoted
     # in once that gate confirms parity.
-    "calibration_coach": "claude-opus-4-7",
+    "calibration_coach": "claude-opus-4-8",
     # Short, structured, batch — Gemini Flash at parity with Haiku, lower cost
     # (Chip 2 PR D first promotions; model-eval cron watches for regression).
     "intake_classifier": "gemini-3-flash-preview",

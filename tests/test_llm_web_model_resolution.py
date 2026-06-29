@@ -86,7 +86,7 @@ def test_web_resolves_opus_pinned_purpose_when_model_omitted(
     cli.call_llm_with_web("prompt", purpose="news_structuring", force_budget_bypass=True)
     cmd = capture_web_cmd["cmd"]
     assert cmd is not None
-    assert _model_arg(cmd) == "claude-opus-4-7"
+    assert _model_arg(cmd) == "claude-opus-4-8"
     # Web tools still wired (guards the cmd assembly against regression).
     assert "--allowedTools" in cmd
 

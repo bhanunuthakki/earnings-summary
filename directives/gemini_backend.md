@@ -59,29 +59,21 @@ repo's project context nor the user's global `~/.gemini/GEMINI.md` rulebook
 (~17KB) is injected into backend prompts. Without this every judged output
 would be contaminated by machine-setup instructions.
 
-## Routing policy (the eval gate)
+## Routing & failure policy
 
-```
-call_llm(prompt, purpose=...)            -> Claude (always, today)
-call_llm(..., backend="gemini")          -> Gemini, forced (compare harness)
-call_llm(purpose in allowlist)           -> Gemini, once judges pass it
-```
+Routing is **model-first** — see `directives/cheapest_model_routing.md`, the
+authoritative routing doc. `call_llm` resolves a purpose's model (DB
+`model_pin_overrides` → `LLM_MODELS` → tier-derived `GEMINI_MODELS`); if the
+resolved model is a Gemini id, the call dispatches to this backend via
+`family_of()`. `backend="gemini"` forces it (the compare harness). The old
+`GEMINI_BACKEND_ALLOWED_PURPOSES` allowlist no longer gates routing — it is dead
+code (see the banner above); the resolved model family decides everything.
 
-* `GEMINI_BACKEND_ALLOWED_PURPOSES` (in `gemini_backend.py`) **ships EMPTY**.
-  Adding a purpose requires: a `compare_backends` corpus for that purpose →
-  the evals-track judges grade Gemini vs Claude on it → the PR adding the
-  purpose links the verdict. `tests/test_gemini_backend.py::
-  test_allowlist_ships_empty` enforces the empty default; it is updated in
-  the same PR that passes an eval.
-* `GEMINI_BACKEND_PURPOSES` env var (comma-separated) merges extra purposes
-  for the current process — the local-trial escape hatch. Never set it in
-  cron/task definitions.
-* An explicit `model=` pin with no explicit backend always stays on Claude.
-* Failure policy: allowlist-routed Gemini calls that fail **operationally**
-  degrade to Claude (enabling a purpose can never break the pipeline);
-  `LLMSetupError` / `LLMBudgetExceeded` propagate per `is_hard_stop`. A
-  **forced** `backend="gemini"` call raises instead of switching — the
-  caller asked for Gemini's answer.
+Failure policy (current): a model-routed Gemini call that fails **operationally**
+degrades to Claude, so a model swap can never break the pipeline;
+`LLMSetupError` / `LLMBudgetExceeded` propagate per `is_hard_stop`. A **forced**
+`backend="gemini"` call raises instead of switching — the caller asked for
+Gemini's answer.
 
 ## Models, cost, ledger
 

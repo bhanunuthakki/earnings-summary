@@ -400,7 +400,7 @@ def _generate_alignment_narrative(
         prompt,
         purpose="exec_comp_alignment",
         ticker=ticker,
-        model="claude-opus-4-7",  # alignment judgment benefits from Opus
+        model="claude-opus-4-8",  # alignment judgment benefits from Opus
     )
     upsert(
         UpsertRequest(
@@ -408,7 +408,7 @@ def _generate_alignment_narrative(
             purpose="exec_comp_alignment",
             content_md=narrative,
             cache_inputs=cache_inputs,
-            model="claude-opus-4-7",
+            model="claude-opus-4-8",
         ),
         db_path=db_path,
     )
