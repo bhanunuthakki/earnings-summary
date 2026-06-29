@@ -109,3 +109,30 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
     assert len(musings) == 1
     assert musings[0].ticker == "NU"
     assert not (audio / "tg_30.oga").exists()  # audio purged once landed
+
+
+def test_poll_once_skips_bot_commands(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    updates = [
+        telegram.Update(update_id=40, kind="text", chat_id=1, text="/start"),
+        telegram.Update(update_id=41, kind="text", chat_id=1, text="Nubank looks good here"),
+    ]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command") == 1
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert len(musings) == 1  # only the real thought landed, not /start
+    assert "Nubank looks good" in musings[0].body
+    assert any("capture is live" in s for s in sent)  # /start got a greeting
