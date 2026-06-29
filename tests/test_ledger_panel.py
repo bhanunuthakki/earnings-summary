@@ -62,3 +62,23 @@ def test_needs_ticker_chip_renders(db_path: Path) -> None:
     )
     html = render_ledger_list(db_path)
     assert "needs ticker" in html
+
+
+def test_panel_shows_synthesized_stances(db_path: Path) -> None:
+    from synthesis.insights import record_insight
+
+    roster = build_roster_index(symbols=["NU"], phrases={"nubank": "NU"})
+    ingest.ingest_capture(
+        channel="tray", text="Nubank credit cycle looks early", roster=roster, db_path=db_path
+    )
+    record_insight(
+        scope_key="NU",
+        kind="stance",
+        body_md="Constructive on NU; the credit cycle still looks early.",
+        source_note_ids=[1],
+        watermark_id=1,
+        db_path=db_path,
+    )
+    html = render_ledger_panel(db_path)
+    assert "What you think now" in html
+    assert "Constructive on NU" in html

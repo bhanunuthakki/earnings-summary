@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from synthesis.insights import InsightRow, list_insights
 from ui.controls import ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -36,6 +37,11 @@ _PANEL_STYLE = """<style>
 .ledger-body > :first-child { margin-top: 0; }
 .ledger-body > :last-child { margin-bottom: 0; }
 .ledger-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
+.ledger-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
+.ledger-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
+.ledger-stance { background: var(--surface); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
+.ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
+.ledger-stance-meta { color: var(--muted); font-size: var(--fs-micro); margin-left: auto; }
 </style>"""
 
 _CAPTURE_JS = """<script>(function(){
@@ -103,6 +109,33 @@ def _musing_card(row: AnalystNoteRow) -> str:
     )
 
 
+def _stance_card(insight: InsightRow) -> str:
+    count = len(insight.source_note_ids)
+    plural = "" if count == 1 else "s"
+    return (
+        '<div class="ledger-stance">'
+        '<div class="ledger-stance-head">'
+        f"{ticker_label(insight.scope_key)}"
+        f'<span class="ledger-stance-meta">from {count} musing{plural}</span></div>'
+        f'<div class="ledger-body">{render_prose(insight.body_md)}</div>'
+        "</div>"
+    )
+
+
+def _stance_section(db_path: Path | str | None) -> str:
+    """The synthesized per-holding stances ("what you think now"), each grounded
+    in the musings it cites. Empty until the synthesis stage has run."""
+    stances = list_insights(kind="stance", db_path=db_path)
+    if not stances:
+        return ""
+    cards = "".join(_stance_card(s) for s in stances)
+    return (
+        '<h3 class="ledger-sec-h">What you think now</h3>'
+        '<p class="ledger-sec-sub">Your current stance per holding, synthesized from your '
+        "musings and grounded in the ones it cites.</p>" + cards
+    )
+
+
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The musings list fragment (re-fetched after a capture)."""
     rows = list_notes(user_id=user_id, kind="musing", db_path=db_path, limit=200)
@@ -121,8 +154,10 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         _PANEL_STYLE + '<section class="panel"><h2>Ledger</h2>'
         '<p class="sub">Your captured stream of consciousness. Talk or type a musing - '
         "to your Telegram bot on the go, or here at the desk; it lands linked to a name "
-        "and you read it back below. Theme synthesis arrives next.</p>"
+        "and you read it back below.</p>"
         + _capture_box()
+        + _stance_section(db_path)
+        + '<h3 class="ledger-sec-h">Musings</h3>'
         + render_ledger_list(db_path, user_id=user_id)
         + "</section>"
     )

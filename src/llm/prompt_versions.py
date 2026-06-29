@@ -170,6 +170,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # biases + behavioural experiment. Registered here so it counts as a known
     # audit purpose (the rubric-wiring test gates AUDIT_SPECS ⊆ registered).
     "calibration_coach": "v1",
+    # The Ledger longitudinal synthesis (Wave B). Bump when the per-holding
+    # stance-consolidation prompt (theme_synthesis) or the theme-clustering
+    # prompt (theme_seed_cluster) is materially rewritten.
+    "theme_synthesis": "v1",
+    "theme_seed_cluster": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
