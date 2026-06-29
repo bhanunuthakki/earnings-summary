@@ -48,7 +48,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 **Three trigger modes** drive when work happens:
 
-- **Cron** — 27 registered tasks (see `cron/*.task.xml` for the authoritative set): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, several weekly jobs, a monthly refresh, and a quarterly 13F miner. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
+- **Cron** — 28 registered tasks (see `cron/*.task.xml` for the authoritative set): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, several weekly jobs, a monthly refresh, and a quarterly 13F miner. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
 - **Comment-driven** — when the analyst applies a comment with `--apply`, the comment processor edits holdings JSON, re-runs the affected stages synchronously, and rebuilds the brief inline.
 - **Manual CLI** — every step has a direct invocation. `.bat` launchers wrap the most common ones for cmd.exe.
 
@@ -101,7 +101,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
 | `data/surprise/`, `data/report_comments/`, `data/report_chats/` | Surprise ledger + per-report comment/chat stores |
 | `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
-| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the scheduled tasks (27 `*.task.xml` — the authoritative set) |
+| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the scheduled tasks (28 `*.task.xml` — the authoritative set) |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
 | `transcripts/raw/`, `transcripts/processed/` | Earnings transcript flow (gitignored) |
 | `ir_documents/` | IR PDFs filed by ticker × period (gitignored) |
@@ -235,7 +235,7 @@ Every step is also a direct Python entrypoint. See [HOW_TO_USE_REPORTS.md §Full
 
 ## Cron jobs and automation
 
-27 scheduled tasks — see `cron/*.task.xml` for the authoritative set; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
+28 scheduled tasks — see `cron/*.task.xml` for the authoritative set; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
 
 ### Daily chain (03:00 → 06:30)
 

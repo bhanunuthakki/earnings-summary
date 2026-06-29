@@ -119,7 +119,28 @@ def main() -> None:
         default=DEFAULT_LIMIT,
         help=f"Max events per ticker (default {DEFAULT_LIMIT})",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Fetch even on a no-paid tier (bypass the FMP_TIER skip gate).",
+    )
     args = parser.parse_args()
+
+    # FMP's /stable/earnings endpoint requires a paid subscription; on the free
+    # tiers (FMP_TIER=basic|free) it 402s for every ticker, burning real
+    # server-side quota uncoordinated with refresh_cache's daily budget ledger
+    # (these calls bypass save_fmp_data, so they aren't even counted). Skip the
+    # fetch on those tiers — the .bat's step 2 (refresh_expected_earnings.py)
+    # still runs and falls back to the yfinance/next_earnings_date stack. Use
+    # --force to attempt anyway (e.g. right after upgrading the subscription).
+    tier = os.environ.get("FMP_TIER", "basic").strip().lower()
+    if tier in {"basic", "free"} and not args.force:
+        print(
+            f"FMP_TIER={tier or 'basic'}: /stable/earnings needs a paid tier — "
+            "skipping the calendar fetch (use --force to override). "
+            "Downstream expected_earnings still refreshes via the yfinance fallback."
+        )
+        sys.exit(0)
 
     if not FMP_API_KEY:
         print("Error: FMP_API_KEY not set in .env", file=sys.stderr)
