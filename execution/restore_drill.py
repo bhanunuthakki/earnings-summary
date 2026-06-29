@@ -1,0 +1,198 @@
+"""Monthly DB restore drill — prove the daily backups actually restore.
+
+A backup you have never restored is not a backup. ``cron/backup_db.py`` writes a
+gzip snapshot of ``data/portfolio.db`` daily (02:45); this drill periodically
+restores the LATEST snapshot to a throwaway temp file and verifies it, so
+real-world rot — Drive-sync truncation, gzip corruption, a stale/old snapshot,
+or schema drift — surfaces on a schedule instead of during a real outage. It is
+the scheduled counterpart to ``cron/restore_db.py``'s on-demand restore, and the
+verification ``tests/test_backup_restore.py`` only ever exercises against
+synthetic tmp DBs, never the real ``.gz`` snapshots on Drive.
+
+The drill NEVER touches the live DB's data — it restores to a temp path that is
+deleted afterward. It writes exactly one ``ingestion_runs`` bookkeeping row
+(directive=``restore_drill``) so the cron-health panel shows the drill verdict +
+clean-streak alongside ``backup_db`` (best-effort: skipped if the live DB is
+absent, which is itself the disaster case the drill is rehearsing for).
+
+Checks (all on the temp copy):
+  1. restore — gunzip the newest snapshot + ``PRAGMA integrity_check`` (reuses
+     ``cron/restore_db.py::restore_snapshot``; a corrupt restore is discarded).
+  2. row-count sanity — core tables (``tracked_companies``, ``financial_facts``)
+     are non-empty, catching a truncated/empty snapshot that still passes the
+     integrity check.
+  3. schema match — the restored snapshot's ``alembic_version`` matches the live
+     DB's. A soft check: a mismatch warns (a migration run after the last backup
+     is legitimate) but does not fail the drill.
+
+Exit code:
+  0  drill passed (restore + integrity + non-empty core tables)
+  1  a hard check failed (restore/integrity failed, or a core table was empty)
+  2  no snapshot found (nothing to drill) / setup error
+
+Usage:
+    python execution/restore_drill.py
+    python execution/restore_drill.py --backup-dir D:\\backups --keep
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import sqlite3
+import sys
+import tempfile
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "cron"))
+
+import restore_db  # noqa: E402  (cron/restore_db.py — gunzip + integrity + list)
+
+_DEFAULT_DB = PROJECT_ROOT / "data" / "portfolio.db"
+# A healthy snapshot has rows here; an empty one signals truncation/corruption
+# that still slips past PRAGMA integrity_check (a valid-but-empty DB is "ok").
+_CORE_TABLES: tuple[str, ...] = ("tracked_companies", "financial_facts")
+
+
+def _alembic_version(db_path: Path) -> str | None:
+    """The single ``alembic_version.version_num`` for *db_path*, or None if the
+    file isn't a readable SQLite DB / has no alembic_version table."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+    except sqlite3.Error:
+        return None
+    try:
+        row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+    except sqlite3.DatabaseError:
+        return None
+    finally:
+        conn.close()
+    return str(row[0]) if row else None
+
+
+def _row_counts(db_path: Path, tables: tuple[str, ...]) -> dict[str, int]:
+    """Row count per table; -1 if the table is missing/unreadable. Table names
+    are module-level literals, never user input (so the f-string is safe)."""
+    out: dict[str, int] = {}
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for tbl in tables:
+            try:
+                out[tbl] = int(conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0])
+            except sqlite3.DatabaseError:
+                out[tbl] = -1
+    finally:
+        conn.close()
+    return out
+
+
+def run_drill(
+    backup_dir: Path, live_db: Path, *, keep: bool = False
+) -> tuple[bool, dict[str, object]]:
+    """Restore the newest snapshot to a temp file and verify it.
+
+    Returns ``(ok, summary)``. Never mutates *live_db*. ``ok`` is False on a
+    missing snapshot, a failed restore/integrity check, or an empty core table;
+    a schema-version mismatch only adds a warning (still ``ok``).
+    """
+    snaps = restore_db.list_snapshots(backup_dir)
+    if not snaps:
+        return False, {"status": "no_snapshot", "error": f"no snapshots in {backup_dir}"}
+
+    snapshot = snaps[-1]
+    tmpdir = Path(tempfile.mkdtemp(prefix="restore_drill."))
+    target = tmpdir / "drill.db"
+    try:
+        try:
+            restore_db.restore_snapshot(snapshot, target, force=False)
+        except (OSError, RuntimeError) as exc:
+            return False, {
+                "status": "restore_failed",
+                "snapshot": snapshot.name,
+                "error": str(exc),
+            }
+
+        counts = _row_counts(target, _CORE_TABLES)
+        empty = [t for t, n in counts.items() if n <= 0]
+
+        snap_ver = _alembic_version(target)
+        live_ver = _alembic_version(live_db) if live_db.exists() else None
+        schema_match = live_ver is None or snap_ver == live_ver
+
+        ok = not empty
+        summary: dict[str, object] = {
+            "status": "ok" if ok else "empty_core_tables",
+            "snapshot": snapshot.name,
+            "snapshot_bytes": target.stat().st_size,
+            "row_counts": counts,
+            "snapshot_schema": snap_ver,
+            "live_schema": live_ver,
+            "schema_match": schema_match,
+        }
+        if not schema_match:
+            summary["warning"] = (
+                f"schema drift: snapshot at {snap_ver}, live DB at {live_ver} "
+                "(a migration run after the last backup is the benign case)"
+            )
+        return ok, summary
+    finally:
+        if not keep:
+            target.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                tmpdir.rmdir()
+
+
+def _record_run(live_db: Path, ok: bool, summary: dict[str, object]) -> None:
+    """Best-effort ingestion_runs bookkeeping so the cron-health panel sees the
+    drill. Silently no-ops if the live DB / schema isn't available."""
+    if not live_db.exists():
+        print("(live DB absent — skipping ingestion_runs bookkeeping)", file=sys.stderr)
+        return
+    try:
+        from models.runs import StageStatus
+        from pipeline.queries import open_db
+        from pipeline.run_accounting import end_run, start_run
+
+        conn = open_db(live_db)
+        try:
+            run_id = start_run(conn, directive="restore_drill", ticker_scope=["ALL"])
+            end_run(
+                conn,
+                run_id,
+                StageStatus.OK if ok else StageStatus.FAILED,
+                error_summary=None if ok else json.dumps(summary)[:500],
+            )
+        finally:
+            conn.close()
+    except Exception as exc:  # bookkeeping must never fail the drill
+        print(f"WARN: could not record ingestion_runs row: {exc}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    p.add_argument(
+        "--backup-dir", type=Path, default=restore_db.DEFAULT_BACKUP_DIR, help="snapshot directory"
+    )
+    p.add_argument(
+        "--db", type=Path, default=_DEFAULT_DB, help="live DB (read-only, for schema cmp)"
+    )
+    p.add_argument("--keep", action="store_true", help="keep the temp restore (debugging)")
+    args = p.parse_args(argv)
+
+    ok, summary = run_drill(args.backup_dir, args.db, keep=args.keep)
+    _record_run(args.db, ok, summary)
+
+    print(json.dumps(summary, indent=2))
+
+    if summary.get("status") == "no_snapshot":
+        return 2
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

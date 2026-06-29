@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-27 scheduled tasks total — the authoritative set is the `cron/*.task.xml` files on disk; run `python execution/verify_cron_registration.py` to see which are actually registered vs. present on disk. The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a quarterly task mines the rostered 13F managers one to two days after each 13F filing deadline; and a weekly Thursday audit verifies every task XML is registered and on schedule. Beyond those, several standalone + analytics tasks run off the chain — tabled under **Additional standalone + analytics tasks** below: a daily macro-series fetch (05:35) and podcast-RSS poller (06:30); the weekly model-eval sweep (Sun 02:00), calibration grading (Sun 03:30), stance scoring (Sun 06:30), and cross-source validation (Sun 03:00); and two monthly analytics tasks — advisor memos (1st, 07:30) and the calibration scorecard (2nd, 07:30).
+28 scheduled tasks total — the authoritative set is the `cron/*.task.xml` files on disk; run `python execution/verify_cron_registration.py` to see which are actually registered vs. present on disk. A monthly disaster-recovery drill (15th, 09:00) restores the latest backup to a throwaway path and verifies it (see **Disaster-recovery drill** below). The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a quarterly task mines the rostered 13F managers one to two days after each 13F filing deadline; and a weekly Thursday audit verifies every task XML is registered and on schedule. Beyond those, several standalone + analytics tasks run off the chain — tabled under **Additional standalone + analytics tasks** below: a daily macro-series fetch (05:35) and podcast-RSS poller (06:30); the weekly model-eval sweep (Sun 02:00), calibration grading (Sun 03:30), stance scoring (Sun 06:30), and cross-source validation (Sun 03:00); and two monthly analytics tasks — advisor memos (1st, 07:30) and the calibration scorecard (2nd, 07:30).
 
 ### Pre-chain backup
 
@@ -110,6 +110,29 @@ These run off the daily chain. They were present on disk but previously undocume
 | `earnings-summary\weekly_score_stances` | Weekly, Sunday 06:30 | `weekly_score_stances.task.xml` | `run_weekly_score_stances.bat` | Grades matured advisor memos/stances (master build P2.5): Socratic stances vs price (SPY-relative via the tracker) + swap checks vs realized pair margin. Deferrals (immature horizons / price-cache gaps) are normal; idempotent over the pending set. |
 | `earnings-summary\monthly_advisor_memos` | Monthly, 1st @ 07:30 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Advisor memo run (master build P2.3): the next-dollar allocation memo + swap-discipline checks. Runs after the morning pipeline so FMP prices/DCFs are fresh; degrades gracefully if the tracker is offline. Each memo persists to `advisor_memos` + an analyst note (+ ledger entry when ticker-scoped). |
 | `earnings-summary\monthly_calibration_scorecard` | Monthly, 2nd @ 07:30 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Calibration scorecard (close_the_loops L8): the compounding loop's personal readout — deterministic hit-rate/skill split + eval-gated coach prose (named biases + a falsifiable experiment), grounded only in the owner's graded history. Below the min-n floor it renders the substrate with a "too thin to coach yet" note and makes no LLM call. Persists to `data/calibration_scorecard/<period>.json`. |
+
+### Disaster-recovery drill
+
+The scheduled counterpart to the daily `backup_db` — a backup you have never restored is not a backup.
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest** `backup_db` snapshot to a throwaway temp path and verifies it: gunzip + `PRAGMA integrity_check` (via `cron/restore_db.py`), a core-table row-count sanity check (`tracked_companies`, `financial_facts` non-empty — catches a truncated snapshot that still passes integrity), and a soft schema-version match against the live DB (a mismatch warns; a migration after the last backup is benign). **Never touches the live DB** except to record one `ingestion_runs` row (directive=`restore_drill`) so the cron-health panel shows the drill verdict + clean-streak alongside `backup_db`. Exit 0 = passed, 1 = a hard check failed, 2 = no snapshot found. The CI tests (`tests/test_backup_restore.py`, `tests/test_restore_drill.py`) only exercise synthetic DBs, so this drill is what catches real-world rot (Drive-sync truncation, gzip corruption, a stale snapshot) on the actual `.gz` files. |
+
+### Re-registering after a schedule change
+
+Editing a `*.task.xml` only changes the repo definition — the **live** Windows task keeps its old trigger until you re-import it. After changing a schedule, re-run its `schtasks /create /f` (overwrite) so the registered trigger matches the XML; otherwise `verify_cron` reports a SCHEDULE MISMATCH. The 2026-06 stagger pass moved three jobs to de-conflict same-minute LLM work — re-register these three if they were already installed:
+
+```cmd
+schtasks /create /f /tn "earnings-summary\refresh_dirty_artifacts" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\refresh_dirty_artifacts.task.xml"   REM 04:00 -> 05:00
+
+schtasks /create /f /tn "earnings-summary\fetch_podcast_rss" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_podcast_rss.task.xml"          REM 06:30 -> 07:15
+
+schtasks /create /f /tn "earnings-summary\model_eval_sweep" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"           REM Sun 02:00 -> Sat 20:00
+```
 
 ## Switching FMP tier
 
@@ -281,6 +304,9 @@ schtasks /create /tn "earnings-summary\monthly_advisor_memos" ^
 
 schtasks /create /tn "earnings-summary\monthly_calibration_scorecard" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_calibration_scorecard.task.xml"
+
+schtasks /create /tn "earnings-summary\restore_drill" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\restore_drill.task.xml"
 ```
 
 The `/tn` value is the registered task name (used by all `schtasks` commands
