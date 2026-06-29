@@ -1,10 +1,10 @@
 """The Ledger capture subsystem.
 
-Turns a stream-of-consciousness musing — spoken or typed, arriving via Telegram,
-Gmail, or the desktop tray — into a durable, ticker-linked ``analyst_notes`` row
+Turns a stream-of-consciousness musing — spoken or typed, arriving via Telegram
+or the desktop tray — into a durable, ticker-linked ``analyst_notes`` row
 (``kind='musing'``, ``source='capture'``). The raw words are staged transiently
-in ``raw_capture_sessions`` (0115) and purged once the structured musing exists;
-a durable summary-level trail lives in ``capture_audit_log`` (0116).
+in ``raw_capture_sessions`` (0116) and purged once the structured musing exists;
+a durable summary-level trail lives in ``capture_audit_log`` (0117).
 
 Modules:
   audit       — the summary-level audit-log writer (0116).
