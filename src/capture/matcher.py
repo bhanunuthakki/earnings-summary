@@ -9,7 +9,9 @@ hard toward NOT guessing.
 Two match lanes, both word-boundary:
   * SYMBOLS — case-SENSITIVE uppercase (``MELI``, ``GOOGL``). Lowercase prose
     never matches a bare symbol, so the common words "now"/"nu" can't be mistaken
-    for the NOW/NU tickers; a typed uppercase symbol still resolves.
+    for the NOW/NU tickers; a typed uppercase symbol still resolves. A tiny
+    stopword set (``SYMBOL_STOPWORDS`` = {"I", "A"}) is exempt so the capitalized
+    pronoun/article in ordinary prose can't match a single-letter roster ticker.
   * PHRASES — case-INsensitive distinctive names/aliases (``Nubank``,
     ``MercadoLibre``, ``ServiceNow``). Curated to be distinctive enough that a
     casual mention attributes safely; anything ambiguous is left unmatched.
@@ -51,6 +53,16 @@ DISTINCTIVE_ALIASES: dict[str, str] = {
     "booking holdings": "BKNG",
     "sofi": "SOFI",
 }
+
+# Uppercase tokens the SYMBOL lane refuses to match even when a roster ticker
+# shares the spelling. The capitalized pronoun "I" — and the sentence-initial
+# article "A" — appear in nearly every typed/voice musing, so a single-letter
+# roster ticker like "I" (or "A") would otherwise be picked up as a spurious
+# candidate and flag every note ``needs_ticker``. This is the lane's ONLY
+# case-folding exception; it's deliberately tiny. Other single-letter symbols
+# (F, T, V, ...) are NOT excluded — they almost never appear capitalized as a
+# standalone English word, so a typed single-letter ticker still resolves.
+SYMBOL_STOPWORDS: frozenset[str] = frozenset({"I", "A"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +116,8 @@ def match_ticker(text: str, roster: RosterIndex) -> MatchResult:
         return MatchResult(None, (), False)
     found: set[str] = set()
     for sym, ticker in roster.symbol_to_ticker.items():
+        if sym in SYMBOL_STOPWORDS:
+            continue
         if _word_present(sym, text):
             found.add(ticker)
     low = text.lower()
