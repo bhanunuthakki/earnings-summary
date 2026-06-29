@@ -55,6 +55,34 @@ def test_lowercase_symbol_does_not_false_match() -> None:
     assert match_ticker("NOW at a 52-week low", r).ticker == "NOW"
 
 
+def test_symbol_lane_skips_english_stopwords() -> None:
+    # Roster carries the single-letter tickers "I" and "A". The capitalized
+    # pronoun "I" and sentence-initial "A" appear in nearly every musing and must
+    # NOT become spurious candidates — the note resolves to its real ticker only.
+    r = build_roster_index(symbols=["NU", "I", "A"], phrases={"nubank": "NU"})
+    res = match_ticker("I think NU is great", r)
+    assert res.ticker == "NU"
+    assert res.needs_ticker is False
+    assert res.candidates == ("NU",)
+    # sentence-initial article "A" is likewise skipped
+    res2 = match_ticker("A strong quarter for NU", r)
+    assert res2.ticker == "NU"
+    assert res2.needs_ticker is False
+    assert res2.candidates == ("NU",)
+    # a stopword with no other roster mention yields no match (not needs_ticker)
+    res3 = match_ticker("I am still undecided", r)
+    assert res3.ticker is None
+    assert res3.needs_ticker is False
+    assert res3.candidates == ()
+
+
+def test_typed_single_letter_ticker_still_resolves() -> None:
+    # Single-letter symbols outside the stopword set (e.g. Ford = F) still match
+    # when explicitly typed — the fix is surgical, not a blanket single-letter ban.
+    r = build_roster_index(symbols=["F", "NU"], phrases={})
+    assert match_ticker("F printed a great quarter", r).ticker == "F"
+
+
 def test_load_roster_from_tracked_companies(tmp_path: Path) -> None:
     db = tmp_path / "roster.db"
     conn = sqlite3.connect(str(db))
