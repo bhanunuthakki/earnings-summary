@@ -20,9 +20,9 @@ import time
 from pathlib import Path
 from typing import cast
 
-from capture import ingest, telegram
+from capture import ingest, research_notify, telegram
 from capture.matcher import RosterIndex
-from research.proposals import detect_and_create_task, tap_enabled
+from research.proposals import detect_and_create_task, get_task, tap_enabled
 
 log = logging.getLogger(__name__)
 
@@ -71,12 +71,30 @@ def _confirm(
         telegram.send_message(token, update.chat_id, text)
 
 
-def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> bool:
+def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
     """Fire the detection tap on a landed musing (fire-and-forget; never raises).
-    Returns True iff a 'proposed' research task (an inert chip) was created."""
+    Returns the new 'proposed' task id (an inert chip), or None."""
     if not (tap_enabled() and result.status == "landed" and result.note_id is not None):
-        return False
-    return detect_and_create_task(result.note_id, db_path=db_path) is not None
+        return None
+    return detect_and_create_task(result.note_id, db_path=db_path)
+
+
+def _notify_wondering(
+    token: str,
+    update: telegram.Update,
+    task_id: int,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    """Push a 'caught a wondering' card back into the thread (best-effort)."""
+    if not enabled or update.chat_id is None:
+        return
+    task = get_task(task_id, db_path=db_path)
+    if task is None:
+        return
+    with contextlib.suppress(telegram.TelegramError):
+        research_notify.notify_new_task(token, update.chat_id, task)
 
 
 def poll_once(
@@ -129,8 +147,10 @@ def poll_once(
             )
             bump(result.status)
             _confirm(token, update, result.status, result.ticker, enabled=confirm)
-            if _tap(result, db_path):
+            tid = _tap(result, db_path)
+            if tid is not None:
                 bump("wondering")
+                _notify_wondering(token, update, tid, db_path, enabled=confirm)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -152,9 +172,16 @@ def poll_once(
             if result.status == "landed":
                 dest.unlink(missing_ok=True)  # raw audio is transient — purge once landed
             _confirm(token, update, result.status, result.ticker, enabled=confirm)
-            if _tap(result, db_path):
+            tid = _tap(result, db_path)
+            if tid is not None:
                 bump("wondering")
-        # callback updates drive the Phase-1 research surface; ignored in Phase 0.
+                _notify_wondering(token, update, tid, db_path, enabled=confirm)
+        elif update.kind == "callback":
+            # The Phase-1 research surface: an inline-button press (run a wondering,
+            # or approve/further/steer/reject a proposal) → the one action core.
+            bump("callback")
+            with contextlib.suppress(telegram.TelegramError):
+                research_notify.dispatch_callback(token, update, db_path=db_path)
 
     new_offset = telegram.next_offset(updates)
     if new_offset is not None:
