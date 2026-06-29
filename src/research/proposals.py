@@ -119,6 +119,170 @@ def set_task_status(task_id: int, status: str, *, db_path: Path | str | None = N
         conn.close()
 
 
+PROPOSAL_STATUSES: tuple[str, ...] = (
+    "pending",
+    "approved",
+    "researching",
+    "steered",
+    "rejected",
+    "superseded",
+)
+_VERB_STATUS: dict[str, str] = {
+    "approve": "approved",
+    "further": "researching",
+    "steer": "steered",
+    "reject": "rejected",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchProposal:
+    id: int
+    task_id: int | None
+    kind: str
+    ticker: str | None
+    title: str
+    body_md: str
+    evidence_json: str
+    status: str
+    adversarial_verdict: str | None
+    budget_tier: str | None
+    provenance: str
+    tainted_by_proposal_id: int | None
+
+
+def create_proposal(
+    *,
+    task_id: int | None,
+    kind: str,
+    ticker: str | None,
+    title: str,
+    body_md: str,
+    evidence_json: str = "[]",
+    source_note_ids: str = "[]",
+    budget_tier: str | None = None,
+    adversarial_verdict: str | None = None,
+    provenance: str = "derived",
+    tainted_by_proposal_id: int | None = None,
+    db_path: Path | str | None = None,
+) -> int:
+    conn = open_conn(db_path)
+    try:
+        now = now_iso()
+        cur = conn.execute(
+            "INSERT INTO research_proposals "
+            "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
+            " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
+            " created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+            (
+                task_id,
+                kind,
+                ticker,
+                title,
+                body_md,
+                evidence_json,
+                source_note_ids,
+                adversarial_verdict,
+                budget_tier,
+                provenance,
+                tainted_by_proposal_id,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
+    return ResearchProposal(
+        id=int(row["id"]),
+        task_id=None if row["task_id"] is None else int(row["task_id"]),
+        kind=str(row["kind"]),
+        ticker=None if row["ticker"] is None else str(row["ticker"]),
+        title=str(row["title"]),
+        body_md="" if row["body_md"] is None else str(row["body_md"]),
+        evidence_json="[]" if row["evidence_json"] is None else str(row["evidence_json"]),
+        status=str(row["status"]),
+        adversarial_verdict=(
+            None if row["adversarial_verdict"] is None else str(row["adversarial_verdict"])
+        ),
+        budget_tier=None if row["budget_tier"] is None else str(row["budget_tier"]),
+        provenance=str(row["provenance"]),
+        tainted_by_proposal_id=(
+            None if row["tainted_by_proposal_id"] is None else int(row["tainted_by_proposal_id"])
+        ),
+    )
+
+
+def get_proposal(proposal_id: int, *, db_path: Path | str | None = None) -> ResearchProposal | None:
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM research_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        return None if row is None else _row_to_proposal(row)
+    finally:
+        conn.close()
+
+
+def list_proposals(
+    *, status: str | None = "pending", db_path: Path | str | None = None
+) -> list[ResearchProposal]:
+    conn = open_conn(db_path)
+    try:
+        if status is not None:
+            rows = conn.execute(
+                "SELECT * FROM research_proposals WHERE status = ? ORDER BY id DESC", (status,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM research_proposals ORDER BY id DESC").fetchall()
+        return [_row_to_proposal(r) for r in rows]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def act_on_proposal(
+    proposal_id: int,
+    verb: str,
+    *,
+    steer_text: str | None = None,
+    db_path: Path | str | None = None,
+) -> str:
+    """The ONE action core for the 4 inbox/Telegram verbs. Returns the new status.
+
+    SAFE BY CONSTRUCTION: it only flips the proposal's status (+ records a steer
+    note). 'approve' marks the inert drafted memo 'approved' — it does NOT write
+    any live artifact, fact, or DCF (that is a separate, explicit later step), so
+    a one-tap approve can never trigger a lethal-trifecta write. No web, no fetch.
+    """
+    if verb not in PROPOSAL_VERBS:
+        raise ValueError(f"unknown verb {verb!r}; expected one of {PROPOSAL_VERBS}")
+    status = _VERB_STATUS[verb]
+    conn = open_conn(db_path)
+    try:
+        if verb == "steer" and steer_text:
+            conn.execute(
+                "UPDATE research_proposals "
+                "SET status = ?, body_md = COALESCE(body_md, '') || ?, updated_at = ? WHERE id = ?",
+                (status, f"\n\n---\n**Owner steer:** {steer_text.strip()}", now_iso(), proposal_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE research_proposals SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now_iso(), proposal_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return status
+
+
 def detect_and_create_task(
     note_id: int, *, db_path: Path | str | None = None, call: DetectCall | None = None
 ) -> int | None:
