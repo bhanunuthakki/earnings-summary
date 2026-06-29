@@ -104,3 +104,20 @@ def test_load_token_empty_raises(tmp_path: Path) -> None:
     p.write_text("   \n", encoding="utf-8")
     with pytest.raises(token_store.CaptureSetupError):
         token_store.load_token(p)
+
+
+def test_load_token_from_json_object(tmp_path: Path) -> None:
+    # base file absent; the .json sibling holds {"token": "..."}
+    (tmp_path / "telegram_bot_token.json").write_text('{"token": "999:JSON-tok"}', encoding="utf-8")
+    assert token_store.load_token(tmp_path / "telegram_bot_token") == "999:JSON-tok"
+
+
+def test_load_token_bare_string_in_json_file(tmp_path: Path) -> None:
+    (tmp_path / "telegram_bot_token.json").write_text("888:bare\n", encoding="utf-8")
+    assert token_store.load_token(tmp_path / "telegram_bot_token") == "888:bare"
+
+
+def test_load_token_json_missing_token_key_raises(tmp_path: Path) -> None:
+    (tmp_path / "telegram_bot_token.json").write_text('{"nope": "x"}', encoding="utf-8")
+    with pytest.raises(token_store.CaptureSetupError):
+        token_store.load_token(tmp_path / "telegram_bot_token")

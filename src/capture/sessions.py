@@ -10,8 +10,8 @@ musing exists. The lifecycle:
               RETAINED for retry so the user's words are never lost
 
 Dedup is by ``(channel, external_ref)``: ``new_session`` returns None when the
-source message was already ingested, so re-polling the same Telegram update /
-Gmail message is a no-op.
+source message was already ingested, so re-polling the same Telegram update is a
+no-op.
 """
 
 from __future__ import annotations
