@@ -99,6 +99,14 @@ FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
 #       where latency dominates and the task is narrowly scoped
 #       (intake classification, per-line entity extraction).
 LLM_MODELS: dict[str, str] = {
+    # The Ledger longitudinal synthesis (Wave B). theme_synthesis consolidates a
+    # holding's captured musings into a cited standing stance; theme_seed_cluster
+    # groups musings/notes into themes. Both are analytical synthesis-with-
+    # citations (latency unimportant; batch on the morning pipeline) → Sonnet.
+    # Budget-capped + the citation set is deterministically validated before any
+    # insight is recorded (no hallucinated "you said X").
+    "theme_synthesis": DEFAULT_MODEL,
+    "theme_seed_cluster": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,
