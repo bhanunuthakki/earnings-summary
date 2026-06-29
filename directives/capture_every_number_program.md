@@ -1,6 +1,6 @@
 # Capture Every Reported Number — program directive
 
-**Status:** in-progress (program kicked off 2026-06-14)
+**Status:** COMPLETE — record-only, do not re-build (kicked off 2026-06-14; shipped to PROD with ~8,839 capture facts; durable seams: `xbrl_capture_all` opt-in, `canonical_metric_name` write-path, the DIY metric picker / DCF fact-injection UX)
 **Owner:** bhanu · **Initiative note:** `project_capture_every_number`
 **Companion directives:** `data_provenance.md`, `data_pipeline_dag.md`,
 `provenance_override_2026_06.md` (fact_overrides), `dcf_damodaran_redesign` notes (DCF).

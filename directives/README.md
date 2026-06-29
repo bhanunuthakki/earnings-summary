@@ -2,11 +2,11 @@
 
 Read this first to find the active plan and avoid re-building finished programs.
 
-**CURRENT (top of stack):** `capture_every_number_program.md` — the active program
-(8-session program spawned 2026-06-14). Make **every reported number** queryable via
-ask / raw DB / a company-specific DIY metric, and injectable into the DCF. Mostly
-additive — the storage substrate is already universal; the blocker is the three
-fixed-allowlist extractors. Critical path S1→S3→S5→S6→S7.
+**CURRENT (top of stack):** No active multi-session program. The canonical open-work
+tracker is `platform_backlog.md` — **check it FIRST.** Its one open feature item is
+**peer selection** (`peer_selection_llm.md`): replace the FMP sector/market-cap peer
+screen with an eval-gated LLM business-model comparables call. (The last program,
+`capture_every_number_program.md`, shipped — now in the DONE list below.)
 
 **Prior program (now in dogfood, do not re-build):** `close_the_loops_2026_06.md` —
 20-agent goal-anchored re-score 2026-06-13; targeted **performance-vs-index / risk**
@@ -21,7 +21,10 @@ and **the compounding loop**. Built + deployed; posture is dogfood, then re-grad
 
 **DONE programs (record-only, do not re-build):**
 `master_build_2026_06.md` → `fund_grade_build_2026_06.md` → `interaction_paradigm_2026_06.md`
-(each was the top-of-stack program in turn; all phases shipped).
+→ `capture_every_number_program.md` (each was the top-of-stack program in turn; all phases
+shipped — capture_every_number is in PROD with ~8,839 capture facts).
+Shipped feature specs from those programs: `key_metrics_picker.md` (the DIY metric picker),
+`concepts_spine_decision.md` (the concepts-spine decision).
 
 **Superseded:** `improvement_roadmap_2026_06.md` (→ `master_build_2026_06.md`).
 
@@ -34,16 +37,21 @@ and **the compounding loop**. Built + deployed; posture is dogfood, then re-grad
   `peer_selection_llm.md`.
 - Data-model & schema specs: `holdings_json_schema.md`, `folder_structure.md`,
   `cross_asset_data_model.md`, `document_tables_design.md`, `annual_kpi_cadence_design.md`,
-  `next_dollar_model.md`, `news_sources_plan.md`, `per_ticker_segment_extraction_notes.md`.
+  `next_dollar_model.md`, `news_sources_plan.md`, `per_ticker_segment_extraction_notes.md`,
+  `provenance_override_2026_06.md` (the `fact_overrides` seam — companion to the capture program).
 
 **Runbooks / task SOPs:** `fetch_transcripts.md`, `fetch_qa_transcript.md`,
 `backfill_transcripts.md`, `qa_transcripts.md`, `fetch_ir_documents.md`,
 `ir_browser_assisted_fetch.md`, `intake_documents.md`, `onboard_pending_tickers.md`,
 `quarterly_refresh.md`, `micro_thesis_runbook.md`, `micro_thesis_skill.md`,
-`dcf_gsheets_setup.md`, `nvo_external_sources.md`.
+`dcf_gsheets_setup.md`, `nvo_external_sources.md`, `design_conformance_audit.md`
+(the monthly semantic design-conformance audit, run as a scheduled task).
 
 **Trackers / data-quality logs:** `platform_backlog.md` (canonical cross-workspace tracker —
 check FIRST when asked about open work), `data_fixes.md`.
+
+**Cross-repo decision (record-only):** `cio_advisor_governance_2026_06.md` — advisor /
+Personal-CIO governance; scope is the companion **portfolio-tracker** repo, not this one.
 
 **Re-grade memos (historical, dated point-in-time audits):** `regrade_memo_post_wedge.md` (v3),
 `regrade_memo_v5_independent.md` (v5), `regrade_memo_v6.md`.

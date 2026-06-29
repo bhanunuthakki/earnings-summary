@@ -8,7 +8,7 @@ GUI.
 
 ## Active crons
 
-Seventeen scheduled tasks total. The five daily ones run as a chain (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a quarterly task mines the rostered 13F managers one to two days after each 13F filing deadline; and a weekly Thursday audit verifies every task XML is registered and on schedule.
+27 scheduled tasks total — the authoritative set is the `cron/*.task.xml` files on disk; run `python execution/verify_cron_registration.py` to see which are actually registered vs. present on disk. The five daily data-chain tasks run in sequence (03:00 → 06:30); a sixth daily task drains the LLM artifact queue at 04:00 and a seventh runs the Personal CIO morning pipeline at 04:00 (news → triggers → feed → validation); an eighth (02:45) backs up the database before the chain starts; the hourly catch-up is independent; the weekly + monthly tasks run off-cycle and refresh the synthesis / lens layer, the IR-spreadsheet KPI series, and the IR-document corpus — including a twice-weekly rescan of the names whose IR crawl is still failing (a bot-protected site that may start cooperating); a quarterly task mines the rostered 13F managers one to two days after each 13F filing deadline; and a weekly Thursday audit verifies every task XML is registered and on schedule. Beyond those, several standalone + analytics tasks run off the chain — tabled under **Additional standalone + analytics tasks** below: a daily macro-series fetch (05:35) and podcast-RSS poller (06:30); the weekly model-eval sweep (Sun 02:00), calibration grading (Sun 03:30), stance scoring (Sun 06:30), and cross-source validation (Sun 03:00); and two monthly analytics tasks — advisor memos (1st, 07:30) and the calibration scorecard (2nd, 07:30).
 
 ### Pre-chain backup
 
@@ -54,7 +54,7 @@ These regenerate the LLM "lens" artifacts (`five_min_reread`, `thesis_drift_qoq`
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
 | `earnings-summary\weekly_p2_lens_refresh` | Weekly, Sunday 02:00 | `weekly_p2_lens_refresh.task.xml` | `run_weekly_p2_lens_refresh.bat` | Regenerates P2-tier (watchlist + evaluation) lens artifacts drifted past their cadence. Wraps `python execution/run_due_lenses.py --cadence weekly`. Idempotent via `artifact_store.cached_inputs` hash dedup — stable tickers cost nothing. |
-| `earnings-summary\weekly_synthesis` | Weekly, Sunday 23:00 | `weekly_synthesis.task.xml` | `run_weekly_synthesis.bat` | **The "Sunday-night portfolio review" pipeline.** Five steps in order: (1) `refresh_dirty_artifacts.py --manifest-only` drains the LLM-artifact dirty queue so lens reads see fresh facts; (2) `run_lens.py --tickers AMZN,BN,GOOG,MELI,META,NOW,NU,NVO,RBRK,VEEV,WIX --all` regenerates every per-ticker lens for the full portfolio; (3) `run_lens.py --lens cross_portfolio_synthesis` runs the Opus cross-portfolio convergence read (~$0.25); (4) `build_analytical_dashboard.py` rebuilds `output/dashboard/<DATE>_portfolio_dashboard.html` with the new artifacts; (5) `grade_bear_cases.py --all-portfolio` grades predictions whose `target_period` has passed. Sequential — any step's failure halts the rest. |
+| `earnings-summary\weekly_synthesis` | Weekly, Sunday 23:00 | `weekly_synthesis.task.xml` | `run_weekly_synthesis.bat` | **The "Sunday-night portfolio review" pipeline.** Four steps in order: (1) `refresh_dirty_artifacts.py --manifest-only` drains the LLM-artifact dirty queue so lens reads see fresh facts; (2) `run_lens.py --tickers AMZN,BN,GOOG,MELI,META,NOW,NU,NVO,RBRK,VEEV,WIX --all` regenerates every per-ticker lens for the full portfolio; (3) `run_lens.py --lens cross_portfolio_synthesis` runs the Opus cross-portfolio convergence read (~$0.25); (4) `build_analytical_dashboard.py` rebuilds `output/dashboard/<DATE>_portfolio_dashboard.html` with the new artifacts. Sequential — any step's failure halts the rest. **Bear-case grading was removed from this task** (#675) — it is owned by the dedicated weekly `grade_calibration` cron (Sun 03:30); grading is idempotent so a single weekly pass suffices. |
 | `earnings-summary\monthly_p3_refresh` | Monthly, 1st @ 03:00 | `monthly_p3_refresh.task.xml` | `run_monthly_p3_refresh.bat` | Regenerates P3-tier (index_member / etf / `none`) lens artifacts drifted past their 90-day cadence. Wraps `python execution/run_due_lenses.py --cadence monthly`. The P3 lens set is minimal (`five_min_reread` only) so the run stays bounded even with 2k+ index constituents — and the `cache_inputs` hash means stable tickers cost nothing. |
 | `earnings-summary\submit_saydo_batch` | Weekly, Saturday 02:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | **SayDo verdicts via the Anthropic Message Batches API (50% off-hours discount).** Two steps: (1) `build_saydo_pairs.py --all --prepare-batch` writes a JSONL of management-commitment (say, do) verdict requests whose check-date has arrived; (2) `submit_saydo_batch.py` submits it, polls until the batch ends, writes each verdict, and ledgers results at the 50% batch rate. No-op when nothing is due; a pre-flight cost gate hard-halts if the projection would breach the `pairwise_analysis` cap. Own task (6h `ExecutionTimeLimit`) because the batch poll can outlast `weekly_synthesis`'s 2h cap. |
 
@@ -95,6 +95,21 @@ The failing-only rescan is the cheap mid-week companion to the Sunday full sweep
 | `earnings-summary\fetch_13f` | Quarterly, 16th of Feb/May/Aug/Nov @ 08:15 | `fetch_13f.task.xml` | `run_fetch_13f.bat` | **EDGAR 13F-HR miner (S6 discovery, investor lane).** Fires 1–2 days after the 45-day 13F filing deadline (Feb 14 / May 15 / Aug 14 / Nov 14) so the quarter's filings are in. Three steps: (1) `execution/fetch_13f.py` polls every active rostered manager (`discovery_sources` rows **with a `cik`**), diffs its two latest `13F-HR` filings, and writes `investor_13f` `discovery_signals` for untracked universe names + `news` rows (`source_feed='edgar_13f'`) for tracked names — a full-class replace, so a sold position drops; (2) `execution/recalibrate_investor_weights.py` snapshots this quarter's new buys into the `investor_calibration` ledger (alembic 0100), measures any whose 180-day horizon has elapsed against the FMP price cache, and nudges each fund's `base_weight` by its realized win/loss hit-rate (EWMA-damped + bounded; a no-op until ~2 quarters of buys clear the horizon); (3) `execution/run_discovery.py` re-scores the queue so the fresh investor signals + tuned weights re-rank immediately (the clamp + corroboration math runs there). Best-effort — an unreachable manager / unparseable filing contributes nothing; a roster with no CIK-resolved managers is a no-op. Only managers whose CIK is set fire; resolve more with `python execution/resolve_manager_ciks.py --apply` (it auto-applies only a single recent, strong-name 13F-HR match and reports the ambiguous/stale ones for the owner to paste via the Sources panel). |
 
 13F is quarterly with a 45-day lag, so a quarterly poll is ample; the miner uses the two latest filings, so a manager that files a few days late is picked up the next quarter. Verify a run via the JSON summary in `.tmp/cron_logs/fetch_13f_*.log` (`{ "signals": N, "untracked_names": N, "tracked_news": N, "managers": N }`) and new `investor_13f` rows in `discovery_signals` / re-ranked rows in the Discovery panel.
+
+### Additional standalone + analytics tasks
+
+These run off the daily chain. They were present on disk but previously undocumented here; this table closes that gap (and they are now in the Install list below).
+
+| Task name | Cadence | XML | Wrapper | What it does |
+|---|---|---|---|---|
+| `earnings-summary\fetch_macro_series` | Daily 05:35 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Populates `macro_series` (12-series FMP fetch, ~25 calls) then recomputes portfolio `macro_sensitivities` (local CPU) — the substrate of the next-dollar panel's macro tilt (`directives/next_dollar_model.md`). Scheduled right after the 00:00-UTC FMP quota reset and **before** the calendar/brief tasks burn the day's budget. |
+| `earnings-summary\fetch_podcast_rss` | Daily 06:30 | `fetch_podcast_rss.task.xml` | `run_fetch_podcast_rss.bat` | DIET-lane podcast poller (S11): polls 7 curated shows, matches episodes to tracked names + rostered investors → `media_appearance` signals (idempotent); then a Sonnet pass summarizes new/short episodes into a 2–4 sentence investment briefing, budget-capped at $5/mo (migration 0103). |
+| `earnings-summary\model_eval_sweep` | Weekly, Sunday 02:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | The activated model-downgrade eval loop (`directives/model_eval_loop.md`): harvest a rotating 2-ticker sample → sweep every cheaper candidate per active purpose → auto-switch a `model_pin_overrides` row after 3 consecutive SWITCH_DOWN verdicts (revert after 3 KEEP_INCUMBENT). Conservative + reversible; every decision audited via `model_eval_verdicts` + alerts. (The task runs `run_weekly_model_eval.bat`; the older `run_model_eval_sweep.bat` is unused.) |
+| `earnings-summary\grade_calibration` | Weekly, Sunday 03:30 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Feeds the prompt-calibration loop: `run_calibration_grading.py` runs 3 outcome graders (predictions → decisions → bear_cases, the last over `--all-portfolio`) + 5 eval-audit rungs (bear_case, transcript_summary, advisor_next_dollar, ask_advisory_answer, calibration_coach), writing `prompt_calibration_scores`. Never aborts early; exit code = count of failed rungs. **Owns bear-case grading** (moved here from `weekly_synthesis` in #675). |
+| `earnings-summary\weekly_validation` | Weekly, Sunday 03:00 | `weekly_validation.task.xml` | `run_weekly_validation.bat` | Cross-source validation + confidence backfill. Stage 1: `run_validation_engine` checks (range / magnitude / source-disagreement) → `validation_issues`. Stage 2: confidence backfill `--apply` rescores `financial_facts`/`kpi_facts` confidence. Idempotent (~12s); recorded in `ingestion_runs` for the cron-health panel. (Note: Stage 1 overlaps the daily morning-pipeline validation scan — flagged as an audit follow-up.) |
+| `earnings-summary\weekly_score_stances` | Weekly, Sunday 06:30 | `weekly_score_stances.task.xml` | `run_weekly_score_stances.bat` | Grades matured advisor memos/stances (master build P2.5): Socratic stances vs price (SPY-relative via the tracker) + swap checks vs realized pair margin. Deferrals (immature horizons / price-cache gaps) are normal; idempotent over the pending set. |
+| `earnings-summary\monthly_advisor_memos` | Monthly, 1st @ 07:30 | `monthly_advisor_memos.task.xml` | `run_monthly_advisor_memos.bat` | Advisor memo run (master build P2.3): the next-dollar allocation memo + swap-discipline checks. Runs after the morning pipeline so FMP prices/DCFs are fresh; degrades gracefully if the tracker is offline. Each memo persists to `advisor_memos` + an analyst note (+ ledger entry when ticker-scoped). |
+| `earnings-summary\monthly_calibration_scorecard` | Monthly, 2nd @ 07:30 | `monthly_calibration_scorecard.task.xml` | `run_monthly_calibration_scorecard.bat` | Calibration scorecard (close_the_loops L8): the compounding loop's personal readout — deterministic hit-rate/skill split + eval-gated coach prose (named biases + a falsifiable experiment), grounded only in the owner's graded history. Below the min-n floor it renders the substrate with a "too thin to coach yet" note and makes no LLM call. Persists to `data/calibration_scorecard/<period>.json`. |
 
 ## Switching FMP tier
 
@@ -239,6 +254,33 @@ schtasks /create /tn "earnings-summary\verify_cron" ^
 
 schtasks /create /tn "earnings-summary\fetch_13f" ^
   /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_13f.task.xml"
+
+schtasks /create /tn "earnings-summary\submit_saydo_batch" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\submit_saydo_batch.task.xml"
+
+schtasks /create /tn "earnings-summary\fetch_macro_series" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_macro_series.task.xml"
+
+schtasks /create /tn "earnings-summary\fetch_podcast_rss" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_podcast_rss.task.xml"
+
+schtasks /create /tn "earnings-summary\model_eval_sweep" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\model_eval_sweep.task.xml"
+
+schtasks /create /tn "earnings-summary\grade_calibration" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\grade_calibration.task.xml"
+
+schtasks /create /tn "earnings-summary\weekly_validation" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_validation.task.xml"
+
+schtasks /create /tn "earnings-summary\weekly_score_stances" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\weekly_score_stances.task.xml"
+
+schtasks /create /tn "earnings-summary\monthly_advisor_memos" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_advisor_memos.task.xml"
+
+schtasks /create /tn "earnings-summary\monthly_calibration_scorecard" ^
+  /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\monthly_calibration_scorecard.task.xml"
 ```
 
 The `/tn` value is the registered task name (used by all `schtasks` commands
