@@ -175,6 +175,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # prompt (theme_seed_cluster) is materially rewritten.
     "theme_synthesis": "v1",
     "theme_seed_cluster": "v1",
+    # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
+    # detect prompt is materially rewritten, then re-run the golden set.
+    "wondering_detect": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

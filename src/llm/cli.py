@@ -107,6 +107,10 @@ LLM_MODELS: dict[str, str] = {
     # insight is recorded (no hallucinated "you said X").
     "theme_synthesis": DEFAULT_MODEL,
     "theme_seed_cluster": DEFAULT_MODEL,
+    # The Ledger Phase-1 wondering classifier (the research-loop gate). A short
+    # closed binary+extraction behind a deterministic regex pre-gate → the cheap
+    # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.
+    "wondering_detect": FAST_CLASSIFIER_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

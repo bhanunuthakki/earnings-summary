@@ -66,6 +66,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # here so the registries match.
     "earnings_themes_split",
     "qa_topics",
+    # The Ledger Phase-1 research-loop gate (mode-A golden classifier) — kept in
+    # sync with run_llm_evals.GOLDEN_PURPOSES (test_runner_purpose_lists_stay_in_sync).
+    "wondering_detect",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30
