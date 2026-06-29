@@ -157,7 +157,10 @@ def test_sync_mirrors_anchor_fact_ref_onto_note(repo_root: Path, db_path: Path) 
 
 def test_vocab_validation(db_path: Path) -> None:
     with pytest.raises(ValueError):
-        notes.create_note(ticker="NU", kind="musing", body="x", db_path=db_path)
+        # An out-of-vocabulary kind is rejected. (Was "musing" until The Ledger
+        # capture pipeline made that a first-class NOTE_KIND — use a kind that is
+        # still genuinely absent from NOTE_KINDS.)
+        notes.create_note(ticker="NU", kind="not_a_real_kind", body="x", db_path=db_path)
     with pytest.raises(ValueError):
         notes.create_note(ticker="NU", kind="watch", body="   ", db_path=db_path)
     with pytest.raises(ValueError):
