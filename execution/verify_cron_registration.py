@@ -53,6 +53,7 @@ class _XmlTask(NamedTuple):
     task_name: str  # e.g. r"\earnings-summary\refresh_cache"
     start_time: str | None  # ISO local time, e.g. "03:00:00"
     enabled: bool
+    has_repetition: bool  # True for hourly/repeating triggers (skip time-match)
 
 
 @dataclass(slots=True)
@@ -105,11 +106,18 @@ def _parse_xml(path: Path) -> _XmlTask | None:
     enabled_el = root.find(f".//{ns}Enabled")
     enabled = (enabled_el is None) or (enabled_el.text or "true").lower() != "false"
 
+    # A repeating trigger (e.g. hourly: Repetition Interval=PT1H) fires at
+    # StartBoundary + n*interval, so schtasks' "Next Run Time" is almost never
+    # the StartBoundary time — comparing the two would be a guaranteed false
+    # "schedule mismatch". Flag it so the mismatch check skips these.
+    has_repetition = root.find(f".//{ns}Repetition/{ns}Interval") is not None
+
     return _XmlTask(
         xml_path=path,
         task_name=task_name,
         start_time=start_time,
         enabled=enabled,
+        has_repetition=has_repetition,
     )
 
 
@@ -221,8 +229,11 @@ def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
 
         # Schedule-mismatch check: compare trigger start time from XML vs
         # schtasks' "Next Run Time" column (only the time portion matters
-        # since the date advances each run).
-        if xt.start_time is not None:
+        # since the date advances each run). Skipped for repeating triggers
+        # (hourly etc.) — their next run is StartBoundary + n*interval, so the
+        # time almost never equals StartBoundary and the check would always
+        # false-positive.
+        if xt.start_time is not None and not xt.has_repetition:
             next_run_time = _extract_next_run_time(task_info["next_run"])
             if next_run_time is not None and next_run_time != xt.start_time:
                 report.mismatch.append((xt.task_name, xt.start_time, next_run_time))

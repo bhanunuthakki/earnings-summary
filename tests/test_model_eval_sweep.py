@@ -445,7 +445,10 @@ def test_run_sweep_no_capture_files_returns_empty(
 
 
 def test_cron_bat_exists() -> None:
-    bat = PROJECT_ROOT / "cron" / "run_model_eval_sweep.bat"
+    # The model_eval_sweep task runs run_weekly_model_eval.bat (the auto-switch
+    # orchestrator); the older run_model_eval_sweep.bat was an unused orphan and
+    # was removed. run_model_eval_sweep.py remains as a manual entry point.
+    bat = PROJECT_ROOT / "cron" / "run_weekly_model_eval.bat"
     assert bat.exists(), f"missing cron bat: {bat}"
 
 
