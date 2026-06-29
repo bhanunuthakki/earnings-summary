@@ -22,6 +22,7 @@ from typing import cast
 
 from capture import ingest, telegram
 from capture.matcher import RosterIndex
+from research.proposals import detect_and_create_task, tap_enabled
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,14 @@ def _confirm(
     # a failed confirmation never blocks capture
     with contextlib.suppress(telegram.TelegramError):
         telegram.send_message(token, update.chat_id, text)
+
+
+def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> bool:
+    """Fire the detection tap on a landed musing (fire-and-forget; never raises).
+    Returns True iff a 'proposed' research task (an inert chip) was created."""
+    if not (tap_enabled() and result.status == "landed" and result.note_id is not None):
+        return False
+    return detect_and_create_task(result.note_id, db_path=db_path) is not None
 
 
 def poll_once(
@@ -120,6 +129,8 @@ def poll_once(
             )
             bump(result.status)
             _confirm(token, update, result.status, result.ticker, enabled=confirm)
+            if _tap(result, db_path):
+                bump("wondering")
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -141,6 +152,8 @@ def poll_once(
             if result.status == "landed":
                 dest.unlink(missing_ok=True)  # raw audio is transient — purge once landed
             _confirm(token, update, result.status, result.ticker, enabled=confirm)
+            if _tap(result, db_path):
+                bump("wondering")
         # callback updates drive the Phase-1 research surface; ignored in Phase 0.
 
     new_offset = telegram.next_offset(updates)
