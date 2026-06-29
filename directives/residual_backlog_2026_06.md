@@ -1,5 +1,9 @@
 # Directive: Residual backlog + chip plan (2026-06-13)
 
+**Status:** HISTORICAL — point-in-time snapshot (2026-06-13). The live, canonical
+open-work tracker is `platform_backlog.md`; consult that first. This file is kept
+as a record of the post-program sweep, not a to-do list.
+
 Catalog of all pending/unbuilt work after the two big 2026-06 programs landed, with a
 prioritized chip plan. Produced by a full sweep of: both canonical session plans
 (`fund_grade_build_2026_06.md` S1–S17, `interaction_paradigm_2026_06.md` S1–S12), every
