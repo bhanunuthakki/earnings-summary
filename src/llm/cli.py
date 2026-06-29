@@ -111,6 +111,13 @@ LLM_MODELS: dict[str, str] = {
     # closed binary+extraction behind a deterministic regex pre-gate → the cheap
     # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.
     "wondering_detect": FAST_CLASSIFIER_MODEL,
+    # The Ledger Phase-1 research loop (the two-pass trifecta firebreak): fetch
+    # (web on, no writer) / adversarial assess / narrate (no web). Sonnet-tier
+    # reasoning + web orchestration; monthly budgets seeded warn/warn/skip (0124),
+    # per-run $-cap clamped by the budget tier (research.tier).
+    "research_fetch": DEFAULT_MODEL,
+    "research_adversarial_assess": DEFAULT_MODEL,
+    "research_narrate": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,
@@ -887,6 +894,7 @@ def call_llm_with_web(
     scope: str | None = None,
     run_id: str | None = None,
     force_budget_bypass: bool = False,
+    max_budget_usd: float | None = None,
 ) -> str:
     """LLM call with Claude WebSearch + WebFetch tools enabled.
 
@@ -901,6 +909,12 @@ def call_llm_with_web(
 
     Same per-purpose budget enforcement as `_call_claude`; pass
     ``force_budget_bypass=True`` to skip the check.
+
+    ``max_budget_usd`` sets the per-run agentic $-cap. It can only LOWER the hard
+    module ceiling (``CLAUDE_WEB_MAX_BUDGET_USD``), never raise it — a tiered
+    caller passes its budget here and the run is clamped to ``min(requested,
+    ceiling)``. This is the S2 invariant: no caller can spend above the structural
+    maximum, whatever budget it asks for.
 
     Model selection mirrors ``call_llm``: pass an explicit ``model`` to force
     one, or leave it ``None`` (the default) to resolve from ``purpose`` via
@@ -937,6 +951,11 @@ def call_llm_with_web(
     prompt_sha = sha256_text(prompt)
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
+    # A caller may LOWER the per-run ceiling (the tiered research budget), never
+    # raise it above the hard module maximum — clamped to [0.01, ceiling].
+    effective_budget_usd = CLAUDE_WEB_MAX_BUDGET_USD
+    if max_budget_usd is not None:
+        effective_budget_usd = min(max(max_budget_usd, 0.01), CLAUDE_WEB_MAX_BUDGET_USD)
     cmd = [
         llm_client._claude_cli_path,
         "-p",
@@ -952,7 +971,7 @@ def call_llm_with_web(
         # cannot run away on cost if the model ignores the prompt's advisory
         # "AT MOST 2 searches" budget. Degrades like any other web-call failure.
         "--max-budget-usd",
-        str(CLAUDE_WEB_MAX_BUDGET_USD),
+        str(effective_budget_usd),
     ]
     try:
         result = subprocess.run(

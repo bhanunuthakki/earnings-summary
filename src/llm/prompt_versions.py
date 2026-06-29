@@ -178,6 +178,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
     # detect prompt is materially rewritten, then re-run the golden set.
     "wondering_detect": "v1",
+    # The Ledger Phase-1 research loop (two-pass): fetch / adversarial assess / narrate.
+    "research_fetch": "v1",
+    "research_adversarial_assess": "v1",
+    "research_narrate": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
