@@ -5,6 +5,10 @@ REM bot token from data\secrets\telegram_bot_token; exits cleanly if unconfigure
 REM One instance only (IgnoreNew) — a second getUpdates poller would 409.
 
 setlocal
+REM small.en transcribes proper nouns (ticker names: Nubank, MercadoLibre) far
+REM better than base.en, so the deterministic matcher auto-links them. ~480MB
+REM one-time model download on the first voice memo.
+set CAPTURE_WHISPER_MODEL=small.en
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
