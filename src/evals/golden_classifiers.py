@@ -56,6 +56,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "intake_classifier",
     "news_structuring",
     "decision_conditions_extract",
+    "wondering_detect",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -227,6 +228,32 @@ def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
                 list(cast("list[object]", expected)),
             )
         )
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def load_wondering_detect_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for research.detect.detect_for_eval: a musing ``text``; ``expected``
+    is ``{is_wondering: bool, ticker: str|None}`` (the precision gate's fields)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "wondering_detect")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        text = _require_str(c, "text", label, errors)
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        if not isinstance(exp.get("is_wondering"), bool):
+            errors.append(f"{label} ({case_id}): expected.is_wondering must be a bool")
+        cases.append(ClassifierCase(case_id, {"text": text}, exp))
     if errors:
         raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
     return cases
@@ -503,6 +530,48 @@ def grade_news_structuring_case(
     )
 
 
+def grade_wondering_detect_case(
+    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
+) -> CaseResult:
+    """The precision gate: the binary ``is_wondering`` must match (a wrong verdict
+    IS the whole failure mode — a false positive wastes a research run). When the
+    verdict is a wondering AND the golden pins a ticker, the ticker must match too
+    for a full pass (partial credit 0.5 for the right verdict, wrong ticker)."""
+    expected = cast("dict[str, object]", case.expected)
+    exp_wonder = bool(expected.get("is_wondering"))
+    t0 = time.monotonic()
+    try:
+        actual = fn(cast("str", case.inputs["text"]))
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "wondering_detect", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    act = actual  # fn is typed dict[str, object]; detect_for_eval always returns one
+    wonder_ok = bool(act.get("is_wondering")) == exp_wonder
+    exp_ticker = expected.get("ticker")
+    ticker_ok = True
+    if wonder_ok and exp_wonder and isinstance(exp_ticker, str) and exp_ticker.strip():
+        act_ticker = act.get("ticker")
+        ticker_ok = (
+            isinstance(act_ticker, str) and act_ticker.strip().upper() == exp_ticker.strip().upper()
+        )
+    passed = wonder_ok and ticker_ok
+    score = 1.0 if passed else (0.5 if wonder_ok else 0.0)
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"wondering_detect/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact({"is_wondering": exp_wonder, "ticker": exp_ticker}),
+        actual_json=dumps_compact(act),
+        failure_stage=None if passed else ("ticker" if wonder_ok else "verdict"),
+        judge_rationale=None
+        if passed
+        else f"expected is_wondering={exp_wonder} ticker={exp_ticker!r}",
+        latency_ms=latency_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # run orchestration
 # ---------------------------------------------------------------------------
@@ -522,6 +591,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import decision_conditions
 
         return cast("Callable[..., object]", decision_conditions.extract_conditions)
+    if purpose == "wondering_detect":
+        import research.detect as detect
+
+        return cast("Callable[..., object]", detect.detect_for_eval)
     return llm_client.structure_recent_news_json
 
 
@@ -549,6 +622,9 @@ def run_classifier_eval(
     elif purpose == "decision_conditions_extract":
         cases = load_decision_conditions_golden(golden_path)
         grade = grade_decision_conditions_case
+    elif purpose == "wondering_detect":
+        cases = load_wondering_detect_golden(golden_path)
+        grade = grade_wondering_detect_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"

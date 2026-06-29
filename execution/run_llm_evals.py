@@ -57,6 +57,8 @@ GOLDEN_PURPOSES = (
     "injection_canaries",
     "provenance_caution",
     "key_metrics",
+    # The Ledger Phase-1 research-loop gate (mode-A golden classifier).
+    "wondering_detect",
 )
 AUDIT_PURPOSES = (
     "bear_case",

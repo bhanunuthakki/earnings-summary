@@ -1,0 +1,18 @@
+{
+  "purpose": "wondering_detect",
+  "notes": "The make-or-break precision gate: a research-worthy WONDERING/REQUEST (true) vs a FLAT OBSERVATION/decision/mood (false). Default-false asymmetry: a false positive wastes a research run. Includes regex-miss cases (the pre-gate decides, zero LLM) and regex-hit observations (the LLM must still say false).",
+  "cases": [
+    {"id": "wd-001-ingest-deck", "text": "Ingest this deck and give me insights and critical evaluation of NU", "expected": {"is_wondering": true, "ticker": "NU"}},
+    {"id": "wd-002-add-watchlist", "text": "Add to watchlist: Dassault Systemes", "expected": {"is_wondering": true, "ticker": null}},
+    {"id": "wd-003-margins-hold", "text": "do NU's margins still hold up given where the credit cycle is?", "expected": {"is_wondering": true, "ticker": "NU"}},
+    {"id": "wd-004-take-rate", "text": "I wonder if MELI's take rate is really sustainable at these levels", "expected": {"is_wondering": true, "ticker": "MELI"}},
+    {"id": "wd-005-trim-bn", "text": "should I trim BN here or add more?", "expected": {"is_wondering": true, "ticker": "BN"}},
+    {"id": "wd-006-research-veev", "text": "research this: is VEEV's R&D reacceleration guide credible?", "expected": {"is_wondering": true, "ticker": "VEEV"}},
+    {"id": "wd-007-rule-of-40", "text": "how does NOW compare to CRM on rule of 40 these days?", "expected": {"is_wondering": true, "ticker": "NOW"}},
+    {"id": "wd-008-npl-observation", "text": "NU's NPL formation ticked up to 4.5% this quarter", "expected": {"is_wondering": false, "ticker": null}},
+    {"id": "wd-009-meli-print", "text": "MELI reported Q3 revenue of 5.6B, up 35% year over year", "expected": {"is_wondering": false, "ticker": null}},
+    {"id": "wd-010-added-dip", "text": "added to NU on the dip today", "expected": {"is_wondering": false, "ticker": null}},
+    {"id": "wd-011-macro-mood", "text": "the macro tape feels heavy and I'm uneasy", "expected": {"is_wondering": false, "ticker": null}},
+    {"id": "wd-012-really-executing", "text": "NU is really executing well on the credit book", "expected": {"is_wondering": false, "ticker": null}}
+  ]
+}
