@@ -48,6 +48,25 @@ def _write_task_xml(
     path.write_text(content, encoding="utf-16")
 
 
+def _write_hourly_task_xml(path: Path, uri: str, start_time: str = "00:17:00") -> None:
+    """A daily trigger carrying an hourly Repetition (fires at :MM each hour)."""
+    content = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="{_NS}">
+  <RegistrationInfo><URI>{uri}</URI></RegistrationInfo>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-06-12T{start_time}</StartBoundary>
+      <Enabled>true</Enabled>
+      <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+      <Repetition><Interval>PT1H</Interval><Duration>P1D</Duration></Repetition>
+    </CalendarTrigger>
+  </Triggers>
+  <Settings><Enabled>true</Enabled></Settings>
+  <Actions Context="Author"><Exec><Command>C:\\foo.bat</Command></Exec></Actions>
+</Task>"""
+    path.write_text(content, encoding="utf-16")
+
+
 # ---------------------------------------------------------------------------
 # _parse_xml
 # ---------------------------------------------------------------------------
@@ -198,6 +217,39 @@ def test_compare_schedule_mismatch(tmp_path: Path) -> None:
     assert report.has_problems
     assert len(report.mismatch) == 1
     assert report.mismatch[0][0] == r"\earnings-summary\wrong"
+
+
+def test_parse_xml_detects_repetition(tmp_path: Path) -> None:
+    daily = tmp_path / "daily.task.xml"
+    _write_task_xml(daily, r"\earnings-summary\daily")
+    hourly = tmp_path / "hourly.task.xml"
+    _write_hourly_task_xml(hourly, r"\earnings-summary\hourly")
+
+    daily_task = _parse_xml(daily)
+    hourly_task = _parse_xml(hourly)
+    assert daily_task is not None and daily_task.has_repetition is False
+    assert hourly_task is not None and hourly_task.has_repetition is True
+
+
+def test_hourly_repetition_not_flagged_as_mismatch(tmp_path: Path) -> None:
+    """An hourly task's next-run time is rarely its StartBoundary time, so the
+    schedule-mismatch check must skip repeating triggers (regression: this used
+    to flag onboard_pending forever)."""
+    _write_hourly_task_xml(
+        tmp_path / "onboard.task.xml", r"\earnings-summary\onboard_pending", "00:17:00"
+    )
+    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+        mock_q.return_value = {
+            r"\earnings-summary\onboard_pending".lower(): {
+                "name": r"\earnings-summary\onboard_pending",
+                "next_run": "6/12/2026 7:17:00 PM",  # 19:17 — a later hourly occurrence
+                "status": "Ready",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert not report.mismatch
+    assert not report.has_problems
 
 
 def test_compare_no_xmls_returns_empty(tmp_path: Path) -> None:
