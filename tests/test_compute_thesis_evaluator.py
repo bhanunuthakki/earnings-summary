@@ -23,6 +23,7 @@ from compute.thesis_evaluator import (
     evaluate_ticker_thesis,
     load_holdings_spec,
     persist_verdict,
+    refresh_thesis_mirror,
 )
 from models.facts import Unit
 from models.kpis import BreachStatus
@@ -671,6 +672,163 @@ def test_persist_verdict_preserves_existing_raw_json(
     ).fetchone()
     assert raw["raw_json"] == seeded_raw
     assert raw["breach_status"] == "breach"
+
+
+# --- refresh_thesis_mirror + persist_verdict(holdings_dir=...) ---------------
+#
+# The content mirror (thesis_state.raw_json + thesis) caches the on-disk holdings
+# JSON. These cover the seam that previously let it drift silently (the NU
+# stub_regenerated_from_corruption row): the file is the source of truth, the
+# evaluator owns breach_status/last_updated, and the mirror tracks the file.
+
+
+def _write_holdings(tmp_path: Path, ticker: str, payload: dict[str, object]) -> None:
+    (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_refresh_thesis_mirror_populates_new_row(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """A ticker with no thesis_state row gets a faithful mirror created from file."""
+    payload = {"ticker": "NEWT", "thesis": "the real thesis", "verdict": "Intact", "x": [1, 2]}
+    _write_holdings(tmp_path, "NEWT", payload)
+
+    drifted = refresh_thesis_mirror(conn, "NEWT", tmp_path)
+    conn.commit()
+
+    assert drifted is True
+    row = conn.execute(
+        "SELECT thesis, raw_json, breach_status FROM thesis_state WHERE ticker='NEWT'"
+    ).fetchone()
+    assert row["thesis"] == "the real thesis"
+    assert json.loads(row["raw_json"]) == payload
+    assert row["breach_status"] is None  # mirror never invents an evaluation
+
+
+def test_refresh_thesis_mirror_replaces_stub_and_preserves_breach_status(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """The exact NU-shaped bug: a stub raw_json + live breach_status.
+
+    After refresh, raw_json/thesis match the file (no _status stub) while the
+    evaluator-owned breach_status + last_updated are left untouched.
+    """
+    stub = {
+        "ticker": "NU",
+        "thesis": "stale stub thesis",
+        "_status": "stub_regenerated_from_corruption",
+    }
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, breach_status, last_updated, raw_json, ingested_at) "
+        "VALUES ('NU', 'stale stub thesis', 'ok', ?, ?, ?)",
+        (datetime(2026, 5, 19), json.dumps(stub), datetime(2026, 5, 19)),
+    )
+    conn.commit()
+    real = {
+        "ticker": "NU",
+        "thesis": "Nu is a digital bank compounding members and ARPAC.",
+        "verdict": "Intact",
+        "break_rules": [{"rule_id": "a"}, {"rule_id": "b"}],
+    }
+    _write_holdings(tmp_path, "NU", real)
+
+    drifted = refresh_thesis_mirror(conn, "NU", tmp_path)
+    conn.commit()
+
+    assert drifted is True
+    row = conn.execute(
+        "SELECT thesis, raw_json, breach_status, last_updated FROM thesis_state WHERE ticker='NU'"
+    ).fetchone()
+    stored = json.loads(row["raw_json"])
+    assert "_status" not in stored
+    assert stored == real
+    assert row["thesis"] == real["thesis"]
+    # Evaluation state is NOT clobbered by a content refresh.
+    assert row["breach_status"] == "ok"
+    assert str(row["last_updated"]).startswith("2026-05-19")
+
+
+def test_refresh_thesis_mirror_idempotent_returns_false(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A second refresh with no file change reports no drift."""
+    payload = {"ticker": "IDEM", "thesis": "t", "k": 1}
+    _write_holdings(tmp_path, "IDEM", payload)
+    assert refresh_thesis_mirror(conn, "IDEM", tmp_path) is True
+    conn.commit()
+    assert refresh_thesis_mirror(conn, "IDEM", tmp_path) is False
+
+
+def test_refresh_thesis_mirror_missing_file_raises_and_leaves_row(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A missing holdings file raises and never blanks an existing mirror."""
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES ('GONE', 't', '{\"thesis\": \"t\"}', ?)",
+        (datetime(2026, 1, 1),),
+    )
+    conn.commit()
+    with pytest.raises(FileNotFoundError):
+        refresh_thesis_mirror(conn, "GONE", tmp_path)
+    row = conn.execute("SELECT raw_json FROM thesis_state WHERE ticker='GONE'").fetchone()
+    assert row["raw_json"] == '{"thesis": "t"}'  # untouched
+
+
+def test_persist_verdict_refreshes_mirror_when_holdings_dir_given(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """With holdings_dir, persist_verdict re-mirrors raw_json/thesis from the file
+    while still writing breach_status — the two concerns coexist in one call."""
+    # Pre-existing stale stub row.
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, breach_status, raw_json, ingested_at) "
+        "VALUES ('MELI', 'old', 'warn', '{\"_status\": \"stub_regenerated_from_corruption\"}', ?)",
+        (datetime(2026, 5, 19),),
+    )
+    conn.commit()
+    payload = {"ticker": "MELI", "thesis": "MercadoLibre flywheel", "verdict": "Intact"}
+    _write_holdings(tmp_path, "MELI", payload)
+
+    verdict = ThesisVerdict(
+        ticker="MELI",
+        thesis="MercadoLibre flywheel",
+        overall_status=BreachStatus.OK,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 6, 29, 12, 0, 0),
+    )
+    persist_verdict(conn, verdict, run_id="r", holdings_dir=tmp_path)
+
+    row = conn.execute(
+        "SELECT thesis, raw_json, breach_status FROM thesis_state WHERE ticker='MELI'"
+    ).fetchone()
+    assert json.loads(row["raw_json"]) == payload  # mirror refreshed
+    assert "_status" not in row["raw_json"]
+    assert row["thesis"] == "MercadoLibre flywheel"
+    assert row["breach_status"] == "ok"  # breach_status still written
+
+
+def test_persist_verdict_without_holdings_dir_leaves_mirror_alone(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Back-compat: omitting holdings_dir preserves the old breach-only behavior."""
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES ('OLD', 't', '{\"keep\": true}', ?)",
+        (datetime(2026, 1, 1),),
+    )
+    conn.commit()
+    verdict = ThesisVerdict(
+        ticker="OLD",
+        thesis="t",
+        overall_status=BreachStatus.BREACH,
+        rule_evaluations=(),
+        evaluated_at=datetime(2026, 6, 1),
+    )
+    persist_verdict(conn, verdict)  # no holdings_dir
+    row = conn.execute(
+        "SELECT raw_json, breach_status FROM thesis_state WHERE ticker='OLD'"
+    ).fetchone()
+    assert row["raw_json"] == '{"keep": true}'  # untouched
+    assert row["breach_status"] == "breach"
 
 
 # ---------------------------------------------------------------------------

@@ -439,7 +439,9 @@ def _stage_evaluate_thesis(
             ),
             _ThesisEvalOutcome(status=None, changed=False, notes="eval failed"),
         )
-    persist_verdict(conn, verdict, run_id=run_id)
+    # holdings_dir re-syncs the thesis_state content mirror (raw_json/thesis)
+    # from the file just evaluated, so the quarterly pass keeps it current too.
+    persist_verdict(conn, verdict, run_id=run_id, holdings_dir=holdings_dir)
     new_status = verdict.overall_status
     changed = prior_status is not new_status
     return (
