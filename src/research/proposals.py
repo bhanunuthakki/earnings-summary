@@ -42,6 +42,16 @@ def tap_enabled() -> bool:
     return os.environ.get("LEDGER_RESEARCH_TAP", "1").strip().lower() not in _TAP_OFF
 
 
+# The research RUN (the expensive web pass) is OFF by default — detection produces
+# inert chips, but nothing spends research $ until the owner opts in. The run route
+# and the "Research it" button are both gated on this.
+_RUN_ON = frozenset({"1", "true", "yes", "on"})
+
+
+def research_run_enabled() -> bool:
+    return os.environ.get("LEDGER_RESEARCH_RUN", "0").strip().lower() in _RUN_ON
+
+
 @dataclass(frozen=True, slots=True)
 class ResearchTask:
     id: int

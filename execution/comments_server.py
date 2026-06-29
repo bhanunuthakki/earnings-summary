@@ -504,6 +504,43 @@ def create_app(
             "needs_ticker": result.needs_ticker,
         }
 
+    @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])
+    def research_run(task_id: int):
+        """W1-5d: run the two-pass research engine on a proposed task → an inert
+        proposal. Gated by LEDGER_RESEARCH_RUN (the only place the expensive web
+        pass is triggered, and only on an explicit owner tap). CSRF-guarded by the
+        global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.proposals import research_run_enabled
+
+        if not research_run_enabled():
+            return ({"error": "research run disabled; set LEDGER_RESEARCH_RUN=1"}, 403)
+        from research.run import run_research_task
+
+        try:
+            proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
+        except Exception as exc:  # a run failure reverts the task; surface it
+            return ({"error": f"research failed: {exc}"}, 500)
+        if proposal_id is None:
+            return ({"error": "task not runnable (missing or already researched)"}, 409)
+        return {"proposal_id": proposal_id}
+
+    @app.route("/api/research/proposal/<int:proposal_id>/<verb>", methods=["POST", "OPTIONS"])
+    def research_act(proposal_id: int, verb: str):
+        """W1-7: the 4-action core (approve / further / steer / reject). 'approve'
+        is INERT — it flips status only, writing no live artifact. CSRF-guarded."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.proposals import PROPOSAL_VERBS, act_on_proposal
+
+        if verb not in PROPOSAL_VERBS:
+            return ({"error": f"unknown verb {verb!r}"}, 400)
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        steer_text = str(payload.get("steer_text") or "").strip() or None
+        status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
+        return {"status": status}
+
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
@@ -782,14 +819,18 @@ def create_app(
             # stream-of-consciousness read-back + at-desk quick-capture box.
             # ``?fragment=list`` returns just the musings list the box reloads
             # after a POST /api/capture/text.
-            from pipeline.ledger_panel import render_ledger_list, render_ledger_panel
+            from pipeline.ledger_panel import (
+                render_ledger_list,
+                render_ledger_panel,
+                render_ledger_research_list,
+            )
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
-            l_renderer = (
-                render_ledger_list
-                if request.args.get("fragment") == "list"
-                else render_ledger_panel
-            )
+            fragment = request.args.get("fragment")
+            if fragment == "research":
+                # The Ledger → Research inbox lane re-fetched after a run / action.
+                return Response(render_ledger_research_list(db_path), mimetype="text/html")
+            l_renderer = render_ledger_list if fragment == "list" else render_ledger_panel
             return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
 
         if name == "discovery":

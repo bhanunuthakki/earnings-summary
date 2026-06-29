@@ -16,6 +16,13 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from research.proposals import (
+    ResearchProposal,
+    ResearchTask,
+    list_proposals,
+    list_tasks,
+    research_run_enabled,
+)
 from synthesis.insights import InsightRow, list_insights
 from ui.controls import ticker_label
 from ui.prose import render_prose
@@ -136,6 +143,113 @@ def _stance_section(db_path: Path | str | None) -> str:
     )
 
 
+_RESEARCH_VERBS: tuple[tuple[str, str, str], ...] = (
+    ("approve", "Approve", "k-btn-primary"),
+    ("further", "Research further", ""),
+    ("steer", "Steer", ""),
+    ("reject", "Reject", "k-btn-danger"),
+)
+
+_RESEARCH_JS = """<script>(function(){
+  if(window.__ledgerResearchWired){ return; }
+  window.__ledgerResearchWired = true;
+  function reload(){
+    fetch('/api/panel/musings?fragment=research').then(function(r){return r.text();})
+      .then(function(h){ var el=document.getElementById('ledger-research'); if(el){ el.outerHTML=h; } });
+  }
+  document.addEventListener('click', function(e){
+    var run=e.target.closest('[data-run-task]');
+    if(run){
+      run.disabled=true; run.textContent='Researching...';
+      fetch('/api/research/task/'+run.getAttribute('data-run-task')+'/run',{method:'POST'})
+        .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
+        .then(function(){ reload(); })
+        .catch(function(){ run.disabled=false; run.textContent='Research it'; });
+      return;
+    }
+    var act=e.target.closest('[data-verb]');
+    if(act){
+      var verb=act.getAttribute('data-verb'); var pid=act.getAttribute('data-pid'); var body={};
+      if(verb==='steer'){ var dir=window.prompt('How should I steer this research?'); if(!dir){ return; } body.steer_text=dir; }
+      fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+        .then(function(){ reload(); });
+    }
+  });
+})();</script>"""
+
+
+def _task_chip(task: ResearchTask) -> str:
+    ident = (
+        ticker_label(task.ticker)
+        if task.ticker
+        else '<span class="ledger-unattr">unattributed</span>'
+    )
+    if research_run_enabled():
+        action = (
+            '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+            f'data-run-task="{task.id}">Research it</button>'
+        )
+    else:
+        action = (
+            '<span class="ledger-cap-status">detection only — set '
+            "LEDGER_RESEARCH_RUN=1 to research</span>"
+        )
+    return (
+        '<div class="ledger-musing">'
+        f'<div class="ledger-musing-head">{ident}<span class="ledger-chan">wondering</span></div>'
+        f'<div class="ledger-body">{escape(task.claim)}</div>'
+        f'<div class="ledger-cap-row">{action}</div></div>'
+    )
+
+
+def _proposal_card(prop: ResearchProposal) -> str:
+    ident = ticker_label(prop.ticker) if prop.ticker else ""
+    meta = " · ".join(p for p in (prop.budget_tier, prop.kind) if p)
+    footer = "".join(
+        f'<button type="button" class="k-btn k-btn-sm {cls}" '
+        f'data-verb="{verb}" data-pid="{prop.id}">{escape(label)}</button>'
+        for verb, label, cls in _RESEARCH_VERBS
+    )
+    return (
+        '<div class="ledger-stance">'
+        '<div class="ledger-stance-head">'
+        f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span></div>'
+        f'<div class="ledger-body"><strong>{escape(prop.title)}</strong>'
+        f"{render_prose(prop.body_md)}</div>"
+        f'<div class="ledger-cap-row">{footer}</div></div>'
+    )
+
+
+def render_ledger_research_list(db_path: Path | str | None) -> str:
+    """The research inbox fragment (re-fetched after a run / action): proposals to
+    review, then the open wonderings waiting to be researched."""
+    proposals = list_proposals(status="pending", db_path=db_path)
+    tasks = list_tasks(status="proposed", db_path=db_path)
+    if not proposals and not tasks:
+        return (
+            '<div id="ledger-research"><p class="ledger-empty">No open wonderings or '
+            'proposals yet. Capture a wondering — "do NU\'s margins still hold?" — and it '
+            "shows up here to research.</p></div>"
+        )
+    parts: list[str] = []
+    if proposals:
+        parts.append('<h4 class="ledger-sec-h">Proposals to review</h4>')
+        parts.append("".join(_proposal_card(p) for p in proposals))
+    if tasks:
+        parts.append('<h4 class="ledger-sec-h">Open wonderings</h4>')
+        parts.append("".join(_task_chip(t) for t in tasks))
+    return f'<div id="ledger-research">{"".join(parts)}</div>'
+
+
+def _research_section(db_path: Path | str | None) -> str:
+    return (
+        '<h3 class="ledger-sec-h">Research</h3>'
+        '<p class="ledger-sec-sub">Wonderings I detected in your musings, and the inert '
+        "proposals they produced — approve, dig further, steer, or reject. Nothing acts "
+        "until you say so.</p>" + render_ledger_research_list(db_path) + _RESEARCH_JS
+    )
+
+
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The musings list fragment (re-fetched after a capture)."""
     rows = list_notes(user_id=user_id, kind="musing", db_path=db_path, limit=200)
@@ -157,6 +271,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         "and you read it back below.</p>"
         + _capture_box()
         + _stance_section(db_path)
+        + _research_section(db_path)
         + '<h3 class="ledger-sec-h">Musings</h3>'
         + render_ledger_list(db_path, user_id=user_id)
         + "</section>"
