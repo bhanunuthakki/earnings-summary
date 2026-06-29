@@ -203,7 +203,7 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
 
 LENS = Lens(
     name="cross_portfolio_synthesis",
-    model="claude-opus-4-7",  # cross-portfolio benefits from Opus's wider sector knowledge
+    model="claude-opus-4-8",  # cross-portfolio benefits from Opus's wider sector knowledge
     scope="portfolio",
     prompt_template=_PROMPT_CROSS_PORTFOLIO,
     build_context=_ctx_cross_portfolio,

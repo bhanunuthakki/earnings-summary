@@ -106,7 +106,7 @@ def _ctx_reverse_dcf(ticker: str | None, repo_root: Path) -> LensContext | None:
 
 LENS = Lens(
     name="reverse_dcf",
-    model="claude-opus-4-7",  # quantitative reverse-engineering benefits from Opus
+    model="claude-opus-4-8",  # quantitative reverse-engineering benefits from Opus
     scope="ticker",
     prompt_template=_PROMPT_REVERSE_DCF,
     build_context=_ctx_reverse_dcf,

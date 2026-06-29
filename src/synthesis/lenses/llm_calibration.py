@@ -182,7 +182,7 @@ LENS = Lens(
     # Opus is worth it here — calibration auditing is a numeric-reasoning
     # task where Opus's stronger discipline pays off in the analysis. One
     # call per portfolio run, cost is bounded.
-    model="claude-opus-4-7",
+    model="claude-opus-4-8",
     scope="portfolio",
     prompt_template=_PROMPT_LLM_CALIBRATION,
     build_context=_ctx_llm_calibration,

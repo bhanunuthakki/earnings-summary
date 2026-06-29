@@ -87,11 +87,11 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     (Sonnet default) — the two modes diverge cleanly."""
     from llm import cli
 
-    assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-7"
+    assert cli.LLM_MODELS["kpi_registry_auto_proposal"] == "claude-opus-4-8"
     # _model_for is module-private; tests reaching into it use the repo's
     # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
-    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
     # The manual seeder purpose is deliberately NOT registered -> Sonnet.
     assert "kpi_registry_proposal" not in cli.LLM_MODELS
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
@@ -111,10 +111,10 @@ def test_news_purposes_route_to_opus() -> None:
     # _model_for is module-private; tests reaching into it use the repo's
     # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
-    assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-7"
-    assert cli.LLM_MODELS["news_structuring"] == "claude-opus-4-7"
-    assert resolve("material_news_classification") == "claude-opus-4-7"
-    assert resolve("news_structuring") == "claude-opus-4-7"
+    assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-8"
+    assert cli.LLM_MODELS["news_structuring"] == "claude-opus-4-8"
+    assert resolve("material_news_classification") == "claude-opus-4-8"
+    assert resolve("news_structuring") == "claude-opus-4-8"
     # Recent-developments is pinned to Sonnet, not Opus.
     assert cli.LLM_MODELS["recent_developments"] == cli.DEFAULT_MODEL
     assert resolve("recent_developments") == cli.DEFAULT_MODEL
@@ -133,9 +133,9 @@ def test_news_pins_do_not_disturb_existing_purposes() -> None:
     # company_description moved Opus -> Sonnet in #444 (model-eval verdict).
     assert resolve("company_description") == cli.DEFAULT_MODEL
     # Pre-existing Opus pins — unchanged.
-    assert resolve("valuation_basis") == "claude-opus-4-7"
-    assert resolve("saydo_importance") == "claude-opus-4-7"
-    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-7"
+    assert resolve("valuation_basis") == "claude-opus-4-8"
+    assert resolve("saydo_importance") == "claude-opus-4-8"
+    assert resolve("kpi_registry_auto_proposal") == "claude-opus-4-8"
     # Gemini Flash promotions (#538): these two classifier purposes moved off
     # Haiku to Gemini Flash; the id tracks gemini_backend.GEMINI_BACKEND_FAST_MODEL
     # (bumped to gemini-3-flash-preview in #541).
