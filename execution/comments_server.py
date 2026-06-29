@@ -483,6 +483,27 @@ def create_app(
     def healthz():
         return {"status": "ok", "repo_root": str(repo_root)}
 
+    @app.route("/api/capture/text", methods=["POST", "OPTIONS"])
+    def capture_text():
+        """The Ledger at-desk tray: land a typed musing through the SAME LLM-free
+        ingest pipeline the Telegram poller uses (channel='tray'). CSRF-guarded by
+        the global Origin check on JSON state-changing requests."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.ingest import ingest_capture
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return ({"error": "text required"}, 400)
+        result = ingest_capture(channel="tray", media_kind="text", text=text, db_path=db_path)
+        return {
+            "status": result.status,
+            "note_id": result.note_id,
+            "ticker": result.ticker,
+            "needs_ticker": result.needs_ticker,
+        }
+
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
@@ -755,6 +776,21 @@ def create_app(
             from pipeline.diet_panel import render_diet_panel
 
             return Response(render_diet_panel(db_path), mimetype="text/html")
+
+        if name == "musings":
+            # Companies → Ledger (The Ledger capture program): the captured
+            # stream-of-consciousness read-back + at-desk quick-capture box.
+            # ``?fragment=list`` returns just the musings list the box reloads
+            # after a POST /api/capture/text.
+            from pipeline.ledger_panel import render_ledger_list, render_ledger_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            l_renderer = (
+                render_ledger_list
+                if request.args.get("fragment") == "list"
+                else render_ledger_panel
+            )
+            return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
 
         if name == "discovery":
             # Research → Discovery (P5.4): the candidate approval queue —

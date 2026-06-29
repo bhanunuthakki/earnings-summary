@@ -139,6 +139,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # couldn't route (`needs_triage`) — route / resolve / dismiss. A lens
             # over the same analyst_notes spine the Journal reads.
             ("triage", "Triage", "/api/panel/triage", False, False),
+            # The Ledger (capture program): the captured stream-of-consciousness
+            # read-back + at-desk quick-capture. Telegram is the primary mouth;
+            # this is the desk mouth + the dogfood read-back (Wave A).
+            ("musings", "Ledger", "/api/panel/musings", False, False),
         ),
     ),
     (
@@ -512,6 +516,7 @@ _SKELETON_KINDS: dict[str, str] = {
     "diet": "table",
     "journal": "cards",
     "triage": "table",
+    "musings": "cards",
     "explore": "form",
     "portfolio": "kpis",
     "portfolio_risk": "kpis",
