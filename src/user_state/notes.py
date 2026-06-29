@@ -10,6 +10,8 @@ section / KPI / fact / alert), classified by *semantics*:
   watch        — a watch-item to resurface on relevant events
   assumption   — a belief the thesis rests on, checkable later
   observation  — anything else worth remembering
+  musing       — a captured stream-of-consciousness thought (The Ledger);
+                 identity defaulted at write time so capture asks nothing
 
 Lifecycle: ``open → resolved`` (answered/done), ``open → archived``
 (no longer relevant), and correction is a supersede chain — a new row with
@@ -51,11 +53,21 @@ if TYPE_CHECKING:
 
     from comments import Comment, CommentStore
 
-NOTE_KINDS: tuple[str, ...] = ("question", "decision", "watch", "assumption", "observation")
+NOTE_KINDS: tuple[str, ...] = (
+    "question",
+    "decision",
+    "watch",
+    "assumption",
+    "observation",
+    "musing",
+)
 NOTE_STATUSES: tuple[str, ...] = ("open", "resolved", "superseded", "archived")
 # 'advisor' (0077): notes written by advisor memo runs — honest provenance for
 # the priors anchor, distinct from anything the analyst typed themselves.
-NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual", "advisor")
+# 'capture' (The Ledger): a stream-of-consciousness musing landed by the capture
+# pipeline (Telegram / Gmail / desktop tray, voice or text) — distinct provenance
+# from a typed `manual` note, so a musing is never mistaken for a deliberate edit.
+NOTE_SOURCES: tuple[str, ...] = ("comment", "chat", "alert", "manual", "advisor", "capture")
 
 # Comment intents → note kinds. Action routes collapse onto semantics:
 # every thesis/KPI mutation directive is a *decision*; data-quality and
