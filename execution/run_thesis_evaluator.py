@@ -124,7 +124,10 @@ def main() -> int:
 
             verdicts.append(verdict)
             if not args.dry_run:
-                persist_verdict(conn, verdict, run_id=run_id)
+                # Pass holdings_dir so the thesis_state content mirror
+                # (raw_json/thesis) is re-synced from the file this verdict was
+                # built from — the mirror can't silently drift behind the file.
+                persist_verdict(conn, verdict, run_id=run_id, holdings_dir=args.holdings_dir)
             record_stage(
                 conn,
                 run_id,

@@ -12,6 +12,7 @@ out of scope for the MVP — flagged via UNSUPPORTED_RULE in validation_issues.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, Field
 
@@ -538,20 +540,88 @@ def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
     return json.dumps(payload, separators=(",", ":"))
 
 
+def refresh_thesis_mirror(
+    conn: sqlite3.Connection,
+    ticker: str,
+    holdings_dir: Path,
+    *,
+    ingested_at: datetime | None = None,
+) -> bool:
+    """Re-sync the thesis_state *content mirror* from the on-disk holdings JSON.
+
+    `thesis_state.raw_json` + `thesis` are a cache of
+    `micro_thesis/holdings/<TICKER>.json`, first seeded by migration 0008. The
+    file is the source of truth; this function makes the cache match it again.
+
+    Ownership split (deliberate, to avoid two writers fighting over a column):
+      * the evaluator (`persist_verdict`) owns ``breach_status`` + ``last_updated``
+        — those are *evaluation* state, derived from kpi_facts, not file content;
+      * this function owns ``thesis`` + ``raw_json`` + ``ingested_at`` — the
+        *file* content and when it was last mirrored.
+
+    Reads the file, upserts the three content columns, and returns True if the
+    stored content actually differed (i.e. the row was stale/absent) so callers
+    can report what they fixed. Comparison is on the *parsed* payload, not the
+    raw string, because `json.dumps` separators/key-order are not stable across
+    writers. Does NOT commit — the caller owns the transaction.
+
+    Raises FileNotFoundError when the holdings file is missing, leaving any
+    existing row untouched so a deleted/renamed file never silently blanks the
+    mirror.
+    """
+    path = holdings_dir / f"{ticker.upper()}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"Holdings spec not found: {path}")
+    payload = cast("dict[str, object]", json.loads(path.read_text(encoding="utf-8")))
+    raw_json = json.dumps(payload)
+    file_thesis = payload.get("thesis") if isinstance(payload.get("thesis"), str) else None
+
+    prior = conn.execute(
+        "SELECT thesis, raw_json FROM thesis_state WHERE ticker = ?", (ticker.upper(),)
+    ).fetchone()
+    drifted = True
+    if prior is not None:
+        stored: object
+        try:
+            stored = json.loads(prior["raw_json"]) if prior["raw_json"] else {}
+        except json.JSONDecodeError:
+            stored = None
+        drifted = stored != payload or prior["thesis"] != file_thesis
+
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, raw_json, ingested_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(ticker) DO UPDATE SET "
+        "    thesis      = excluded.thesis, "
+        "    raw_json    = excluded.raw_json, "
+        "    ingested_at = excluded.ingested_at",
+        (ticker.upper(), file_thesis, raw_json, ingested_at or datetime.now()),
+    )
+    return drifted
+
+
 def persist_verdict(
     conn: sqlite3.Connection,
     verdict: ThesisVerdict,
     *,
     run_id: str | None = None,
+    holdings_dir: Path | None = None,
 ) -> None:
     """Update thesis_state.breach_status (current snapshot) AND append to thesis_evaluations (history).
 
     `thesis_state` is mutable (current-state row per ticker). `thesis_evaluations`
     is append-only — every evaluation produces a new row keyed by evaluated_at.
+
+    When ``holdings_dir`` is supplied, the thesis_state *content mirror*
+    (``thesis`` + ``raw_json``) is also re-synced from the on-disk holdings JSON
+    via `refresh_thesis_mirror`, so an evaluation can never leave the mirror
+    drifted from the file it was evaluated against. Omitting ``holdings_dir``
+    preserves the historical behavior — breach_status/history only, raw_json
+    left as-is — for callers that don't have the file at hand.
     """
     # Upsert: a thesis_state row may not exist yet (e.g. ticker added via raw SQL
     # bypassing the track_company → onboard_ticker → seed flow). New rows get an
-    # empty raw_json placeholder; the holdings JSON file remains the source of truth.
+    # empty raw_json placeholder; `holdings_dir` (when passed) re-mirrors it below.
     conn.execute(
         "INSERT INTO thesis_state "
         "(ticker, thesis, breach_status, last_updated, raw_json, ingested_at) "
@@ -603,4 +673,10 @@ def persist_verdict(
                 run_id,
             ),
         )
+    # Keep the content mirror in lockstep with the file this verdict was built
+    # from. A missing file (ticker tracked, thesis not yet authored) leaves the
+    # placeholder mirror untouched — breach_status/history are already written.
+    if holdings_dir is not None:
+        with contextlib.suppress(FileNotFoundError):
+            refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)
     conn.commit()
