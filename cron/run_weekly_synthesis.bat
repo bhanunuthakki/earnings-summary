@@ -34,8 +34,9 @@ REM 4. Rebuild the analytical dashboard so the new artifacts surface.
 echo === %TIME% Rebuilding analytical dashboard === >> "%LOG_FILE%" 2>&1
 python execution\build_analytical_dashboard.py >> "%LOG_FILE%" 2>&1
 
-REM 5. Grade any bear-case predictions whose target_period has passed.
-echo === %TIME% Grading bear-case predictions === >> "%LOG_FILE%" 2>&1
-python execution\grade_bear_cases.py --all-portfolio >> "%LOG_FILE%" 2>&1
+REM Bear-case grading is owned by the dedicated weekly grade_calibration cron
+REM (Sun 03:30 -> execution/run_calibration_grading.py, bear_cases rung), so it
+REM is intentionally NOT duplicated here. Grading is idempotent (only
+REM outcome='pending' predictions are touched), so a single weekly pass suffices.
 
 endlocal

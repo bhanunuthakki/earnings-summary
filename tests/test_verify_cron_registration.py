@@ -9,8 +9,10 @@ from unittest.mock import patch
 import pytest
 
 from execution.verify_cron_registration import (
+    TaskReport,
     _extract_next_run_time,  # pyright: ignore[reportPrivateUsage]
     _parse_xml,  # pyright: ignore[reportPrivateUsage]
+    _print_report,  # pyright: ignore[reportPrivateUsage]
     compare,
     main,
 )
@@ -272,6 +274,30 @@ def test_main_exit_nonzero_on_unparseable(tmp_path: Path) -> None:
         mock_q.return_value = {}
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
     assert rc == 1  # malformed file → problem, never a false exit-0
+
+
+def test_print_report_uses_ascii_only_markers(capsys: pytest.CaptureFixture[str]) -> None:
+    """Regression: report markers must stay ASCII.
+
+    The earlier ✓/✗ glyphs are not encodable in cp1252 (the default Windows
+    console / redirected-log encoding), so the first problem line raised
+    UnicodeEncodeError and crashed the weekly audit mid-report — exactly when it
+    had something to say. The markers must be ASCII so the report always prints.
+    """
+    report = TaskReport()
+    report.missing.append(r"\earnings-summary\not_registered")
+    report.mismatch.append((r"\earnings-summary\w", "03:00:00", "05:00:00"))
+
+    _print_report(report, [])
+    out = capsys.readouterr().out
+
+    assert "✓" not in out
+    assert "✗" not in out
+    # Got past the former crash point: the problem sections actually rendered.
+    assert "MISSING" in out
+    assert "SCHEDULE MISMATCH" in out
+    # And the output is encodable in cp1252 (the prod console/log codec).
+    out.encode("cp1252")
 
 
 def test_main_no_false_allclear_when_unparseable_mixed_with_ok(tmp_path: Path) -> None:
