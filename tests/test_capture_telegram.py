@@ -50,6 +50,45 @@ def test_parse_callback_update() -> None:
     assert u.chat_id == 111
 
 
+def test_parse_document_update() -> None:
+    u = telegram.parse_update(
+        {
+            "update_id": 10,
+            "message": {
+                "chat": {"id": 111},
+                "message_id": 5,
+                "document": {
+                    "file_id": "BQACAgI123",
+                    "file_name": "nubank_deck.pdf",
+                    "mime_type": "application/pdf",
+                },
+                "caption": "NU investor deck Q1 2026",
+            },
+        }
+    )
+    assert u.kind == "document"
+    assert u.document_file_id == "BQACAgI123"
+    assert u.document_file_name == "nubank_deck.pdf"
+    assert u.document_mime_type == "application/pdf"
+    assert u.text == "NU investor deck Q1 2026"  # caption surfaces as text
+    assert u.chat_id == 111
+
+
+def test_parse_document_no_caption() -> None:
+    u = telegram.parse_update(
+        {
+            "update_id": 11,
+            "message": {
+                "chat": {"id": 111},
+                "message_id": 6,
+                "document": {"file_id": "XYZ789", "file_name": "report.pdf"},
+            },
+        }
+    )
+    assert u.kind == "document"
+    assert u.text is None  # no caption
+
+
 def test_parse_other_update() -> None:
     u = telegram.parse_update(
         {"update_id": 8, "message": {"chat": {"id": 1}, "message_id": 4, "photo": [{}]}}

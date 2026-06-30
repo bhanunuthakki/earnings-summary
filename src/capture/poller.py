@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 # gets no reply (silence = "already had it / nothing to say").
 _CONFIRM: dict[str, str] = {
     "landed": "Captured.",
+    "influence_landed": "Saved as an influence.",
     "needs_ticker": "Captured. (Which ticker? Set it from the Ledger.)",
     "transcription_failed": "Couldn't transcribe that one - I kept the audio, try again?",
     "no_audio": "That voice note came through empty - try again?",
@@ -137,20 +138,37 @@ def poll_once(
                             "and it lands in your Ledger.",
                         )
                 continue
-            result = ingest.ingest_capture(
-                channel="telegram",
-                media_kind="text",
-                text=update.text,
-                external_ref=f"tg:{update.update_id}",
-                roster=roster,
-                db_path=db_path,
-            )
-            bump(result.status)
-            _confirm(token, update, result.status, result.ticker, enabled=confirm)
-            tid = _tap(result, db_path)
-            if tid is not None:
-                bump("wondering")
-                _notify_wondering(token, update, tid, db_path, enabled=confirm)
+            # A bare URL → land as an influence (link the analyst flagged as reading),
+            # not a musing.  Anything else is stream-of-consciousness capture.
+            url = ingest._extract_url(update.text)
+            if url:
+                inf = ingest.ingest_influence(
+                    channel="telegram",
+                    url=url,
+                    external_ref=f"tg:{update.update_id}",
+                    db_path=db_path,
+                )
+                # report as "influence_landed" so _confirm sends the right reply
+                _confirm(
+                    token, update, "influence_landed" if inf.status == "landed" else inf.status,
+                    None, enabled=confirm,
+                )
+                bump(f"influence_{inf.status}")
+            else:
+                result = ingest.ingest_capture(
+                    channel="telegram",
+                    media_kind="text",
+                    text=update.text,
+                    external_ref=f"tg:{update.update_id}",
+                    roster=roster,
+                    db_path=db_path,
+                )
+                bump(result.status)
+                _confirm(token, update, result.status, result.ticker, enabled=confirm)
+                tid = _tap(result, db_path)
+                if tid is not None:
+                    bump("wondering")
+                    _notify_wondering(token, update, tid, db_path, enabled=confirm)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -176,6 +194,34 @@ def poll_once(
             if tid is not None:
                 bump("wondering")
                 _notify_wondering(token, update, tid, db_path, enabled=confirm)
+        elif update.kind == "document" and update.document_file_id:
+            # A PDF, deck, or any document file → land as an investor influence.
+            # The file is downloaded and stored locally so future text extraction
+            # can read it; the local path is indexed in context_json.
+            docs_dir = Path(audio_dir).parent / "docs"
+            safe_name = (update.document_file_name or "file").replace("/", "_")
+            dest = docs_dir / f"tg_{update.update_id}_{safe_name}"
+            try:
+                file_path = telegram.get_file_path(token, update.document_file_id)
+                docs_dir.mkdir(parents=True, exist_ok=True)
+                telegram.download_file(token, file_path, dest)
+            except telegram.TelegramError:
+                bump("download_failed")
+                continue
+            inf = ingest.ingest_influence(
+                channel="telegram",
+                local_path=dest,
+                file_name=update.document_file_name,
+                mime_type=update.document_mime_type,
+                caption=update.text,
+                external_ref=f"tg:{update.update_id}",
+                db_path=db_path,
+            )
+            _confirm(
+                token, update, "influence_landed" if inf.status == "landed" else inf.status,
+                None, enabled=confirm,
+            )
+            bump(f"influence_{inf.status}")
         elif update.kind == "callback":
             # The Phase-1 research surface: an inline-button press (run a wondering,
             # or approve/further/steer/reject a proposal) → the one action core.

@@ -30,7 +30,7 @@ class TelegramError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class Update:
-    """One decoded update. ``kind`` ∈ {text, voice, callback, other}."""
+    """One decoded update. ``kind`` ∈ {text, voice, callback, document, other}."""
 
     update_id: int
     kind: str
@@ -40,6 +40,9 @@ class Update:
     voice_file_id: str | None = None
     callback_data: str | None = None
     callback_query_id: str | None = None
+    document_file_id: str | None = None
+    document_file_name: str | None = None
+    document_mime_type: str | None = None
 
 
 def _as_int(value: object) -> int | None:
@@ -80,6 +83,21 @@ def parse_update(raw: dict[str, object]) -> Update:
         file_id = _as_str(_as_dict(msg.get("voice")).get("file_id"))
         if file_id:
             return Update(update_id, "voice", chat_id, message_id, voice_file_id=file_id)
+        doc = _as_dict(msg.get("document"))
+        doc_file_id = _as_str(doc.get("file_id"))
+        if doc_file_id:
+            # Telegram sends caption (user's note alongside the file) in msg["caption"]
+            caption = _as_str(msg.get("caption"))
+            return Update(
+                update_id,
+                "document",
+                chat_id,
+                message_id,
+                text=caption,
+                document_file_id=doc_file_id,
+                document_file_name=_as_str(doc.get("file_name")),
+                document_mime_type=_as_str(doc.get("mime_type")),
+            )
         text = _as_str(msg.get("text"))
         if text and text.strip():
             return Update(update_id, "text", chat_id, message_id, text=text)

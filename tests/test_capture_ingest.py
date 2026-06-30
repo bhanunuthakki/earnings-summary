@@ -174,3 +174,76 @@ def test_scrub_applied_before_landing(db_path: Path) -> None:
     assert "[email]" in note.body
     assert "jane@example.com" not in note.body
     assert note.context is not None and note.context.get("scrubbed")
+
+
+# ---------------------------------------------------------------------------
+# ingest_influence — document and URL
+# ---------------------------------------------------------------------------
+
+
+def test_influence_document_lands(db_path: Path, tmp_path: Path) -> None:
+    pdf = tmp_path / "nubank_investor_deck.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+
+    res = ingest.ingest_influence(
+        channel="telegram",
+        local_path=pdf,
+        file_name="nubank_investor_deck.pdf",
+        mime_type="application/pdf",
+        caption="NU Q1 2026 investor presentation",
+        external_ref="tg:doc:1",
+        db_path=db_path,
+    )
+    assert res.status == "landed"
+    note = notes.get_note(res.note_id or 0, db_path=db_path)
+    assert note is not None
+    assert note.kind == "influence"
+    assert note.source == "capture"
+    assert note.ticker is None  # portfolio-level
+    assert "nubank_investor_deck.pdf" in note.body
+    assert "NU Q1 2026" in note.body
+    assert note.context is not None
+    assert note.context.get("media_kind") == "document"
+    assert note.context.get("file_name") == "nubank_investor_deck.pdf"
+    assert note.context.get("mime_type") == "application/pdf"
+    assert note.context.get("caption") == "NU Q1 2026 investor presentation"
+    assert _audit_count(db_path, note_id=res.note_id, action="landed") == 1
+
+
+def test_influence_url_lands(db_path: Path) -> None:
+    res = ingest.ingest_influence(
+        channel="telegram",
+        url="https://example.com/latam-fintech-report.pdf",
+        external_ref="tg:url:1",
+        db_path=db_path,
+    )
+    assert res.status == "landed"
+    note = notes.get_note(res.note_id or 0, db_path=db_path)
+    assert note is not None
+    assert note.kind == "influence"
+    assert note.ticker is None
+    assert "https://example.com" in note.body
+    assert note.context is not None
+    assert note.context.get("media_kind") == "url"
+    assert note.context.get("url") == "https://example.com/latam-fintech-report.pdf"
+
+
+def test_influence_dedup(db_path: Path) -> None:
+    args = {"channel": "telegram", "url": "https://example.com/deck.pdf", "external_ref": "tg:u2"}
+    first = ingest.ingest_influence(**args, db_path=db_path)
+    second = ingest.ingest_influence(**args, db_path=db_path)
+    assert first.status == "landed"
+    assert second.status == "duplicate"
+
+
+def test_influence_empty_returns_empty(db_path: Path) -> None:
+    res = ingest.ingest_influence(channel="telegram", db_path=db_path)
+    assert res.status == "empty"
+
+
+def test_extract_url() -> None:
+    assert ingest._extract_url("https://example.com/deck.pdf") == "https://example.com/deck.pdf"
+    assert ingest._extract_url("  https://example.com  ") == "https://example.com"
+    assert ingest._extract_url("check out https://example.com for details") is None
+    assert ingest._extract_url("NU looks cheap to me") is None
+    assert ingest._extract_url("http://example.com/path") == "http://example.com/path"

@@ -23,8 +23,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import chat_session  # noqa: E402
 from llm.anchors import (  # noqa: E402
+    INFLUENCES_ANCHOR_CHAR_CAP,
     PRIORS_ANCHOR_CHAR_CAP,
     compose_anchor_block,
+    load_investor_influences_anchor,
     load_priors_anchor,
 )
 from user_state import notes  # noqa: E402
@@ -140,15 +142,16 @@ def test_compose_backcompat_and_priors() -> None:
     two = compose_anchor_block("T-BLOCK", "B-BLOCK")
     assert "T-BLOCK\n\n---\n\nB-BLOCK" in two
     assert "<<<BEGIN-UNTRUSTED-DATA" in two and two.endswith("\n\n---\n\n")
-    assert compose_anchor_block("", "", "", "") == ""
+    assert compose_anchor_block("", "", "", "", "") == ""
     only_priors = compose_anchor_block("", "", "", "P-BLOCK")
     assert "P-BLOCK" in only_priors and only_priors.endswith("\n\n---\n\n")
-    full = compose_anchor_block("T-BLOCK", "B-BLOCK", "I-BLOCK", "P-BLOCK")
+    full = compose_anchor_block("T-BLOCK", "B-BLOCK", "I-BLOCK", "P-BLOCK", "INF-BLOCK")
     assert (
         full.index("T-BLOCK")
         < full.index("B-BLOCK")
         < full.index("I-BLOCK")
         < full.index("P-BLOCK")
+        < full.index("INF-BLOCK")
     )
 
 
@@ -199,3 +202,80 @@ def test_system_prompt_degrades_without_db_or_chats(tmp_path: Path) -> None:
     assert "ANALYST PRIORS" not in prompt
     assert "PRIOR DISCUSSION" not in prompt
     assert "analyst assistant for NU" in prompt
+
+
+# ---------------------------------------------------------------------------
+# load_investor_influences_anchor
+# ---------------------------------------------------------------------------
+
+
+def test_influences_no_db_returns_empty(tmp_path: Path) -> None:
+    assert load_investor_influences_anchor(tmp_path / "nowhere") == ""
+
+
+def test_influences_no_rows_returns_empty(repo: Path) -> None:
+    assert load_investor_influences_anchor(repo) == ""
+
+
+def test_influences_renders_document_and_url(repo: Path) -> None:
+    db = _db(repo)
+    notes.create_note(
+        ticker=None,
+        kind="influence",
+        body="nubank_investor_deck.pdf: NU Q1 2026 presentation",
+        source="capture",
+        context={
+            "channel": "telegram",
+            "media_kind": "document",
+            "file_name": "nubank_investor_deck.pdf",
+            "mime_type": "application/pdf",
+            "caption": "NU Q1 2026 presentation",
+        },
+        db_path=db,
+    )
+    notes.create_note(
+        ticker=None,
+        kind="influence",
+        body="https://example.com/latam-fintech-overview.pdf",
+        source="capture",
+        context={"channel": "telegram", "media_kind": "url", "url": "https://example.com/latam-fintech-overview.pdf"},
+        db_path=db,
+    )
+    anchor = load_investor_influences_anchor(repo)
+    assert anchor.startswith("## INVESTOR INFLUENCES")
+    assert "nubank_investor_deck.pdf" in anchor
+    assert "https://example.com/latam-fintech-overview.pdf" in anchor
+    assert "(since 20" in anchor  # stable date, not relative
+
+
+def test_influences_resolved_excluded(repo: Path) -> None:
+    db = _db(repo)
+    n = notes.create_note(
+        ticker=None, kind="influence", body="https://example.com/stale.pdf",
+        source="capture", db_path=db,
+    )
+    notes.resolve_note(n.id, db_path=db)
+    assert load_investor_influences_anchor(repo) == ""
+
+
+def test_influences_caps_at_char_limit(repo: Path) -> None:
+    db = _db(repo)
+    for i in range(25):
+        notes.create_note(
+            ticker=None, kind="influence",
+            body=f"https://example.com/report-{i}.pdf" + " x" * 60,
+            source="capture", db_path=db,
+        )
+    anchor = load_investor_influences_anchor(repo)
+    assert len(anchor) <= INFLUENCES_ANCHOR_CHAR_CAP + len("\n[...truncated]")
+
+
+def test_system_prompt_includes_influences(repo: Path) -> None:
+    notes.create_note(
+        ticker=None, kind="influence",
+        body="https://example.com/latam-neobanks.pdf",
+        source="capture", db_path=_db(repo),
+    )
+    prompt = chat_session._system_prompt(repo, "NU", RD)  # pyright: ignore[reportPrivateUsage]
+    assert "INVESTOR INFLUENCES" in prompt
+    assert "latam-neobanks.pdf" in prompt
