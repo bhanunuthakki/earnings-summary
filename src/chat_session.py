@@ -234,11 +234,13 @@ def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
     # degrades to an absent section rather than a broken chat.
     memory_bits: list[str] = []
     try:
-        from llm.anchors import load_priors_anchor
+        from llm.anchors import load_investor_influences_anchor, load_priors_anchor
 
         priors = load_priors_anchor(repo_root, ticker)
+        influences = load_investor_influences_anchor(repo_root)
     except Exception:
         priors = ""
+        influences = ""
     if priors:
         memory_bits.append(priors)
         memory_bits.append(
@@ -247,6 +249,8 @@ def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
             "analyst can mark it resolved. When evidence touches a watch-item "
             "or assumption, call that out by name."
         )
+    if influences:
+        memory_bits.append(influences)
     prior_chat = _prior_threads_context(repo_root, ticker, report_date)
     if prior_chat:
         memory_bits.append(prior_chat)

@@ -20,6 +20,7 @@ Stages:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,3 +137,92 @@ def ingest_capture(
         ticker=result.ticker,
         needs_ticker=result.needs_ticker,
     )
+
+
+def _extract_url(text: str) -> str | None:
+    """Return the URL if this message is a bare URL (no whitespace), else None."""
+    stripped = text.strip()
+    if stripped.startswith(("http://", "https://")) and " " not in stripped:
+        return stripped
+    return None
+
+
+def ingest_influence(
+    *,
+    channel: str,
+    local_path: Path | str | None = None,
+    file_name: str | None = None,
+    mime_type: str | None = None,
+    caption: str | None = None,
+    url: str | None = None,
+    external_ref: str | None = None,
+    db_path: Path | str | None = None,
+) -> IngestResult:
+    """Land a document or URL as a portfolio-level investor influence note.
+
+    Influences are ticker=NULL — they shape the LLM's understanding of the
+    analyst's investing mental model across all companies, not just one ticker.
+    The pipeline is LLM-free: the file is indexed by reference (name + path)
+    without blocking on any extraction step.
+    """
+    if local_path:
+        name = file_name or Path(local_path).name
+        body = name if not caption else f"{name}: {caption.strip()}"
+        media_kind = "document"
+    elif url:
+        body = url
+        media_kind = "url"
+    else:
+        return IngestResult(status="empty")
+
+    # 1. Durable staging row (dedup on external_ref).
+    session_id = sessions.new_session(
+        channel=channel,
+        media_kind=media_kind,
+        transcript=body,
+        external_ref=external_ref,
+        db_path=db_path,
+    )
+    if session_id is None:
+        return IngestResult(status="duplicate")
+
+    # 2. Build context_json metadata.
+    context: dict[str, object] = {
+        "channel": channel,
+        "media_kind": media_kind,
+        "ledger": "influence",
+    }
+    if local_path:
+        context["file_name"] = name
+        context["local_path"] = str(local_path)
+        if mime_type:
+            context["mime_type"] = mime_type
+        if caption:
+            context["caption"] = caption.strip()
+    if url:
+        context["url"] = url
+
+    # 3. Land as a portfolio-level influence note (ticker=None).
+    note = create_note(
+        ticker=None,
+        kind="influence",
+        body=body,
+        source="capture",
+        context=context,
+        db_path=db_path,
+    )
+
+    # 4. Mark session landed + purge raw staging text.
+    sessions.mark_landed(session_id, note_id=note.id, db_path=db_path)
+
+    # 5. Audit summary (never the raw body).
+    audit.write_audit(
+        channel=channel,
+        action="landed",
+        utterance_summary=f"influence ({media_kind}): {body[:100]}",
+        session_id=session_id,
+        note_id=note.id,
+        detail=f"media_kind={media_kind}",
+        db_path=db_path,
+    )
+    return IngestResult(status="landed", note_id=note.id, session_id=session_id)
