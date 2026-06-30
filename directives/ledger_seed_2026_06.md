@@ -32,8 +32,8 @@ This is the human-readable playback of the seeding interview. It was produced by
 | NVO | add | 2026-04 | med | Contrarian washout; +30–40%; "diversify-from-tech" **flagged** |
 | TSM | trim | 2026-01 | high | Taiwan-risk-is-shared anomaly; **trimmed the monopoly (early)** |
 | NVDA | sell | 2026-02 | high | Exited on opportunity cost; **wants to re-enter via LEAPs** |
-| AMZN | trim | 2026-02 | med | Not narrated — likely rebalancing *(needs owner color)* |
-| CPNG | sell | 2026-02 | low | Fast ~13% capitulation *(needs owner color)* |
+| AMZN | sell | 2026-02 | med | Exited a conviction long on AWS-share fear (overreaction); opp-cost, regrets it |
+| CPNG | sell | 2026-02 | low | Forced the washout narrative onto a no-catalyst name; cut fast — entry-discipline lesson |
 | FLKR | buy | 2026-01 | low | Korea ETF, +~93% — macro/factor, not a thesis name |
 | XLV | sell | 2025-12 | low | $80k dry-powder hedge, round-tripped flat; **wrong instrument** |
 
@@ -55,6 +55,7 @@ Full rationale + falsifier for each is in `seed.json`. Falsifiers marked *(infer
 9. **TSMC's discount to fabless was an anomaly** — shared Taiwan risk; now largely played out. *(TSM)*
 10. **NVDA 2-yr** — capex rising but ASIC/digestion is the 2-yr multiple risk; own via LEAP overlay. *(NVDA)*
 11. **Retirement-account tax** — no loss-harvest benefit, so let depressed quality ride. *(WIX)*
+12. **CPNG = washout-narrative failure** — the catalyst test must pass *before* I buy; following a company a while isn't a thesis. *(CPNG)*
 
 ---
 
@@ -75,7 +76,7 @@ Full rationale + falsifier for each is in `seed.json`. Falsifiers marked *(infer
 
 ## Open threads (not yet resolved)
 
-- **AMZN trim** and **CPNG** fast loss — surfaced from the ledger, not narrated; need the owner's rationale/feeling.
+- ~~AMZN trim and CPNG fast loss~~ — **resolved:** AMZN was a conviction long exited on an AWS-share overreaction (opp-cost, regretted); CPNG was a washout-narrative misfire onto a no-catalyst name (entry-discipline lesson).
 - **NVO → NVDA-LEAPs + index reallocation** — under analysis (separate research run); not yet executed, captured as intent.
 - **NVDA re-entry via LEAPs** — strike/timing under research; intent captured as a musing.
 - **RBRK competitive instrumentation** — KPIs wired into `micro_thesis/holdings/RBRK.json` (this PR); 3rd-party share + transcript-mention extraction still need pipeline plumbing; the Cohesity 2026 IPO S-1 is the data-unlock for a true net-new-ARR share metric.
