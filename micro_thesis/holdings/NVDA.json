@@ -1,8 +1,8 @@
 {
   "ticker": "NVDA",
   "name": "NVIDIA",
-  "last_updated": "2026-06-09",
-  "thesis": "NVIDIA — the compute substrate for AI, monetized as a full-stack rack (accelerator + NVLink/Spectrum-X networking + CUDA software), not a merchant GPU. The bet: Data Center is still inflecting, not peaking — Q1 FY27 revenue was $81.6B (+85% YoY) with Data Center $75.2B (+92%), GAAP gross margin held at 74.9%, and management guided Q2 to $91B assuming ZERO China compute. What the market misunderstands: the consensus frames NVDA as 'priced for perfection' near $5T, yet it trades at only ~22-24x NTM EPS — BELOW the semis median (~34x) and a fraction of its own ~49x history. The multiple already discounts both an AI-capex digestion and custom-ASIC displacement; you are not paying up for the growth, you are paying for deceleration that hasn't shown. The under-modeled franchise is networking: DC networking grew +199% YoY to $14.8B/quarter — Nvidia increasingly monetizes the whole AI factory even where merchant ASICs nibble the chip, and the annual Rubin cadence (now in full production, ~10x lower cost/token vs Blackwell) keeps the CUDA switching bar rising faster than alternatives can standardize. The real risk is genuine, not a strawman: ~61% of revenue comes from a few hyperscalers each funding their own silicon (Google TPU, AWS Trainium, Meta MTIA via Broadcom), custom ASIC spend is growing ~45% vs ~16% for GPUs, and a 2027 hyperscaler capex pause with China still zeroed could compress the multiple to the high-teens and pull the stock toward the $150s even on rising EPS. This is the consensus long; the edge is that the price already embeds the bear.",
+  "last_updated": "2026-06-30",
+  "thesis": "NVIDIA — the compute substrate for AI, monetized as a full-stack rack (accelerator + NVLink/Spectrum-X networking + CUDA software), not a merchant GPU. The bet: Data Center is still inflecting, not peaking — Q1 FY27 revenue was $81.6B (+85% YoY) with Data Center $75.2B (+92%), GAAP gross margin held at 74.9%, and management guided Q2 to $91B assuming ZERO China compute. What the market misunderstands: the consensus frames NVDA as 'priced for perfection' near $5T, yet it trades at only ~20x NTM EPS (~$195 spot / ~$4.7T cap, late-Jun'26; DE-RATED from ~22-24x as FY27/28 EPS rose and the stock broke its beat-and-drop streak +1.9% on the print, so 'price embeds the bear' is MORE true now) — BELOW the semis median (~34x) and a fraction of its own ~49x history. The multiple already discounts both an AI-capex digestion and custom-ASIC displacement; you are not paying up for the growth, you are paying for deceleration that hasn't shown. The under-modeled franchise is networking: DC networking grew +199% YoY to $14.8B/quarter — Nvidia increasingly monetizes the whole AI factory even where merchant ASICs nibble the chip, and the annual Rubin cadence (now in full production, ~10x lower cost/token vs Blackwell) keeps the CUDA switching bar rising faster than alternatives can standardize. The real risk is genuine, not a strawman: ~61% of revenue comes from a few hyperscalers each funding their own silicon (Google TPU, AWS Trainium, Meta MTIA via Broadcom), custom ASIC spend is growing ~45% vs ~16% for GPUs, and a 2027 hyperscaler capex pause with China still zeroed could compress the multiple to the high-teens and pull the stock toward the $150s even on rising EPS. This is the consensus long; the edge is that the price already embeds the bear.",
   "verdict": "Evaluating",
   "verdict_color": "blue",
   "key_driver": "Data Center revenue (compute + networking) growth x ~75% gross margin, with the Blackwell->Rubin cadence and CUDA/NVLink moat sustaining pricing as hyperscaler custom-ASIC share rises",
@@ -61,11 +61,11 @@
     },
     {
       "name": "Share of Hyperscaler Capex Captured",
-      "current": "~45% of the big-4 hyperscaler capex flows to NVDA Data Center (range 39-47% over 8 Qs); custom ASIC absorbs ~28% (~$185B) and growing",
+      "current": "~45% of the big-4 hyperscaler capex flows to NVDA Data Center (range 39-47% over 8 Qs); custom ASIC absorbs ~28% (~$185B) and growing. ALSO track NVDA share of the AI-ACCELERATOR market: ~80% in 2026 on the ~86%->75% glide path (ASIC units +44.6% CAGR vs ~16% GPU; Broadcom AI rev >$100B 2027 line-of-sight; Anthropic 1M-TPU + Meta-TPU + >1M Trainium are the leading milestones).",
       "prior": null,
       "yoy": null,
       "status": "Amber",
-      "break_condition": "NVDA's capex-capture share trends below ~35% as custom silicon displaces GPUs (the structural-substitution thesis-breaker)",
+      "break_condition": "NVDA's capex-capture share trends below ~35%, OR NVDA AI-accelerator share breaks below ~72% (off ~80%), OR ASIC unit CAGR re-accelerates above ~50% - any one signals custom silicon structurally displacing GPUs (the substitution thesis-breaker; the single most validated 2-yr risk).",
       "source": "third-party / earnings commentary"
     }
   ],
@@ -87,8 +87,13 @@
     },
     {
       "name": "China Data Center Compute Contribution",
-      "current": "Effectively zero in the guide (export controls); upside optionality NOT in numbers (~$50B addressable if relaxed)",
-      "source": "earnings commentary"
+      "current": "Reframed as a CAPPED CALL OPTION, not a downside KPI: base case correctly ~zero (guide assumes it; Beijing is actively blocking the H200 even after the US 'Trump-cut' license - reportedly ~0 units shipped). Dormant upside ~$30B/yr TAM (KeyBanc) NOT in numbers and may never clear Beijing. Little incremental DOWNSIDE left in estimates.",
+      "source": "earnings commentary + export-policy reporting"
+    },
+    {
+      "name": "Vera Rubin ramp checkpoint (near-term execution / moat-cadence validator)",
+      "current": "Full production confirmed at GTC Taipei Jun 1 2026; first shipments Q3 2026, volume ramp Q4 2026 into 1H27 (336B transistors, 288GB HBM4, NVLink 6, rack-scale). A Rubin SLIP would be the first crack in the full-stack-cadence moat that justifies the premium ASP.",
+      "source": "NVIDIA Newsroom / GTC"
     }
   ],
   "tier_3_kpis": [],
